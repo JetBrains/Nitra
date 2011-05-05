@@ -1,0 +1,98 @@
+﻿using System;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Parsetree.PExpr;
+using Nemerle.Compiler.Token;
+
+namespace Nemerle.Parser
+{
+  internal partial class GrammarParser
+  {
+    private ParceRecoveryAttribute(tok : Token, makeAttr : (Location * NameRef * Rule * Rule) -> RuleAttribute) : RuleAttribute * Token
+    {
+      match (tok.Next)
+      {
+        | RoundGroup as group => 
+          match (group.Child)
+          {
+            | LooseGroup(Identifier(handlerName) as id) as looseGroup => 
+              if (looseGroup.Next is LooseGroup)
+              {
+                when (looseGroup.Next == null)
+                  _ = ReportCriticalUnexpected(looseGroup, "recovery-handler-name, stopper-rule, rule-to-skip");
+                when (looseGroup.Next.Next == null)
+                  _ = ReportCriticalUnexpected(looseGroup.Next, "recovery-handler-name, stopper-rule, rule-to-skip");
+
+                def (stopperRule, _) = ParseChoice(looseGroup.Next);
+                def (skipRule, _)    = ParseChoice(looseGroup.Next.Next);
+                def location         = tok.Location + group.Location;
+                def name             = NameRef(id.Location, handlerName);
+                def attr             = makeAttr(location, name, stopperRule, skipRule);
+                (attr, group.Next)
+              }
+              else
+                ReportCriticalUnexpected(group, "(recovery-handler-name, stopper-rule, rule-to-skip)")
+
+            | _ => ReportCriticalUnexpected(group, "(recovery-handler-name, stopper-rule, rule-to-skip)")
+          }
+        | null => ReportCriticalUnexpected(tok, "FailureRecovery(recovery-handler-name, stopper-rule, rule-to-skip)")
+        | x => ReportCriticalUnexpected(x, "(recovery-handler-name, stopper-rule, rule-to-skip)")
+      }
+    }
+
+    private ParseAttributes(tok : Token) : Token * list[RuleAttribute]
+    {
+      | SquareGroup(child) =>
+        def parseAttr(g : Token) : RuleAttribute * Token
+        {
+          | LooseGroup(tok) =>
+            def getName(tok : Token) : NameRef
+            {
+              match (tok.Next)
+              {
+                | Identifier(name) as id  =>
+                  when (id.Next != null)
+                    ReportUnexpected(id.Next, "nothing");
+
+                  NameRef(id.Location, name)
+
+                | null                    => ReportCriticalUnexpected(tok, "rule-name");
+                | x                       => ReportCriticalUnexpected(x, "rule-name");
+              }
+            }
+            match (tok)
+            {
+              | Identifier("Inline")            => (RuleAttribute.Inline(g.Location), g.Next)
+              | Identifier("InlineAllSubrules") => (RuleAttribute.InlineAllSubrules(g.Location), g.Next)
+              | Identifier("OmitLocation")      => (RuleAttribute.OmitLocation(g.Location), g.Next)
+              | Identifier("Export")            => (RuleAttribute.Export(g.Location), g.Next)
+              | Identifier("Extensible")        => (RuleAttribute.Extensible(g.Location), g.Next)
+              | Operator("%")                   => ParceRecoveryAttribute(tok, RuleAttribute.Cut);
+              | Identifier("FailureRecovery")   => ParceRecoveryAttribute(tok, RuleAttribute.Recovery);
+              | Operator("<")                   => (RuleAttribute.PrecedenceLesserThan (g.Location, getName(tok)), g.Next)
+              | Operator(">")                   => (RuleAttribute.PrecedenceGreaterThan(g.Location, getName(tok)), g.Next)
+              | _ => ReportCriticalUnexpected(g, RuleAttribute.GetUsages())
+            }
+
+          | _ => ReportCriticalUnexpected(tok, RuleAttribute.GetUsages())
+        }
+        def parseAttrs(currTok : Token, attrs = [])
+        {
+          if (currTok == null) attrs.Reverse()
+          else
+          {
+            def (attr, next) = parseAttr(currTok);
+            parseAttrs(next, attr :: attrs)
+          }
+        }
+
+        (tok.Next, parseAttrs(child, []))
+
+      | _ => (tok, [])
+    }
+  }
+}

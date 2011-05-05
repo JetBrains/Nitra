@@ -1,0 +1,79 @@
+﻿using System;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Parsetree.PExpr;
+using Nemerle.Compiler.Token;
+
+namespace Nemerle.Parser
+{
+  internal partial class GrammarParser
+  {
+    // Rule            = RuleName ((':' Type)? '=' OrderedChoice)?
+    private ParseRule(tok : Token, ruleId : int) : RuleDefinition
+    {
+      def straightenLooseGroup(tok : Token)
+      {
+        match (tok, tok.Next)
+        {
+          | (LooseGroup(child1) as g1, LooseGroup(child2) as g2) when !(g1.SeparatorToken is Semicolon) => 
+            def getLastTok(tok : Token)
+            {
+              if (tok.Next == null)
+                tok
+              else
+                getLastTok(tok.Next)
+            }
+            getLastTok(child1).Next = child2; // append
+            def newLoose = LooseGroup(g1.Location + g2.Location, child1, g2.SeparatorToken);
+            newLoose.Next = g2.Next;
+            g1.Next = g2.Next;
+            straightenLooseGroup(newLoose)
+
+          | _ => tok
+        }
+      }
+      match (straightenLooseGroup(tok))
+      {
+        | LooseGroup(child) =>
+          def (tok2, ruleAttrs) = ParseAttributes(child);
+
+          //assert2(!_debug);
+
+          def (expr, nextToken) = _parser.ParseExpr(if (tok2 is Identifier) LooseGroup(tok2) 
+                                                   else tok2, 
+                                                   TokenStoppers.All);
+          def (id, ruleType) =
+            match (expr)
+            {
+              | <[ $name : $ty ]>  => (name, RuleDefinitionType.Typed(BindFixedType(ty, _typer)))
+              | <[ $name is $ty ]> => (name, RuleDefinitionType.Extention(NameRef(ty.Location, ty.ToString())))
+              | Ref as name        => (name, RuleDefinitionType.None())
+              | _                  => ReportCriticalUnexpected(tok2, "rule-name (':' return-type)?");
+            };
+
+          def name = NameRef(id.Location, id.ToString());
+
+          if (nextToken == null)
+            RuleDefinition(id.Location, ruleId, name, ruleType, ruleAttrs, None());
+          else if (!(nextToken is Operator("=")))
+            ReportCriticalUnexpected(nextToken, "('=' rule-body)? ';'");
+          else if (nextToken.Next == null)
+            ReportCriticalUnexpected(nextToken, "('=' rule-body)? ';'");
+          else
+          {
+            def (rule, nextTok) = ParseChoice(nextToken.Next);
+
+            when (nextTok != null)
+              _ = ReportUnexpected(nextTok, "EOF");
+            RuleDefinition(id.Location + rule.Location, ruleId, name, ruleType, ruleAttrs, Some(rule));
+          }
+
+        | _ => ReportCriticalUnexpected(tok, <# [Attributes] RuleName (("extends" RuleRef / ':' Type)? '=' OrderedChoice)?;#>)
+      }
+    }
+  }
+}
