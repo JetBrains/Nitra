@@ -8,9 +8,9 @@ namespace Nemerle.Parser
   partial internal class Optimizer
   {
     public static OptimizeRule( ruleName : NameRef
-                              , _getOptimizedRule : NameRef -> option[Rule]
+                              , getOptimizedRule : NameRef -> option[Rule]
                               , grammar : Grammar
-                              , _weights : Map[NameRef, option[int]]
+                              , weights : Map[NameRef, option[int]]
                               ) : option[Rule]
     {
       def optimize(r : Rule)
@@ -26,8 +26,8 @@ namespace Nemerle.Parser
           def rules = rules.Flatten();
           def catFSM(_)
           {
-            | (Rule.Fsm(fsm1) as r1) :: (Rule.Fsm(fsm2) as r2) :: rules =>
-              catFSM(Rule.Fsm(r1.Location + r2.Location, FSMBuilder.Choice([fsm1, fsm2])) :: rules)
+            | (Rule.Fsm(fsm1, loop1) as r1) :: (Rule.Fsm(fsm2, loop2) as r2) :: rules =>
+              catFSM(Rule.Fsm(r1.Location + r2.Location, FSMBuilder.Choice([fsm1, fsm2]), loop1 || loop2) :: rules)
             | rule :: rules => rule :: catFSM(rules)
             | []            => []
           }
@@ -50,8 +50,8 @@ namespace Nemerle.Parser
           def rules = rules.Flatten();
           def catFSM(_)
           {
-            | (Rule.Fsm(fsm1) as r1) :: (Rule.Fsm(fsm2) as r2) :: rules =>
-              catFSM(Rule.Fsm(r1.Location + r2.Location, FSMBuilder.Seq([fsm1, fsm2])) :: rules)
+            | (Rule.Fsm(fsm1, false) as r1) :: (Rule.Fsm(fsm2, loop2) as r2) :: rules =>
+              catFSM(Rule.Fsm(r1.Location + r2.Location, FSMBuilder.Seq([fsm1, fsm2]), loop2) :: rules)
             | rule :: rules => rule :: catFSM(rules)
             | [] => []
           }
@@ -64,17 +64,18 @@ namespace Nemerle.Parser
           }
 
 
-        | Repeat(min, max, rule)  =>
+        | Repeat(min, max, rule) =>
           match (optimize(rule))
           {
-            | Fsm(fsm)      =>
-              def fsm = match (max)
+            | Fsm(fsm, _) =>
+              def (fsm, loop) = match (max)
               {
-                | None      => FSMBuilder.RepeatMin(min, fsm)
-                | Some(max) => FSMBuilder.RepeatMinMax(min, max, fsm)
+                | Some(1) when min == 0 => (FSMBuilder.Option(fsm)                 , false)
+                | Some(max)             => (FSMBuilder.RepeatMinMax(min, max, fsm) , true)
+                | None                  => (FSMBuilder.RepeatMin(min, fsm)         , true)
               }
-              Rule.Fsm(r.Location, fsm)
-            | rule          => Rule.Repeat(r.Location, min, max, rule)
+              Rule.Fsm(r.Location, fsm, loop)
+            | rule => Rule.Repeat(r.Location, min, max, rule)
           }
 
         | Not(Not(rule))                => optimize(Rule.And(r.Location, rule))
@@ -85,20 +86,20 @@ namespace Nemerle.Parser
         | And(rule)                     => Rule.And(r.Location, optimize(rule))
         | Capture(kind, rule)           => Rule.Capture(r.Location, kind, optimize(rule))
         | Scope(name, rule)             => Rule.Scope(r.Location, name, optimize(rule))
-        | Chars(chars)                  => Rule.Fsm(r.Location, FSMBuilder.Seq(chars))
+        | Chars(chars)                  => Rule.Fsm(r.Location, FSMBuilder.Seq(chars), false)
         | Cut as rule                   => rule
         | Fsm as rule                   => rule
-        | Call(name, bp)                => Rule.Call(r.Location, name, bp)
-          //match (weights.Get(name))
-          //{
-          //  | Some(weight) when weight < 20 && grammar.GetRule(name).ResultType is RuleDefinitionType.None =>
-          //    match (getOptimizedRule(name))
-          //    {
-          //      | Some(Fsm as rule) => rule
-          //      | _                 => Rule.Call(r.Location, name, bp)
-          //    }
-          //  | _                     => Rule.Call(r.Location, name, bp)
-          //}
+        | Call(name, bp)                =>
+          match (weights.Get(name))
+          {
+            | Some(weight) when weight < 20 && grammar.GetRule(name).ResultType is RuleDefinitionType.None =>
+              match (getOptimizedRule(name))
+              {
+                | Some(Fsm as rule) => rule
+                | _                 => Rule.Call(r.Location, name, bp)
+              }
+            | _                     => Rule.Call(r.Location, name, bp)
+          }
       }
 
       match (grammar.GetRule(ruleName).Rule)
