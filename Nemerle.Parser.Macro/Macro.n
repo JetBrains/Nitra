@@ -17,125 +17,69 @@ namespace Nemerle.Parser
   {
     <[ () ]>
   }
-  module PegGrammarOptions
-  {
-    public EmitDebugSources : bool { get; private set;}
-     
-    public GetDefineMethod(tb : TypeBuilder) : (ClassMember) -> void
-    {
-        if(EmitDebugSources)
-          (classMember) => _ =  tb.DefineWithSource(classMember);
-        else
-          tb.Define
-    }
-    public Parse(expr : PExpr) : void
-    {
-      | <[Options = EmitDebugSources]> => EmitDebugSources = true;
-      | _ => ();
-    }
-  }
 
   [Nemerle.MacroUsage(Nemerle.MacroPhase.BeforeTypedMembers, Nemerle.MacroTargets.Class)]
-  macro PegGrammar (tb : TypeBuilder, options, startRule, rules)
+  macro ParserGrammar (tb : TypeBuilder, options, startRule, rules)
   {
-    try
-    {
-      PegGrammarOptions.Parse(options);
-      def startRuleName = NameRef(startRule.Location, startRule.ToString());
-      tb.UserData[typeof(Grammar)] = Grammar(startRuleName);
-
-      def parsedGrammar = GrammarParser(Macros.ImplicitCTX(), false).ParseGrammar(startRuleName, rules);
-
-      tb.UserData[typeof(Grammar)] = parsedGrammar;
-    }
-    catch
-    {
-      | e is GrammarException =>
-        def loc = if (e.Location != Location.Default) e.Location else tb.Location;
-        Message.Error(loc,  e.Message);
-      | _ is CriticalUnexpectedException => ()
-      | e is Exception =>
-        assert2(false, e.ToString());
-        Message.Error(tb.Location,  $"Exception $e");
-    }
+    GrammarImpl.BeforeTypedMembers(Macros.ImplicitCTX(), tb, options, startRule, rules);
   }
 
   [Nemerle.MacroUsage(Nemerle.MacroPhase.WithTypedMembers, Nemerle.MacroTargets.Class)]
-  macro PegGrammar (tb : TypeBuilder, _options, _startRule, _rules)
+  macro ParserGrammar (tb : TypeBuilder, _options, _startRule, _rules)
   {
-    try
-    {
-      def parsedGrammar = tb.UserData[typeof(Grammar)] :> Grammar;
-      when (parsedGrammar == null)
-        Message.FatalError(tb.Location, "PEG Grammar not parsed.");
-
-      GrammarImpl.MakeParser(Macros.ImplicitCTX(), tb, parsedGrammar);
-    }
-    catch
-    {
-      | e is GrammarException =>
-        def loc = if (e.Location != Location.Default) e.Location else tb.Location;
-        Message.Error(loc,  e.Message);
-      | _ is CriticalUnexpectedException => ()
-      | e is Exception =>
-        assert2(false, e.ToString());
-        Message.Error(tb.Location,  $"Exception $e");
-    }
+    GrammarImpl.WithTypedMembers(tb);
   }
 
-  public module GrammarImpl
+  internal module GrammarImpl
   {
-    private CheckRules(grammar : Grammar) : bool
+    public BeforeTypedMembers(typer : Typer, tb : TypeBuilder, options : PExpr, startRule : PExpr, rules : PExpr) : void
     {
-      def check(rule : Rule)
-      {
-        | Call(name, _)    =>
-          if (grammar.Rules.Exists(rd => rd.Name.Id == name.Id))
-            true
-          else
-          {
-            Message.Error(name.Location, $"There is no rule \"$name\" in grammar.");
-            false
-          }
-        | Choice(rules)
-        | Sequence(rules)  => rules.Fold(true, (rule, res) => check(rule) && res)
-        | Not(rule)
-        | And(rule)
-        | Capture(_, rule)
-        | Scope(_, rule)
-        | Repeat(_, _, rule) => check(rule);
-        | Chars | Fsm | Cut => true
-      }
-      grammar.Rules.Fold(true, (rd, res) =>
-        {
-          def r = match (rd.Rule)
-          {
-            | Some(rule) => check(rule)
-            | None       => true
-          }
-          r && res
-        });
-    }
-
-    public MakeParser(typer : Typer, tb : TypeBuilder, parsedGrammar : Grammar) : void
-    {
-      def allRules = CheckRules(parsedGrammar);
-
-      def typedGrammar = GrammarTyper.AddArgumentCaptures(parsedGrammar, typer);
-
-      def compiler = GrammarCompiler(typedGrammar, typer, tb);
-
       try
       {
-        if (typer.Manager.IsIntelliSenseMode)
-          IntelliSenseSupport.AddIntelliSenseSupport(compiler, parsedGrammar, typer, tb);
-        else
-          when (allRules)
-            compiler.CompileGrammar();
+        tb.UserData[typeof(GrammarCompiler)] = GrammarCompiler(typer, tb, options, startRule, rules);
       }
-      finally
+      catch
       {
-        compiler.DefineAllMethods();
+        | e is GrammarException =>
+          def loc = if (e.Location != Location.Default) e.Location else tb.Location;
+          Message.Error(loc,  e.Message);
+        | _ is CriticalUnexpectedException => ()
+        | e is Exception =>
+          assert2(false, e.ToString());
+          Message.Error(tb.Location,  $"Exception $e");
+      }
+    }
+
+    public WithTypedMembers(tb : TypeBuilder) : void
+    {
+      try
+      {
+        def compiler = tb.UserData[typeof(GrammarCompiler)] :> GrammarCompiler;
+        when (compiler == null)
+          Message.FatalError(tb.Location, "PEG Grammar not parsed.");
+
+        try
+        {
+          if (compiler.Typer.Manager.IsIntelliSenseMode)
+            IntelliSenseSupport.AddIntelliSenseSupport(compiler);
+          else
+            when (compiler.AllRules)
+              compiler.CompileGrammar();
+        }
+        finally
+        {
+          compiler.DefineAllMethods();
+        }
+      }
+      catch
+      {
+        | e is GrammarException =>
+          def loc = if (e.Location != Location.Default) e.Location else tb.Location;
+          Message.Error(loc,  e.Message);
+        | _ is CriticalUnexpectedException => ()
+        | e is Exception =>
+          assert2(false, e.ToString());
+          Message.Error(tb.Location,  $"Exception $e");
       }
     }
   }
