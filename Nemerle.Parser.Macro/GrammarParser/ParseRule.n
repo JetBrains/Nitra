@@ -46,31 +46,61 @@ namespace Nemerle.Parser
           def (expr, nextToken) = _parser.ParseExpr(if (tok2 is Identifier) LooseGroup(tok2) 
                                                    else tok2, 
                                                    TokenStoppers.All);
-          def (id, ruleType) =
-            match (expr)
-            {
-              | <[ $name : $ty ]>  => (name, RuleDefinitionType.Typed(BindFixedType(ty, _typer)))
-              | <[ $name is $ty ]> => (name, RuleDefinitionType.Extention(NameRef(ty.Location, ty.ToString())))
-              | Ref as name        => (name, RuleDefinitionType.None())
-              | _                  => ReportCriticalUnexpected(tok2, "rule-name (':' return-type)?");
-            };
-
-          def name = NameRef(id.Location, id.ToString());
-
-          if (nextToken == null)
-            RuleDefinition(id.Location, ruleId, name, ruleType, ruleAttrs, None());
-          else if (!(nextToken is Operator("=")))
-            ReportCriticalUnexpected(nextToken, "('=' rule-body)? ';'");
-          else if (nextToken.Next == null)
-            ReportCriticalUnexpected(nextToken, "('=' rule-body)? ';'");
-          else
+          def parseBody(nextToken)
           {
-            def (rule, nextTok) = ParseChoice(nextToken.Next);
+            if (nextToken == null)
+              None();
+            else if (!(nextToken is Operator("=")))
+              ReportCriticalUnexpected(nextToken, "('=' rule-body)? ';'");
+            else if (nextToken.Next == null)
+              ReportCriticalUnexpected(nextToken, "('=' rule-body)? ';'");
+            else
+            {
+              def (rule, nextTok) = ParseChoice(nextToken.Next);
 
-            when (nextTok != null)
-              _ = ReportUnexpected(nextTok, "EOF");
-            RuleDefinition(id.Location + rule.Location, ruleId, name, ruleType, ruleAttrs, Some(rule));
+              when (nextTok != null)
+                _ = ReportUnexpected(nextTok, "EOF");
+              Some(rule);
+            }
           }
+
+          def simple(name, ty, rule)
+          {
+            RuleDefinition.Simple(name.Location, ruleId, NameRef(name), ruleAttrs, ty, rule)
+          }
+          def extentionPoint(name, ty)
+          {
+            RuleDefinition.ExtentionPoint(name.Location, ruleId, NameRef(name), ruleAttrs, ty)
+          }
+          def extention(name, baseRuleName, rule)
+          {
+            RuleDefinition.Extention(name.Location, ruleId, NameRef(name), ruleAttrs, NameRef(baseRuleName), rule)
+          }
+          match (expr)
+          {
+            | <[ $name : $ty ]> =>
+              match (parseBody(nextToken))
+              {
+                | Some(rule) => simple(name, BindFixedType(ty, _typer), rule)
+                | None       => extentionPoint(name, BindFixedType(ty, _typer))
+              }
+
+            | <[ $name is $baseRuleName ]> =>
+              match (parseBody(nextToken))
+              {
+                | Some(rule) => extention(name, baseRuleName, rule)
+                | None       => ReportCriticalUnexpected(expr, "Extension can not be extensible.");
+              }
+
+            | Ref as name =>
+              match (parseBody(nextToken))
+              {
+                | Some(rule) => simple(name, RuleType.Chars(), rule)
+                | None       => ReportCriticalUnexpected(expr, "Extension point must be typed.");
+              }
+
+            | _                  => ReportCriticalUnexpected(tok2, "rule-name (':' return-type)?");
+          };
 
         | _ => ReportCriticalUnexpected(tok, <# [Attributes] RuleName (("extends" RuleRef / ':' Type)? '=' OrderedChoice)?;#>)
       }

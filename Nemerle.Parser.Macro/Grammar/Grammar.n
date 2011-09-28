@@ -46,15 +46,21 @@ namespace Nemerle.Parser
         throw GrammarException($"There is no rule \"$name\" in grammar.", name.Location);
     }
 
-    public GetRuleType(name : NameRef) : option[RuleType]
+    public GetRuleType(name : NameRef) : RuleType
     {
-      match (GetRule(name).ResultType)
+      match (GetRule(name))
       {
-        | Typed(NType(ty)) when ty.Equals(ty.Manager.InternalType.Void)
-                          => Some(RuleType.Void())
-        | Typed(ty)       => Some(ty)
-        | Extention(name) => GetRuleType(name)
-        | None            => None()
+        | ExtentionPoint(ty)
+        | Simple(ty, _) =>
+          match (ty)
+          {
+            | NType(ty) when ty.Equals(ty.Manager.InternalType.Void) =>
+              RuleType.Void()
+            | ty => ty
+          }
+
+        | Extention(name, _) =>
+          GetRuleType(name)
       }
     }
 
@@ -73,12 +79,34 @@ namespace Nemerle.Parser
       get { _grammar.Map((_, rd) => rd) }
     }
 
-    public TransformRules(fn : RuleDefinition -> option[Rule]) : Grammar
+    public TransformRules(transformSimple : RuleDefinition.Simple -> Rule, transformExtention : RuleDefinition.Extention -> Rule) : Grammar
     {
       _grammar.Fold(Grammar(StartRuleName, Map(), _grammarRefs), (_, rd, newGrammar) =>
       {
-        def rule = fn(rd);
-        newGrammar.Add(RuleDefinition(rd.Location, rd.Id, rd.Name, rd.ResultType, rd.Attributes, rule))
+        def rd = match (rd : RuleDefinition)
+        {
+          | ExtentionPoint  => rd
+          | Extention as rd =>
+            RuleDefinition.Extention
+              ( rd.Location
+              , rd.Id
+              , rd.Name
+              , rd.Attributes
+              , rd.baseRuleName
+              , transformExtention(rd)
+              )
+
+          | Simple as rd    =>
+            RuleDefinition.Simple
+              ( rd.Location
+              , rd.Id
+              , rd.Name
+              , rd.Attributes
+              , rd.ruleType
+              , transformSimple(rd)
+              )
+        }
+        newGrammar.Add(rd)
       })
     }
 
@@ -87,7 +115,7 @@ namespace Nemerle.Parser
       def isOptionalImpl(rule : Rule, visited : HashSet[Rule]) : bool
       {
         def isOptional = isOptionalImpl(_, visited);
-        
+
         match (rule)
         {
           | Capture(_, rule1)                 => isOptional(rule1)
@@ -98,7 +126,7 @@ namespace Nemerle.Parser
           | And                               => true
           | Scope(_, rule8)                   => isOptional(rule8)
           | Call(name, _)                     =>
-            match (this.GetRule(name).Rule)
+            match (this.GetRule(name).GetRule())
             {
               | Some(r) =>
                 if (visited.Add(r))
