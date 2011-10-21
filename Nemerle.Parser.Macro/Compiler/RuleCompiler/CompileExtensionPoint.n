@@ -4,6 +4,7 @@ using Nemerle.Utility;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
 
 using System;
 using System.Linq;
@@ -13,78 +14,143 @@ namespace Nemerle.Parser
 {
   partial internal class RuleCompiler
   {
-    public CompileExtensionPoint(ruleDef : RuleDefinition.ExtentionPoint) : PExpr
+    public CompileExtensionPoint(ruleDef : RuleDefinition.ExtentionPoint) : void
     {
-      def isExtendRule(rd)
-      {
-        match (rd)
+      def memoizeNames = _grammarCompiller.DefineExtensionPointMemoizeNames(ruleDef.Name, ruleDef.ruleType);
+
+      def body = <[
+        mutable curEndPos = -1; // вместе с параметром curResult содержит конечный результат разбора правила
+
+        mutable c; // временная переменная для отсечения правил по первой букве
+
+        mutable newResult; // содержит вновь полученное значение из вызываемого правила
+        mutable newEndPos;
+
+        if ($(memoizeNames.StartPos : dyn) == pos)
         {
-          | RuleDefinition.Extention(baseRuleName, _) => ruleDef.Name.Id == baseRuleName.Id
-          | _                                         => false
-        }
-      }
+          when ($(memoizeNames.EndPos : dyn) < 0)
+            return -1; // обнаружена левая рекурсия в префиксном правиле
+                       // или не смогли разобрать префикс
+                       // все остальное не важно
 
-      def isRightRule(rd)
-      {
-        match (rd.rule : Rule)//TODO: Fix me.
-        {
-          | Capture(_, Sequence(Call(name, _) :: _))
-          | Capture(_, Call(name, _)) => ruleDef.Name.Id == name.Id
-          | _                         => false
-        }
-      }
-
-      def memoizeNames = _grammarCompiller.DefineMemoize(ruleDef.Name, ruleDef.ruleType);
-
-      def rules = _grammarCompiller.TypedGrammar.Rules.Filter(isExtendRule).Cast.[RuleDefinition.Extention]().NToList();
-      def (rightRules, leftRules) = rules.Partition(isRightRule);
-      def rules = Rule.Choice(rules.Map(rd => Rule.Call(rd.Name, 0)));
-      def rules = CompileRule(rules, if (_useResult) ["result"] else []);
-
-
-      <[
-        if ($(memoizeNames.MemPos : dyn) == pos)
-        {
-          if ($(memoizeNames.MemRBP : dyn) < rbp)
+          if ($(memoizeNames.BindingPower : dyn) == bindingPower) // если сила связывания совпадает возвращаем результат из кеша
           {
-            when ($(memoizeNames.MemNewPos : dyn) >= 0)
-              result = $(memoizeNames.MemResult : dyn);
-            $(memoizeNames.MemNewPos : dyn)
+            curResult = $(memoizeNames.Result : dyn);
+            return $(memoizeNames.EndPos : dyn);
+          }
+          else // если сила связывания не совпадает то из кеша можно достать только префикс
+          {
+            $(memoizeNames.BindingPower : dyn) = bindingPower;
+            //$(memoizeNames.StartPos : dyn)   = pos;
+            $(memoizeNames.EndPos : dyn)       = -1; // защита от левой рекурсии
+
+            // достаем префикс из кеша
+            curResult = $(memoizeNames.PrefixResult : dyn);
+            curEndPos = $(memoizeNames.PrefixEndPos : dyn);
+          }
+        }
+        else // стартовая позиция не совпадает
+        {    // парсим префикс
+          $(memoizeNames.BindingPower : dyn) = bindingPower;
+          $(memoizeNames.StartPos : dyn)     = pos;
+          $(memoizeNames.EndPos : dyn)       = -1; // защита от левой рекурсии
+
+          if (pos < text.Length)
+          {
+            c = text[pos];
+            foreach (prefixRule in prefixRules)
+            {
+              when (prefixRule.LowerBound <= c && c <= prefixRule.UpperBound)
+              {
+                newEndPos = prefixRule.Parse(pos, text, ref newResult);
+                when (curEndPos < newEndPos)
+                {
+                  curResult = newResult;
+                  curEndPos = newEndPos;
+                }
+              }
+            }
           }
           else
           {
-            -1
+            // правило может захотеть сматчить конец текста
+            // сомневаюсь что этот код будет хоть раз выполнен в реальной задаче
+            // но для корректности он должен быть
+            foreach (prefixRule in prefixRules)
+            {
+              newEndPos = prefixRule.Parse(pos, text, ref newResult);
+              when (curEndPos < newEndPos)
+              {
+                curResult = newResult;
+                curEndPos = newEndPos;
+              }
+            }
           }
+
+          $(memoizeNames.PrefixResult : dyn) = curResult;
+          $(memoizeNames.PrefixEndPos : dyn) = curEndPos;
         }
-        else
+
+        when (curEndPos < 0)// не смогли разобрать префикс
+          return -1;
+
+        mutable bestResult = curResult;
+        mutable bestEndPos = curEndPos;
+
+        while (curEndPos < text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
+                                        // при достижении конца текста есть нечего
         {
-          $(memoizeNames.MemPos    : dyn) = pos;
-          $(memoizeNames.MemNewPos : dyn) = -1;
-          def loop(pos)
-          {
-            def oldPos = $(memoizeNames.MemNewPos : dyn);
-
-            def newPos = $rules;
-
-            $(memoizeNames.MemPos    : dyn) = pos;
-            $(memoizeNames.MemNewPos : dyn) = newPos;
-            $(memoizeNames.MemRBP    : dyn) = rbp;
-
-            if (newPos >= 0)
+          c = text[curEndPos];
+          foreach (postfixRule in postfixRules)
+            when (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound && bindingPower < postfixRule.BindingPower)
             {
-              $(memoizeNames.MemResult : dyn) = result;
-              loop(newPos)
+              newResult = curResult;
+              newEndPos = postfixRule.Parse(pos, curEndPos, text, ref newResult);
+              when (bestEndPos < newEndPos)
+              {
+                bestEndPos = newEndPos;
+                bestResult = newResult;
+              }
             }
-            else
+
+          when (bestEndPos == curEndPos)
+            break; // если нам не удалось продвинутся то заканчиваем разбор
+
+          curResult = bestResult;
+          curEndPos = bestEndPos;
+        }
+
+        $(memoizeNames.Result : dyn) = curResult;
+        $(memoizeNames.EndPos : dyn) = curEndPos;
+        curEndPos
+      ]>;
+
+      def methodName = _grammarCompiller.DecorateRuleName(ruleDef.Name.Id);
+      def method = if (_useResult)
+      {
+        def ty = GetRuleType(ruleDef);
+        <[decl:
+          private $(methodName : dyn)(pos : int, text : string, bindingPower : int, curResult : ref $ty) : int
+          {
+            unchecked
             {
-              when ($(memoizeNames.MaxRollbackPos : dyn) < pos)
-                $(memoizeNames.MaxRollbackPos : dyn) = pos;
-              oldPos
+              $body;
             }
           }
-          loop(pos)
-        }
-      ]>
+        ]>
+      }
+      else//TODO: FIXME
+      {
+        <[decl:
+          private $(methodName : dyn)(pos : int, text : string, bindingPower : int) : int
+          {
+            mutable result;
+            $(methodName : dyn)(pos, text, bindingPower, ref result);
+          }
+        ]>
+      }
+
+      _grammarCompiller.DefineWithSource(method);
     }
   }
 }
