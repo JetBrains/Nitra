@@ -19,6 +19,9 @@ namespace Nemerle.Parser
       def memoizeNames = _grammarCompiller.DefineExtensionPointMemoizeNames(ruleDef.Name, ruleDef.retType);
 
       def body = <[
+        def curOffsets    = Nemerle.Parser.Internal.ParsedOffsets();
+        def bestOffsets   = Nemerle.Parser.Internal.ParsedOffsets();
+
         mutable curEndPos = -1; // вместе с параметром curResult содержит конечный результат разбора правила
 
         mutable c; // временная переменная для отсечения правил по первой букве
@@ -53,18 +56,22 @@ namespace Nemerle.Parser
         {    // парсим префикс
           $(memoizeNames.BindingPower : dyn) = bindingPower;
           $(memoizeNames.StartPos : dyn)     = pos;
+          $(memoizeNames.PrefixEndPos : dyn) = -1;
           $(memoizeNames.EndPos : dyn)       = -1; // защита от левой рекурсии
 
           if (pos < text.Length)
           {
             c = text[pos];
+            bestOffsets.Clear();
             foreach (prefixRule in $(memoizeNames.PrefixRules : dyn))
             {
               when (prefixRule.LowerBound <= c && c <= prefixRule.UpperBound)
               {
-                newEndPos = prefixRule.Parse(pos, text, ref newResult);
-                when (curEndPos < newEndPos)
+                curOffsets.Clear();
+                newEndPos = prefixRule.Parse(pos, text, curOffsets, ref newResult);
+                when (newEndPos > 0 && curOffsets.IsBetterThan(bestOffsets))
                 {
+                  bestOffsets.CopyFrom(curOffsets);
                   curResult = newResult;
                   curEndPos = newEndPos;
                 }
@@ -76,38 +83,43 @@ namespace Nemerle.Parser
             // правило может захотеть сматчить конец текста
             // сомневаюсь что этот код будет хоть раз выполнен в реальной задаче
             // но для корректности он должен быть
+            bestOffsets.Clear();
             foreach (prefixRule in $(memoizeNames.PrefixRules : dyn))
             {
-              newEndPos = prefixRule.Parse(pos, text, ref newResult);
-              when (curEndPos < newEndPos)
+              curOffsets.Clear();
+              newEndPos = prefixRule.Parse(pos, text, curOffsets, ref newResult);
+              when (newEndPos > 0 && curOffsets.IsBetterThan(bestOffsets))
               {
+                bestOffsets.CopyFrom(curOffsets);
                 curResult = newResult;
                 curEndPos = newEndPos;
               }
             }
           }
-
-          $(memoizeNames.PrefixResult : dyn) = curResult;
-          $(memoizeNames.PrefixEndPos : dyn) = curEndPos;
         }
 
         when (curEndPos < 0)// не смогли разобрать префикс
           return -1;
 
+        def prefixResult = curResult;
+        def prefixEndPos = curEndPos;
         mutable bestResult = curResult;
         mutable bestEndPos = curEndPos;
 
         while (curEndPos < text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
                                         // при достижении конца текста есть нечего
         {
+          bestOffsets.Clear();
           c = text[curEndPos];
           foreach (postfixRule in $(memoizeNames.PostfixRules : dyn))
             when (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound && bindingPower < postfixRule.BindingPower)
             {
+              curOffsets.Clear();
               newResult = curResult;
-              newEndPos = postfixRule.Parse(pos, curEndPos, text, ref newResult);
-              when (bestEndPos < newEndPos)
+              newEndPos = postfixRule.Parse(pos, curEndPos, text, curOffsets, ref newResult);
+              when (newEndPos > 0 && curOffsets.IsBetterThan(bestOffsets))
               {
+                bestOffsets.CopyFrom(curOffsets);
                 bestEndPos = newEndPos;
                 bestResult = newResult;
               }
@@ -120,8 +132,12 @@ namespace Nemerle.Parser
           curEndPos = bestEndPos;
         }
 
-        $(memoizeNames.Result : dyn) = curResult;
-        $(memoizeNames.EndPos : dyn) = curEndPos;
+        $(memoizeNames.BindingPower : dyn) = bindingPower;
+        $(memoizeNames.StartPos : dyn)     = pos;
+        $(memoizeNames.PrefixResult : dyn) = prefixResult;
+        $(memoizeNames.PrefixEndPos : dyn) = prefixEndPos;
+        $(memoizeNames.Result : dyn)       = curResult;
+        $(memoizeNames.EndPos : dyn)       = curEndPos;
         curEndPos
       ]>;
 
@@ -136,7 +152,7 @@ namespace Nemerle.Parser
           }
         }
       ]>;
-      //TODO: FIXME
+
       def method2 = <[decl:
         public $(methodName : dyn)(pos : int, text : string, bindingPower : int) : int
         {
