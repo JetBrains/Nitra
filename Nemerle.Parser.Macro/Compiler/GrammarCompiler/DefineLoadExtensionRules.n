@@ -1,0 +1,88 @@
+﻿using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using System.Linq;
+using SCG = System.Collections.Generic;
+using Nemerle.Parser.Internal;
+
+namespace Nemerle.Parser
+{
+  partial internal class GrammarCompiler
+  {
+    private DefineLoadExtensionRules() : void
+    {
+      def inits = if (Typer.Manager.IsIntelliSenseMode)
+        []
+      else
+      {
+        def findExtentionRules(baseRuleName)
+        {
+          def prefixRDs  = TypedGrammar.Rules
+            .MapFiltered(_ is RuleDefinition.ExtentionPrefix, _ :> RuleDefinition.ExtentionPrefix)
+            .Filter(rd => rd.baseRuleName.Id == baseRuleName.Id);
+          def postfixRDs = TypedGrammar.Rules
+            .MapFiltered(_ is RuleDefinition.ExtentionPostfix, _ :> RuleDefinition.ExtentionPostfix)
+            .Filter(rd => rd.baseRuleName.Id == baseRuleName.Id);
+          (prefixRDs, postfixRDs)
+        }
+
+        def extentionPoints = TypedGrammar.Rules
+          .MapFiltered(_ is RuleDefinition.ExtentionPoint, _ :> RuleDefinition.ExtentionPoint)
+          .Map(baseRD => (baseRD, findExtentionRules(baseRD.Name)));
+
+        def externalExtentionPoints = TypedGrammar.Rules
+          .MapFiltered(_ is RuleDefinition.ExternalRule, _ :> RuleDefinition.ExternalRule)
+          .Filter(_.isExtentionPoint)
+          .Map(baseRD => (baseRD, findExtentionRules(baseRD.Name)));
+
+        def extentionPoints = extentionPoints.Map((extentionPoint, (prefixRDs, postfixRDs)) =>
+        {
+          def names = ExtensionPointMemoizeNames(extentionPoint.Name);
+          def prefixDescriptors  = prefixRDs. Map(rd => <[ $(DecorateRuleClassName(rd.Name.Id) : dyn).StaticDescriptor ]>);
+          def postfixDescriptors = postfixRDs.Map(rd => <[ $(DecorateRuleClassName(rd.Name.Id) : dyn).StaticDescriptor ]>);
+          def prefixRules  = <[ $(names.PrefixRules : dyn) ]>;
+          def postfixRules = <[ $(names.PostfixRules : dyn) ]>;
+          [(prefixDescriptors, prefixRules), (postfixDescriptors, postfixRules)]
+        }).Flatten();
+
+        def externalExtentionPoints = externalExtentionPoints.Map(fun(extentionPoint, (prefixRDs, postfixRDs))
+        {
+          def names = ExtensionPointMemoizeNames(extentionPoint.Name);
+          def prefixDescriptors  = prefixRDs. Map(rd => <[ $(DecorateRuleClassName(rd.Name.Id) : dyn).StaticDescriptor ]>);
+          def postfixDescriptors = postfixRDs.Map(rd => <[ $(DecorateRuleClassName(rd.Name.Id) : dyn).StaticDescriptor ]>);
+          def prefixRules  = <[ $(DecorateGrammarRef(extentionPoint.grammarRef) : dyn).$(names.PrefixRules : dyn) ]>;
+          def postfixRules = <[ $(DecorateGrammarRef(extentionPoint.grammarRef) : dyn).$(names.PostfixRules : dyn) ]>;
+          [(prefixDescriptors, prefixRules), (postfixDescriptors, postfixRules)]
+        }).Flatten();
+
+        extentionPoints.Append(externalExtentionPoints).Map((descriptors, rules) =>
+        {
+          if (descriptors.Length == 0)
+            <[ () ]>
+          else
+          {
+            def inits = descriptors.MapI((index, descriptor) => <[ $rules[prevLength + $index] = $descriptor.Create(this) ]>);
+            <[
+              prevLength = $rules?.Length;
+              Array.Resize(ref $rules, prevLength + $(descriptors.Length : int));
+              { ..$inits }
+            ]>
+          }
+        });
+      }
+
+      DefineImplementation(
+        <[decl:
+          private LoadExtensionRules() : void
+          {
+            mutable prevLength; _ = prevLength;
+            { ..$inits }
+          }
+        ]>);
+    }
+  }
+}

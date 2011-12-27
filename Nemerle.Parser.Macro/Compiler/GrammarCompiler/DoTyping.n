@@ -4,6 +4,7 @@ using Nemerle.Utility;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Assertions;
+using Nemerle.Imperative;
 
 using System;
 using System.Linq;
@@ -13,9 +14,21 @@ namespace Nemerle.Parser
 {
   partial internal class GrammarCompiler
   {
-    private _externalGrammars : SCG.List[TypeBuilder] = SCG.List();
-    public DoTyping() : void
+    private _externalGrammars : SCG.List[GrammarRef * TypeBuilder] = SCG.List();
+
+    private _externalRuleTypeGetters : SCG.Dictionary[int, NameRef -> RuleType] = SCG.Dictionary();
+    public GetExternalRuleType(rd : RuleDefinition.ExternalRule) : RuleType
     {
+      _externalRuleTypeGetters[rd.grammarRef.Id](rd.Name)
+    }
+
+    private mutable _loadingExternalGrammars : bool = false;
+    public LoadExternalGrammars() : void
+    {
+      when (_loadingExternalGrammars)
+        return;
+      _loadingExternalGrammars = true;
+
       foreach (grammarRef in ParsedGrammar.GrammarRefs)
       {
         match (grammarRef.GrammarType)
@@ -24,18 +37,23 @@ namespace Nemerle.Parser
             def tb = ti :> TypeBuilder;
             when (!tbArgs.IsEmpty())
               Message.Error(grammarRef.Location, "Generic grammar not supported.");
-            def grammarId = _externalGrammars.Count;
-            _externalGrammars.Add(tb);
+            _externalGrammars.Add((grammarRef, tb));
 
             match (tb.UserData[typeof(GrammarCompiler)])
             {
               | compiler is GrammarCompiler =>
+                compiler.LoadExternalGrammars();
                 def grammar = compiler.ParsedGrammar;
-                foreach (ruleName in grammar.Names)
+                _externalRuleTypeGetters.Add(grammarRef.Id, grammar.GetRuleType);
+                foreach (rule in grammar.Rules)
                 {
-                  def ruleType = grammar.GetRuleType(ruleName);
-                  def isExtentionPoint = grammar.GetRule(ruleName) is RuleDefinition.ExtentionPoint;
-                  _parsedGrammar = _parsedGrammar.Add(RuleDefinition.ExternalRule(ruleName.Location, _parsedGrammar.Count, ruleName, [], grammarId, ruleType, isExtentionPoint));
+                  match (rule)
+                  {
+                    | RuleDefinition.ExternalRule => ()
+                    | rule =>
+                      def isExtentionPoint = rule is RuleDefinition.ExtentionPoint;
+                      _parsedGrammar = _parsedGrammar.Add(RuleDefinition.ExternalRule(rule.Name.Location, _parsedGrammar.Count, rule.Name, [], grammarRef, isExtentionPoint));
+                  }
                 }
 
               | _ => Message.Error(grammarRef.Location, "External refirence not implemented.");
@@ -44,6 +62,11 @@ namespace Nemerle.Parser
           | _ => Message.Error(grammarRef.Location, "Not class.");
         }
       }
+    }
+
+    public DoTyping() : void
+    {
+      LoadExternalGrammars();
 
       _allRules = CheckRuleCalls(_parsedGrammar);
 

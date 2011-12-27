@@ -8,6 +8,8 @@ using System;
 using System.Linq;
 using SCG = System.Collections.Generic;
 
+using Nemerle.Parser.Internal;
+
 namespace Nemerle.Parser
 {
   partial internal class GrammarCompiler
@@ -18,22 +20,41 @@ namespace Nemerle.Parser
       DefineGetRuleName();
       DefineResetMaxRollbackPos();
       DefineResetMemoization();
-      DefineInitExtensionRules();
+      DefineLoadExtensionRules();
+      DefineSaveState();
 
-      foreach (tb in _externalGrammars with grammarId)
+      def dependencies = SCG.List();
+      foreach ((grammarRef, tb) in _externalGrammars)
       {
         match (tb.GetAllSubTypes().Find(tb => tb.Name == "Grammar"))
         {
-          | Some(subTB) =>
-            DefineImplementation(<[decl:
-              private mutable $($"_grammar$grammarId" : dyn) : $(subTB.GetMemType() : typed)
-            ]>);
-
-          | None() =>
-            Message.Error(tb.Location, "Invalid external grammar.");
+          | Some(subTB) => dependencies.Add((grammarRef, subTB))
+          | None()      => Message.Error(tb.Location, "Invalid external grammar.")
         }
       }
 
+      foreach ((grammarRef, tb) in dependencies)
+        DefineImplementation(<[decl:
+          private mutable $(DecorateGrammarRef(grammarRef) : dyn) : $(tb.GetMemType() : typed)
+        ]>);
+
+      DefineImplementation(<[decl:
+        public Init() : void
+        {
+          _parsingSource = Parser.ParsingSource;
+          { ..$(dependencies.Map((grammarRef, tb) => <[ $(DecorateGrammarRef(grammarRef) : dyn) = Parser.GetGrammar($(tb.GetMemType() : typed).StaticDescriptor).Value :> $(tb.GetMemType() : typed) ]> )) }
+          LoadExtensionRules();
+        }
+      ]>);
+
+      DefineImplementation(<[decl:
+        public static Dependencies() : array[GrammarDescriptor]
+        {
+          array[..$(dependencies.Map((_, tb) => <[ $(tb.GetMemType() : typed).StaticDescriptor ]>))]
+        }
+      ]>);
+
+      _stateTB.Compile();
       _implTB.Compile();
     }
   }
