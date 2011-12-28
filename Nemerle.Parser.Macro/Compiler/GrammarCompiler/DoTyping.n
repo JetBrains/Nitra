@@ -14,14 +14,25 @@ namespace Nemerle.Parser
 {
   partial internal class GrammarCompiler
   {
-    private _externalGrammars : SCG.List[GrammarRef * TypeBuilder] = SCG.List();
-
-    private _externalRuleTypeGetters : SCG.Dictionary[int, NameRef -> RuleType] = SCG.Dictionary();
-    public GetExternalRuleType(rd : RuleDefinition.ExternalRule) : RuleType
+    public static GetNestedTypes(this ti : LibraryReference.ExternalTypeInfo) : list[TypeInfo]
     {
-      _externalRuleTypeGetters[rd.grammarRef.Id](rd.Name)
+      def nestedTypes = SCG.List();
+      foreach ((_, node) in ti.NamespaceNode.Children.KeyValuePairs)
+      {
+        node.EnsureCached();
+        match (node.Value)
+        {
+          | NamespaceTree.TypeInfoCache.Cached(ti)           => nestedTypes.Add(ti)
+          | NamespaceTree.TypeInfoCache.CachedAmbiguous(tis) => nestedTypes.AddRange(tis)
+          | _ => ()
+        }
+      }
+      nestedTypes.Filter(nested => nested.DeclaringType?.Equals(ti));
     }
 
+    private _externalGrammars : SCG.List[GrammarRef * TypeInfo] = SCG.List();
+
+    private _externalRuleTypeGetters : SCG.Dictionary[int, NameRef -> RuleType] = SCG.Dictionary();
     private mutable _loadingExternalGrammars : bool = false;
     public LoadExternalGrammars() : void
     {
@@ -33,30 +44,66 @@ namespace Nemerle.Parser
       {
         match (grammarRef.GrammarType)
         {
-          | FixedType.Class(ti, tbArgs) =>
-            def tb = ti :> TypeBuilder;
-            when (!tbArgs.IsEmpty())
+          | FixedType.Class(ti, tiArgs) =>
+            when (!tiArgs.IsEmpty())
               Message.Error(grammarRef.Location, "Generic grammar not supported.");
-            _externalGrammars.Add((grammarRef, tb));
-
-            match (tb.UserData[typeof(GrammarCompiler)])
+            match (ti)
             {
-              | compiler is GrammarCompiler =>
-                compiler.LoadExternalGrammars();
-                def grammar = compiler.ParsedGrammar;
-                _externalRuleTypeGetters.Add(grammarRef.Id, compiler.GetRuleType);
-                foreach (rule in grammar.Rules)
+              | tb is TypeBuilder =>
+                match (tb.UserData[typeof(GrammarCompiler)])
                 {
-                  match (rule)
-                  {
-                    | RuleDefinition.ExternalRule => ()
-                    | rule =>
-                      def isExtentionPoint = rule is RuleDefinition.ExtentionPoint;
-                      _parsedGrammar = _parsedGrammar.Add(RuleDefinition.ExternalRule(rule.Name.Location, _parsedGrammar.Count, rule.Name, [], grammarRef, isExtentionPoint));
-                  }
+                  | compiler is GrammarCompiler =>
+                    _externalGrammars.Add((grammarRef, compiler._implTB));
+                    compiler.LoadExternalGrammars();
+                    def grammar = compiler.ParsedGrammar;
+                    _externalRuleTypeGetters.Add(grammarRef.Id, compiler.GetRuleType);
+                    foreach (rule in grammar.Rules)
+                    {
+                      match (rule)
+                      {
+                        | RuleDefinition.ExternalRule => ()
+                        | rule =>
+                          def isExtentionPoint = rule is RuleDefinition.ExtentionPoint;
+                          _parsedGrammar = _parsedGrammar.Add(RuleDefinition.ExternalRule(rule.Name.Location, _parsedGrammar.Count, rule.Name, [], grammarRef, isExtentionPoint));
+                      }
+                    }
+
+                  | _ => Message.Error("Implementation eror. No GrammarCompiler in type builder.");
                 }
 
-              | _ => Message.Error(grammarRef.Location, "External refirence not implemented.");
+              | ti is LibraryReference.ExternalTypeInfo =>
+                match (ti.GetNestedTypes().Filter(ti => ti.Name == "Grammar"))
+                {
+                  | [ti] =>
+                    _externalGrammars.Add((grammarRef, ti));
+                    def ruleMethods = ti
+                      .GetMembers()
+                      .OfType.[IMethod]()
+                      .Map(method =>
+                          match (ParseRuleName(method.Name))
+                          {
+                            | Some(name) => 
+                              match (method.GetParameters().Last().Type)
+                              {
+                                | FixedType.Ref(type) => Some((method, name, type))
+                                | _                   => None()
+                              }
+                            | _ => None()
+                          }
+                        );
+                    def ruleNameToType = Hashtable();
+                    foreach (Some((method, name, type)) in ruleMethods)
+                    {
+                      ruleNameToType.Add(name, RuleType.NType(type :> FixedType));
+                      def isExtentionPoint = method.GetParameters().Length == 4;
+                      _parsedGrammar = _parsedGrammar.Add(RuleDefinition.ExternalRule(method.NameLocation, _parsedGrammar.Count, NameRef(method.NameLocation, name), [], grammarRef, isExtentionPoint));
+                    }
+                    _externalRuleTypeGetters.Add(grammarRef.Id, name => ruleNameToType[name.Id]);
+
+                    | _ => Message.Error(grammarRef.Location, $"$(ti.FullName) not grammar.")
+                }
+
+              | _ => Message.Error("o_O");
             }
 
           | _ => Message.Error(grammarRef.Location, "Not class.");
