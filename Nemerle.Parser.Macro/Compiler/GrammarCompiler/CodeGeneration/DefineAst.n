@@ -14,44 +14,75 @@ namespace Nemerle.Parser
 {
   partial internal class GrammarCompiler
   {
-    public DefineAst() : void
+    private _astVariants : Hashtable[string, TypeBuilder] = Hashtable();
+
+    [Memoize]
+    public DefineAstType(rd : RuleDefinition) : TypeBuilder
     {
-      def variants = Hashtable();
-      foreach (rd in TypedGrammar.Rules)
-        when (rd.Attributes.Find(_ is RuleAttribute.Ast) is Some(RuleAttribute.Ast as ast))
-        {
+      match (rd)
+      {
+        | RuleDefinition.Simple(PType(basePType), _) with baseType = Typer.BindFixedType(basePType)
+        | RuleDefinition.Simple(NType(baseType), _) =>
+          GrammarTB.DefineNestedType(<[decl: public class $(MakePublicRuleName(rd.Name.Id) : dyn) : $(baseType : typed) {} ]>);
+        | _ => assert(false)
+      }
+    }
+
+    public DefineAstBody(rd : RuleDefinition) : void
+    {
+      match (rd.Attributes.Find(_ is RuleAttribute.Ast), GetRuleHandlerArgs(rd, true))
+      {
+        | (Some(RuleAttribute.Ast as ast), Some(args)) =>
+          when (args.Length != ast.names.Length)
+            Message.Error(ast.Location, $"Expected $(args.Length) member got $(ast.names.Length)");
+          def fields = args.Zip(ast.names).Map((argType, name) => <[decl: public $(name.Id : dyn) : $(argType : typed); ]>);
           match (rd)
           {
+            | RuleDefinition.Simple =>
+              def tb = DefineAstType(rd);
+              foreach (field in fields)
+                tb.Define(field);
+              def args = args.Zip(ast.names).Map((argType, name) => PParameter(<[ $(name.Id : dyn) : $(argType : typed) ]>));
+              def assignments = ast.names.Map(name => <[ this.$(name.Id : dyn) = $(name.Id : dyn); ]>);
+              tb.Define(<[decl:
+                public this(..$args)
+                {
+                  ..$assignments
+                }
+              ]>);
+              tb.Compile();
+
             | RuleDefinition.ExtentionPrefix as rd1 with baseRuleName = rd1.baseRuleName
             | RuleDefinition.ExtentionPostfix as rd2 with baseRuleName = rd2.baseRuleName =>
-              match (GetRuleHandlerArgs(rd, true))
+              def (variantName, optionName) = GetRuleAstNames(rd);
+              def newVariant()
               {
-                | Some(args) =>
-                  when (args.Length != ast.names.Length)
-                    Message.Error(ast.Location, $"Expected $(args.Length) member got $(ast.names.Length)");
-                  def (variantName, optionName) = GetRuleAstNames(rd);
-                  def newVariant()
-                  {
-                    def baseType = GetRuleNType(rd);
-                    GrammarTB.DefineNestedType(<[decl: public variant $(variantName : dyn) : $(baseType  : typed){} ]>)
-                  }
-                  def addOption(variantTB)
-                  {
-                    def fields = args.Zip(ast.names).Map((argType, name) => <[decl: public $(name.Id : dyn) : $(argType : typed); ]>);
-                    def name = Name.Global(Typer.Manager, optionName);
-                    def attributes = AttributesAndModifiers(NemerleAttributes.Public, []);
-                    def variantOption = TopDeclaration.VariantOption(name, attributes, Typarms([], []), fields);
-                    variantTB.DefineNestedType(ClassMember.TypeDeclaration(variantOption)).Compile();
-                    variantTB
-                  }
-                  _ = variants.Update(baseRuleName.Id, newVariant, addOption);
-
-                | _ => assert(false)
+                def baseType = GetRuleNType(rd);
+                GrammarTB.DefineNestedType(<[decl: public variant $(variantName : dyn) : $(baseType  : typed){} ]>)
               }
+              def addOption(variantTB)
+              {
+                def name = Name.Global(Typer.Manager, optionName);
+                def attributes = AttributesAndModifiers(NemerleAttributes.Public, []);
+                def variantOption = TopDeclaration.VariantOption(name, attributes, Typarms([], []), fields);
+                def tb = variantTB.DefineNestedType(ClassMember.TypeDeclaration(variantOption));
+                tb.Compile();
+                variantTB
+              }
+              _ = _astVariants.Update(baseRuleName.Id, newVariant, addOption);
+
             | _ => Message.Error(rd.Location, "Ast generation for this rule type not supported.");
           }
-        }
-      foreach (kv in variants)
+        | _ => assert(false)
+      }
+    }
+
+    public DefineAst() : void
+    {
+      foreach (rd when rd.IsAst in TypedGrammar.Rules)
+        _ = DefineAstBody(rd);
+
+      foreach (kv in _astVariants)
         kv.Value.Compile();
     }
   }
