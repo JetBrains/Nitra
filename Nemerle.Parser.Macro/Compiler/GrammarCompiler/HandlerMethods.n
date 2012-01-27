@@ -20,8 +20,8 @@ namespace Nemerle.Parser
         | Some(Rule.Capture(argType, _)) =>
           def res = match (argType)
           {
-            | Tuple(types) => types.MapFiltered(ty => !(ty is RuleType.Void), ty => RuleTypeToNType(ty, useNList));
-            | ty           => [RuleTypeToNType(ty, useNList)];
+            | Tuple(types) => types.MapFiltered(ty => !(ty is RuleType.Void), ty => RuleTypeToNType(ty, useNList))
+            | ty           => [RuleTypeToNType(ty, useNList)]
           }
           Some(res)
         | _ => None()
@@ -33,58 +33,75 @@ namespace Nemerle.Parser
     {
       def methodsMap = Hashtable();
       def allMethods = GrammarTB.GetParsedMembers(true).MapFiltered(_ is ClassMember.Function, _ :> ClassMember.Function);
-      foreach (ruleDef when !ruleDef.Attributes.Exists(_ is RuleAttribute.Ast) in TypedGrammar.Rules)
+      def getSignature(rd : RuleDefinition)
       {
-        match (GetRuleHandlerArgs(ruleDef, false), GetRuleType(ruleDef.Name))
-        {   // Capture with defined type. User must define handler for it!
-          | (Some(types), NType(retNType)) when !retNType.Equals(GrammarTB.InternalType.Void) =>
-
-            mutable invalidHandler = false;
-            def error(loc, msg)
-            {
-              Message.Error(loc, msg);
-              invalidHandler = true;
-            }
-            match (allMethods.Filter(m => m.Name == ruleDef.Name.Id))
-            {
-              | []       =>
-                match (types)
-                {
-                  | [ty] when ty.TryUnify(retNType) => ()
-                  | _ => invalidHandler = true
-                }
-
-              | [method] =>
-                // check parameters types...
-                def parms = method.header.Parameters;
-                
-                if (parms.Length == types.Length)
-                  foreach ((need, p) in types.ZipLazy(parms))
-                  {
-                    def real = BindFixedType(p.Type);
-                    unless (need.TryUnify(real))
-                      error(p.Location, $<#The parameter "$(p.Name)" has wrong type $real (need type $need).#>);
-                  }
-                else
-                  error(method.Location, $<#The method-handler of rule "$(ruleDef.Name)" must have $(types.Length) parameters.#>);
-
-                // check return type...
-                def methodRetTy = BindFixedType(method.header.ReturnType);
-
-                unless (methodRetTy.TryRequire(retNType))
-                  error(method.header.ReturnType.Location, $<#The method-handler of rule "$(ruleDef.Name)" has wrong return type (need type $retNType).#>);
-
-                unless (invalidHandler)
-                  methodsMap.Add(ruleDef.Name, method);
-
-              | methods  => methods.Iter(m => error(m.Location, "Overloading not supported for rule method-handler"));
-            }
-            
-            when (invalidHandler)
-              Message.Error(ruleDef.Name.Location, $<#You need define method-handler with signature: $(ruleDef.Name)(_ : ..$(types; ", _ : ")) : $retNType#>);
-              
-          | _ => ()
+        if (rd.IsAst)
+        {
+          Some((rd, [GetRuleNType(rd)], GrammarTB.InternalType.Void, true))
         }
+        else
+        {
+          match (GetRuleHandlerArgs(rd, false))
+          {
+            | Some(types) =>
+              match (GetRuleType(rd.Name))
+              {
+                | NType(retType) when !retType.Equals(GrammarTB.InternalType.Void) =>
+                  def isOption = match (types)
+                  {
+                    | [ty] when ty.TryUnify(retType) => true
+                    | _                              => false
+                  }
+                  Some((rd, types, retType, isOption))
+
+                | _ => None()
+              }
+            | None => None()
+          }
+        }
+      }
+      foreach (Some((rd, types, retType, isOption)) in TypedGrammar.Rules.Map(getSignature))
+      {
+        mutable invalidHandler = false;
+        def error(loc, msg)
+        {
+          Message.Error(loc, msg);
+          invalidHandler = true;
+        }
+        match (allMethods.Filter(m => m.Name == rd.Name.Id))
+        {
+          | []       =>
+            when (!isOption)
+              invalidHandler = true;
+
+          | [method] =>
+            // check parameters types...
+            def parms = method.header.Parameters;
+
+            if (parms.Length == types.Length)
+              foreach ((need, p) in types.ZipLazy(parms))
+              {
+                def real = BindFixedType(p.Type);
+                unless (need.TryUnify(real))
+                  error(p.Location, $<#The parameter "$(p.Name)" has wrong type $real (need type $need).#>);
+              }
+            else
+              error(method.Location, $<#The method-handler of rule "$(rd.Name)" must have $(types.Length) parameters.#>);
+
+            // check return type...
+            def methodRetTy = BindFixedType(method.header.ReturnType);
+
+            unless (methodRetTy.TryRequire(retType))
+              error(method.header.ReturnType.Location, $<#The method-handler of rule "$(rd.Name)" has wrong return type (need type $retType).#>);
+
+            unless (invalidHandler)
+              methodsMap.Add(rd.Name, method);
+
+          | methods  => methods.Iter(m => error(m.Location, "Overloading not supported for rule method-handler"));
+        }
+
+        when (invalidHandler)
+          Message.Error(rd.Name.Location, $<#You need define method-handler with signature: $(rd.Name)(_ : ..$(types; ", _ : ")) : $retType#>);
       }
       methodsMap
     }
