@@ -14,7 +14,7 @@ namespace Nemerle.Parser
 {
   partial internal class GrammarCompiler
   {
-    public static GetNestedTypes(this ti : LibraryReference.ExternalTypeInfo) : list[TypeInfo]//TODO: Move to Nemerle.Compiler
+    public static GetNestedTypes(this ti : LibraryReference.ExternalTypeInfo) : list[LibraryReference.ExternalTypeInfo]//TODO: Move to Nemerle.Compiler
     {
       def nestedTypes = SCG.List();
       foreach ((_, node) in ti.NamespaceNode.Children.KeyValuePairs)
@@ -27,7 +27,7 @@ namespace Nemerle.Parser
           | _ => ()
         }
       }
-      nestedTypes.Filter(nested => nested.DeclaringType?.Equals(ti));
+      nestedTypes.Filter(nested => nested.DeclaringType?.Equals(ti)).Map(_ :> LibraryReference.ExternalTypeInfo);
     }
 
     private _externalGrammars : SCG.List[GrammarRef * TypeInfo] = SCG.List();
@@ -71,21 +71,36 @@ namespace Nemerle.Parser
                   | _ => Message.Error("Implementation eror. No GrammarCompiler in type builder.");
                 }
 
-              | ti is LibraryReference.ExternalTypeInfo =>
-                match (ti.GetNestedTypes().Filter(ti => ti.Name == GrammarImplTB.Name))
+              | grammarTI is LibraryReference.ExternalTypeInfo =>
+                match (grammarTI.GetNestedTypes().Filter(ti => ti.Name == GrammarImplTB.Name))
                 {
-                  | [ti] =>
-                    _externalGrammars.Add((grammarRef, ti));
-                    def ruleNameToType = Hashtable();
-                    foreach (method is IMethod in ti.GetMembers())
-                      when (ParseRuleName(method.Name) is Some(name))
-                      when (method.GetParameters().Last().Type is FixedType.Ref(type))
-                      {
-                        ruleNameToType.Add(name, RuleType.NType(type :> FixedType));
-                        def isExtentionPoint = method.GetParameters().Length == 4;
-                        _parsedGrammar = _parsedGrammar.Add(RuleDefinition.ExternalRule(method.NameLocation, _parsedGrammar.Count, NameRef(method.NameLocation, name), [], grammarRef, isExtentionPoint));
-                      }
-                    _externalRuleTypeGetters.Add(grammarRef.Id, name => ruleNameToType[name.Id]);
+                  | [grammarImplTI] =>
+                    match (grammarImplTI.GetNestedTypes().Filter(ti => ti.Name == GrammarDescriptorImplTB.Name))
+                    {
+                      | [grammarDescriptorImplTI] =>
+                        _externalGrammars.Add((grammarRef, grammarImplTI));
+                        def ruleNameToType = Hashtable();
+                        foreach (ruleTI in grammarDescriptorImplTI.GetNestedTypes())
+                          when (ParseRuleClassName(ruleTI.Name) is Some((type, name)))
+                          {
+                            def ruleType = ret:
+                              {
+                                foreach (method is IMethod in ruleTI.GetMembers())
+                                  when (method.Name == "ResultType")
+                                    if (method.ReturnType.TryUnify(Typer.InternalType.Void))
+                                      ret(RuleType.Void());
+                                    else
+                                      ret(RuleType.NType(method.ReturnType :> FixedType));
+                                RuleType.Chars();
+                              }
+                            ruleNameToType.Add(name, ruleType);
+                            def isExtentionPoint = type == "point";
+                            _parsedGrammar = _parsedGrammar.Add(RuleDefinition.ExternalRule(ruleTI.NameLocation, _parsedGrammar.Count, NameRef(ruleTI.NameLocation, name), [], grammarRef, isExtentionPoint));
+                          }
+                        _externalRuleTypeGetters.Add(grammarRef.Id, name => ruleNameToType[name.Id]);
+
+                      | _ => Message.Error(grammarRef.Location, $"$(ti.FullName) not grammar.")
+                    }
 
                   | _ => Message.Error(grammarRef.Location, $"$(ti.FullName) not grammar.")
                 }
