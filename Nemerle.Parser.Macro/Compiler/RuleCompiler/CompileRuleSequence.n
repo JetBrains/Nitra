@@ -14,59 +14,46 @@ namespace Nemerle.Parser
   partial internal class RuleCompiler
   {
     private mutable _sequenseLevel : int = 0;
-    private NeedGenerateSequenceOffsets : bool { get { _sequenseLevel == 1 && (_ruleDefinition is RuleDefinition.ExtentionPrefix || _ruleDefinition is RuleDefinition.ExtentionPostfix) } }
 
     public CompileRuleSequence(rule : Rule.Sequence, results : list[string]) : PExpr
     {
-      def generate(rules : list[Rule], results : list[string], ofsPos : int) : PExpr
+      ++_sequenseLevel;
+      def code = SCG.List();
+      def generateSequenceOffsets = _sequenseLevel == 1 && (_ruleDefinition is RuleDefinition.ExtentionPrefix || _ruleDefinition is RuleDefinition.ExtentionPostfix);
+      def generate(rules : list[Rule], results : list[string], ofsPos : int) : void
       {
         match (rules)
         {
-          //| [rule]        => CompileRule(rule, results);
           | rule :: rules =>
-            def elementCode(curResults, tailResults)
+            def seqElement(curResults, tailResults)
             {
-              def saveOffset()
-              {
-                if (NeedGenerateSequenceOffsets)
-                  <[ def $($"ofs$ofsPos" : dyn) = pos; ]>
-                else
-                  <[ () ]>
-              }
               def checkResult()
               {
-                if (NeedGenerateSequenceOffsets)
+                if (generateSequenceOffsets)
                   <[ pos >= 0 && (isBest || { isBest = bestOffsets[$(ofsPos : int)] < pos; isBest || bestOffsets[$(ofsPos : int)] == pos }) ]>
                 else
                   <[ pos >= 0 ]>
               }
-              def ruleCode = CompileRule(rule, curResults);
-              <[
-                {
-                  def pos = $ruleCode;
-                  if ($(checkResult()))
-                  {
-                    $(saveOffset());
-                    $(generate(rules, tailResults, ofsPos + 1))
-                  }
-                  else -1
-                }
-              ]>
+              code.Add(<[ def pos = $(CompileRule(rule, curResults)); ]>);
+              code.Add(<[ unless ($(checkResult())) seqResult(-1); ]>);
+              when (generateSequenceOffsets)
+                code.Add(<[ def $($"ofs$ofsPos" : dyn) = pos; ]>);
+              generate(rules, tailResults, ofsPos + 1)
             }
             match (rule)
             {
               | Capture(ty, _) when !(ty is RuleType.None || ty is RuleType.Void) =>
                 match (results)
                 {
-                  | result :: results => elementCode([result], results)
-                  | _ => PExpr.Error("Empty result list")
+                  | result :: results => seqElement([result], results)
+                  | _                 => code.Add(PExpr.Error("Empty result list"))
                 }
-              | _ => elementCode([], results)
+              | _ => seqElement([], results)
             }
 
           | [] =>
             assert(results.Length == 0);
-            if (NeedGenerateSequenceOffsets)
+            def res = if (generateSequenceOffsets)
             {
               def offsetSetters = $[0..ofsPos - 1].Map(i => <[ bestOffsets[$(i : int)] = $($"ofs$i" : dyn); ]>);
               <[
@@ -76,36 +63,19 @@ namespace Nemerle.Parser
                   for (mutable i = $(ofsPos : int); i < bestOffsets.Length && bestOffsets[i] >= 0; ++i)
                     bestOffsets[i] = -1;
                   pos
-                } else -1
+                }
+                else
+                  -1;
               ]>
             }
             else
-              <[ { pos } ]>
+              <[ pos ]>;
+            code.Add(res);
         }
       }
-
-      def generateNoResult(rules : list[Rule]) : PExpr
-      {
-        match (rules)
-        {
-          | []            => <[ { pos } ]>
-          | [rule]        => CompileRule(rule, [])
-          | rule :: rules =>
-            <[
-              def pos = $(CompileRule(rule, []));
-              if (pos >= 0) $(generateNoResult(rules)) else -1
-            ]>
-        }
-      }
-
-      ++_sequenseLevel;
-      def res = match (results)
-      {
-        | [] => generateNoResult(rule.rules);
-        | _  => generate(rule.rules, results, 0);
-      }
+      generate(rule.rules, results, 0);
       --_sequenseLevel;
-      res;
+      <[ { seqResult: { ..$(code.NToList()) } } ]>
     }
   }
 }
