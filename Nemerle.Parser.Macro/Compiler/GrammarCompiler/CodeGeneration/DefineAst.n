@@ -14,81 +14,97 @@ namespace Nemerle.Parser
 {
   partial internal class GrammarCompiler
   {
-    private _astVariants : Hashtable[NameRef, TypeBuilder] = Hashtable();
-
     [Memoize]
     public DefineAstType(rd : RuleDefinition) : TypeBuilder
     {
+      assert(rd.IsAst);
       match (rd)
       {
-        | RuleDefinition.Simple(PType(basePType), _) with baseType = BindFixedType(basePType)
-        | RuleDefinition.Simple(NType(baseType), _) =>
-          GrammarTB.DefineNestedType(<[decl: public partial class $(MakePublicRuleName(rd.Name) : dyn) : $(baseType : typed) {} ]>);
-
-        | RuleDefinition.ExtentionPrefix as rd1 with baseRuleName = rd1.baseRuleName
-        | RuleDefinition.ExtentionPostfix as rd2 with baseRuleName = rd2.baseRuleName =>
-          mutable tb;
-          def (variantName, optionName) = GetRuleAstNames(rd);
-          def newVariant()
-          {
-            def baseType = GetBaseRuleNType(rd);
-            GrammarTB.DefineNestedType(<[decl: public partial variant $(variantName : dyn) : $(baseType  : typed){} ]>)
-          }
-          def addOption(variantTB)
-          {
-            def name = Name.Global(Typer.Manager, optionName);
-            def attributes = AttributesAndModifiers(NemerleAttributes.Public | NemerleAttributes.Partial, []);
-            def variantOption = TopDeclaration.VariantOption(name, attributes, Typarms([], []), []);
-            tb = variantTB.DefineNestedType(ClassMember.TypeDeclaration(variantOption));
-            variantTB
-          }
-          _ = _astVariants.Update(baseRuleName, newVariant, addOption);
-          tb
+        | RuleDefinition.ExtentionPoint(PType(basePType)) with baseType = BindFixedType(basePType)
+        | RuleDefinition.ExtentionPoint(NType(baseType))
+        | RuleDefinition.Simple(PType(basePType), _)      with baseType = BindFixedType(basePType)
+        | RuleDefinition.Simple(NType(baseType), _)
+        | RuleDefinition.ExtentionPrefix                  with baseType = GetBaseRuleNType(rd)
+        | RuleDefinition.ExtentionPostfix                 with baseType = GetBaseRuleNType(rd) =>
+          GrammarTB.DefineNestedType(<[decl:
+            public partial class $(MakePublicRuleName(rd.Name) : dyn) : $(baseType : typed)
+            {
+              public this(location : Location, errors : list[ErrorInfo])
+              {
+                base(location, errors)
+              }
+            }
+          ]>)
 
         | _ => assert(false)
       }
-    }
-
-    public DefineAstBody(rd : RuleDefinition) : void
-    {
-      def tb = DefineAstType(rd);
-      match (rd.Attributes.Find(_ is RuleAttribute.Ast), GetRuleHandlerArgs(rd, true))
-      {
-        | (Some(RuleAttribute.Ast as ast), None) when ast.names.Length == 0 => ()
-        | (Some(RuleAttribute.Ast as ast), Some(args)) =>
-          when (args.Length != ast.names.Length)
-            Message.Error(ast.Location, $"Expected $(args.Length) member got $(ast.names.Length)");
-          def fields = args.Zip(ast.names).Map((argType, name) => <[decl: public $(name.AsName : dyn) : $(argType : typed); ]>);
-          match (rd)
-          {
-            | RuleDefinition.Simple
-            | RuleDefinition.ExtentionPrefix
-            | RuleDefinition.ExtentionPostfix =>
-              foreach (field in fields)
-                tb.Define(field);
-              def args = args.Zip(ast.names).Map((argType, name) => PParameter(<[ $(name.AsName : dyn) : $(argType : typed) ]>));
-              def assignments = ast.names.Map(name => <[ this.$(name.AsName : dyn) = $(name.AsName : dyn); ]>);
-              tb.Define(<[decl:
-                public this(..$args)
-                {
-                  ..$assignments
-                }
-              ]>);
-
-            | _ => Message.Error(rd.Location, "Ast generation for this rule type not supported.");
-          }
-        | _ => assert(false)
-      }
-      tb.Compile();
     }
 
     public DefineAst() : void
     {
       foreach (rd when rd.IsAst in TypedGrammar.Rules)
-        _ = DefineAstBody(rd);
+      {
+        def tb = DefineAstType(rd);
+        match (rd.Attributes.Find(_ is RuleAttribute.Ast), GetRuleHandlerArgs(rd, true))
+        {
+          | (Some(RuleAttribute.Ast as ast), None) with args = []
+          | (Some(RuleAttribute.Ast as ast), Some(args)) =>
+            when (args.Length != ast.names.Length)
+              Message.Error(ast.Location, $"Expected $(args.Length) member got $(ast.names.Length)");
+            tb.DefineNestedType(<[decl: 
+              public partial new class Error : $(tb.GetMemType() : typed)
+              {
+                public this(location : Location, errors : list[ErrorInfo])
+                {
+                  base(location, errors)
+                }
+              }
+            ]>).Compile();
 
-      foreach (kv in _astVariants)
-        kv.Value.Compile();
+            tb.DefineNestedType(<[decl: 
+              public partial new class Splice : $(tb.GetMemType() : typed)
+              {
+                public this(location : Location, errors : list[ErrorInfo])
+                {
+                  base(location, errors)
+                }
+              }
+            ]>).Compile();
+
+            match (rd)
+            {
+              | RuleDefinition.ExtentionPoint => ()
+              | RuleDefinition.ExtentionPostfix
+              | RuleDefinition.ExtentionPrefix
+              | RuleDefinition.Simple =>
+                def astTb = tb.DefineNestedType(<[decl: 
+                  public partial new class Ast : $(tb.GetMemType() : typed)
+                  {
+                  }
+                ]>);
+                def fields = args.Zip(ast.names).Map((argType, name) => <[decl: public $(name.AsName : dyn) : $(argType : typed); ]>);
+                foreach (field in fields)
+                  astTb.Define(field);
+
+                def locationName = <[ $(Nemerle.Compiler.Parsetree.Name("location") : name) ]>;
+                def errorsName   = <[ $(Nemerle.Compiler.Parsetree.Name("error") : name) ]>;
+                def args = <[ $locationName : Location ]> :: <[ $errorsName : list[ErrorInfo] ]> :: args.Zip(ast.names).Map((argType, name) => <[ $(name.AsName : dyn) : $(argType : typed) ]>);
+                def assignments = ast.names.Map(name => <[ this.$(name.AsName : dyn) = $(name.AsName : dyn); ]>);
+                astTb.Define(<[decl:
+                  public this(..$(args.Map(PParameter)))
+                  {
+                     base($locationName, $errorsName);
+                     { ..$assignments }
+                  }
+                ]>);
+                astTb.Compile();
+              | RuleDefinition.ExternalRule
+              | RuleDefinition.Regular => assert(false);
+            }
+          | _ => assert(false)
+        }
+        tb.Compile();
+      }
     }
   }
 }
