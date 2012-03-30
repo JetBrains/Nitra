@@ -1,0 +1,146 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nemerle.Parser
+{
+  [ParserGrammar(
+    Options = EmitDebugSources,
+    parsergrammar
+    {
+      [StartRule, Ast(Declarations)]
+      Start : Ast = s Declaration* !Any;
+
+      Any = ['\u0000'..'\uFFFF'];
+      NewLineCharacter  = '\n'
+                        | '\r'
+                        | '\u2028'    /*  line separator       */
+                        | '\u2029';   /*  paragraph separator  */
+      NewLine  = "\r\n" | NewLineCharacter;
+
+      Whitespace = [Zs]
+                 | '\t'
+                 | '\v'        /*  vertial tab          */
+                 | '\f';       /*  form feed            */
+
+      Space = Whitespace | NewLine;
+
+      s : void = Space*;                      /* optional spacer          */
+      S : void = !IdentifierPartCharacters s; /* identifier break spacer  */
+
+      LetterCharacter       = [Lu, Ll, Lt, Lm, Lo, Nl];
+      CombiningCharacter    = [Mn, Mc];
+      DecimalDigitCharacter = [Nd];
+      ConnectingCharacter   = [Pc];
+      FormattingCharacter   = [Cf];
+
+      IdentifierStartCharacter  = LetterCharacter | "_";
+      IdentifierPartCharacters  = LetterCharacter | DecimalDigitCharacter | ConnectingCharacter | CombiningCharacter | FormattingCharacter;
+      IdentifierBody            = IdentifierStartCharacter IdentifierPartCharacters*;
+
+      HexDigit           = ['0'..'9', 'a'..'f', 'A'..'F'];
+      ReservedStringChar = "\"" | "\\";
+      ReservedCharChar   = "\'" | "\\";
+
+      [Ast(Open, Parts, Close)]
+      StringLiteral : Ast              = "\"" StringPart* "\"" s;
+      [Ast()]
+      StringPart : Ast;
+      [Ast(Chars)]
+      SimpleStringPart                is StringPart = (!ReservedStringChar Any)+;
+      [Ast(Prefix, Digit0, Digit1, Digit2, Digit3)]
+      UnicodeEscapeSequenceStringPart is StringPart = "\\u" HexDigit HexDigit HexDigit HexDigit;
+      [Ast(Backslash, Char)]
+      EscapeSequenceStringPart        is StringPart = "\\" Any;
+
+      [Ast(Open, Char, Close)]
+      CharLiteral : Ast                = "\'" CharPart "\'" s;
+      [Ast()]
+      CharPart : Ast;
+      [Ast(Chars)]
+      SimpleCharPart                is CharPart = !ReservedCharChar Any;
+      [Ast(Prefix, Digit0, Digit1, Digit2, Digit3)]
+      UnicodeEscapeSequenceCharPart is CharPart = "\\u" HexDigit HexDigit HexDigit HexDigit;
+      [Ast(Backslash, Char)]
+      EscapeSequenceCharPart        is CharPart = "\\" Any;
+
+      Digits = ['0'..'9']+;
+      [Ast(Number)]            Number                   : Ast = Digits s;
+
+      [Ast(Name)]              Identifier               : Ast = IdentifierBody s;
+      [Ast(Names)]             QIdentifier              : Ast = (Identifier, "."s)+;
+
+      [Ast(TypeParts)]         NemerleType              : Ast = (NemerleTypePart, "."s)+;
+      [Ast(Name, TypeArgs)]    NemerleTypePart          : Ast = IdentifierBody s (("."s)? "["s (NemerleType, ","s)* "]"s)?;
+
+      [Ast()]
+      RuleAttribute            : Ast;
+      [Ast(AttributeName)]
+      StartAttribute           is RuleAttribute = "StartRule"S;
+      [Ast(AttributeName, Open, Names, Close)]
+      AstAttribute             is RuleAttribute = "Ast"S "("s (Identifier, ","s)* ")"s;
+      [Ast(Open, Attributes, Close)]
+      RuleAttributeList        : Ast  = "["s (RuleAttribute, ","s)+ "]"s;
+      [Ast(AttributeLists)]
+      RuleAttributes           : Ast  = RuleAttributeList*;
+
+      [Ast()]                  Declaration              : Ast;
+      [Ast(Attributes, Token, Name, Assign, Rule, Semicolon)]
+      TokenRuleDecl            is Declaration = RuleAttributes "token"S Identifier "="s TokenRule ";"s;
+      [Ast(Attributes, RuleKW, Name, Colon, Type, Assign, Rule, Semicolon)]
+      SimpleRuleDecl           is Declaration = RuleAttributes "rule"S Identifier ":"s NemerleType "="s Rule ";"s;
+      [Ast(Attributes, RuleKW, Name, Colon, Type, Semicolon)]
+      ExtentionPointRuleDecl   is Declaration = RuleAttributes "rule"S Identifier ":"s NemerleType ";"s;
+      [Ast(Attributes, RuleKW, Name, Is, Type, Assign, Rule, Semicolon)]
+      ExtentionRuleDecl        is Declaration = RuleAttributes "rule"S Identifier "is"S QIdentifier "="s Rule ";"s;
+
+      [Ast(Using, GrammarName, Semicolon)]
+      UsingDecl                is Declaration = "using"S QIdentifier";"s;
+      [Ast(Using, Alias, Assign, GrammarName, Semicolon)]
+      AliasDecl                is Declaration = "using"S Identifier "="s QIdentifier";"s;
+
+      [Ast(Option, EmitDebugSources, Assign, Value, Semicolon)]
+      OptionEmitDebugSources   is Declaration = "option"S "EmitDebugSources"S "="s Identifier ";"s;
+
+      [Ast(Open, Ranges, Close)]        Ranges          : Ast    = "["s (Range, ","s)+ "]"s;
+
+      [Ast()]                           Range           : Ast;
+      [Ast(Char)]                       SingleCharRange is Range = CharLiteral;
+      [Ast(StartChar, DotDot, EndChar)] CharRange       is Range = CharLiteral ".."s CharLiteral;
+      [Ast(Name)]                       UnicodeRange    is Range = Identifier;
+
+      [Ast()]                        TokenRule           : Ast;
+      [Ast(LeftRule, Op, RightRule)] ChoiceTokenRule     is TokenRule = TokenRule : 10 "|"s TokenRule : 10;
+      [Ast(LeftRule, RightRule)]     SequenceTokenRule   is TokenRule = TokenRule : 20 TokenRule : 20;
+      [Ast(Rule, Op)]                OptionalTokenRule   is TokenRule = TokenRule : 30 "?"s;
+      [Ast(Rule, Op)]                ZeroOrManyTokenRule is TokenRule = TokenRule : 30 "*"s;
+      [Ast(Rule, Op)]                OneOrManyTokenRule  is TokenRule = TokenRule : 30 "+"s;
+      [Ast(Ranges)]                  RangeTokenRule      is TokenRule = Ranges;
+      [Ast(Char)]                    CharTokenRule       is TokenRule = CharLiteral;
+      [Ast(String)]                  StringTokenRule     is TokenRule = StringLiteral;
+      [Ast(Open, Rule, Close)]       RoundsTokenRule     is TokenRule = "("s TokenRule ")"s;
+      [Ast(Name)]                    CallTokenRule       is TokenRule = QIdentifier;
+
+      [Ast()]                                            Rule                        : Ast;
+      [Ast(LeftRule, RightRule)]                         SequenceRule                is Rule = Rule : 10 Rule : 10;
+      [Ast(Op, Rule)]                                    NotRule                     is Rule = "!"s Rule : 20;
+      [Ast(Op, Rule)]                                    AndRule                     is Rule = "&"s Rule : 20;
+      [Ast(Rule, Op)]                                    OptionalRule                is Rule = Rule : 30 "?"s;
+      [Ast(Rule, Op)]                                    ZeroOrManyRule              is Rule = Rule : 30 "*"s;
+      [Ast(Rule, Op)]                                    OneOrManyRule               is Rule = Rule : 30 "+"s;
+      [Ast(Char)]                                        CharRule                    is Rule = CharLiteral;
+      [Ast(String)]                                      StringRule                  is Rule = StringLiteral;
+      [Ast(Open, Rule, Close)]                           RoundsRule                  is Rule = "("s Rule ")"s;
+      [Ast(Name, BP)]                                    CallRule                    is Rule = QIdentifier (":"s Number)?;
+      [Ast(Open, Rule, Semicolon, Separator, Close, Op)] ZeroOrManyWithSeparatorRule is Rule = "("s Rule ";" Rule ")"s "*"s;
+      [Ast(Open, Rule, Semicolon, Separator, Close, Op)] OneOrManyWithSeparatorRule  is Rule = "("s Rule ";" Rule ")"s "+"s;
+    }
+  )]
+  public abstract class GrammarParser2
+  {}
+}
