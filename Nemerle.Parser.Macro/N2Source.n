@@ -1,0 +1,91 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Imperative;
+
+using System.IO;
+using System.IO.File;
+using System.IO.Path;
+using System.IO.Directory;
+
+namespace Nemerle.Parser
+{
+  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
+  public macro N2Source(path : string)
+  {
+    N2SourceImpl.Build(path, Nemerle.Macros.ImplicitCTX());
+  }
+
+  internal module N2SourceImpl
+  {
+    public Build(path : string, typer : Typer) : void
+    {
+      def projDir = GetDirectoryName(typer.Manager.Options.ProjectPath);
+      def resPath =
+        if (IsPathRooted(path)) path
+        else Combine(projDir, path);
+
+      when (!File.Exists(resPath))
+      {
+        Message.Error($<#The "$resPath" not exists.#>);
+        return;
+      }
+
+      def makeWrapperClass(source : ISource, processingCount : int) : void
+      {
+        // request rebuilding type tree when xml changed
+        when (processingCount > 1 && typer.Manager.IsIntelliSenseMode)
+        {
+          typer.Manager.RequestOnBuildTypesTree();
+          return;
+        }
+        try
+        {
+          def parser = GrammarParser2.GrammarImpl();
+          match (parser.ParseStart(SourceSnapshot(source.GetText(), source.FileIndex, resPath)))
+          {
+            | None      =>
+              def (pos, tokens) = parser.Parser.GetErrors();
+              def loc = Parser.Location(parser.Parser.ParsingSource, pos, pos + 1).ToNemerleLocation();
+              foreach (token in tokens)
+                Message.Error(loc, $"expected \"$(token.Name)\" in rule $(token.Rule.Grammar.Name).$(token.Rule.Name)");
+
+            | Some(GrammarParser2.Start.Ast) => ()
+              /*foreach (rd in start.Declarations)
+              {
+                | GrammarParser2.TokenRuleDecl.Ast as rd          => WriteLine(rd.Name);
+                | GrammarParser2.SimpleRuleDecl.Ast as rd         => WriteLine(rd.Name);
+                | GrammarParser2.ExtentionPointRuleDecl.Ast as rd => WriteLine(rd.Name);
+                | GrammarParser2.ExtentionRuleDecl.Ast as rd      => WriteLine(rd.Name);
+                | GrammarParser2.OptionEmitDebugSources.Ast as rd => WriteLine(rd.Value);
+                | GrammarParser2.UsingDecl.Ast as rd              => WriteLine(rd.GrammarName);
+                | GrammarParser2.AliasDecl.Ast as rd              => WriteLine(rd.GrammarName);
+                | _ => assert(false);
+              }
+              WriteLine("Ok");*/
+            | _ => assert(false);
+          }
+        }
+        catch { | e => Message.Error(e.Message); }
+      }
+      SubscribeSourceChangedWithCounter(typer.Manager, Location.GetFileIndex(resPath), makeWrapperClass);
+    }
+
+    public SubscribeSourceChangedWithCounter(manager : ManagerClass, fileIndex : int, handler : ISource * int -> void) : void
+    {
+      mutable counter = 0;
+      manager.SubscribeSourceChanged(fileIndex, source =>
+      {
+        counter += 1;
+        handler(source, counter);
+      });
+    }
+
+    public ToNemerleLocation(this loc : Parser.Location) : Compiler.Location
+    {
+      def (startLine, startCol) = loc.StartLineColumn;
+      def (endLine, endCol) = loc.EndLineColumn;
+      Location(loc.Source.FileIndex, startLine, startCol, endLine, endCol)
+    }
+  }
+}
