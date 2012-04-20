@@ -11,37 +11,150 @@ namespace Nemerle.Parser
   [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
   public macro N2Source(path : string)
   {
-    N2SourceImpl.Build(path, Nemerle.Macros.ImplicitCTX());
+    N2SourceImpl.Instance(path, Nemerle.Macros.ImplicitCTX().Manager).BeforeInheritance();
   }
 
-  internal module N2SourceImpl
+  [MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Assembly)]
+  public macro N2Source(path : string)
   {
-    public Build(path : string, typer : Typer) : void
-    {
-      def projDir = IO.Path.GetDirectoryName(typer.Manager.Options.ProjectPath);
-      def path = if (IO.Path.IsPathRooted(path)) path else IO.Path.Combine(projDir, path);
+    N2SourceImpl.Instance(path, Nemerle.Macros.ImplicitCTX().Manager).BeforeTypedMembers();
+  }
 
-      when (!IO.File.Exists(path))
+  [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Assembly)]
+  public macro N2Source(path : string)
+  {
+    N2SourceImpl.Instance(path, Nemerle.Macros.ImplicitCTX().Manager).WithTypedMembers();
+  }
+
+  internal class SyntaxModule
+  {
+    public Name : NameRef { get; set; }
+    public Grammar : Grammar { get; set; }
+    public Imports : list[Ast] { get; set; }
+    public GrammarCompiler : GrammarCompiler { get; set; }
+    public TypeBuilder : TypeBuilder { get; set; }
+  }
+
+  internal class N2SourceImpl
+  {
+    private Path          : string { get; }
+    private Manager       : ManagerClass { get; }
+    private Env           : GlobalEnv { get; set; }
+    private SyntaxModules : SCG.List[SyntaxModule] = SCG.List();
+
+    public this(path : string, manager : ManagerClass)
+    {
+      Path    = path;
+      Manager = manager;
+      Env     = Manager.CoreEnv;
+    }
+
+    public static Instance(path : string, manager : ManagerClass) : N2SourceImpl
+    {
+      def projDir = IO.Path.GetDirectoryName(manager.Options.ProjectPath);
+      def path = if (IO.Path.IsPathRooted(path))
+        path;
+      else
+        IO.Path.Combine(projDir, path);
+      if (manager.UserData.Contains(path))
+        manager.UserData[path] :> N2SourceImpl;
+      else
       {
-        Message.Error($<#The "$path" not exists.#>);
+        def impl = N2SourceImpl(path, manager);
+        manager.UserData[path] = impl;
+        impl;
+      }
+    }
+
+    public BeforeInheritance() : void
+    {
+      when (!IO.File.Exists(Path))
+      {
+        Message.Error($<#The "$Path" not exists.#>);
         return;
       }
 
       def makeWrapperClass(source : ISource, processingCount : int) : void
       {
         // request rebuilding type tree when code changed
-        if (processingCount > 1 && typer.Manager.IsIntelliSenseMode)
-          typer.Manager.RequestOnBuildTypesTree();
+        if (processingCount > 1 && Manager.IsIntelliSenseMode)
+          Manager.RequestOnBuildTypesTree();
         else
-          try Compile(source, path, typer) catch { | e => Message.Error(e.Message); }
+          try Parse(source) catch { | e => Message.Error(e.Message); }
       }
-      SubscribeSourceChangedWithCounter(typer.Manager, Location.GetFileIndex(path), makeWrapperClass);
+      SubscribeSourceChangedWithCounter(Manager, Location.GetFileIndex(Path), makeWrapperClass);
     }
 
-    public Compile(source : ISource, path : string, typer : Typer) : void
+    public BeforeTypedMembers() : void
+    {
+      foreach (sm in SyntaxModules)
+      {
+        try
+        {
+          foreach (import in sm.Imports)
+          {
+            | GrammarParser2.UsingDecl.Ast as decl =>
+              def grammarType   = MainParser.ParseExpr(Env, decl.GrammarName.Location.GetText(), decl.GrammarName.NLocation());
+              sm.Grammar = sm.Grammar.Add(GrammarRef(decl.NLocation(), sm.Grammar.GrammarRefs.Length, None(), Env.BindFixedType(grammarType)));
+
+            | GrammarParser2.AliasDecl.Ast as decl =>
+              def grammarType   = MainParser.ParseExpr(Env, decl.GrammarName.Location.GetText(), decl.GrammarName.NLocation());
+              sm.Grammar = sm.Grammar.Add(GrammarRef(decl.NLocation(), sm.Grammar.GrammarRefs.Length, Some(decl.Alias.ToNameRef()), Env.BindFixedType(grammarType)));
+
+            | _ => assert(false);
+          }
+
+          sm.GrammarCompiler = GrammarCompiler(Manager, Env, sm.TypeBuilder, sm.Grammar);
+          sm.TypeBuilder.UserData[typeof(GrammarCompiler)] = sm.GrammarCompiler;
+        }
+        catch
+        {
+          | e is GrammarException =>
+            def loc = if (e.Location != Location.Default) e.Location else sm.TypeBuilder.Location;
+            Message.Error(loc,  e.Message);
+          | _ is CriticalUnexpectedException => ()
+          | _ is Nemerle.Compiler.Recovery => ()
+          | e is Exception =>
+            assert2(false, e.ToString());
+            Message.Error(sm.TypeBuilder.Location,  $"Exception $e");
+        }
+      }
+    }
+
+    public WithTypedMembers() : void
+    {
+      foreach (sm in SyntaxModules)
+      {
+        try
+        {
+          if (sm.GrammarCompiler.Manager.IsIntelliSenseMode)
+            IntelliSenseSupport.AddIntelliSenseSupport(sm.GrammarCompiler);
+          else
+            when (sm.GrammarCompiler.AllRules)
+              sm.GrammarCompiler.CompileGrammar();
+
+          sm.GrammarCompiler.DefineAllMethods();
+
+          sm.TypeBuilder.Compile();
+        }
+        catch
+        {
+          | e is GrammarException =>
+            def loc = if (e.Location != Location.Default) e.Location else sm.TypeBuilder.Location;
+            Message.Error(loc,  e.Message);
+          | _ is CriticalUnexpectedException => ()
+          | _ is Nemerle.Compiler.Recovery => ()
+          | e is Exception =>
+            assert2(false, e.ToString());
+            Message.Error(sm.TypeBuilder.Location,  $"Exception $e");
+        }
+      }
+    }
+
+    public Parse(source : ISource) : void
     {
       def parser = GrammarParser2.GrammarImpl();
-      match (parser.ParseStart(SourceSnapshot(source.GetText(), source.FileIndex, path)))
+      match (parser.ParseStart(SourceSnapshot(source.GetText(), source.FileIndex, Path)))
       {
         | None      =>
           def (pos, tokens) = parser.Parser.GetErrors();
@@ -50,11 +163,18 @@ namespace Nemerle.Parser
             Message.Error(loc, $"expected \"$(token.Name)\" in rule $(token.Rule.Grammar.Name).$(token.Rule.Name)");
 
         | Some(GrammarParser2.Start.Ast as start) =>
+          foreach (openNamespace in start.OpenNamespaces)
+          {
+            | GrammarParser2.OpenNamespace.Ast as openNamespace =>
+              Env = Env.AddOpenNamespace(openNamespace.Namespace.ToNameRef().Parts, openNamespace.Location.ToNemerleLocation());
+
+            | _ => assert(false);
+          }
+
           foreach (rd in start.Declarations)
           {
             | GrammarParser2.SyntaxModule.Ast as syntaxModule =>
-              def grammar = ConvertGrammar(typer, syntaxModule);
-              _ = grammar;
+              SyntaxModules.Add(ConvertSyntaxModule(syntaxModule));
 
             | _ => assert(false);
           }
@@ -72,31 +192,31 @@ namespace Nemerle.Parser
       });
     }
 
-    public ToNemerleLocation(this loc : Parser.Location) : Compiler.Location
+    public static ToNemerleLocation(this loc : Parser.Location) : Compiler.Location
     {
       def (startLine, startCol) = loc.StartLineColumn;
       def (endLine, endCol) = loc.EndLineColumn;
       Location(loc.Source.FileIndex, startLine, startCol, endLine, endCol)
     }
 
-    public NLocation(this ast : Parser.Ast) : Compiler.Location
+    public static NLocation(this ast : Parser.Ast) : Compiler.Location
     {
       ast.Location.ToNemerleLocation();
     }
 
-    public ToName(this identifier : GrammarParser2.Identifier) : string
+    public static ToName(this identifier : GrammarParser2.Identifier) : string
     {
       | GrammarParser2.Identifier.Ast as identifier => identifier.GetText(identifier.Name)
       | _ => Message.FatalError(identifier.NLocation(), "Error.");
     }
 
-    public ToNameRef(this identifier : GrammarParser2.Identifier) : NameRef
+    public static ToNameRef(this identifier : GrammarParser2.Identifier) : NameRef
     {
       | GrammarParser2.Identifier.Ast as identifier => NameRef(identifier.NLocation(), [identifier.GetText(identifier.Name)])
       | _ => Message.FatalError(identifier.NLocation(), "Error.");
     }
 
-    public ToNameRef(this identifier : GrammarParser2.QIdentifier) : NameRef
+    public static ToNameRef(this identifier : GrammarParser2.QIdentifier) : NameRef
     {
       | GrammarParser2.QIdentifier.Ast as identifier =>
         def nameRefs = identifier.Names[0].Map(_.ToNameRef());
@@ -107,12 +227,20 @@ namespace Nemerle.Parser
       | _ => Message.FatalError(identifier.NLocation(), "Error.");
     }
 
-    public ConvertGrammar(typer : Typer, syntaxModule : GrammarParser2.SyntaxModule.Ast) : Grammar
+    private ParsePExpr(ast : Ast) : Parsetree.PExpr
+    {
+      MainParser.ParseExpr(Env, ast.Location.GetText(), ast.NLocation())
+    }
+
+    public ConvertSyntaxModule(syntaxModule : GrammarParser2.SyntaxModule.Ast) : SyntaxModule
     {
       mutable grammar = Grammar();
+      mutable imports = SCG.List();
       mutable optionEmitDebugSources = true;
       foreach (decl in syntaxModule.Declarations)
       {
+        | GrammarParser2.UsingDecl.Ast as decl => imports.Add(decl)
+        | GrammarParser2.AliasDecl.Ast as decl => imports.Add(decl)
         | GrammarParser2.OptionEmitDebugSources.Ast as opt =>
           match (opt.Value.ToName())
           {
@@ -120,14 +248,6 @@ namespace Nemerle.Parser
             | "false" => optionEmitDebugSources = false
             | _       => Message.Error(opt.NLocation(), "Invalid value. true of false expected.")
           }
-
-        | GrammarParser2.UsingDecl.Ast as decl =>
-          def grammarType   = MainParser.ParseExpr(typer.Manager.CoreEnv, decl.GrammarName.Location.GetText(), decl.GrammarName.NLocation());
-          grammar = grammar.Add(GrammarRef(decl.NLocation(), grammar.GrammarRefs.Length, None(), typer.BindFixedType(grammarType)));//TODO::FIXME
-
-        | GrammarParser2.AliasDecl.Ast as decl =>
-          def grammarType   = MainParser.ParseExpr(typer.Manager.CoreEnv, decl.GrammarName.Location.GetText(), decl.GrammarName.NLocation());
-          grammar = grammar.Add(GrammarRef(decl.NLocation(), grammar.GrammarRefs.Length, Some(decl.Alias.ToNameRef()), typer.BindFixedType(grammarType)));//TODO::FIXME
 
         | GrammarParser2.TokenRuleDecl.Ast as decl =>
           def name       = decl.Name.ToNameRef();
@@ -141,14 +261,14 @@ namespace Nemerle.Parser
           def ruleId     = grammar.Count;
           def attributes = ConvertAttributes(decl.Attributes);
           def rule       = ConvertRule(decl.Rule);
-          def ruleType   = MainParser.ParseExpr(typer.Manager.CoreEnv, decl.Type.Location.GetText(), decl.Type.NLocation());
+          def ruleType   = ParsePExpr(decl.Type);
           grammar = grammar.Add(RuleDefinition.Simple(name.Location, ruleId, name, attributes, RuleType.PType(ruleType), rule));
 
         | GrammarParser2.ExtentionPointRuleDecl.Ast as decl =>
           def name       = decl.Name.ToNameRef();
           def ruleId     = grammar.Count;
           def attributes = ConvertAttributes(decl.Attributes);
-          def ruleType   = MainParser.ParseExpr(typer.Manager.CoreEnv, decl.Type.Location.GetText(), decl.Type.NLocation());
+          def ruleType   = ParsePExpr(decl.Type);
           grammar = grammar.Add(RuleDefinition.ExtentionPoint(name.Location, ruleId, name, attributes, RuleType.PType(ruleType)));
 
         | GrammarParser2.ExtentionRuleDecl.Ast as decl =>
@@ -184,7 +304,17 @@ namespace Nemerle.Parser
 
         | error => Message.Error(error.NLocation(), "Error.");
       }
-      grammar
+      def sm = SyntaxModule();
+      sm.Name    = syntaxModule.Name.ToNameRef();
+      sm.Grammar = grammar;
+      sm.Imports = imports.NToList();
+      //typer.Manager.CoreEnv.AddOpenNamespace(["ПерваяЧастьНС", "СледующаяЧасть"], Location(...));
+      sm.TypeBuilder = Manager.CoreEnv.Define(<[decl:
+          public partial abstract class $(sm.Name.AsName : dyn)
+          {
+          }
+        ]>);
+      sm
     }
 
     public ConvertAttributes(attributes : GrammarParser2.RuleAttributes) : list[RuleAttribute]
@@ -309,7 +439,7 @@ namespace Nemerle.Parser
             if (UnicodeCategoryTable.StrToUnicodeCategory(cat.Name.ToName()) is Some(cat))
               charSet = charSet.AddRange(cat);
             else
-              Message.Error(cat.NLocation(), "Error.");
+              Message.Error(cat.NLocation(), "Invalid unicode category.");
 
           | error => Message.Error(error.NLocation(), "Error.");
         }
