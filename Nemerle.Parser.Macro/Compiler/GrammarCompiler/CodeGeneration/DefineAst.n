@@ -88,6 +88,8 @@ namespace Nemerle.Parser
                 DefineAstFields(astTb, members);
                 DefineAstCtor(astTb, members);
                 DefineAstGetErrors(astTb, members);
+                when (rd.GetRule() is Some(rule))
+                  DefineAstGetSpans(astTb, ast, rule);
 
                 astTb.Compile();
               | RuleDefinition.ExternalRule
@@ -169,6 +171,102 @@ namespace Nemerle.Parser
         {
           base.GetErrors(errors);
           { ..$(members.Map(makeGetErrors)) }
+        }
+      ]>);
+    }
+
+    private DefineAstGetSpans(astTb : TypeBuilder, ast : RuleAttribute.Ast, rule : Rule) : void
+    {
+      def nameMap = SCG.Dictionary();
+      def rules = match (rule)
+      {
+        | Rule.Sequence(rules) =>
+          rules.Filter(rule => !(rule.Type is RuleType.Void));
+        | _ => assert(false);
+      }
+      assert(rules.Length == ast.names.Length);
+      foreach ((name, rule) in ast.names.Zip(rules))
+        nameMap[rule.Id] = name.AsName;
+      def getName(rule)
+      {
+        def id = rule.Id;
+        if (nameMap.ContainsKey(id))
+          nameMap[id];
+        else
+          $"ast_$id"
+      }
+      def makeGetSpans(rule : Rule) : PExpr
+      {
+        def varName = getName(rule);
+        match (rule : Rule)
+        {
+          | PrefixCall(ruleName, _)
+          | Call(ruleName, _) =>
+            if (TypedGrammar.GetRule(ruleName) is RuleDefinition.Regular)
+              <[ spans.Add(Nemerle.Parser.SpanInfo($(varName : dyn), Nemerle.Parser.SpanClass.Default)) ]>
+            else
+              <[ $(varName : dyn).GetSpans(spans) ]>
+
+          | String(_str) =>
+            <[ spans.Add(Nemerle.Parser.SpanInfo($(varName : dyn), Nemerle.Parser.SpanClass.Default)) ]>
+
+          | Sequence(rules) =>
+            def rules = rules.Filter(rule => !(rule.Type is RuleType.Void));
+            def names = rules.Map(getName).Map(name => <[ $(name : dyn)]>);
+            match (names)
+            {
+              | [name] =>
+                <[
+                  {
+                    def $name = $(varName : dyn);
+                    { ..$(rules.Map(makeGetSpans)) }
+                  }
+                ]>
+              | names =>
+                <[
+                  {
+                    def (..$names) = $(varName : dyn);
+                    { ..$(rules.Map(makeGetSpans)) }
+                  }
+                ]>
+            }
+
+          | Repeat(0, Some(1), subRule) =>
+            <[
+              match($(varName : dyn))
+              {
+                | Some($(getName(subRule) : dyn)) => $(makeGetSpans(subRule))
+                | _ => ()
+              }
+            ]>
+
+          | Repeat(_, _, subRule) =>
+            <[
+              foreach ($(getName(subRule) : dyn) in $(varName : dyn))
+                $(makeGetSpans(subRule))
+            ]>
+
+          | RepeatWithSeparator(_, _, rule, separator) =>
+            <[
+              foreach ($(getName(rule) : dyn) in $(varName : dyn)[0])
+                $(makeGetSpans(rule));
+              foreach ($(getName(separator) : dyn) in $(varName : dyn)[1])
+                $(makeGetSpans(separator));
+            ]>
+
+          | Scope(_, rule) =>
+            <[
+              def $(getName(rule) : dyn) = $(varName : dyn);
+              $(makeGetSpans(rule));
+            ]>
+
+          | And | Not | Cut => assert(false);
+        }
+      }
+      _ = astTb.DefineWithSource(<[decl:
+        public override GetSpans(spans : System.Collections.Generic.List[Nemerle.Parser.SpanInfo]) : void
+        {
+          ..$(rules.Map(makeGetSpans))
         }
       ]>);
     }
