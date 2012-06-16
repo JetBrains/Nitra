@@ -15,67 +15,50 @@ namespace Nemerle.Parser
   {
     private mutable _sequenseLevel : int = 0;
 
-    public CompileRuleSequence(rule : Rule.Sequence, results : list[string]) : PExpr
+    public CompileRuleSequence(rule : Rule.Sequence) : PExpr * list[string]
     {
       ++_sequenseLevel;
-      def code = SCG.List();
       def generateSequenceOffsets = _sequenseLevel == 1 && (_ruleDefinition is RuleDefinition.ExtentionPrefix || _ruleDefinition is RuleDefinition.ExtentionPostfix);
-      def generate(rules : list[Rule], results : list[string], ofsPos : int) : void
+      def makeSubruleCode(ofsPos, rule)
       {
-        match (rules)
+        def checkResult()
         {
-          | rule :: rules =>
-            def seqElement(curResults, tailResults)
-            {
-              def checkResult()
-              {
-                if (generateSequenceOffsets)
-                  <[ pos >= 0 && (isBest || { isBest = bestOffsets[$(ofsPos : int)] < pos; isBest || bestOffsets[$(ofsPos : int)] == pos }) ]>
-                else
-                  <[ pos >= 0 ]>
-              }
-              code.Add(<[ def pos = $(CompileRule(rule, curResults)); ]>);
-              code.Add(<[ unless ($(checkResult())) seqResult(-1); ]>);
-              when (generateSequenceOffsets)
-                code.Add(<[ def $($"ofs$ofsPos" : dyn) = pos; ]>);
-              generate(rules, tailResults, ofsPos + 1)
-            }
-            match (rule)
-            {
-              | Capture(ty, _) when !(ty is RuleType.Void) =>
-                match (results)
-                {
-                  | result :: results => seqElement([result], results)
-                  | _                 => code.Add(PExpr.Error("Empty result list"))
-                }
-              | _ => seqElement([], results)
-            }
-
-          | [] =>
-            assert(results.Length == 0);
-            def res = if (generateSequenceOffsets)
-            {
-              def offsetSetters = $[0..ofsPos - 1].Map(i => <[ bestOffsets[$(i : int)] = $($"ofs$i" : dyn); ]>);
-              <[
-                if (isBest)
-                {
-                  { ..$offsetSetters }
-                  for (mutable i = $(ofsPos : int); i < bestOffsets.Length && bestOffsets[i] >= 0; ++i)
-                    bestOffsets[i] = -1;
-                  pos
-                }
-                else
-                  -1;
-              ]>
-            }
-            else
-              <[ pos ]>;
-            code.Add(res);
+          if (generateSequenceOffsets)
+            <[ pos >= 0 && (isBest || { isBest = bestOffsets[$(ofsPos : int)] < pos; isBest || bestOffsets[$(ofsPos : int)] == pos }) ]>
+          else
+            <[ pos >= 0 ]>
         }
+        def (subruleCode, results) = CompileRule(rule);
+        def code =
+          [ <[ def pos = $subruleCode; ]>
+          , <[ unless ($(checkResult())) seqResult(-1); ]>
+          , if (generateSequenceOffsets) <[ def $($"ofs$ofsPos" : dyn) = pos; ]> else <[ () ]>
+          ];
+        (code, results)
       }
-      generate(rule.rules, results, 0);
+      def rules = rule.rules.MapI(makeSubruleCode);
+      def code    = rules.Map(x => x[0]).Flatten();
+      def results = rules.Map(x => x[1]).Flatten();
+      def last = if (generateSequenceOffsets)
+      {
+        def offsetSetters = $[0..rules.Length - 1].Map(i => <[ bestOffsets[$(i : int)] = $($"ofs$i" : dyn); ]>);
+        <[
+          if (isBest)
+          {
+            { ..$offsetSetters }
+            for (mutable i = $(rules.Length : int); i < bestOffsets.Length && bestOffsets[i] >= 0; ++i)
+              bestOffsets[i] = -1;
+            pos
+          }
+          else
+            -1;//TODO: Сообщать о неоднозначности
+        ]>
+      }
+      else
+        <[ pos ]>;
+
       --_sequenseLevel;
-      <[ { seqResult: { ..$(code.NToList()) } } ]>
+      (<[ { seqResult: { ..$(code.Append([last])) } } ]>, results)
     }
   }
 }
