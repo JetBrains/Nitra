@@ -89,7 +89,7 @@ namespace Nemerle.Parser
                 DefineAstCtor(astTb, members);
                 DefineAstGetErrors(astTb, members);
                 when (rd.GetRule() is Some(rule))
-                  DefineAstGetSpans(astTb, ast, rule);
+                  DefineAstGetSpans(astTb, ast, rule, rd);
 
                 astTb.Compile();
               | RuleDefinition.ExternalRule
@@ -175,7 +175,7 @@ namespace Nemerle.Parser
       ]>);
     }
 
-    private DefineAstGetSpans(astTb : TypeBuilder, ast : RuleAttribute.Ast, rule : Rule) : void
+    private DefineAstGetSpans(astTb : TypeBuilder, ast : RuleAttribute.Ast, rule : Rule, rd : RuleDefinition) : void
     {
       def nameMap = SCG.Dictionary();
       def rules = match (rule)
@@ -202,13 +202,36 @@ namespace Nemerle.Parser
         {
           | PrefixCall(ruleName, _)
           | Call(ruleName, _) =>
-            if (TypedGrammar.GetRule(ruleName) is RuleDefinition.Regular)
-              <[ spans.Add(Nemerle.Parser.SpanInfo($(varName : dyn), Nemerle.Parser.SpanClass.Default)) ]>
+            def rd = TypedGrammar.GetRule(ruleName);
+            if (rd.Attributes.Find(_ is RuleAttribute.SpanClass) is Some(RuleAttribute.SpanClass as spanClass))
+            {
+              if (rd is RuleDefinition.Regular)
+                <[ spans.Add(Nemerle.Parser.SpanInfo($(varName : dyn), $(MakeSpanClassFieldName(spanClass.name) : dyn))) ]>
+              else
+                <[ $(varName : dyn).GetSpans(spans) ]>
+            }
             else
-              <[ $(varName : dyn).GetSpans(spans) ]>
+            {
+              if (rd is RuleDefinition.Regular)
+                <[ spans.Add(Nemerle.Parser.SpanInfo($(varName : dyn), Nemerle.Parser.SpanClass.Default)) ]>
+              else
+                <[ $(varName : dyn).GetSpans(spans) ]>
+            }
 
-          | String(_str) =>
-            <[ spans.Add(Nemerle.Parser.SpanInfo($(varName : dyn), Nemerle.Parser.SpanClass.Default)) ]>
+          | String(str) =>
+            def spanClass = TypedGrammar.SpanClasses.Find(spanClass =>
+            {
+              match (spanClass.Match)
+              {
+                | Some(rr) =>
+                  FSMMatch.MakeMatcher(ConvertRegularRuleToFsm(rr))(str)//TODO:Optimize
+                | None => false;
+              }
+            });
+            if (spanClass is Some(spanClass))
+              <[ spans.Add(Nemerle.Parser.SpanInfo($(varName : dyn), $(MakeSpanClassFieldName(spanClass.Name) : dyn))) ]>
+            else
+              <[ spans.Add(Nemerle.Parser.SpanInfo($(varName : dyn), Nemerle.Parser.SpanClass.Default)) ]>
 
           | Sequence(rules) =>
             def rules = rules.Filter(rule => !(rule.Type is RuleType.Void));
@@ -263,10 +286,17 @@ namespace Nemerle.Parser
           | And | Not | Cut => assert(false);
         }
       }
+
       _ = astTb.DefineWithSource(<[decl:
         public override GetSpans(spans : System.Collections.Generic.List[Nemerle.Parser.SpanInfo]) : void
         {
-          ..$(rules.Map(makeGetSpans))
+          $(
+            if (rd.Attributes.Find(_ is RuleAttribute.SpanClass) is Some(RuleAttribute.SpanClass as spanClass))
+              <[ spans.Add(Nemerle.Parser.SpanInfo(this.Location.NToken, $(MakeSpanClassFieldName(spanClass.name) : dyn))) ]>
+            else
+              <[ () ]>
+          );
+          { ..$(rules.Map(makeGetSpans)) }
         }
       ]>);
     }
