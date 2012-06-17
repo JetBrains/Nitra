@@ -1,0 +1,79 @@
+﻿using System.ComponentModel.Composition;
+using Microsoft.VisualStudio.Utilities;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Linq;
+using System.Reflection;
+using System.Xml.Linq;
+
+namespace N2.VisualStudio
+{
+  public interface IGlobalConfig
+  {
+    Languages : list[Language] { get; }
+    Property[name : string] : string { get; }
+  }
+  
+  [Export(typeof(IGlobalConfig))]
+  class GlobalConfig : IGlobalConfig
+  {
+    public static Instance : GlobalConfig { [Memoize] get { GlobalConfig() } }
+    
+    _properties : Hashtable[string, string] = Hashtable();
+    _expendRx   : Regex                     = Regex(@"\$(\w(\w|\d)*)", RegexOptions.Compiled);
+    public Languages : list[Language] { get; }
+    
+    [Import] mutable _registryService            : IFileExtensionRegistryService = null;
+    [Import] mutable _contentTypeRegistryService : IContentTypeRegistryService   = null;
+    
+    this()
+    {
+      def n2ConfigName = "N2GlobalConfig.xml";
+      def root         = Environment.GetEnvironmentVariable("N2Path");
+      
+      when (root == null || !Directory.Exists(root))
+        throw ApplicationException("The 'N2Path' environment variable not set. The N2 environment variable must contains path to N2GlobalConfig.xml.");
+        
+      _properties["N2Path"] = root.TrimEnd('\\');
+      
+      def configPath   = Path.Combine(root, n2ConfigName);
+      def config       = XElement.Load(configPath);
+      
+      // Init Properties 
+      foreach (prop in config.Element("Properties")?.Elements() ?? [])
+        _properties[prop.Name.LocalName] = prop.Value ?? "";
+        
+      // Init Languages
+      foreach (lang in config.Element("Languages")?.Elements("Language") ?? [])
+        Languages ::= 
+          Language(
+            name           = lang.Attribute("Name").Value,
+            fileExtentions = lang.Attribute("FileExtentions")?.Value?.SplitToList(';').RevMap(s => s.Trim()),
+            grammar        = lang.Attribute("Grammar").Value,
+            startRule      = lang.Attribute("StartRule").Value,
+            modules        = (lang.Elements("Module") ?? []).Map(e => Expend(e.Value)));
+    }
+
+    RegisterContentType() : void
+    {
+    }
+    
+    public Property[name : string] : string { get { Expend(_properties[name]) } }
+    
+    Expend(value : string) : string
+    {
+      if (value.Contains("$"))
+        Expend(_expendRx.Replace(value, m => _properties[m.Groups[1].Value]));
+      else
+        value
+    }
+  }
+}
