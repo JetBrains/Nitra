@@ -20,24 +20,28 @@ namespace N2.VisualStudio
   {
     Languages : list[Language] { get; }
     Property[name : string] : string { get; }
+    GetLanguageByExtension(extension : string) : ValueOption[Language];
   }
   
   [Export(typeof(IGlobalConfig))]
-  class GlobalConfig : IGlobalConfig
+  public class GlobalConfig : IGlobalConfig
   {
-    public static Instance : GlobalConfig { [Memoize] get { GlobalConfig() } }
-    
-    _properties : Hashtable[string, string] = Hashtable();
-    _expendRx   : Regex                     = Regex(@"\$(\w(\w|\d)*)", RegexOptions.Compiled);
     public Languages : list[Language] { get; }
     
-    [Import] mutable _registryService            : IFileExtensionRegistryService = null;
-    [Import] mutable _contentTypeRegistryService : IContentTypeRegistryService   = null;
+    _properties                   : Hashtable[string, string]   = Hashtable();
+    _expendRx                     : Regex                       = Regex(@"\$(\w(\w|\d)*)", RegexOptions.Compiled);
+    _languageMap                  : Hashtable[string, Language] = Hashtable();
+    _fileExtensionRegistryService : IFileExtensionRegistryService;
+    _contentTypeRegistryService   : IContentTypeRegistryService;
     
-    this()
+    [ImportingConstructor]
+    this(contentTypeRegistryService : IContentTypeRegistryService, fileExtensionRegistryService : IFileExtensionRegistryService)
     {
       def n2ConfigName = "N2GlobalConfig.xml";
       def root         = Environment.GetEnvironmentVariable("N2Path");
+    
+      _fileExtensionRegistryService = fileExtensionRegistryService;
+      _contentTypeRegistryService   = contentTypeRegistryService;
       
       when (root == null || !Directory.Exists(root))
         throw ApplicationException("The 'N2Path' environment variable not set. The N2 environment variable must contains path to N2GlobalConfig.xml.");
@@ -53,17 +57,45 @@ namespace N2.VisualStudio
         
       // Init Languages
       foreach (lang in config.Element("Languages")?.Elements("Language") ?? [])
-        Languages ::= 
-          Language(
-            name           = lang.Attribute("Name").Value,
-            fileExtentions = lang.Attribute("FileExtentions")?.Value?.SplitToList(';').RevMap(s => s.Trim()),
-            grammar        = lang.Attribute("Grammar").Value,
-            startRule      = lang.Attribute("StartRule").Value,
-            modules        = (lang.Elements("Module") ?? []).Map(e => Expend(e.Value)));
-    }
+      {
+        def name           = lang.Attribute("Name").Value;
+        def oldContentType = contentTypeRegistryService.GetContentType(name);
+        def fileExtentions = lang.Attribute("FileExtentions")?.Value?.SplitToList(';').RevMap(s => s.Trim().ToLowerInvariant());
+        
+        when (oldContentType != null) // remove if exists
+        {
+          foreach (extension in List(fileExtensionRegistryService.GetExtensionsForContentType(oldContentType)))
+            fileExtensionRegistryService.RemoveFileExtension(extension);
+            
+          contentTypeRegistryService.RemoveContentType(name);
+        }
+        
+        def contentType = contentTypeRegistryService.AddContentType(name, ["code"]);
 
-    RegisterContentType() : void
+        def language = 
+          Language(name, contentType, fileExtentions,
+            grammar   = lang.Attribute("Grammar").Value,
+            startRule = lang.Attribute("StartRule").Value,
+            modules   = (lang.Elements("Module") ?? []).Map(e => Expend(e.Value)));
+            
+        foreach (ext in fileExtentions)
+        {
+          _languageMap[ext] = language;
+          fileExtensionRegistryService.AddFileExtension(ext, contentType);
+        }
+        
+        Languages ::= language;
+      }
+    }
+    
+    public GetLanguageByExtension(extension : string) : ValueOption[Language]
     {
+      mutable language;
+      
+      if (_languageMap.TryGetValue(extension.ToLowerInvariant(), out language))
+        VSome(language)
+      else
+        VNone()
     }
     
     public Property[name : string] : string { get { Expend(_properties[name]) } }
