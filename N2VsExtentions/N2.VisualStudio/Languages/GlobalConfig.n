@@ -1,4 +1,6 @@
-﻿using System.ComponentModel.Composition;
+﻿using Microsoft.VisualStudio.Text.Classification;
+using Microsoft.VisualStudio.Text.Formatting;
+using System.ComponentModel.Composition;
 using Microsoft.VisualStudio.Utilities;
 
 using Nemerle;
@@ -12,7 +14,10 @@ using System.IO;
 using System.Text.RegularExpressions;
 using System.Linq;
 using System.Reflection;
+using System.Windows.Media;
 using System.Xml.Linq;
+
+using GdiColor = System.Drawing.Color;
 
 namespace N2.VisualStudio
 {
@@ -21,6 +26,7 @@ namespace N2.VisualStudio
     Languages : list[Language] { get; }
     Property[name : string] : string { get; }
     GetLanguageByExtension(extension : string) : ValueOption[Language];
+    ClassificationTypeRegistryService : IClassificationTypeRegistryService { get; };
   }
   
   [Export(typeof(IN2GlobalConfig))]
@@ -28,20 +34,26 @@ namespace N2.VisualStudio
   {
     public Languages : list[Language] { get; }
     
-    _properties                   : Hashtable[string, string]   = Hashtable();
-    _expendRx                     : Regex                       = Regex(@"\$(\w(\w|\d)*)", RegexOptions.Compiled);
-    _languageMap                  : Hashtable[string, Language] = Hashtable();
-    _fileExtensionRegistryService : IFileExtensionRegistryService;
-    _contentTypeRegistryService   : IContentTypeRegistryService;
+    _properties                         : Hashtable[string, string]   = Hashtable();
+    _expendRx                           : Regex                       = Regex(@"\$(\w(\w|\d)*)", RegexOptions.Compiled);
+    _languageMap                        : Hashtable[string, Language] = Hashtable();
+    _fileExtensionRegistryService       : IFileExtensionRegistryService;
+    _contentTypeRegistryService         : IContentTypeRegistryService;
+    public ClassificationTypeRegistryService : IClassificationTypeRegistryService { get; }
     
     [ImportingConstructor]
-    this(contentTypeRegistryService : IContentTypeRegistryService, fileExtensionRegistryService : IFileExtensionRegistryService)
+    this(
+      contentTypeRegistryService        : IContentTypeRegistryService, 
+      fileExtensionRegistryService      : IFileExtensionRegistryService, 
+      classificationTypeRegistryService : IClassificationTypeRegistryService, 
+      classificationFormatMapService    : IClassificationFormatMapService)
     {
       def n2ConfigName = "N2GlobalConfig.xml";
       def root         = Environment.GetEnvironmentVariable("N2Path");
     
-      _fileExtensionRegistryService = fileExtensionRegistryService;
-      _contentTypeRegistryService   = contentTypeRegistryService;
+      ClassificationTypeRegistryService  = classificationTypeRegistryService;
+      _fileExtensionRegistryService      = fileExtensionRegistryService;
+      _contentTypeRegistryService        = contentTypeRegistryService;
       
       when (root == null || !Directory.Exists(root))
         throw ApplicationException("The 'N2Path' environment variable not set. The N2 environment variable must contains path to N2GlobalConfig.xml.");
@@ -85,6 +97,29 @@ namespace N2.VisualStudio
         }
         
         Languages ::= language;
+        
+        // Read SpanClasses
+        
+        foreach (spanClass in config.Element("SpanClasses")?.Elements() ?? [])
+        {
+          def name = spanClass.Name.LocalName;
+          def classificationType = classificationTypeRegistryService.GetClassificationType(name);
+          
+          when (classificationType == null)
+          {
+            def newClassificationType = classificationTypeRegistryService.CreateClassificationType(name, []);
+            def foreground = spanClass.Attribute("Foreground")?.Value;
+            
+            when (foreground != null)
+            {
+              def formatMap = classificationFormatMapService.GetClassificationFormatMap("Text Editor");
+              def prop = formatMap.GetTextProperties(newClassificationType);
+              def foreColor = GdiColor.FromName(foreground);
+              def newProp = prop.SetForeground(Color.FromRgb(foreColor.R, foreColor.G, foreColor.B));
+              formatMap.SetTextProperties(newClassificationType, newProp);
+            }
+          }
+        }
       }
     }
     
