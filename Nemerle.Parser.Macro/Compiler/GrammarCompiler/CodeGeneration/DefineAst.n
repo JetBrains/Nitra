@@ -10,6 +10,7 @@ using System.Linq;
 using SCG = System.Collections.Generic;
 
 using Nemerle.Parser.Internal;
+using Nemerle.Imperative;
 
 namespace Nemerle.Parser
 {
@@ -177,6 +178,18 @@ namespace Nemerle.Parser
 
     private DefineAstGetSpans(astTb : TypeBuilder, ast : RuleAttribute.Ast, rule : Rule, rd : RuleDefinition) : void
     {
+      def isEmpty(code : PExpr) : bool { code is <[ () ]> }
+      def mapRules(rules : list[Rule], func) : PExpr
+      {
+        def exprs = rules.Map(func);
+        
+        if (exprs.ForAll(_ is <[ () ]>))
+          <[ () ]>
+        else if (exprs is [_])
+          exprs.Head
+        else
+          <[ { ..$exprs } ]>
+      }
       def nameMap = SCG.Dictionary();
       def rules = match (rule)
       {
@@ -187,17 +200,24 @@ namespace Nemerle.Parser
       assert(rules.Length == ast.names.Length);
       foreach ((name, rule) in ast.names.Zip(rules))
         nameMap[rule.Id] = name.AsName;
-      def getName(rule)
+      def getName(rule) : Name
       {
+        mutable name;
         def id = rule.Id;
-        if (nameMap.ContainsKey(id))
-          nameMap[id];
+        
+        if (nameMap.TryGetValue(id, out name))
+          <[ $(name : dyn) ]>.name//Name.NameInCurrentColor(nameMap[id], astTb.GlobalEnv)
         else
-          $"ast_$id"
+           Name.NameInCurrentColor($"_ast_$id", astTb.GlobalEnv)
       }
       def makeGetSpans(rule : Rule) : PExpr
       {
-        def varName = getName(rule);
+        def varName = 
+          if (nameMap.ContainsKey(rule.Id))
+            <[ this.$(getName(rule) : name) ]>
+          else
+            <[ $(getName(rule) : name) ]>;
+        
         match (rule : Rule)
         {
           | PrefixCall(ruleName, _)
@@ -206,16 +226,21 @@ namespace Nemerle.Parser
             if (rd.Attributes.Find(_ is RuleAttribute.SpanClass) is Some(RuleAttribute.SpanClass as spanClass))
             {
               if (rd is RuleDefinition.Regular)
-                <[ spans.Add(Nemerle.Parser.SpanInfo($(varName : dyn), $(MakeSpanClassFieldName(spanClass.name) : dyn))) ]>
+                <[  when ($varName.IntersectsWith(startPos, endPos))
+                      spans.Add(Nemerle.Parser.SpanInfo($varName, $(MakeSpanClassFieldName(spanClass.name) : dyn))) ]>
               else
-                <[ $(varName : dyn).GetSpans(spans) ]>
+                <[  when ($varName.IntersectsWith(startPos, endPos))
+                      $varName.GetSpans(spans, startPos, endPos) ]>
             }
             else
             {
               if (rd is RuleDefinition.Regular)
-                <[ spans.Add(Nemerle.Parser.SpanInfo($(varName : dyn), Nemerle.Parser.SpanClass.Default)) ]>
+                <[ () ]> // we not need SpanClass.Default spans 
+                //<[ when ($varName.IntersectsWith(startPos, endPos))
+                //     spans.Add(Nemerle.Parser.SpanInfo($varName, Nemerle.Parser.SpanClass.Default)) ]>
               else
-                <[ $(varName : dyn).GetSpans(spans) ]>
+                <[  when ($varName.IntersectsWith(startPos, endPos))
+                      $varName.GetSpans(spans, startPos, endPos) ]>
             }
 
           | String(str) =>
@@ -223,80 +248,141 @@ namespace Nemerle.Parser
             {
               match (spanClass.Match)
               {
-                | Some(rr) =>
-                  FSMMatch.MakeMatcher(ConvertRegularRuleToFsm(rr))(str)//TODO:Optimize
+                | Some(rr) => FSMMatch.MakeMatcher(ConvertRegularRuleToFsm(rr))(str)//TODO:Optimize
                 | None => false;
               }
             });
             if (spanClass is Some(spanClass))
-              <[ spans.Add(Nemerle.Parser.SpanInfo($(varName : dyn), $(MakeSpanClassFieldName(spanClass.Name) : dyn))) ]>
+              <[  when ($varName.IntersectsWith(startPos, endPos))
+                    spans.Add(Nemerle.Parser.SpanInfo($varName, $(MakeSpanClassFieldName(spanClass.Name) : dyn))) ]>
             else
-              <[ spans.Add(Nemerle.Parser.SpanInfo($(varName : dyn), Nemerle.Parser.SpanClass.Default)) ]>
+              <[ () ]> // we not need SpanClass.Default spans
+              //<[  when ($varName.IntersectsWith(startPos, endPos))
+              //      spans.Add(Nemerle.Parser.SpanInfo($varName, Nemerle.Parser.SpanClass.Default)) ]>
 
           | Sequence(rules) =>
             def rules = rules.Filter(rule => !(rule.Type is RuleType.Void));
-            def names = rules.Map(getName).Map(name => <[ $(name : dyn)]>);
+            def names = rules.Map(getName).Map(name => <[ $(name : name)]>);
+            def code  = mapRules(rules, makeGetSpans);
+            
             match (names)
             {
               | [name] =>
-                <[
-                  {
-                    def $name = $(varName : dyn);
-                    { ..$(rules.Map(makeGetSpans)) }
-                  }
-                ]>
+                if (!isEmpty(code))
+                  <[
+                    {
+                      def $name = $varName;
+                      $code;
+                    }
+                  ]>
+                else
+                  <[ () ]>
+                  
+              | [] | null => assert(false)
               | names =>
-                <[
-                  {
-                    def (..$names) = $(varName : dyn);
-                    { ..$(rules.Map(makeGetSpans)) }
-                  }
-                ]>
+                if (!isEmpty(code))
+                  <[
+                    {
+                      def (..$names) = $varName;
+                      $code;
+                    }
+                  ]>
+                else
+                  <[ () ]>
             }
 
           | Repeat(0, Some(1), subRule) =>
-            <[
-              match($(varName : dyn))
-              {
-                | Some($(getName(subRule) : dyn)) => $(makeGetSpans(subRule))
-                | _ => ()
-              }
-            ]>
+            def code = makeGetSpans(subRule);
+            
+            if (!isEmpty(code))
+              <[
+                match($varName)
+                {
+                  | Some($(getName(subRule) : name)) => $code
+                  | _ => ()
+                }
+              ]>
+            else
+              <[ () ]>
 
           | Repeat(_, _, subRule) =>
-            <[
-              foreach ($(getName(subRule) : dyn) in $(varName : dyn))
-                $(makeGetSpans(subRule))
-            ]>
+            def code = makeGetSpans(subRule);
+            
+            if (!isEmpty(code))
+              <[
+                foreach ($(getName(subRule) : name) in $varName)
+                  $code
+              ]>
+            else
+              <[ () ]>
 
           | RepeatWithSeparator(_, _, rule, separator) =>
-            <[
-              foreach ($(getName(rule) : dyn) in $(varName : dyn)[0])
-                $(makeGetSpans(rule));
-              foreach ($(getName(separator) : dyn) in $(varName : dyn)[1])
-                $(makeGetSpans(separator));
-            ]>
-
+            def codeForRule             = makeGetSpans(rule);
+            def codeForSeparator        = makeGetSpans(separator);
+            def isCodeForRuleEmpty      = isEmpty(codeForRule);
+            def isCodeForSeparatorEmpty = isEmpty(codeForSeparator);
+            
+            if (isCodeForRuleEmpty && isCodeForSeparatorEmpty)
+              <[ () ]>
+            else
+            {
+              def codeForRules =
+                if (isCodeForSeparatorEmpty)
+                  <[
+                    foreach ($(getName(rule) : name) in $varName[0])
+                      $codeForRule;
+                  ]>
+                else
+                  <[ () ]>;
+              def codeForSeparators =
+                if (isCodeForRuleEmpty)
+                  <[
+                    foreach ($(getName(separator) : name) in $varName[1])
+                      $codeForSeparator;
+                  ]>
+                else
+                  <[ () ]>;
+                  
+              <[ $codeForRules; $codeForSeparators; ]>
+            }
+              
           | Scope(_, rule) =>
-            <[
-              def $(getName(rule) : dyn) = $(varName : dyn);
-              $(makeGetSpans(rule));
-            ]>
+            def code = makeGetSpans(rule);
+            
+            if (!isEmpty(code))
+              <[
+                def $(getName(rule) : name) = $varName;
+                $code;
+              ]>
+            else
+              <[ () ]>
 
           | And | Not | Cut => assert(false);
         }
       }
 
+
+      def selfCode = 
+        if (rd.Attributes.Find(_ is RuleAttribute.SpanClass) is Some(RuleAttribute.SpanClass as spanClass))
+          <[ 
+            def loc = this.Location.NToken;
+            when (loc.IntersectsWith(startPos, endPos))
+              spans.Add(Nemerle.Parser.SpanInfo(loc, $(MakeSpanClassFieldName(spanClass.name) : dyn))) 
+          ]>
+        else
+          <[ () ]>;
+      def subRuleCode  = mapRules(rules, makeGetSpans);
+      
+      def bodyCode =
+        if (isEmpty(selfCode) && isEmpty(subRuleCode))
+          <[ _ = spans; _ = startPos; _ = endPos; ]>
+        else
+          <[ $selfCode; $subRuleCode; ]>;
+      
       _ = astTb.DefineWithSource(<[decl:
-        public override GetSpans(spans : System.Collections.Generic.List[Nemerle.Parser.SpanInfo]) : void
+        public override GetSpans(spans : System.Collections.Generic.List[Nemerle.Parser.SpanInfo], startPos : int, endPos : int) : void
         {
-          $(
-            if (rd.Attributes.Find(_ is RuleAttribute.SpanClass) is Some(RuleAttribute.SpanClass as spanClass))
-              <[ spans.Add(Nemerle.Parser.SpanInfo(this.Location.NToken, $(MakeSpanClassFieldName(spanClass.name) : dyn))) ]>
-            else
-              <[ () ]>
-          );
-          { ..$(rules.Map(makeGetSpans)) }
+          $bodyCode
         }
       ]>);
     }

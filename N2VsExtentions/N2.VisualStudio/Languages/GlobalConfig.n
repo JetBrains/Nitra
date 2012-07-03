@@ -1,4 +1,5 @@
-﻿using Microsoft.VisualStudio.Text.Classification;
+﻿using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Formatting;
 using System.ComponentModel.Composition;
 using Microsoft.VisualStudio.Utilities;
@@ -26,7 +27,9 @@ namespace N2.VisualStudio
     Languages : list[Language] { get; }
     Property[name : string] : string { get; }
     GetLanguageByExtension(extension : string) : ValueOption[Language];
-    ClassificationTypeRegistryService : IClassificationTypeRegistryService { get; };
+    ClassificationTypeRegistryService : IClassificationTypeRegistryService { get; }
+    GetSpanClass(spanClassName : string) : TextFormattingRunProperties;
+    GetSpanClassNames() : Seq[string];
   }
   
   [Export(typeof(IN2GlobalConfig))]
@@ -39,15 +42,20 @@ namespace N2.VisualStudio
     _languageMap                        : Hashtable[string, Language] = Hashtable();
     _fileExtensionRegistryService       : IFileExtensionRegistryService;
     _contentTypeRegistryService         : IContentTypeRegistryService;
+    _spanClassesMap                     : Hashtable[string, TextFormattingRunProperties] = Hashtable();
+    public ConfigPath                   : string { get; }
     public ClassificationTypeRegistryService : IClassificationTypeRegistryService { get; }
     
     [ImportingConstructor]
-    this(
+    public this(
       contentTypeRegistryService        : IContentTypeRegistryService, 
       fileExtensionRegistryService      : IFileExtensionRegistryService, 
       classificationTypeRegistryService : IClassificationTypeRegistryService, 
-      classificationFormatMapService    : IClassificationFormatMapService)
+      classificationFormatMapService    : IClassificationFormatMapService
+      )
     {
+      #region read config
+      
       def n2ConfigName = "N2GlobalConfig.xml";
       def root         = Environment.GetEnvironmentVariable("N2Path");
     
@@ -55,19 +63,28 @@ namespace N2.VisualStudio
       _fileExtensionRegistryService      = fileExtensionRegistryService;
       _contentTypeRegistryService        = contentTypeRegistryService;
       
-      when (root == null || !Directory.Exists(root))
-        throw ApplicationException("The 'N2Path' environment variable not set. The N2 environment variable must contains path to N2GlobalConfig.xml.");
-        
-      _properties["N2Path"] = root.TrimEnd('\\');
+      when (root == null)
+        Error(@"You must specify path to N2 root directory in the 'N2Path' environment variable. For example: N2Path=d:\ParserGenerator");
+      when (!Directory.Exists(root))
+        Error(@"Path specified in the 'N2Path' environment variable not exists. You must specify path to N2 root directory in the 'N2Path' environment variable. For example: N2Path=d:\ParserGenerator");
+
+      _properties["N2Path"]        = root.TrimEnd('\\');
+      _properties["Configuration"] = Constants.Configuration;
       
       def configPath   = Path.Combine(root, n2ConfigName);
       def config       = XElement.Load(configPath);
       
+      ConfigPath = configPath;
+      
+      #endregion
+      
       // Init Properties 
       foreach (prop in config.Element("Properties")?.Elements() ?? [])
         _properties[prop.Name.LocalName] = prop.Value ?? "";
+      
         
-      // Init Languages
+      #region Init Languages
+      
       foreach (lang in config.Element("Languages")?.Elements("Language") ?? [])
       {
         def name           = lang.Attribute("Name").Value;
@@ -97,33 +114,43 @@ namespace N2.VisualStudio
         }
         
         Languages ::= language;
+      }
+      
+      #endregion
+
+      #region Read SpanClasses
+      
+      def formalLanguageClassificationType = classificationTypeRegistryService.GetClassificationType("formal language");
+      def formatMap = classificationFormatMapService.GetClassificationFormatMap("Text Editor");
+      formatMap.BeginBatchUpdate();
         
-        // Read SpanClasses
-        def formatMap = classificationFormatMapService.GetClassificationFormatMap("Text Editor");
-        formatMap.BeginBatchUpdate();
-        
-        foreach (spanClass in config.Element("SpanClasses")?.Elements() ?? [])
-        {
-          def name = spanClass.Name.LocalName;
-          def classificationType = classificationTypeRegistryService.GetClassificationType(name);
+      foreach (spanClass in config.Element("SpanClasses")?.Elements() ?? [])
+      {
+        def name = spanClass.Name.LocalName;
+        def classificationType = classificationTypeRegistryService.GetClassificationType(name);
           
-          when (classificationType == null)
-          {
-            def newClassificationType = classificationTypeRegistryService.CreateClassificationType(name, []);
-            def foreground = spanClass.Attribute("Foreground")?.Value;
+        when (classificationType == null)
+        {
+          def newClassificationType = classificationTypeRegistryService.CreateClassificationType(name, [formalLanguageClassificationType]);
+          def foreground = spanClass.Attribute("Foreground")?.Value;
             
-            when (foreground != null)
-            {
-              def prop = formatMap.GetTextProperties(newClassificationType);
-              def foreColor = GdiColor.FromName(foreground);
-              def newProp = prop.SetForeground(Color.FromRgb(foreColor.R, foreColor.G, foreColor.B));
-              formatMap.AddExplicitTextProperties(newClassificationType, newProp);
-            }
+          when (foreground != null)
+          {
+            //def prop = formatMap.GetExplicitTextProperties(newClassificationType);
+            def prop = formatMap.GetTextProperties(newClassificationType);
+            def foreColor = GdiColor.FromName(foreground);
+            def newProp = prop.SetForeground(Color.FromRgb(foreColor.R, foreColor.G, foreColor.B));
+            _spanClassesMap[name] = newProp;
+            // Код ниже почему-то не работает. Надо выяснять у знатоков студийного АПИ, почему не пашет.
+            formatMap.AddExplicitTextProperties(newClassificationType, newProp);
+            formatMap.SetTextProperties(newClassificationType, newProp);
           }
         }
-        
-        formatMap.EndBatchUpdate();
       }
+        
+      formatMap.EndBatchUpdate();
+      
+      #endregion
     }
     
     public GetLanguageByExtension(extension : string) : ValueOption[Language]
@@ -140,10 +167,39 @@ namespace N2.VisualStudio
     
     Expend(value : string) : string
     {
-      if (value.Contains("$"))
-        Expend(_expendRx.Replace(value, m => _properties[m.Groups[1].Value]));
-      else
-        value
+      mutable currentProperty;
+      def getPropertyName(m)
+      {
+        currentProperty = m.Groups[1].Value;
+        currentProperty
+      }
+      try
+      {
+        if (value.Contains("$"))
+          Expend(_expendRx.Replace(value, m => _properties[getPropertyName(m)]));
+        else
+          value
+      }
+      catch
+      {
+        | _ is KeyNotFoundException => Error($"Configuration loading failed.\r\nProperty '$currentProperty' not defined in '$ConfigPath'."); throw;
+      }
+    }
+    
+    public GetSpanClass(spanClassName : string) : TextFormattingRunProperties
+    {
+      _spanClassesMap[spanClassName]
+    }
+    
+    public GetSpanClassNames() : Seq[string]
+    {
+      _spanClassesMap.Keys
+    }
+    
+    Error(msg : string) : void
+    {
+      N2Package.Instance.ShowMessage(msg, MessageType.Error);
+      throw ApplicationException(msg);
     }
   }
 }
