@@ -28,6 +28,112 @@ namespace Nemerle.Parser.Model
     public IsExtention : bool { get { this is ExtentionPrefix || this is ExtentionPostfix } }
     public IsVoid      : bool { get { this is ExtentionPoint(Void) || this is Simple(Void, _) } }
 
+    [Memoize]
+    public GetNames(importedTokenFieldNames : Map[string, NameRef]) : list[NameRef]
+    {
+      def subRules = GetSubRules();
+      def subRulesCount = subRules.Length;
+      def names : list[_] = 
+        match (this.Attributes.Find(_ is RuleAttribute.Ast))
+        {
+          | Some(ast is RuleAttribute.Ast) =>
+            if (ast.names.Length == subRulesCount)
+              ast.names
+            else 
+            {
+              Message.Error(ast.Location, $"Expected $subRulesCount member got $(ast.names.Length)");
+              
+              if (ast.names.Length > subRulesCount)
+                ast.names.Take(subRulesCount).NToList()
+              else
+                ast.names + NList.Repeat(NameRef(LocationStack.Top(), "_"), subRulesCount - ast.names.Length)
+            }
+            
+          | _ when subRulesCount == 0 => []
+          | _ => def loc = NameRef(LocationStack.Top(), "_"); NList.Repeat(loc, subRulesCount)
+        };
+      
+      def makeName(name : NameRef, rule : Rule) : NameRef
+      {
+        def toCamelCase(str : string, sufix : string = null) : string
+        {
+          if (str.Length == 0)
+            str
+          else if (sufix == null)
+            char.ToUpperInvariant(str[0]).ToString() + str.Substring(1).ToLowerInvariant()
+          else
+            sufix + char.ToUpperInvariant(str[0]).ToString() + str.Substring(1).ToLowerInvariant()
+        }
+        def toCamelCaseName(name : NameRef) : NameRef
+        {
+          def str = name.Parts.Last;
+          if (str.Length == 0 || char.IsUpper(str[0]))
+            name
+          else
+            NameRef(name.Location, toCamelCase(str))
+        }
+        def makeKeywordName(str : string) : string
+        {
+          def isIdentifier(str : string) : bool
+          {
+            if (str.Length == 0)
+              false
+            else
+            {
+              def ch = str[0];
+                  
+              if (ch == '_' || char.IsLetter(ch))
+                str.Exists(ch => ch == '_' || char.IsLetterOrDigit(ch)) // TODO: Performance problem
+              else
+                false
+            }
+          }
+              
+          if (isIdentifier(str))
+            toCamelCase(str, "Kw")
+          else
+            Message.FatalError(rule.Location, $<#Name for literal "$str" not defined. You should define it by 'token field Name = String;' statement.#>)
+        }
+        def makeNameForRule(rule : Rule) : NameRef
+        {
+          | String(str) when this.TokenFieldNames.Contains(str) => this.TokenFieldNames.Get(str)
+          | String(str) when importedTokenFieldNames.Contains(str)    => importedTokenFieldNames.Get(str)
+          | String(str) => NameRef(name.Location, makeKeywordName(str))
+          | Call(name, _) => toCamelCaseName(name)
+          | PrefixCall(name, _) => toCamelCaseName(name)
+          | Repeat(_, _, rule)
+          | RepeatWithSeparator(_, _, rule, _) =>
+            def name2 = makeNameForRule(rule);
+            NameRef(name2.Location, name2.AsName + "s")
+                
+          | _ => Message.FatalError(rule.Location, $<#Name for rule "$rule" not defined.#>)
+        }
+                  
+        match (name.Parts)
+        {
+          | ["_"]  => makeNameForRule(rule)
+          | [_]    => name
+          | _      => assert2(false); assert(false);
+        }
+      }
+      def names = NList.Map2(names, subRules, makeName);
+      def nameIndex = Hashtable(names.GroupBy(n => n).Where(g => g.Count() > 1).Select(g => (g.Key, 1)));
+      def makeIndexedName(n : NameRef) : NameRef
+      {
+        mutable index;
+            
+        if (nameIndex.TryGetValue(n, out index))
+        {
+          nameIndex[n] = index + 1;
+          NameRef(n.Location, n.AsName + index)
+        }
+        else
+          n
+      }
+      def result = names.Map(makeIndexedName);
+      result
+    }
+
     public GetRule() : option[Rule]
     {
       match (this)
