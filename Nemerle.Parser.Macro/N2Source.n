@@ -232,16 +232,33 @@ namespace Nemerle.Parser
       | _ => Message.FatalError(identifier.NLocation(), "Error.");
     }
 
+    private AddPrecedence(rule : Rule.Sequence, baseName : NameRef, precedence : G.Number, rightAssociative : bool) : Rule.Sequence
+    {
+      match (rule.rules)
+      {
+        | (Call(callName, bindingPower) as call) :: rules when callName == baseName =>
+          def bp = 
+            if (bindingPower == 0)
+              ConvertNumber(precedence) + if (rightAssociative) 1 else 0
+            else
+            {
+              Message.Warning(call.Location, "You can't use Binding Power and precedence simultaneously.");
+              bindingPower
+            };
+          Rule.Sequence(rule.Location, RuleType.Void(), 0, Rule.PrefixCall(call.Location, RuleType.Void(), 0, baseName, bindingPower) :: rules)
+      }
+    }
+    
     public ConvertSyntaxModule(syntaxModule : G.SyntaxModule.Ast) : SyntaxModule
     {
       mutable grammar = Grammar();
       mutable imports = SCG.List();
       mutable tokenFieldNames = Map();
       mutable optionEmitDebugSources = true;
-      def addSequence(rule)
+      def addSequence(rule : Rule) : Rule.Sequence
       {
-        | Rule.Sequence => rule
-        | _             => Rule.Sequence(rule.Location, RuleType.Void(), 0, [rule])
+        | Rule.Sequence as rule => rule
+        | _                     => Rule.Sequence(rule.Location, RuleType.Void(), 0, [rule])
       }
       foreach (decl in syntaxModule.Declarations)
       {
@@ -287,33 +304,50 @@ namespace Nemerle.Parser
           def name       = decl.Name.ToNameRef();
           def ruleId     = grammar.Count;
           def attributes = ConvertAttributes(decl.RuleAttributes);
-          def rule       = addSequence(ConvertRule(decl.Rule));
+          def rule1        = addSequence(ConvertRule(decl.Rule));
           def baseName   = decl.BaseName.ToNameRef();
-          def ruleDecl = match (rule : Rule)
-          {
-            | Sequence((Call(callName, bindingPower) as call) :: rules) when callName == baseName =>
-              RuleDefinition.ExtentionPostfix
-                ( name.Location
-                , ruleId
-                , name
-                , attributes
-                , tokenFieldNames
-                , baseName
-                , bindingPower
-                , Rule.Sequence(rule.Location, RuleType.Void(), 0, Rule.PrefixCall(call.Location, RuleType.Void(), 0, baseName, bindingPower) :: rules)
-                )
+          def rule2 =
+            match (decl.BodyDeclaration)
+            {
+              //| G.EmptyBodyDeclaration.Ast => rule1
+              | G.BlokBodyDeclaration.Ast(BodyMemberDeclarations=members) =>
+                def subrules = members.Once.[G.SubruleNamesDeclaration.Ast]();
+                def precedence = members.Once.[G.PrecedenceDeclaration.Ast]();
+                
+                if (precedence is Some(prec))
+                  AddPrecedence(rule1, baseName, prec.Precedence, prec.RightAssociative.IsSome)
+                else
+                  rule1
+              
+              
+              | _ => rule1
+            };
+          def ruleDecl = 
+            match (rule2)
+            {
+              | Sequence((Call(callName, bindingPower) as call) :: rules) when callName == baseName =>
+                RuleDefinition.ExtentionPostfix
+                  ( name.Location
+                  , ruleId
+                  , name
+                  , attributes
+                  , tokenFieldNames
+                  , baseName
+                  , bindingPower
+                  , Rule.Sequence(rule1.Location, RuleType.Void(), 0, Rule.PrefixCall(call.Location, RuleType.Void(), 0, baseName, bindingPower) :: rules)
+                  )
 
-            | _ =>
-              RuleDefinition.ExtentionPrefix
-                ( name.Location
-                , ruleId
-                , name
-                , attributes
-                , tokenFieldNames
-                , baseName
-                , rule
-                )
-          }
+              | _ =>
+                RuleDefinition.ExtentionPrefix
+                  ( name.Location
+                  , ruleId
+                  , name
+                  , attributes
+                  , tokenFieldNames
+                  , baseName
+                  , rule2
+                  )
+            };
           grammar = grammar.Add(ruleDecl);
 
         | G.TokenField.Ast(StringLiterals=lits) as decl => 
