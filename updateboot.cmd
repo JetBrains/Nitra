@@ -8,7 +8,7 @@ ROBOCOPY Nemerle.Parser\bin\Debug\              %Boot%\   Nemerle.Parser.???    
 ROBOCOPY Nemerle.Parser.Macro.Parser\bin\Debug\ %Boot%\   Nemerle.Parser.Macro.Parser.???   /LOG+:%Boot%\Boot-update.log /NP /NJS /V /NJH
 ROBOCOPY Nemerle.Parser.Macro.Model\bin\Debug\  %Boot%\   Nemerle.Parser.Macro.Model.???    /LOG+:%Boot%\Boot-update.log /NP /NJS /V /NJH
 ROBOCOPY %Nemerle%\                             %Boot%\   %CompilerFiles%                   /LOG+:%Boot%\Boot-update.log /NP /NJS /V /NJH
-
+ROBOCOPY Nemerle.Parser\                        Boot.Nemerle.Parser\   *.n *.nproj          /LOG+:%Boot%\Boot-update.log /NP /NJS /V /NJH /MIR /A+:R /XF Boot.Nemerle.Parser.nproj 
 cls
 echo Result of update %Boot%
 type %Boot%\Boot-update.log
