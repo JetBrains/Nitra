@@ -235,7 +235,6 @@ namespace Nemerle.Parser
     private AddPrecedence(rule : Rule.Sequence, baseName : NameRef, precedence : G.Number, rightAssociative : bool) : Rule.Sequence
     {
       def newBindingPower = ConvertNumber(precedence);
-      
       def updateCall(call, bindingPower, newBindingPower) : Rule
       {
         def bp = 
@@ -243,28 +242,45 @@ namespace Nemerle.Parser
             newBindingPower
           else
           {
-            Message.Warning(call.Location, "You can't use Binding Power and precedence simultaneously.");
+            Message.Warning(call.Location, "You can't use Binding Power and 'precedence' simultaneously.");
             bindingPower
           };
           
         Rule.Call(call.Location, RuleType.Void(), 0, baseName, bp)
       }
-      mutable isFirst = true;
-      def desugarRest(rule : Rule) : Rule
+      def checkUnary(call)
       {
-        | Call(callName, bindingPower) as call when isFirst && callName == baseName =>
-          isFirst = false;
-          updateCall(call, bindingPower, newBindingPower);
-              
-        | _ => rule
+        when (rightAssociative)
+          Message.Error(call.Location, "You can't use 'right-associative' for a unary extending rule.");
       }
-      
       match (rule.rules)
       {
-        | (Call(callName, bindingPower) as call) :: rest when callName == baseName
-          with first = updateCall(call, bindingPower, newBindingPower + if (rightAssociative) 1 else 0)
-        | first :: rest => Rule.Sequence(rule.Location, RuleType.Void(), 0, first :: rest.Map(desugarRest))
-        | _ => assert(false);
+        | (Call(n1, bp1) as call1) :: (String as op)                                    :: (Call(n2, bp2) as call2) :: rest when n1 == baseName && n2 == baseName with s = null // rec "op"   rec
+        | (Call(n1, bp1) as call1) :: (String as op) :: (Rule(Type=RuleType.Void) as s) :: (Call(n2, bp2) as call2) :: rest when n1 == baseName && n2 == baseName  =>            // rec "op" s rec
+          def newCall1 = updateCall(call1, bp1, newBindingPower + if (rightAssociative) 1 else 0);
+          def newCall2 = updateCall(call2, bp2, newBindingPower);
+          def rest2    = if (s == null) call2 :: rest else s :: newCall2 :: rest;
+          Rule.Sequence(rule.Location, RuleType.Void(), 0, newCall1 :: op :: rest2)
+          
+        | [Call(n, bp) as call, String as op]                                when n == baseName with s = null // rec "op"
+        | [Call(n, bp) as call, String as op, Rule(Type=RuleType.Void) as s] when n == baseName => // rec "op" s
+          checkUnary(call);
+          def newCall = updateCall(call, bp, newBindingPower);
+          def rest    = if (s == null) [op] else [op, s];
+          Rule.Sequence(rule.Location, RuleType.Void(), 0, newCall :: rest)
+        
+        | [String as op,                                Call(n, bp) as call] when n == baseName with s = null // "op"   rec 
+        | [String as op, Rule(Type=RuleType.Void) as s, Call(n, bp) as call] when n == baseName =>            // "op" s rec
+          checkUnary(call);
+          def newCall = updateCall(call, bp, newBindingPower);
+          def rest    = if (s == null) [call] else [s, newCall];
+          
+          Rule.Sequence(rule.Location, RuleType.Void(), 0, op :: rest)
+
+        | _ => 
+          Message.Error(precedence.Location.ToNemerleLocation(), 
+            "You can use the 'precedence' for only rules satisfying the following patterns: 'E op E', 'op E', 'E op', 'E op s E', 'op E s', 'E op s'. Where op is literal and s is void rule call. Use a binding power instead.");
+          rule
       }
     }
     
