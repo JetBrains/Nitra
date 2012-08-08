@@ -1,6 +1,6 @@
 echo off
 set Nemerle="%ProgramFiles%\Nemerle\Net-4.0"
-set Boot=boot\Net-4.0
+set Boot=%dp0\boot\Net-4.0
 set CompilerFiles=ncc.exe ncc.pdb ncc32.exe ncc32.pdb ncc64.exe ncc64.pdb Nemerle.dll Nemerle.pdb Nemerle.Compiler.dll Nemerle.Compiler.pdb Nemerle.Macros.dll Nemerle.Macros.pdb Nemerle.MSBuild.targets Nemerle.MSBuild.Tasks.dll
 
 ROBOCOPY Nemerle.Parser.Macro\bin\Debug\        %Boot%\   Nemerle.Parser.Macro.???           /LOG:%Boot%\Boot-update.log /NP /NJS /V /NJH
