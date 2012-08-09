@@ -178,9 +178,7 @@ namespace N2
 
           foreach (rd in start.TopDeclarations)
           {
-            | G.SyntaxModule.Ast as syntaxModule =>
-              SyntaxModules.Add(ConvertSyntaxModule(syntaxModule));
-
+            | G.SyntaxModule.Ast as syntaxModule => SyntaxModules.Add(ConvertSyntaxModule(syntaxModule));
             | _ => assert(false);
           }
         | _ => assert(false);
@@ -289,11 +287,28 @@ namespace N2
       mutable grammar = Grammar();
       mutable imports = SCG.List();
       mutable tokenFieldNames = Map();
+      mutable aliases = Map();
       mutable optionEmitDebugSources = true;
-      def addSequence(rule : Rule) : Rule.Sequence
+      def isAlias(rule) : bool
       {
-        | Rule.Sequence as rule => rule
-        | _                     => Rule.Sequence(rule.Location, RuleType.Void(), 0, [rule])
+        | Rule.Call(n, _) when aliases.Contains(n) => true
+        | _ => false
+      }
+      def addSequence(rule : Rule) : Rule.Sequence * list[NameRef]
+      {
+        def names = SCG.List();
+        def none  = NameRef(LocationStack.Top(), "_");
+        def replaceAlias(rule) : Rule
+        {
+          | Rule.Call(n, _) when aliases.Contains(n) => names.Add(n); aliases.Get(n)
+          | _ => names.Add(none); rule
+        }
+        match (rule)
+        {
+          | Rule.Sequence(rules) when rules.Exists(isAlias) => (Rule.Sequence(rule.Location, rule.Type, rule.Id, rules.Map(replaceAlias)), names.NToList())
+          | Rule.Sequence as rule => (rule, NList.Repeat(none, rule.rules.Length))
+          | _                     => (Rule.Sequence(rule.Location, RuleType.Void(), 0, [replaceAlias(rule)]), names.NToList())
+        }
       }
       foreach (decl in syntaxModule.Declarations)
       {
@@ -316,31 +331,27 @@ namespace N2
 
         | G.VoidRuleDecl.Ast  (RuleAttributes=attr, Name=name, Rule=rule) with type = RuleType.Void()
         | G.SimpleRuleDecl.Ast(RuleAttributes=attr, Name=name, Rule=rule) with type = RuleType.PType(<[ Ast ]>) =>
-          def name       = name.ToNameRef();
-          def ruleId     = grammar.Count;
-          def attributes = ConvertAttributes(attr);
-          def rule       = addSequence(ConvertRule(rule));
+          def name          = name.ToNameRef();
+          def ruleId        = grammar.Count;
+          def attributes    = ConvertAttributes(attr);
+          def (rule, names) = addSequence(ConvertRule(rule));
             
-          grammar = grammar.Add(RuleDefinition.Simple(name.Location, ruleId, name, attributes, 
-                                tokenFieldNames, type, rule));
+          grammar = grammar.Add(RuleDefinition.Simple(name.Location, ruleId, name, attributes, tokenFieldNames, type, rule, names));
 
         | G.ExtentionPointRuleDecl.Ast as decl =>
           def name       = decl.Name.ToNameRef();
           def ruleId     = grammar.Count;
           def attributes = ConvertAttributes(decl.RuleAttributes);
-          def ruleType   = //GetRuleType(decl.NemerleType);
-            //if (decl.NemerleType.GetText().Trim() == "void")
-            //  RuleType.Void()
-            //else
-              RuleType.PType(<[ Ast ]>);
+          def ruleType   = RuleType.PType(<[ Ast ]>);
+          
           grammar = grammar.Add(RuleDefinition.ExtentionPoint(name.Location, ruleId, name, attributes, tokenFieldNames, ruleType));
 
         | G.ExtentionRuleDecl.Ast as decl =>
-          def name       = decl.Name.ToNameRef();
-          def ruleId     = grammar.Count;
-          def attributes = ConvertAttributes(decl.RuleAttributes);
-          def rule1        = addSequence(ConvertRule(decl.Rule));
-          def baseName   = decl.BaseName.ToNameRef();
+          def name            = decl.Name.ToNameRef();
+          def ruleId          = grammar.Count;
+          def attributes      = ConvertAttributes(decl.RuleAttributes);
+          def (rule1, names)  = addSequence(ConvertRule(decl.Rule));
+          def baseName        = decl.BaseName.ToNameRef();
           def rule2 =
             match (decl.BodyDeclaration)
             {
@@ -370,6 +381,7 @@ namespace N2
                   , baseName
                   , bindingPower
                   , Rule.Sequence(rule1.Location, RuleType.Void(), 0, Rule.PrefixCall(call.Location, RuleType.Void(), 0, baseName, bindingPower) :: rules)
+                  , names
                   )
 
               | _ =>
@@ -381,10 +393,16 @@ namespace N2
                   , tokenFieldNames
                   , baseName
                   , rule2
+                  , names
                   )
             };
           grammar = grammar.Add(ruleDecl);
 
+        | G.Alias.Ast as alias =>
+          def name = alias.Name.ToNameRef();
+          def rule = ConvertRule(alias.Rule);
+          aliases  = aliases.Replace(name, rule);
+          
         | G.TokenField.Ast(StringLiterals=lits) as decl => 
           foreach (strLit is G.StringLiteral.Ast in lits[0])
             tokenFieldNames = tokenFieldNames.Replace(ConvertString(strLit), decl.Name.ToNameRef());
