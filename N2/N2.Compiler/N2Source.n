@@ -289,18 +289,41 @@ namespace N2
       mutable tokenFieldNames = Map();
       mutable aliases = Map();
       mutable optionEmitDebugSources = true;
+      def processBody[T](decl : G.BodyDeclaration, func : _ -> T, defaultValue : T) : T
+      {
+        match (decl)
+        {
+          | G.BlokBodyDeclaration.Ast(BodyMemberDeclarations=members) => func(members)
+          | _ => defaultValue
+        }
+      }
+      def processLocalAliases(members)
+      {
+        def localAliasDecls = members.OfType.[G.InnerAliasDeclaration.Ast]();
+        mutable localAliasesMap = Map();
+            
+        foreach (alias in localAliasDecls)
+        {
+          def name        = alias.Name.ToNameRef();
+          def rule        = ConvertRule(alias.Rule);
+          localAliasesMap = aliases.Replace(name, rule);
+        }
+            
+        localAliasesMap
+      }
       def isAlias(rule) : bool
       {
         | Rule.Call(n, _) when aliases.Contains(n) => true
         | _ => false
       }
-      def addSequence(rule : Rule) : Rule.Sequence * list[NameRef]
+      def addSequence(rule : Rule, localAliases) : Rule.Sequence * list[NameRef]
       {
         def names = SCG.List();
         def none  = NameRef(LocationStack.Top(), "_");
         def replaceAlias(rule) : Rule
         {
-          | Rule.Call(n, _) when aliases.Contains(n) => names.Add(n); aliases.Get(n)
+          | Rule.Call(n, _) when localAliases.Contains(n) => names.Add(n); localAliases.Get(n)
+          | Rule.Call(n, _) when aliases.Contains(n)      => names.Add(n); aliases.Get(n)
           | _ => names.Add(none); rule
         }
         match (rule)
@@ -329,12 +352,13 @@ namespace N2
           def rule       = ConvertTokenRule(decl.TokenRule);
           grammar = grammar.Add(RuleDefinition.Regular(name.Location, ruleId, name, attributes, tokenFieldNames, rule));
 
-        | G.VoidRuleDecl.Ast  (RuleAttributes=attr, Name=name, Rule=rule) with type = RuleType.Void()
-        | G.SimpleRuleDecl.Ast(RuleAttributes=attr, Name=name, Rule=rule) with type = RuleType.PType(<[ Ast ]>) =>
+        | G.VoidRuleDecl.Ast  (RuleAttributes=attr, Name=name, Rule=rule) with (type = RuleType.Void(), decl = null)
+        | (G.SimpleRuleDecl.Ast(RuleAttributes=attr, Name=name, Rule=rule) as decl) with type = RuleType.PType(<[ Ast ]>) =>
           def name          = name.ToNameRef();
           def ruleId        = grammar.Count;
           def attributes    = ConvertAttributes(attr);
-          def (rule, names) = addSequence(ConvertRule(rule));
+          def localAliases  = if (decl == null) Map() else processBody(decl.BodyDeclaration, processLocalAliases, Map());
+          def (rule, names) = addSequence(ConvertRule(rule), localAliases);
             
           grammar = grammar.Add(RuleDefinition.Simple(name.Location, ruleId, name, attributes, tokenFieldNames, type, rule, names));
 
@@ -350,24 +374,19 @@ namespace N2
           def name            = decl.Name.ToNameRef();
           def ruleId          = grammar.Count;
           def attributes      = ConvertAttributes(decl.RuleAttributes);
-          def (rule1, names)  = addSequence(ConvertRule(decl.Rule));
+          def localAliases    = processBody(decl.BodyDeclaration, processLocalAliases, Map());
+          def (rule1, names)  = addSequence(ConvertRule(decl.Rule), localAliases);
           def baseName        = decl.BaseName.ToNameRef();
-          def rule2 =
-            match (decl.BodyDeclaration)
-            {
-              //| G.EmptyBodyDeclaration.Ast => rule1
-              | G.BlokBodyDeclaration.Ast(BodyMemberDeclarations=members) =>
-                def subrules = members.Once.[G.InnerAliasDeclaration.Ast]();
-                def precedence = members.Once.[G.PrecedenceDeclaration.Ast]();
+          def processPrecedence(members)
+          {
+            def precedence = members.Once.[G.PrecedenceDeclaration.Ast]();
                 
-                if (precedence is Some(prec))
-                  AddPrecedence(rule1, baseName, prec.Precedence, prec.RightAssociative.IsSome)
-                else
-                  rule1
-              
-              
-              | _ => rule1
-            };
+            if (precedence is Some(prec))
+              AddPrecedence(rule1, baseName, prec.Precedence, prec.RightAssociative.IsSome)
+            else
+              rule1
+          }
+          def rule2 = processBody(decl.BodyDeclaration, processPrecedence, rule1);
           def ruleDecl = 
             match (rule2)
             {
@@ -396,6 +415,7 @@ namespace N2
                   , names
                   )
             };
+            
           grammar = grammar.Add(ruleDecl);
 
         | G.Alias.Ast as alias =>
