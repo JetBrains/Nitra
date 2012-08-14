@@ -1,0 +1,168 @@
+﻿using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.IO;
+using System.Reflection;
+using System.Text;
+using System.Collections.Generic;
+using System.Linq;
+
+using N2;
+
+namespace TestUtil.Utils
+{
+  /// <summary>
+  /// Description of GrammarLoader.
+  /// </summary>
+  internal module GrammarLoader
+  {
+    public Load([NotNull] assemblyBasePath : string, [NotNull] ast : TestParser.Start) : GrammarLoadResult
+    {
+      def parseErrors = List();
+      ast.GetErrors(parseErrors);
+      unless (parseErrors.Count == 0)
+        return GrammarLoadResult.Fail("Parse errors");
+
+      mutable startRules = [];
+      match(ast)
+      {
+        | TestParser.Start.Ast as ast =>
+          foreach(decl in ast.TopDeclarations)
+          {
+            | TestParser.AssemblyReference.Ast as ast =>
+              def filePath = Path.Combine(assemblyBasePath, foldStringLiteral(ast.FilePath));
+              def assembly = Assembly.LoadFrom(filePath);
+              def grammarTable = GrammarInspector.Inspect(assembly).ToDictionary(_.FullName);
+
+              foreach(grammarReference in ast.GrammarReferences[0])
+              {
+                | TestParser.GrammarReference.Ast as ast =>
+                  match(ast.StartRuleReferences)
+                  {
+                    | Some(TestParser.StartRuleReference.Ast(RuleName = Some(ruleName))) =>
+                      startRules ::= StartRuleDetermination.Exact(grammarTable, foldQIdentifier(ast.GrammarName), foldQIdentifier(ruleName))
+                    | Some(TestParser.StartRuleReference.Ast(RuleName = None)) =>
+                      startRules ::= StartRuleDetermination.FromGrammar(grammarTable, foldQIdentifier(ast.GrammarName))
+                    | None => ()
+                    | _ => assert(false)
+                  }
+                | _ => assert(false)
+              }
+              otherwise
+                startRules ::= StartRuleDetermination.FromAssembly(grammarTable);
+
+              | _ => assert(false)
+          }
+        | _ => assert(false)
+      }
+
+      def selectRuleFromGrammar(grammarDescriptor)
+      {
+        match(grammarDescriptor.Rules.Where(_.IsStart).NToList())
+        {
+          | []    => GrammarLoadResult.Fail($"No start rules found in grammar '$(grammarDescriptor.FullName)'");
+          | [one] => GrammarLoadResult.Success(one)
+          | many  => GrammarLoadResult.Fail($<#Multiple start rules found: ..$(many; ", "; x => "'" + x.Name + "'")#>);
+        }
+      }
+
+      match(startRules)
+      {
+        | [] => GrammarLoadResult.Fail("No referencies specified");
+        | [StartRuleDetermination.FromAssembly as det] =>
+          when(det.GrammarTable.Count == 0)
+            return GrammarLoadResult.Fail("No grammars found");
+          when(det.GrammarTable.Count > 1)
+            return GrammarLoadResult.Fail($<#Multiple grammars found: ..$(det.GrammarTable.Values; ", "; x => "'" + x.FullName + "'") #>);
+          selectRuleFromGrammar(det.GrammarTable.First().Value)
+
+        | [StartRuleDetermination.FromGrammar(grammar) as det] =>
+          mutable grammarDescriptor;
+          unless(det.GrammarTable.TryGetValue(grammar, out grammarDescriptor))
+            return GrammarLoadResult.Fail($"Grammar '$grammar' not found");
+          selectRuleFromGrammar(grammarDescriptor)
+
+        | _ =>
+          match(startRules.FindAll(_ is StartRuleDetermination.Exact))
+          {
+            | [] => GrammarLoadResult.Fail("Start rule not specified")
+            | [Exact(grammar, rule) as det] =>
+              mutable grammarDescriptor;
+              unless(det.GrammarTable.TryGetValue(grammar, out grammarDescriptor))
+                return GrammarLoadResult.Fail($"Grammar '$grammar' not found");
+              match(grammarDescriptor.Rules.FirstOrDefault(r => r.Name == rule))
+              {
+                | null => GrammarLoadResult.Fail($"Rule '$rule' not found");
+                | r => GrammarLoadResult.Success(r)
+              }
+            | _ => GrammarLoadResult.Fail("Multiple start rules specified")
+          }
+      }
+    }
+
+    private foldQIdentifier(qid : TestParser.QIdentifier) : string
+    {
+      | TestParser.QIdentifier.Ast(Names = (names, _)) => string.Join(".", names.Select(n => n.GetText()))
+      | _ => assert(false)
+    }
+
+    private foldStringLiteral(stringLiteral : TestParser.StringLiteral) : string
+    {
+      | TestParser.StringLiteral.Ast as stringLiteral =>
+        def sb = System.Text.StringBuilder();
+        foreach (part in stringLiteral.StringParts)
+        {
+          | TestParser.StringLiteral.Ast as simple =>
+            _ = sb.Append(stringLiteral.Location.Source.OriginalText, simple.Location.StartPos, simple.Location.EndPos - simple.Location.StartPos)
+
+          | TestParser.UnicodeEscapeSequenceStringPart.Ast as esc =>
+            def digit(tok) { hexDigit(stringLiteral.Location.Source.OriginalText[tok.StartPos]) }
+            _ = sb.Append((digit(esc.HexDigit1) * 0x1000 + digit(esc.HexDigit2) * 0x100 + digit(esc.HexDigit3) * 0x10 + digit(esc.HexDigit4)) :> char)
+
+          | TestParser.EscapeSequenceStringPart.Ast as esc =>
+            _ = sb.Append(escapeSequence(stringLiteral.Location.Source.OriginalText[esc.Char.StartPos]))
+
+          | _ => assert(false);
+        }
+        sb.ToString()
+
+      | _ => assert(false);
+    }
+
+    private hexDigit(c : char) : int
+    {
+      | c when '0' <= c && c <= '9' => c : int - '0' : int
+      | c when 'a' <= c && c <= 'f' => c : int - 'a' : int + 10
+      | c when 'A' <= c && c <= 'F' => c : int - 'A' : int + 10
+      | _ => assert(false);
+    }
+
+    private escapeSequence(c : char) : char
+    {
+      | '\'' => '\'' | '\"' => '\"' | '\\' => '\\' | '0'  => '\0'
+      | 'a'  => '\a' | 'b'  => '\b' | 'f'  => '\f' | 'n'  => '\n'
+      | 'r'  => '\r' | 't'  => '\t' | 'v'  => '\v' | c    => c
+    }
+
+    [Record]
+    private variant StartRuleDetermination
+    {
+      | FromAssembly
+      | FromGrammar  { grammar : string }
+      | Exact        { grammar : string; rule : string }
+
+      public GrammarTable : Dictionary[string, GrammarDescriptor]
+    }
+  }
+
+  internal variant GrammarLoadResult
+  {
+    | Fail    { message : string }
+    | Success { rule : RuleDescriptor }
+  }
+}
