@@ -53,7 +53,7 @@ namespace N2
         {
           | None with args = []
           | Some(args) =>
-            tb.DefineNestedType(<[decl: 
+            def errorTb = tb.DefineNestedType(<[decl: 
               public partial new class Error : $(tb.GetMemType() : typed)
               {
                 public this(location : Location, errors : list[ErrorInfo])
@@ -61,9 +61,11 @@ namespace N2
                   base(location, errors)
                 }
               }
-            ]>).Compile();
+            ]>);
+            DefineErrorGetDump(errorTb, tb.FullName);
+            errorTb.Compile();
 
-            tb.DefineNestedType(<[decl: 
+            def spliceTb = tb.DefineNestedType(<[decl: 
               public partial new class Splice : $(tb.GetMemType() : typed)
               {
                 public this(location : Location, errors : list[ErrorInfo])
@@ -71,7 +73,9 @@ namespace N2
                   base(location, errors)
                 }
               }
-            ]>).Compile();
+            ]>);
+            DefineSpliceGetDump(spliceTb, tb.FullName);
+            spliceTb.Compile();
 
             match (rd)
             {
@@ -90,6 +94,7 @@ namespace N2
                 DefineAstFields(astTb, members);
                 DefineAstCtor(astTb, members);
                 DefineAstGetErrors(astTb, members);
+                DefineAstGetDump(astTb, tb.FullName, members);
                 when (rd.GetRule() is Some(rule))
                   DefineAstGetSpans(astTb, rule, rd);
 
@@ -380,6 +385,80 @@ namespace N2
         public override GetSpans(spans : System.Collections.Generic.List[N2.SpanInfo], startPos : int, endPos : int) : void
         {
           $bodyCode
+        }
+      ]>);
+    }
+
+    private DefineAstGetDump(astTb : TypeBuilder, astFullName : string, members : list[string * RuleType]) : void
+    {
+      def makeDump(name, type) : PExpr // TODO: Оптимизировать списоки токенов.
+      {
+        match (type : RuleType)
+        {
+          | _ when RuleTypeToNType(type).TryUnify(_ntokenType)
+          | Chars        => <[ N2.Runtime.Dump.Token(GetText($(name : dyn))) ]>
+          | Tuple([_])   => <[ $(name : dyn).GetDump(); ]>
+          | PType        => <[ $(name : dyn).GetDump(); ]>
+          | NType        => <[ $(name : dyn).GetDump(); ]>
+          | List(type)   =>
+            <[
+              N2.Runtime.Dump.List($(name : dyn).Map(fun(_item)
+              {
+                $(makeDump("_item", type))
+              }))
+            ]>
+
+          | Option(type) =>
+            <[
+              match ($(name : dyn))
+              {
+                | Some(_item) => N2.Runtime.Dump.Option(Some($(makeDump("_item", type))));
+                | _ => N2.Runtime.Dump.Option(None())
+              }
+            ]>
+
+          | Tuple(types) =>
+            def types = types.Filter(ty => !(ty is RuleType.Void));
+            def fields = types.Length;
+            def names = $[0..fields - 1].Map(n => $"_item$n");
+            <[
+              {
+                def (..$(names.Map(name => <[ $(name : dyn) ]>))) = $(name : dyn);
+                N2.Runtime.Dump.Tuple([..$(names.Zip(types).Map(makeDump))]);
+              }
+            ]>
+
+          | Void         => assert(false)
+        }
+      }
+      def makeFieldDump(name, type) : PExpr
+      {
+        <[ N2.Runtime.Dump.Field($(name : string), $(makeDump(name, type))) ]>
+      }
+      _ = astTb.DefineWithSource(<[decl:
+        public override GetDump() : N2.Runtime.Dump
+        {
+          N2.Runtime.Dump.Ast($(astFullName : string), [..$(members.Map(makeFieldDump))])
+        }
+      ]>);
+    }
+
+    private DefineErrorGetDump(errorTb : TypeBuilder, astFullName : string) : void
+    {
+      _ = errorTb.DefineWithSource(<[decl:
+        public override GetDump() : N2.Runtime.Dump
+        {
+          N2.Runtime.Dump.Error($(astFullName : string), GetText())
+        }
+      ]>);
+    }
+
+    private DefineSpliceGetDump(spliceTb : TypeBuilder, astFullName : string) : void
+    {
+      _ = spliceTb.DefineWithSource(<[decl:
+        public override GetDump() : N2.Runtime.Dump
+        {
+          N2.Runtime.Dump.Splice($(astFullName : string))
         }
       ]>);
     }
