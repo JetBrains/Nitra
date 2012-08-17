@@ -1,23 +1,16 @@
-﻿using Nemerle;
-using Nemerle.Imperative;
-using Nemerle.Collections;
-using Nemerle.Text;
-using Nemerle.Utility;
-
-using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿using System;
 
 //структура правила расширения.
 
-//id
-//размер узла
-//состояние разбора -1 если правило полностью разобрано.
-//размеры подправил
-//...
-//терминатор и флаги. Должен быть меньше 0
-//ссылки на ast подправил
-//...
+// 0         id
+// 1         размер узла
+// 2         состояние разбора -1 если правило полностью разобрано.
+// 3         размеры подправил
+//           ...
+// 3 + n     терминатор и флаги. Должен быть меньше 0
+// 3 + n + 1 ссылки на AST или инлайн AST подправил
+//           ...
+
 
 namespace N2.Internal
 {
@@ -29,14 +22,13 @@ namespace N2.Internal
     public static const int AstSize      = 2;
 
     public int          SubrulesOffset { get; }
-    public RuleParser[] PrefixRules { get; }
-    public RuleParser[] PostfixRules { get; }
+    public RuleParser[] PrefixRules    { get; }
+    public RuleParser[] PostfixRules   { get; }
 
-    public sealed override int Parse(int pos, string text, int astPos, ref int[] ast)
+    public sealed override int Parse(int curEndPos, string text, int astPos, ref int[] ast)
     {
       unchecked
       {
-        int curEndPos;
         int newEndPos;
         int bestEndPos;
         int i;
@@ -47,59 +39,60 @@ namespace N2.Internal
         else
           goto error_recovery;
 
-start_parsing: // чистый разбор
+start_parsing:
         //AST расширяемого правила проинлайнин в AST того правила которое его вызывает
         ast[astPos + ParsedAstOfs] = -1;
         ast[astPos + BestAstOfs]   = -1;
 
-        if (pos >= text.Length) // конец текста
+        if (curEndPos >= text.Length) // конец текста
           return -1;
 
         goto prefix_loop;
 
-error_recovery: // восстановление после ошибки
+error_recovery:
         astPos = ~astPos;
 
         int bestAst = ast[astPos + BestAstOfs];
         if (bestAst < 0)
-          return -1; // не смогли восстановиться
+          return -1; // ни одно правило не съело ни одного токена // TODO: Сделать восстановление
 
         i = ast[bestAst] - SubrulesOffset; // восстанавливаем состояние из Id правила которое было разобрано дальше всех.
         if (i < PrefixRules.Length)
-        { // префикное правило.
+        { // префикное правило
           RuleParser prefixRule = PrefixRules[i];
-          curEndPos = prefixRule.Parse(pos, text, ~astPos, ref ast);
+          curEndPos = prefixRule.Parse(curEndPos, text, ~astPos, ref ast);
         }
         else
         { // постфиксное правило
           i -= PrefixRules.Length;
           RuleParser postfixRule = PostfixRules[i];
-          curEndPos = pos + ast[ast[astPos + ParsedAstOfs] + 1]; // к стартовой позиции в тексте добавляем размер уже разобранного AST
+          curEndPos = curEndPos + ast[ast[astPos + ParsedAstOfs] + 1]; // к стартовой позиции в тексте добавляем размер уже разобранного AST
           curEndPos = postfixRule.Parse(curEndPos, text, ~astPos, ref ast);
         }
+        assert(curEndPos >= 0);
         goto postfix_loop;
 
 prefix_loop:
         i = 0;
-        c = text[pos];
+        c = text[curEndPos];
+        bestEndPos = -1;
         for (; i < PrefixRules.Length; ++i)
         {
           RuleParser prefixRule = PrefixRules[i];
           if (prefixRule.LowerBound <= c && c <= prefixRule.UpperBound)
           {
-            newEndPos = prefixRule.Parse(pos, text, astPos, ref ast);
+            newEndPos = prefixRule.Parse(curEndPos, text, astPos, ref ast);
             if (newEndPos > 0)
-              curEndPos = newEndPos;
+              bestEndPos = newEndPos;
           }
         }
 
-        ast[astPos + StateOfs] = i;
-        ast[astPos + SizeOfs]  = curEndPos - pos;
+        curEndPos = bestEndPos;
 
-postfix_loop:
         if (curEndPos < 0)// не смогли разобрать префикс
           return -1;
 
+postfix_loop:
         bestEndPos = curEndPos;
         while (curEndPos < text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
                                         // при достижении конца текста есть нечего
@@ -118,7 +111,7 @@ postfix_loop:
           }
 
           if (bestEndPos == curEndPos)
-            break; // если нам не удалось продвинутся то заканчиваем разбор
+            break; // если нам не удалось продвинуться то заканчиваем разбор
 
           curEndPos = bestEndPos;
         }

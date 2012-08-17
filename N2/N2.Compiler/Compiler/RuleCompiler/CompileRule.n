@@ -14,6 +14,76 @@ namespace N2
 {
   internal partial class RuleCompiler
   {
+    private PrintRule(rule : Rule) : PExpr
+    {
+      PExpr.Sequence(Convert(rule).NToList().MapI((i, field) => <[ _ = $(string.Format("{0, 4} {1}", i, field))]>))
+    }
+
+    private Convert(rule : Rule) : SCG.List[AstField]
+    {
+      mutable fields = SCG.List.[AstField]();
+      def newField()
+      {
+        def id = fields.Count;
+        fields.Add(null);
+        id;
+      }
+
+      def convertRule(parent : int, level : int, rule : Rule) : int
+      {
+        def add(field, id)
+        {
+          fields[id] = field(parent, level);
+          id
+        }
+
+        def convertPredicate(isAnd, rule : Rule) : int
+        {
+          def id = newField();
+          add(AstField.Predicate(_, _, convertRule(id, level + 1, rule), isAnd), id)
+        }
+        match (rule)
+        {
+          | And                 as rule => convertPredicate(true, rule.rule)
+          | Not                 as rule => convertPredicate(false, rule.rule)
+          | String              as rule => add(AstField.TokenString(_, _, rule.str), newField())
+          | Call                as rule =>
+            def rd   = _grammarCompiler.TypedGrammar.GetRule(rule.name);
+            def field = match (rd, _grammarCompiler.GetRuleType(rd))
+            {
+              | (ExtentionPoint         , _    ) => AstField.ExtentionPoint(_, _, rd);
+              | (ExternalRule(_, true)  , _    ) => AstField.ExtentionPoint(_, _, rd);
+              | (ExternalRule(_, false) , Void ) => AstField.Void(_, _, rd);
+              | (ExternalRule(_, false) , _    ) => AstField.ExternalAst(_, _, rd);
+              | (Simple                 , Void ) => AstField.Void(_, _, rd);
+              | (Simple                 , _    ) => AstField.ExternalAst(_, _, rd);
+              | (Regular                , _    ) => AstField.TokenCall(_, _, rd);
+              | _     => assert(false);
+            }
+            add(field, newField())
+
+          | PrefixCall                  => add(AstField.PrefixCall(_, _), newField())
+          | Sequence            as rule =>
+            def seqId = newField();
+            add(AstField.Sequence(_, _, rule.rules.Map(convertRule(seqId, level + 1, _))), seqId)
+
+          | Repeat(0, Some(1), _) as rule =>
+            def seqId = newField();
+            add(AstField.Option(_, _, convertRule(seqId, level + 1, rule.rule)), seqId)
+
+          | Repeat              as rule =>
+            def seqId = newField();
+            add(AstField.List(_, _, convertRule(seqId, level + 1, rule.rule), rule.minCount, rule.maxCount), seqId)
+
+          | RepeatWithSeparator as rule =>
+            def seqId = newField();
+            add(AstField.List2(_, _, convertRule(seqId, level + 1, rule.rule), convertRule(seqId, level + 1, rule.separator), rule.minCount, rule.maxCount), seqId)
+        }
+      }
+      _ = convertRule(-1, 0, rule);
+      fields
+    }
+
     private CompileRule(currentRule : Rule) : PExpr * list[string]
     {
       def (code, results) = match (currentRule)
