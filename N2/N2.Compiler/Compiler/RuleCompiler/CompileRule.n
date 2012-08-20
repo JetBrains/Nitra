@@ -19,6 +19,153 @@ namespace N2
       PExpr.Sequence(Convert(rule).NToList().MapI((i, field) => <[ _ = $(string.Format("{0, 4} {1}", i, field))]>))
     }
 
+    [Record]
+    private class AstInfo
+    {
+      public SizeOffsetsSize : int;
+      public AstFieldsSize : int;
+      public AstSize : int;
+    }
+
+    private NewCompile(rule : Rule) : PExpr
+    {
+      def manager     = _grammarCompiler.Manager;
+      def fields      = Convert(rule);
+      def sizeOffsets = array(fields.Count);
+      def astOffsets  = array(fields.Count);
+      for(mutable i = 0; i < sizeOffsets.Length; ++i)
+        sizeOffsets[i] = PExpr.Error($"size offset invalid for $i");
+      for(mutable i = 0; i < astOffsets.Length; ++i)
+        astOffsets[i] = PExpr.Error($"ast offset invalid for $i");
+
+      def calcAstInfo(ast : list[int], headerSize : int, terminator : bool)
+      {
+        def terminator = if (terminator) 1 else 0;
+        mutable sizeFielsSize = 0;
+        foreach (i in ast)
+        {
+          sizeOffsets[i] = <[ $(sizeFielsSize + headerSize) ]>;
+          ++sizeFielsSize;
+        }
+
+        mutable astFieldsSize = 0;
+        foreach (i in ast)
+        {
+          def setOffset(size)
+          {
+            astOffsets[i] = <[ $(sizeFielsSize + astFieldsSize + headerSize + terminator) ]>;
+            astFieldsSize += size;
+          }
+          match (fields[i])
+          {
+            | ExtentionPoint => setOffset(2)
+            | ExternalAst    => setOffset(1)
+            | Option         => setOffset(1)
+            | List           => setOffset(1)
+            | List2          => setOffset(1)
+            | _              => ()
+          }
+        }
+        def astSize = sizeFielsSize + astFieldsSize + headerSize + terminator;
+        AstInfo(sizeFielsSize, astFieldsSize, astSize)
+      }
+
+      def parseLabel = array(fields.Count);
+      for(mutable i = 0; i < parseLabel.Length; ++i)
+        parseLabel[i] = Util.next_id(manager);
+
+      def failLabel = Util.next_id(manager);
+
+      def goto(n)  { PExpr.Typed(Location.Default, TExpr.Goto(manager.InternalType.Void, n, 1)) }
+      def label(n) { PExpr.Typed(Location.Default, TExpr.Label(manager.InternalType.Void, n, TExpr.DefaultValue(manager.InternalType.Void))) }
+
+      def gotoParse(n)  { goto(parseLabel[n]) }
+      def labelParse(n) { label(parseLabel[n]) }
+
+      //"( s (Expression, (, s))* ) s"
+      //"   0   -1   -1  Ast            [1, 2, 3, 7, 8]";
+      //"   1    0    0  TokenString    \"(\"";
+      //"   2    0    0  Void           s";
+      //"   3    0    0  List2          [4] [5, 6] 0 None";
+      //"   4    3    1  ExtentionPoint Expression";
+      //"   5    3    1  TokenString    \",\"";
+      //"   6    3    1  Void           s";
+      //"   7    0    0  TokenString    \")\"";
+      //"   8    0    0  Void           s"
+
+      //"[ s (Attribute, (, s))+ (, s)? ] s";
+      //"   0   -1   -1  Ast            [1, 2, 3, 7, 10, 11]";
+      //"   1    0    0  TokenString    \"[\"";
+      //"   2    0    0  Void           s";
+      //"   3    0    0  List2          [4] [5, 6] 1 None";
+      //"   4    3    1  ExternalAst    Attribute";
+      //"   5    3    1  TokenString    \",\"";
+      //"   6    3    1  Void           s";
+      //"   7    0    0  Option         [8, 9]";
+      //"   8    7    1  TokenString    \",\"";
+      //"   9    7    1  Void           s";
+      //"  10    0    0  TokenString    \"]\"";
+      //"  11    0    0  Void           s"
+
+      // 0         id
+      // 1         размер узла
+      // 2         состояние разбора -1 если правило полностью разобрано.
+      // 3         размеры подправил
+      //           ...
+      // 3 + n     терминатор и флаги. Должен быть меньше 0
+      // 3 + n + 1 ссылки на AST или инлайн AST подправил
+      //           ...
+      //(curEndPos : int, text : string, astPos : int, ast : ref array[int]) : int
+      def parseCode(state : int, check : PExpr, astSize : PExpr)
+      {
+        def sizeOffset = sizeOffsets[state];
+        <[
+          $(labelParse(state));
+          if ($check && (isBest || ({ diff = ast[bestAstPos + $sizeOffset] - ($astSize); isBest = diff < 0; diff <= 0})))
+          {
+            ast[astPos + $sizeOffset] =  $astSize; // размер
+            curEndPos += $astSize;
+          }
+          else
+          {
+            ast[astPos + 2] = $state;//состояние
+            ast[astPos + $sizeOffset] = -1; // размер
+            $(goto(failLabel))
+          }
+        ]>
+      }
+      def makeAst(state, field)
+      {
+        match (field : AstField)
+        {
+          | Ast                 => PExpr.Error("Ast                 not implemented")
+          | TokenString(str)    => parseCode(state, StringCheckCode(<[ curEndPos ]>, str), <[ $(str.Length) ]>)
+          | TokenCall(rd)       => parseCode(state, <[ ({ newPos = $(rd.Name.ToString() + "_rule")(curEndPos, text); newPos > 0 }) ]>, <[ (newPos - curEndPos) ]>)
+          | ExtentionPoint      => PExpr.Error("ExtentionPoint      not implemented")
+          | ExternalAst(rd)     => parseCode(state, <[ ({ newPos = $(rd.Name.ToString() + "_rule")(curEndPos, text, astPos + __shift__, ref ast); newPos > 0 }) ]>, <[ (newPos - curEndPos) ]>)
+          | Void(rd)            => parseCode(state, <[ ({ newPos = $(rd.Name.ToString() + "_rule")(curEndPos, text); newPos > 0 }) ]>, <[ (newPos - curEndPos) ]>)
+          | Option              => PExpr.Error("Option              not implemented")
+          | List                => PExpr.Error("List                not implemented")
+          | List2               => PExpr.Error("List2               not implemented")
+          | Predicate           => PExpr.Error("Predicate           not implemented")
+        }
+      }
+      def localVars =
+        [ <[ mutable diff; ]>
+        , <[ mutable bestAstPos; ]>
+        , <[ mutable isBest = false; ]>
+        , <[ mutable astPos = -1; ]>
+        , <[ mutable newPos; ]>
+        ];
+      def flattenSequence(expr : PExpr)
+      {
+        | Sequence(exprs) => exprs
+        | _               => [expr]
+      }
+      def parsingExprs = fields.NToList().MapI(makeAst).Map(flattenSequence).Flatten();
+      PExpr.Sequence([PrintRule(rule)] + localVars + parsingExprs + [<[ $(label(failLabel)); ]>, <[ -1 ]>])
+    }
+
     private Convert(rule : Rule) : SCG.List[AstField]
     {
       mutable fields = SCG.List.[AstField]();
@@ -29,58 +176,48 @@ namespace N2
         id;
       }
 
-      def convertRule(parent : int, level : int, rule : Rule) : int
+      def convertRule(parent : int, level : int, rule : Rule) : list[int]
       {
-        def add(field, id)
+        def add(field)
         {
-          fields[id] = field(parent, level);
-          id
+          def fieldId = newField();
+          fields[fieldId] = field(convertRule(fieldId, level + 1, _))(parent, level);
+          [fieldId]
         }
 
-        def convertPredicate(isAnd, rule : Rule) : int
-        {
-          def id = newField();
-          add(AstField.Predicate(_, _, convertRule(id, level + 1, rule), isAnd), id)
-        }
         match (rule)
         {
-          | And                 as rule => convertPredicate(true, rule.rule)
-          | Not                 as rule => convertPredicate(false, rule.rule)
-          | String              as rule => add(AstField.TokenString(_, _, rule.str), newField())
-          | Call                as rule =>
+          | And                   as rule => add(conv => AstField.Predicate  (_, _, conv(rule.rule), true))
+          | Not                   as rule => add(conv => AstField.Predicate  (_, _, conv(rule.rule), false))
+          | Repeat(0, Some(1), _) as rule => add(conv => AstField.Option     (_, _, conv(rule.rule)))
+          | Repeat                as rule => add(conv => AstField.List       (_, _, conv(rule.rule),                       rule.minCount, rule.maxCount))
+          | RepeatWithSeparator   as rule => add(conv => AstField.List2      (_, _, conv(rule.rule), conv(rule.separator), rule.minCount, rule.maxCount))
+          | String                as rule => add(_    => AstField.TokenString(_, _, rule.str))
+          | Sequence              as rule => rule.rules.Map(convertRule(parent, level, _)).Flatten()
+          | Call                  as rule =>
             def rd   = _grammarCompiler.TypedGrammar.GetRule(rule.name);
-            def field = match (rd, _grammarCompiler.GetRuleType(rd))
+            def field : _ -> AstField = match (rd, _grammarCompiler.GetRuleType(rd))
             {
-              | (ExtentionPoint         , _    ) => AstField.ExtentionPoint(_, _, rd);
-              | (ExternalRule(_, true)  , _    ) => AstField.ExtentionPoint(_, _, rd);
-              | (ExternalRule(_, false) , Void ) => AstField.Void(_, _, rd);
-              | (ExternalRule(_, false) , _    ) => AstField.ExternalAst(_, _, rd);
-              | (Simple                 , Void ) => AstField.Void(_, _, rd);
-              | (Simple                 , _    ) => AstField.ExternalAst(_, _, rd);
-              | (Regular                , _    ) => AstField.TokenCall(_, _, rd);
+              | (ExtentionPoint         , _    ) => AstField.ExtentionPoint
+              | (ExternalRule(_, true)  , _    ) => AstField.ExtentionPoint
+              | (ExternalRule(_, false) , Void ) => AstField.Void
+              | (ExternalRule(_, false) , _    ) => AstField.ExternalAst
+              | (Simple                 , Void ) => AstField.Void
+              | (Simple                 , _    ) => AstField.ExternalAst
+              | (Regular                , _    ) => AstField.TokenCall
               | _     => assert(false);
             }
-            add(field, newField())
-
-          | PrefixCall                  => add(AstField.PrefixCall(_, _), newField())
-          | Sequence            as rule =>
-            def seqId = newField();
-            add(AstField.Sequence(_, _, rule.rules.Map(convertRule(seqId, level + 1, _))), seqId)
-
-          | Repeat(0, Some(1), _) as rule =>
-            def seqId = newField();
-            add(AstField.Option(_, _, convertRule(seqId, level + 1, rule.rule)), seqId)
-
-          | Repeat              as rule =>
-            def seqId = newField();
-            add(AstField.List(_, _, convertRule(seqId, level + 1, rule.rule), rule.minCount, rule.maxCount), seqId)
-
-          | RepeatWithSeparator as rule =>
-            def seqId = newField();
-            add(AstField.List2(_, _, convertRule(seqId, level + 1, rule.rule), convertRule(seqId, level + 1, rule.separator), rule.minCount, rule.maxCount), seqId)
+            add(_ => field(_, _, rd))
+          | PrefixCall                  => assert(false)
         }
       }
-      _ = convertRule(-1, 0, rule);
+      def rule = match (rule)
+      {
+        | Sequence(PrefixCall :: rules) as rule => Rule.Sequence(rule.Location, rule.Type, rule.Id, rules)
+        | rule => rule
+      }
+      fields.Add(null);
+      fields[0] = AstField.Ast(-1, -1, convertRule(0, 0, rule));
       fields
     }
 
