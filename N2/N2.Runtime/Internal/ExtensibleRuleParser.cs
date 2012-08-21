@@ -14,16 +14,29 @@
 
 namespace N2.Internal
 {
-  [Record]
   public sealed class ExtensibleRuleParser : RuleParser
   {
     public static const int ParsedAstOfs = 0; //ссылка на разобранное правило
     public static const int BestAstOfs   = 1; //ссылка на лучшее текущее правило
     public static const int AstSize      = 2;
 
-    public int          SubrulesOffset { get; }
-    public RuleParser[] PrefixRules    { get; }
-    public RuleParser[] PostfixRules   { get; }
+    private int                   FirstPostfixRule;
+    private ExtentionRuleParser[] PrefixRules;
+    private ExtentionRuleParser[] PostfixRules;
+
+    public ExtensibleRuleParser(ExtensibleRuleDescriptor descriptor, int bindingPower, CompositeGrammar grammar)
+    {
+      var rules = grammar.GetExtentionRules(descriptor);
+      var postfixRules = rules[0];
+      PrefixRules      = rules[1];
+      PostfixRules     = rules[2];
+      FirstPostfixRule = 0;
+      for (; FirstPostfixRule < postfixRules.Length && bindingPower >= postfixRules[FirstPostfixRule].BindingPower; ++FirstPostfixRule);
+    }
+
+    public override void Init()
+    {
+    }
 
     public sealed override int Parse(int curEndPos, string text, int astPos, ref int[] ast)
     {
@@ -56,7 +69,7 @@ error_recovery:
         if (bestAst < 0)
           return -1; // ни одно правило не съело ни одного токена // TODO: Сделать восстановление
 
-        i = ast[bestAst] - SubrulesOffset; // восстанавливаем состояние из Id правила которое было разобрано дальше всех.
+        i = ast[bestAst] - PrefixRules[0].RuleId; // восстанавливаем состояние из Id правила которое было разобрано дальше всех.
         if (i < PrefixRules.Length)
         { // префикное правило
           RuleParser prefixRule = PrefixRules[i];
@@ -78,7 +91,7 @@ prefix_loop:
         bestEndPos = -1;
         for (; i < PrefixRules.Length; ++i)
         {
-          RuleParser prefixRule = PrefixRules[i];
+          var prefixRule = PrefixRules[i];
           if (prefixRule.LowerBound <= c && c <= prefixRule.UpperBound)
           {
             newEndPos = prefixRule.Parse(curEndPos, text, astPos, ref ast);
@@ -97,11 +110,11 @@ postfix_loop:
         while (curEndPos < text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
                                         // при достижении конца текста есть нечего
         {
-          i = 0;
+          i = FirstPostfixRule;
           c = text[curEndPos];
           for (; i < PostfixRules.Length; ++i)
           {
-            RuleParser postfixRule = PostfixRules[i];
+            var postfixRule = PostfixRules[i];
             if (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound)
             {
               newEndPos = postfixRule.Parse(curEndPos, text, astPos, ref ast);
