@@ -38,7 +38,7 @@ namespace N2.Internal
     {
     }
 
-    public sealed override int Parse(int curEndPos, string text, int astPos, ref int[] ast)
+    public sealed override int Parse(int curEndPos, string text, int astPos, ref Parser parser)
     {
       unchecked
       {
@@ -54,8 +54,8 @@ namespace N2.Internal
 
 start_parsing:
         //AST расширяемого правила проинлайнин в AST того правила которое его вызывает
-        ast[astPos + ParsedAstOfs] = -1;
-        ast[astPos + BestAstOfs]   = -1;
+        parser.ast[astPos + ParsedAstOfs] = -1;
+        parser.ast[astPos + BestAstOfs]   = -1;
 
         if (curEndPos >= text.Length) // конец текста
           return -1;
@@ -65,22 +65,22 @@ start_parsing:
 error_recovery:
         astPos = ~astPos;
 
-        int bestAst = ast[astPos + BestAstOfs];
+        int bestAst = parser.ast[astPos + BestAstOfs];
         if (bestAst < 0)
           return -1; // ни одно правило не съело ни одного токена // TODO: Сделать восстановление
 
-        i = ast[bestAst] - PrefixRules[0].RuleId; // восстанавливаем состояние из Id правила которое было разобрано дальше всех.
+        i = parser.ast[bestAst] - PrefixRules[0].RuleId; // восстанавливаем состояние из Id правила которое было разобрано дальше всех.
         if (i < PrefixRules.Length)
         { // префикное правило
           RuleParser prefixRule = PrefixRules[i];
-          curEndPos = prefixRule.Parse(curEndPos, text, ~astPos, ref ast);
+          curEndPos = prefixRule.Parse(curEndPos, text, ~astPos, ref parser);
         }
         else
         { // постфиксное правило
           i -= PrefixRules.Length;
           RuleParser postfixRule = PostfixRules[i];
-          curEndPos = curEndPos + ast[ast[astPos + ParsedAstOfs] + 1]; // к стартовой позиции в тексте добавляем размер уже разобранного AST
-          curEndPos = postfixRule.Parse(curEndPos, text, ~astPos, ref ast);
+          curEndPos = curEndPos + parser.ast[parser.ast[astPos + ParsedAstOfs] + 1]; // к стартовой позиции в тексте добавляем размер уже разобранного AST
+          curEndPos = postfixRule.Parse(curEndPos, text, ~astPos, ref parser);
         }
         assert(curEndPos >= 0);
         goto postfix_loop;
@@ -94,7 +94,7 @@ prefix_loop:
           var prefixRule = PrefixRules[i];
           if (prefixRule.LowerBound <= c && c <= prefixRule.UpperBound)
           {
-            newEndPos = prefixRule.Parse(curEndPos, text, astPos, ref ast);
+            newEndPos = prefixRule.Parse(curEndPos, text, astPos, ref parser);
             if (newEndPos > 0)
               bestEndPos = newEndPos;
           }
@@ -117,7 +117,7 @@ postfix_loop:
             var postfixRule = PostfixRules[i];
             if (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound)
             {
-              newEndPos = postfixRule.Parse(curEndPos, text, astPos, ref ast);
+              newEndPos = postfixRule.Parse(curEndPos, text, astPos, ref parser);
               if (newEndPos > 0)
                 bestEndPos = newEndPos;
             }
