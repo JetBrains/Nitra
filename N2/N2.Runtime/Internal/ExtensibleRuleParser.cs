@@ -25,6 +25,7 @@ namespace N2.Internal
     private ExtentionRuleParser[] PostfixRules;
 
     public ExtensibleRuleParser(ExtensibleRuleDescriptor descriptor, int bindingPower, CompositeGrammar grammar)
+      : base(grammar)
     {
       var rules = grammar.GetExtentionRules(descriptor);
       var postfixRules = rules[0];
