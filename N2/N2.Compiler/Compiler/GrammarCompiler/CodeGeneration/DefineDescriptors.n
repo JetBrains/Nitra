@@ -39,64 +39,96 @@ namespace N2
     public DefineDescriptors() : void
     {
       def descriptors = SCG.List();
-      foreach (rd in ParsedGrammar.Rules)
+      foreach (rd when !(rd is RuleDefinition.ExternalRule) in ParsedGrammar.Rules)
       {
-        def define()
+        def isStart = rd.Attributes.Exists(_ is RuleAttribute.StartRule);
+        def baseType = match (rd)
         {
-          def descriptorClass = <[decl:
-            public class $(DecorateRuleClassName(rd) : dyn) : RuleDescriptor
+          | ExtentionPoint   => <[ ExtensibleRuleDescriptor ]>
+          | ExtentionPrefix  => <[ PrefixRuleDescriptor ]>
+          | ExtentionPostfix => <[ PostfixRuleDescriptor ]>
+          | Simple           => <[ SimpleRuleDescriptor ]>
+          | Regular          => <[ RegularRuleDescriptor ]>
+          | _                => assert(false)
+        }
+
+        mutable baseTypes = [baseType];
+        baseTypes = if (isStart) baseTypes + [<[ N2.IStartRuleDescriptor ]>] else baseTypes;
+
+        def descriptorClass = <[decl:
+          public class $(DecorateRuleClassName(rd) : dyn) : ..$(baseTypes)
+          {
+            private this() {}
+            public override Name : string { get { $(rd.Name.AsName : string) } }
+            public override Grammar : GrammarDescriptor { get { $(GrammarImplTB.GetMemType() : typed).StaticDescriptor } }
+            private static _staticDescriptor : $(DecorateRuleClassName(rd) : dyn) = $(DecorateRuleClassName(rd) : dyn)();
+            public static StaticDescriptor : RuleDescriptor { get { _staticDescriptor } }
+          }
+        ]>;
+        def tb = GrammarDescriptorImplTB.DefineNestedType(descriptorClass);
+        when (isStart)
+        {
+          _ = tb.DefineWithSource(<[decl:
+            public Parse(source : N2.SourceSnapshot) : N2.Ast
             {
-              private this() {}
-              public override Name : string { get { $(rd.Name.AsName : string) } }
-              public override Grammar : GrammarDescriptor { get { $(GrammarImplTB.GetMemType() : typed).StaticDescriptor } }
-              private static _staticDescriptor : $(DecorateRuleClassName(rd) : dyn) = $(DecorateRuleClassName(rd) : dyn)();
-              public static StaticDescriptor : RuleDescriptor { get { _staticDescriptor } }
-            }
-          ]>;
-          def tb = GrammarDescriptorImplTB.DefineNestedType(descriptorClass);
-          when (rd.Attributes.Exists(_ is RuleAttribute.StartRule))
-          {
-            _ = tb.DefineWithSource(<[decl:
-              public override IsStart : bool { get { true } }
-            ]>);
-            _ = tb.DefineWithSource(<[decl:
-              public override Parse(source : N2.SourceSnapshot) : N2.Ast
+              def parser = $(GrammarTB.GetMemType() : typed).GrammarImpl();
+              match (parser.$(("Parse" + MakePublicRuleName(rd.Name)) : dyn)(source))
               {
-                def parser = $(GrammarTB.GetMemType() : typed).GrammarImpl();
-                match (parser.$(("Parse" + MakePublicRuleName(rd.Name)) : dyn)(source))
-                {
-                  | Some(ast) => ast
-                  | _         =>
-                    def (pos, tokens) = parser.Parser.GetErrors();
-                    def fileLoc = N2.Location(source, 0, source.OriginalText.Length);
-                    def errorLoc = N2.Location(source, pos, pos + 1);
-                    N2.Ast(fileLoc, [ErrorInfo(errorLoc, tokens.NToList())]);
-                }
+                | Some(ast) => ast
+                | _         =>
+                  def (pos, tokens) = parser.Parser.GetErrors();
+                  def fileLoc = N2.Location(source, 0, source.OriginalText.Length);
+                  def errorLoc = N2.Location(source, pos, pos + 1);
+                  N2.Ast(fileLoc, [ErrorInfo(errorLoc, tokens.NToList())]);
               }
-            ]>);
-          }
-          when (_tokenErrorPositions.Contains(rd))
-            foreach (tep in _tokenErrorPositions[rd])
-              tb.Define(<[decl: public static $(tep.DescriptorFieldName : dyn) : N2.TokenDescriptor = N2.TokenDescriptor(_staticDescriptor, $(tep.Name : string), $(tep.IsLiteral : bool)) ]>);
-          match (GetRuleType(rd.Name))
-          {
-            | RuleType.NType(type) => tb.Define(<[decl: public ResultType() : $(type : typed) { mutable res; res } ]>)
-            | RuleType.Void        => tb.Define(<[decl: public ResultType() : void {} ]>)
-            | RuleType.Chars       => ()
-            | _                    => Message.Error(rd.Name.Location, "Implementation error. DefineDescriptors")
-          }
-          tb.Compile();
-          descriptors.Add(tb);
+            }
+          ]>);
+        }
+        when (_tokenErrorPositions.Contains(rd))
+          foreach (tep in _tokenErrorPositions[rd])
+            tb.Define(<[decl: public static $(tep.DescriptorFieldName : dyn) : N2.TokenDescriptor = N2.TokenDescriptor(_staticDescriptor, $(tep.Name : string), $(tep.IsLiteral : bool)) ]>);
+        match (GetRuleType(rd.Name))
+        {
+          | RuleType.NType(type) => tb.Define(<[decl: public ResultType() : $(type : typed) { mutable res; res } ]>)
+          | RuleType.Void        => tb.Define(<[decl: public ResultType() : void {} ]>)
+          | RuleType.Chars       => ()
+          | _                    => Message.Error(rd.Name.Location, "Implementation error. DefineDescriptors")
+        }
+        def defineExtentionRuleMethods(baseRd)
+        {
+          _ = tb.DefineWithSource(<[decl:
+            public override NewParser(ruleId : int, grammar : N2.CompositeGrammar) : N2.Internal.ExtentionRuleParser
+            {
+            }
+          ]>);
+          def baseRuleClassName = DecorateRuleClassName(baseRd);
+          _ = tb.DefineWithSource(<[decl:
+            public override BaseRule : ExtensibleRuleDescriptor { get { GrammarDescriptorImpl.$(baseRuleClassName : dyn).StaticDescriptor } }
+          ]>);
         }
         match (rd)
         {
-          | RuleDefinition.ExtentionPrefix  => define()
-          | RuleDefinition.ExtentionPostfix => define()
-          | RuleDefinition.ExtentionPoint   => define()
-          | RuleDefinition.Simple           => define()
-          | RuleDefinition.Regular          => define()
-          | RuleDefinition.ExternalRule     => ()
+          | ExtentionPoint   => ()
+          | ExtentionPrefix  as rd =>
+            defineExtentionRuleMethods(ParsedGrammar.GetRule(rd.baseRuleName))
+          | ExtentionPostfix as rd =>
+            defineExtentionRuleMethods(ParsedGrammar.GetRule(rd.baseRuleName));
+            _ = tb.DefineWithSource(<[decl:
+              public override BindingPower : int { get { $(rd.bindingPower) } }
+            ]>);
+
+          | Simple           =>
+            _ = tb.DefineWithSource(<[decl:
+              public override NewParser(ruleId : int, grammar : N2.CompositeGrammar) : N2.Internal.RuleParser
+              {
+              }
+            ]>);
+
+          | Regular          => ()
+          | _                => assert(false)
         }
+        tb.Compile();
+        descriptors.Add(tb);
       }
       DefineDescriptorMember(<[decl:
         public override Rules : array[N2.RuleDescriptor]
