@@ -44,33 +44,42 @@ namespace N2.Test.Framework
 
       match(GrammarLoader.Load(Path.GetDirectoryName(_filePath), ast))
       {
-        | Success(rule) =>
+        | Success(rule, grammars) =>
           match(ast)
           {
             | TestParser.Start.Ast(TestBody = testBody) =>
               def testText = originalTestSource.Text.Substring(testBody.StartPos, testBody.EndPos - testBody.StartPos);
               def testSource = originalTestSource.WithText(testText, testBody.StartPos);
-              def parseResult = rule.Parse(testSource);
+              def parseResult =
+                try
+                {
+                  AppDomain.CurrentDomain.SetData("ExternalGrammars", grammars);
+                  rule.Parse(testSource);
+                }
+                finally
+                {
+                  AppDomain.CurrentDomain.SetData("ExternalGrammars", null);
+                }
               def astDump = parseResult.GetDump();
               def dumpName = Path.ChangeExtension(_filePath, "out");
               using(def writer = StreamWriter(dumpName))
                 astDump.WriteTo(writer, " ");
               def goldDumpName = Path.ChangeExtension(_filePath, "gold");
-              unless(File.Exists(goldDumpName))
-                return if(_createGoldFile)
+              if(File.Exists(goldDumpName))
+                match(DumpComparer.Compare(File.ReadAllLines(dumpName), File.ReadAllLines(goldDumpName), StringComparison.Ordinal))
                 {
-                  using(def writer = StreamWriter(goldDumpName))
-                    astDump.WriteTo(writer, " ");
-                  Result.UnableToRun("Gold file created");
+                  | Success => Result.Success()
+                  | Fail(lineNumber, expectedText, foundText) =>
+                    Result.Fail($"Dump differs with gold on line $lineNumber. Expected '$expectedText' found '$foundText'")
                 }
-                else
-                  Result.UnableToRun("Gold file not found");
-              match(DumpComparer.Compare(File.ReadAllLines(dumpName), File.ReadAllLines(goldDumpName), StringComparison.Ordinal))
+              else if(_createGoldFile)
               {
-                | Success => Result.Success()
-                | Fail(lineNumber, expectedText, foundText) =>
-                  Result.Fail($"Dump differs with gold on line $lineNumber. Expected '$expectedText' found '$foundText'")
+                using(def writer = StreamWriter(goldDumpName))
+                  astDump.WriteTo(writer, " ");
+                Result.UnableToRun("Gold file created");
               }
+              else
+                Result.UnableToRun("Gold file not found");
             | _ => assert(false)
           }
         | Fail(message) => Result.Fail(message)
