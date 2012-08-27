@@ -3,9 +3,10 @@ using Nemerle.Collections;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Text;
 using Nemerle.Utility;
+using Nemerle.Imperative;
 
 using System;
-using System.Collections.Generic;
+using SCG = System.Collections.Generic;
 using System.Linq;
 
 using N2.Model;
@@ -18,8 +19,9 @@ namespace N2.Compiler
     public sealed class Ast : AstField
     {
       private fields : array[AstField];
+      private isPostfix : bool;
 
-      public override InitChildren(compiler : RuleCompiler, parent : AstField, level : int, allFields : List[AstField]) : void
+      public override InitChildren(compiler : RuleCompiler, parent : AstField, level : int, allFields : SCG.List[AstField]) : void
       {
         foreach (field in fields)
           field.Init(compiler, parent, level, allFields);
@@ -28,22 +30,50 @@ namespace N2.Compiler
       [RecordIgnore] private mutable astInfo : AstInfo;
       public override CalculateAstInfo() : void
       {
-        astInfo            = AstInfo();
+        astInfo            = AstInfo(this);
         astInfo.HeaderSize = 3;
         astInfo.Terminator = 1;
-        SizeOffset         = PExpr.Error("No size offset for Ast.");
-        AstOffset          = PExpr.Error("No ast offset for Ast.");
+        astInfo.OkLabel    = Compiler.MakeLabel();
+        astInfo.FailLabel  = Compiler.MakeLabel();
+        when (isPostfix)
+          astInfo.AstOffsetsSize = 1;
+        FieldOffsets = if (isPostfix)
+          astInfo.AllocateField(-1, 1);
+         else
+          astInfo.AllocateField(-1, -1);
         CalculateAstInfo(astInfo, fields);
-      }
-
-      public override GetAstOffset(_astInfo : AstInfo) : PExpr * int
-      {
-        (PExpr.Error("No ast offset for Ast."), 0)
       }
 
       public override Compile() : void
       {
-        ParseCode = PExpr.Error("Ast not implemented");
+        def parseCode = SCG.List();
+        parseCode.Add(<[  if (parser.ast[resultPos] == -1)
+                            isBest = true
+                          else
+                            bestAstPos = resultPos + 4
+        ]>);
+        parseCode.Add(<[   $(Compiler.Goto(fields[0].ParseLabel)) ]>);
+
+        parseCode.Add(<[   $(Compiler.Label(astInfo.OkLabel)) ]>);
+        parseCode.Add(<[   parser.ast[astPos0 + 2] = -1 ]>); // состояние разбора -1 если правило полностью разобрано.
+        if (isPostfix)
+        {
+          parseCode.Add(<[ $(FieldOffsets.AstPExpr) = parser.ast[resultPos] ]>);
+          parseCode.Add(<[ parser.ast[resultPos + 1] = astPos0 ]>);
+        }
+        else
+        {
+          parseCode.Add(<[ parser.ast[resultPos] = astPos0 ]>);
+        }
+        parseCode.Add(<[   return curEndPos ]>);
+
+        parseCode.Add(<[   $(Compiler.Label(astInfo.FailLabel)) ]>);
+        parseCode.Add(<[   parser.ast[astPos0 + 2] = parseState ]>);
+        parseCode.Add(<[   when (isBest && parser.ast[resultPos] == -1)
+                             parser.ast[resultPos] = astPos0;
+                      ]>);
+        parseCode.Add(<[   return -1 ]>);
+        ParseCode = PExpr.Sequence(parseCode.FlattenPExprSequence());
       }
 
       public override PrintContent() : string * string { ("Ast", $<#$(PrintChildren(fields))#>) }
