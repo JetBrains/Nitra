@@ -89,11 +89,14 @@ namespace N2
                   }
                 ]>);
                 
-                def members = rd.GetNames(_tokenFieldNames).Map(_.AsName).Zip(args);
+                def names = rd.GetNames(_tokenFieldNames).Map(_.AsName);
+                def members = names.Zip(args);
 
                 DefineAstFields(astTb, members);
                 DefineAstCtor(astTb, members);
                 DefineAstGetErrors(astTb, members);
+                when (rd.GetRule() is Some(Rule.Sequence(rules)))
+                  DefineToString(astTb, names, rules);
                 DefineAstGetDump(astTb, tb.FullName, members);
                 when (rd.GetRule() is Some(rule))
                   DefineAstGetSpans(astTb, rule, rd);
@@ -106,6 +109,116 @@ namespace N2
         }
         tb.Compile();
       }
+    }
+    
+    private DefineToString(astTb : TypeBuilder, names : list[string], rules : list[Rule]) : void
+    {
+      //assert2(astTb.FullName != "GrammarParser2.AstAttribute.Ast");
+      def isNoNeedVar(rule : Rule) { rule.Type is RuleType.Void || rule is Rule.String }
+      def isVoid(ruleType : RuleType)
+      {
+        | Void                                   => true
+        | Tuple(types) when types.ForAll(isVoid) => true
+        | Option(type) when isVoid(type)         => true
+        | _                                      => false
+      }
+      def zipWithNames(mutable names : list[string], rules : list[Rule]) : list[string * Rule]
+      {
+
+        def result = SCG.List();
+        foreach (rule in rules)
+        {
+          def isVoid = isVoid(rule.Type);
+          def name   = if (isVoid) "_" else names.Head;
+          unless (isVoid)
+            names = names.Tail;
+          result.Add(name, rule);
+        }
+        result.NToList()
+      }
+      def members = zipWithNames(names, rules);
+      def fieldToString(name : string, rule : Rule) : PExpr
+      {
+        def loop(expr : PExpr, rule : Rule) : PExpr
+        {
+          match (rule)
+
+          {
+            | String(str)                                => <[ _ = code.Append($str); ]>
+            | And | Cut | Not                            => <[ () ]>
+            | Scope(_, rule)                             => loop(expr, rule)
+            | Sequence(rules)                            => 
+              def members2 = rules.MapI((i, r) => if (isNoNeedVar(r)) (<[ _ ]>, r), else (<[ $($"_item$i" : dyn) ]>, r));
+              def noNeedVars = members2.ForAll((_, r) => isNoNeedVar(r));
+              def varNames = $[ n | (n, r) in members2, !(r.Type is RuleType.Void) ]; // make list of names for not void rules
+              def lines = members2.Map(loop);
+              match (varNames)
+              {
+                | _ when noNeedVars
+                | []        => <[ { ..$lines } ]>
+                | [varName] => <[ { ..$(<[ def $varName      = $expr; ]> :: lines) } ]>
+                | _         => <[ { ..$(<[ def (..$varNames) = $expr; ]> :: lines) } ]>
+              }
+              
+            | Call when rule.Type is RuleType.Void       => <[ _ = code.Append(' '); ]>
+            | Call when rule.Type is RuleType.Chars      => <[ def tok = $expr; _ = code.Append(this.Location.Source.Text, tok.StartPos, tok.Length); ]>
+            | Call | PrefixCall                          => <[ $expr.ToString(code, currentIndent, options); ]>
+            | Repeat(_, _, rule) when isVoid(rule.Type)  => <[ _ = code.Append(' '); ]>
+            | Repeat(0, Some(1), rule)                   => <[ when ($expr is Some(_x)) $(loop(<[ _x ]>, rule)) ]>
+            | Repeat(_, _, rule)                         => <[ foreach (elem in $expr) $(loop(<[ elem ]>, rule)); ]>
+            | RepeatWithSeparator(_, _, rule, separator) => 
+              //assert2(false);
+              
+              if (separator.GetAllSubRules().ForAll(isNoNeedVar))
+                <[  def (elems, separators) = $expr;
+                    assert2(elems.IsEmpty || elems.Length > separators.Length);
+                    def endIndex = elems.Length - 1;
+                      
+                    foreach (elem in elems with i)
+                    {
+                      $(loop(<[ elem ]>, rule));
+                    
+                      when (endIndex != i)
+                        $(loop(<[ separator ]>, separator));
+                    } ]>
+              else
+                <[  def (elems, separators) = $expr;
+                    assert2(elems.IsEmpty || elems.Length > separators.Length);
+                    mutable separatorRest = separators;
+                    
+                    foreach (elem in elems)
+                    {
+                      $(loop(<[ elem ]>, rule));
+                    
+                      unless (separatorRest.IsEmpty)
+                      {
+                        def separator = separatorRest.Head;
+                        $(loop(<[ separator ]>, separator));
+                        separatorRest = separatorRest.Tail;
+                      }
+                    } ]>
+          }
+        }
+        
+        loop(<[ this.$(name : dyn) ]>, rule);
+      }
+      //assert2(false);
+      def code = members.Map(fieldToString);
+      def body = <[ { ..$code } ]>;
+      _ = astTb.DefineWithSource(<[ decl: 
+        public override ToString() : string
+        {
+          def code = System.Text.StringBuilder();
+          ToString(code, 0, N2.ToStringOptions.None);
+          code.ToString()
+        } ]>);
+      _ = astTb.DefineWithSource(<[ decl: 
+        public override ToString(code : System.Text.StringBuilder, currentIndent : int, options : N2.ToStringOptions) : void
+        {
+          _ = $(astTb.FullName);
+          _ = currentIndent; _ = options;
+          $body
+        } ]>);
     }
 
     private DefineAstFields(astTb : TypeBuilder, members : list[string * RuleType]) : void
@@ -150,6 +263,7 @@ namespace N2
                 $(makeGetErrors("_item", type));
             ]>
 
+          | Option(Void) => <[ () ]>
           | Option(type) =>
             <[
               match ($(name : dyn))
@@ -408,6 +522,7 @@ namespace N2
               }))
             ]>
 
+          | Option(Void) => <[ () ]>
           | Option(type) =>
             <[
               match ($(name : dyn))
