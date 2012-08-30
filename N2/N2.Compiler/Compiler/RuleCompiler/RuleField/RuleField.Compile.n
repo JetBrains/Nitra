@@ -1,0 +1,98 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  [Record]
+  internal class AstPointer
+  {
+    private Field : RuleField;
+    private Name  : string;
+    public Var : PExpr { get { Field.Compiler.GetName($"$Name$(Field.Level)") } }
+    public Offset(structField : AstStruct.FieldBase) : PExpr
+    {
+      if (object.ReferenceEquals(structField.AstStruct.Field, Field))
+        <[ $Var + $(structField.OffsetInStruct) ]>
+      else
+        PExpr.Error("AstPointer invalid ref.")
+    }
+    public Ref(structField : AstStruct.FieldBase) : PExpr
+    {
+      <[ parser.ast[$(Offset(structField))] ]>
+    }
+  }
+
+  internal partial abstract class RuleField
+  {
+    public mutable ParseCode : PExpr;
+    public abstract Compile() : void;
+
+    public ContinueParseLabel : PExprLabel { get { if (NextSibling == null) ParentAstStruct.OkLabel else NextSibling.ParseLabel } }
+    public FailParseLabel     : PExprLabel { get { ParentAstStruct.FailLabel } }
+
+    public AstPtr      : AstPointer { [Memoize] get { AstPointer(this, "astPtr") } }
+    public ListTailPtr : AstPointer { [Memoize] get { AstPointer(this, "listTailPtr") } }
+
+    public TextPos   : PExpr { get { Compiler.GetName($"textPos$Level") } }
+    public Counter   : PExpr { get { Compiler.GetName($"counter$Level") } }
+    public Allocated : PExpr { get { Compiler.GetName($"allocated$Level") } }
+
+    public AllocateCode() : PExpr
+    {
+      if (AllocateAst)
+      {
+        if (Parent is Ast)
+          <[ $(Parent.AstPtr.Var) = parser.Allocate($(ParentAstStruct.AstSize), RuleId) ]>
+        else
+          <[ $(Parent.AstPtr.Var) = parser.Allocate($(ParentAstStruct.AstSize)) ]>
+      }
+      else
+        <[ {} ]>
+    }
+
+    public SetSizeCode(sizeField : AstStruct.SizeField, astSize : PExpr) : PExpr
+    {
+      if (Parent is Ast)
+        <[ $(Parent.AstPtr.Ref(sizeField)) = $astSize ]>
+      else
+        <[ {} ]>
+    }
+
+    public MakeParseCode(check : PExpr, astSize : PExpr, sizeField : AstStruct.SizeField) : PExpr
+    {
+      def check = if (Level == 1)
+        <[ $check && (isBest || ({ diff =  $(sizeField.BestRef) - ($astSize); isBest = diff < 0; diff <= 0 })) ]>;
+      else
+        check;
+      <[
+        $(ParseLabel.Label());
+        if ($check)
+        {
+          $(AllocateCode());
+          $(SetSizeCode(sizeField, astSize));
+          curEndPos += $astSize;
+          $(ContinueParseLabel.Goto());
+        }
+        else
+        {
+          parseState = $(State : int);//состояние
+          $(FailParseLabel.Goto());
+        }
+      ]>
+    }
+
+    public MakeRuleCall(call : PExpr, sizeField : AstStruct.SizeField) : PExpr
+    {
+      MakeParseCode(<[ ({ newPos = $call; newPos > 0 }) ]>, <[ (newPos - curEndPos) ]>, sizeField)
+    }
+  }
+}

@@ -1,0 +1,110 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal partial abstract class RuleField
+  {
+    [Record]
+    public sealed class List : RuleField
+    {
+      fields : array[RuleField];
+      min    : int;
+      max    : option[int];
+
+      public override InitChildren(compiler : RuleCompiler, parent : RuleField, level : int, allFields : SCG.List[RuleField]) : void
+      {
+        foreach (field in fields)
+          field.Init(compiler, parent, level, allFields);
+      }
+
+      [RecordIgnore] public SizeRef : AstStruct.SizeField { get; private set; }
+      [RecordIgnore] public AstRef  : AstStruct.AstField  { get; private set; }
+      [RecordIgnore] public NextRef : AstStruct.AstField  { get; private set; }
+
+      [RecordIgnore] private mutable astStruct : AstStruct;
+      public override CalculateAstInfo() : void
+      {
+        astStruct = AstStruct(this, "List");
+        when (ParentAstStruct.IsAst)
+          SizeRef = AstStruct.SizeField(ParentAstStruct);
+        AstRef = AstStruct.AstField(ParentAstStruct);
+        NextRef = AstStruct.AstField(astStruct);
+        CalculateAstInfo(astStruct, fields);
+      }
+
+      public override Compile() : void
+      {
+        def useCounter = min > 0 || max is Some(_);
+        def counterInit() { if (useCounter) <[ $Counter  = 0 ]> else <[ {} ]> }
+        def counterInc()  { if (useCounter) <[ ++ $Counter   ]> else <[ {} ]> }
+        def counterWhenMax()
+        {
+          if (max is Some(max))
+            <[
+              when ($Counter == $max)
+                $(ContinueParseLabel.Goto());
+            ]>
+          else
+            <[ {} ]>
+        }
+        def counterWhenMin()
+        {
+          if (min > 0)
+            <[
+              when ($Counter < $min)
+                $(FailParseLabel.Goto());
+            ]>
+          else
+            <[ {} ]>
+        }
+
+        def firstChild = fields[0];
+        def code = SCG.List();
+        code.Add(<[
+          $(ParseLabel.Label());
+            $(counterInit());
+            $TextPos = curEndPos;
+            $(ListTailPtr.Var) = -1;
+            $(firstChild.ParseLabel.Goto());
+
+          $(astStruct.OkLabel.Label());
+            $(SetSizeCode(SizeRef, <[ curEndPos - $TextPos ]>));
+            $(counterInc());
+            $(AstPtr.Ref(NextRef)) = -1;
+            if ($(ListTailPtr.Var) == -1)
+              $(Parent.AstPtr.Ref(AstRef)) = $(AstPtr.Var);
+            else
+              $(ListTailPtr.Ref(NextRef)) = $(AstPtr.Var);
+            $(ListTailPtr.Var) = $(AstPtr.Var);
+            $(counterWhenMax());
+            $(firstChild.ParseLabel.Goto());
+
+          $(astStruct.FailLabel.Label());
+            when (parseState > $(astStruct.AllocateState)) // АСТ создано
+            {
+              $(AstPtr.Ref(NextRef)) = -1;
+              if ($(ListTailPtr.Var) == -1)
+                $(Parent.AstPtr.Ref(AstRef)) = ~ $(AstPtr.Var);
+              else
+                $(ListTailPtr.Ref(NextRef)) = ~ $(AstPtr.Var);
+            }
+            $(counterWhenMin());
+            $(ContinueParseLabel.Goto());
+        ]>);
+        ParseCode = PExpr.Sequence(code.FlattenPExprSequence());
+      }
+
+      public override PrintContent() : string * string { ("List", $<#$(PrintChildren(fields)) $min $max#>) }
+    }
+  }
+}
