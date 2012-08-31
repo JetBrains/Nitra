@@ -1,0 +1,71 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+using CSharpParser;
+
+using Peg = Nemerle.Peg;
+
+namespace CSharp.Grammar
+{
+  [Record]
+  public class PegError : Peg.Located
+  {
+    public Message : string { get; }
+  }
+    
+  public class CSharpParser
+  {
+    public Parse(code : string, fileIndex : int, fileName : string, preprocessorSymbols : list[string]) : CSharp.CompilationUnit
+    {
+      mutable pegErrors = [];
+      def source = Peg.SourceSnapshot(code, fileIndex, fileName);
+      
+      try
+      {
+        def preParser = PreParser();
+        
+        match(preParser.Parse(source))
+        {
+          | Some(preAst) =>
+            def preResult = Preprocessor.Run(preAst, preprocessorSymbols);
+            when(preResult.HasErrors)
+              pegErrors = preResult.Errors;
+              
+            def prepSource = preResult.Source;
+            def n2Source = N2.SourceSnapshot(prepSource.Text, prepSource.FileIndex, prepSource.FileName);
+            
+            def parser = CSharp.GrammarImpl();
+            match (parser.ParseCompilationUnit(n2Source))
+            {
+              | None      =>
+                def (pos, tokens) = parser.Parser.GetErrors();
+                def loc = N2.Location(n2Source, pos, pos);
+                CSharp.CompilationUnit.Error(loc, [N2.ErrorInfo(loc, tokens.NToList())]);
+
+              | Some(ast) => ast
+            }
+            
+
+          | _ =>
+            def (errorPos, ids) = preParser.GetMaxRollbackPosAndIds();
+            def loc = Peg.Location(source, errorPos, errorPos);
+            //pegErrors = [PegError(Peg.Location(source, errorPos, errorPos), $<#Preprocessor error. Expected: ..$(ids; "; "; id => preParser.GetRuleName(id))#>)];
+            //SimpleError($<#Preprocessor error. Expected: ..$(ids; "; "; id => preParser.GetRuleName(id))#>);
+            def (line, col) = loc.StartLineColumn;;
+            throw Exception($<#$fileName($line, $col): Preprocessor error. Expected: ..$(ids; "; "; id => preParser.GetRuleName(id))#>)
+            
+        }
+      }
+      catch
+      {
+        | _ is Exception => throw
+      }
+    }
+  }
+}
