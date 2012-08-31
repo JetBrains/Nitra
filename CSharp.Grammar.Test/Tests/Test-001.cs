@@ -9,6 +9,7 @@ using System.Linq;
 
 namespace CSharp.Grammar.Test
 {
+  using System.Linq;
   class Test_001
   {
   }
