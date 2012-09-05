@@ -23,6 +23,11 @@ namespace CSharp.Grammar.Test
     int[] _field = {1, 2};
 
     const A x = y;
+
+    Func<int, string> Foo() { return str => str; }
+    Func<int, string> Bar() { return delegate(string str) { return str; }; }
+
+    ~Test_001() { }
   }
 }
 
@@ -32,7 +37,15 @@ enum E : byte
   A, B
 }
 
-class A
+unsafe class A
 {
+  public fixed char pathName[128];
+  A() : this(42) { }
+  A(int x) { }
   public readonly int Field1 = 42;
+
+  public static A operator +(A c1, A c2)
+  {
+    return null;
+  }
 }
