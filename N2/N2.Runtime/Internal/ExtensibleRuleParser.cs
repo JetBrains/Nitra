@@ -16,16 +16,20 @@ namespace N2.Internal
 {
   public sealed class ExtensibleRuleParser : RuleParser
   {
-    public static const int ParsedAstOfs = 0; //ссылка на разобранное правило
-    public static const int BestAstOfs   = 1; //ссылка на лучшее текущее правило
-    public static const int AstSize      = 2;
+    public static const int IdOfs      = 0;
+    public static const int SizeOfs    = 1;
+    public static const int StateOfs   = 2;
+    public static const int AstOfs     = 3; //ссылка на разобранное правило
+    public static const int BestAstOfs = 4; //ссылка на лучшее текущее правило
+
+    public static const int PrefixOfs  = 2;
 
     private int                   FirstPostfixRule;
     private ExtentionRuleParser[] PrefixRules;
     private ExtentionRuleParser[] PostfixRules;
 
-    public ExtensibleRuleParser(ExtensibleRuleDescriptor descriptor, int bindingPower, CompositeGrammar grammar)
-      : base(-1, grammar)
+    public ExtensibleRuleParser(int RuleId, ExtensibleRuleDescriptor descriptor, int bindingPower, CompositeGrammar grammar)
+      : base(RuleId, grammar)
     {
       var rules = grammar.GetExtentionRules(descriptor);
       var postfixRules = rules[0];
@@ -39,69 +43,70 @@ namespace N2.Internal
     {
     }
 
-    public sealed override int Parse(int curEndPos, string text, int astPos, ref Parser parser)
+    public sealed override int Parse(int curEndPos, string text, ref int resultPtr, ref Parser parser)
     {
       unchecked
       {
+        int parseResult;
         int newEndPos;
         int bestEndPos;
         int i;
         char c; // временная переменная для отсечения правил по первой букве
 
-        if (astPos >= 0)
+        if (resultPtr == -1)
           goto start_parsing;
         else
           goto error_recovery;
 
 start_parsing:
-        //AST расширяемого правила проинлайнин в AST того правила которое его вызывает
-        parser.ast[astPos + ParsedAstOfs] = -1;
-        parser.ast[astPos + BestAstOfs]   = -1;
-
         if (curEndPos >= text.Length) // конец текста
           return -1;
 
+        resultPtr = parser.Allocate(5, RuleId);
         goto prefix_loop;
 
 error_recovery:
-        astPos = ~astPos;
+        throw System.Exception();
+        //resultPtr = ~resultPtr;
 
-        int bestAst = parser.ast[astPos + BestAstOfs];
-        if (bestAst < 0)
-          return -1; // ни одно правило не съело ни одного токена // TODO: Сделать восстановление
+        //int bestAst = parser.ast[astPos + BestAstOfs];
+        //if (bestAst < 0)
+        //  return -1; // ни одно правило не съело ни одного токена // TODO: Сделать восстановление
 
-        i = parser.ast[bestAst] - PrefixRules[0].RuleId; // восстанавливаем состояние из Id правила которое было разобрано дальше всех.
-        if (i < PrefixRules.Length)
-        { // префикное правило
-          RuleParser prefixRule = PrefixRules[i];
-          curEndPos = prefixRule.Parse(curEndPos, text, ~astPos, ref parser);
-        }
-        else
-        { // постфиксное правило
-          i -= PrefixRules.Length;
-          RuleParser postfixRule = PostfixRules[i];
-          curEndPos = curEndPos + parser.ast[parser.ast[astPos + ParsedAstOfs] + 1]; // к стартовой позиции в тексте добавляем размер уже разобранного AST
-          curEndPos = postfixRule.Parse(curEndPos, text, ~astPos, ref parser);
-        }
-        assert(curEndPos >= 0);
-        goto postfix_loop;
+        //i = parser.ast[bestAst] - PrefixRules[0].RuleId; // восстанавливаем состояние из Id правила которое было разобрано дальше всех.
+        //if (i < PrefixRules.Length)
+        //{ // префикное правило
+        //  RuleParser prefixRule = PrefixRules[i];
+        //  curEndPos = prefixRule.Parse(curEndPos, text, ~astPos, ref parser);
+        //}
+        //else
+        //{ // постфиксное правило
+        //  i -= PrefixRules.Length;
+        //  RuleParser postfixRule = PostfixRules[i];
+        //  curEndPos = curEndPos + parser.ast[parser.ast[astPos + ParsedAstOfs] + 1]; // к стартовой позиции в тексте добавляем размер уже разобранного AST
+        //  curEndPos = postfixRule.Parse(curEndPos, text, ~astPos, ref parser);
+        //}
+        //assert(curEndPos >= 0);
+        //goto postfix_loop;
 
 prefix_loop:
         i = 0;
         c = text[curEndPos];
         bestEndPos = -1;
+        parseResult = -1;
         for (; i < PrefixRules.Length; ++i)
         {
           var prefixRule = PrefixRules[i];
           if (prefixRule.LowerBound <= c && c <= prefixRule.UpperBound)
           {
-            newEndPos = prefixRule.Parse(curEndPos, text, astPos, ref parser);
+            newEndPos = prefixRule.Parse(curEndPos, text, ref parseResult, ref parser);
             if (newEndPos > 0)
               bestEndPos = newEndPos;
           }
         }
 
         curEndPos = bestEndPos;
+        parser.ast[resultPtr + AstOfs] = parseResult;
 
         if (curEndPos < 0)// не смогли разобрать префикс
           return -1;
@@ -111,6 +116,7 @@ postfix_loop:
         while (curEndPos < text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
                                         // при достижении конца текста есть нечего
         {
+          parseResult = -1;
           i = FirstPostfixRule;
           c = text[curEndPos];
           for (; i < PostfixRules.Length; ++i)
@@ -118,7 +124,7 @@ postfix_loop:
             var postfixRule = PostfixRules[i];
             if (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound)
             {
-              newEndPos = postfixRule.Parse(curEndPos, text, astPos, ref parser);
+              newEndPos = postfixRule.Parse(curEndPos, text, ref parseResult, ref parser);
               if (newEndPos > 0)
                 bestEndPos = newEndPos;
             }
@@ -126,6 +132,8 @@ postfix_loop:
 
           if (bestEndPos == curEndPos)
             break; // если нам не удалось продвинуться то заканчиваем разбор
+          parser.ast[parseResult + 3] = parser.ast[resultPtr + AstOfs];
+          parser.ast[resultPtr + AstOfs] = parseResult;
 
           curEndPos = bestEndPos;
         }

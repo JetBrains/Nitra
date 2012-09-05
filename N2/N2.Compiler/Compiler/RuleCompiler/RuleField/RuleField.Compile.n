@@ -12,18 +12,25 @@ using N2.Model;
 
 namespace N2.Compiler
 {
-  [Record]
   internal class AstPointer
   {
-    private Field : RuleField;
-    private Name  : string;
-    public Var : PExpr { get { Field.Compiler.GetName($"$Name$(Field.Level)") } }
+    public AstStruct : AstStruct;
+    public Var : PExpr;
+    public this(astStruct : AstStruct, name : string)
+    {
+      AstStruct = astStruct;
+      Var       = AstStruct.Compiler.GetName(name);
+    }
+    public this(astStruct : AstStruct, name : string, field : RuleField)
+    {
+      this(astStruct, $"$name$(field.Level)");
+    }
     public Offset(structField : AstStruct.FieldBase) : PExpr
     {
-      if (object.ReferenceEquals(structField.AstStruct.Field, Field))
+      if (object.ReferenceEquals(AstStruct, structField.AstStruct))
         <[ $Var + $(structField.OffsetInStruct) ]>
       else
-        PExpr.Error("AstPointer invalid ref.")
+        PExpr.Error("Type mismatch.")
     }
     public Ref(structField : AstStruct.FieldBase) : PExpr
     {
@@ -39,31 +46,19 @@ namespace N2.Compiler
     public ContinueParseLabel : PExprLabel { get { if (NextSibling == null) ParentAstStruct.OkLabel else NextSibling.ParseLabel } }
     public FailParseLabel     : PExprLabel { get { ParentAstStruct.FailLabel } }
 
-    public AstPtr      : AstPointer { [Memoize] get { AstPointer(this, "astPtr") } }
-
     public CurTextPos     : PExpr { get { <[ curEndPos ]> } }
     public StartTextPos   : PExpr { get { Compiler.GetName($"startTextPos$Level") } }
     public TextPos        : PExpr { get { Compiler.GetName($"textPos$Level") } }
-    public Counter        : PExpr { get { Compiler.GetName($"counter$Level") } }
-    public Allocated      : PExpr { get { Compiler.GetName($"allocated$Level") } }
 
-    public AllocateCode() : PExpr
+    public AllocateParentAst() : PExpr
     {
       if (AllocateAst)
       {
         if (Parent is Ast)
-          <[ $(Parent.AstPtr.Var) = parser.Allocate($(ParentAstStruct.AstSize), RuleId) ]>
+          <[ $(ParentAstPtr.Var) = parser.Allocate($(ParentAstStruct.AstSize), RuleId) ]>
         else
-          <[ $(Parent.AstPtr.Var) = parser.Allocate($(ParentAstStruct.AstSize)) ]>
+          <[ $(ParentAstPtr.Var) = parser.Allocate($(ParentAstStruct.AstSize)) ]>
       }
-      else
-        <[ {} ]>
-    }
-
-    public SetSizeCode(sizeField : AstStruct.SizeField, astSize : PExpr) : PExpr
-    {
-      if (Parent is Ast)
-        <[ $(Parent.AstPtr.Ref(sizeField)) = $astSize ]>
       else
         <[ {} ]>
     }
@@ -73,19 +68,36 @@ namespace N2.Compiler
       <[ parseState > $(astStruct.AllocateState) ]>
     }
 
-    public MakeParseCode(check : PExpr, astSize : PExpr, sizeField : AstStruct.SizeField) : PExpr
+    public AddBestCheck(check : PExpr, sizeField : AstStruct.SizeField, size : PExpr) : PExpr
     {
-      def check = if (ParentAstStruct.MultipleVariants)
-        <[ $check && (isBest || ({ diff =  $(sizeField.BestRef) - ($astSize); isBest = diff < 0; diff <= 0 })) ]>;
+      if (ParentAstStruct.MultipleVariants)
+        <[ $check && (isBest || ({ diff =  ($(sizeField.BestRef)) - ($size); isBest = diff < 0; diff <= 0 })) ]>;
       else
         check;
+    }
+
+    public MakeSyntaxCallCode(call : PExpr, field : option[AstStruct.AstField], sizeField : AstStruct.SizeField) : PExpr
+    {
+      MakeCallCodeImpl(<[ $call(curEndPos, text, ref tmpResult, ref parser) ]>, field, sizeField)
+    }
+
+    public MakeCallCodeImpl(call : PExpr, field : option[AstStruct.AstField], sizeField : AstStruct.SizeField) : PExpr
+    {
+      def setAst = if (field is Some(field))
+        <[ $(ParentAstPtr.Ref(field)) = tmpResult ]>
+      else
+        <[ () ]>;
       <[
-        $(ParseLabel.Label());
-        if ($check)
+      $(ParseLabel.Label());
+        tmpResult = -1;
+        newPos = $call;
+        tmpSize = newPos - curEndPos;
+        if ($(AddBestCheck(<[ newPos > 0 ]>, sizeField, <[ tmpSize ]>)))
         {
-          $(AllocateCode());
-          $(SetSizeCode(sizeField, astSize));
-          curEndPos += $astSize;
+          $(AllocateParentAst());
+          $setAst;
+          $(ParentAstPtr.Ref(sizeField)) = tmpSize;
+          curEndPos = newPos;
           $(ContinueParseLabel.Goto());
         }
         else
@@ -94,11 +106,6 @@ namespace N2.Compiler
           $(FailParseLabel.Goto());
         }
       ]>
-    }
-
-    public MakeRuleCall(call : PExpr, sizeField : AstStruct.SizeField) : PExpr
-    {
-      MakeParseCode(<[ ({ newPos = $call; newPos > 0 }) ]>, <[ (newPos - curEndPos) ]>, sizeField)
     }
   }
 }

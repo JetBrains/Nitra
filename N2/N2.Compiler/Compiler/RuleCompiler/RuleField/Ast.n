@@ -31,53 +31,55 @@ namespace N2.Compiler
           field.Init(compiler, parent, level, allFields);
       }
 
-      [RecordIgnore] public IdRef     : AstStruct.HeaderField { get; private set; }
-      [RecordIgnore] public SizeRef   : AstStruct.HeaderField { get; private set; }
-      [RecordIgnore] public StateRef  : AstStruct.HeaderField { get; private set; }
-      [RecordIgnore] public PrefixRef : AstStruct.AstField    { get; private set; }
-
-      [RecordIgnore] private mutable astStruct : AstStruct;
+      [RecordIgnore] private mutable astStruct : RootAstStruct;
+      [RecordIgnore] private mutable astPtr    : AstPointer;
       public override CalculateAstInfo() : void
       {
-        astStruct = AstStruct(this, "Ast");
-        IdRef     = AstStruct.HeaderField(astStruct);
-        SizeRef   = AstStruct.HeaderField(astStruct);
-        StateRef  = AstStruct.HeaderField(astStruct);
-        when (IsPostfix)
-          PrefixRef = AstStruct.AstField(astStruct);
-        CalculateAstInfo(astStruct, fields);
+        astStruct = match (ruleDefinition)
+        {
+          | ExtentionPoint   => ExtensibleAstStruct(Compiler)
+          | ExtentionPrefix  => PrefixAstStruct(Compiler)
+          | ExtentionPostfix => PostfixAstStruct(Compiler)
+          | Simple           => SimpleAstStruct(Compiler)
+          | Regular          => assert(false);
+          | ExternalRule     => assert(false);
+        }
+        astPtr = AstPointer(astStruct, "astPtr", this);
+        CalculateAstInfo(astStruct, astPtr, fields);
         astStruct.MultipleVariants = IsExtension;
       }
 
-      public PrevResultPtr : AstPointer { [Memoize] get { AstPointer(this, "prevResultPtr") } }
       public override Compile() : void
       {
         def code = SCG.List();
-        def resultPtr = if (IsPostfix) <[ resultPtr + 1 ]> else <[ resultPtr ]>;
         when (astStruct.MultipleVariants)
           code.Add(<[
-            if (parser.ast[$resultPtr] == -1)
+            if (resultRef == -1)
               isBest = true;
             else
-              bestAstPos = parser.ast[$resultPtr];
+              bestAstPos = resultRef;
           ]>);
         code.Add(<[ $(fields[0].ParseLabel.Goto()); ]>);
-
+        def resultRef = AstPointer(astStruct, "resultRef");
         def returnAstCode = if (astStruct.MultipleVariants)
           <[
-            when (isBest) // данный АСТ лучше того что был до него.
-            {
-              $(PrevResultPtr.Var) = parser.ast[$resultPtr];
-              when ($(PrevResultPtr.Var) == -1 || $(PrevResultPtr.Ref(StateRef)) != -1) // предыдущего АСТ нет или предыдущий АСТ тоже не полный.
-                parser.ast[$resultPtr] = $(AstPtr.Var);
-            }
+            when (isBest)
+              $(resultRef.Var) = $(astPtr.Var);
           ]>;
         else
-          <[ parser.ast[$resultPtr] = $(AstPtr.Var); ]>;
+          <[ resultRef = $(astPtr.Var); ]>;
+
+        def returnBadAstCode = if (astStruct.MultipleVariants)
+          <[
+            when (isBest && ($(resultRef.Var) == -1 || $(resultRef.Ref(astStruct.StateRef)) != -1)) // предыдущего АСТ нет или предыдущий АСТ тоже не полный.
+              $(resultRef.Var) = $(astPtr.Var);
+          ]>;
+        else
+          <[ resultRef = $(astPtr.Var); ]>;
 
         //parse ok
         code.Add(<[ $(astStruct.OkLabel.Label()); ]>);
-        code.Add(<[ $(AstPtr.Ref(StateRef)) = -1; ]>);// состояние разбора -1 если правило полностью разобрано.
+        code.Add(<[ $(astPtr.Ref(astStruct.StateRef)) = -1; ]>);// состояние разбора -1 если правило полностью разобрано.
         code.Add(returnAstCode);
         code.Add(<[ $(Compiler.EndLabel.Goto()); ]>);
 
@@ -85,8 +87,8 @@ namespace N2.Compiler
         code.Add(<[ $(astStruct.FailLabel.Label()); ]>);
         code.Add(<[ when ($(IsAstAllocatetdCode(astStruct))) // АСТ создано
                     {
-                      $(AstPtr.Ref(StateRef)) = parseState;
-                      $returnAstCode;
+                      $(astPtr.Ref(astStruct.StateRef)) = parseState;
+                      $returnBadAstCode;
                     }
         ]>);
         code.Add(<[ curEndPos = -1; $(Compiler.EndLabel.Goto()); ]>);
