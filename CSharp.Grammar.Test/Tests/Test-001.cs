@@ -19,7 +19,7 @@ namespace CSharp.Grammar.Test
     where X : ITest<X>
   {
     public static int Foo(this string x, ref int r) { ;;; }
-
+    public void F() { base(); }
     string Prop1 { get; set; }
 
     int[] _field = {1UL, 2u};
