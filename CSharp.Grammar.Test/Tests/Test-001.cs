@@ -7,6 +7,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
+class B { int? Field = z = a ? b = x : c = y ? d ? f : j : h; } //
+
 namespace CSharp.Grammar.Test
 {
   using System.Linq;
@@ -20,12 +22,13 @@ namespace CSharp.Grammar.Test
 
     string Prop1 { get; set; }
 
-    int[] _field = {1, 2};
+    int[] _field = {1UL, 2u};
 
     const A x = y;
 
-    Func<int, string> Foo() { return str => str; }
-    Func<int, string> Bar() { return delegate(string str) { return str; }; }
+    Func<int, string> Foo() { return str => str + " test"; }
+    Func<int, object> Foo2() { return x => new { X = x }; }
+    Func<int, object> Bar() { return delegate(string str) { return new { }; }; }
 
     ~Test_001() { }
   }
@@ -44,8 +47,9 @@ unsafe class A
   A(int x) { }
   public readonly int Field1 = 42;
 
-  public static A operator +(A c1, A c2)
+  public static int operator +(A c1, A c2)
   {
-    return null;
+    //return c1 ? 42 : 12;
+    return new A(Ns1.Type<int?>.Foo<A>(42, "aa"));
   }
 }
