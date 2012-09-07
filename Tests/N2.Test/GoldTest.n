@@ -1,0 +1,93 @@
+﻿using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Test.Framework;
+
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Text;
+using System.Linq;
+
+using N2.Test.Utils;
+
+namespace N2.Test
+{
+  /// <summary>
+  /// Description of GoldTest.
+  /// </summary>
+  public sealed class GoldTest : Test
+  {
+    public this(filePath : string, createGoldFile : bool)
+      requires !string.IsNullOrEmpty(filePath)
+    {
+      _filePath = filePath;
+      _createGoldFile = createGoldFile;
+      Name = Path.GetFileNameWithoutExtension(filePath);
+    }
+
+    public override Name : string { get }
+
+    public override Run() : Result
+    {
+      unless(File.Exists(_filePath))
+        return Result.Skipped("File not found");
+
+      def originalTestSource = N2.SourceSnapshot(File.ReadAllText(_filePath), fileName = _filePath);
+      def parser = TestParser.GrammarImpl();
+      def (pos, ast) = parser.TryParseStart(originalTestSource);
+
+      unless (pos >= 0)
+        return Result.Skipped("Failed to parse test source");
+
+      match(GrammarLoader.Load(Path.GetDirectoryName(_filePath), ast))
+      {
+        | Success(rule, grammars) =>
+          match(ast)
+          {
+            | TestParser.Start.Ast(TestBody = testBody) =>
+              def testText = originalTestSource.Text.Substring(testBody.StartPos, testBody.EndPos - testBody.StartPos);
+              def testSource = originalTestSource.WithText(testText, testBody.StartPos);
+              def parseResult =
+                try
+                {
+                  AppDomain.CurrentDomain.SetData("ExternalGrammars", grammars);
+                  rule.Parse(testSource);
+                }
+                finally
+                {
+                  AppDomain.CurrentDomain.SetData("ExternalGrammars", null);
+                }
+              def astDump = parseResult.GetDump();
+              def dumpName = Path.ChangeExtension(_filePath, "out");
+              using(def writer = StreamWriter(dumpName))
+                astDump.WriteTo(writer, " ");
+              def goldDumpName = Path.ChangeExtension(_filePath, "gold");
+              if(File.Exists(goldDumpName))
+                match(DumpComparer.Compare(File.ReadAllLines(dumpName), File.ReadAllLines(goldDumpName), StringComparison.Ordinal))
+                {
+                  | Success => Result.Passed("Passed")
+                  | Fail(lineNumber, expectedText, foundText) =>
+                    Result.Failed($"Dump differs with gold on line $lineNumber. Expected '$expectedText' found '$foundText'")
+                }
+              else if(_createGoldFile)
+              {
+                using(def writer = StreamWriter(goldDumpName))
+                  astDump.WriteTo(writer, " ");
+                Result.Skipped("Gold file created");
+              }
+              else
+                Result.Skipped("Gold file not found");
+            | _ => assert(false)
+          }
+        | Fail(message) => Result.Failed(message)
+      }
+    }
+
+    private _filePath : string;
+    private _createGoldFile : bool;
+  }
+}

@@ -1,0 +1,364 @@
+﻿using System;
+using SCG = System.Collections.Generic;
+
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Utility;
+using Nemerle.Peg;
+
+namespace CSharpParser
+{
+  [PegGrammar(Options = EmitDebugSources,
+    start,
+    grammar
+    {
+      #region Primitives
+
+      newLine = "\n"
+              / "\r\n"
+              / "\r"
+              / "\u2028"      /*  line separator       */
+              / "\u2029";     /*  paragraph separator  */
+
+      whitespace = [Zs]
+                / '\t'
+                / '\v'        /*  vertial tab          */
+                / '\f';       /*  form feed            */
+
+      s : void = whitespace*;
+      S : void = !identifierPartCharacters s;
+
+      #endregion
+
+      #region Strings
+
+      delimitedStringLiteral    = "\"" delimitedStringCharacter* "\"";
+      delimitedStringCharacter  = "\\\""
+                                / !(newLine / "\"") [Any];
+
+      verbatimStringLiteral     = "@\"" verbatimStringCharacter* "\"";
+      verbatimStringCharacter   = "\"\""
+                                / !"\"" [Any];
+
+      stringLiteral = delimitedStringLiteral / verbatimStringLiteral;
+
+      #endregion
+
+      #region Comments
+
+      singleLineComment         = "//" (!newLine [Any])*;
+      delimitedComment          = "/*" (!"*/" [Any])* "*/";
+      comment : PreParseElement = singleLineComment / delimitedComment;
+
+      singleLineDocCommentPart : Location = "///" (!newLine [Any])*;
+      singleLineDocComment : PreParseElement = singleLineDocCommentPart ((whitespace / newLine)* singleLineDocCommentPart)*;
+      delimitedDocComment  : PreParseElement = "/**" (!"*/" [Any])* "*/";
+      docComment : PreParseElement = singleLineDocComment / delimitedDocComment;
+
+      #endregion
+
+      #region Expressions
+
+      letterCharacter       = [Lu, Ll, Lt, Lm, Lo, Nl];
+      combiningCharacter    = [Mn, Mc];
+      decimalDigitCharacter = [Nd];
+      connectingCharacter   = [Pc];
+      formattingCharacter   = [Cf];
+
+      identifierStartCharacter  = letterCharacter / "_";
+      identifierPartCharacters  = letterCharacter / decimalDigitCharacter / connectingCharacter / combiningCharacter / formattingCharacter;
+      identifierBody            = identifierStartCharacter identifierPartCharacters*;
+
+      symbol              : DirectiveExpression = identifierBody s;
+      boolLiteral         : DirectiveExpression = ("true" / "false")S;
+      braceExpression     : DirectiveExpression = "("s expression ")"s;
+      primaryExpression   : DirectiveExpression = (boolLiteral / symbol / braceExpression);
+      unaryExpression     : DirectiveExpression = ("!" s)* primaryExpression;
+      equalityExpression  : DirectiveExpression = unaryExpression     (("==" / "!=")s unaryExpression   )*;
+      andExpression       : DirectiveExpression = equalityExpression  ("&&"s          equalityExpression)*;
+      orExpression        : DirectiveExpression = andExpression       ("||"s          andExpression     )*;
+      expression          : DirectiveExpression = orExpression s;
+
+      message     : string = (!(newLine / comment) [Any])*;
+
+      fileName    : string = "\"" (!("\"" / newLine) [Any])* "\"";
+
+      #endregion
+
+      #region Directives
+
+      ifDirective           : Directive = "if"        S expression    &(newLine / comment / ![Any]);
+      elifDirective         : Directive = "elif"      S expression    &(newLine / comment / ![Any]);
+      elseDirective         : Directive = "else"      s               &(newLine / comment / ![Any]);
+      endifDirective        : Directive = "endif"     s               &(newLine / comment / ![Any]);
+      defineDirective       : Directive = "define"    S symbol        &(newLine / comment / ![Any]);
+      undefDirective        : Directive = "undef"     S symbol        &(newLine / comment / ![Any]);
+      lineNumberDirective   : Directive = "line"      S ['0'..'9']+ s fileName? s &(newLine / comment / ![Any]);
+      lineDefaultDirective  : Directive = "line"      S "default"   s &(newLine / comment / ![Any]);
+      lineHiddenDirective   : Directive = "line"      S "hidden"    s &(newLine / comment / ![Any]);
+      errorDirective        : Directive = "error"     (S message)?    &(newLine / comment / ![Any]);
+      warningDirective      : Directive = "warning"   (S message)?    &(newLine / comment / ![Any]);
+      regionDirective       : Directive = "region"    (S message)?    &(newLine / comment / ![Any]);
+      endregionDirective    : Directive = "endregion" (S message)?    &(newLine / comment / ![Any]);
+      pragmaDirective       : Directive = "pragma"    S message       &(newLine / comment / ![Any]);
+      invalidDirective      : Directive = message                     &(newLine / comment / ![Any]);
+
+      directive             : PreParseElement = s"#"s (ifDirective
+                                                      / elifDirective
+                                                      / elseDirective
+                                                      / endifDirective
+                                                      / defineDirective
+                                                      / undefDirective
+                                                      / lineNumberDirective
+                                                      / lineHiddenDirective
+                                                      / lineDefaultDirective
+                                                      / errorDirective
+                                                      / warningDirective
+                                                      / regionDirective
+                                                      / endregionDirective
+                                                      / pragmaDirective
+                                                      / invalidDirective);
+
+      [OmitLocation]
+      directiveFromNewLine  : PreParseElement = newLine directive;
+
+      #endregion
+
+      #region Top rules
+
+      rawTextOrString : void = (!(comment / directiveFromNewLine / stringLiteral) [Any])+ / stringLiteral;
+
+      [OmitLocation]
+      element : PreParseElement         = rawTextOrString* (directiveFromNewLine / docComment / comment);
+
+      start   : PreparedCompilationUnit = directive? element* rawTextOrString* ![Any];
+
+      #endregion
+    }
+  )]
+  public partial class PreParser
+  {
+    //comment           : PreParseElement = singleLineComment / delimitedComment;
+    comment(_ : NToken) : PreParseElement
+    {
+      PreParseElement.Comment()
+    }
+
+    //singleLineDocCommentPart : NToken = "///" (!newLine [Any])*;
+    singleLineDocCommentPart(_ : NToken, value : NToken) : Location
+    {
+      Location(ParsingSource, value.StartPos, value.EndPos)
+    }
+
+    //singleLineDocComment : PreParseElement = singleLineDocCommentPart ((whitespace / newLine)* singleLineDocCommentPart)*;
+    singleLineDocComment(firstComment : Location, otherComments : SCG.List[NToken * Location]) : PreParseElement
+    {
+      mutable tail = [];
+      for(mutable i = otherComments.Count - 1; i >= 0; --i)
+        tail ::= otherComments[i][1];
+      PreParseElement.DocComment(firstComment :: tail)
+    }
+
+    //delimitedDocComment  : PreParseElement = "/**" (!"*/" [Any])* "*/";
+    delimitedDocComment(_ : NToken, value : NToken, _ : NToken) : PreParseElement
+    {
+      PreParseElement.DocComment([Location(ParsingSource, value.StartPos, value.EndPos)])
+    }
+
+    //symbol              : DirectiveExpression = identifierBody s;
+    symbol(id : NToken) : DirectiveExpression.Symbol
+    {
+      DirectiveExpression.Symbol(GetText(id))
+    }
+
+    //boolLiteral         : DirectiveExpression = ("true" / "false")S;
+    boolLiteral(lit : NToken) : DirectiveExpression
+    {
+      match(GetText(lit))
+      {
+        | "true" => DirectiveExpression.Boolean(true)
+        | "false" => DirectiveExpression.Boolean(false)
+        | _ => throw ArgumentOutOfRangeException("lit");
+      }
+    }
+
+    //braceExpression     : DirectiveExpression = "("s expression ")"s;
+    braceExpression(_open : NToken, expr : DirectiveExpression, _close : NToken) : DirectiveExpression
+    {
+      expr
+    }
+
+    //unaryExpression     : DirectiveExpression = ("!" s)* primaryExpression;
+    unaryExpression(ops : SCG.List[NToken], expr : DirectiveExpression) : DirectiveExpression
+    {
+      mutable chain = expr;
+      for(mutable i = ops.Count - 1; i >= 0; --i)
+        chain = DirectiveExpression.NotOperator(chain);
+      chain
+    }
+
+    //equalityExpression  : DirectiveExpression = unaryExpression     (("==" / "!=")s unaryExpression   )*;
+    equalityExpression(head : DirectiveExpression, tail : SCG.List[NToken * DirectiveExpression]) : DirectiveExpression
+    {
+      mutable chain = head;
+      foreach((op, expr) in tail)
+        match(GetText(op))
+        {
+          | "==" => chain = DirectiveExpression.EqualsOperator(chain, expr);
+          | "!=" => chain = DirectiveExpression.NotEqualsOperator(chain, expr);
+          | _ => throw InvalidOperationException();
+        }
+      chain
+    }
+
+    //andExpression       : DirectiveExpression = equalityExpression  ("&&"s          equalityExpression)*;
+    andExpression(head : DirectiveExpression, tail : SCG.List[NToken * DirectiveExpression]) : DirectiveExpression
+    {
+      mutable chain = head;
+      foreach((_, expr) in tail)
+        chain = DirectiveExpression.AndOperator(chain, expr);
+      chain
+    }
+
+    //orExpression        : DirectiveExpression = andExpression       ("||"s          andExpression     )*;
+    orExpression(head : DirectiveExpression, tail : SCG.List[NToken * DirectiveExpression]) : DirectiveExpression
+    {
+      mutable chain = head;
+      foreach((_, expr) in tail)
+        chain = DirectiveExpression.OrOperator(chain, expr);
+      chain
+    }
+
+    //expression          : DirectiveExpression = orExpression s;
+    expression(expr : DirectiveExpression) : DirectiveExpression
+    {
+      expr
+    }
+
+    //message     : string = (!(newLine / comment) [Any])*;
+    message(msg : NToken) : string
+    {
+      GetText(msg)
+    }
+
+    //fileName    : string = "\"" (!("\"" / newLine) [Any])* "\"";
+    fileName(_ : NToken, name : NToken, _ : NToken) : string
+    {
+      GetText(name)
+    }
+
+    //ifDirective           : Directive = "if"        S expression    &(newLine / comment / ![Any]);
+    ifDirective(_ : NToken, expression : DirectiveExpression) : Directive
+    {
+      Directive.If(expression)
+    }
+
+    //elifDirective         : Directive = "elif"      S expression    &(newLine / comment / ![Any]);
+    elifDirective(_ : NToken, expression : DirectiveExpression) : Directive
+    {
+      Directive.Elif(expression)
+    }
+
+    //elseDirective         : Directive = "else"      s               &(newLine / comment / ![Any]);
+    elseDirective(_ : NToken) : Directive
+    {
+      Directive.Else()
+    }
+
+    //endifDirective        : Directive = "endif"     s               &(newLine / comment / ![Any]);
+    endifDirective(_ : NToken) : Directive
+    {
+      Directive.EndIf()
+    }
+
+    //defineDirective       : Directive = "define"    S symbol       &(newLine / comment / ![Any]);
+    defineDirective(_ : NToken, symbol : DirectiveExpression) : Directive
+    {
+      Directive.Define(symbol :> DirectiveExpression.Symbol)
+    }
+
+    //undefDirective        : Directive = "undef"     S symbol       &(newLine / comment / ![Any]);
+    undefDirective(_ : NToken, symbol : DirectiveExpression) : Directive
+    {
+      Directive.Undefine(symbol :> DirectiveExpression.Symbol)
+    }
+
+    //lineNumberDirective   : Directive = "line"      S ['0'..'9']+ s fileName? s &(newLine / comment / ![Any]);
+    lineNumberDirective(_ : NToken, number : NToken, fileName : option[string]) : Directive
+    {
+      mutable lineNumber;
+      if(int.TryParse(GetText(number), out lineNumber))
+        Directive.LineNumber(lineNumber, fileName.WithDefault(null))
+      else
+        Directive.Error("invalid line number")
+    }
+
+    //lineDefaultDirective  : Directive = "line"      S "default"   s &(newLine / comment / ![Any]);
+    lineDefaultDirective(_ : NToken, _ : NToken) : Directive
+    {
+      Directive.LineDefault()
+    }
+
+    //lineHiddenDirective   : Directive = "line"      S "hidden"    s &(newLine / comment / ![Any]);
+    lineHiddenDirective(_ : NToken, _ : NToken) : Directive
+    {
+      Directive.LineHidden()
+    }
+
+    //errorDirective        : Directive = "error"     S message       &(newLine / comment / ![Any]);
+    errorDirective(_ : NToken, message : option[string]) : Directive
+    {
+      Directive.CompilationError(message.WithDefault(""))
+    }
+
+    //warningDirective      : Directive = "warning"   S message       &(newLine / comment / ![Any]);
+    warningDirective(_ : NToken, message : option[string]) : Directive
+    {
+      Directive.CompilationWarning(message.WithDefault(""))
+    }
+
+    //regionDirective       : Directive = "region"    S message       &(newLine / comment / ![Any]);
+    regionDirective(_ : NToken, message : option[string]) : Directive
+    {
+      Directive.Region(message.WithDefault(""))
+    }
+
+    //endregionDirective    : Directive = "endregion" S message       &(newLine / comment / ![Any]);
+    endregionDirective(_ : NToken, message : option[string]) : Directive
+    {
+      Directive.EndRegion(message.WithDefault(""))
+    }
+
+    //pragmaDirective        : Directive = "pragma"     S message       &(newLine / comment / ![Any]);
+    pragmaDirective(_ : NToken, text : string) : Directive
+    {
+      Directive.Pragma(text)
+    }
+
+    //invalidDirective      : Directive = message                     &(newLine / comment / ![Any]);
+    invalidDirective(text : string) : Directive
+    {
+      Directive.Error($"unknown preprocessor directive: $text")
+    }
+
+    directive(_ : NToken, opt : Directive) : PreParseElement
+    {
+      PreParseElement.Directive(opt)
+    }
+
+    //directiveFromNewLine  : PreParseElement = newLine directive;
+    directiveFromNewLine(_ : NToken, directive : PreParseElement) : PreParseElement
+    {
+      directive
+    }
+
+    //start   : PreparedCompilationUnit = directive? element* rawText* ![Any];
+    start(firstLineDirective  : option[PreParseElement],
+          elements            : SCG.List[PreParseElement]) : PreparedCompilationUnit
+    {
+      when(firstLineDirective is Some(first))
+        elements.Insert(0, first);
+      PreparedCompilationUnit(elements)
+    }
+  }
+}

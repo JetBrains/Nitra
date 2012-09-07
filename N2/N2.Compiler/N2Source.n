@@ -15,6 +15,7 @@ namespace N2
   [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
   public macro N2Source(path : string)
   {
+    //assert2(false);
     N2SourceImpl.Instance(path, Nemerle.Macros.ImplicitCTX().Manager).BeforeInheritance();
   }
 
@@ -256,12 +257,14 @@ namespace N2
       }
       match (rule.rules)
       {
-        | (Call(n1, bp1) as call1) :: (String as op)                                    :: (Call(n2, bp2) as call2) :: rest when n1 == baseName && n2 == baseName with s = null // rec "op"   rec
-        | (Call(n1, bp1) as call1) :: (String as op) :: (Rule(Type=RuleType.Void) as s) :: (Call(n2, bp2) as call2) :: rest when n1 == baseName && n2 == baseName  =>           // rec "op" s rec
+        | (Call(n1, bp1) as call1) :: (String as op)                                     :: (Call(n2, bp2) as call2) :: rest when n1 == baseName && n2 == baseName with (s1 = null, s2 = null) // rec   "op"   rec
+        | (Call(n1, bp1) as call1) :: (String as op) :: (Rule(Type=RuleType.Void) as s2) :: (Call(n2, bp2) as call2) :: rest when n1 == baseName && n2 == baseName with (s1 = null)            // rec   "op" s rec
+        | (Call(n1, bp1) as call1) :: (Rule(Type=RuleType.Void) as s1) :: (String as op) :: (Rule(Type=RuleType.Void) as s2) :: (Call(n2, bp2) as call2) :: rest when n1 == baseName && n2 == baseName  =>           // rec s "op" s rec
           def newCall1 = updateCall(call1, bp1, newBindingPower + if (rightAssociative) 1 else 0);
           def newCall2 = updateCall(call2, bp2, newBindingPower);
-          def rest2    = if (s == null) call2 :: rest else s :: newCall2 :: rest;
-          Rule.Sequence(rule.Location, RuleType.Void(), 0, newCall1 :: op :: rest2)
+          def prependIfNotNull(e, lst) { if (e == null) lst else e :: lst }
+          def rest2 = prependIfNotNull(s2, newCall2 :: rest);
+          Rule.Sequence(rule.Location, RuleType.Void(), 0, newCall1 :: prependIfNotNull(s1, op :: rest2))
           
         | [Call(n, bp) as call, String as op]                                when n == baseName with s = null // rec "op"
         | [Call(n, bp) as call, String as op, Rule(Type=RuleType.Void) as s] when n == baseName =>            // rec "op" s
@@ -279,6 +282,7 @@ namespace N2
           Rule.Sequence(rule.Location, RuleType.Void(), 0, op :: rest)
 
         | _ => 
+          assert2(false);
           Message.Error(precedence.Location.ToNemerleLocation(), 
             "You can use the 'precedence' for only rules satisfying the following patterns: 'E op E', 'op E', 'E op', 'E op s E', 'op E s', 'E op s'. Where op is literal and s is void rule call. Use a binding power instead.");
           rule
@@ -314,8 +318,24 @@ namespace N2
             
         localAliasesMap
       }
-      def addSequence(rule : Rule, localAliases) : Rule.Sequence * list[NameRef]
+      def addSequence(n2Rule : G.Rule, localAliases) : Rule.Sequence * list[NameRef]
       {
+        def definedNames = SCG.List();
+        def extractName(n2Rule) : G.Rule
+        {
+          | G.FieldName.Ast as r => definedNames.Add(r.Name.ToNameRef()); r.Rule
+          | _                    => definedNames.Add(null); n2Rule
+        }        
+        def extractNames(n2Rule)
+        {
+          | G.FieldName.Ast as r => ConvertRule(extractName(r.Rule));
+          | G.SequenceRule.Ast as rule =>
+            def rules = ConvertRule(extractName(rule.LeftRule)) :: rule.RightRules.Map(r => ConvertRule(extractName(r)));
+            Rule.Sequence(rule.NLocation(), RuleType.Void(), 0, rules)
+          | _ => ConvertRule(extractName(n2Rule));
+        }        
+        def rule : Rule = extractNames(n2Rule);
+        
         def isAlias(rule) : bool
         {
           | Rule.Call(n, _) when localAliases.Contains(n)
@@ -330,12 +350,53 @@ namespace N2
           | Rule.Call(n, _) when aliases.Contains(n)      => names.Add(n); aliases.Get(n)
           | _ => names.Add(none); rule
         }
+        def makeNames()
+        {
+          assert2(definedNames.Count == names.Count);
+          def res = definedNames.Map2Lazy(names, (dn, n) => dn ?? n ?? none).NToList();
+          assert2(res.ForAll(_ != null));
+          res
+        }
         match (rule)
         {
-          | Rule.Sequence(rules) when rules.Exists(isAlias) => (Rule.Sequence(rule.Location, rule.Type, rule.Id, rules.Map(replaceAlias)), names.NToList())
-          | Rule.Sequence as rule => (rule, NList.Repeat(none, rule.rules.Length))
-          | _                     => (Rule.Sequence(rule.Location, RuleType.Void(), 0, [replaceAlias(rule)]), names.NToList())
+          | Rule.Sequence(rules) when rules.Exists(isAlias) => (Rule.Sequence(rule.Location, rule.Type, rule.Id, rules.Map(replaceAlias)), makeNames())
+          | Rule.Sequence as rule => (rule, definedNames.Map(x => x ?? none))
+          | _                     => (Rule.Sequence(rule.Location, RuleType.Void(), 0, [replaceAlias(rule)]), makeNames())
         }
+      }
+      def addExtentionRule(nameId : G.Identifier, ruleAttributes : G.RuleAttributes, bodyDeclaration : G.BodyDeclaration, 
+                          rule : G.Rule, baseName : G.QIdentifier) : void
+      {
+        def name            = nameId.ToNameRef();
+        //assert2(name.AsName != "Add");
+        def ruleId          = grammar.Count;
+        def attributes      = ConvertAttributes(ruleAttributes);
+        def localAliases    = processBody(bodyDeclaration, processLocalAliases, Map());
+        def (rule1, names)  = addSequence(rule, localAliases);
+        def baseName        = baseName.ToNameRef();
+        def processPrecedence(members : list[G.BodyMemberDeclaration]) : Rule.Sequence
+        {
+          def precedence = members.Once.[G.PrecedenceDeclaration.Ast]();
+                
+          if (precedence is Some(prec))
+            AddPrecedence(rule1, baseName, prec.Precedence, prec.RightAssociative.IsSome)
+          else
+            rule1
+        }
+        def rule2 = processBody(bodyDeclaration, processPrecedence, rule1);
+        def ruleDecl = 
+          match (rule2)
+          {
+            | Sequence((Call(callName, bindingPower) as call) :: rules) when callName == baseName =>
+              RuleDefinition.ExtentionPostfix(name.Location, ruleId, name, attributes, tokenFieldNames, baseName, bindingPower, 
+                Rule.Sequence(rule1.Location, RuleType.Void(), 0, 
+                Rule.PrefixCall(call.Location, RuleType.Void(), 0, baseName, bindingPower) :: rules), names)
+
+            | _ => RuleDefinition.ExtentionPrefix(name.Location, ruleId, name, attributes, tokenFieldNames, baseName, rule2, names)
+          };
+            
+        try { grammar = grammar.Add(ruleDecl); }
+        catch { | e is Exception => Message.Error(name.Location, "Exception: " + e.Message); }
       }
       foreach (decl in syntaxModule.Declarations)
       {
@@ -362,7 +423,7 @@ namespace N2
           def ruleId        = grammar.Count;
           def attributes    = ConvertAttributes(attr);
           def localAliases  = if (decl == null) Map() else processBody(decl.BodyDeclaration, processLocalAliases, Map());
-          def (rule, names) = addSequence(ConvertRule(rule), localAliases);
+          def (rule, names) = addSequence(rule, localAliases);
             
           grammar = grammar.Add(RuleDefinition.Simple(name.Location, ruleId, name, attributes, tokenFieldNames, type, rule, names));
 
@@ -374,54 +435,12 @@ namespace N2
           
           grammar = grammar.Add(RuleDefinition.ExtentionPoint(name.Location, ruleId, name, attributes, tokenFieldNames, ruleType));
 
-        | G.ExtentionRuleDecl.Ast as decl =>
-          def name            = decl.Name.ToNameRef();
-          //assert2(name.AsName != "BracePairDecl");
-          def ruleId          = grammar.Count;
-          def attributes      = ConvertAttributes(decl.RuleAttributes);
-          def localAliases    = processBody(decl.BodyDeclaration, processLocalAliases, Map());
-          def (rule1, names)  = addSequence(ConvertRule(decl.Rule), localAliases);
-          def baseName        = decl.BaseName.ToNameRef();
-          def processPrecedence(members)
-          {
-            def precedence = members.Once.[G.PrecedenceDeclaration.Ast]();
-                
-            if (precedence is Some(prec))
-              AddPrecedence(rule1, baseName, prec.Precedence, prec.RightAssociative.IsSome)
-            else
-              rule1
-          }
-          def rule2 = processBody(decl.BodyDeclaration, processPrecedence, rule1);
-          def ruleDecl = 
-            match (rule2)
-            {
-              | Sequence((Call(callName, bindingPower) as call) :: rules) when callName == baseName =>
-                RuleDefinition.ExtentionPostfix
-                  ( name.Location
-                  , ruleId
-                  , name
-                  , attributes
-                  , tokenFieldNames
-                  , baseName
-                  , bindingPower
-                  , Rule.Sequence(rule1.Location, RuleType.Void(), 0, Rule.PrefixCall(call.Location, RuleType.Void(), 0, baseName, bindingPower) :: rules)
-                  , names
-                  )
-
-              | _ =>
-                RuleDefinition.ExtentionPrefix
-                  ( name.Location
-                  , ruleId
-                  , name
-                  , attributes
-                  , tokenFieldNames
-                  , baseName
-                  , rule2
-                  , names
-                  )
-            };
+        | G.ExtendSyntax.Ast as decl =>
+          def baseName = decl.BaseName;
+          foreach (m is G.ExtendSyntaxMember.Ast in decl.ExtendSyntaxMembers)
+            addExtentionRule(m.Name, m.RuleAttributes, m.BodyDeclaration, m.Rule, baseName);
             
-          grammar = grammar.Add(ruleDecl);
+        | G.ExtentionRuleDecl.Ast as decl => addExtentionRule(decl.Name, decl.RuleAttributes, decl.BodyDeclaration, decl.Rule, decl.BaseName);
 
         | G.Alias.Ast as alias =>
           def name = alias.Name.ToNameRef();
@@ -622,9 +641,11 @@ namespace N2
       | G.ZeroOrManyRule.Ast              as rule =>
         Rule.Repeat(rule.NLocation(), RuleType.Void(), 0, 0, None(), ConvertRule(rule.Rule))
 
-      | G.OneOrManyRule.Ast               as rule =>
-        Rule.Repeat(rule.NLocation(), RuleType.Void(), 0, 1, None(), ConvertRule(rule.Rule))
-
+      | G.OneOrManyRule.Ast               as rule => Rule.Repeat(rule.NLocation(), RuleType.Void(), 0, 1, None(), ConvertRule(rule.Rule))
+      | G.FieldName.Ast                   as rule =>
+        Message.Error(rule.Location.ToNemerleLocation(), "The 'as' operator not allowed in subrules.");
+        ConvertRule(rule.Rule)
+        
       | G.CharRule.Ast                    as rule =>
         def c = ConvertChar(rule.CharLiteral);
         Rule.String(rule.NLocation(), RuleType.Void(), 0, c.ToString())

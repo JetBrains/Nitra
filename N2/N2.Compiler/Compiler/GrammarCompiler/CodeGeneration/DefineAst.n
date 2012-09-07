@@ -89,11 +89,14 @@ namespace N2
                   }
                 ]>);
                 
-                def members = rd.GetNames(_tokenFieldNames).Map(_.AsName).Zip(args);
+                def names = rd.GetNames(_tokenFieldNames).Map(_.AsName);
+                def members = names.Zip(args);
 
                 DefineAstFields(astTb, members);
                 DefineAstCtor(astTb, members);
                 DefineAstGetErrors(astTb, members);
+                when (rd.GetRule() is Some(Rule.Sequence(rules)))
+                  DefineToString(astTb, names, rules);
                 DefineAstGetDump(astTb, tb.FullName, members);
                 when (rd.GetRule() is Some(rule))
                   DefineAstGetSpans(astTb, rule, rd);
@@ -106,6 +109,122 @@ namespace N2
         }
         tb.Compile();
       }
+    }
+    
+    private DefineToString(astTb : TypeBuilder, names : list[string], rules : list[Rule]) : void
+    {
+      //assert2(astTb.FullName != "N2Parser.NamespaceDeclaration.Ast");
+      def isNoNeedVar(rule : Rule) { rule.Type is RuleType.Void || rule is Rule.String }
+      def isVoid(ruleType : RuleType)
+      {
+        | Void
+        | Tuple(types) when types.ForAll(isVoid)
+        | Option(type) when isVoid(type)         => true
+        | _                                      => false
+      }
+      def zipWithNames(mutable names : list[string], rules : list[Rule]) : list[string * Rule]
+      {
+        def result = SCG.List();
+        
+        foreach (rule in rules)
+        {
+          def isVoid = isVoid(rule.Type);
+          def name   = if (isVoid) "_" else names.Head;
+          unless (isVoid)
+            names = names.Tail;
+          result.Add(name, rule);
+        }
+        
+        result.NToList()
+      }
+      def members = zipWithNames(names, rules);
+      def fieldToString(name : string, rule : Rule) : PExpr
+      {
+        def loop(expr : PExpr, rule : Rule) : PExpr
+        {
+          def result =
+            match (rule)
+            {
+              | String(str)                                     => <[ _ = code.Append($str); ]>
+              | And | Not                                       => <[ () ]>
+              | Sequence(rules)                                 => 
+                def members2 = rules.MapI((i, r) => if (isNoNeedVar(r)) (<[ _ ]>, r), else (<[ $($"_item$i" : dyn) ]>, r));
+                def noNeedVars = members2.ForAll((_, r) => isNoNeedVar(r));
+                def varNames = $[ n | (n, r) in members2, !(r.Type is RuleType.Void) ]; // make list of names for not void rules
+                def lines = members2.Map(loop);
+                match (varNames)
+                {
+                  | _ when noNeedVars
+                  | []        => <[ { ..$lines } ]>
+                  | [varName] => <[ { ..$(<[ def $varName      = $expr; ]> :: lines) } ]>
+                  | _         => <[ { ..$(<[ def (..$varNames) = $expr; ]> :: lines) } ]>
+                }
+              
+              | Call(name, _bp) when rule.Type is RuleType.Void =>
+                def newLine() { <[ _ = code.AppendLine(); Indent(code, currentIndent); ]> }
+                match (name.LastPartString)
+                {
+                  | "S"
+                  | "s"   => <[ () ]> // TODO: add analysis of a space usefulness
+                  | "nl"  => newLine()
+                  | "inl" 
+                  | "nli" => <[ currentIndent++; $(newLine()) ]>
+                  | "d"   => <[ currentIndent--; Unindent(code, currentIndent); ]>
+                  | "i"   => <[ currentIndent++; ]>
+                  | _     => <[ _ = code.Append(' '); ]>
+                }
+
+              | Call when rule.Type is RuleType.Chars           => <[ def tok = $expr; _ = code.Append(this.Location.Source.Text, tok.StartPos, tok.Length); ]>
+              | Call | PrefixCall                               => <[ $expr.PrettyPrint(code, currentIndent, options); ]>
+              | Repeat(_, _, rule) when isVoid(rule.Type)       => <[ _ = code.Append(' '); ]>
+              | Repeat(0, Some(1), rule)                        => <[ when ($expr is Some(_x)) $(loop(<[ _x ]>, rule)) ]>
+              | Repeat(_, _, rule)                              => <[ foreach (elem in $expr) $(loop(<[ elem ]>, rule)); ]>
+              | RepeatWithSeparator(_, _, rule, separator)      => 
+                if (separator.GetAllSubRules().ForAll(isNoNeedVar))
+                  <[  def (elems, separators) = $expr;
+                      assert2(elems.IsEmpty || elems.Length > separators.Length);
+                      def endIndex = elems.Length - 1;
+                      
+                      foreach (elem in elems with i)
+                      {
+                        $(loop(<[ elem ]>, rule));
+                    
+                        when (endIndex != i)
+                          $(loop(<[ separator ]>, separator));
+                      } ]>
+                else
+                  <[  def (elems, separators) = $expr;
+                      assert2(elems.IsEmpty || elems.Length > separators.Length);
+                      mutable separatorRest = separators;
+                    
+                      foreach (elem in elems)
+                      {
+                        $(loop(<[ elem ]>, rule));
+                    
+                        unless (separatorRest.IsEmpty)
+                        {
+                          def separator = separatorRest.Head;
+                          $(loop(<[ separator ]>, separator));
+                          separatorRest = separatorRest.Tail;
+                        }
+                      } ]>
+            };
+          
+          result
+        }
+
+        loop(<[ this.$(name : dyn) ]>, rule);
+      }
+
+      def code = members.Map(fieldToString);
+      def body = <[ { ..$code } ]>;
+      _ = astTb.DefineWithSource(<[ decl: 
+        public override PrettyPrint(code : System.Text.StringBuilder, mutable currentIndent : int, options : N2.ToStringOptions) : void
+        {
+          _ = $(astTb.FullName); // TODO: Remove at release!!!
+          _ = currentIndent; _ = options; _ = currentIndent;
+          $body
+        } ]>);
     }
 
     private DefineAstFields(astTb : TypeBuilder, members : list[string * RuleType]) : void
@@ -133,51 +252,59 @@ namespace N2
       ]>);
     }
 
+    IsVoidDeep(type : RuleType) : bool
+    {
+      | Void => true
+      | Option(t) | List(t) => IsVoidDeep(t)
+      | Tuple(types) => types.ForAll(IsVoidDeep)
+      | Chars | PType | NType => false
+    }
+    
     private DefineAstGetErrors(astTb : TypeBuilder, members : list[string * RuleType]) : void
     {
-      def makeGetErrors(name, type) : PExpr // TODO: Оптимизировать списоки токенов.
+      def makeGetErrors(expr : PExpr, type) : PExpr // TODO: Оптимизировать списоки токенов.
       {
         match (type : RuleType)
         {
+          | _ when IsVoidDeep(type) => <[ () ]>
           | _ when RuleTypeToNType(type).TryUnify(_ntokenType)
           | Chars        => <[ () ]>
-          | Tuple([_])   => <[ $(name : dyn).GetErrors(errors); ]>
-          | PType        => <[ $(name : dyn).GetErrors(errors); ]>
-          | NType        => <[ $(name : dyn).GetErrors(errors); ]>
+          | PType        => <[ $expr.GetErrors(errors); ]>
+          | NType        => <[ $expr.GetErrors(errors); ]>
           | List(type)   =>
             <[
-              foreach (_item in $(name : dyn))
-                $(makeGetErrors("_item", type));
+              foreach (_item in $expr)
+                $(makeGetErrors(<[ $("_item" : dyn) ]>, type));
             ]>
 
           | Option(type) =>
             <[
-              match ($(name : dyn))
+              match ($expr)
               {
-                | Some(_item) => $(makeGetErrors("_item", type));
+                | Some(_item) => $(makeGetErrors(<[ $("_item" : dyn) ]>, type));
                 | _ => ()
               }
             ]>
 
+          | Tuple(types) when types.Count(ty => !(ty is RuleType.Void)) == 1 => <[ $expr.GetErrors(errors); ]>
           | Tuple(types) =>
             def types = types.Filter(ty => !(ty is RuleType.Void));
             def fields = types.Length;
-            def names = $[0..fields - 1].Map(n => $"_item$n");
+            def names = $[0..fields - 1].Map(n => <[ $($"_item$n" : dyn) ]>);
             <[
               {
-                def (..$(names.Map(name => <[ $(name : dyn) ]>))) = $(name : dyn);
+                def (..$names) = $expr;
                 { ..$(names.Zip(types).Map(makeGetErrors)) };
               }
             ]>
-
-          | Void         => assert(false)
+          | Void => assert(false);
         }
       }
       _ = astTb.DefineWithSource(<[decl:
         public override GetErrors(errors : System.Collections.Generic.List[ErrorInfo]) : void
         {
-          base.GetErrors(errors);
-          { ..$(members.Map(makeGetErrors)) }
+          base.GetErrors(errors); 
+          { ..$(members.Map((name, type) => makeGetErrors(<[ this.$(name : dyn) ]>, type))) }
         }
       ]>);
     }
@@ -351,8 +478,6 @@ namespace N2
           | And | Not => assert(false);
         }
       }
-
-
       def selfCode = 
         if (rd.Attributes.Find(_ is RuleAttribute.SpanClass) is Some(RuleAttribute.SpanClass as spanClass))
           <[ 
@@ -380,54 +505,56 @@ namespace N2
 
     private DefineAstGetDump(astTb : TypeBuilder, astFullName : string, members : list[string * RuleType]) : void
     {
-      def makeDump(name, type) : PExpr // TODO: Оптимизировать списоки токенов.
+      def makeDump(expr : PExpr, type) : PExpr // TODO: Оптимизировать списоки токенов.
       {
         match (type : RuleType)
         {
+          | _ when IsVoidDeep(type) => <[ () ]>
           | _ when RuleTypeToNType(type).TryUnify(_ntokenType)
-          | Chars        => <[ N2.Runtime.Dump.Token(GetText($(name : dyn))) ]>
-          | Tuple([_])   => <[ $(name : dyn).GetDump(); ]>
-          | PType        => <[ $(name : dyn).GetDump(); ]>
-          | NType        => <[ $(name : dyn).GetDump(); ]>
+          | Chars        => <[ N2.Internal.AstDump.Token(GetText($expr)) ]>
+          | PType        => <[ $expr.GetDump(); ]>
+          | NType        => <[ $expr.GetDump(); ]>
           | List(type)   =>
             <[
-              N2.Runtime.Dump.List($(name : dyn).Map(fun(_item)
+              N2.Internal.AstDump.List($expr.Map(fun(_item)
               {
-                $(makeDump("_item", type))
+                $(makeDump(<[ $("_item" : dyn) ]>, type))
               }))
             ]>
 
+          | Option(Void) => <[ () ]>
           | Option(type) =>
             <[
-              match ($(name : dyn))
+              match ($expr)
               {
-                | Some(_item) => N2.Runtime.Dump.Option(Some($(makeDump("_item", type))));
-                | _ => N2.Runtime.Dump.Option(None())
+                | Some(_item) => N2.Internal.AstDump.Option(Some($(makeDump(<[ $("_item" : dyn) ]>, type))));
+                | _ => N2.Internal.AstDump.Option(None())
               }
             ]>
 
+          | Tuple(types) when types.Count(ty => !(ty is RuleType.Void)) == 1 => <[ $expr.GetDump(); ]>
           | Tuple(types) =>
             def types = types.Filter(ty => !(ty is RuleType.Void));
             def fields = types.Length;
-            def names = $[0..fields - 1].Map(n => $"_item$n");
+            def names = $[0..fields - 1].Map(n => <[ $($"_item$n" : dyn) ]>);
             <[
               {
-                def (..$(names.Map(name => <[ $(name : dyn) ]>))) = $(name : dyn);
-                N2.Runtime.Dump.Tuple([..$(names.Zip(types).Map(makeDump))]);
+                def (..$names) = $expr;
+                N2.Internal.AstDump.Tuple([..$(names.Zip(types).Map(makeDump))]);
               }
             ]>
 
-          | Void         => assert(false)
+          | Void => assert(false);
         }
       }
       def makeFieldDump(name, type) : PExpr
       {
-        <[ N2.Runtime.Dump.Field($(name : string), $(makeDump(name, type))) ]>
+        <[ N2.Internal.AstDump.Field($(name : string), $(makeDump(<[ this.$(name : dyn) ]>, type))) ]>
       }
       _ = astTb.DefineWithSource(<[decl:
-        public override GetDump() : N2.Runtime.Dump
+        public override GetDump() : N2.Internal.AstDump
         {
-          N2.Runtime.Dump.Ast($(astFullName : string), [..$(members.Map(makeFieldDump))])
+          N2.Internal.AstDump.Ast($(astFullName : string), [..$(members.Map(makeFieldDump))])
         }
       ]>);
     }
@@ -435,9 +562,9 @@ namespace N2
     private DefineErrorGetDump(errorTb : TypeBuilder, astFullName : string) : void
     {
       _ = errorTb.DefineWithSource(<[decl:
-        public override GetDump() : N2.Runtime.Dump
+        public override GetDump() : N2.Internal.AstDump
         {
-          N2.Runtime.Dump.Error($(astFullName : string), GetText())
+          N2.Internal.AstDump.Error($(astFullName : string), GetText())
         }
       ]>);
     }
@@ -445,9 +572,9 @@ namespace N2
     private DefineSpliceGetDump(spliceTb : TypeBuilder, astFullName : string) : void
     {
       _ = spliceTb.DefineWithSource(<[decl:
-        public override GetDump() : N2.Runtime.Dump
+        public override GetDump() : N2.Internal.AstDump
         {
-          N2.Runtime.Dump.Splice($(astFullName : string))
+          N2.Internal.AstDump.Splice($(astFullName : string))
         }
       ]>);
     }
