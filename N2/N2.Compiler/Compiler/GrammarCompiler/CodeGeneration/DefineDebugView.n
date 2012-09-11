@@ -5,6 +5,7 @@ using Nemerle.Utility;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using N2.Model;
+using N2.Compiler;
 
 using System;
 using System.Diagnostics;
@@ -20,31 +21,51 @@ namespace N2
     public DefineDebugView(rd : RuleDefinition, descriptorTB : TypeBuilder) : void
     {
       def ruleCompiler = _ruleCompilers[rd];
-      //ruleCompiler.RootField.
-      def tb = descriptorTB.DefineNestedType(<[decl:
-          private class DebugView
-          {
-            [DebuggerBrowsable(DebuggerBrowsableState.Never)] public parser : N2.Internal.Parser;
-            [DebuggerBrowsable(DebuggerBrowsableState.Never)] public index : int;
-
-            public this(parser : N2.Internal.Parser, index : int)
-            {
-              this.parser = parser;
-              this.index  = index;
-            }
-
-            public override ToString() : string
-            {
-              def rd = $(descriptorTB.GetMemType() : typed).StaticDescriptor;
-              string.Format("{0, 5} {1, -5} {2} {3} {4}", "Ast", index, rd.Grammar.FullName, rd.Name, rd.GetType().Name);
-            }
-          }
-        ]>);
-      tb.Compile();
-      _ = descriptorTB.DefineWithSource(<[decl:
-        public override FillDebugAst(parser : N2.Internal.Parser, index : int, debugAst : array[object]) : void
+      def makeFieldViews()
+      {
+        def makeSizeSetter(field)
         {
-          debugAst[index] = $(descriptorTB.GetMemType() : typed).DebugView(parser, index);
+          def ofs = field.OffsetInStruct;
+          <[ debugAst[index + $ofs] = N2.Debug.DebugViewSize(parser, index + $ofs) ]>
+        }
+        def makeAstSetter(field)
+        {
+          def make(ofs, rd)
+          {
+            <[ debugAst[index + $ofs] = N2.Debug.DebugViewAstRef(parser, index + $ofs, $(GetStaticDescriptorRef(rd))) ]>
+          }
+          match (field.RuleField)
+          {
+            | RuleField.ExtentionPoint as ruleField => make(field.OffsetInStruct, ruleField.ruleDefinition)
+            | RuleField.ExternalAst    as ruleField => make(field.OffsetInStruct, ruleField.ruleDefinition)
+            | RuleField.Void           as ruleField => make(field.OffsetInStruct, ruleField.ruleDefinition)
+            | RuleField.Ast            as ruleField => make(field.OffsetInStruct, ruleField.ruleDefinition)
+            | _ => <[ () ]>
+          }
+        }
+        def astStruct = ruleCompiler.RootField.astStruct;
+        def sizeSetters = astStruct.SizeFields.Map(makeSizeSetter);
+        def astSetters = astStruct.AstFields.Map(makeAstSetter);
+        <[ { ..$sizeSetters } { ..$astSetters } ]>;
+      }
+      def setters = match (rd)
+      {
+        | ExtentionPrefix | ExtentionPostfix =>
+          def terminatorOffset = ruleCompiler.RootField.astStruct.TerminatorOffset;
+          <[
+            debugAst[index + $terminatorOffset] = N2.Debug.DebugViewTerminator(parser, index + $terminatorOffset);
+            $(makeFieldViews());
+          ]>
+
+        | Simple => makeFieldViews()
+
+        | _ => <[ {} ]>
+      }
+      _ = descriptorTB.DefineWithSource(<[decl:
+        public override FillDebugAst(parser : N2.Debug.DebugParser, index : int, debugAst : array[object]) : void
+        {
+          debugAst[index] = N2.Debug.DebugViewAstDef(parser, index, $(GetStaticDescriptorRef(rd)));
+          $setters
         }
       ]>);
     }
