@@ -1,9 +1,11 @@
-﻿using System;
+﻿using System.Text;
+using System;
 using System.Console;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 using CSharp.Grammar;
 
@@ -12,24 +14,94 @@ using Nemerle.Imperative;
 
 namespace CSharp.Grammar.Test
 {
-  static class Program
+  module Program
   {
-    static Main() : void
+    StopOnError        : bool   = false;
+    Extention          : string = @"*.cs";
+    //TestsRootDir       : string = @"C:\P\Tmp\";
+    //DestTestsDataDir   : string = TestsRootDir + @"data\";
+    TestsRootDir       : string = @"C:\P\Tmp\data\";
+    DestTestsDataDir   : string = TestsRootDir;
+    
+    SourceTestsDataDir : string = @"c:\P\ReSharper\Psi.Features\test\data\";
+    
+    Main() : void
     {
-      Test(warmupPass = true);
+      PrepareTests();
+      
+      //Test(warmupPass = true);
       Test(warmupPass = false);
+
+      _ = ReadLine();
+    }
+
+    CaretRx : Regex = Regex(@"\{/?(\w|\d)+\:?(\w|\d)*\}", RegexOptions.Compiled);
+    //CaretRx : Regex = Regex(@"\{add\}|\{caret\:?\w*\}|\{source\d*\}|{target\d*}|\{selstart\d*\}|\{selend\d*\}|\{ReturnDefaultValue\}|\{ThrowNotImplemented\}|\{NotCompiledCode\}", RegexOptions.Compiled);
+
+    PrepareTests() : void
+    {
+      WriteLine("Preparing test data catalog.");
+      
+      when (Directory.Exists(DestTestsDataDir))
+        Directory.Delete(DestTestsDataDir, recursive=true);
+      
+      def convert(content : string) : string
+      {
+        CaretRx.Replace(content, "")
+      }
+      
+      def ensurEndSlash(path : string) { path.TrimEnd('\\', '/') + "\\" }
+      def sourseRoot    = ensurEndSlash(Path.GetFullPath(SourceTestsDataDir));
+      def sourseRootLen = sourseRoot.Length;
+      def destRoot      = ensurEndSlash(DestTestsDataDir);
+      def changeRoot(path : string) : string
+      {
+        assert2(path.StartsWith(sourseRoot));
+        Path.Combine(destRoot, path.Substring(sourseRootLen))
+      }
+      def dirs = Directory.GetDirectories(sourseRoot, "*.*", SearchOption.AllDirectories);
+      
+      _ = dirs;
+      
+      foreach (dir in dirs)
+      {
+        def destDir = changeRoot(dir);
+        
+        when (Directory.Exists(destDir))
+          continue;
+          
+        def files = Directory.GetFiles(dir, Extention);
+        
+        when (files.Length == 0)
+          continue;
+          
+        _ = Directory.CreateDirectory(destDir);
+        
+        Write(".");
+
+        foreach (file in files)
+        {
+          def destFile = changeRoot(file);
+          def content  = File.ReadAllText(file);
+          File.WriteAllText(destFile, convert(content));
+        }
+      }
+      
+      WriteLine();
+      WriteLine("Finish preparing.");
     }
     
-    static Test(warmupPass : bool) : void
+    Test(warmupPass : bool) : void
     {
       def topSize = 10;
       def preprocessorSymbols = ["DEBUG", "TRACE"];
+      mutable filesWithErrors = 0;
       //def asmPath = Uri(Reflection.Assembly.GetCallingAssembly().CodeBase).AbsolutePath;
       //def path    = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(asmPath), @"..\..\Tests"));
       //def files   = Directory.GetFiles(path, "*.cs");
       //def files = array[@"c:\P\Tmp\aspnet-61\Samples\Net45\CS\HttpClient\GoogleMapsSample\Program.cs"];
 
-      def files   = Directory.GetFiles(@"C:\P\Tmp\tests", "*.cs", SearchOption.AllDirectories);
+      def files   = Directory.GetFiles(TestsRootDir, Extention, SearchOption.AllDirectories);
       
 //      def files = array[
 //@"c:\P\Tmp\aspnet-61\Samples\Net4\CS\HttpClient\WorldBankSample\Program.cs",
@@ -53,9 +125,8 @@ namespace CSharp.Grammar.Test
         Console.ForegroundColor = ConsoleColor.Red;
         WriteLine("warm-up pass");
         Console.ResetColor();
+        Console.Clear();
       }
-      
-      Console.Clear();
       
       def (count, len) = files.FoldI((0, 0L), (i, file, (_, len)) => (i, FileInfo(file).Length + len));
       def len = len + 1;
@@ -71,6 +142,7 @@ namespace CSharp.Grammar.Test
         def rawTyle = times.Aggregate((a, b) => a + b);
         def lenInMb = (len :> double) / 1024 / 1024;
         WriteLine($"Processed $count files. Total size: $lenInMb MB. Processing took raw $rawTyle total: $(timer.Elapsed). MB/sec. $((lenInMb : double) / timer.Elapsed.TotalSeconds).");
+        WriteLine($"  Files with errors: $filesWithErrors.");
         
         when (isFail)
           return;
@@ -97,42 +169,50 @@ namespace CSharp.Grammar.Test
         }
         
         Console.ResetColor();
-        
-        unless (warmupPass)
-          _ = ReadLine();
       }
       
       foreach (file in files with i)
       {
         def parser = CSharpParser();
-        Write(file);
+        
+        when (StopOnError)
+          Write(file);
         timer2.Restart();
         def ast = parser.Parse(File.ReadAllText(file, Text.Encoding.UTF8), i, file, preprocessorSymbols);
         times.Add(timer2.Elapsed);
         
         if (ast.Errors.IsEmpty)
-          WriteLine(":  OK");
-        else foreach (error in ast.Errors)
+          when (StopOnError)
+            WriteLine(":  OK");
+        else 
         {
-          Console.ForegroundColor = ConsoleColor.Red;
-          def msg = $@"$(error.Location.EndLineColumn): Parsing error.";
-          WriteLine(msg);
-          Debug.WriteLine(file + msg);
-          Console.ResetColor();
-          
-          foreach (tok in error.ExpectedTokens)
+          filesWithErrors++;
+          foreach (error in ast.Errors)
           {
-            def msg = $@"    Expected rule: $(tok.Rule.Name)";
+            unless (StopOnError)
+              Write(file);
+            Console.ForegroundColor = ConsoleColor.Red;
+            def msg = $@"$(error.Location.EndLineColumn): Parsing error.";
             WriteLine(msg);
-            Debug.WriteLine(msg);
-          }
-
-          Console.ForegroundColor = ConsoleColor.DarkGray;
-          report(isFail = true);
-          Console.ResetColor();
-          return; 
-        }
+            Debug.WriteLine(file + msg);
+            Console.ResetColor();
           
+            when (StopOnError)
+            {
+              foreach (tok in error.ExpectedTokens)
+              {
+                def msg = $@"    Expected rule: $(tok.Rule.Name)";
+                WriteLine(msg);
+                Debug.WriteLine(msg);
+              }
+
+              Console.ForegroundColor = ConsoleColor.DarkGray;
+              report(isFail = true);
+              Console.ResetColor();
+              return; 
+            }
+          }
+        }
           
         //WriteLine("-----------------------------------------------------");
         //WriteLine(ast.GetDump());
