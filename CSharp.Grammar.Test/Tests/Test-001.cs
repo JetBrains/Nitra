@@ -1,4 +1,5 @@
-﻿using Nemerle;
+﻿/*
+using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -18,8 +19,46 @@ namespace CSharp.Grammar.Test
     where T : class, new()
     where X : ITest<X>
   {
-    public static int Foo(this string x, ref int r) { ;;; }
-    public void F() { base(); }
+    public static int Foo(this string x, ref int r)
+    {
+      ;
+      ;;
+      if (a == b)
+        Foo(42);
+      else
+      {
+        //var x = 42;
+        switch (42)
+        {
+          case 2: break;
+          case 3: Console.WriteLine(@"Test ""test""!"); break;
+          case 42:
+          default:
+            return 42;
+        }
+
+        Foo(x + 8);
+        Foo(x + 8);
+      }
+
+      for (; ; )
+        Console.WriteLine("test");
+
+      for (int i = 0; i < length; i++)
+      {
+        Console.WriteLine(i);
+      }
+
+      for (int i = 0, k = 42; i < length; i++, k += 2)
+        Console.WriteLine(i + k);
+
+      for (i = 0, k = 42; i < length; i++, k += 2)
+        Console.WriteLine(i + k);
+
+      foreach (var x in xs)
+        Console.WriteLine(x);
+    }
+    public void F() { base.Foo<T>.Foo<T>(); }
     string Prop1 { get; set; }
 
     int[] _field = {1UL, 2u};
@@ -53,3 +92,4 @@ unsafe class A
     return new A(Ns1.Type<int?>.Foo<A>(42, "aa"));
   }
 }
+*/
