@@ -1,6 +1,7 @@
 ﻿using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Collections;
+using Nemerle.Diff;
 using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -21,11 +22,12 @@ namespace N2.Test
   /// </summary>
   public sealed class GoldTest : Test
   {
-    public this(filePath : string, createGoldFile : bool)
+    public this(filePath : string, createGoldFile : bool, showDiff : bool)
       requires !string.IsNullOrEmpty(filePath)
     {
       _filePath = filePath;
       _createGoldFile = createGoldFile;
+      _showDiff = showDiff;
       Name = Path.GetFileNameWithoutExtension(filePath);
     }
 
@@ -72,13 +74,20 @@ namespace N2.Test
                 File.Delete(dumpName);
               def goldDumpName = Path.ChangeExtension(_filePath, "gold");
               if(File.Exists(goldDumpName))
-                match(DumpComparer.Compare(dumpString, File.ReadAllText(goldDumpName), StringComparison.Ordinal))
+              {
+                def split(s) : array[_] { s.Split(array["\r\n", "\n", "\r"], StringSplitOptions.None) }
+                def output = split(dumpString);
+                def gold   = split(File.ReadAllText(goldDumpName));
+                match(DumpComparer.Compare(output, gold, StringComparison.Ordinal))
                 {
                   | Success => Result.Passed("Passed")
                   | Fail(lineNumber, expectedText, foundText) =>
                     File.WriteAllText(dumpName, dumpString);
-                    Result.Failed($"Dump differs with gold on line $lineNumber. Expected '$expectedText' found '$foundText'")
+                    def message = $"Dump differs with gold on line $lineNumber. Expected '$expectedText' found '$foundText'";
+                    def details = if(_showDiff) diff(gold, output) else [];
+                    Result.Failed(message, details)
                 }
+              }
               else if(_createGoldFile)
               {
                 File.WriteAllText(goldDumpName, dumpString);
@@ -95,7 +104,69 @@ namespace N2.Test
       }
     }
 
+    private static diff(textA : array[string], textB : array[string], rangeToShow : int = 3) : list[string]
+    {
+      def output = List();
+      output.Add("BEGIN-DIFF");
+      def writeSeparator()
+      {
+        output.Add("...");
+      }
+      def writeOriginal(line : string) : void
+      {
+        output.Add("  " + line);
+      }
+      def writeRemoved(line : string) : void
+      {
+        output.Add(" -" + line);
+      }
+      def writeInserted(line : string) : void
+      {
+        output.Add(" +" + line);
+      }
+      mutable indexA = 0;
+      foreach(diffItem in textA.Diff(textB))
+      {
+        // определяем нужно ли выводить разделитель
+        def nextIndexA = Math.Max(indexA, diffItem.Index - rangeToShow);
+        when(nextIndexA > indexA + 1)
+          writeSeparator();
+
+        // показваем не боле rangeToShow предыдущих строк
+        indexA = nextIndexA;
+        while(indexA < diffItem.Index)
+        {
+          writeOriginal(textA[indexA]);
+          ++indexA;
+        }
+
+        // показываем удаленные строки
+        for(mutable i = 0; i < diffItem.Deleted; ++i)
+        {
+          writeRemoved(textA[indexA]);
+          ++indexA;
+        }
+
+        // показываем добавленные строки
+        foreach(insertedItem in diffItem.Inserted)
+          writeInserted(insertedItem);
+
+        // показываем не более rangeToShow последующих строк
+        def tailLinesToShow = Math.Min(rangeToShow, textA.Length - indexA);
+        for(mutable i = 0; i < tailLinesToShow; ++i)
+        {
+          writeOriginal(textA[indexA]);
+          ++indexA;
+        }
+      }
+      when(indexA < textA.Length)
+        writeSeparator();
+      output.Add("END-DIFF");
+      output.ToNList()
+    }
+
     private _filePath : string;
     private _createGoldFile : bool;
+    private _showDiff : bool;
   }
 }
