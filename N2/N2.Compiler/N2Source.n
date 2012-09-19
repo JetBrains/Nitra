@@ -9,6 +9,7 @@ using System.Linq;
 
 using SCG = System.Collections.Generic;
 using G = GrammarParser2;
+using PExpr = Nemerle.Compiler.Parsetree.PExpr;
 
 namespace N2
 {
@@ -361,6 +362,29 @@ namespace N2
           | _                     => (Rule.Sequence(rule.Location, RuleType.Void(), 0, [replaceAlias(rule)]), makeNames())
         }
       }
+      def processExtraFields(members : list[G.BodyMemberDeclaration]) : list[ExtraField]
+      {
+        def parse(ast : N2.Ast) : PExpr
+        {
+          MainParser.ParseExpr(Env, ast.Location.GetText(), ast.NLocation())
+        }
+        def loop(members : list[G.BodyMemberDeclaration], acc)
+        {
+          match (members)
+          {
+            | G.InFieldDeclaration.Ast  as m :: tail => loop(tail, ExtraField.InFieldDef(m.Name.ToNameRef(), parse(m.Type))  :: acc)
+            | G.OutFieldDeclaration.Ast(FieldInitializers=Some(G.FieldInitializer.Ast as init)) as m :: tail =>
+              loop(tail, ExtraField.OutFieldDef(m.Name.ToNameRef(), parse(m.Type), Some(parse(init.Expression))) :: acc)
+              
+            | G.OutFieldDeclaration.Ast as m :: tail => loop(tail, ExtraField.OutFieldDef(m.Name.ToNameRef(),       parse(m.Type), None()) :: acc)
+            | G.SetDeclaration.Ast      as m :: tail => loop(tail, ExtraField.SetField(parse(m.QualifiedName), parse(m.Expression))   :: acc)
+            | _                              :: tail => loop(tail, acc)
+            | _                                      => acc
+          }
+        }
+          
+        loop(members, [])
+      }
       def addExtentionRule(nameId : G.Identifier, ruleAttributes : G.RuleAttributes, bodyDeclaration : G.BodyDeclaration, 
                           rule : G.Rule, baseName : G.QIdentifier) : void
       {
@@ -381,18 +405,19 @@ namespace N2
             rule1
         }
         def rule2 = processBody(bodyDeclaration, processPrecedence, rule1);
-        def ruleDecl = 
+        def extraFields = processBody(bodyDeclaration, processExtraFields, []);
+        def ruleDefinition = 
           match (rule2)
           {
             | Sequence((Call(callName, bindingPower) as call) :: rules) when callName == baseName =>
-              RuleDefinition.ExtentionPostfix(name.Location, ruleId, name, attributes, tokenFieldNames, baseName, bindingPower, 
+              RuleDefinition.ExtentionPostfix(name.Location, ruleId, name, attributes, tokenFieldNames, extraFields, baseName, bindingPower, 
                 Rule.Sequence(rule1.Location, RuleType.Void(), 0, 
                 Rule.PrefixCall(call.Location, RuleType.Void(), 0, baseName, bindingPower) :: rules), names)
 
-            | _ => RuleDefinition.ExtentionPrefix(name.Location, ruleId, name, attributes, tokenFieldNames, baseName, rule2, names)
+            | _ => RuleDefinition.ExtentionPrefix(name.Location, ruleId, name, attributes, tokenFieldNames, extraFields, baseName, rule2, names)
           };
             
-        try { grammar = grammar.Add(ruleDecl); }
+        try { grammar = grammar.Add(ruleDefinition); }
         catch { | e is Exception => Message.Error(name.Location, "Exception: " + e.Message); }
       }
       foreach (decl in syntaxModule.Declarations)
@@ -408,11 +433,12 @@ namespace N2
           }
 
         | G.TokenRuleDecl.Ast as decl =>
-          def name       = decl.Name.ToNameRef();
-          def ruleId     = grammar.Count;
-          def attributes = ConvertAttributes(decl.RuleAttributes);
-          def rule       = ConvertTokenRule(decl.TokenRule);
-          grammar = grammar.Add(RuleDefinition.Regular(name.Location, ruleId, name, attributes, tokenFieldNames, rule));
+          def name        = decl.Name.ToNameRef();
+          def ruleId      = grammar.Count;
+          def attributes  = ConvertAttributes(decl.RuleAttributes);
+          def rule        = ConvertTokenRule(decl.TokenRule);
+          def extraFields = processBody(decl.BodyDeclaration, processExtraFields, []);
+          grammar = grammar.Add(RuleDefinition.Regular(name.Location, ruleId, name, attributes, tokenFieldNames, extraFields, rule));
 
         | G.VoidRuleDecl.Ast  (RuleAttributes=attr, Name=name, Rule=rule) with (type = RuleType.Void(), decl = null)
         | (G.SimpleRuleDecl.Ast(RuleAttributes=attr, Name=name, Rule=rule) as decl) with type = RuleType.PType(<[ Ast ]>) =>
@@ -422,16 +448,18 @@ namespace N2
           def attributes    = ConvertAttributes(attr);
           def localAliases  = if (decl == null) Map() else processBody(decl.BodyDeclaration, processLocalAliases, Map());
           def (rule, names) = addSequence(rule, localAliases);
+          def extraFields   = if (decl == null) [] else processBody(decl.BodyDeclaration, processExtraFields, []);
             
-          grammar = grammar.Add(RuleDefinition.Simple(name.Location, ruleId, name, attributes, tokenFieldNames, type, rule, names));
+          grammar = grammar.Add(RuleDefinition.Simple(name.Location, ruleId, name, attributes, tokenFieldNames, extraFields, type, rule, names));
 
         | G.ExtentionPointRuleDecl.Ast as decl =>
-          def name       = decl.Name.ToNameRef();
-          def ruleId     = grammar.Count;
-          def attributes = ConvertAttributes(decl.RuleAttributes);
-          def ruleType   = RuleType.PType(<[ Ast ]>);
+          def name        = decl.Name.ToNameRef();
+          def ruleId      = grammar.Count;
+          def attributes  = ConvertAttributes(decl.RuleAttributes);
+          def ruleType    = RuleType.PType(<[ Ast ]>);
+          def extraFields = processBody(decl.BodyDeclaration, processExtraFields, []);
           
-          grammar = grammar.Add(RuleDefinition.ExtentionPoint(name.Location, ruleId, name, attributes, tokenFieldNames, ruleType));
+          grammar = grammar.Add(RuleDefinition.ExtentionPoint(name.Location, ruleId, name, attributes, tokenFieldNames, extraFields, ruleType));
 
         | G.ExtendSyntax.Ast as decl =>
           def baseName = decl.BaseName;

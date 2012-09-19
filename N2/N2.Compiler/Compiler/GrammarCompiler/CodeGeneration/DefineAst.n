@@ -79,7 +79,7 @@ namespace N2
 
             match (rd)
             {
-              | RuleDefinition.ExtentionPoint => ()
+              | RuleDefinition.ExtentionPoint => DefineExtraFields(tb, rd);
               | RuleDefinition.ExtentionPostfix
               | RuleDefinition.ExtentionPrefix
               | RuleDefinition.Simple =>
@@ -101,8 +101,12 @@ namespace N2
                 DefineAstGetDump(astTb, tb.FullName, members);
                 when (rd.GetRule() is Some(rule))
                   DefineAstGetSpans(astTb, rule, rd);
+                  
+                DefineCalcExtraField(astTb, rd);
+                DefineExtraFields(tb, rd);
 
                 astTb.Compile();
+                
               | RuleDefinition.ExternalRule
               | RuleDefinition.Regular => assert(false);
             }
@@ -591,6 +595,63 @@ namespace N2
           N2.Internal.AstDump.Splice($(astFullName : string))
         }
       ]>);
+    }
+
+    private DefineCalcExtraField(astTb : TypeBuilder, rd : RuleDefinition) : void
+    {
+      def extraFields = rd.ExtraFields;
+      mutable cases : list[MatchCase] = [<[ case: | _ => System.Diagnostics.Debug.Assert(false, "Invalid property extra field " + fieldIndex); ]>];
+
+      def addThis(expr) : PExpr
+      {
+        | <[ this.$(_ : name) ]>
+        | <[ this.$(_ : name).$(_ : name) ]> => expr      
+        | <[ $(n1 : name).$(n2 : name) ]> => <[ this.$(n1 : name).$(n2 : name) ]>
+        | <[ $(n : name) ]> => <[ this.$(n : name) ]>
+        | _ => Message.FatalError(expr.Location, "You can assign value only to 'in' extra fields of sabrules.")
+      }
+      
+      foreach (extraField in extraFields with i)
+      {
+        | InFieldDef => ()
+        | OutFieldDef(name, _, Some(expr)) => cases ::= <[ case: | $i => this.$(name.AsName : dyn) = $expr; ]>
+        | OutFieldDef(_, _, _) => ()
+        | SetField(name, expr)             => cases ::= <[ case: | $i => $(addThis(name)) = $expr; ]>
+      }
+      
+      _ = astTb.Define(<[decl:
+        public override CalcExtraField(fieldIndex : int) : void
+        {
+          _ = $(astTb.FullName);
+          
+          match (fieldIndex)
+          {
+            ..$cases
+          }
+        } ]>);
+    }
+
+    private DefineExtraFields(baseAstTb : TypeBuilder, rd : RuleDefinition) : void
+    {
+      //assert2(rd.Name.AsName !=	"plus");
+      //assert2(rd.Name.AsName !=	"expr");
+      def extraFields = rd.ExtraFields;
+      
+      //def makeName(name : NameRef) : PExpr { <[ $(name.AsName : dyn) ]> }
+      
+      foreach (extraField in extraFields with i)
+      {
+        | InFieldDef(name, type) => baseAstTb.Define(<[ decl: public $(name.AsName : dyn) : $type { get; set; } ]>);
+        | OutFieldDef(name, type, init) =>
+          when (rd is RuleDefinition.ExtentionPoint)
+            when (init is Some(x))
+              Message.Error(x.Location, "A extention point can't have calculations.");
+          baseAstTb.Define(<[ decl: public $(name.AsName : dyn) : $type { get; set; } ]>);
+          
+        | SetField(name, _) =>
+          when (rd is RuleDefinition.ExtentionPoint)
+            Message.Error(name.Location, "A extention point can't have calculations.");
+      }
     }
   }
 }
