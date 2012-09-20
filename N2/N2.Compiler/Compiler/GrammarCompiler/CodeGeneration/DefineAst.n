@@ -7,6 +7,7 @@ using Nemerle.Compiler.Parsetree;
 using N2.Model;
 
 using System;
+using System.Diagnostics;
 using System.Linq;
 using SCG = System.Collections.Generic;
 
@@ -45,6 +46,10 @@ namespace N2
 
     public DefineAst() : void
     {
+      assert2(GrammarTB != null);
+      unless (Manager.IsIntelliSenseMode)
+        Manager.TypeTreeBuildFinish += MakeExtraFieldsCalcs;
+      
       foreach (rd when rd.IsAst in TypedGrammar.Rules)
       {
         def tb = DefineAstType(rd);
@@ -597,9 +602,33 @@ namespace N2
       ]>);
     }
 
+    private DefineExtraFields(baseAstTb : TypeBuilder, rd : RuleDefinition) : void
+    {
+      //assert2(rd.Name.AsName !=	"expr");
+      def extraFields = rd.ExtraFields;
+      
+      foreach (extraField in extraFields with i)
+      {
+        | InFieldDef(name, type) => baseAstTb.Define(<[ decl: public $(name.AsName : dyn) : $type { get; set; } ]>);
+        | OutFieldDef(name, type, init) =>
+          when (rd is RuleDefinition.ExtentionPoint)
+            when (init is Some(x))
+              Message.Error(x.Location, "A extention point can't have calculations.");
+          baseAstTb.Define(<[ decl: public $(name.AsName : dyn) : $type { get; set; } ]>);
+          
+        | SetField(name, _) =>
+          when (rd is RuleDefinition.ExtentionPoint)
+            Message.Error(name.Location, "A extention point can't have calculations.");
+      }
+    }
+    
     private DefineCalcExtraField(astTb : TypeBuilder, rd : RuleDefinition) : void
     {
       def extraFields = rd.ExtraFields;
+      
+      unless (extraFields.IsEmpty)
+        astTb.UserData[typeof(ExtraField)] = extraFields;
+
       mutable cases : list[MatchCase] = [<[ case: | _ => System.Diagnostics.Debug.Assert(false, "Invalid property extra field " + fieldIndex); ]>];
 
       def addThis(expr) : PExpr
@@ -618,12 +647,11 @@ namespace N2
         | OutFieldDef(_, _, _) => ()
         | SetField(name, expr)             => cases ::= <[ case: | $i => $(addThis(name)) = $expr; ]>
       }
-      
+        
+          //_ = $(astTb.FullName);
       _ = astTb.Define(<[decl:
         public override CalcExtraField(fieldIndex : int) : void
         {
-          _ = $(astTb.FullName);
-          
           match (fieldIndex)
           {
             ..$cases
@@ -631,26 +659,54 @@ namespace N2
         } ]>);
     }
 
-    private DefineExtraFields(baseAstTb : TypeBuilder, rd : RuleDefinition) : void
+    static GetAllNestedTypes(tb : TypeBuilder) : Seq[TypeBuilder]
     {
-      //assert2(rd.Name.AsName !=	"plus");
-      //assert2(rd.Name.AsName !=	"expr");
-      def extraFields = rd.ExtraFields;
-      
-      //def makeName(name : NameRef) : PExpr { <[ $(name.AsName : dyn) ]> }
-      
-      foreach (extraField in extraFields with i)
+      foreach (x is TypeBuilder in tb.GetNestedTypes())
       {
-        | InFieldDef(name, type) => baseAstTb.Define(<[ decl: public $(name.AsName : dyn) : $type { get; set; } ]>);
-        | OutFieldDef(name, type, init) =>
-          when (rd is RuleDefinition.ExtentionPoint)
-            when (init is Some(x))
-              Message.Error(x.Location, "A extention point can't have calculations.");
-          baseAstTb.Define(<[ decl: public $(name.AsName : dyn) : $type { get; set; } ]>);
+        yield x;
+        
+        foreach (y in GetAllNestedTypes(x))
+          yield y;
+      }
+    }
+
+    MakeExtraFieldsCalcs(_manager : ManagerClass) : void
+    {
+      assert2(false);
+      
+      foreach (rd when rd.IsAst in TypedGrammar.Rules)
+      {
+        def tb = DefineAstType(rd);
+        
+        foreach (astTb in GetAllNestedTypes(tb))
+        {
+          def extraFields = astTb.UserData[typeof(ExtraField)] :> list[ExtraField];
+        
+          when (extraFields == null)
+            continue;
+        
+          def methods = astTb.GetMethods();
+        
+          foreach (method is MethodBuilder when method.Name == "CalcExtraField" in methods)
+          {
+            match (method.Header.body)
+            {
+              | FunBody.Typed(tExpr) => 
+                _ = tExpr;
+                
+              | _ => ()
+            }
+            
+            def typer = Typer(method);
+            typer.RunFullTyping();
           
-        | SetField(name, _) =>
-          when (rd is RuleDefinition.ExtentionPoint)
-            Message.Error(name.Location, "A extention point can't have calculations.");
+            match (method.Header.body)
+            {
+              | FunBody.Typed(tExpr) => IO.File.AppendAllText(@"c:\p\ParserGenerator\N2\log.txt", $"CalcExtraField: $tExpr");
+              | _ => assert2(false);
+            }
+          }
+        }
       }
     }
   }
