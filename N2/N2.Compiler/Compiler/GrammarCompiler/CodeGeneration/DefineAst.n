@@ -610,12 +610,14 @@ namespace N2
       
       foreach (extraField in extraFields with i)
       {
-        | InFieldDef(name, type) => baseAstTb.Define(<[ decl: public $(name.AsName : dyn) : $type { get; set; } ]>);
-        | OutFieldDef(name, type, init) =>
+        | InFieldDef(name, type) with n = name.AsName =>
+          baseAstTb.Define(<[ decl: [N2.Runtime.ExtraField(true, $i)] public $(n : dyn) : $type { get; set; } ]>);
+          
+        | OutFieldDef(name, type, init) with n = name.AsName =>
           when (rd is RuleDefinition.ExtentionPoint)
             when (init is Some(x))
               Message.Error(x.Location, "A extention point can't have calculations.");
-          baseAstTb.Define(<[ decl: public $(name.AsName : dyn) : $type { get; set; } ]>);
+          baseAstTb.Define(<[ decl: [N2.Runtime.ExtraField(false, $i)] public $(n : dyn) : $type { get; set; } ]>);
           
         | SetField(name, _) =>
           when (rd is RuleDefinition.ExtentionPoint)
@@ -671,13 +673,22 @@ namespace N2
       }
     }
 
-    public class Typer2 : Typer
+    public class TyperEx : Typer
     {
       public this(method : MethodBuilder) { base(method) }
+      
+      public IsRunSecondPassCalled : bool { get; private set; }
+      
+      public RunSecondPassBase() : void
+      {
+        when (IsRunSecondPassCalled)
+          base.RunSecondPass(CurrentMethodBuilder)
+      }
       
       protected override RunSecondPass(_meth : MethodBuilder) : void
       {
         // do not call T2 & T3
+        IsRunSecondPassCalled = true;
       }
     }
     
@@ -689,7 +700,6 @@ namespace N2
       {
         def tb = DefineAstType(rd);
         
-        when (false)
         foreach (astTb in GetAllNestedTypes(tb))
         {
           def extraFields = astTb.UserData[typeof(ExtraField)] :> list[ExtraField];
@@ -710,12 +720,23 @@ namespace N2
               | _ => ()
             }
             
-            def typer = Typer2(method);
+            def typer = TyperEx(method);
             typer.RunFullTyping();
           
             match (method.Header.body)
             {
-              | FunBody.Typed(TExpr.Block(_, TExpr.Match(_, cases))) => CheckExtraFields(cases, extraFields);
+              | FunBody.Typed(TExpr.Block(_, TExpr.Match(_, cases))) => 
+                CheckExtraFields(cases, extraFields);
+                typer.RunSecondPassBase();
+                //when (typer.IsRunSecondPassCalled)
+                //{
+                //  def t2 = Typer2(typer.CurrentType, method, typer);
+                //  t2.Run();
+
+                //  def t3 = Typer3(method, typer, t2);
+                //  t3.Run ();
+                //}
+                
               | _ => assert2(false);
             }
           }
@@ -725,22 +746,62 @@ namespace N2
     
     CheckExtraField(case : Match_case, extraField : ExtraField) : void
     {
-      def wolker = ExprWalker();
+      mutable setNode;
+      mutable setIndex;
       _ = extraField;
-      def wolk(info : ExprWalkInfo) : void
+      def removeDebugInfo(expr) { | TExpr.DebugInfo(e, _) => e | _ => expr }
+      def extractFieldInfo(expr) : bool * TExpr * int
       {
-        match (info.Node)
+        def readAttr(obj : TExpr, prop : IProperty)
         {
-          | TExpr.Assign(target, source) => 
-            Debug.WriteLine(target);
-            Debug.WriteLine(source);
-            
-          | e => Debug.WriteLine(e);
-
+          match (prop.GetModifiers().FindAttributeWithArgs(_extraFieldAttributeTypeInfo, Env))
+          {
+            | Some((_, [<[ $(isIn : bool) ]>, <[$(index : int)]>])) => (isIn, obj, index)
+            | _ => (false, obj, -1)
+          }
+        }
+        match (removeDebugInfo(expr))
+        {
+          | TExpr.PropertyMember(TExpr.FieldMember(TExpr.This, _) as obj, prop) => readAttr(obj, prop)
+          | TExpr.PropertyMember(TExpr.This as obj, prop) => readAttr(obj, prop)
+          | _ => (false, null, -1)
         }
       }
       
-      wolker.Walk(case.body, wolk);
+      match (removeDebugInfo(case.body))
+      {
+        | TExpr.Assign(target, source) =>
+          def (isIn, node, index) = extractFieldInfo(target);
+          setNode  = node;
+          setIndex = index;
+          if (node == null)
+            Message.Error(target.Location, "You can set only 'out' extra fields of current node or 'in' extra fields of direct subnodes.");
+          else if (index < 0)
+            Message.Error(target.Location, "You can set extra fields only.");
+          else if (!isIn && !(node is TExpr.This))
+            Message.Error(target.Location, "You can't set 'out' extra fields of subrules.");
+          else if (isIn && node is TExpr.This)
+            Message.Error(target.Location, "You can set only 'in' extra fields of current node.");
+          else
+            {}
+        
+          def wolker = ExprWalker();
+          def wolk(info : ExprWalkInfo) : void
+          {
+            match (info.Node)
+            {
+              | TExpr.Assign(target, source) => 
+                Debug.WriteLine(target);
+                Debug.WriteLine(source);
+            
+              | e => Debug.WriteLine(e);
+
+            }
+          }
+          wolker.Walk(source, wolk);
+        
+        | e => Message.FatalError(e.Location, "Only assign (E.ExtraField = ...) supported.");
+      }
     }
     
     CheckExtraFields(cases : list[Match_case], extraFields : list[ExtraField]) : void
