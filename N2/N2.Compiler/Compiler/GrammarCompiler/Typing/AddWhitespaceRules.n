@@ -1,0 +1,85 @@
+﻿using System;
+using SCG = System.Collections.Generic;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Parsetree.PExpr;
+using Nemerle.Compiler.Token;
+using Nemerle.Imperative;
+using N2.Model;
+
+namespace N2
+{
+  internal partial class GrammarCompiler
+  {
+    private AddWhitespaceRules() : void
+    {
+      def s = ParsedGrammar.GetRule(NameRef(Location.Default, "s"));
+      def S = ParsedGrammar.GetRule(NameRef(Location.Default, "S")); // TODO: сделать поиск по регексу
+      def convertRule(rule : Rule.Sequence) : Rule.Sequence
+      {
+        def convert(r : Rule)
+        {
+          | String
+          | PrefixCall
+          | Call
+          | Cut                                            => r
+          | Scope(name, rule)                              => Rule.Scope(r, name, convert(rule))
+          | Repeat(min, max, rule)                         => Rule.Repeat(r, min, max, convert(rule))
+          | RepeatWithSeparator(min, max, rule, separator) => Rule.RepeatWithSeparator(r, min, max, convert(rule), convert(separator))
+          | Not(rule)                                      => Rule.Not(r, convert(rule))
+          | And(rule)                                      => Rule.And(r, convert(rule))
+          | Sequence as r                                  => convertSequence(r)
+        }
+        and convertSequence(r : Rule.Sequence) : Rule.Sequence
+        {
+          def needSpaces(name)
+          {
+            def rd = ParsedGrammar.GetRule(name);
+            rd.IsExplicitSpaces || rd is RuleDefinition.Regular
+          }
+          def rules = SCG.List();
+          foreach(r in r.rules)
+          {
+            | PrefixCall(name, _)
+            | Call(name, _) =>
+              rules.Add(r);
+              if (name == s.Name || name == S.Name)
+                Message.Error(r.Location, "Unexpected whitespace rule. Mark rule with 'ExplicitSpaces' attribute.");
+              else
+                when (needSpaces(name))
+                  rules.Add(Rule.Call(Location.Default, RuleType.Void(), 0, s.Name, 0));
+
+            | String(str) => //TODO: проверить строку регексом и выбрать соответвтующее пробельное правило
+              rules.Add(r);
+
+            | _ => rules.Add(convert(r))
+          }
+          Rule.Sequence(r, rules.ToNList())
+        }
+        convertSequence(rule)
+      }
+      def convertRuleDefinition(rd : RuleDefinition)
+      {
+        | ExtentionPoint
+        | ExtentionPrefix  when rd.IsExplicitSpaces
+        | ExtentionPostfix when rd.IsExplicitSpaces
+        | Simple           when rd.IsExplicitSpaces
+        | Regular
+        | ExternalRule => rd
+
+        | ExtentionPrefix(baseRuleName, rule, names)                => RuleDefinition.ExtentionPrefix(rd, baseRuleName, convertRule(rule), names)
+        | ExtentionPostfix(baseRuleName, bindingPower, rule, names) => RuleDefinition.ExtentionPostfix(rd, baseRuleName, bindingPower, convertRule(rule), names)
+        | Simple(retType, rule, names)                              => RuleDefinition.Simple(rd, retType, convertRule(rule), names)
+      }
+      mutable grammar = Grammar(ParsedGrammar.GrammarRefs, ParsedGrammar.SpanClasses, ParsedGrammar.BracePairs);
+      foreach(rd in ParsedGrammar.Rules) 
+        grammar = grammar.Add(convertRuleDefinition(rd));
+      WhitespacedGrammar = grammar;
+    }
+  }
+}
