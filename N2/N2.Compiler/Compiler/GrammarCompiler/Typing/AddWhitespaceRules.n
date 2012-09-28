@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq;
 using SCG = System.Collections.Generic;
 
 using Nemerle;
@@ -18,9 +19,14 @@ namespace N2
   {
     private AddWhitespaceRules() : void
     {
-      def s = ParsedGrammar.GetRule(NameRef(Location.Default, "s"));
-      def S = ParsedGrammar.GetRule(NameRef(Location.Default, "S")); // TODO: сделать поиск по регексу
-      def convertRule(rule : Rule.Sequence) : Rule.Sequence
+      def sName = NameRef(Location.Default, "s");
+      def SName = NameRef(Location.Default, "S");
+      def sNameLookupResult = ParsedGrammar.TryGetRule(sName);
+      def SNameLookupResult = ParsedGrammar.TryGetRule(SName);
+
+      def compiledKeywordRegex = ParsedGrammar.KeywordRegexes.ToDictionary(_.Id, kr => FSMMatch.MakeMatcher(ConvertRegularRuleToFsm(ParsedGrammar, kr.Match)));
+
+      def convertRule(rd : RuleDefinition, rule : Rule.Sequence) : Rule.Sequence
       {
         def convert(r : Rule)
         {
@@ -42,20 +48,42 @@ namespace N2
             def rd = ParsedGrammar.GetRule(name);
             rd.IsExplicitSpaces || rd is RuleDefinition.Regular
           }
+          def makeWhitespaceRuleCall(whitespaceRuleLookupResult : option[RuleDefinition], whitespaceRuleName : NameRef)
+          {
+            def loc = r.Location.FromEndAsGenerated();
+            def nameLocated = NameRef(loc, whitespaceRuleName.Parts);
+            match (whitespaceRuleLookupResult)
+            {
+              | Some => Rule.Call(loc, RuleType.Void(), 0, nameLocated, 0)
+              | None => Message.FatalError(rd.Name.Location, $"Whitespace rule '$sName' is required")
+            }
+          }
           def rules = SCG.List();
           foreach(r in r.rules)
           {
             | PrefixCall(name, _)
             | Call(name, _) =>
               rules.Add(r);
-              if (name == s.Name || name == S.Name)
-                Message.Error(r.Location, "Unexpected whitespace rule. Mark rule with 'ExplicitSpaces' attribute.");
-              else
-                when (needSpaces(name))
-                  rules.Add(Rule.Call(Location.Default, RuleType.Void(), 0, s.Name, 0));
+              def nameLookupResult = ParsedGrammar.TryGetRule(name);
+              when (nameLookupResult.IsSome)
+                if (nameLookupResult.Equals(sNameLookupResult) || nameLookupResult.Equals(SNameLookupResult))
+                  Message.Error(r.Location, "Unexpected whitespace rule. Mark rule with 'ExplicitSpaces' attribute.");
+                else when (needSpaces(name))
+                  rules.Add(makeWhitespaceRuleCall(sNameLookupResult, sName))
 
-            | String(str) => //TODO: проверить строку регексом и выбрать соответвтующее пробельное правило
+            | String(str) =>
               rules.Add(r);
+              def isKeyword = rd.KeywordRegexes.FoldLeft(false, fun (keywordRegex, acc)
+              {
+                mutable compiledKr;
+                unless (compiledKeywordRegex.TryGetValue(keywordRegex.Id, out compiledKr))
+                  assert(false);
+                acc || compiledKr(str)
+              });
+              if (isKeyword)
+                rules.Add(makeWhitespaceRuleCall(SNameLookupResult, SName))
+              else
+                rules.Add(makeWhitespaceRuleCall(sNameLookupResult, sName))
 
             | _ => rules.Add(convert(r))
           }
@@ -72,11 +100,11 @@ namespace N2
         | Regular
         | ExternalRule => rd
 
-        | ExtentionPrefix(baseRuleName, rule, names)                => RuleDefinition.ExtentionPrefix(rd, baseRuleName, convertRule(rule), names)
-        | ExtentionPostfix(baseRuleName, bindingPower, rule, names) => RuleDefinition.ExtentionPostfix(rd, baseRuleName, bindingPower, convertRule(rule), names)
-        | Simple(retType, rule, names)                              => RuleDefinition.Simple(rd, retType, convertRule(rule), names)
+        | ExtentionPrefix(baseRuleName, rule, names)                => RuleDefinition.ExtentionPrefix(rd, baseRuleName, convertRule(rd, rule), names)
+        | ExtentionPostfix(baseRuleName, bindingPower, rule, names) => RuleDefinition.ExtentionPostfix(rd, baseRuleName, bindingPower, convertRule(rd, rule), names)
+        | Simple(retType, rule, names)                              => RuleDefinition.Simple(rd, retType, convertRule(rd, rule), names)
       }
-      mutable grammar = Grammar(ParsedGrammar.GrammarRefs, ParsedGrammar.SpanClasses, ParsedGrammar.BracePairs);
+      mutable grammar = Grammar(ParsedGrammar.GrammarRefs, ParsedGrammar.SpanClasses, ParsedGrammar.BracePairs, ParsedGrammar.KeywordRegexes);
       foreach(rd in ParsedGrammar.Rules) 
         grammar = grammar.Add(convertRuleDefinition(rd));
       WhitespacedGrammar = grammar;
