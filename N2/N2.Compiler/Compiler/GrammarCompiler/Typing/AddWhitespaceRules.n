@@ -6,11 +6,11 @@ using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
+using Nemerle.Imperative;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Parsetree.PExpr;
 using Nemerle.Compiler.Token;
-using Nemerle.Imperative;
 using N2.Model;
 
 namespace N2
@@ -26,70 +26,62 @@ namespace N2
 
       def compiledKeywordRegex = ParsedGrammar.KeywordRegexes.ToDictionary(_.Id, kr => FSMMatch.MakeMatcher(ConvertRegularRuleToFsm(ParsedGrammar, kr.Match)));
 
-      def convertRule(rd : RuleDefinition, rule : Rule.Sequence) : Rule.Sequence
+      def convertRule(rd : RuleDefinition, r : Rule.Sequence) : Rule.Sequence
       {
-        def convert(r : Rule)
+        def needSpaces(name)
         {
-          | String
-          | PrefixCall
-          | Call
-          | Cut                                            => r
-          | Scope(name, rule)                              => Rule.Scope(r, name, convert(rule))
-          | Repeat(min, max, rule)                         => Rule.Repeat(r, min, max, convert(rule))
-          | RepeatWithSeparator(min, max, rule, separator) => Rule.RepeatWithSeparator(r, min, max, convert(rule), convert(separator))
-          | Not(rule)                                      => Rule.Not(r, convert(rule))
-          | And(rule)                                      => Rule.And(r, convert(rule))
-          | Sequence as r                                  => convertSequence(r)
+          def rd = ParsedGrammar.GetRule(name);
+          rd.IsExplicitSpaces || rd is RuleDefinition.Regular
         }
-        and convertSequence(r : Rule.Sequence) : Rule.Sequence
+        def makeWhitespaceRuleCall(r : Rule, whitespaceRuleLookupResult : option[RuleDefinition], whitespaceRuleName : NameRef)
         {
-          def needSpaces(name)
+          def loc = r.Location.FromEndAsGenerated();
+          def nameLocated = NameRef(loc, whitespaceRuleName.Parts);
+          match (whitespaceRuleLookupResult)
           {
-            def rd = ParsedGrammar.GetRule(name);
-            rd.IsExplicitSpaces || rd is RuleDefinition.Regular
+            | Some => Rule.Call(loc, RuleType.Void(), 0, nameLocated, 0)
+            | None => Message.FatalError(rd.Name.Location, $"Whitespace rule '$sName' is required")
           }
-          def makeWhitespaceRuleCall(whitespaceRuleLookupResult : option[RuleDefinition], whitespaceRuleName : NameRef)
-          {
-            def loc = r.Location.FromEndAsGenerated();
-            def nameLocated = NameRef(loc, whitespaceRuleName.Parts);
-            match (whitespaceRuleLookupResult)
+        }
+        def convert(r : Rule) : Rule
+        {
+          | Cut => r
+          | PrefixCall(name, _)
+          | Call(name, _) =>
+            result :
             {
-              | Some => Rule.Call(loc, RuleType.Void(), 0, nameLocated, 0)
-              | None => Message.FatalError(rd.Name.Location, $"Whitespace rule '$sName' is required")
-            }
-          }
-          def rules = SCG.List();
-          foreach(r in r.rules)
-          {
-            | PrefixCall(name, _)
-            | Call(name, _) =>
-              rules.Add(r);
               def nameLookupResult = ParsedGrammar.TryGetRule(name);
               when (nameLookupResult.IsSome)
                 if (nameLookupResult.Equals(sNameLookupResult) || nameLookupResult.Equals(SNameLookupResult))
                   Message.Error(r.Location, "Unexpected whitespace rule. Mark rule with 'ExplicitSpaces' attribute.");
                 else when (needSpaces(name))
-                  rules.Add(makeWhitespaceRuleCall(sNameLookupResult, sName))
+                  result(Rule.Sequence(r, [r, makeWhitespaceRuleCall(r, sNameLookupResult, sName)]));
+              r
+            }
 
-            | String(str) =>
-              rules.Add(r);
-              def isKeyword = rd.KeywordRegexes.FoldLeft(false, fun (keywordRegex, acc)
-              {
-                mutable compiledKr;
-                unless (compiledKeywordRegex.TryGetValue(keywordRegex.Id, out compiledKr))
-                  assert(false);
-                acc || compiledKr(str)
-              });
+          | String(str) =>
+            def isKeyword = rd.KeywordRegexes.FoldLeft(false, fun (keywordRegex, acc)
+            {
+              mutable compiledKr;
+              unless (compiledKeywordRegex.TryGetValue(keywordRegex.Id, out compiledKr))
+                assert(false);
+              acc || compiledKr(str)
+            });
+            Rule.Sequence(r, [r,
               if (isKeyword)
-                rules.Add(makeWhitespaceRuleCall(SNameLookupResult, SName))
+                makeWhitespaceRuleCall(r, SNameLookupResult, SName)
               else
-                rules.Add(makeWhitespaceRuleCall(sNameLookupResult, sName))
+                makeWhitespaceRuleCall(r, sNameLookupResult, sName)
+            ]);
 
-            | _ => rules.Add(convert(r))
-          }
-          Rule.Sequence(r, rules.ToNList())
+          | Scope(name, rule)                              => Rule.Scope(r, name, convert(rule))
+          | Repeat(min, max, rule)                         => Rule.Repeat(r, min, max, convert(rule))
+          | RepeatWithSeparator(min, max, rule, separator) => Rule.RepeatWithSeparator(r, min, max, convert(rule), convert(separator))
+          | Not(rule)                                      => Rule.Not(r, convert(rule))
+          | And(rule)                                      => Rule.And(r, convert(rule))
+          | Sequence(rules)                                => Rule.Sequence(r, rules.Map(convert))
         }
-        convertSequence(rule)
+        convert(r) :> Rule.Sequence
       }
       def convertRuleDefinition(rd : RuleDefinition)
       {
