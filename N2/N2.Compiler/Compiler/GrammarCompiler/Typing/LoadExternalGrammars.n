@@ -10,6 +10,8 @@ using N2.Model;
 using System;
 using System.Diagnostics;
 using System.Linq;
+
+using G = GrammarParser2;
 using SCG = System.Collections.Generic;
 
 namespace N2
@@ -42,6 +44,21 @@ namespace N2
         return;
       _loadingExternalGrammars = true;
 
+      def parseKeywordRegex(text : string) : KeywordRegex
+      {
+        def parser = G.GrammarImpl();
+        match (parser.ParseDeclaration(text))
+        {
+          | None            => Message.FatalError($"Failed to parse keyword regex '$text'");
+          | Some(G.KeywordRegexDecl.Ast as decl) =>
+            def name        = N2SourceImpl.ToNameRef(decl.Name);
+            def matchTokens = N2SourceImpl.ConvertTokenRule(decl.MatchTokens);
+            KeywordRegex(Location.Default, N2SourceImpl.NextKeywordRegexId(), text, matchTokens, name);
+
+          | Some => Message.FatalError($"Expected keyword regex '$text'");
+        }
+      }
+
       foreach (grammarRef in ParsedGrammar.GrammarRefs)
       {
         def makeName(name)
@@ -73,9 +90,10 @@ namespace N2
                       | RuleDefinition.ExternalRule => ()
                       | rd =>
                         def isExtentionPoint = rd is RuleDefinition.ExtentionPoint;
-                        def attributes = if (rd.IsExplicitSpaces) [RuleAttribute.ExplicitSpaces(Location.Default)] else [];
+                        def attributes = rd.Attributes.Filter(_ is RuleAttribute.ExplicitSpaces);
+                        def keywordRegexes = rd.KeywordRegexes;
                         ParsedGrammar = ParsedGrammar.Add(RuleDefinition.ExternalRule(
-                          rd.Name.Location, ParsedGrammar.Count, makeName(rd.Name), attributes, Map() /*TODO: !!!*/, [] /*TODO: load KeywordRegex from metadata*/,
+                          rd.Name.Location, ParsedGrammar.Count, makeName(rd.Name), attributes, Map() /*TODO: !!!*/, keywordRegexes,
                           rd.ExtraFields, grammarRef, isExtentionPoint));
                     }
 
@@ -107,9 +125,23 @@ namespace N2
                               }
                             ruleNameToType.Add(name, ruleType);
                             def isExtentionPoint = type is RuleDefinitionType.ExtentionPoint;
-                            def attributes = if (ruleTI.IsCustomAttributeDefined("N2.ExplicitSpacesAttribute")) [RuleAttribute.ExplicitSpaces(Location.Default)] else [];
+
+                            mutable isExplicitSpaces;
+                            mutable keywordRegexes = [];
+                            foreach(attr in ruleTI.GetModifiers().CustomAttributes)
+                            {
+                              | <[ N2.ExplicitSpacesAttribute ]> => isExplicitSpaces = true;
+                              | <[ N2.KeywordRegexesAttribute(array[ ..$sources ]) ]> =>
+                                keywordRegexes = sources.Map(fun(_)
+                                {
+                                  | <[ $(source : string) ]> => parseKeywordRegex(source)
+                                  | _ => assert(false)
+                                })
+                              | _ => ()
+                            }
+                            def attributes = if (isExplicitSpaces) [RuleAttribute.ExplicitSpaces(Location.Default)] else [];
                             ParsedGrammar = ParsedGrammar.Add(RuleDefinition.ExternalRule(
-                              ruleTI.NameLocation, ParsedGrammar.Count, makeName(name), attributes, Map() /*TODO: !!!*/, [] /*TODO: load KeywordRegex from metadata*/,
+                              ruleTI.NameLocation, ParsedGrammar.Count, makeName(name), attributes, Map() /*TODO: !!!*/, keywordRegexes,
                               [], grammarRef, isExtentionPoint));
                           }
                         _externalRuleTypeGetters.Add(grammarRef.Id, name => ruleNameToType[name]);
