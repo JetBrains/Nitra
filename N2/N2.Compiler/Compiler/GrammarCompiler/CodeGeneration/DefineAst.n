@@ -31,9 +31,14 @@ namespace N2
         | RuleDefinition.Simple(NType(baseType), _, _)
         | RuleDefinition.ExtentionPrefix                  with baseType = GetBaseRuleNType(rd)
         | RuleDefinition.ExtentionPostfix                 with baseType = GetBaseRuleNType(rd) =>
+          //def isExtention = rd is RuleDefinition.ExtentionPoint;
+          //def mods = (if (isExtention) NemerleModifiers.Abstract else NemerleModifiers.None) %| NemerleModifiers.Public %| NemerleModifiers.Partial;
+          def mods = NemerleModifiers.Abstract %| NemerleModifiers.Public %| NemerleModifiers.Partial;
+          def attrsAndMods = AttributesAndModifiers(mods, []);
+          
           Util.locate(rd.Name.Location,
           GrammarTB.DefineNestedType(<[decl:
-            public abstract partial class $(MakePublicRuleName(rd.Name) : dyn) : $(baseType : typed)
+            ..$attrsAndMods class $(MakePublicRuleName(rd.Name) : dyn) : $(baseType : typed)
             {
               public this(location : Location, errors : list[ErrorInfo])
               {
@@ -46,6 +51,38 @@ namespace N2
       }
     }
 
+    private DefineErrorAst(rd : RuleDefinition, baseAstTb : TypeBuilder) : TypeBuilder
+    {
+      def errorTb = Util.locate(rd.Name.Location, 
+        baseAstTb.DefineNestedType(<[decl: 
+        public partial new class Error : $(baseAstTb.GetMemType() : typed)
+        {
+          public this(location : Location, errors : list[ErrorInfo])
+          {
+            base(location, errors)
+          }
+        }
+      ]>));
+      DefineErrorGetDump(errorTb, baseAstTb.FullName);
+      errorTb
+    }
+
+    private DefineSpliceAst(rd : RuleDefinition, baseAstTb : TypeBuilder) : TypeBuilder
+    {
+      def spliceTb = Util.locate(rd.Name.Location,
+        baseAstTb.DefineNestedType(<[decl: 
+        public partial new class Splice : $(baseAstTb.GetMemType() : typed)
+        {
+          public this(location : Location, errors : list[ErrorInfo])
+          {
+            base(location, errors)
+          }
+        }
+      ]>));
+      DefineSpliceGetDump(spliceTb, baseAstTb.FullName);
+      spliceTb
+    }
+
     public DefineAst() : void
     {
       assert2(GrammarTB != null);
@@ -53,40 +90,20 @@ namespace N2
       foreach (rd when rd.IsAst in TypedGrammar.Rules)
       {
         def tb = DefineAstType(rd);
+
+        def (errorTb, spliceTb) =
+          if (rd is RuleDefinition.ExtentionPoint || rd is RuleDefinition.Simple)
+            (DefineErrorAst(rd, tb), DefineSpliceAst(rd, tb))
+          else
+            (null, null);
         
         match (GetAstFieldsTypes(rd))
         {
           | None with args = []
           | Some(args) =>
-            def errorTb = Util.locate(rd.Name.Location, 
-              tb.DefineNestedType(<[decl: 
-              public partial new class Error : $(tb.GetMemType() : typed)
-              {
-                public this(location : Location, errors : list[ErrorInfo])
-                {
-                  base(location, errors)
-                }
-              }
-            ]>));
-            DefineErrorGetDump(errorTb, tb.FullName);
-            errorTb.Compile();
-
-            def spliceTb = Util.locate(rd.Name.Location,
-              tb.DefineNestedType(<[decl: 
-              public partial new class Splice : $(tb.GetMemType() : typed)
-              {
-                public this(location : Location, errors : list[ErrorInfo])
-                {
-                  base(location, errors)
-                }
-              }
-            ]>));
-            DefineSpliceGetDump(spliceTb, tb.FullName);
-            spliceTb.Compile();
-
             match (rd)
             {
-              | RuleDefinition.ExtentionPoint => DefineExtraFields(tb, null, rd);
+              | RuleDefinition.ExtentionPoint => Util.locate(rd.Name.Location, DefineExtraFields(tb, null, errorTb, spliceTb, rd));
               | RuleDefinition.ExtentionPostfix
               | RuleDefinition.ExtentionPrefix
               | RuleDefinition.Simple =>
@@ -110,7 +127,7 @@ namespace N2
                 when (rd.GetRule() is Some(rule))
                   DefineAstGetSpans(astTb, rule, rd);
                   
-                DefineExtraFields(tb, astTb, rd);
+                Util.locate(rd.Name.Location, DefineExtraFields(tb, astTb, errorTb, spliceTb, rd));
 
                 astTb.Compile();
                 
@@ -119,6 +136,11 @@ namespace N2
             }
           | _ => assert(false)
         }
+        
+        when (errorTb != null)
+          errorTb.Compile();
+        when (spliceTb != null)
+          spliceTb.Compile();
         tb.Compile();
       }
     }
@@ -613,65 +635,129 @@ namespace N2
       ]>);
     }
 
-    private DefineExtraFields(baseAstTb : TypeBuilder, astTb : TypeBuilder, rd : RuleDefinition) : void
+    private GetExtraFieldDefinition(baseRule : RuleDefinition.ExtentionPoint, fieldName : NameRef) : ValueOption[ExtraField.Abstract]
+    {
+      // TODO: Этот код будет работать только для RuleDefinition-ов спарсеных с кода. Надо обеспечить загрузку ExtraFields из внешних сборок.
+      foreach (field in baseRule.ExtraFields)
+      {
+        | Abstract(name, _, _) as x           when name == fieldName => return VSome(x);
+        | Def     (name, parameters, type, _) when name == fieldName => return VSome(ExtraField.Abstract(field.Location, name, parameters, type));
+        | _ => ()
+      }
+      
+      VNone()
+    }
+    
+    private DefineExtraFields(baseAstTb : TypeBuilder, astTb : TypeBuilder, errorTb : TypeBuilder, spliceTb : TypeBuilder, rd : RuleDefinition) : void
     {
       //assert2(rd.Name.AsName !=	"expr");
+      def makeParams(parameters) { parameters.Map(((p, t)) => <[ parameter: $p : $t ]>) }
       def extraFields = rd.ExtraFields;
       def names = SCG.HashSet();
+      def definedErrorHendlers = SCG.HashSet();
       
-      foreach (extraField in extraFields with i)
+      foreach (field in extraFields with i)
       {
-        def name       = extraField.Name;
-        def n          = <[ $(name.AsName : dyn) ]>.name;
-        def type       = extraField.Type;
-        def parameters = try extraField.Params.Map(((p, t)) => <[ parameter: $p : $t ]>) 
-        catch { | _ => assert2(false); null };
+        | Abstract (name, parameters, type) with body = null
+        | DefPrivate(name, parameters, type, body)  
+        | Def(name, parameters, type, body) => 
+          def n          = <[ $(name.AsName : dyn) ]>.name;
+          def parameters = makeParams(parameters);
         
-        unless (names.Add(name))
-        {
-          Message.Error(name.Location, $"The rule '$(rd.Name)' already contains a definition for '$name'.");
-          continue;
-        }
-          
-        
-        if (extraField.Body is Some(body))
-        {
-          match(rd)
+          unless (names.Add(name))
           {
-            | RuleDefinition.ExtentionPoint => baseAstTb.Define(<[ decl: public virtual $(n : name)(..$parameters) : $type $body ]>);
-            | RuleDefinition.ExtentionPostfix(baseRuleName, _, _, _)
-            | RuleDefinition.ExtentionPrefix(baseRuleName, _, _) => 
+            Message.Error(name.Location, $"The rule '$(rd.Name)' already contains a definition for '$name'.");
+            continue;
+          }
+          
+          unless (rd is RuleDefinition.ExtentionPoint || rd is RuleDefinition.Simple || field is ExtraField.DefPrivate)
+          {
+            Message.Error(name.Location, "A public extra field must be defined in a extention point rule or a simple rule only.");
+            continue;
+          }
+
+          if (rd is RuleDefinition.Simple)
+          {
+            baseAstTb.Define(<[ decl: public abstract $(n : name)(..$parameters) : $type; ]>);
+            astTb.Define(<[ decl: public override $(n : name)(..$parameters) : $type $body ]>);
+          }
+          else if (body == null)
+            baseAstTb.Define(<[ decl: public abstract $(n : name)(..$parameters) : $type; ]>);
+          else
+            baseAstTb.Define(<[ decl: public virtual $(n : name)(..$parameters) : $type $body ]>);
+          
+
+        | OnError(name, body) | Override(name, body) =>
+          match (rd)
+          {
+            | RuleDefinition.ExtentionPostfix(baseRuleName, _, _, _) | RuleDefinition.ExtentionPrefix(baseRuleName, _, _) =>
               def extPoint = TypedGrammar.GetRule(baseRuleName);
-              
-              def bases = extPoint.ExtraFields.FindAll(x => x.Name == name);
-              
-              match (bases)
+              // TODO: Добавить Grammar.Contains и сделать проверку наличия правила.
+              assert2(extPoint is RuleDefinition.ExtentionPoint);
+              def baseFieldOpt = GetExtraFieldDefinition(extPoint :> RuleDefinition.ExtentionPoint, name);
+              when (baseFieldOpt.IsNone)
               {
-                | [] when extraField.IsOverride => 
-                  Message.Error(name.Location, "No extra fields to override.");
-                  when (name.Location.IsSourceAvailable)
-                    Message.FatalError(name.Location, "The related extention point rule.");
-                    
-                | [] => baseAstTb.Define(<[ decl: public $(n : name)(..$parameters) : $type $body ]>);
+                Message.Error(name.Location, $"No '$name' extra field to override.");
+                continue;
+              }
+              def baseField = baseFieldOpt.Value;
+              
+              def n          = <[ $(name.AsName : dyn) ]>.name;
+              def parameters = makeParams(baseField.Params);
+              def type       = baseField.Type;
+              
+              when (field is ExtraField.OnError)
+                unless (definedErrorHendlers.Add(name))
+                  Message.Error(name.Location, "Redefinition of error hendler.");
                 
-                | [_] => 
-                  if (extraField.IsOverride)
-                    baseAstTb.Define(<[ decl: public override $(n : name)(..$parameters) : $type $body ]>);
-                  else
-                    Message.Error(name.Location, "Extra field  must have body.");
-                    
-                | _ => assert2(false);
+              def tb = if (field is ExtraField.OnError) errorTb else astTb;
+              tb.Define(<[ decl: public override $(n : name)(..$parameters) : $type $body ]>);
+              
+            | _ => 
+              if (field is ExtraField.OnError)
+                Message.Error(name.Location, "A error hendler for a extra field can be defined only in extending rules.");
+              else
+                Message.Error(name.Location, "A extra field can be overridden only in extending rules.");
+              continue;
+          }
+      }
+      
+      
+      match (rd)
+      {
+        | RuleDefinition.ExtentionPostfix(baseRuleName, _, _, _) with baseRule = TypedGrammar.GetRule(baseRuleName)
+        | RuleDefinition.ExtentionPrefix(baseRuleName, _, _)     with baseRule = TypedGrammar.GetRule(baseRuleName)
+        | RuleDefinition.Simple as baseRule =>
+          foreach (field in baseRule.ExtraFields)
+          {
+            | Abstract (name, parameters, type)
+            | Def(name, parameters, type, _) when !definedErrorHendlers.Contains(name) =>
+              def n         = <[ $(name.AsName : dyn) ]>.name;
+              def ignores   = parameters.Map((n, _) => <[ _ = $(n : name); ]>);
+              
+              when (errorTb != null)
+              {
+                def msg = $"Parse error handling for '$name' extra field of '$(rd.Name)' rule is not implemented.";
+                def errorBody = <[ 
+                  { ..$ignores } 
+                  throw System.NotImplementedException($msg); ]>;
+                def parameters = makeParams(parameters);
+                errorTb.Define(<[ decl: public override $(n : name)(..$parameters) : $type $errorBody ]>);
               }
               
-            | RuleDefinition.Simple => baseAstTb.Define(<[ decl: public $(n : name)(..$parameters) : $type $body ]>);
-            | Regular
-            | ExternalRule => assert2(false);
+              when (spliceTb != null)
+              {
+                def spliceBody = <[ 
+                  { ..$ignores } 
+                  assert2(false, "This method should not be invoked."); assert(false); ]>;
+                def parameters = makeParams(parameters);
+                spliceTb.Define(<[ decl: public override $(n : name)(..$parameters) : $type $spliceBody ]>);
+              }
+                
+            | _ => ()
           }
-        }
-        else if (rd is RuleDefinition.ExtentionPoint)
-          baseAstTb.Define(<[ decl: public abstract $(n : name)(..$parameters) : $type; ]>);
-        else
-          Message.FatalError(name.Location, "Extra field on must have body.");
+          
+        | _ => ()
       }
     }
   }
