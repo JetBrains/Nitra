@@ -31,10 +31,36 @@ namespace N2
       {
         def convert(r : Rule) : list[Rule]
         {
-          def needSpaces(name)
+          def isKeyword(str : string) : bool
           {
-            def rd = ParsedGrammar.GetRule(name);
-            rd.IsExplicitSpaces || rd is RuleDefinition.Regular
+            def checkMatch(keywordRegex, acc)
+            {
+              mutable compiledKr;
+              unless (compiledKeywordRegex.TryGetValue(keywordRegex.Id, out compiledKr))
+                assert(false);
+              acc || compiledKr(str)
+            }
+            rd.KeywordRegexes.FoldLeft(false, checkMatch) || externalKeywordRegexes.FoldLeft(false, checkMatch);
+          }
+          def isKeywordChoice(rr : RegularRule) : bool // TODO: may be annotate tokens with attribute 'Keywords'?
+          {
+            | Choice(rules) => rules.ForAll(isKeywordChoice)
+            | Call(name) =>
+              match (ParsedGrammar.TryGetRule(name))
+              {
+                | Some(RuleDefinition.Regular(rr)) => isKeywordChoice(rr)
+                | Some(_)
+                | None => false
+              }
+
+            | Chars(chars) as rule when rule.IsString =>
+              def str = chars.FoldLeft(Text.StringBuilder(), (rangeSet, acc) => rangeSet.Ranges.FoldLeft(acc, (range, acc) => acc.Append(range.from))).ToString();
+              isKeyword(str)
+
+            | Chars
+            | Sequence
+            | Repeat
+            | RepeatWithSeparator => false
           }
           def makeWhitespaceRuleCall(r : Rule, whitespaceRuleLookupResult : option[RuleDefinition], whitespaceRuleName : NameRef)
           {
@@ -60,28 +86,30 @@ namespace N2
             | Cut => [r]
             | PrefixCall(name, _)
             | Call(name, _) =>
-              result :
+              match (ParsedGrammar.TryGetRule(name))
               {
-                def nameLookupResult = ParsedGrammar.TryGetRule(name);
-                when (nameLookupResult.IsSome)
-                  if (nameLookupResult.Equals(sNameLookupResult) || nameLookupResult.Equals(SNameLookupResult))
-                    Message.Error(r.Location, "Unexpected whitespace rule. Mark rule with 'ExplicitSpaces' attribute.");
-                  else when (needSpaces(name))
-                    result([r, makeWhitespaceRuleCall(r, sNameLookupResult, sName)]);
-                [r]
+                | Some(_) as nameLookupResult when nameLookupResult.Equals(sNameLookupResult) || nameLookupResult.Equals(SNameLookupResult) =>
+                  Message.Error(r.Location, "Unexpected whitespace rule. Mark rule with 'ExplicitSpaces' attribute.");
+                  [r]
+
+                | Some(targetRd) when targetRd.IsExplicitSpaces =>
+                  [r, makeWhitespaceRuleCall(r, sNameLookupResult, sName)]
+
+                | Some(RuleDefinition.Regular(rr)) =>
+                  def whitespaceRuleCall = 
+                    if (isKeywordChoice(rr))
+                      makeWhitespaceRuleCall(r, SNameLookupResult, SName)
+                    else
+                      makeWhitespaceRuleCall(r, sNameLookupResult, sName);
+                  [r, whitespaceRuleCall]
+
+                | Some(_)
+                | None => [r]
               }
 
             | String(str) =>
-              def checkMatch(keywordRegex, acc)
-              {
-                mutable compiledKr;
-                unless (compiledKeywordRegex.TryGetValue(keywordRegex.Id, out compiledKr))
-                  assert(false);
-                acc || compiledKr(str)
-              }
-              def isKeyword = rd.KeywordRegexes.FoldLeft(false, checkMatch) || externalKeywordRegexes.FoldLeft(false, checkMatch);
               def whitespaceRuleCall = 
-                if (isKeyword)
+                if (isKeyword(str))
                   makeWhitespaceRuleCall(r, SNameLookupResult, SName)
                 else
                   makeWhitespaceRuleCall(r, sNameLookupResult, sName);
