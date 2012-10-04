@@ -9,6 +9,7 @@ using System.Linq;
 
 using SCG = System.Collections.Generic;
 using G = GrammarParser2;
+using PExpr = Nemerle.Compiler.Parsetree.PExpr;
 
 namespace N2
 {
@@ -112,7 +113,7 @@ namespace N2
             | _ => assert(false);
           }
 
-          sm.GrammarCompiler = GrammarCompiler(Manager, Env, sm.TypeBuilder, sm.Grammar);
+          sm.GrammarCompiler = GrammarCompiler(Manager, Env, sm.TypeBuilder, sm.Name, sm.Grammar);
           sm.TypeBuilder.UserData[typeof(GrammarCompiler)] = sm.GrammarCompiler;
         }
         catch
@@ -234,6 +235,8 @@ namespace N2
       | _ => Message.FatalError(identifier.NLocation(), "Error.");
     }
 
+    internal static NextKeywordRegexId : void -> int = Util.CreateIdGenerator(0);
+
     private AddPrecedence(rule : Rule.Sequence, baseName : NameRef, precedence : G.Number, rightAssociative : bool) : Rule.Sequence
     {
       def newBindingPower = ConvertNumber(precedence);
@@ -265,20 +268,20 @@ namespace N2
           def prependIfNotNull(e, lst) { if (e == null) lst else e :: lst }
           def rest2 = prependIfNotNull(s2, newCall2 :: rest);
           Rule.Sequence(rule.Location, RuleType.Void(), 0, newCall1 :: prependIfNotNull(s1, op :: rest2))
-          
+
         | [Call(n, bp) as call, String as op]                                when n == baseName with s = null // rec "op"
         | [Call(n, bp) as call, String as op, Rule(Type=RuleType.Void) as s] when n == baseName =>            // rec "op" s
           checkUnary(call);
           def newCall = updateCall(call, bp, newBindingPower);
           def rest    = if (s == null) [op] else [op, s];
           Rule.Sequence(rule.Location, RuleType.Void(), 0, newCall :: rest)
-        
+
         | [String as op,                                Call(n, bp) as call] when n == baseName with s = null // "op"   rec 
         | [String as op, Rule(Type=RuleType.Void) as s, Call(n, bp) as call] when n == baseName =>            // "op" s rec
           checkUnary(call);
           def newCall = updateCall(call, bp, newBindingPower);
-          def rest    = if (s == null) [call] else [s, newCall];
-          
+          def rest    = if (s == null) [newCall] else [s, newCall];
+
           Rule.Sequence(rule.Location, RuleType.Void(), 0, op :: rest)
 
         | _ => 
@@ -294,6 +297,7 @@ namespace N2
       mutable grammar = Grammar();
       mutable imports = SCG.List();
       mutable tokenFieldNames = Map();
+      mutable keywordRegexes = [];
       mutable aliases = Map();
       mutable optionEmitDebugSources = true;
       def processBody[T](decl : G.BodyDeclaration, func : _ -> T, defaultValue : T) : T
@@ -364,6 +368,29 @@ namespace N2
           | _                     => (Rule.Sequence(rule.Location, RuleType.Void(), 0, [replaceAlias(rule)]), makeNames())
         }
       }
+      def processExtraFields(members : list[G.BodyMemberDeclaration]) : list[ExtraField]
+      {
+        def parse(ast : N2.Ast) : PExpr
+        {
+          MainParser.ParseExpr(Env, ast.Location.GetText(), ast.NLocation())
+        }
+        def loop(members : list[G.BodyMemberDeclaration], acc)
+        {
+          match (members)
+          {
+            | G.InFieldDeclaration.Ast  as m :: tail => loop(tail, ExtraField.InFieldDef(m.Name.ToNameRef(), parse(m.Type))  :: acc)
+            | G.OutFieldDeclaration.Ast(FieldInitializers=Some(G.FieldInitializer.Ast as init)) as m :: tail =>
+              loop(tail, ExtraField.OutFieldDef(m.Name.ToNameRef(), parse(m.Type), Some(parse(init.Expression))) :: acc)
+              
+            | G.OutFieldDeclaration.Ast as m :: tail => loop(tail, ExtraField.OutFieldDef(m.Name.ToNameRef(),       parse(m.Type), None()) :: acc)
+            | G.SetDeclaration.Ast      as m :: tail => loop(tail, ExtraField.SetField(parse(m.QualifiedName), parse(m.Expression))   :: acc)
+            | _                              :: tail => loop(tail, acc)
+            | _                                      => acc
+          }
+        }
+          
+        loop(members, [])
+      }
       def addExtentionRule(nameId : G.Identifier, ruleAttributes : G.RuleAttributes, bodyDeclaration : G.BodyDeclaration, 
                           rule : G.Rule, baseName : G.QIdentifier) : void
       {
@@ -384,18 +411,19 @@ namespace N2
             rule1
         }
         def rule2 = processBody(bodyDeclaration, processPrecedence, rule1);
-        def ruleDecl = 
+        def extraFields = processBody(bodyDeclaration, processExtraFields, []);
+        def ruleDefinition = 
           match (rule2)
           {
             | Sequence((Call(callName, bindingPower) as call) :: rules) when callName == baseName =>
-              RuleDefinition.ExtentionPostfix(name.Location, ruleId, name, attributes, tokenFieldNames, baseName, bindingPower, 
+              RuleDefinition.ExtentionPostfix(name.Location, ruleId, name, attributes, tokenFieldNames, keywordRegexes, extraFields, baseName, bindingPower, 
                 Rule.Sequence(rule1.Location, RuleType.Void(), 0, 
                 Rule.PrefixCall(call.Location, RuleType.Void(), 0, baseName, bindingPower) :: rules), names)
 
-            | _ => RuleDefinition.ExtentionPrefix(name.Location, ruleId, name, attributes, tokenFieldNames, baseName, rule2, names)
+            | _ => RuleDefinition.ExtentionPrefix(name.Location, ruleId, name, attributes, tokenFieldNames, keywordRegexes, extraFields, baseName, rule2, names)
           };
             
-        try { grammar = grammar.Add(ruleDecl); }
+        try { grammar = grammar.Add(ruleDefinition); }
         catch { | e is Exception => Message.Error(name.Location, "Exception: " + e.Message); }
       }
       foreach (decl in syntaxModule.Declarations)
@@ -411,11 +439,12 @@ namespace N2
           }
 
         | G.TokenRuleDecl.Ast as decl =>
-          def name       = decl.Name.ToNameRef();
-          def ruleId     = grammar.Count;
-          def attributes = ConvertAttributes(decl.RuleAttributes);
-          def rule       = ConvertTokenRule(decl.TokenRule);
-          grammar = grammar.Add(RuleDefinition.Regular(name.Location, ruleId, name, attributes, tokenFieldNames, rule));
+          def name        = decl.Name.ToNameRef();
+          def ruleId      = grammar.Count;
+          def attributes  = ConvertAttributes(decl.RuleAttributes);
+          def rule        = ConvertTokenRule(decl.TokenRule);
+          def extraFields = processBody(decl.BodyDeclaration, processExtraFields, []);
+          grammar = grammar.Add(RuleDefinition.Regular(name.Location, ruleId, name, attributes, tokenFieldNames, keywordRegexes, extraFields, rule));
 
         | G.VoidRuleDecl.Ast  (RuleAttributes=attr, Name=name, Rule=rule) with (type = RuleType.Void(), decl = null)
         | (G.SimpleRuleDecl.Ast(RuleAttributes=attr, Name=name, Rule=rule) as decl) with type = RuleType.PType(<[ Ast ]>) =>
@@ -425,16 +454,18 @@ namespace N2
           def attributes    = ConvertAttributes(attr);
           def localAliases  = if (decl == null) Map() else processBody(decl.BodyDeclaration, processLocalAliases, Map());
           def (rule, names) = addSequence(rule, localAliases);
+          def extraFields   = if (decl == null) [] else processBody(decl.BodyDeclaration, processExtraFields, []);
             
-          grammar = grammar.Add(RuleDefinition.Simple(name.Location, ruleId, name, attributes, tokenFieldNames, type, rule, names));
+          grammar = grammar.Add(RuleDefinition.Simple(name.Location, ruleId, name, attributes, tokenFieldNames, keywordRegexes, extraFields, type, rule, names));
 
         | G.ExtentionPointRuleDecl.Ast as decl =>
-          def name       = decl.Name.ToNameRef();
-          def ruleId     = grammar.Count;
-          def attributes = ConvertAttributes(decl.RuleAttributes);
-          def ruleType   = RuleType.PType(<[ Ast ]>);
+          def name        = decl.Name.ToNameRef();
+          def ruleId      = grammar.Count;
+          def attributes  = ConvertAttributes(decl.RuleAttributes);
+          def ruleType    = RuleType.PType(<[ Ast ]>);
+          def extraFields = processBody(decl.BodyDeclaration, processExtraFields, []);
           
-          grammar = grammar.Add(RuleDefinition.ExtentionPoint(name.Location, ruleId, name, attributes, tokenFieldNames, ruleType));
+          grammar = grammar.Add(RuleDefinition.ExtentionPoint(name.Location, ruleId, name, attributes, tokenFieldNames, keywordRegexes, extraFields, ruleType));
 
         | G.ExtendSyntax.Ast as decl =>
           def baseName = decl.BaseName;
@@ -464,6 +495,18 @@ namespace N2
           def open  = ConvertTokenRule(decl.Open);
           def close = ConvertTokenRule(decl.Close);
           grammar = grammar.Add(BracePair(decl.Location.ToNemerleLocation(), open, close));
+
+        | G.MarkerDecl.Ast as decl =>
+          def name   = decl.Name.ToNameRef();
+          def ruleId = grammar.Count;
+          grammar = grammar.Add(RuleDefinition.Marker(name.Location, ruleId, name, [], tokenFieldNames, keywordRegexes, [], false));
+
+        | G.KeywordRegexDecl.Ast as decl =>
+          def name        = decl.Name.ToNameRef();
+          def matchTokens = ConvertTokenRule(decl.MatchTokens);
+          def keywordRegex = KeywordRegex(decl.Location.ToNemerleLocation(), NextKeywordRegexId(), decl.Location.GetText(), matchTokens, name, false);
+          keywordRegexes ::= keywordRegex;
+          grammar = grammar.Add(keywordRegex);
 
         | error => Message.Error(error.NLocation(), "Error. Unknown declaration.");
       }
@@ -498,9 +541,10 @@ namespace N2
           | G.RuleAttributeList.Ast as attrList =>
             foreach (attribute in attrList.RuleAttributes[0])
             {
-              | G.StartAttribute.Ast     as attr => res.Add(RuleAttribute.StartRule(attr.NLocation()))
-              | G.AstAttribute.Ast       as attr => res.Add(RuleAttribute.Ast(attr.NLocation(), attr.Names[0].Map(_.ToNameRef())))
-              | G.SpanClassAttribute.Ast as attr => res.Add(RuleAttribute.SpanClass(attr.NLocation(), attr.Class.ToNameRef()))
+              | G.StartAttribute.Ast          as attr => res.Add(RuleAttribute.StartRule(attr.NLocation()))
+              | G.AstAttribute.Ast            as attr => res.Add(RuleAttribute.Ast(attr.NLocation(), attr.Names[0].Map(_.ToNameRef())))
+              | G.SpanClassAttribute.Ast      as attr => res.Add(RuleAttribute.SpanClass(attr.NLocation(), attr.Class.ToNameRef()))
+              | G.ExplicitSpacesAttribute.Ast as attr => res.Add(RuleAttribute.ExplicitSpaces(attr.NLocation()))
               | _ => Message.Error(attributes.NLocation(), "Error. Unknown attribute.");
             }
           | _ => Message.Error(attributes.NLocation(), "Error.");
@@ -510,7 +554,7 @@ namespace N2
       res.NToList();
     }
 
-    private HexDigit(c : char) : int
+    private static HexDigit(c : char) : int
     {
       | c when '0' <= c && c <= '9' => c : int - '0' : int
       | c when 'a' <= c && c <= 'f' => c : int - 'a' : int + 10
@@ -518,14 +562,14 @@ namespace N2
       | _ => assert(false);
     }
 
-    private EscapeSequence(c : char) : char
+    private static EscapeSequence(c : char) : char
     {
       | '\'' => '\'' | '\"' => '\"' | '\\' => '\\' | '0'  => '\0'
       | 'a'  => '\a' | 'b'  => '\b' | 'f'  => '\f' | 'n'  => '\n'
       | 'r'  => '\r' | 't'  => '\t' | 'v'  => '\v' | c    => c
     }
 
-    public ConvertChar(charLiteral : G.CharLiteral) : char
+    public static ConvertChar(charLiteral : G.CharLiteral) : char
     {
       | G.CharLiteral.Ast as charLiteral =>
         match (charLiteral.CharPart)
@@ -545,7 +589,7 @@ namespace N2
       | error => Message.FatalError(error.NLocation(), "Error.");
     }
 
-    public ConvertString(stringLiteral : G.StringLiteral) : string
+    public static ConvertString(stringLiteral : G.StringLiteral) : string
     {
       | G.StringLiteral.Ast as stringLiteral =>
         def sb = System.Text.StringBuilder();
@@ -568,7 +612,7 @@ namespace N2
       | error => Message.FatalError(error.NLocation(), "Error.");
     }
 
-    public ConvertNumber(numberLiteral : G.Number) : int
+    public static ConvertNumber(numberLiteral : G.Number) : int
     {
       | G.Number.Ast as number =>
         int.Parse(number.GetText(number.Digits))
@@ -576,7 +620,7 @@ namespace N2
       | error => Message.FatalError(error.NLocation(), "Error.");
     }
 
-    public ConvertTokenRule(rule : G.TokenRule) : RegularRule
+    public static ConvertTokenRule(rule : G.TokenRule) : RegularRule
     {
       | G.ChoiceTokenRule.Ast                  as rule =>
         def rules = ConvertTokenRule(rule.LeftRule) :: rule.RightRules.Map(r => ConvertTokenRule(r[1]));
@@ -624,7 +668,7 @@ namespace N2
       | _ => Message.FatalError(rule.NLocation(), "Error.");
     }
 
-    public ConvertRule(rule : G.Rule) : Rule
+    public static ConvertRule(rule : G.Rule) : Rule
     {
       | G.SequenceRule.Ast                as rule =>
         def rules = ConvertRule(rule.LeftRule) :: rule.RightRules.Map(ConvertRule(_));

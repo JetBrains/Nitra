@@ -17,6 +17,8 @@ namespace N2.Model
     public Name            : NameRef              { get; }
     public Attributes      : list[RuleAttribute]  { get; }
     public TokenFieldNames : Map[string, NameRef] { get; }
+    public KeywordRegexes  : list[KeywordRegex]   { get; }
+    public ExtraFields     : list[ExtraField]     { get; }
 
     | ExtentionPoint   { retType : RuleType; }
     | ExtentionPrefix  { baseRuleName : NameRef; rule : Rule.Sequence; Names : list[NameRef]; }
@@ -24,11 +26,24 @@ namespace N2.Model
     | Simple           { retType : RuleType; rule : Rule.Sequence; Names : list[NameRef]; }
     | Regular          { rule : RegularRule; }
     | ExternalRule     { grammarRef : GrammarRef; isExtentionPoint : bool; }
+    | Marker           { isExternal : bool }
 
     public IsStart     : bool { get { Attributes.Exists(_ is RuleAttribute.StartRule) } }
     public IsAst       : bool { get { !(this is Regular || this is ExternalRule || IsVoid) } }
     public IsExtention : bool { get { this is ExtentionPrefix || this is ExtentionPostfix } }
-    public IsVoid      : bool { get { this is ExtentionPoint(Void) || this is Simple(Void, _, _) } }
+    public IsVoid      : bool { get { this is ExtentionPoint(Void) || this is Simple(Void, _, _) || this is Marker } }
+    public IsExplicitSpaces : bool { [Memoize] get { Attributes.Exists(_ is RuleAttribute.ExplicitSpaces) } }
+
+    public this(originalRuleDefinition : RuleDefinition)
+    {
+      base(originalRuleDefinition.Location);
+      Id              = originalRuleDefinition.Id;
+      Name            = originalRuleDefinition.Name;
+      Attributes      = originalRuleDefinition.Attributes;
+      TokenFieldNames = originalRuleDefinition.TokenFieldNames;
+      KeywordRegexes  = originalRuleDefinition.KeywordRegexes;
+      ExtraFields     = originalRuleDefinition.ExtraFields;
+    }
 
     [Memoize]
     public GetNames(importedTokenFieldNames : Map[string, NameRef]) : list[NameRef]
@@ -69,22 +84,29 @@ namespace N2.Model
       
       def makeName(name : NameRef, rule : Rule) : NameRef
       {
-        def toCamelCase(str : string, sufix : string = null) : string
+        def toPascalCase(str : string, suffix : string = null) : string
         {
-          if (str.Length == 0)
+          def suffixIsEmpty = string.IsNullOrEmpty(suffix);
+          if (str.Length == 0 || (char.IsUpper(str[0]) && suffixIsEmpty))
             str
-          else if (sufix == null)
-            char.ToUpperInvariant(str[0]).ToString() + str.Substring(1).ToLowerInvariant()
           else
-            sufix + char.ToUpperInvariant(str[0]).ToString() + str.Substring(1).ToLowerInvariant()
+          {
+            def suffixLength = if (suffixIsEmpty) 0 else suffix.Length;
+            def buffer = array(suffixLength + str.Length);
+            when (suffixLength > 0)
+              suffix.CopyTo(0, buffer, 0, suffixLength);
+            str.CopyTo(0, buffer, suffixLength, str.Length);
+            buffer[suffixLength] = char.ToUpperInvariant(buffer[suffixLength]);
+            string(buffer)
+          }
         }
-        def toCamelCaseName(name : NameRef) : NameRef
+        def toPascalCaseName(name : NameRef) : NameRef
         {
           def str = name.Parts.Last;
           if (str.Length == 0 || char.IsUpper(str[0]))
             name
           else
-            NameRef(name.Location, toCamelCase(str))
+            NameRef(name.Location, toPascalCase(str))
         }
         def makeKeywordName(str : string) : string
         {
@@ -102,9 +124,9 @@ namespace N2.Model
                 false
             }
           }
-              
+
           if (isIdentifier(str))
-            toCamelCase(str, "Kw")
+            toPascalCase(str, "Kw")
           else
             Message.FatalError(rule.Location, $<#Name for literal "$str" not defined. You should define it by 'token field Name = String;' statement.#>)
         }
@@ -113,8 +135,9 @@ namespace N2.Model
           | String(str) when this.TokenFieldNames.Contains(str) => this.TokenFieldNames.Get(str)
           | String(str) when importedTokenFieldNames.Contains(str)    => importedTokenFieldNames.Get(str)
           | String(str) => NameRef(name.Location, makeKeywordName(str))
-          | Call(name, _) => toCamelCaseName(name)
-          | PrefixCall(name, _) => toCamelCaseName(name)
+          | Call(name, _) => toPascalCaseName(name)
+          | PrefixCall(name, _) => toPascalCaseName(name)
+          | Sequence([String as r, Rule(Type = RuleType.Void)]) => makeNameForRule(r) // handling inserted whitespace after string literals
           | Sequence(rules) when rules.Count(isNotImportantRule) == 1 => makeNameForRule(rules.First(isNotImportantRule))
           | Repeat(_, _, rule)
           | RepeatWithSeparator(_, _, rule, _) =>
@@ -157,6 +180,7 @@ namespace N2.Model
     {
       match (this)
       {
+        | Marker
         | ExternalRule
         | Regular
         | ExtentionPoint         => None()
@@ -170,6 +194,7 @@ namespace N2.Model
     {
       match (this)
       {
+        | Marker
         | ExternalRule
         | Regular
         | ExtentionPoint         => []
@@ -181,11 +206,8 @@ namespace N2.Model
 
     public override Equals(that : object) : bool
     {
-      match (that)
-      {
-        | that is RuleDefinition => Id == that.Id
-        | _ => false
-      }
+      | that is RuleDefinition => Id == that.Id
+      | _ => false
     }
 
     public override GetHashCode() : int
