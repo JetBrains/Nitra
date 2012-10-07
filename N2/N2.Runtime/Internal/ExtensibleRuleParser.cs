@@ -47,6 +47,11 @@ namespace N2.Internal
     {
       unchecked
       {
+#if DEBUG || PARSER_DEBUG
+        if (parser.ruleCalls[curEndPos] == null)
+          parser.ruleCalls[curEndPos] = System.Collections.Generic.List();
+        parser.ruleCalls[curEndPos].Add(parser.parserHost.GetRuleDescriptorById(RuleId));
+#endif
         int parseResult;
         int newEndPos;
         int bestEndPos;
