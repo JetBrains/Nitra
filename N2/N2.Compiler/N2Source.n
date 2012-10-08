@@ -372,20 +372,104 @@ namespace N2
       {
         def parse(ast : N2.Ast) : PExpr
         {
+          def simpleParse(ast : N2.Ast) : PExpr
+          {
           MainParser.ParseExpr(Env, ast.Location.GetText(), ast.NLocation())
+        }
+          def parseAndAddIt(ast : N2.Ast) : PExpr
+          {
+            def e = simpleParse(ast);
+            
+            def addIt(e)
+            {
+              | <[ value ]> => e
+              | <[ $(n : name) ]> => <[ it.$(n : name)]>
+              | <[ $x = $y ]> => <[ $(addIt(x)) = $(addIt(y)) ]>
+              | _ => e
+            }
+            
+            addIt(e)
+          }
+          
+          match (ast)
+          {
+            | G.Expression.Ast(ExpressionContents=[G.ExpressionContent1.Ast(Content=G.Content6.Ast as fold)]) => 
+              def collection = simpleParse(fold.Identifier);
+              def expr1 = simpleParse(fold.Expression);
+              def exprs = fold.Expressions[0].Map(parseAndAddIt);
+              //exprs.Fold()
+              <[ $collection.Fold($expr1, fun((it, value)) { ..$exprs }) ]>
+              
+            | _ => simpleParse(ast)
+          }
+          
         }
         def loop(members : list[G.BodyMemberDeclaration], acc)
         {
+          def parseBodyOpt(extraFieldBody : G.ExtraFieldBody) : option[PExpr]
+          {
+            match (extraFieldBody)
+            {
+              | G.ExtraFieldBody1.Ast as b => Some(parse(b.Block))
+              | G.ExtraFieldBody2.Ast as b => Some(parse(b.Expression))
+              | G.ExtraFieldBodyEmpty      => None()
+              | _                          => None()
+            }
+          }
+          def parseBody(extraFieldBody : G.ExtraFieldBody) : PExpr
+          {
+            match (parseBodyOpt(extraFieldBody))
+            {
+              | Some(e) => e
+              | _ =>
+                def loc = extraFieldBody.Location.ToNemerleLocation();
+                Message.Error(loc, "Expected '= Expression' or block.");
+                PExpr.Error(loc)
+            }
+          }
           match (members)
           {
-            | G.InFieldDeclaration.Ast  as m :: tail => loop(tail, ExtraField.InFieldDef(m.Name.ToNameRef(), parse(m.Type))  :: acc)
-            | G.OutFieldDeclaration.Ast(FieldInitializers=Some(G.FieldInitializer.Ast as init)) as m :: tail =>
-              loop(tail, ExtraField.OutFieldDef(m.Name.ToNameRef(), parse(m.Type), Some(parse(init.Expression))) :: acc)
+            | G.ExtraFieldDeclaration1.Ast as m :: tail =>
+              def name = m.Name.ToNameRef();
+              def loc = m.Location.ToNemerleLocation();
+              def body = parseBodyOpt(m.ExtraFieldBody);
+              def toName(e)
+              {
+                | <[ $(x : name) ]> => x
+                | _ => Message.FatalError(e.Location, "Expected simple name.")
+              }
+              def parseParam(_ : G.ExtraFieldsParam)
+              {
+                | G.ExtraFieldsParam.Ast as p => <[ parameter: $(toName(parse(p.Name))) : $(parse(p.Type)) ]>
+                | e => Message.FatalError(e.Location.ToNemerleLocation(), "Parse error.")
+              }
+              def parameters = m.ExtraFieldsParams[0].Map(parseParam);
               
-            | G.OutFieldDeclaration.Ast as m :: tail => loop(tail, ExtraField.OutFieldDef(m.Name.ToNameRef(),       parse(m.Type), None()) :: acc)
-            | G.SetDeclaration.Ast      as m :: tail => loop(tail, ExtraField.SetField(parse(m.QualifiedName), parse(m.Expression))   :: acc)
-            | _                              :: tail => loop(tail, acc)
-            | _                                      => acc
+              def field =
+                if (m.ExtraFieldPrivates.IsSome)
+                  if (body.IsSome)
+                    ExtraField.DefPrivate(loc, name, parameters, parse(m.Type), body.Value)
+                  else
+                    Message.FatalError(loc, "A private extra field must have body.");
+                else if (body.IsSome)
+                  ExtraField.Def(loc, name, parameters, parse(m.Type), body.Value)
+                else
+                  ExtraField.Abstract(loc, name, parameters, parse(m.Type));
+                
+              loop(tail, field :: acc)
+              
+            | G.ExtraFieldDeclaration2.Ast as m :: tail =>
+              def name = m.Name.ToNameRef();
+              def loc = m.Location.ToNemerleLocation();
+              loop(tail, ExtraField.Override(loc, name, parseBody(m.ExtraFieldBody)) :: acc)
+              
+            | G.ExtraFieldDeclaration3.Ast as m :: tail =>
+              def name = m.Name.ToNameRef();
+              def loc = m.Location.ToNemerleLocation();
+              loop(tail, ExtraField.OnError(loc, name, parseBody(m.ExtraFieldBody)) :: acc)
+              
+            | _ :: tail                               => loop(tail, acc)
+            | []                                      => acc
           }
         }
           
@@ -395,7 +479,7 @@ namespace N2
                           rule : G.Rule, baseName : G.QIdentifier) : void
       {
         def name            = nameId.ToNameRef();
-        //assert2(name.AsName != "CatchExceptionFulter");
+        //assert2(name.AsName != "add");
         def ruleId          = grammar.Count;
         def attributes      = ConvertAttributes(ruleAttributes);
         def localAliases    = processBody(bodyDeclaration, processLocalAliases, Map());
@@ -473,7 +557,6 @@ namespace N2
             addExtentionRule(m.Name, m.RuleAttributes, m.BodyDeclaration, m.Rule, baseName);
             
         | G.ExtentionRuleDecl.Ast as decl => addExtentionRule(decl.Name, decl.RuleAttributes, decl.BodyDeclaration, decl.Rule, decl.BaseName);
-
         | G.Alias.Ast as alias =>
           def name = alias.Name.ToNameRef();
           def rule = ConvertRule(alias.Rule);
