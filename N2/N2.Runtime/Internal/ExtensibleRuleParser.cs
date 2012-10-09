@@ -52,10 +52,12 @@ namespace N2.Internal
           parser.ruleCalls[curEndPos] = System.Collections.Generic.List();
         parser.ruleCalls[curEndPos].Add(parser.parserHost.GetRuleDescriptorById(RuleId));
 #endif
-        int parseResult;
         int newEndPos;
+        int newResult;
         int bestEndPos;
+        int bestResult;
         int i;
+        int j;
         char c; // временная переменная для отсечения правил по первой букве
 
         if (resultPtr == -1)
@@ -98,30 +100,49 @@ prefix_loop:
         i = 0;
         c = text[curEndPos];
         bestEndPos = -1;
-        parseResult = -1;
+        bestResult = -1;
         for (; i < PrefixRules.Length; ++i)
         {
           var prefixRule = PrefixRules[i];
           if (prefixRule.LowerBound <= c && c <= prefixRule.UpperBound)
           {
-            newEndPos = prefixRule.Parse(curEndPos, text, ref parseResult, ref parser);
+            newResult = -1;
+            newEndPos = prefixRule.Parse(curEndPos, text, ref newResult, ref parser);
             if (newEndPos > 0)
-              bestEndPos = newEndPos;
+            {
+              if (bestResult < 0)
+              {
+                bestEndPos = newEndPos;
+                bestResult = newResult;
+              }
+              else
+                for (j = 3; true; ++j)
+                {
+                  var newSize  = parser.ast[newResult + j];
+                  if (newSize < 0)
+                    break;
+                  if (parser.ast[bestResult + j] < newSize)
+                  {
+                    bestEndPos = newEndPos;
+                    bestResult = newResult;
+                    break;
+                  }
+                }
+            }
           }
         }
 
-        curEndPos = bestEndPos;
-        parser.ast[resultPtr + AstOfs] = parseResult;
+        parser.ast[resultPtr + AstOfs] = bestResult;
 
-        if (curEndPos < 0)// не смогли разобрать префикс
+        if (bestEndPos < 0)// не смогли разобрать префикс
           return -1;
 
 postfix_loop:
-        bestEndPos = curEndPos;
+        curEndPos = bestEndPos;
         while (curEndPos < text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
                                         // при достижении конца текста есть нечего
         {
-          parseResult = -1;
+          bestResult = -1;
           i = FirstPostfixRule;
           c = text[curEndPos];
           for (; i < PostfixRules.Length; ++i)
@@ -129,16 +150,36 @@ postfix_loop:
             var postfixRule = PostfixRules[i];
             if (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound)
             {
-              newEndPos = postfixRule.Parse(curEndPos, text, ref parseResult, ref parser);
+              newResult = -1;
+              newEndPos = postfixRule.Parse(curEndPos, text, ref newResult, ref parser);
               if (newEndPos > 0)
-                bestEndPos = newEndPos;
+              {
+                if (bestResult < 0)
+                {
+                  bestEndPos = newEndPos;
+                  bestResult = newResult;
+                }
+                else
+                  for (j = 3; true; ++j)
+                  {
+                    var newSize  = parser.ast[newResult + j];
+                    if (newSize < 0)
+                      break;
+                    if (parser.ast[bestResult + j] < newSize)
+                    {
+                      bestEndPos = newEndPos;
+                      bestResult = newResult;
+                      break;
+                    }
+                  }
+              }
             }
           }
 
           if (bestEndPos == curEndPos)
             break; // если нам не удалось продвинуться то заканчиваем разбор
-          parser.ast[parseResult + 3] = parser.ast[resultPtr + AstOfs];
-          parser.ast[resultPtr + AstOfs] = parseResult;
+          parser.ast[bestResult + 3] = parser.ast[resultPtr + AstOfs];
+          parser.ast[resultPtr + AstOfs] = bestResult;
 
           curEndPos = bestEndPos;
         }
