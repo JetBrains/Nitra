@@ -1,5 +1,7 @@
 ﻿using N2;
+using N2.Grammar;
 using N2.Grammar.Utils;
+using Nemerle.Compiler;
 
 syntax module GrammarParser2
 {
@@ -86,15 +88,22 @@ syntax module GrammarParser2
   alias Char          = Any;
 
   [StartRule, ExplicitSpaces]
-  syntax Start                = s OpenNamespace*  TopDeclaration* !Any;
+  syntax Start                = s OpenNamespace*  TopDeclaration* !Any
+  {
+    Env(env : GlobalEnv) : GlobalEnv = FoldThrough(OpenNamespaces, env, _.Env(_));
+  }
 
-  syntax OpenNamespace        = "using" QIdentifier as Namespace ";";
+  syntax OpenNamespace        = "using" QIdentifier as Namespace ";"
+  {
+    // FIXME: Namespace.Location include a space locations, which is not good.
+    Env(env : GlobalEnv) : GlobalEnv = env.AddOpenNamespace(Namespace.Parts(), Namespace.Location.ToNemerleLocation());
+  }
 
   syntax TopDeclaration { OutScope(inScope : N2.Scope) : N2.Scope = inScope; }
 
   syntax SyntaxModule is TopDeclaration = "syntax"sm "module"sm Name nl "{" inl  Declaration* d "}" nl
   {
-    override OutScope { PushToNested(Declarations, inScope, _.OutScope(_)); }
+    override OutScope { PassThrough(Declarations, inScope, _.OutScope(_)); }
   }
 
   [SpanClass(String), ExplicitSpaces]
@@ -126,8 +135,15 @@ syntax module GrammarParser2
   [SpanClass(Number), ExplicitSpaces]
   syntax Number                           = Digits;
   [ExplicitSpaces]
-  syntax Identifier                       = !(Keyword !IdentifierPartCharacters) IdentifierBody;
-  syntax QIdentifier                      = Names             { alias Names = (Identifier; ".")+; }
+  syntax Identifier                       = !(Keyword !IdentifierPartCharacters) IdentifierBody
+  {
+    Value() : string = GetText(IdentifierBody);
+  }
+  syntax QIdentifier                      = Names
+  {
+    alias Names = (Identifier; ".")+;
+    Parts() : list[string] = Names[0].Map(_.Value());
+  }
   
   syntax RuleAttribute;
 
@@ -153,25 +169,29 @@ syntax module GrammarParser2
 
   extend syntax Declaration
   {
-    ExtentionRuleDecl       = RuleAttributes "syntax"  sm             Name  sm "is" sm BaseName sm "=" sm Rule  BodyDeclaration;
+    ExtentionRuleDecl       = RuleAttributes "syntax"  sm             Name  sm "is" sm BaseName sm "=" sm Rule  BodyDeclaration
+    {
+      //override OutScope { FieldNames(inScope); inScope }
+      //FieldNames(scope : Scope) : list[string] = Rule.FieldNames(scope);
+    }
     SimpleRuleDecl          = RuleAttributes "syntax"  sm             Name  sm "="  sm Rule                     BodyDeclaration;
     ExtentionPointRuleDecl  = RuleAttributes "syntax"  sm             Name                                      BodyDeclaration;
     ExtendSyntax            =                "extend"  sm "syntax" sm BaseName nl "{" inl ExtendSyntaxMember* d "}"nl
-                            { override OutScope = PushToNested(ExtendSyntaxMembers, inScope, _.OutScope(_)); }
+    { override OutScope = PassThrough(ExtendSyntaxMembers, inScope, _.OutScope(_)); }
     TokenRuleDecl           = RuleAttributes "token"   sm             Name  sm "="  sm TokenRule                BodyDeclaration;
     VoidRuleDecl            = RuleAttributes "void"    sm             Name  sm "="  sm Rule                     ";"nl;
     Alias                   =                "alias"   sm             Name  sm "="  sm Rule                     ";"nl;
     TokenField              =                "token"   sm "field"  sm Name  sm "="  sm (StringLiteral; ","sm)+  ";"nl
-                            { override OutScope = inScope.Nested(Symbol.TokenField(StringLiterals[0], Name)); }
+    { override OutScope = inScope.Nested(Symbol.TokenField(StringLiterals[0], Name)); }
     AliasSyntaxModuleDecl   =                "using"   sm             Alias sm "="  sm GrammarName              ";"nl
-                            { alias Alias = Identifier; }
+    { alias Alias = Identifier; }
     ImportSyntaxModuleDecl  =                "using"   sm             GrammarName                               ";"nl;
     SpanClassDecl           =                "span"    sm "class"  sm Name MatchTokens                          ";"nl
-                            { alias MatchTokens = ("=" TokenRule)?; }
+    { alias MatchTokens = ("=" TokenRule)?; }
     BracePairDecl           =                "braces"  sm             Open ","sm Close                          ";"nl
-                            { alias Open = TokenRule; alias Close = TokenRule; }
+    { alias Open = TokenRule; alias Close = TokenRule; }
     OptionEmitDebugSources  =                "option"  sm             "EmitDebugSources" sm "=" sm Value        ";"nl
-                            { alias Value = Identifier; }
+    { alias Value = Identifier; }
     MarkerDecl              =                "marker"  sm             Name                                      ";"nl;
     KeywordRegexDecl        =                "keyword" sm "regex"  sm TokenRule as MatchTokens sm "rule" sm Name ";"nl;
   }
@@ -185,7 +205,7 @@ syntax module GrammarParser2
   {
     EmptyBodyDeclaration = ";"nl;
     BlockBodyDeclaration = "{"  BodyMemberDeclaration* "}"nl
-    { override OutScope = PushToNested(BodyMemberDeclarations, inScope, _.OutScope(_)); }
+    { override OutScope = PassThrough(BodyMemberDeclarations, inScope, _.OutScope(_)); }
   }
 
   syntax FieldInitializer = "=" sm Expression;
@@ -285,12 +305,22 @@ syntax module GrammarParser2
 
   alias SeparatorRule = Rule;
 
-  syntax Rule;
+  syntax Rule
+  {
+    OutScope(inScope : N2.Scope) : N2.Scope = inScope;
+    //FieldNames(scope : Scope) : string = [];
+  }
 
   extend syntax Rule
   {
     SequenceRule                = LeftRule RightRules
-                                { alias LeftRule = Rule : 10; alias RightRules = (sm Rule : 10)+; }
+    {
+      alias LeftRule = Rule : 10;
+      alias RightRules = (sm Rule : 10)+;
+
+      //override OutScope = a;
+      //override FieldNames { LeftRule.FieldName() :: RightRules.Map(r => r.FieldName()) }
+    }
     NotRule                     = "!" Rule : 20;
     AndRule                     = "&" Rule : 20;
     OptionalRule                = Rule "?"          { precedence 30; }
