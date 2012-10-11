@@ -150,7 +150,7 @@ postfix_loop:
             var postfixRule = PostfixRules[i];
             if (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound)
             {
-              newResult = -1;
+              newResult = parser.ast[resultPtr + AstOfs];
               newEndPos = postfixRule.Parse(curEndPos, text, ref newResult, ref parser);
               if (newEndPos > 0)
               {
@@ -178,7 +178,6 @@ postfix_loop:
 
           if (bestEndPos == curEndPos)
             break; // если нам не удалось продвинуться то заканчиваем разбор
-          parser.ast[bestResult + 3] = parser.ast[resultPtr + AstOfs];
           parser.ast[resultPtr + AstOfs] = bestResult;
 
           curEndPos = bestEndPos;
