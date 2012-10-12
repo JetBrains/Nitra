@@ -4,6 +4,8 @@ using N2.Grammar.Utils;
 using N2.Model;
 using Nemerle.Compiler;
 
+using System.Text;
+
 syntax module GrammarParser2
 {
   token field OpenBrace           = "(";
@@ -91,15 +93,28 @@ syntax module GrammarParser2
   token ReservedCharChar          = "\'" | "\\";
 
   [SpanClass(String), ExplicitSpaces]
-  syntax StringLiteral                    = "\""  StringPart* "\"";
+  syntax StringLiteral                    = "\""  StringPart* "\""
+  {
+    Value() : string = FoldThrough(StringParts, StringBuilder(), _.Value(_)).ToString();
+  }
 
-  [ExplicitSpaces] syntax StringPart;
+  [ExplicitSpaces] syntax StringPart { Value(sb : StringBuilder) : string = FoldThrough(StringParts, sb, _.Value(_)); }
 
   extend syntax StringPart
   {
-    [ExplicitSpaces] UnicodeEscapeSequenceStringPart = "\\u" HexDigit HexDigit HexDigit HexDigit;
-    [ExplicitSpaces] EscapeSequenceStringPart        = "\\"  Char;
-    [ExplicitSpaces] SimpleStringPart                = Chars { alias Chars = (!ReservedStringChar Any)+; }
+    [ExplicitSpaces] UnicodeEscapeSequenceStringPart = "\\u" HexDigit HexDigit HexDigit HexDigit
+    {
+      override Value = sb.Append((FirstChar(HexDigit1) * 0x1000 + FirstChar(HexDigit2) * 0x100 + FirstChar(HexDigit1) * 0x10 + FirstChar(HexDigit1)) :> char);
+    }
+    [ExplicitSpaces] EscapeSequenceStringPart        = "\\"  Char
+    {
+      override Value = sb.Append(EscapeSequence(FirstChar(Char)));
+    }
+    [ExplicitSpaces] SimpleStringPart                = Chars
+    {
+      alias Chars = (!ReservedStringChar Any)+;
+      override Value = sb.Append(this);
+    }
   }
 
   [SpanClass(Char), ExplicitSpaces]
@@ -124,11 +139,18 @@ syntax module GrammarParser2
   {
     Value() : string = GetText(IdentifierBody);
     Identifier() : N2.Model.Identifier = N2.Model.Identifier(this, IdentifierBody);
+    Aggregate(endPos : int, parts : list[string]) : IntOrStringList = (EndPos, GetText(IdentifierBody) :: acc);
   }
   syntax QIdentifier                      = Names
   {
     alias Names = (Identifier; ".")+;
     Parts() : list[string] = Names[0].Map(_.Value());
+    CalcLocation() : N2.Location = N2.Location(loc.Source, loc.StartPos, Names[0].LastOrDefault(loc.StartPos));
+    NameRef() : NameRef
+    {
+      def loc = this.Location;
+      NameRef(CalcLocation().NLocation(), Parts())
+    }
   }
 
   ///////////////////////////////////////////////////////////////////////////
@@ -226,7 +248,9 @@ syntax module GrammarParser2
     BracePairDecl           =                "braces"  sm             Open ","sm Close                          ";"nl
     { alias Open = TokenRule; alias Close = TokenRule; }
     OptionEmitDebugSources  =                "option"  sm             "EmitDebugSources" sm "=" sm Value        ";"nl
-    { alias Value = Identifier; }
+    {
+      alias Value = Identifier;
+    }
     MarkerDecl              =                "marker"  sm             Name                                      ";"nl;
     KeywordRegexDecl        =                "keyword" sm "regex"  sm TokenRule as MatchTokens sm "rule" sm Name ";"nl;
   }
@@ -279,7 +303,8 @@ syntax module GrammarParser2
   extend syntax Type
   {
     Type1 = SimpleName;
-    Type2 = Type "." SimpleName { precedence 10; }
+    Type2 = Type "." SimpleName { precedence 20; }
+    Type3 = Type "*" Type       { precedence 10; }
   }
 
   syntax Block = nl "{" inl (Expression; ";" nl)* ";"* as Semicolons d "}" nl;
@@ -307,7 +332,7 @@ syntax module GrammarParser2
 
   syntax Expression = ExpressionContent+;
 
-  syntax Range;
+  syntax Range { RangeSet() : RangeSet; }
 
   extend syntax Range
   {
@@ -316,37 +341,82 @@ syntax module GrammarParser2
     UnicodeRange    = Name;
   }
 
-  syntax TokenRule;
+  syntax TokenRule
+  {
+    RegularRule() : RegularRule;
+  }
 
   alias SeparatorToken = TokenRule;
   
   extend syntax TokenRule
   {
     ChoiceTokenRule                  = LeftRule sm RightRules
-    { alias LeftRule = TokenRule : 10; alias RightRules = ("|" TokenRule : 10)+; }
+    {
+      alias LeftRule = TokenRule : 10; alias RightRules = ("|" TokenRule : 10)+;
+      override RegularRule = RegularRule.Sequence(this.NLocation(), LeftRule.RegularRule() :: RightRules.Map(r => r[1].RegularRule()));
+    }
     SequenceTokenRule                = LeftRule sm RightRules
-    { alias LeftRule = TokenRule : 20; alias RightRules = (TokenRule : 20)+; }
-    OptionalTokenRule                = TokenRule "?"       { precedence 30; }
-    ZeroOrManyTokenRule              = TokenRule "*"       { precedence 30; }
-    OneOrManyTokenRule               = TokenRule "+"       { precedence 30; }
-    CharTokenRule                    = CharLiteral;
-    StringTokenRule                  = StringLiteral;
-    CallTokenRule                    = QualifiedName;
-    RoundsTokenRule                  = "(" TokenRule ")";
-    RangeTokenRule                   = "[" (Range; ","sm)+ "]";
-    ZeroOrManyWithSeparatorTokenRule = "(" TokenRule ";"sm SeparatorToken ")" "*";
+    {
+      alias LeftRule = TokenRule : 20; alias RightRules = (TokenRule : 20)+;
+      override RegularRule = RegularRule.Sequence(this.NLocation(), LeftRule.RegularRule() :: RightRules.Map(_.RegularRule()));
+    }
+    OptionalTokenRule                = TokenRule "?"
+    {
+      precedence 30;
+      override RegularRule = RegularRule.Repeat(this.NLocation(), 0, Some(1), this.TokenRule.RegularRule());
+    }
+    ZeroOrManyTokenRule              = TokenRule "*"
+    {
+      precedence 30;
+      override RegularRule = RegularRule.Repeat(this.NLocation(), 0, None(), this.TokenRule.RegularRule());
+    }
+    OneOrManyTokenRule               = TokenRule "+"
+    {
+      precedence 30;
+      override RegularRule = RegularRule.Repeat(this.NLocation(), 1, None(), this.TokenRule.RegularRule());
+    }
+    CharTokenRule                    = CharLiteral
+    {
+      override RegularRule
+      {
+        def c = ConvertChar(rule.CharLiteral);
+        RegularRule.Chars(this.NLocation(), [RangeSet().AddRange(c, c)])
+      }
+    }
+    StringTokenRule                  = StringLiteral
+    {
+      override RegularRule = RegularRule.Chars(this.NLocation(), StringLiteral.Value().Map(c => RangeSet().AddRange(c, c)));
+    }
+    CallTokenRule                    = QualifiedName
+    {
+      override RegularRule { def n = this.QualifiedName.NameRef(); RegularRule.Call(n.Location,  n) }
+    }
+    RoundsTokenRule                  = "(" TokenRule ")" 
+    {
+      override RegularRule = TokenRule.RegularRule();
+    }
+    RangeTokenRule                   = "[" (Range; ","sm)+ "]"
+    {
+    }
+    ZeroOrManyWithSeparatorTokenRule = "(" TokenRule ";"sm SeparatorToken ")" "*"
+    {
+      override RegularRule = RegularRule.RepeatWithSeparator(this.NLocation(), 0, None(), TokenRule.RegularRule(), SeparatorToken.RegularRule()));
+    }
     OneOrManyWithSeparatorTokenRule  = "(" TokenRule ";"sm SeparatorToken ")" "+";
+    {
+      override RegularRule = RegularRule.RepeatWithSeparator(this.NLocation(), 1, None(), TokenRule.RegularRule(), SeparatorToken.RegularRule()));
+    }
   }
 
   alias SeparatorRule = Rule;
+
+  syntax NamespaceName = Name;
 
   syntax Rule
   {
     OutScope(inScope : N2.Scope) : N2.Scope = inScope;
     //FieldNames(scope : Scope) : string = [];
   }
-
-  syntax NamespaceName = Name;
 
   extend syntax Rule
   {
