@@ -9,6 +9,7 @@ using Nemerle.Compiler.Typedtree;
 
 using N2.Internal;
 using N2.Model;
+using N2.Compiler;
 
 using System;
 using System.Diagnostics;
@@ -22,30 +23,91 @@ namespace N2
     public DefineCreateAst(rd : RuleDefinition, descriptorTB : TypeBuilder) : void
     {
       def ruleCompiler = _ruleCompilers[rd];
-
       def body = match (rd)
       {
         | Simple when rd.IsAst =>
-          def astTb = DefineAstType(rd);
-          <[
-            assert(ast[index] > 0, "Bad ast offset");
-            $(PExpr.FromQualifiedIdentifier(Manager, astTb.FullName)).Ast(N2.Location(source, 0, 0), [])
-          ]>
+          def astStruct = ruleCompiler.RootField.astStruct;
+          def astPointer = AstPointer(astStruct, "index");
+
+          def statements = SCG.List();
+          statements.Add(<[ assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1); ]>);
+          statements.Add(<[ ignore(source, parserHost, ast, index, pos); ]>);
+          statements.Add(<[ mutable startPos = pos; ]>);
+          statements.Add(<[ mutable endPos = pos; ]>);
+
+          def arguments = SCG.List();
+          arguments.Add(<[ N2.Location(source, pos, endPos) ]>);
+          arguments.Add(<[ [] ]>);
+
+          foreach(sizeField in astStruct.SizeFields)
+          {
+            match(sizeField.Field)
+            {
+              | RuleField.Void =>
+                statements.Add(<[ startPos = endPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
+                statements.Add(<[ endPos = startPos ]>);
+
+              | RuleField.TokenString with varId = "string"
+              | RuleField.TokenCall   with varId = "token" =>
+                def varName = Util.tmpname(varId);
+                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
+                statements.Add(<[ def $(varName : usesite) = N2.NToken(startPos, endPos) ]>);
+                statements.Add(<[ startPos = endPos ]>);
+                arguments.Add(<[ $(varName : usesite) ]>);
+
+              | RuleField.ExternalAst =>
+                def varName = Util.tmpname("ast");
+                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
+                statements.Add(<[ def $(varName : usesite) = null ]>);
+                statements.Add(<[ startPos = endPos ]>);
+                arguments.Add(<[ $(varName : usesite) ]>);
+
+              | RuleField.ExtentionPoint =>
+                def varName = Util.tmpname("ast");
+                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
+                statements.Add(<[ def $(varName : usesite) = null ]>);
+                statements.Add(<[ startPos = endPos ]>);
+                arguments.Add(<[ $(varName : usesite) ]>);
+
+              | RuleField.List =>
+                def varName = Util.tmpname("list");
+                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
+                statements.Add(<[ def $(varName : usesite) = [] ]>);
+                statements.Add(<[ startPos = endPos ]>);
+                arguments.Add(<[ $(varName : usesite) ]>);
+
+              | RuleField.List2 =>
+                def varName = Util.tmpname("list2");
+                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
+                statements.Add(<[ def $(varName : usesite) = ([], []) ]>);
+                statements.Add(<[ startPos = endPos ]>);
+                arguments.Add(<[ $(varName : usesite) ]>);
+
+              | RuleField.Option =>
+                def varName = Util.tmpname("option");
+                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
+                statements.Add(<[ def $(varName : usesite) = None() ]>);
+                statements.Add(<[ startPos = endPos ]>);
+                arguments.Add(<[ $(varName : usesite) ]>);
+
+              | RuleField.Ast
+              | RuleField.Predicate => ()
+              | _                   => assert(false)
+            }
+          }
+          statements.Add(<[ $(PExpr.FromQualifiedIdentifier(Manager, DefineAstType(rd).FullName)).Ast(..$(arguments.ToNList())) ]>);
+          statements.ToNList()
 
         | ExtentionPrefix
         | ExtentionPostfix
         | ExtentionPoint
-        | _ =>
-          <[
-            ignore(source, parserHost, ast, index);
-            throw System.NotImplementedException();
-          ]>
+        | _ => [ <[ ignore(source, parserHost, ast, index, pos); ]>, <[ throw System.NotImplementedException(); ]> ]
       }
 
       _ = descriptorTB.DefineWithSource(<[decl:
-        public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int) : N2.Ast
+        public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
         {
-          $body;
+          ..$body
         }
       ]>);
     }
