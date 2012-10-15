@@ -22,102 +22,122 @@ namespace N2
   {
     public DefineCreateAst(rd : RuleDefinition, descriptorTB : TypeBuilder) : void
     {
-      def ruleCompiler = _ruleCompilers[rd];
-      def body = match (rd)
+      def rootAstMaker(arguments : list[PExpr]) : PExpr
+      {
+        def arguments = <[ N2.Location(source, startPos, endPos) ]> :: <[ [] ]> :: arguments;
+        <[ $( PExpr.FromQualifiedIdentifier(Manager, DefineAstType(rd).FullName)).Ast(..$arguments) ]>
+      }
+      def internalAstMaker(_ : list[PExpr]) : PExpr
+      {
+        | []   => assert(false)
+        | [x]  => x
+        | many => <[ (..$many) ]>
+      }
+      def makeReader(structField : AstStruct.StructField, astPointer : AstPointer) : PExpr
+      {
+        match(structField.Field)
+        {
+          | RuleField.TokenString
+          | RuleField.TokenCall =>
+            <[ N2.NToken(startPos, endPos) ]>
+
+          | RuleField.ExternalAst(ruleDefinition = rd) =>
+            <[
+              $(GetStaticDescriptorRef(rd))
+                .CreateAst(source, parserHost, ast, ast[$(astPointer.AstOffset(structField))], startPos)
+                :> $(GetRuleNType(rd) : typed)
+            ]>
+
+          | RuleField.ExtentionPoint(ruleDefinition = rd) =>
+            <[
+              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              parserHost.GetRuleDescriptorById(ast[astIndex])
+                .CreateAst(source, parserHost, ast, astIndex, startPos)
+                :> $(GetRuleNType(rd) : typed)
+            ]>
+
+          | RuleField.List(astStruct = valueAstStruct, NextRef = nextRef) =>
+            def valueAstPointer = AstPointer(valueAstStruct, "astIndex");
+            <[
+              def buffer = System.Collections.Generic.List();
+              mutable astIndex = ast[$(astPointer.AstOffset(structField))];
+              while (astIndex > 0)
+              {
+                buffer.Add($(makeAst(valueAstStruct, valueAstPointer, internalAstMaker)));
+                astIndex = ast[$(valueAstPointer.AstOffset(nextRef))];
+              }
+              Nemerle.Collections.NList.ToList(buffer)
+            ]>
+
+          | RuleField.List2 =>
+            <[ ([], []) ]>
+
+          | RuleField.Option(astStruct = valueAstStruct) =>
+            <[
+              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              if (astIndex > 0)
+                Some($(makeAst(valueAstStruct, AstPointer(valueAstStruct, "astIndex"), internalAstMaker)))
+              else
+                None()
+            ]>
+
+          | _ => assert(false)
+        }
+      }
+      and makeAst(astStruct : AstStruct, astPointer : AstPointer, maker : list[PExpr] -> PExpr) : PExpr
+      {
+        def statements = SCG.List();
+        def arguments = SCG.List();
+        foreach(structField in astStruct.SizeFields)
+        {
+          match(structField.Field)
+          {
+            | RuleField.Ast
+            | RuleField.Predicate => ()
+            | RuleField.Void =>
+              statements.Add(<[ startPos = endPos + ast[$(astPointer.SizeOffset(structField))] ]>);
+              statements.Add(<[ endPos = startPos ]>);
+
+            | _ =>
+              def varName = Util.tmpname("ast");
+              statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(structField))] ]>);
+              statements.Add(<[ def $(varName : usesite) = $(makeReader(structField, astPointer)) ]>);
+              statements.Add(<[ startPos = endPos ]>);
+              arguments.Add(<[ $(varName : usesite) ]>);
+          }
+        }
+        statements.Add(maker(arguments.ToNList()));
+        <[ { ..$(statements.ToNList()) } ]>
+      }
+      match (rd)
       {
         | Simple when rd.IsAst =>
+          def ruleCompiler = _ruleCompilers[rd];
           def astStruct = ruleCompiler.RootField.astStruct;
           def astPointer = AstPointer(astStruct, "index");
-
-          def statements = SCG.List();
-          statements.Add(<[ assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1); ]>);
-          statements.Add(<[ ignore(source, parserHost, ast, index, pos); ]>);
-          statements.Add(<[ mutable startPos = pos; ]>);
-          statements.Add(<[ mutable endPos = pos; ]>);
-
-          def arguments = SCG.List();
-          arguments.Add(<[ N2.Location(source, pos, endPos) ]>);
-          arguments.Add(<[ [] ]>);
-
-          foreach(sizeField in astStruct.SizeFields)
-          {
-            match(sizeField.Field)
+          _ = descriptorTB.DefineWithSource(<[decl:
+            public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
             {
-              | RuleField.Void =>
-                statements.Add(<[ startPos = endPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
-                statements.Add(<[ endPos = startPos ]>);
-
-              | RuleField.TokenString with varId = "string"
-              | RuleField.TokenCall   with varId = "token" =>
-                def varName = Util.tmpname(varId);
-                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
-                statements.Add(<[ def $(varName : usesite) = N2.NToken(startPos, endPos) ]>);
-                statements.Add(<[ startPos = endPos ]>);
-                arguments.Add(<[ $(varName : usesite) ]>);
-
-              | RuleField.ExternalAst(ruleDefinition = rd) =>
-                def varName = Util.tmpname("ast");
-                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
-                //TODO: позвать статическую функцию
-                statements.Add(<[ def $(varName : usesite) = $(GetStaticDescriptorRef(rd))
-                  .CreateAst(source, parserHost, ast, ast[$(astPointer.AstOffset(sizeField))], startPos) :> $(GetRuleNType(rd) : typed) ]>);
-                statements.Add(<[ startPos = endPos ]>);
-                arguments.Add(<[ $(varName : usesite) ]>);
-
-              | RuleField.ExtentionPoint(ruleDefinition = rd) =>
-                def varName = Util.tmpname("ast");
-                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
-                statements.Add(<[
-                  def $(varName : usesite) =
-                  {
-                    def astIndex = ast[$(astPointer.AstOffset(sizeField))];
-                    parserHost.GetRuleDescriptorById(ast[astIndex]).CreateAst(source, parserHost, ast, astIndex, startPos) :> $(GetRuleNType(rd) : typed)
-                  }
-                ]>);
-                statements.Add(<[ startPos = endPos ]>);
-                arguments.Add(<[ $(varName : usesite) ]>);
-
-              | RuleField.List =>
-                def varName = Util.tmpname("list");
-                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
-                statements.Add(<[ def $(varName : usesite) = [] ]>);
-                statements.Add(<[ startPos = endPos ]>);
-                arguments.Add(<[ $(varName : usesite) ]>);
-
-              | RuleField.List2 =>
-                def varName = Util.tmpname("list2");
-                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
-                statements.Add(<[ def $(varName : usesite) = ([], []) ]>);
-                statements.Add(<[ startPos = endPos ]>);
-                arguments.Add(<[ $(varName : usesite) ]>);
-
-              | RuleField.Option =>
-                def varName = Util.tmpname("option");
-                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(sizeField))] ]>);
-                statements.Add(<[ def $(varName : usesite) = None() ]>);
-                statements.Add(<[ startPos = endPos ]>);
-                arguments.Add(<[ $(varName : usesite) ]>);
-
-              | RuleField.Ast
-              | RuleField.Predicate => ()
-              | _                   => assert(false)
+              assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1);
+              mutable startPos = pos;
+              mutable endPos = pos;
+              ignore(source, parserHost, ast, index, startPos, endPos);
+              $(makeAst(astStruct, astPointer, rootAstMaker))
             }
-          }
-          statements.Add(<[ $(PExpr.FromQualifiedIdentifier(Manager, DefineAstType(rd).FullName)).Ast(..$(arguments.ToNList())) ]>);
-          statements.ToNList()
+          ]>);
 
         | ExtentionPrefix
         | ExtentionPostfix
         | ExtentionPoint
-        | _ => [ <[ ignore(source, parserHost, ast, index, pos); ]>, <[ throw System.NotImplementedException(); ]> ]
+        | _ =>
+          _ = descriptorTB.DefineWithSource(<[decl:
+            public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
+            {
+              ignore(source, parserHost, ast, index, pos);
+              throw System.NotImplementedException();
+            }
+          ]>);
       }
-
-      _ = descriptorTB.DefineWithSource(<[decl:
-        public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
-        {
-          ..$body
-        }
-      ]>);
     }
   }
 }
