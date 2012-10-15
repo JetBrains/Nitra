@@ -98,13 +98,13 @@ syntax module GrammarParser2
     Value() : string = FoldThrough(StringParts, StringBuilder(), _.Value(_)).ToString();
   }
 
-  [ExplicitSpaces] syntax StringPart { Value(sb : StringBuilder) : string = FoldThrough(StringParts, sb, _.Value(_)); }
+  [ExplicitSpaces] syntax StringPart { Value(sb : StringBuilder) : StringBuilder; }
 
   extend syntax StringPart
   {
     [ExplicitSpaces] UnicodeEscapeSequenceStringPart = "\\u" HexDigit HexDigit HexDigit HexDigit
     {
-      override Value = sb.Append((FirstChar(HexDigit1) * 0x1000 + FirstChar(HexDigit2) * 0x100 + FirstChar(HexDigit1) * 0x10 + FirstChar(HexDigit1)) :> char);
+      override Value = sb.Append(HexToChar(this, HexDigit1.StartPos, HexDigit4.EndPos));
     }
     [ExplicitSpaces] EscapeSequenceStringPart        = "\\"  Char
     {
@@ -118,15 +118,24 @@ syntax module GrammarParser2
   }
 
   [SpanClass(Char), ExplicitSpaces]
-  syntax CharLiteral                      = "\'"  CharPart "\'";
+  syntax CharLiteral                      = "\'"  CharPart "\'" { Value() : char = CharPart.Value(); }
 
-  [ExplicitSpaces] syntax CharPart;
+  [ExplicitSpaces] syntax CharPart { Value() : char; }
 
   extend syntax CharPart
   {
-    [ExplicitSpaces] SimpleCharPart                = !ReservedCharChar Char;
-    [ExplicitSpaces] UnicodeEscapeSequenceCharPart = "\\u" HexDigit HexDigit HexDigit HexDigit;
-    [ExplicitSpaces] EscapeSequenceCharPart        = "\\" Char;
+    [ExplicitSpaces] SimpleCharPart                = !ReservedCharChar Char
+    {
+      override Value = FirstChar(this.Char);
+    }
+    [ExplicitSpaces] UnicodeEscapeSequenceCharPart = "\\u" HexDigit HexDigit HexDigit HexDigit
+    {
+      override Value = HexToChar(this, HexDigit1.StartPos, HexDigit4.EndPos);
+    }
+    [ExplicitSpaces] EscapeSequenceCharPart        = "\\" Char
+    {
+      override Value = EscapeSequence(FirstChar(this.Char));
+    }
   }
   
   token Digits = ['0'..'9']+;
@@ -139,18 +148,18 @@ syntax module GrammarParser2
   {
     Value() : string = GetText(IdentifierBody);
     Identifier() : N2.Model.Identifier = N2.Model.Identifier(this, IdentifierBody);
-    Aggregate(endPos : int, parts : list[string]) : IntOrStringList = (EndPos, GetText(IdentifierBody) :: acc);
+    NameRef() : NameRef = NameRef(this.NLocation(), [GetText(IdentifierBody)]);
   }
   syntax QIdentifier                      = Names
   {
     alias Names = (Identifier; ".")+;
     Parts() : list[string] = Names[0].Map(_.Value());
-    CalcLocation() : N2.Location = N2.Location(loc.Source, loc.StartPos, Names[0].LastOrDefault(loc.StartPos));
-    NameRef() : NameRef
+    CalcLocation() : N2.Location
     {
       def loc = this.Location;
-      NameRef(CalcLocation().NLocation(), Parts())
+      N2.Location(loc.Source, loc.StartPos, Names[0].LastOrDefault(n => n.Location.StartPos, loc.StartPos))
     }
+    NameRef() : NameRef = NameRef(CalcLocation().NLocation(), Parts());
   }
 
   ///////////////////////////////////////////////////////////////////////////
@@ -332,13 +341,29 @@ syntax module GrammarParser2
 
   syntax Expression = ExpressionContent+;
 
-  syntax Range { RangeSet() : RangeSet; }
+  syntax Range { RangeSet(inCharSet : RangeSet) : RangeSet; }
 
   extend syntax Range
   {
-    SingleCharRange = CharLiteral;
-    CharRange       = CharLiteral ".." CharLiteral;
-    UnicodeRange    = Name;
+    SingleCharRange = CharLiteral
+    {
+      override RangeSet = inCharSet.AddSingleCharRange(CharLiteral.Value());
+    }
+    CharRange       = CharLiteral ".." CharLiteral
+    {
+      override RangeSet = inCharSet.AddRange(CharLiteral1.Value(), CharLiteral2.Value());
+    }
+    UnicodeRange    = Name
+    {
+      override RangeSet = 
+        if (UnicodeCategoryTable.StrToUnicodeCategory(Name.Value()) is Some(cat))
+          inCharSet.AddRange(cat)
+        else
+        {
+          Message.Error(this.NLocation(), "Invalid unicode category.");
+          inCharSet
+        };
+    }
   }
 
   syntax TokenRule
@@ -353,7 +378,7 @@ syntax module GrammarParser2
     ChoiceTokenRule                  = LeftRule sm RightRules
     {
       alias LeftRule = TokenRule : 10; alias RightRules = ("|" TokenRule : 10)+;
-      override RegularRule = RegularRule.Sequence(this.NLocation(), LeftRule.RegularRule() :: RightRules.Map(r => r[1].RegularRule()));
+      override RegularRule = RegularRule.Choice(this.NLocation(), LeftRule.RegularRule() :: RightRules.Map(r => r[1].RegularRule()));
     }
     SequenceTokenRule                = LeftRule sm RightRules
     {
@@ -377,15 +402,11 @@ syntax module GrammarParser2
     }
     CharTokenRule                    = CharLiteral
     {
-      override RegularRule
-      {
-        def c = ConvertChar(rule.CharLiteral);
-        RegularRule.Chars(this.NLocation(), [RangeSet().AddRange(c, c)])
-      }
+      override RegularRule = RegularRule.Chars(this.NLocation(), [RangeSet().AddSingleCharRange(CharLiteral.Value())]);
     }
     StringTokenRule                  = StringLiteral
     {
-      override RegularRule = RegularRule.Chars(this.NLocation(), StringLiteral.Value().Map(c => RangeSet().AddRange(c, c)));
+      override RegularRule = RegularRule.Chars(this.NLocation(), RangeSet.MakeString(StringLiteral.Value()));
     }
     CallTokenRule                    = QualifiedName
     {
@@ -397,14 +418,15 @@ syntax module GrammarParser2
     }
     RangeTokenRule                   = "[" (Range; ","sm)+ "]"
     {
+      override RegularRule = RegularRule.Chars(this.NLocation(), [FoldThrough(Ranges[0], RangeSet(), _.RangeSet(_))]);
     }
     ZeroOrManyWithSeparatorTokenRule = "(" TokenRule ";"sm SeparatorToken ")" "*"
     {
-      override RegularRule = RegularRule.RepeatWithSeparator(this.NLocation(), 0, None(), TokenRule.RegularRule(), SeparatorToken.RegularRule()));
+      override RegularRule = RegularRule.RepeatWithSeparator(this.NLocation(), 0, None(), TokenRule.RegularRule(), SeparatorToken.RegularRule());
     }
-    OneOrManyWithSeparatorTokenRule  = "(" TokenRule ";"sm SeparatorToken ")" "+";
+    OneOrManyWithSeparatorTokenRule  = "(" TokenRule ";"sm SeparatorToken ")" "+"
     {
-      override RegularRule = RegularRule.RepeatWithSeparator(this.NLocation(), 1, None(), TokenRule.RegularRule(), SeparatorToken.RegularRule()));
+      override RegularRule = RegularRule.RepeatWithSeparator(this.NLocation(), 1, None(), TokenRule.RegularRule(), SeparatorToken.RegularRule());
     }
   }
 
