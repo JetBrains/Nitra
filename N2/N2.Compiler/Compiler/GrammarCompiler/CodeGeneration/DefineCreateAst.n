@@ -56,21 +56,44 @@ namespace N2
                 :> $(GetRuleNType(rd) : typed)
             ]>
 
-          | RuleField.List(astStruct = valueAstStruct, NextRef = nextRef) =>
-            def valueAstPointer = AstPointer(valueAstStruct, "astIndex");
+          | RuleField.List(astStruct = itemStruct, NextRef = nextRef) =>
+            def itemPointer = AstPointer(itemStruct, "astIndex");
             <[
-              def buffer = System.Collections.Generic.List();
-              mutable astIndex = ast[$(astPointer.AstOffset(structField))];
-              while (astIndex > 0)
+              def astBuffer = System.Collections.Generic.List();
+              def loop(astIndex)
               {
-                buffer.Add($(makeAst(valueAstStruct, valueAstPointer, internalAstMaker)));
-                astIndex = ast[$(valueAstPointer.AstOffset(nextRef))];
+                when (astIndex > 0)
+                {
+                  astBuffer.Add($(makeAst(itemStruct, itemPointer, internalAstMaker)));
+                  loop(ast[$(itemPointer.AstOffset(nextRef))])
+                }
               }
-              Nemerle.Collections.NList.ToList(buffer)
+              loop(ast[$(astPointer.AstOffset(structField))]);
+              Nemerle.Collections.NList.ToList(astBuffer)
             ]>
 
-          | RuleField.List2 =>
-            <[ ([], []) ]>
+          | RuleField.List2(astRuleStruct = itemStruct, astSeparatorStruct = separatorStruct, NextRuleRef = nextItemRef, NextSeparatorRef = nextSeparatorRef) =>
+            def itemPointer = AstPointer(itemStruct, "astIndex");
+            def separatorPointer = AstPointer(separatorStruct, "separatorIndex");
+            <[
+              def astBuffer = System.Collections.Generic.List();
+              def separatorBuffer = System.Collections.Generic.List();
+              def loop(astIndex)
+              {
+                when (astIndex > 0)
+                {
+                  astBuffer.Add($(makeAst(itemStruct, itemPointer, internalAstMaker)));
+                  def separatorIndex = ast[$(itemPointer.AstOffset(nextItemRef))];
+                  when (separatorIndex > 0)
+                  {
+                    separatorBuffer.Add($(makeAst(separatorStruct, separatorPointer, internalAstMaker)));
+                    loop(ast[$(separatorPointer.AstOffset(nextSeparatorRef))]);
+                  }
+                }
+              }
+              loop(ast[$(astPointer.AstOffset(structField))]);
+              (Nemerle.Collections.NList.ToList(astBuffer), Nemerle.Collections.NList.ToList(separatorBuffer))
+            ]>
 
           | RuleField.Option(astStruct = valueAstStruct) =>
             <[
@@ -88,6 +111,12 @@ namespace N2
       {
         def statements = SCG.List();
         def arguments = SCG.List();
+        when (astStruct is PostfixAstStruct)
+        {
+          def varName = Util.tmpname("ast");
+          statements.Add(<[ mutable $(varName : usesite) ]>);
+          arguments.Add(<[ $(varName : usesite) ]>);
+        }
         foreach(structField in astStruct.SizeFields)
         {
           match(structField.Field)
@@ -111,7 +140,10 @@ namespace N2
       }
       match (rd)
       {
-        | Simple when rd.IsAst =>
+        | ExtentionPrefix  when rd.IsAst
+        | ExtentionPostfix when rd.IsAst
+        | Simple           when rd.IsAst =>
+          assert2(rd.Name.AsName != "Add");
           def ruleCompiler = _ruleCompilers[rd];
           def astStruct = ruleCompiler.RootField.astStruct;
           def astPointer = AstPointer(astStruct, "index");
@@ -126,9 +158,19 @@ namespace N2
             }
           ]>);
 
-        | ExtentionPrefix
-        | ExtentionPostfix
-        | ExtentionPoint
+        | ExtentionPoint when rd.IsAst =>
+          def ruleCompiler = _ruleCompilers[rd];
+          def astStruct = ExtensibleAstStruct(ruleCompiler, rd);
+          def astPointer = AstPointer(astStruct, "index");
+          _ = descriptorTB.DefineWithSource(<[decl:
+            public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
+            {
+              assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1);
+              def astIndex = ast[$(astPointer.AstOffset(astStruct.AstRef))];
+              parserHost.GetRuleDescriptorById(ast[astIndex]).CreateAst(source, parserHost, ast, astIndex, pos)
+            }
+          ]>);
+
         | _ =>
           _ = descriptorTB.DefineWithSource(<[decl:
             public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
