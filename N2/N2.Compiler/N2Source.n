@@ -3,6 +3,7 @@ using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Imperative;
 using N2.Model;
+using N2.Typing;
 
 using System;
 using System.Linq;
@@ -25,6 +26,18 @@ namespace N2
       Path    = path;
       Manager = manager;
       Env     = Manager.CoreEnv;
+    }
+    
+    GetSyntaxModules() : SCG.List[list[string] * Identifier * G.SyntaxModule.Ast] // Namespace * Name * SyntaxModule
+    {
+      def key = typeof(G.SyntaxModule.Ast);
+      mutable syntaxModules = Manager.UserData[key] :> SCG.List[_];
+      when (syntaxModules == null)
+      {
+        syntaxModules = SCG.List();
+        Manager.UserData[key] = syntaxModules;
+      }
+      syntaxModules
     }
 
     public static Instance(path : string, manager : ManagerClass) : N2SourceImpl
@@ -65,8 +78,72 @@ namespace N2
       SubscribeSourceChangedWithCounter(Manager, Location.GetFileIndex(Path), makeWrapperClass);
     }
 
+    public Parse(source : ISource) : void
+    {
+      def parser = G.GrammarImpl();
+      match (parser.ParseStart(SourceSnapshot(source.GetText(), source.FileIndex, Path)))
+      {
+        | None      =>
+          def (pos, tokens) = parser.Parser.GetErrors();
+          def loc = N2.Location(parser.Parser.ParsingSource, pos, pos + 1).ToNemerleLocation();
+          foreach (token in tokens)
+            Message.Error(loc, $"expected \"$(token.Name)\" in rule $(token.Rule.Grammar.Name).$(token.Rule.Name)");
+
+        | Some(G.Start.Ast as start) =>
+          Env = start.Env(Env);
+          
+          def loc = start.NLocation();
+          Message.Hint(loc, $"File $(loc.File) is parsed.");
+          def syntaxModules = GetSyntaxModules();
+          def (ns, syntaxModuleAsts) = start.GetSyntaxModules();
+          foreach (syntaxModule in syntaxModuleAsts)
+            syntaxModules.Add(ns, syntaxModule.Name.Identifier(), syntaxModule);
+          
+          foreach (rd in start.TopDeclarations)
+          {
+            | G.SyntaxModule.Ast as syntaxModule => 
+              
+              SyntaxModules.Add(ConvertSyntaxModule(syntaxModule));
+              
+            | _ => assert(false);
+          }
+
+        | _ => assert(false);
+      }
+    }
+
+
     public BeforeTypedMembers() : void
     {
+      Message.Hint("BeforeTypedMembers(). Prarsed SyntaxModules:");
+      def syntaxModules = GetSyntaxModules();
+      def root = N2.Typing.HierarchyNode();
+      def modules = Hashtable();
+      foreach ((ns, name, syntaxModule) in syntaxModules)
+      {
+        def symbol = SyntaxModuleSymbol(syntaxModule);
+        def node = root.AddNamespace(ns).Add(symbol);
+        when (node.Symbol is AmbiguousSymbol as ambiguous)
+        {
+          ambiguous.ReoprtAmbiguous(symbol);
+        }
+        
+        def key = (ns, name);
+        def nsStr = $<#..$(ns; ".")#> + if (ns.IsEmpty) "" else ".";
+        mutable firstDefinition;
+        if (modules.TryGetValue(key, out firstDefinition))
+        {
+          Message.Error(syntaxModule.NLocation(),   $"The syntax module $nsStr$name already exists");
+          Message.Error(firstDefinition.NLocation(), "  related syntax module");
+        }
+        else
+          modules.Add(key, syntaxModule);
+        
+          
+        Message.Hint($"  ns='$ns' Name='$name'");
+      }
+      
+
       foreach (sm in SyntaxModules)
       {
         try
@@ -123,29 +200,6 @@ namespace N2
             assert2(false, e.ToString());
             Message.Error(sm.TypeBuilder.Location,  $"Exception $e");
         }
-      }
-    }
-
-    public Parse(source : ISource) : void
-    {
-      def parser = G.GrammarImpl();
-      match (parser.ParseStart(SourceSnapshot(source.GetText(), source.FileIndex, Path)))
-      {
-        | None      =>
-          def (pos, tokens) = parser.Parser.GetErrors();
-          def loc = N2.Location(parser.Parser.ParsingSource, pos, pos + 1).ToNemerleLocation();
-          foreach (token in tokens)
-            Message.Error(loc, $"expected \"$(token.Name)\" in rule $(token.Rule.Grammar.Name).$(token.Rule.Name)");
-
-        | Some(G.Start.Ast as start) =>
-          Env = start.Env(Env);
-
-          foreach (rd in start.TopDeclarations)
-          {
-            | G.SyntaxModule.Ast as syntaxModule => SyntaxModules.Add(ConvertSyntaxModule(syntaxModule));
-            | _ => assert(false);
-          }
-        | _ => assert(false);
       }
     }
 
