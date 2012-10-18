@@ -1,0 +1,97 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+
+using N2.Internal;
+using N2.Model;
+using N2.Compiler;
+
+using System;
+using System.Diagnostics;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace N2
+{
+  internal partial class GrammarCompiler
+  {
+    public DefineGetAstLength(rd : RuleDefinition, descriptorTB : TypeBuilder) : void
+    {
+      def makeLength(astStruct : AstStruct, astPointer : AstPointer) : PExpr
+      {
+        def statements = SCG.List();
+        statements.Add(<[ mutable length ]>);
+        def visitStructField(structField : AstStruct.StructField, isPrefixRef : bool) : void
+        {
+          match (structField.Field)
+          {
+            | RuleField.Ast
+            | RuleField.Predicate => ()
+            | _ =>
+              def expr =
+                if(isPrefixRef)
+                  <[
+                    {
+                      def astIndex = ast[$(astPointer.AstOffset(structField))];
+                      length += parserHost.GetRuleDescriptorById(ast[astIndex]).GetAstLength(source, parserHost, ast, astIndex)
+                    }
+                  ]>
+                else
+                  <[ length += ast[$(astPointer.SizeOffset(structField))] ]>;
+              statements.Add(expr);
+          }
+        }
+        when (astStruct is PostfixAstStruct as astStruct)
+          visitStructField(astStruct.PrefixRef, true);
+        foreach (sizeField in astStruct.SizeFields)
+          visitStructField(sizeField, false);
+        statements.Add(<[ length ]>);
+        <[ { ..$(statements.ToNList()) } ]>
+      }
+      match (rd)
+      {
+        | ExtentionPrefix
+        | ExtentionPostfix
+        | Simple =>
+          def ruleCompiler = _ruleCompilers[rd];
+          def astStruct = ruleCompiler.RootField.astStruct;
+          def astPointer = AstPointer(astStruct, "index");
+          _ = descriptorTB.DefineWithSource(<[decl:
+            public override GetAstLength(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int) : int
+            {
+              assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1);
+              ignore(source, parserHost, ast, index);
+              $(makeLength(astStruct, astPointer))
+            }
+          ]>);
+
+        | ExtentionPoint =>
+          def ruleCompiler = _ruleCompilers[rd];
+          def astStruct = ExtensibleAstStruct(ruleCompiler, rd);
+          def astPointer = AstPointer(astStruct, "index");
+          _ = descriptorTB.DefineWithSource(<[decl:
+            public override GetAstLength(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int) : int
+            {
+              assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1);
+              def astIndex = ast[$(astPointer.AstOffset(astStruct.AstRef))];
+              parserHost.GetRuleDescriptorById(ast[astIndex]).GetAstLength(source, parserHost, ast, astIndex)
+            }
+          ]>);
+
+        | _ =>
+          _ = descriptorTB.DefineWithSource(<[decl:
+            public override GetAstLength(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int) : int
+            {
+              ignore(source, parserHost, ast, index);
+              throw System.NotImplementedException();
+            }
+          ]>);
+      }
+    }
+  }
+}

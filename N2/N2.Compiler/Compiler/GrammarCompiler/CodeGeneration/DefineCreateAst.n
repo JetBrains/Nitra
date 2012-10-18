@@ -24,7 +24,7 @@ namespace N2
     {
       def rootAstMaker(arguments : list[PExpr]) : PExpr
       {
-        def arguments = <[ N2.Location(source, startPos, endPos) ]> :: <[ [] ]> :: arguments;
+        def arguments = <[ N2.Location(source, pos, pos + length) ]> :: <[ [] ]> :: arguments;
         <[ $( PExpr.FromQualifiedIdentifier(Manager, DefineAstType(rd).FullName)).Ast(..$arguments) ]>
       }
       def internalAstMaker(_ : list[PExpr]) : PExpr
@@ -39,12 +39,12 @@ namespace N2
         {
           | RuleField.TokenString
           | RuleField.TokenCall =>
-            <[ N2.NToken(startPos, endPos) ]>
+            <[ N2.NToken(curPos, curPos + curLength) ]>
 
           | RuleField.ExternalAst(ruleDefinition = rd) =>
             <[
               $(GetStaticDescriptorRef(rd))
-                .CreateAst(source, parserHost, ast, ast[$(astPointer.AstOffset(structField))], startPos)
+                .CreateAst(source, parserHost, ast, ast[$(astPointer.AstOffset(structField))], curPos, curLength)
                 :> $(GetRuleNType(rd) : typed)
             ]>
 
@@ -52,7 +52,7 @@ namespace N2
             <[
               def astIndex = ast[$(astPointer.AstOffset(structField))];
               parserHost.GetRuleDescriptorById(ast[astIndex])
-                .CreateAst(source, parserHost, ast, astIndex, startPos)
+                .CreateAst(source, parserHost, ast, astIndex, curPos, curLength)
                 :> $(GetRuleNType(rd) : typed)
             ]>
 
@@ -111,36 +111,41 @@ namespace N2
       {
         def statements = SCG.List();
         def arguments = SCG.List();
-
-        def structFields = SCG.List();
-        when (astStruct is PostfixAstStruct as astStruct)
-          structFields.Add((astStruct.PrefixRef, false));
-        foreach(sizeField in astStruct.SizeFields)
-          structFields.Add((sizeField, true));
-
-        foreach((structField, hasSize) in structFields)
+        def visitStructField(structField : AstStruct.StructField, isPrefixRef : bool) : void
         {
-          match(structField.Field)
+          def getLengthExpr()
+          {
+            if(isPrefixRef)
+              <[
+                curLength =
+                {
+                  def astIndex = ast[$(astPointer.AstOffset(structField))];
+                  parserHost.GetRuleDescriptorById(ast[astIndex]).GetAstLength(source, parserHost, ast, astIndex)
+                }
+              ]>
+            else
+              <[ curLength = ast[$(astPointer.SizeOffset(structField))] ]>
+          }
+          match (structField.Field)
           {
             | RuleField.Ast
             | RuleField.Predicate => ()
             | RuleField.Void =>
-              when(hasSize)
-              {
-                statements.Add(<[ startPos = endPos + ast[$(astPointer.SizeOffset(structField))] ]>);
-                statements.Add(<[ endPos = startPos ]>);
-              }
+              statements.Add(getLengthExpr());
+              statements.Add(<[ curPos += curLength ]>);
 
             | _ =>
               def varName = Util.tmpname("ast");
-              when(hasSize)
-                statements.Add(<[ endPos = startPos + ast[$(astPointer.SizeOffset(structField))] ]>);
+              statements.Add(getLengthExpr());
               statements.Add(<[ def $(varName : usesite) = $(makeReader(structField, astPointer)) ]>);
-              when (hasSize)
-                statements.Add(<[ startPos = endPos ]>);
               arguments.Add(<[ $(varName : usesite) ]>);
+              statements.Add(<[ curPos += curLength ]>);
           }
         }
+        when (astStruct is PostfixAstStruct as astStruct)
+          visitStructField(astStruct.PrefixRef, true);
+        foreach (sizeField in astStruct.SizeFields)
+          visitStructField(sizeField, false);
         statements.Add(maker(arguments.ToNList()));
         <[ { ..$(statements.ToNList()) } ]>
       }
@@ -153,12 +158,12 @@ namespace N2
           def astStruct = ruleCompiler.RootField.astStruct;
           def astPointer = AstPointer(astStruct, "index");
           _ = descriptorTB.DefineWithSource(<[decl:
-            public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
+            public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int, length : int) : N2.Ast
             {
               assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1);
-              mutable startPos = pos;
-              mutable endPos = pos;
-              ignore(source, parserHost, ast, index, startPos, endPos);
+              mutable curPos = pos;
+              mutable curLength;
+              ignore(source, parserHost, ast, index, curPos, curLength);
               $(makeAst(astStruct, astPointer, rootAstMaker))
             }
           ]>);
@@ -168,19 +173,19 @@ namespace N2
           def astStruct = ExtensibleAstStruct(ruleCompiler, rd);
           def astPointer = AstPointer(astStruct, "index");
           _ = descriptorTB.DefineWithSource(<[decl:
-            public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
+            public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int, length : int) : N2.Ast
             {
               assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1);
               def astIndex = ast[$(astPointer.AstOffset(astStruct.AstRef))];
-              parserHost.GetRuleDescriptorById(ast[astIndex]).CreateAst(source, parserHost, ast, astIndex, pos)
+              parserHost.GetRuleDescriptorById(ast[astIndex]).CreateAst(source, parserHost, ast, astIndex, pos, length)
             }
           ]>);
 
         | _ =>
           _ = descriptorTB.DefineWithSource(<[decl:
-            public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
+            public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int, length : int) : N2.Ast
             {
-              ignore(source, parserHost, ast, index, pos);
+              ignore(source, parserHost, ast, index, pos, length);
               throw System.NotImplementedException();
             }
           ]>);
