@@ -40,68 +40,56 @@ namespace N2.Test
         return Result.Skipped("File not found");
 
       def originalTestSource = N2.SourceSnapshot(File.ReadAllText(_filePath), fileName = _filePath);
-      def parser = TestParser.GrammarImpl();
-      def (pos, ast) = parser.TryParseStart(originalTestSource);
+      def originalParserHost = ParserHost();
+      def originalBinaryAst = originalParserHost.DoParsing(originalTestSource, StartRuleDescriptor);
 
-      unless (pos >= 0)
+      unless (originalBinaryAst[0] >= 0)
         return Result.Skipped("Failed to parse test source");
 
-      match(GrammarLoader.Load(Path.GetDirectoryName(_filePath), ast))
+      def originalAst = originalParserHost.CreateAst.[TestParser.Start.Ast](originalTestSource, StartRuleDescriptor, originalBinaryAst);
+
+      match(GrammarLoader.Load(Path.GetDirectoryName(_filePath), originalAst))
       {
         | Success(rule, grammars) =>
-          match(ast)
+          def testText = originalTestSource.Text.Substring(originalAst.TestBody.StartPos, originalAst.TestBody.EndPos - originalAst.TestBody.StartPos);
+          def testSource = originalTestSource.WithText(testText, originalAst.TestBody.StartPos);
+          when (_canDebug && originalAst.TopDeclarations.Any(_ is TestParser.Debugger))
+            _ = Diagnostics.Debugger.Launch();
+          def parseResult = ParseTestSource(testSource, rule, grammars);
+          def dumpString = using(def writer = StringWriter())
           {
-            | TestParser.Start.Ast(TopDeclarations = topDeclarations, TestBody = testBody) =>
-              def testText = originalTestSource.Text.Substring(testBody.StartPos, testBody.EndPos - testBody.StartPos);
-              def testSource = originalTestSource.WithText(testText, testBody.StartPos);
-              when (_canDebug && topDeclarations.Any(_ is TestParser.Debugger))
-                _ = Diagnostics.Debugger.Launch();
-              def parseResult =
-                try
-                {
-                  AppDomain.CurrentDomain.SetData("ExternalGrammars", grammars);
-                  rule.Parse(testSource);
-                }
-                finally
-                {
-                  AppDomain.CurrentDomain.SetData("ExternalGrammars", null);
-                }
-              def dumpString = using(def writer = StringWriter())
-              {
-                def astDump = parseResult.GetDump();
-                astDump.WriteTo(writer, " ");
-                writer.ToString()
-              }
-              def dumpName = Path.ChangeExtension(_filePath, "out");
-              when(File.Exists(dumpName))
-                File.Delete(dumpName);
-              def goldDumpName = Path.ChangeExtension(_filePath, "gold");
-              if(File.Exists(goldDumpName))
-              {
-                def split(s) : array[_] { s.Split(array["\r\n", "\n", "\r"], StringSplitOptions.None) }
-                def output = split(dumpString);
-                def gold   = split(File.ReadAllText(goldDumpName));
-                match(DumpComparer.Compare(output, gold, StringComparison.Ordinal))
-                {
-                  | Success => Result.Passed("Passed")
-                  | Fail(lineNumber, expectedText, foundText) =>
-                    File.WriteAllText(dumpName, dumpString);
-                    def message = $"Dump differs with gold on line $lineNumber. Expected '$expectedText' found '$foundText'";
-                    def details = if(_showDiff) diff(gold, output) else [];
-                    Result.Failed(message, details)
-                }
-              }
-              else if(_createGoldFile)
-              {
-                File.WriteAllText(goldDumpName, dumpString);
-                Result.Skipped("Gold file created");
-              }
-              else
-              {
+            def astDump = parseResult.GetDump();
+            astDump.WriteTo(writer, " ");
+            writer.ToString()
+          }
+          def dumpName = Path.ChangeExtension(_filePath, "out");
+          when(File.Exists(dumpName))
+            File.Delete(dumpName);
+          def goldDumpName = Path.ChangeExtension(_filePath, "gold");
+          if(File.Exists(goldDumpName))
+          {
+            def split(s) : array[_] { s.Split(array["\r\n", "\n", "\r"], StringSplitOptions.None) }
+            def output = split(dumpString);
+            def gold   = split(File.ReadAllText(goldDumpName));
+            match(DumpComparer.Compare(output, gold, StringComparison.Ordinal))
+            {
+              | Success => Result.Passed("Passed")
+              | Fail(lineNumber, expectedText, foundText) =>
                 File.WriteAllText(dumpName, dumpString);
-                Result.Skipped("Gold file not found");
-              }
-            | _ => assert(false)
+                def message = $"Dump differs with gold on line $lineNumber. Expected '$expectedText' found '$foundText'";
+                def details = if(_showDiff) diff(gold, output) else [];
+                Result.Failed(message, details)
+            }
+          }
+          else if(_createGoldFile)
+          {
+            File.WriteAllText(goldDumpName, dumpString);
+            Result.Skipped("Gold file created");
+          }
+          else
+          {
+            File.WriteAllText(dumpName, dumpString);
+            Result.Skipped("Gold file not found");
           }
         | Fail(message) => Result.Failed(message)
       }
@@ -172,5 +160,34 @@ namespace N2.Test
     private _createGoldFile : bool;
     private _showDiff : bool;
     private _canDebug : bool;
+
+    public static StartRuleDescriptor : SimpleRuleDescriptor = match(TestParser.GrammarImpl.StaticDescriptor.Rules.Find(rd => rd.Name == "Start"))
+    {
+      | Some (rd is SimpleRuleDescriptor) => rd
+      | _ => assert(false)
+    };
+
+    public static ParseTestSource(source : SourceSnapshot, rule : RuleDescriptor, grammars : IEnumerable[GrammarDescriptor]) : N2.Ast
+    {
+      try
+      {
+        AppDomain.CurrentDomain.SetData("ExternalGrammars", grammars);
+        def parserHost = ParserHost();
+        def binaryAst = match (rule)
+        {
+          | SimpleRuleDescriptor     as rule => parserHost.DoParsing(source, rule);
+          | ExtensibleRuleDescriptor as rule => parserHost.DoParsing(source, rule);
+          | _ => assert(false)
+        }
+        if (binaryAst[0] >= 0)
+          parserHost.CreateAst.[N2.Ast](source, rule, binaryAst)
+        else
+          N2.Ast(Location(source, 0, 0), [ErrorInfo(Location(source, 0, 0), [])]) // TODO: add error reporting
+      }
+      finally
+      {
+        AppDomain.CurrentDomain.SetData("ExternalGrammars", null);
+      }
+    }
   }
 }
