@@ -5,6 +5,7 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using N2.Model;
+using N2.Compiler;
 
 using System;
 using System.Linq;
@@ -14,43 +15,62 @@ namespace N2
 {
   internal partial class RuleCompiler
   {
-    private CompileRule(currentRule : Rule) : PExpr * list[string]
+    private _names : SCG.Dictionary[string, PExpr] = SCG.Dictionary();
+    public GetName(name : string) : PExpr
     {
-      def (code, results) = match (currentRule)
-      {
-        | And                 as rule => CompileRuleAnd                 (rule)
-        | Not                 as rule => CompileRuleNot                 (rule)
-        | String              as rule => CompileRuleString              (rule)
-        | Call                as rule => CompileRuleCall                (rule)
-        | PrefixCall          as rule => CompileRulePrefixCall          (rule)
-        | Sequence            as rule => CompileRuleSequence            (rule)
-        | Repeat              as rule => CompileRuleRepeat              (rule)
-        | RepeatWithSeparator as rule => CompileRuleRepeatWithSeparator (rule)
-        | Scope               as rule => CompileRuleScope               (rule)
-        | Cut                 as rule => CompileRuleCut                 (rule)
-      }
-
-      def code = if (_grammarCompiler.IsDebug)
-        <[
-          _ = $($"$currentRule" : string);
-          $code
-        ]>;
+      mutable nameRef;
+      if (_names.TryGetValue(name, out nameRef))
+        nameRef
       else
-        code;
-      (code, results);
+      {
+        nameRef = <[ $(name : dyn) ]>;
+        _names[name] = nameRef;
+        nameRef;
+      }
+    }
+    public EndLabel : PExprLabel;
+
+    public Fields : array[RuleField] { get; private set; }
+    public RootField : RuleField.Ast { get { if (Fields != null) Fields[0] :> RuleField.Ast else null } }
+
+    private Compile(rule : Rule) : PExpr
+    {
+      Fields = Convert(rule);
+
+      def code = SCG.List();
+      code.Add(<[ _ = $(rule.ToString()) ]>);
+      code.AddRange(Fields.Map(field => <[ _= $(field.Print()) ]>));
+      code.Add(<[
+        def startEndPos             = curEndPos;
+        mutable tmpResult  : int; _ = tmpResult;
+        mutable tmpSize    : int; _ = tmpSize;
+        mutable parseState : int; _ = parseState;
+        mutable newPos     : int; _ = newPos;
+      ]>);
+      code.AddRange(_names.Filter(kv => kv.Key != "resultRef").Map(kv => <[ mutable $(kv.Key : dyn) ]>));
+      code.AddRange(Fields.Map(field => field.ParseCode));
+      code.Add(<[ $(EndLabel.Label()); curEndPos; ]>);
+      PExpr.Sequence(code.FlattenPExprSequence())
     }
 
     public CompileRule() : void
     {
-      match (_ruleDefinition)
+      try
       {
-        | ExtentionPoint as rule   => CompileExtensionPoint(rule)
-        | ExtentionPrefix as rule  => CompileExtensionPrefix(rule)
-        | ExtentionPostfix as rule => CompileExtensionPostfix(rule)
-        | Simple as rule           => CompileSimpleRule(rule)
-        | Regular as rule          => CompileRegularRule(rule)
-        | Marker
-        | ExternalRule             => assert(false)
+        match (_ruleDefinition)
+        {
+          | ExtentionPoint           => ()
+          | ExtentionPrefix as rule  => CompileExtensionPrefix(rule)
+          | ExtentionPostfix as rule => CompileExtensionPostfix(rule)
+          | Simple as rule           => CompileSimpleRule(rule)
+          | Regular as rule          => CompileRegularRule(rule)
+          | Marker
+          | ExternalRule             => assert(false);
+        }
+      }
+      catch
+      {
+        | ex => Message.Error(_ruleDefinition.Name.Location, ex.ToString());
       }
     }
   }

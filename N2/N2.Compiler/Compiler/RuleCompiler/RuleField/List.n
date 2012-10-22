@@ -1,0 +1,118 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal partial abstract class RuleField
+  {
+    [Record]
+    public sealed class List : RuleField
+    {
+      fields : array[RuleField];
+      min    : int;
+      max    : option[int];
+
+      public override InitChildren(compiler : RuleCompiler, parent : RuleField, level : int, allFields : SCG.List[RuleField]) : void
+      {
+        foreach (field in fields)
+          field.Init(compiler, parent, level, allFields);
+      }
+
+      [RecordIgnore] public Field   : AstStruct.StructField { get; private set; }
+      [RecordIgnore] public NextRef : AstStruct.StructField { get; private set; }
+
+      [RecordIgnore] public  mutable astStruct   : AstStruct;
+      [RecordIgnore] private mutable astPtr      : AstPointer;
+      [RecordIgnore] private mutable listTailPtr : AstPointer;
+      public override CalculateAstInfo() : void
+      {
+        astStruct     = InternalAstStruct(this);
+        astPtr        = AstPointer(astStruct, "astPtr", this);
+        listTailPtr   = AstPointer(astStruct, "listTailPtr", this);
+        Field         = AstStruct.StructField(ParentAstStruct, this, true, true);
+        NextRef       = AstStruct.StructField(astStruct, this, true, false);
+        CalculateAstInfo(astStruct, astPtr, fields);
+      }
+
+      public Counter : PExpr { get { Compiler.GetName($"counter$Level") } }
+
+      public override Compile() : void
+      {
+        def useCounter = min > 0 || max is Some(_);
+        def counterInit() { if (useCounter) <[ $Counter  = 0 ]> else <[ {} ]> }
+        def counterInc()  { if (useCounter) <[ ++ $Counter   ]> else <[ {} ]> }
+        def ifCounterEqualsToMaxThenContinue()
+        {
+          if (max is Some(max))
+            <[
+              when ($Counter == $max)
+                $(ContinueParseLabel.Goto());
+            ]>
+          else
+            <[ {} ]>
+        }
+        def ifCounterLessThanMinThenFail()
+        {
+          if (min > 0)
+            <[
+              when ($Counter < $min)
+                $(FailParseLabel.Goto());
+            ]>
+          else
+            <[ {} ]>
+        }
+
+        def firstChild = fields[0];
+        def code = SCG.List();
+        code.Add(<[
+          $(ParseLabel.Label());
+            $(AllocateParentAst());
+            $(counterInit());
+            $(listTailPtr.Var) = -1;
+            $StartTextPos = $CurTextPos;
+            $TextPos = $CurTextPos;
+            $(firstChild.ParseLabel.Goto());
+
+          $(astStruct.OkLabel.Label());
+            $(counterInc());
+            $(astPtr.AstRef(NextRef)) = -1;
+            if ($(listTailPtr.Var) == -1)
+              $(ParentAstPtr.AstRef(Field)) = $(astPtr.Var);
+            else
+              $(listTailPtr.AstRef(NextRef)) = $(astPtr.Var);
+            $(ParentAstPtr.SizeRef(Field)) = $CurTextPos - $StartTextPos;
+            $(listTailPtr.Var) = $(astPtr.Var);
+            $(ifCounterEqualsToMaxThenContinue());
+            $TextPos = $CurTextPos;
+            $(firstChild.ParseLabel.Goto());
+
+          $(astStruct.FailLabel.Label());
+            when ($(IsAstAllocatetdCode(astStruct))) // АСТ создано
+            {
+              $(astPtr.AstRef(NextRef)) = -1;
+              if ($(listTailPtr.Var) == -1)
+                $(ParentAstPtr.AstRef(Field)) = ~ $(astPtr.Var);
+              else
+                $(listTailPtr.AstRef(NextRef)) = ~ $(astPtr.Var);
+            }
+            $(ifCounterLessThanMinThenFail());
+            $CurTextPos = $TextPos;
+            $(ParentAstPtr.SizeRef(Field)) = $CurTextPos - $StartTextPos;
+            $(ContinueParseLabel.Goto());
+        ]>);
+        ParseCode = PExpr.Sequence(code.FlattenPExprSequence());
+      }
+
+      public override PrintContent() : string * string { ("List", $<#$(PrintChildren(fields)) $min $max#>) }
+    }
+  }
+}

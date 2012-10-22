@@ -1,0 +1,121 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal partial abstract class RuleField
+  {
+    [Record]
+    public sealed class Ast : RuleField
+    {
+      private fields : array[RuleField];
+      public ruleDefinition : RuleDefinition;
+
+      public IsPrefix    : bool { get { ruleDefinition is RuleDefinition.ExtentionPrefix } }
+      public IsPostfix   : bool { get { ruleDefinition is RuleDefinition.ExtentionPostfix } }
+      public IsExtension : bool { get { IsPrefix || IsPostfix } }
+
+      public override InitChildren(compiler : RuleCompiler, parent : RuleField, level : int, allFields : SCG.List[RuleField]) : void
+      {
+        foreach (field in fields)
+          field.Init(compiler, parent, level, allFields);
+      }
+
+      [RecordIgnore] public mutable astStruct : RootAstStruct;
+      [RecordIgnore] public mutable astPtr    : AstPointer;
+      public override CalculateAstInfo() : void
+      {
+        astStruct = match (ruleDefinition)
+        {
+          | ExtentionPoint         => ExtensibleAstStruct(Compiler, ruleDefinition)
+          | ExtentionPrefix        => PrefixAstStruct(Compiler)
+          | ExtentionPostfix as rd => PostfixAstStruct(Compiler, rd)
+          | Simple                 => SimpleAstStruct(Compiler)
+          | Regular                => assert(false);
+          | Marker                 => assert(false);
+          | ExternalRule           => assert(false);
+        }
+        astPtr = AstPointer(astStruct, "astPtr", this);
+        CalculateAstInfo(astStruct, astPtr, fields);
+        astStruct.MultipleVariants = IsExtension;
+      }
+
+      public override Compile() : void
+      {
+        def code = SCG.List();
+        when (!IsExtension)
+        code.Add(<[
+          when (startEndPos < text.Length)
+          {
+            for (mutable ast = parser.memoize[startEndPos]; ast > 0; ast = parser.ast[ast + 1])
+            {
+              when (parser.ast[ast] == RuleId)
+              {
+                if (parser.ast[ast + 2] == -1)
+                {
+                  resultRef = ast;
+                  mutable i = ast + $(astStruct.SizesOffset);
+                  mutable end = i + $(astStruct.SizeFields.Count);
+                  for (; i < end; ++i)
+                    curEndPos += parser.ast[i];
+                  $(Compiler.EndLabel.Goto());
+                }
+                else
+                {
+                  curEndPos = -1;
+                  $(Compiler.EndLabel.Goto());
+                }
+              }
+            }
+          }
+        ]>);
+#if DEBUG || PARSER_DEBUG
+        code.Add(<[
+          when (parser.ruleCalls[startEndPos] == null)
+            parser.ruleCalls[startEndPos] = System.Collections.Generic.List();
+          parser.ruleCalls[startEndPos].Add(parser.parserHost.GetRuleDescriptorById(RuleId));
+        ]>);
+#endif
+        code.Add(<[ $(fields[0].ParseLabel.Goto()); ]>);
+        //parse ok
+        code.Add(<[ $(astStruct.OkLabel.Label()); ]>);
+        code.Add(<[ $(astPtr.HeaderRef(astStruct.StateRef)) = -1; ]>);// состояние разбора -1 если правило полностью разобрано.
+        when (astStruct is PostfixAstStruct as astStruct)
+          code.Add(<[ $(astPtr.AstRef(astStruct.PrefixRef)) = resultRef; ]>);
+        code.Add(<[ resultRef = $(astPtr.Var); ]>);
+        when (!IsExtension)
+          code.Add(<[
+                    when (startEndPos < text.Length)
+                    {
+                      parser.ast[resultRef + 1] = parser.memoize[startEndPos];
+                      parser.memoize[startEndPos] = resultRef;
+                    }
+        ]>);
+        code.Add(<[ $(Compiler.EndLabel.Goto()); ]>);
+
+        //parse fail
+        code.Add(<[ $(astStruct.FailLabel.Label()); ]>);
+        code.Add(<[ when ($(IsAstAllocatetdCode(astStruct))) // АСТ создано
+                    {
+                      $(astPtr.HeaderRef(astStruct.StateRef)) = parseState;
+                      resultRef = $(astPtr.Var);
+                    }
+        ]>);
+        code.Add(<[ curEndPos = -1; $(Compiler.EndLabel.Goto()); ]>);
+        ParseCode = PExpr.Sequence(code.FlattenPExprSequence());
+      }
+
+      public override PrintContent() : string * string { ("Ast", $<#$(PrintChildren(fields))#>) }
+    }
+  }
+}
