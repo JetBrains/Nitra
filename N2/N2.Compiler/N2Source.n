@@ -1,4 +1,5 @@
-﻿using N2.Model;
+﻿using N2.Compiler;
+using N2.Model;
 using N2.Typing;
 using N2.Runtime;
 
@@ -10,6 +11,7 @@ using Nemerle.Imperative;
 using System;
 using System.Linq;
 
+using System.Reflection;
 using SCG = System.Collections.Generic;
 using G = GrammarParser2;
 using PExpr = Nemerle.Compiler.Parsetree.PExpr;
@@ -174,15 +176,120 @@ namespace N2
       }
     }
 
+    private LoadExternalGrammars(project : N2Project, root : HierarchyNode) : void
+    {
+      foreach (asm in Manager.ReferencedAssemblies)
+      {
+        foreach ((<[ N2.GrammarsAttribute ]>, [<[ array[..$(elems)] ]>]) in asm.GetCustomAttributes())
+        {
+          Message.HintOnce("Assembly: " + asm.Assembly.FullName);
+          
+          foreach (<[ typeof($(PExpr.TypedType(FixedType.Class(grammarTI is LibraryReference.ExternalTypeInfo, []))))]> in elems)
+            LoadExternalGrammar(project, root, grammarTI);
+            
+          //when attr.Constructor.DeclaringType.Name == "GrammarsAttribute" 
+        }
+      }
+    }
+    
+    private LoadExternalGrammar(project : N2Project, root : HierarchyNode, grammarImplTI : LibraryReference.ExternalTypeInfo) : void
+    {
+      def grammarTI   = grammarImplTI.BaseType;
+      def glammarName = grammarTI.Name;
+      Message.HintOnce($"   Grammar type: $glammarName");
+      assert2(false);
+
+      def parseKeywordRegex(text : string) : KeywordRegex
+      {
+        def parser = G.GrammarImpl();
+        match (parser.ParseDeclaration(text))
+        {
+          | None            => Message.FatalError($"Failed to parse keyword regex '$text'");
+          | Some(G.KeywordRegexDecl.Ast as decl) =>
+            def name        = decl.Name.ToNameRef();
+            def matchTokens = decl.MatchTokens.RegularRule();
+            KeywordRegex(Location.Default, N2SourceImpl.NextKeywordRegexId(), text, matchTokens, name, true);
+
+          | Some => Message.FatalError($"Expected keyword regex '$text'");
+        }
+      }
+      def keywordRegexs = SCG.List(); // TODO: заменить на добавление символов
+      def ruleDefs      = SCG.List(); // TODO: заменить на добавление символов
+      
+      match (grammarImplTI.GetNestedSubtypes().Filter(ti => ti.Name == AssemblyConstants.GrammarDescriptorImplName))
+      {
+        | [grammarDescriptorImplTI] =>
+          //_externalGrammars.Add((grammarRef, grammarImplTI));
+          def symbol = GrammarSymbol(grammarTI, grammarImplTI);
+          def node = root.AddAndRepor(grammarTI.NamespaceNode.FullName, symbol, project);
+
+          when (node.Symbol is GrammarSymbol)
+            Message.Hint(symbol.NLocation(), $"Added grammar: '$symbol'");
+
+          foreach(attr in grammarImplTI.GetModifiers().CustomAttributes)
+          {
+            | <[ N2.KeywordRegexesAttribute(array[ ..$sources ]) ]> =>
+              foreach(source in sources)
+              {
+                | <[ $(source : string) ]> => keywordRegexs.Add(parseKeywordRegex(source))
+                | _ => assert2(false);
+              }
+
+            | <[ N2.MarkerAttribute($(name : string)) ]> =>
+              def sym = MarkerSymbol(attr.Location.N2Location(), name, true);
+              _ = node.AddAndRepor([], sym, project);
+
+            | _ => ()
+          }
+              
+          //def ruleNameToType = Hashtable();
+          foreach (ruleTI in grammarDescriptorImplTI.GetNestedSubtypes())
+          {
+            when (Util.ParseRuleClassName(ruleTI.Name) is Some((type, name)))
+            {
+              def name = NameRef(ruleTI.NameLocation, name);
+              def ruleType = ret:
+                {
+                  foreach (method is IMethod in ruleTI.GetMembers())
+                    when (method.Name == "ResultType")
+                      if (method.ReturnType.TryUnify(Manager.InternalType.Void))
+                        ret(RuleType.Void());
+                      else
+                        ret(RuleType.NType(method.ReturnType :> FixedType));
+                  RuleType.Chars();
+                };
+              //ruleNameToType.Add(name, ruleType);
+              def isExtentionPoint = type is RuleDefinitionType.ExtentionPoint;
+              def extraFields = Util.LoadExtraFields(ruleType, Manager);
+              mutable attributes = [];
+              foreach(attr in ruleTI.GetModifiers().CustomAttributes)
+              {
+                | <[ N2.ExplicitSpacesAttribute() ]>         => attributes ::= RuleAttribute.ExplicitSpaces(Location.Default)
+                | <[ N2.SuppressTrailingSpacesAttribute() ]> => attributes ::= RuleAttribute.SuppressTrailingSpaces(Location.Default)
+                | _ => ()
+              }
+              ruleDefs.Add(RuleDefinition.ExternalRule(
+                ruleTI.NameLocation, 0, name, attributes, Map() /*TODO: !!!*/, 
+                [], extraFields, null/*grammarRef это надо выбрасывать*/, isExtentionPoint));
+            }
+          }
+              
+          //_externalRuleTypeGetters.Add(grammarRef.Id, name => ruleNameToType[name]);
+
+        | _ => Message.Error(grammarTI.Location, $"$(grammarTI.FullName) not grammar.")
+      }
+    }
 
     public BeforeTypedMembers() : void
     {
       //Message.Hint("BeforeTypedMembers(). Prarsed SyntaxModules:");
-      def root = N2.Typing.HierarchyNode();
       when (IsListUserDataPresent.[SyntaxModuleInfos]())
       {
         UpdateCurrentProjectContext();
         def project = GetCurrentProjectContext();
+        def root = GetUserData.[HierarchyNode]();
+        
+        LoadExternalGrammars(project, root);
         
         def syntaxModules = GetListUserData.[SyntaxModuleInfos]();
         foreach ((ns, syntaxModule) in syntaxModules)
@@ -193,7 +300,7 @@ namespace N2
           if (sym is AmbiguousSymbol as ambiguous)
             ambiguous.ReportAlreadyDefined(symbol, project);
           else
-            Message.Hint(sym.NLocation(), $"Added-1: $sym'");
+            Message.Hint(sym.NLocation(), $"Added module: $sym'");
             
           def ruleDefs = SCG.List();
           syntaxModule.RuleRefs(ruleDefs);
@@ -204,8 +311,8 @@ namespace N2
             {
               | a is AmbiguousSymbol => a.ReportAlreadyDefined(sym, project);
               | sym                  => 
-                def msg = $"Added-2: $sym'";
-                assert2(msg != "Added-2: Expression (ExtentionPointRuleDecl) Parent: 'N2Parser''");
+                def msg = $"     Added rule: $sym'";
+                //assert2(msg != "Added-2: Expression (ExtentionPointRuleDecl) Parent: 'N2Parser''");
                 Message.Hint(sym.NLocation(), msg);
             }
           }
@@ -237,6 +344,8 @@ namespace N2
       foreach (sm in SyntaxModules)
         sm.GrammarCompiler.AddGrammarRefs(sm.Ast.GrammarRefs(Env)); // require initialized TypeBuilders
 
+     Message.Hint($<#BeforeTypedMembers() - Grammsr: ..$(SyntaxModules; ", "; x => x.Name.AsName)#>);
+        
       //foreach (sm in SyntaxModules)
       //{
       //  //Message.Hint($"BeforeTypedMembers() - Grammsr: $(sm.GrammarCompiler.GrammarTB.Name)");
