@@ -2,6 +2,7 @@
 
 using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -11,23 +12,24 @@ using System.Linq;
 
 namespace N2.Typing
 {
-  public class Environment
+  public class Environment[TProject]
+    where TProject: Project
   {
     public Root        : HierarchyNode;
-    public Project     : Project;
+    public Project     : TProject;
     public OpenNodes   : list[HierarchyNode];
     public CurrentNode : HierarchyNode;
     public Aliases     : list[string * list[string]];
     public Defines     : Map[string, bool];
     
-    public this(root : HierarchyNode, project : Project)
+    public this(root : HierarchyNode, project : TProject)
     {
       this(root, project, [], root, [], Map())
     }
 
     private this(
       root        : HierarchyNode,
-      project     : Project,
+      project     : TProject,
       openNodes   : list[HierarchyNode],
       currentNode : HierarchyNode,
       aliases     : list[string * list[string]],
@@ -41,12 +43,12 @@ namespace N2.Typing
       Defines     = defines;
     }
 
-    public AddAlias(alias : string, path : list[string], _loc : Location) : Environment
+    public AddAlias(alias : string, path : list[string], _loc : Location) : Environment[TProject]
     {
       Environment(Root, Project, OpenNodes, CurrentNode, (alias, path) :: Aliases, Defines)
     }
     
-    public AddOpen(path : list[string], loc : Location) : Environment
+    public AddOpen(path : list[string], loc : Location) : Environment[TProject]
     {
       match (path)
       {
@@ -61,7 +63,7 @@ namespace N2.Typing
       }
     }
     
-    public AddOpen(nodes : list[HierarchyNode], loc : Location) : Environment
+    public AddOpen(nodes : list[HierarchyNode], loc : Location) : Environment[TProject]
     {
       mutable allOpened = nodes;
       foreach (node in nodes)
@@ -102,6 +104,39 @@ namespace N2.Typing
             x :: acc
       );
       nodes
+    }
+
+    public virtual Bind[TSymbol](name : string, loc : Location) : ValueOption[TSymbol]
+      where TSymbol: Symbol
+    {
+      def reprtNotFound() { Project.Error(loc, $"The '$name' could not be found", -1); VNone() }
+      mutable symbol;
+      
+      unless (CurrentNode.TryGetSymbol(name, out symbol))
+        return reprtNotFound();
+        
+      foreach (node in OpenNodes)
+        when (node.TryGetSymbol(name, out symbol))
+          break;
+        
+      match (symbol)
+      {
+        | s is AmbiguousSymbol =>
+          match (s.AmbiguousList.OfTypeRevert.[TSymbol]())
+          {
+            | []  => reprtNotFound()
+            | [s] => VSome(s)
+            | ambiguous => 
+              using (roor = Project.RootError(loc, $"The '$name' is ambiguous.", -1))
+                foreach (s in ambiguous)
+                  roor.Error(s.Location, "   other defenition.");
+            
+              VNone() // we need separate method for this spetial case
+          }
+        
+        | s is TSymbol => VSome(s)
+        | _ => reprtNotFound()
+      }
     }
   }
 }
