@@ -22,9 +22,11 @@ namespace N2.Typing
     public Aliases     : list[string * list[string]];
     public Defines     : Map[string, bool];
     
+    _aliasesMap        : list[list[string * list[string]]];
+    
     public this(root : HierarchyNode, project : TProject)
     {
-      this(root, project, [], root, [], Map())
+      this(root, project, [], root, [], Map(), [[]])
     }
 
     private this(
@@ -33,7 +35,8 @@ namespace N2.Typing
       openNodes   : list[HierarchyNode],
       currentNode : HierarchyNode,
       aliases     : list[string * list[string]],
-      defines     : Map[string, bool])
+      defines     : Map[string, bool],
+      aliasesMap  : list[list[string * list[string]]])
     {
       Root        = root;
       Project     = project;
@@ -41,21 +44,25 @@ namespace N2.Typing
       CurrentNode = currentNode;
       Aliases     = aliases;
       Defines     = defines;
+      _aliasesMap = aliasesMap;
     }
 
     public EnterIntoNode(path : list [string]) : Environment[TProject]
     {
-      Environment(Root, Project, OpenNodes, CurrentNode.AddNode(path), Aliases, Defines)
+      def aliasesMap = path.Map(_ => []) + _aliasesMap; // TODO: ускорить
+      Environment(Root, Project, OpenNodes, CurrentNode.AddNode(path), Aliases, Defines, aliasesMap)
     }
 
     public EnterIntoNode(name : string) : Environment[TProject]
     {
-      Environment(Root, Project, OpenNodes, CurrentNode.AddNode(name), Aliases, Defines)
+      def aliasesMap = [] :: _aliasesMap;
+      Environment(Root, Project, OpenNodes, CurrentNode.AddNode(name), Aliases, Defines, aliasesMap)
     }
 
     public AddAlias(alias : string, path : list[string], _loc : Location) : Environment[TProject]
     {
-      Environment(Root, Project, OpenNodes, CurrentNode, (alias, path) :: Aliases, Defines)
+      def newHead = (alias, path) :: _aliasesMap.Head;
+      Environment(Root, Project, OpenNodes, CurrentNode, (alias, path) :: Aliases, Defines, newHead :: _aliasesMap.Tail)
     }
     
     public AddOpen(path : list[string], loc : Location) : Environment[TProject]
@@ -95,7 +102,7 @@ namespace N2.Typing
       // we will warn if some of those namespace are already open
       def new_opened = AddOpenNodes(OpenNodes, allOpened, loc, true);
 
-      Environment(Root, Project, new_opened, CurrentNode, Aliases, Defines)
+      Environment(Root, Project, new_opened, CurrentNode, Aliases, Defines, _aliasesMap)
     }
 
     /// this is the auxiliary function for making set of opened namespaces
@@ -167,6 +174,8 @@ namespace N2.Typing
     public virtual Bind[TSymbol](path : list[string], loc : Location) : option[TSymbol]
       where TSymbol: Symbol
     {
+      //assert2(path.Length < 2);
+      //def symbols = List();
       def reprtNotFound(reportError)
       {
         when (reportError)
@@ -200,11 +209,42 @@ namespace N2.Typing
       }
 
       // We must try CurrentNode and all it parent nodes. They take precedence over the OpenNodes.
-      foreach (node in CurrentNode.Path())
-        when (node.TryGetSymbol(path, out symbol))
+      foreach ((node, aliases) in CurrentNode.Path().ZipLazy(_aliasesMap))
+      {
+        def hasAliases()
+        {
+          match (path)
+          {
+            | h :: _ => aliases.Exists((a, _) => a == h)
+            | _ => false
+          }
+        }
+        if (node.TryGetSymbol(path, out symbol))
           when (tryGetSymbol(symbol, reportError=false) is Some(symbol2))
-            return Some(symbol2);
-            
+            if (hasAliases())
+            {
+              Project.Error(loc, $"Namespace '$(node.FullName)' contains a definition conflicting with alias '$(path.Head)'", -1);
+              return None();
+            }
+            else
+              return Some(symbol2);
+        else match (path)
+        {
+          | h :: tail => 
+            match (aliases.Find((a, _) => a == h))
+            {
+              | Some((_, path2)) =>
+                def aliasedNode = Root.AddNode(path2);
+                when (aliasedNode.TryGetSymbol(tail, out symbol))
+                  when (tryGetSymbol(symbol, reportError=false) is Some(symbol2))
+                    return Some(symbol2);
+
+              | _ => ()
+            }
+          | _ => ()
+        }
+      }
+
       foreach (node in OpenNodes)
         when (node.TryGetSymbol(path, out symbol))
           break;
