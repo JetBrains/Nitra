@@ -1,4 +1,6 @@
-﻿using N2.Model;
+﻿using N2.Compiler;
+using N2.Model;
+using N2.ProjectSystem;
 using N2.Typing;
 using N2.Runtime;
 
@@ -7,9 +9,12 @@ using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Imperative;
 
+using Nemerle.Utility;
 using System;
+using System.Diagnostics;
 using System.Linq;
 
+using System.Reflection;
 using SCG = System.Collections.Generic;
 using G = GrammarParser2;
 using PExpr = Nemerle.Compiler.Parsetree.PExpr;
@@ -33,11 +38,11 @@ namespace N2
       UpdateCurrentProjectContext();
     }
     
-    IsUserDataPresent[T]() : bool
-      where T: new(), class
-    {
-      Manager.UserData[typeof(T)] != null
-    }
+    //IsUserDataPresent[T]() : bool
+    //  where T: new(), class
+    //{
+    //  Manager.UserData[typeof(T)] != null
+    //}
     
     IsListUserDataPresent[T]() : bool
     {
@@ -75,20 +80,20 @@ namespace N2
       Manager.UserData[typeof(SCG.List[T])] = null
     }
     
-    ResetUserData[T]() : void
-      where T: new(), class
-    {
-      Manager.UserData[typeof(T)] = null
-    }
+    //ResetUserData[T]() : void
+    //  where T: new(), class
+    //{
+    //  Manager.UserData[typeof(T)] = null
+    //}
 
     UpdateCurrentProjectContext() : void
     {
-      Project.CurrentProject = GetUserData.[N2.Compiler.N2Project]();
+      Project.CurrentProject = GetUserData.[N2Project]();
     }
     
-    GetCurrentProjectContext() : N2.Compiler.N2Project
+    GetCurrentProjectContext() : N2Project
     {
-      Project.CurrentProject :> N2.Compiler.N2Project
+      Project.CurrentProject :> N2Project
     }
     //GetSyntaxModules() : SCG.List[SyntaxModuleInfos] // Namespace * Name * SyntaxModule
     //{
@@ -154,19 +159,15 @@ namespace N2
         | Some(G.Start.Ast as start) =>
           Env = start.Env(Env);
           
-          def loc = start.NLocation();
-          Message.Hint(loc, $"File $(loc.File) is parsed.");
-          def syntaxModules = GetListUserData();
-          def (ns, syntaxModuleAsts) = start.GetSyntaxModules();
-          foreach (syntaxModule in syntaxModuleAsts)
-            syntaxModules.Add(ns, syntaxModule);
+          //def loc = start.NLocation();
+          //Message.Hint(loc, $"File $(loc.File) is parsed.");
+          
+          def fileAsts : SCG.List[G.Start.Ast] = GetListUserData();
+          fileAsts.Add(start);
           
           foreach (rd in start.TopDeclarations)
           {
-            | G.SyntaxModule.Ast as syntaxModule => 
-              
-              SyntaxModules.Add(ConvertSyntaxModule(syntaxModule));
-              
+            | G.SyntaxModule.Ast as syntaxModule =>  SyntaxModules.Add(ConvertSyntaxModule(syntaxModule));
             | _ => assert(false);
           }
 
@@ -174,42 +175,161 @@ namespace N2
       }
     }
 
-
-    public BeforeTypedMembers() : void
+    private LoadExternalSyntaxModules(project : N2Project, root : HierarchyNode) : bool
     {
-      //Message.Hint("BeforeTypedMembers(). Prarsed SyntaxModules:");
-      def root = N2.Typing.HierarchyNode();
-      when (IsListUserDataPresent.[SyntaxModuleInfos]())
+      def errorCount = project.ErrorCount;
+      
+      foreach (asm in Manager.ReferencedAssemblies)
       {
-        UpdateCurrentProjectContext();
-        def project = GetCurrentProjectContext();
+        foreach ((<[ N2.GrammarsAttribute ]>, [<[ array[..$(elems)] ]>]) in asm.GetCustomAttributes())
+          foreach (<[ typeof($(PExpr.TypedType(FixedType.Class(grammarTI is LibraryReference.ExternalTypeInfo, []))))]> in elems)
+            LoadExternalSyntaxModule(project, root, grammarTI);
+      }
+      
+      project.ErrorCount == errorCount
+    }
+    
+    private LoadExternalSyntaxModule(project : N2Project, root : HierarchyNode, grammarImplTI : LibraryReference.ExternalTypeInfo) : void
+    {
+      def grammarTI   = grammarImplTI.BaseType;
+      //Message.HintOnce($"   Grammar type: $glammarName");
+
+      def parseKeywordRegex(text : string) : KeywordRegex
+    {
+        def parser = G.GrammarImpl();
+        match (parser.ParseDeclaration(text))
+      {
+          | None            => Message.FatalError($"Failed to parse keyword regex '$text'");
+          | Some(G.KeywordRegexDecl.Ast as decl) =>
+            def name        = decl.Name.NameRef();
+            def matchTokens = decl.MatchTokens.RegularRule();
+            KeywordRegex(Location.Default, N2SourceImpl.NextKeywordRegexId(), text, matchTokens, name, true);
+
+          | Some => Message.FatalError($"Expected keyword regex '$text'");
+        }
+      }
+      def keywordRegexs = SCG.List();
         
-        def syntaxModules = GetListUserData.[SyntaxModuleInfos]();
-        foreach ((ns, syntaxModule) in syntaxModules)
+      match (grammarImplTI.GetNestedSubtypes().Filter(ti => ti.Name == AssemblyConstants.GrammarDescriptorImplName))
         {
-          def symbol = SyntaxModuleSymbol(syntaxModule);
-          def node = root.AddNode(ns).Add(symbol);
-          def sym = node.Symbol;
-          if (sym is AmbiguousSymbol as ambiguous)
-            ambiguous.ReportAlreadyDefined(symbol, project);
+        | [grammarDescriptorImplTI] =>
+          //assert2(false);
+          def loc = grammarDescriptorImplTI.Location.N2Location();
+          def attrs = grammarImplTI.GetModifiers().CustomAttributes;
+          
+          foreach(<[ N2.KeywordRegexesAttribute(array[ ..$sources ]) ]> in attrs)
+            foreach(<[ $(source : string) ]> in sources)
+              keywordRegexs.Add(parseKeywordRegex(source));
+
+          def tokenFieldNames = LoadExternalTokenFieldNames(grammarTI);
+          
+          def symbol = ExternalSyntaxModuleSymbol(grammarTI, grammarImplTI, keywordRegexs.NToList(), tokenFieldNames) : SyntaxModuleSymbol;
+          def node = root.AddAndRepor(grammarTI.NamespaceNode.FullName, symbol, project);
+          
+
+          foreach(<[ N2.MarkerAttribute($(name : string)) ]> as attr in attrs)
+            _ = node.AddAndRepor([], MarkerSymbol(attr.Location.N2Location(), name, true), project);
+              
+          // load rules
+          foreach (ruleTI in grammarDescriptorImplTI.GetNestedSubtypes())
+          {
+            when (Util.ParseRuleClassName(ruleTI.Name) is Some((kind, name)))
+            {
+              //def name = NameRef(ruleTI.NameLocation, name);
+              def (ruleType, typeInfo) = ret:
+                {
+                  foreach (method is IMethod in ruleTI.GetMembers())
+                    when (method.Name == "ResultType")
+                      if (method.ReturnType.TryUnify(Manager.InternalType.Void))
+                        ret(RuleType2.Void(), null);
           else
-            Message.Hint(sym.NLocation(), $"Added: $sym'");
+                      {
+                        def ti = method.ReturnType.Fix().TypeInfo;
+                        ret(RuleType2.Ref(NString.SplitToList(ti.FullName, '.')), ti);
+                      }
+                  (RuleType2.Chars(), null)
+                };
+              def isExtentionPoint = kind is RuleDefinitionType.ExtentionPoint;
+              def extraFields = if (typeInfo == null) [] else Util.LoadExtraFields(typeInfo, Manager);
+              mutable attributes = [];
+              foreach(attr in ruleTI.GetModifiers().CustomAttributes)
+              {
+                | <[ N2.ExplicitSpacesAttribute() ]>         => attributes ::= RuleAttribute.ExplicitSpaces(Location.Default)
+                | <[ N2.SuppressTrailingSpacesAttribute() ]> => attributes ::= RuleAttribute.SuppressTrailingSpaces(Location.Default)
+                | _ => ()
+              }
+              def symbol = ExternalRuleRefSymbol(loc, name, ruleType, attributes, isExtentionPoint, extraFields);
+              _ = node.AddAndRepor([], symbol, project);
+            }
+          }
+
+        | _ => Message.Error(grammarTI.Location, $"$(grammarTI.FullName) not grammar.")
+      }
+    }
+
+    public LoadExternalTokenFieldNames(type : TypeInfo) : Map[string, Identifier]
+    {
+      def env      = type.Manager.CoreEnv;
+      def attrType = env.BindFixedType(<[ N2.TokenFieldNameAttribute ]>);
+      def loc      = LocationStack.Top();
+      mutable tokenFieldNames = Map();
+
+      foreach ((_, [<[ $(name : string) ]>, <[ array[..$tokens] ]>]) in type.GetModifiers().FindAttributesWithArgs(attrType.TypeInfo, env))
+        foreach (<[ $(token : string) ]> in tokens)
+          tokenFieldNames = tokenFieldNames.Replace(token, Identifier(loc, name));
+
+      tokenFieldNames
+    }
+
+    private LoadParsedSyntaxModules(project : N2Project, root : HierarchyNode, fileAsts : SCG.List[G.Start.Ast]) : bool
+    {
+      def errorCount = project.ErrorCount;
+            
+      foreach (start in fileAsts)
+      foreach ((ns, syntaxModule) in start.GetSyntaxModules())
+      {
+        def symbol = ParsedSyntaxModuleSymbol(syntaxModule) : SyntaxModuleSymbol;
+        def node = root.AddAndRepor(ns, symbol, project);
             
           def ruleDefs = SCG.List();
           syntaxModule.RuleRefs(ruleDefs);
           
           foreach (sym in ruleDefs)
+          _ = node.AddAndRepor([], sym, project);
+      }
+
+      project.ErrorCount == errorCount
+    }
+    
+    public BeforeTypedMembers() : void
           {
-            match (node.Add(sym).Symbol)
+      //Message.Hint("BeforeTypedMembers(). Prarsed SyntaxModules:");
+      when (IsListUserDataPresent.[G.Start.Ast]())
+        try
             {
-              | a is AmbiguousSymbol => a.ReportAlreadyDefined(sym, project);
-              | sym                  => Message.Hint(sym.NLocation(), $"Added: $sym'");
+          UpdateCurrentProjectContext();
+        
+          def project = GetCurrentProjectContext();
+          def root    = GetUserData.[HierarchyNode]();
+
+          def fileAsts : SCG.List[G.Start.Ast] = GetListUserData();
+
+          unless (LoadExternalSyntaxModules(project, root))
+            return;
+          unless (LoadParsedSyntaxModules  (project, root, fileAsts))
+            return;
+          
+          //assert2(false);
+            
+          def env = Environment(root, project);
+          
+          foreach (start in fileAsts)
+          {
+            foreach (sm in start.GetSyntaxModuleDatas(env))
+              Debug.WriteLine(sm.Name);
             }
           }
-        }
-        
-        ResetListUserData.[SyntaxModuleInfos]();
-      }
+        finally ResetListUserData.[G.Start.Ast]();
 
       foreach (sm in SyntaxModules)
       {
@@ -234,6 +354,8 @@ namespace N2
       foreach (sm in SyntaxModules)
         sm.GrammarCompiler.AddGrammarRefs(sm.Ast.GrammarRefs(Env)); // require initialized TypeBuilders
 
+     //Message.Hint($<#BeforeTypedMembers() - Grammsr: ..$(SyntaxModules; ", "; x => x.Name.AsName)#>);
+        
       //foreach (sm in SyntaxModules)
       //{
       //  //Message.Hint($"BeforeTypedMembers() - Grammsr: $(sm.GrammarCompiler.GrammarTB.Name)");
@@ -369,7 +491,7 @@ namespace N2
         def localAliasDecls = members.OfType.[G.InnerAliasDeclaration.Ast]();
         mutable localAliasesMap = Map();
             
-        foreach (alias in localAliasDecls)
+        foreach (G.InnerAliasDeclaration.Ast(RuleAlias=G.RuleAlias.Ast as alias) in localAliasDecls)
         {
           def name        = alias.Name.NameRef();
           def rule        = alias.Rule.GetRule();
@@ -605,18 +727,19 @@ namespace N2
             addExtentionRule(m.Name, m.RuleAttributes, m.BodyDeclaration, m.Rule, baseName);
             
         | G.ExtentionRuleDecl.Ast as decl => addExtentionRule(decl.Name, decl.RuleAttributes, decl.BodyDeclaration, decl.Rule, decl.BaseName);
-        | G.Alias.Ast as alias =>
-          def name = alias.Name.NameRef();
+        | G.AliasDecl.Ast(RuleAlias=G.RuleAlias.Ast as alias) =>
+          def name = alias. Name.NameRef();
           def rule = alias.Rule.GetRule();
           aliases  = aliases.Replace(name, rule);
           
         | G.TokenField.Ast(StringLiterals=lits) as decl => 
-          foreach (strLit is G.StringLiteral.Ast in lits[0])
+          foreach (strLit in lits[0])
             tokenFieldNames = tokenFieldNames.Replace(strLit.Value(), decl.Name.NameRef());
 
         | G.SpanClassDecl.Ast as decl =>
           def name        = decl.Name.NameRef();
-          def matchTokens = if (decl.MatchTokens is Some((_, matchTokens)))
+          def matchTokens = 
+            if (decl.MatchTokens is Some((_, matchTokens)))
             Some(matchTokens.RegularRule())
           else
             None();
