@@ -17,25 +17,77 @@ namespace N2.Typing
   [Record]
   public class N2Scope
   {
-    public Parent           : N2Scope                 { get; }
-    public Env              : Environment[N2Project]  { get; }
-    public Aliases          : Map[string, G.Rule]     { get; }
-    public TokenFieldNames  : Map[string, Identifier] { get; }
-    
+    public Parent                   : N2Scope                                   { get; }
+    public Env                      : Environment[N2Project]                    { get; }
+    public Aliases                  : Map[string, G.Rule]                       { get; }
+    public TokenFieldNames          : Map[string, Identifier]                   { get; }
+    public SpanClassTokensMatchers  : list[(string -> bool) * Identifier]       { get; }
+    public SpanClasses              : Set[Identifier]                           { get; }
+    public BracePairs               : list[(string -> bool) * (string -> bool)] { get; }
+    public KeywordRegexs            : list[(string -> bool) * Identifier]       { get; }
+   
     public this(env : Environment[N2Project])
     {
-      this(null, env, Map(), Map())
+      this(null, env, Map(), Map(), [], Set(), [], [])
     }
 
     public AddAlias(name : string, rule : G.Rule) : N2Scope
     {
-      N2Scope(this, Env, Aliases.Replace(name, rule), TokenFieldNames)
+      def aliases = Aliases.Replace(name, rule);
+      N2Scope(this, Env, aliases, TokenFieldNames, SpanClassTokensMatchers, SpanClasses, BracePairs, KeywordRegexs)
     }
 
     public AddTokenFieldNames(name : Identifier, stringLiterals : list[G.StringLiteral]) : N2Scope
     {
       def tokenFieldNames = Utils.FoldThrough(stringLiterals, TokenFieldNames, (strLit, result) => result.Replace(strLit.Value(), name));
-      N2Scope(this, Env, Aliases, tokenFieldNames)
+      N2Scope(this, Env, Aliases, tokenFieldNames, SpanClassTokensMatchers, SpanClasses, BracePairs, KeywordRegexs)
+    }
+
+    public AddSpanClass(name : Identifier, tokensMatcherOpt : option[RegularRule]) : N2Scope
+    {
+      //when (SpanClasses.Contains(name)) // it is need?
+      //  Env.Project.Error(name, "Can't resolve name: '$name'.", -1);
+        
+      def tokensMatchers =
+        if (tokensMatcherOpt is Some(tokensMatcher))
+          (MakeMatcher(tokensMatcher), name) :: SpanClassTokensMatchers
+        else
+          SpanClassTokensMatchers;
+
+      N2Scope(this, Env, Aliases, TokenFieldNames, tokensMatchers, SpanClasses.Replace(name), BracePairs, KeywordRegexs)
+    }
+
+    public AddBracePair(openBraceMatcher : RegularRule, closeBraceMatcher : RegularRule) : N2Scope
+    {
+      def bracePairs = (MakeMatcher(openBraceMatcher), MakeMatcher(closeBraceMatcher)) :: BracePairs;
+      N2Scope(this, Env, Aliases, TokenFieldNames, SpanClassTokensMatchers, SpanClasses, bracePairs, KeywordRegexs)
+    }
+    
+    public AddKeywordRegex(tokensMatcher : RegularRule, name : Identifier) : N2Scope
+    {
+      def keywordRegexs = (MakeMatcher(tokensMatcher), name) :: KeywordRegexs;
+      N2Scope(this, Env, Aliases, TokenFieldNames, SpanClassTokensMatchers, SpanClasses, BracePairs, keywordRegexs)
+    }
+
+    MakeMatcher(regularRule : RegularRule) : string -> bool
+    {
+      def convert(_ : RegularRule) : FSM
+      {
+        | Choice(rules)                            => FSMBuilder.Choice(rules.Map(convert))
+        | Sequence(rules)                          => FSMBuilder.Seq(rules.Map(convert))
+        | Chars(chars)                             => FSMBuilder.Seq(chars)
+        | Repeat(min, max, rule)                   => FSMBuilder.Repeat(min, max, convert(rule))
+        | RepeatWithSeparator(min, max, rule, sep) => FSMBuilder.RepeatWithSeparator(min, max, convert(rule), convert(sep))
+        | Call(name) =>
+          def loc = name.Location.N2Location();
+          match (Env.Bind.[ParsedRuleRefSymbol[G.TokenRuleDecl.Ast]](name.Parts, name.Location.N2Location()))
+          {
+            | Some(sym) => convert(sym.Value.TokenRule.RegularRule())
+            | _ => Env.Project.Error(loc, "Can't resolve name: '$name'.", -1); FSM()
+          }
+      }
+      
+      FSMMatch.MakeMatcher(convert(regularRule))
     }
 
     public GetNextRuleId() : int
@@ -44,13 +96,13 @@ namespace N2.Typing
       project.GetNextRuleId()
     }
     
-    public Bind[TProject, TSymbol](name : G.Identifier) : option[TSymbol]
+    public Bind[TSymbol](name : G.Identifier) : option[TSymbol]
       where TSymbol: Symbol
     {
       Env.Bind.[TSymbol](name.Value(), name.Location)
     }
     
-    public Bind[TProject, TSymbol](name : G.QIdentifier) : option[TSymbol]
+    public Bind[TSymbol](name : G.QIdentifier) : option[TSymbol]
       where TSymbol: Symbol
     {
       Env.Bind.[TSymbol](name.Parts(), name.Location)
