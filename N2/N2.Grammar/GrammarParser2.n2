@@ -306,9 +306,10 @@ syntax module GrammarParser2
         assert2(ruleSymbol.IsSome);
         def baseRuleSymbol = RuleRef(BaseName, inScope.Bind(BaseName));
         def precedence = BodyDeclaration.GetPrecedence();
-        def localAliases = BodyDeclaration.GetAliases(inScope);
+        def scopeWithAliases = BodyDeclaration.GetAliases(inScope); // !!!
+        def rule = this.Rule.GetRule2(precedence, None(), scopeWithAliases);
         //def ruleDef = RuleDefinition2.
-        ignore(id, baseRuleSymbol, precedence, localAliases);
+        ignore(id, baseRuleSymbol, rule);
         //(inScope, ruleDef :: ruleDefinitions)
         (inScope, ruleDefinitions)
       }
@@ -580,9 +581,8 @@ syntax module GrammarParser2
 
   syntax Rule
   {
-    //OutScope(inScope : N2.Scope) : N2.Scope = inScope;
     GetRule() : N2.Model.Rule;
-    //FieldNames(scope : N2Scope) : string = [];
+    GetRule2(precedence : int, fieldName : option[string], inScope : N2Scope) : N2.Model.Rule2;  // precedence < 0 if it is right-associative
   }
 
   extend syntax Rule
@@ -593,29 +593,59 @@ syntax module GrammarParser2
       alias RightRules = (sm Rule : 10)+;
 
       override GetRule = Rule.Sequence(this.NLocation(), RuleType.Void(), 0, LeftRule.GetRule() :: RightRules.Map(_.GetRule()));
+      override GetRule2
+      {
+        def rules = LeftRule.GetRule2(precedence, None(), inScope) :: RightRules.Map(_.GetRule2(precedence, None(), inScope));
+        def type  = MakeType(rules.Map(_.Type));
+        Rule2.Sequence(this.Location, type, 0, MakeName(fieldName, rules, inScope), rules);
+      }
     }
     NotRule                     = "!" Rule : 20
     {
-      override GetRule = Rule.Not(this.NLocation(), RuleType.Void(), 0, this.Rule.GetRule());
+      override GetRule  = Rule.Not(this.NLocation(), RuleType.Void(), 0, this.Rule.GetRule());
+      override GetRule2
+      {
+        def rule = this.Rule.GetRule2(0, None(), inScope);
+        Rule2.Not(this.Location, RuleType2.Void(), 0, "", rule);
+      }
     }
     AndRule                     = "&" Rule : 20
     {
-      override GetRule = Rule.And(this.NLocation(), RuleType.Void(), 0, this.Rule.GetRule());
+      override GetRule  = Rule.And(this.NLocation(), RuleType.Void(), 0, this.Rule.GetRule());
+      override GetRule2 = Rule2.And(this.Location, RuleType2.Void(), 0, "", this.Rule.GetRule2(0, None(), inScope));
     }
     OptionalRule                = Rule "?"
     {
       precedence 30;
       override GetRule = Rule.Repeat(this.NLocation(), RuleType.Void(), 0, 0, Some(1), this.Rule.GetRule());
+      override GetRule2
+      {
+        def rule  = this.Rule.GetRule2(0, None(), inScope);
+        def type  = if (rule.Type is RuleType2.Void) RuleType2.Void() else RuleType2.Option(rule.Type);
+        Rule2.Repeat(this.Location, type, 0, fieldName ?? (rule.FieldName + "Opt"), 0, Some(1), rule);
+      }
     }
     ZeroOrManyRule              = Rule "*"
     {
       precedence 30;
       override GetRule = Rule.Repeat(this.NLocation(), RuleType.Void(), 0, 0, None(), this.Rule.GetRule());
+      override GetRule2
+      {
+        def rule  = this.Rule.GetRule2(0, None(), inScope);
+        def type  = if (rule.Type is RuleType2.Void) RuleType2.Void() else RuleType2.List(rule.Type);
+        Rule2.Repeat(this.Location, type, 0, MakePlural(fieldName, rule, inScope), 0, None(), rule);
+      }
     }
     OneOrManyRule               = Rule "+"
     {
       precedence 30;
       override GetRule = Rule.Repeat(this.NLocation(), RuleType.Void(), 0, 1, None(), this.Rule.GetRule());
+      override GetRule2
+      {
+        def rule  = this.Rule.GetRule2(0, None(), inScope);
+        def type  = if (rule.Type is RuleType2.Void) RuleType2.Void() else RuleType2.List(rule.Type);
+        Rule2.Repeat(this.Location, type, 0, MakePlural(fieldName, rule, inScope), 1, None(), rule);
+      }
     }
     FieldName                   = Rule : 11 sm "as" sm Name
     {
@@ -624,31 +654,70 @@ syntax module GrammarParser2
         Project.CurrentProject.Error(this, "The 'as' operator not allowed in subrules.", -1);
         this.Rule.GetRule()
       }
+      override GetRule2 = this.Rule.GetRule2(0, Some(Name.Value()), inScope);
     }
     CharRule                    = CharLiteral
     {
       override GetRule = Rule.String(CharLiteral.NLocation(), RuleType.Void(), 0, CharLiteral.Value().ToString());
+      override GetRule2
+      {
+        def value  = CharLiteral.Value().ToString();
+        Rule2.String(CharLiteral.Location, RuleType2.Chars(), 0, MakeLiteralName(fieldName, value, inScope), CharLiteral.Value().ToString());
+      }
     }
     StringRule                  = StringLiteral
     {
       override GetRule = Rule.String(StringLiteral.NLocation(), RuleType.Void(), 0, StringLiteral.Value());
+      override GetRule2
+      {
+        def value  = StringLiteral.Value().ToString();
+        Rule2.String(StringLiteral.Location, RuleType2.Chars(), 0, MakeLiteralName(fieldName, value, inScope), StringLiteral.Value().ToString());
+      }
     }
     RoundsRule                  = "(" Rule ")"
     {
-      override GetRule = this.Rule.GetRule();
+      override GetRule  = this.Rule.GetRule();
+      override GetRule2 = this.Rule.GetRule2(0, fieldName, inScope);
     }
     CallRule                    = QualifiedName BindingPower
     {
       alias BindingPower = (sm ":" sm Number)?;
       override GetRule = Rule.Call(QualifiedName.NLocation(), RuleType.Void(), 0, QualifiedName.NameRef(), BindingPower.Map((_, num) => num.Value()) ?? 0);
+      override GetRule2
+      {
+        def ruleRef = RuleRef(QualifiedName, inScope.Bind(QualifiedName));
+        def type = if (ruleRef.Ref is Some(ruleSymbol)) ruleSymbol.Type else RuleType2.Void();
+        def bp =
+          match (BindingPower)
+          {
+            | None
+            | Some((_, num)) when num == 0 => precedence
+            | Some((_, num)) => num.Value()
+          };
+        Rule2.Call(QualifiedName.Location, type, 0, fieldName ?? QualifiedName.Parts().LastOrDefault() ?? "", ruleRef, bp);
+      }
     }
     ZeroOrManyWithSeparatorRule = "(" Rule ";"sm SeparatorRule ")" "*"
     {
       override GetRule = Rule.RepeatWithSeparator(this.NLocation(), RuleType.Void(), 0, 0, None(), this.Rule.GetRule(), this.SeparatorRule.GetRule());
-    }
+      override GetRule2
+      {
+        def rule    = this.Rule.GetRule2(0, None(), inScope);
+        def sepRule = SeparatorRule.GetRule2(0, None(), inScope);
+        def type  = MakeType(rule, sepRule);
+        Rule2.Repeat(this.Location, type, 0, MakeName(fieldName, rule, sepRule, inScope), 0, None(), rule);
+      }
+   }
     OneOrManyWithSeparatorRule  = "(" Rule ";"sm SeparatorRule ")" "+"
     {
       override GetRule = Rule.RepeatWithSeparator(this.NLocation(), RuleType.Void(), 0, 1, None(), this.Rule.GetRule(), this.SeparatorRule.GetRule());
+      override GetRule2
+      {
+        def rule    = this.Rule.GetRule2(0, None(), inScope);
+        def sepRule = SeparatorRule.GetRule2(0, None(), inScope);
+        def type  = MakeType(rule, sepRule);
+        Rule2.Repeat(this.Location, type, 0, MakeName(fieldName, rule, sepRule, inScope), 1, None(), rule);
+      }
     }
   }
 }
