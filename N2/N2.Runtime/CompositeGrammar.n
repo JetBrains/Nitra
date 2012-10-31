@@ -3,6 +3,7 @@ using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
 using N2.Internal;
+using N2.Runtime;
 
 using System;
 using System.Linq;
@@ -12,24 +13,20 @@ namespace N2
 {
   public class CompositeGrammar
   {
-    public   Parent                   : option[CompositeGrammar];
-    private  Grammars                 : SCG.Dictionary[GrammarDescriptor, int];
-    internal ParserHost               : ParserHost;
-    private  ExtentionRuleDescriptors : Hashtable[ExtensibleRuleDescriptor, array[PrefixRuleDescriptor] * array[PostfixRuleDescriptor]];
-    private  ExtentionRuleParsers     : Hashtable[ExtensibleRuleDescriptor, array[Internal.ExtentionRuleParser] * array[Internal.ExtentionRuleParser]];
-    private  SimpleRuleParsers        : Hashtable[SimpleRuleDescriptor, Internal.RuleParser];
-    private  ExtensibleRuleIds        : Hashtable[ExtensibleRuleDescriptor, int * int] = Hashtable();
+    public Grammars                 : SCG.Dictionary[GrammarDescriptor, int];
+    public ParserHost               : ParserHost;
+    public SimpleRuleParsers        : Hashtable[SimpleRuleDescriptor, Internal.RuleParser];
+    public ExtensibleRuleParsers    : Hashtable[ExtensibleRuleDescriptor * int, Internal.ExtensibleRuleParser];
+    public ExtensibleRules          : Hashtable[ExtensibleRuleDescriptor, ExtensibleRuleParserData] = Hashtable();
 
     internal this(parserHost : ParserHost)
     {
-      Parent = None();
       Grammars = SCG.Dictionary();
       ParserHost = parserHost;
     }
 
     private this(parent : CompositeGrammar, grammarDescriptor : GrammarDescriptor)
     {
-      Parent = Some(parent);
       Grammars = SCG.Dictionary(parent.Grammars);
       ParserHost = parent.ParserHost;
 
@@ -46,7 +43,7 @@ namespace N2
 
       def rules = Grammars.Keys.SelectMany(gd => gd.Rules).NToArray();
 
-      ExtentionRuleDescriptors = rules
+      def extentionRuleDescriptors = rules
         .OfType.[ExtentionRuleDescriptor]()
         .Grouping(rd => (rd.BaseRule, rd))
         .Map((baseRd, extetions) =>
@@ -59,48 +56,35 @@ namespace N2
 
       foreach (extensibleRule in rules.OfType.[ExtensibleRuleDescriptor]())
       {
-        when (!ExtentionRuleDescriptors.Contains(extensibleRule))
-          ExtentionRuleDescriptors.Add(extensibleRule, (array[], array[]));
-        def prefixID  = ParserHost.NewRuleId(extensibleRule);
-        def postfixID = ParserHost.NewRuleId(extensibleRule);
-        ExtensibleRuleIds[extensibleRule] = (prefixID, postfixID);
+        def (prefixDescriptors, postfixDescriptors) = extentionRuleDescriptors.GetValueOrDefault(extensibleRule, (array[], array[]));
+        ExtensibleRules[extensibleRule] = ExtensibleRuleParserData(this, extensibleRule, prefixDescriptors, postfixDescriptors);
       }
-
-      ExtentionRuleParsers = ExtentionRuleDescriptors.Map((baseRd, (prefix, postfix)) =>
-      {
-        def prefix = prefix.Map(rd => rd.NewParser(ParserHost.NewRuleId(rd), this));
-        def postfix = postfix.Map(rd => rd.NewParser(ParserHost.NewRuleId(rd), this));
-        (baseRd, (prefix, postfix))
-      });
 
       SimpleRuleParsers = Hashtable(rules
         .OfType.[SimpleRuleDescriptor]()
         .Map(rd => (rd, rd.NewParser(ParserHost.NewRuleId(rd), this))));
 
-      foreach (kv in ExtentionRuleParsers)
-      {
-        foreach (parser in kv.Value[0])
-          parser.Init();
-        foreach (parser in kv.Value[1])
-          parser.Init();
-      }
+      foreach (extensibleRule in ExtensibleRules)
+        extensibleRule.Value.Init();
 
       foreach (kv in SimpleRuleParsers)
         kv.Value.Init();
+
+      foreach (extensibleRule in ExtensibleRules)
+        _ = GetExtensibleRuleParser(extensibleRule.Key, 0);
     }
 
-    public GetExtentionRules(rd : ExtensibleRuleDescriptor) : array[PostfixRuleDescriptor] * array[Internal.ExtentionRuleParser] * array[Internal.ExtentionRuleParser]
+    public GetExtensibleRuleParser(rd : ExtensibleRuleDescriptor, bindingPower : int) : Internal.ExtensibleRuleParser
     {
-      def (_, rd2) = ExtentionRuleDescriptors[rd];
-      def (rp1, rp2) = ExtentionRuleParsers[rd];
-      (rd2, rp1, rp2)
-    }
-
-    [Memoize(Synchronized = true)]
-    public GetExtensibleRuleParser(bindingPower : int, rd : ExtensibleRuleDescriptor) : Internal.RuleParser
-    {
-      def (prefixID, postfixID) = ExtensibleRuleIds[rd];
-      Internal.ExtensibleRuleParser(prefixID, postfixID, rd, bindingPower, this)
+      def key = (rd, bindingPower);
+      if (ExtensibleRuleParsers.Contains(key))
+        ExtensibleRuleParsers[key]
+      else
+      {
+        def parser = Internal.ExtensibleRuleParser(ExtensibleRules[rd], bindingPower);
+        ExtensibleRuleParsers[key] = parser;
+        parser
+      }
     }
 
     public GetSimpleRuleParser(rd : SimpleRuleDescriptor) : Internal.RuleParser

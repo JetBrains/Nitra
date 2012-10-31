@@ -1,0 +1,183 @@
+﻿using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using N2.Internal;
+
+namespace N2.Runtime
+{
+  public class AstWalkerHost[T]
+  {
+  }
+
+  public abstract class SimpleAstWalker[T]
+  {
+    public abstract Walk(pos : ref int, astPtr : int, parser : ref Parser) : T;
+  }
+
+  public abstract class PrefixAstWalker[T]
+  {
+    public abstract Walk(pos : ref int, astPtr : int, parser : ref Parser) : T;
+  }
+
+  public abstract class PostfixAstWalker[T]
+  {
+    public abstract Walk(pos : ref int, prefix : T, astPtr : int, parser : ref Parser) : T;
+  }
+
+  public class ExtensibleRuleWalker[T]
+  {
+    public PrefixId : int;
+    public PostfixId : int;
+
+    public FirstPostfixRule : int;
+    public FirstPostfixRuleId : int;
+
+    public PrefixRules : array[PrefixAstWalker[T]];
+    public PostfixRules : array[PostfixAstWalker[T]];
+
+    public PrefixRulesOfs : int;
+    public PostfixRulesOfs : int;
+
+    public virtual OnPrefixAmbiguility(pos : int, parser : ref Parser, walker : PrefixAstWalker[T], value : T, nextWalker : PrefixAstWalker[T], nextValue : T) : T
+    {
+      _ = pos;
+      _ = parser;
+      _ = walker;
+      _ = value;
+      _ = nextWalker;
+      _ = nextValue;
+      throw Exception("PrefixAmbiguility");
+    }
+
+    public virtual OnPostfixAmbiguility(pos : int, parser : ref Parser, walker : PostfixAstWalker[T], value : T, nextWalker : PostfixAstWalker[T], nextValue : T) : T
+    {
+      _ = pos;
+      _ = parser;
+      _ = walker;
+      _ = value;
+      _ = nextWalker;
+      _ = nextValue;
+      throw Exception("PrefixAmbiguility");
+    }
+
+    public virtual OnPrefixMissed(pos : int, parser : ref Parser) : T
+    {
+      _ = pos;
+      _ = parser;
+      throw Exception("PrefixMissed");
+    }
+
+    public this(parser : ExtensibleRuleParser)
+    {
+    }
+
+    public Walk(pos : ref int, parser : ref Parser) : T
+    {
+      mutable newPos;
+      mutable ast = FindFirstPrefix(pos, ref parser);
+      if (ast > 0)
+      {
+        mutable prefixWalker = PrefixRules[parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] - PrefixRulesOfs];
+        newPos = pos;
+        mutable prefixValue = prefixWalker.Walk(ref newPos, ast, ref parser);
+        ast = FindNextPrefix(ast, ref parser);
+        when (ast > 0)
+        {
+          def firstNewPos = newPos;
+          while (ast > 0)
+          {
+            def nextPrefixWalker = PrefixRules[parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] - PrefixRulesOfs];
+            newPos = pos;
+            def nextValue = nextPrefixWalker.Walk(ref newPos, ast, ref parser);
+            assert(newPos == firstNewPos);
+            prefixValue = OnPrefixAmbiguility(pos, ref parser, prefixWalker, prefixValue, nextPrefixWalker, nextValue);
+            prefixWalker = nextPrefixWalker;
+            ast = FindNextPrefix(ast, ref parser);
+          }
+        }
+        pos = newPos;
+
+        mutable postfixWalker;
+        mutable postfixValue;
+        for (ast = FindFirstPostfix(pos, ref parser); ast > 0; ast = FindFirstPostfix(pos, ref parser))
+        {
+          postfixWalker = PostfixRules[parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] - PrefixRulesOfs];
+          newPos = pos;
+          postfixValue = postfixWalker.Walk(ref newPos, prefixValue, ast, ref parser);
+          ast = FindNextPostfix(ast, ref parser);
+          when (ast > 0)
+          {
+            def firstNewPos = newPos;
+            while (ast > 0)
+            {
+              def nextWalker = PostfixRules[parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] - PrefixRulesOfs];
+              newPos = pos;
+              def nextValue = nextWalker.Walk(ref newPos, prefixValue, ast, ref parser);
+              assert(newPos == firstNewPos);
+              postfixValue = OnPostfixAmbiguility(pos, ref parser, postfixWalker, postfixValue, nextWalker, nextValue);
+              postfixWalker = nextWalker;
+              ast = FindNextPostfix(ast, ref parser);
+            }
+          }
+          prefixValue = postfixValue;
+          pos = newPos;
+        }
+        prefixValue;
+      }
+      else
+      {
+        OnPrefixMissed(pos, ref parser);
+      }
+    }
+
+    public FindFirstPrefix(pos : int, parser : ref Parser) : int
+    {
+      for (mutable ast = parser.memoize[pos]; ast > 0; ast = parser.ast[ast + ExtensibleRuleParser.PrefixOfs.Next])
+        when (parser.ast[ast + ExtensibleRuleParser.PrefixOfs.Id] == PrefixId)
+          return parser.ast[ast + ExtensibleRuleParser.PrefixOfs.List];
+      0
+    }
+
+    public FindNextPrefix(prevPrefix : int, parser : ref Parser) : int
+    {
+      parser.ast[prevPrefix + ExtensibleRuleParser.AstOfs.Next];
+    }
+
+    public FindFirstPostfix(pos : int, parser : ref Parser) : int
+    {
+      for (mutable ast = parser.memoize[pos]; ast > 0; ast = parser.ast[ast + ExtensibleRuleParser.PostfixOfs.Next])
+        when (parser.ast[ast + ExtensibleRuleParser.PostfixOfs.Id] == PostfixId)//нашли
+        {
+          mutable result = parser.ast[ast + ExtensibleRuleParser.PostfixOfs.AstList];//список разобраных с этого места правил
+          // пропускаем правила с низкой силой связывания.
+          while (result > 0 && (parser.ast[result] & ExtensibleRuleParser.PostfixMask.Id) < FirstPostfixRuleId)
+            result = parser.ast[result + ExtensibleRuleParser.PostfixAstOfs.Next];
+          // пропускаем плохие варианты.
+          while (result > 0 && (parser.ast[result] & ExtensibleRuleParser.PostfixMask.Mark) == ExtensibleRuleParser.PostfixMark.Bad)
+            result = parser.ast[result + ExtensibleRuleParser.PostfixAstOfs.Next];
+          return result;
+        }
+      0
+    }
+
+    public FindNextPostfix(mutable prevPostfix : int, parser : ref Parser) : int
+    {
+      when (prevPostfix <= 0)
+        return 0;
+      //если у нас лучшее значение то заканчиваем перебор
+      when ((parser.ast[prevPostfix] & ExtensibleRuleParser.PostfixMask.Mark) == ExtensibleRuleParser.PostfixMark.Best)
+        return 0;
+      prevPostfix = parser.ast[prevPostfix + ExtensibleRuleParser.PostfixAstOfs.Next];
+      // пропускаем плохие варианты.
+      while (prevPostfix > 0 && (parser.ast[prevPostfix] & ExtensibleRuleParser.PostfixMask.Mark) == ExtensibleRuleParser.PostfixMark.Bad)
+        prevPostfix = parser.ast[prevPostfix + ExtensibleRuleParser.PostfixAstOfs.Next];
+      prevPostfix;
+    }
+  }
+}
