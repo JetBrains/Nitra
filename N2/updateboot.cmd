@@ -7,7 +7,7 @@ ROBOCOPY  N2.Compiler\bin\Debug\   %Boot%\           N2.Compiler.???   /LOG:%Boo
 ROBOCOPY  N2.Runtime\bin\Debug\    %Boot%\           N2.Runtime.???    /LOG+:%Boot%\Boot-update.log /NP /NJS /V /NJH
 ROBOCOPY  N2.Grammar\bin\Debug\    %Boot%\           N2.Grammar.???    /LOG+:%Boot%\Boot-update.log /NP /NJS /V /NJH
 ROBOCOPY  %Nemerle%\               %Boot%\           %CompilerFiles%   /LOG+:%Boot%\Boot-update.log /NP /NJS /V /NJH
-ROBOCOPY  N2.Runtime\              Boot.N2.Runtime\  *.n *.nproj       /LOG+:%Boot%\Boot-update.log /NP /NJS /V /NJH /MIR /A+:R /XF Boot.N2.Runtime.nproj 
+ROBOCOPY  N2.Runtime\              Boot.N2.Runtime\  *.n *.nproj *.cs  /LOG+:%Boot%\Boot-update.log /NP /NJS /V /NJH /MIR /A+:R /XF Boot.N2.Runtime.nproj 
 cls
 echo Result of update %Boot%
 type %Boot%\Boot-update.log

@@ -4,7 +4,9 @@ using N2.Model;
 using N2.ProjectSystem;
 using N2.Runtime;
 using N2.Typing;
+
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Compiler;
 
 using System.Collections.Generic;
@@ -250,7 +252,11 @@ syntax module GrammarParser2
     }
   }
 
-  syntax RuleAttribute { Value() : N2.Model.RuleAttribute; }
+  syntax RuleAttribute
+  {
+    Value() : N2.Model.RuleAttribute;
+    Options(inOptions : RuleDefinitionOptions) : RuleDefinitionOptions = inOptions;
+  }
 
   extend syntax RuleAttribute
   {
@@ -258,6 +264,7 @@ syntax module GrammarParser2
     {
       alias AttributeName = "StartRule";
       override Value = RuleAttribute.StartRule(NLocation(this, AttributeName));
+      //override Options = inOptions.SetStart(AttributeName, true);
     }
     SpanClassAttribute              = AttributeName "(" Class ")"
     {
@@ -301,6 +308,7 @@ syntax module GrammarParser2
     {
       override CollectRuleDefinitions
       {
+        //assert2(false);
         def id = inScope.GetNextRuleId();
         def ruleSymbol = inScope.Bind(Name);
         assert2(ruleSymbol.IsSome);
@@ -582,7 +590,7 @@ syntax module GrammarParser2
   syntax Rule
   {
     GetRule() : N2.Model.Rule;
-    GetRule2(precedence : int, fieldName : option[string], inScope : N2Scope) : N2.Model.Rule2;  // precedence < 0 if it is right-associative
+    GetRule2(_precedence : int, _fieldName : option[string], inScope : N2Scope) : N2.Model.Rule2;  // precedence < 0 if it is right-associative
   }
 
   extend syntax Rule
@@ -595,9 +603,9 @@ syntax module GrammarParser2
       override GetRule = Rule.Sequence(this.NLocation(), RuleType.Void(), 0, LeftRule.GetRule() :: RightRules.Map(_.GetRule()));
       override GetRule2
       {
-        def rules = LeftRule.GetRule2(precedence, None(), inScope) :: RightRules.Map(_.GetRule2(precedence, None(), inScope));
+        def rules = LeftRule.GetRule2(_precedence, None(), inScope) :: RightRules.Map(_.GetRule2(_precedence, None(), inScope));
         def type  = MakeType(rules.Map(_.Type));
-        Rule2.Sequence(this.Location, type, 0, MakeName(fieldName, rules, inScope), rules);
+        Rule2.Sequence(this.Location, type, 0, MakeName(_fieldName, rules, inScope), rules);
       }
     }
     NotRule                     = "!" Rule : 20
@@ -622,7 +630,7 @@ syntax module GrammarParser2
       {
         def rule  = this.Rule.GetRule2(0, None(), inScope);
         def type  = if (rule.Type is RuleType2.Void) RuleType2.Void() else RuleType2.Option(rule.Type);
-        Rule2.Repeat(this.Location, type, 0, fieldName ?? (rule.FieldName + "Opt"), 0, Some(1), rule);
+        Rule2.Repeat(this.Location, type, 0, _fieldName ?? (rule.FieldName + "Opt"), 0, Some(1), rule);
       }
     }
     ZeroOrManyRule              = Rule "*"
@@ -633,7 +641,7 @@ syntax module GrammarParser2
       {
         def rule  = this.Rule.GetRule2(0, None(), inScope);
         def type  = if (rule.Type is RuleType2.Void) RuleType2.Void() else RuleType2.List(rule.Type);
-        Rule2.Repeat(this.Location, type, 0, MakePlural(fieldName, rule, inScope), 0, None(), rule);
+        Rule2.Repeat(this.Location, type, 0, MakePlural(_fieldName, rule, inScope), 0, None(), rule);
       }
     }
     OneOrManyRule               = Rule "+"
@@ -644,7 +652,7 @@ syntax module GrammarParser2
       {
         def rule  = this.Rule.GetRule2(0, None(), inScope);
         def type  = if (rule.Type is RuleType2.Void) RuleType2.Void() else RuleType2.List(rule.Type);
-        Rule2.Repeat(this.Location, type, 0, MakePlural(fieldName, rule, inScope), 1, None(), rule);
+        Rule2.Repeat(this.Location, type, 0, MakePlural(_fieldName, rule, inScope), 1, None(), rule);
       }
     }
     FieldName                   = Rule : 11 sm "as" sm Name
@@ -662,7 +670,7 @@ syntax module GrammarParser2
       override GetRule2
       {
         def value  = CharLiteral.Value().ToString();
-        Rule2.String(CharLiteral.Location, RuleType2.Chars(), 0, MakeLiteralName(fieldName, value, inScope), CharLiteral.Value().ToString());
+        Rule2.String(CharLiteral.Location, RuleType2.Chars(), 0, MakeLiteralName(_fieldName, value, inScope), CharLiteral.Value().ToString());
       }
     }
     StringRule                  = StringLiteral
@@ -671,13 +679,13 @@ syntax module GrammarParser2
       override GetRule2
       {
         def value  = StringLiteral.Value().ToString();
-        Rule2.String(StringLiteral.Location, RuleType2.Chars(), 0, MakeLiteralName(fieldName, value, inScope), StringLiteral.Value().ToString());
+        Rule2.String(StringLiteral.Location, RuleType2.Chars(), 0, MakeLiteralName(_fieldName, value, inScope), StringLiteral.Value().ToString());
       }
     }
     RoundsRule                  = "(" Rule ")"
     {
       override GetRule  = this.Rule.GetRule();
-      override GetRule2 = this.Rule.GetRule2(0, fieldName, inScope);
+      override GetRule2 = this.Rule.GetRule2(0, _fieldName, inScope);
     }
     CallRule                    = QualifiedName BindingPower
     {
@@ -685,16 +693,22 @@ syntax module GrammarParser2
       override GetRule = Rule.Call(QualifiedName.NLocation(), RuleType.Void(), 0, QualifiedName.NameRef(), BindingPower.Map((_, num) => num.Value()) ?? 0);
       override GetRule2
       {
+        def parts = QualifiedName.Parts();
+        def newFieldName = _fieldName ?? ToPascalCase(parts.LastOrDefault(""));
+
+        when (inScope.TryGetAlias(parts) is Some(rule))
+          return rule.GetRule2(_precedence, Some(newFieldName), inScope);
+
         def ruleRef = RuleRef(QualifiedName, inScope.Bind(QualifiedName));
         def type = if (ruleRef.Ref is Some(ruleSymbol)) ruleSymbol.Type else RuleType2.Void();
         def bp =
           match (BindingPower)
           {
             | None
-            | Some((_, num)) when num == 0 => precedence
+            | Some((_, num)) when num.Value() == 0 => _precedence
             | Some((_, num)) => num.Value()
           };
-        Rule2.Call(QualifiedName.Location, type, 0, fieldName ?? QualifiedName.Parts().LastOrDefault() ?? "", ruleRef, bp);
+        Rule2.Call(QualifiedName.Location, type, 0, newFieldName, ruleRef, bp);
       }
     }
     ZeroOrManyWithSeparatorRule = "(" Rule ";"sm SeparatorRule ")" "*"
@@ -705,7 +719,7 @@ syntax module GrammarParser2
         def rule    = this.Rule.GetRule2(0, None(), inScope);
         def sepRule = SeparatorRule.GetRule2(0, None(), inScope);
         def type  = MakeType(rule, sepRule);
-        Rule2.Repeat(this.Location, type, 0, MakeName(fieldName, rule, sepRule, inScope), 0, None(), rule);
+        Rule2.Repeat(this.Location, type, 0, MakeName(_fieldName, rule, sepRule, inScope), 0, None(), rule);
       }
    }
     OneOrManyWithSeparatorRule  = "(" Rule ";"sm SeparatorRule ")" "+"
@@ -716,7 +730,7 @@ syntax module GrammarParser2
         def rule    = this.Rule.GetRule2(0, None(), inScope);
         def sepRule = SeparatorRule.GetRule2(0, None(), inScope);
         def type  = MakeType(rule, sepRule);
-        Rule2.Repeat(this.Location, type, 0, MakeName(fieldName, rule, sepRule, inScope), 1, None(), rule);
+        Rule2.Repeat(this.Location, type, 0, MakeName(_fieldName, rule, sepRule, inScope), 1, None(), rule);
       }
     }
   }
