@@ -255,7 +255,7 @@ syntax module GrammarParser2
   syntax RuleAttribute
   {
     Value() : N2.Model.RuleAttribute;
-    Options(inOptions : RuleDefinitionOptions) : RuleDefinitionOptions = inOptions;
+    Options(inScope : N2Scope, inOptions : RuleDefinitionOptions) : N2Scope * RuleDefinitionOptions = (inScope, inOptions);
   }
 
   extend syntax RuleAttribute
@@ -264,23 +264,26 @@ syntax module GrammarParser2
     {
       alias AttributeName = "StartRule";
       override Value = RuleAttribute.StartRule(NLocation(this, AttributeName));
-      //override Options = inOptions.SetStart(AttributeName, true);
+      override Options = (inScope, inOptions.SetStart(this, true));
     }
     SpanClassAttribute              = AttributeName "(" Class ")"
     {
       alias AttributeName = "SpanClass";
-      alias Class = QIdentifier;
+      alias Class = Identifier;
       override Value = RuleAttribute.SpanClass(NLocation(this, AttributeName), Class.NameRef());
+      override Options = (inScope, inScope.BindSpanClass(Class).Map(inOptions.SetSpanClass(Class, _)) ?? inOptions);
     }
     ExplicitSpacesAttribute         = AttributeName
     {
       alias AttributeName = "ExplicitSpaces";
       override Value = RuleAttribute.ExplicitSpaces(NLocation(this, AttributeName));
+      override Options = (inScope, inOptions.SetExplicitSpaces(this, true));
     }
     SuppressTrailingSpacesAttribute = AttributeName
     {
       alias AttributeName = "SuppressTrailingSpaces";
       override Value = RuleAttribute.SuppressTrailingSpaces(NLocation(this, AttributeName));
+      override Options = (inScope, inOptions.SetSuppressTrailingSpaces(this, true));
     }
   }
 
@@ -288,10 +291,13 @@ syntax module GrammarParser2
   {
     Value(acc : list[N2.Model.RuleAttribute]) : list[N2.Model.RuleAttribute] = 
       FoldThrough(RuleAttributes[0], acc, (x, acc) => x.Value() :: acc);
+    Options(inScope : N2Scope, inOptions : RuleDefinitionOptions) : N2Scope * RuleDefinitionOptions = 
+      FoldThrough(RuleAttributes[0], (inScope, inOptions), _.Options(_));
   }
   syntax RuleAttributes    = RuleAttributeList*
   {
     Value() : list[N2.Model.RuleAttribute] = FoldThrough(RuleAttributeLists, [], (x, acc) => x.Value(acc));
+    Options(inScope : N2Scope) : RuleDefinitionOptions = FoldThrough(RuleAttributeLists, (inScope, RuleDefinitionOptions()), _.Options(_))[1];
   }
 
   [StartRule]
@@ -306,21 +312,8 @@ syntax module GrammarParser2
   {
     ExtentionRuleDecl       = RuleAttributes "syntax"  sm             Name  sm "is" sm BaseName sm "=" sm Rule  BodyDeclaration
     {
-      override CollectRuleDefinitions
-      {
-        //assert2(false);
-        def id = inScope.GetNextRuleId();
-        def ruleSymbol = inScope.Bind(Name);
-        assert2(ruleSymbol.IsSome);
-        def baseRuleSymbol = RuleRef(BaseName, inScope.Bind(BaseName));
-        def precedence = BodyDeclaration.GetPrecedence();
-        def scopeWithAliases = BodyDeclaration.GetAliases(inScope); // !!!
-        def rule = this.Rule.GetRule2(precedence, None(), scopeWithAliases);
-        //def ruleDef = RuleDefinition2.
-        ignore(id, baseRuleSymbol, rule);
-        //(inScope, ruleDef :: ruleDefinitions)
-        (inScope, ruleDefinitions)
-      }
+      override CollectRuleDefinitions = 
+        (inScope, AddExtentionRule(inScope, this.Location, RuleAttributes, Name, BaseName, Rule, BodyDeclaration) :: ruleDefinitions);
       override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     }
     SimpleRuleDecl          = RuleAttributes "syntax"  sm             Name  sm "="  sm Rule                     BodyDeclaration
@@ -391,14 +384,18 @@ syntax module GrammarParser2
   {
     GetPrecedence() : int = 0;
     GetAliases(inScope : N2Scope) : N2Scope = inScope;
-    //OutScope(inScope : N2.Scope) : N2.Scope = inScope;
+    GetExtraFields() : list[ExtraField2];
   }
 
   extend syntax BodyDeclaration
   {
-    EmptyBodyDeclaration = ";"nl;
+    EmptyBodyDeclaration = ";"nl
+    {
+      override GetExtraFields = [];
+    }
     BlockBodyDeclaration = "{"  BodyMemberDeclaration* "}"nl
     {
+      override GetExtraFields = FoldThrough(BodyMemberDeclarations, [], _.GetExtraFields(_));
       override GetPrecedence
       {
         match (BodyMemberDeclarations.Map(_.GetPrecedence()).Filter(_.IsSome))
@@ -414,7 +411,6 @@ syntax module GrammarParser2
         }
       }
       override GetAliases = FoldThrough(BodyMemberDeclarations, inScope, _.GetAliases(_));
-      //OutScope = PassThrough(BodyMemberDeclarations, inScope, _.OutScope(_));
     }
   }
 
@@ -428,13 +424,39 @@ syntax module GrammarParser2
   {
     GetPrecedence() : ValueOption[int * N2.Location] = VNone();
     GetAliases(inScope : N2Scope) : N2Scope = inScope;
+    GetExtraFields(result : list[ExtraField2]) : list[ExtraField2] = result;
   }
 
   extend syntax BodyMemberDeclaration
   {
-    ExtraFieldDeclaration1 = ExtraFieldPrivate? Name sm "(" (ExtraFieldsParam; "," sm)* ")" sm ":" sm Type ExtraFieldBody;
-    ExtraFieldDeclaration2 = "override"     sm  Name ExtraFieldBody;
-    ExtraFieldDeclaration3 = "error"        sm  Name ExtraFieldBody;
+    ExtraFieldDeclaration1 = ExtraFieldPrivate? Name sm "(" (ExtraFieldsParam; "," sm)* ")" sm ":" sm Type ExtraFieldBody
+    {
+      override GetExtraFields
+      {
+        def bodyLocation = ExtraFieldBody.BodyLocation();
+
+        if (ExtraFieldPrivates.IsSome)
+          if (!bodyLocation.IsEmpty)
+            ExtraField2.DefPrivate(this.Location, Name.Identifier(), ExtraFieldsParams[0], Type, bodyLocation) :: result
+          else
+          {
+            Project.CurrentProject.Error(this.Location, "A private extra field must have body.", -1);
+            result
+          }
+        else if (!bodyLocation.IsEmpty)
+          ExtraField2.Def(this.Location, Name.Identifier(), ExtraFieldsParams[0], Type, bodyLocation) :: result
+        else
+          ExtraField2.Abstract(this.Location, Name.Identifier(), ExtraFieldsParams[0], Type) :: result
+      }
+    }
+    ExtraFieldDeclaration2 = "override"     sm  Name ExtraFieldBody
+    {
+      override GetExtraFields = ExtraField2.Override(this.Location, Name.Identifier(), ExtraFieldBody.BodyLocation()) :: result;
+    }
+    ExtraFieldDeclaration3 = "error"        sm  Name ExtraFieldBody
+    {
+      override GetExtraFields = ExtraField2.Override(this.Location, Name.Identifier(), ExtraFieldBody.BodyLocation()) :: result;
+    }
     // TODO: Create "Once" attribute which prevent use rule more then one times.
     InnerAliasDeclaration  = RuleAlias
     {
@@ -448,13 +470,25 @@ syntax module GrammarParser2
     }  // TODO: make precedence table
   }
 
-  syntax ExtraFieldBody;
+  syntax ExtraFieldBody
+  {
+    BodyLocation() : N2.Location;
+  }
 
   extend syntax ExtraFieldBody
   {
-    ExtraFieldBody1     = Block;
-    ExtraFieldBody2     = sm "=" sm Expression ";" nl;
-    ExtraFieldBodyEmpty = ";" nl;
+    ExtraFieldBody1     = Block
+    {
+      override BodyLocation = Block.Location;
+    }
+    ExtraFieldBody2     = sm "=" sm Expression ";" nl
+    {
+      override BodyLocation = Expression.Location;
+    }
+    ExtraFieldBodyEmpty = ";" nl
+    {
+      override BodyLocation = Location(this.Location.Source, this.Location.StartPos, this.Location.StartPos);
+    }
   }
 
   syntax TypeParams = "[" (Type; ","sm)+ "]";
@@ -603,7 +637,9 @@ syntax module GrammarParser2
       override GetRule = Rule.Sequence(this.NLocation(), RuleType.Void(), 0, LeftRule.GetRule() :: RightRules.Map(_.GetRule()));
       override GetRule2
       {
-        def rules = LeftRule.GetRule2(_precedence, None(), inScope) :: RightRules.Map(_.GetRule2(_precedence, None(), inScope));
+        def bp1   = if (_precedence < 0) -_precedence + 1 else _precedence;
+        def bp2   = if (_precedence < 0) -_precedence     else _precedence;
+        def rules = LeftRule.GetRule2(bp1, None(), inScope) :: RightRules.Map(_.GetRule2(bp2, None(), inScope));
         def type  = MakeType(rules.Map(_.Type));
         Rule2.Sequence(this.Location, type, 0, MakeName(_fieldName, rules, inScope), rules);
       }
@@ -706,7 +742,10 @@ syntax module GrammarParser2
           {
             | None
             | Some((_, num)) when num.Value() == 0 => _precedence
-            | Some((_, num)) => num.Value()
+            | Some((_, num)) =>
+              when (_precedence != 0)
+                Project.CurrentProject.Error(num, "You can't set a binding power if you set a precedence.", -1);
+              num.Value()
           };
         Rule2.Call(QualifiedName.Location, type, 0, newFieldName, ruleRef, bp);
       }
