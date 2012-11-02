@@ -8,105 +8,63 @@ using SCG = System.Collections.Generic;
 
 namespace N2.Internal
 {
+#if DEBUG || PARSER_DEBUG
+  [System.Diagnostics.DebuggerTypeProxy(typeof(Debug.DebugParser))]
   public class Parser
+#else
+  public struct Parser
+#endif
   {
-    private _grammars : Hashtable[GrammarDescriptor, IGrammar] = Hashtable();
-    private _parsingErrors : Hashtable[GrammarDescriptor, ParsingErrors] = Hashtable();
-    private _stateStack : SCG.Stack[SCG.List[IGrammarState]] = SCG.Stack();
-    private _bestOffsetsCache : SCG.Stack[array[int]] = SCG.Stack();
-    public GetBestOffsets() : array[int]
+    public mutable ast : array[int];
+    public mutable memoize : array[int];
+    public mutable allocated : int;
+    public parserHost : ParserHost;
+
+    public this(initalSize : int, textSize : int, parserHost : ParserHost)
     {
-      if (_bestOffsetsCache.Count > 0)
-        _bestOffsetsCache.Pop()
-      else
-        array(32)
+      this.ast        = array(initalSize);
+      this.memoize    = array(textSize);
+      this.allocated  = 0;
+      this.parserHost = parserHost;
+#if DEBUG || PARSER_DEBUG
+      this.ruleCalls = SCG.List(array(textSize + 1));
+#endif
     }
 
-    public ReturnBestOffsets(bestOffsets : array[int]) : void
+    private AllocateImpl(size : int) : int
     {
-      _bestOffsetsCache.Push(bestOffsets)
+      def newAst = allocated;
+      allocated = allocated + size;
+      while (ast.Length <= allocated)
+        Array.Resize(ref ast, (ast.Length * 3) / 2);
+
+      for (mutable i = 0; i < size; ++i)
+        ast[newAst + i] = -1;
+
+      newAst
     }
 
-    public ParsingSource : SourceSnapshot { get; }
-
-    public this(grammar : IGrammar, parsingSource : SourceSnapshot)
+    public Allocate(size : int) : int
     {
-      ParsingSource = parsingSource;
-      _grammars.Add(grammar.Descriptor, grammar);
+      def newAst = AllocateImpl(size);
+#if DEBUG || PARSER_DEBUG
+      astOffsets.Add((newAst, size, null));
+#endif
+      newAst
     }
 
-    public PushState() : void
+#if DEBUG || PARSER_DEBUG
+    public astOffsets : SCG.List[int * int * RuleDescriptor] = SCG.List();
+    public ruleCalls : SCG.List[SCG.List[RuleDescriptor]];
+#endif
+    public Allocate(size : int, ruleId : int) : int
     {
-      def states = SCG.List();
-      foreach (kv in _grammars)
-        states.Add(kv.Value.SaveState());
-      _stateStack.Push(states);
-    }
-
-    public PopState() : void
-    {
-      def states = _stateStack.Pop();
-      when (states.Count != _grammars.Count)
-      {
-        _grammars.Clear();
-        foreach (state in states)
-          _grammars.Add(state.Grammar.Descriptor, state.Grammar);
-        foreach (state in states)
-          state.LoadThisState();
-      }
-    }
-
-    public GetGrammar(descriptor : GrammarDescriptor) : option[IGrammar]
-    {
-      _grammars.Get(descriptor);
-    }
-
-    public GetParsingErrorsForGrammar(descriptor : GrammarDescriptor) : ParsingErrors
-    {
-      if (_parsingErrors.Contains(descriptor))
-        _parsingErrors[descriptor];
-      else
-      {
-        def parsingErrors = descriptor.NewParsingErrors();
-        _parsingErrors.Add(descriptor, parsingErrors);
-        parsingErrors
-      }
-    }
-
-    public GetErrors() : int * SCG.List[TokenDescriptor]
-    {
-      mutable pos = -1;
-      def rules = SCG.List();
-      foreach (kv in _parsingErrors)
-        kv.Value.GetErrors(ref pos, rules);
-      (pos, rules);
-    }
-
-    public GetErrorInfo() : ErrorInfo
-    {
-      def (pos, tokens) = GetErrors();
-      ErrorInfo(Location(ParsingSource, pos, pos), tokens.NToList());
-    }
-
-    public AddGrammar(descriptor : GrammarDescriptor) : void
-    {
-      def toInit = SCG.List();
-      def toAdd  = SCG.Queue();
-      toAdd.Enqueue(descriptor);
-      while (toAdd.Count > 0)
-      {
-        def descriptor = toAdd.Dequeue();
-        when (!_grammars.ContainsKey(descriptor))
-        {
-          foreach (descriptor in descriptor.Dependencies)
-            toAdd.Enqueue(descriptor);
-          def newGrammar = descriptor.NewGrammar(this);
-          toInit.Add(newGrammar);
-          _grammars.Add(descriptor, newGrammar);
-        }
-      }
-      foreach (newGrammar in toInit)
-        newGrammar.Init();
+      def newAst = AllocateImpl(size);
+      ast[newAst] = ruleId;
+#if DEBUG || PARSER_DEBUG
+      astOffsets.Add((newAst, size, parserHost.GetRuleDescriptorById(ruleId)));
+#endif
+      newAst;
     }
   }
 }
