@@ -1,0 +1,116 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using N2.Internal;
+
+using System;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace N2
+{
+  public class CompositeGrammar
+  {
+    public   Parent                   : option[CompositeGrammar];
+    private  Grammars                 : SCG.Dictionary[GrammarDescriptor, int];
+    internal ParserHost               : ParserHost;
+    private  ExtentionRuleDescriptors : Hashtable[ExtensibleRuleDescriptor, array[PrefixRuleDescriptor] * array[PostfixRuleDescriptor]];
+    private  ExtentionRuleParsers     : Hashtable[ExtensibleRuleDescriptor, array[Internal.ExtentionRuleParser] * array[Internal.ExtentionRuleParser]];
+    private  SimpleRuleParsers        : Hashtable[SimpleRuleDescriptor, Internal.RuleParser];
+    private  ExtensibleRuleIds        : Hashtable[ExtensibleRuleDescriptor, int] = Hashtable();
+
+    internal this(parserHost : ParserHost)
+    {
+      Parent = None();
+      Grammars = SCG.Dictionary();
+      ParserHost = parserHost;
+    }
+
+    private this(parent : CompositeGrammar, grammarDescriptor : GrammarDescriptor)
+    {
+      Parent = Some(parent);
+      Grammars = SCG.Dictionary(parent.Grammars);
+      ParserHost = parent.ParserHost;
+
+      def addGrammar(descriptor)
+      {
+        when (!Grammars.ContainsKey(descriptor))
+        {
+          Grammars.Add(descriptor, 0);
+          foreach (descriptor in descriptor.Dependencies)
+            addGrammar(descriptor);
+        }
+      }
+      addGrammar(grammarDescriptor);
+
+      def rules = Grammars.Keys.SelectMany(gd => gd.Rules).NToArray();
+
+      ExtentionRuleDescriptors = rules
+        .OfType.[ExtentionRuleDescriptor]()
+        .Grouping(rd => (rd.BaseRule, rd))
+        .Map((baseRd, extetions) =>
+        {
+          def prefix = extetions.OfType.[PrefixRuleDescriptor]().NToArray();
+          def postfix = extetions.OfType.[PostfixRuleDescriptor]().NToArray();
+          Array.Sort.[PostfixRuleDescriptor](postfix, ((l, r) => l.BindingPower.CompareTo(r.BindingPower)));
+          (baseRd, (prefix, postfix))
+        });
+
+      foreach (extensibleRule in rules.OfType.[ExtensibleRuleDescriptor]())
+      {
+        when (!ExtentionRuleDescriptors.Contains(extensibleRule))
+          ExtentionRuleDescriptors.Add(extensibleRule, (array[], array[]));
+        ExtensibleRuleIds[extensibleRule] = ParserHost.NewRuleId(extensibleRule);
+      }
+
+      ExtentionRuleParsers = ExtentionRuleDescriptors.Map((baseRd, (prefix, postfix)) =>
+      {
+        def prefix = prefix.Map(rd => rd.NewParser(ParserHost.NewRuleId(rd), this));
+        def postfix = postfix.Map(rd => rd.NewParser(ParserHost.NewRuleId(rd), this));
+        (baseRd, (prefix, postfix))
+      });
+
+      SimpleRuleParsers = Hashtable(rules
+        .OfType.[SimpleRuleDescriptor]()
+        .Map(rd => (rd, rd.NewParser(ParserHost.NewRuleId(rd), this))));
+
+      foreach (kv in ExtentionRuleParsers)
+      {
+        foreach (parser in kv.Value[0])
+          parser.Init();
+        foreach (parser in kv.Value[1])
+          parser.Init();
+      }
+
+      foreach (kv in SimpleRuleParsers)
+        kv.Value.Init();
+    }
+
+    public GetExtentionRules(rd : ExtensibleRuleDescriptor) : array[PostfixRuleDescriptor] * array[Internal.ExtentionRuleParser] * array[Internal.ExtentionRuleParser]
+    {
+      def (_, rd2) = ExtentionRuleDescriptors[rd];
+      def (rp1, rp2) = ExtentionRuleParsers[rd];
+      (rd2, rp1, rp2)
+    }
+
+    [Memoize(Synchronized = true)]
+    public GetExtensibleRuleParser(bindingPower : int, rd : ExtensibleRuleDescriptor) : Internal.RuleParser
+    {
+      Internal.ExtensibleRuleParser(ExtensibleRuleIds[rd], rd, bindingPower, this)
+    }
+
+    public GetSimpleRuleParser(rd : SimpleRuleDescriptor) : Internal.RuleParser
+    {
+      SimpleRuleParsers[rd]
+    }
+
+    internal static AddGrammar(parent : CompositeGrammar, grammarDescriptor : GrammarDescriptor) : CompositeGrammar
+    {
+      if (parent.Grammars.ContainsKey(grammarDescriptor))
+        parent
+      else
+        CompositeGrammar(parent, grammarDescriptor)
+    }
+  }
+}
