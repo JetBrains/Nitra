@@ -1,6 +1,7 @@
 ﻿using N2;
 using N2.Utils;
 using N2.Model;
+using N2.ProjectSystem;
 using N2.Runtime;
 using N2.Typing;
 using Nemerle.Collections;
@@ -76,9 +77,9 @@ syntax module GrammarParser2
 
   extend syntax IgnoreToken
   {
-    [ExplicitSpaces] SingleLineComment = "//" as Start (!NewLine Any)* as Body NewLine? as End;
-    [ExplicitSpaces] MultiLineComment  = "/*" as Start (!"*/" Any)*    as Body "*/"     as End;
-    [ExplicitSpaces] SpaceToken        = Spaces;
+    [ExplicitSpaces, SpanClass(Comment)] SingleLineComment = "//" as Start (!NewLine Any)* as Body NewLine? as End;
+    [ExplicitSpaces, SpanClass(Comment)] MultiLineComment  = "/*" as Start (!"*/" Any)*    as Body "*/"     as End;
+    [ExplicitSpaces]                     SpaceToken        = Spaces;
   }
 
   [ExplicitSpaces] void s   = IgnoreToken*;                // optional spacer
@@ -125,7 +126,7 @@ syntax module GrammarParser2
   [SpanClass(Char), ExplicitSpaces]
   syntax CharLiteral                      = "\'"  CharPart "\'" { Value() : char = CharPart.Value(); }
 
-  [ExplicitSpaces] syntax CharPart { Value() : char; }
+  [ExplicitSpaces] syntax CharPart { Value() : char;    }
 
   extend syntax CharPart
   {
@@ -174,58 +175,78 @@ syntax module GrammarParser2
   syntax Start                = s Using*  TopDeclaration* !Any
   {
     Env(env : GlobalEnv) : GlobalEnv = FoldThrough(Usings, env, _.Env(_));
-    GetSyntaxModules() : list[string] * list[SyntaxModule.Ast] = ([], TopDeclarations.OfType.[SyntaxModule.Ast]().NToList());
-    OutScope(inScope : N2.Scope) : N2.Scope = PassThrough(TopDeclarations, inScope, _.OutScope(_));
+    GetSyntaxModules() : list[list[string] * SyntaxModule.Ast] = TopDeclarations.OfType.[SyntaxModule.Ast]().Select(ast => ([], ast)).NToList();
+    GetSyntaxModuleDatas(inEnvironment : Environment[N2Project]) : list[SyntaxModuleData]
+    {
+      def env = FoldThrough(Usings, inEnvironment, _.GetEnvironment(_));
+      TopDeclarations.Map(decl => decl.GetSyntaxModuleData(env))
+    }
+    //OutScope(inScope : N2.Scope) : N2.Scope = PassThrough(TopDeclarations, inScope, _.OutScope(_));
   }
 
-  syntax Using { Env(env : GlobalEnv) : GlobalEnv; }
+  syntax Using
+  {
+    Env(env : GlobalEnv) : GlobalEnv;
+    GetEnvironment(inEnvironment : Environment[N2Project]) : Environment[N2Project];
+  }
 
   extend syntax Using
   {
     UsingOpen  = "using" sm NamespaceOrType ";"
     {
       override Env = env.AddOpenNamespace(NamespaceOrType.Parts(), NamespaceOrType.NLocation());
+      override GetEnvironment = inEnvironment.AddOpen(NamespaceOrType.Parts(), NamespaceOrType.Location);
     }
     UsingAlias = "using" Name sm "=" sm NamespaceOrType ";"
     {
       override Env = env.AddNamespaceAlias(Name.Value(), NamespaceOrType.Parts(), NamespaceOrType.NLocation());
+      override GetEnvironment = inEnvironment.AddAlias(Name.Value(), NamespaceOrType.Parts(), NamespaceOrType.Location);
     }
   }
 
   syntax TopDeclaration
   {
+    RuleRefs(ruleRefs : List[RuleRefSymbol]) : void;
+    GetSyntaxModuleData(inEnvironment : Environment[N2Project]) : SyntaxModuleData;
     GrammarRefs(env : GlobalEnv) : list[GrammarRef];
-    OutScope(inScope : N2.Scope) : N2.Scope = inScope;
-    RuleRefs(ruleRefs : List[Symbol]) : void;
+    GetTokenFieldNames() : Map[string, N2.Model.Identifier];
   }
 
   syntax SyntaxModule is TopDeclaration = "syntax"sm "module"sm Name nl "{" inl Import* Declaration* d "}" nl
   {
-    override GrammarRefs = Imports.MapI((i, import) => import.GrammarRef(env, i));
-    override OutScope
-    {
-      def newScope = FoldThrough(Imports, inScope, _.OutScope(_));
-      PassThrough(Declarations, newScope, _.OutScope(_));
-    }
     override RuleRefs = foreach (d in Declarations) d.RuleRefs(ruleRefs);
+    override GetSyntaxModuleData
+    {
+      def env = FoldThrough(Imports, inEnvironment.EnterIntoNode(Name.Value()), _.GetEnvironment(_));
+
+      def ruleDefinitions = FoldThrough(Declarations, (N2Scope(env, ), []), _.CollectRuleDefinitions(_));
+      def res = inEnvironment.Bind(Name);
+      assert2(res.HasValue);
+      SyntaxModuleData(res.Value, ruleDefinitions[1]);
+    }
+    override GrammarRefs = Imports.MapI((i, import) => import.GrammarRef(env, i));
+    override GetTokenFieldNames = FoldThrough(Declarations, Map(), _.GetTokenFieldNames(_));
   }
 
   syntax Import
   {
+    GetEnvironment(inEnvironment : Environment[N2Project]) : Environment[N2Project];
     GrammarRef(env : GlobalEnv, index : int) : GrammarRef;
-    OutScope(inScope : N2.Scope) : N2.Scope = inScope;
+    //OutScope(inScope : N2.Scope) : N2.Scope = inScope;
   }
 
   extend syntax Import
   {
+    ImportSyntaxModuleDecl  = "using" sm GrammarName                  ";"nl
+    {
+      override GetEnvironment = inEnvironment.AddOpen(GrammarName.Parts(), GrammarName.Location);
+      override GrammarRef = GrammarRef(GrammarName.NLocation(), index, None(), BindFixedType(env, GrammarName));
+    }
     AliasSyntaxModuleDecl   = "using" sm Alias sm "="  sm GrammarName ";"nl
     {
       alias Alias = Identifier;
+      override GetEnvironment = inEnvironment.AddAlias(Alias.Value(), GrammarName.Parts(), GrammarName.Location);
       override GrammarRef = GrammarRef(GrammarName.NLocation(), index, Some(Alias.Identifier()), BindFixedType(env, GrammarName));
-    }
-    ImportSyntaxModuleDecl  = "using" sm GrammarName                  ";"nl
-    {
-      override GrammarRef = GrammarRef(GrammarName.NLocation(), index, None(), BindFixedType(env, GrammarName));
     }
   }
 
@@ -269,69 +290,133 @@ syntax module GrammarParser2
   [StartRule]
   syntax Declaration
   {
-    OutScope(inScope : N2.Scope) : N2.Scope = inScope;
-    RuleRefs(ruleRefs : List[Symbol]) : void { _ = ruleRefs; }
+    CollectRuleDefinitions(inScope : N2Scope, ruleDefinitions : list[RuleDefinition2]) : N2Scope * list[RuleDefinition2] = (inScope, ruleDefinitions);
+    RuleRefs(ruleRefs : List[RuleRefSymbol]) : void { _ = ruleRefs; }
+    GetTokenFieldNames(result : Map[string, N2.Model.Identifier]) : Map[string, N2.Model.Identifier] = result;
   }
 
   extend syntax Declaration
   {
     ExtentionRuleDecl       = RuleAttributes "syntax"  sm             Name  sm "is" sm BaseName sm "=" sm Rule  BodyDeclaration
     {
-      override RuleRefs = ruleRefs.Add(RuleRefSymbol(this, Name.Value()));
-      //override OutScope { FieldNames(inScope); inScope }
-      //FieldNames(scope : Scope) : list[string] = Rule.FieldNames(scope);
+      override CollectRuleDefinitions
+      {
+        def id = inScope.GetNextRuleId();
+        def ruleSymbol = inScope.Bind(Name);
+        assert2(ruleSymbol.IsSome);
+        def baseRuleSymbol = RuleRef(BaseName, inScope.Bind(BaseName));
+        def precedence = BodyDeclaration.GetPrecedence();
+        def localAliases = BodyDeclaration.GetAliases(inScope);
+        //def ruleDef = RuleDefinition2.
+        ignore(id, baseRuleSymbol, precedence, localAliases);
+        //(inScope, ruleDef :: ruleDefinitions)
+        (inScope, ruleDefinitions)
+      }
+      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     }
     SimpleRuleDecl          = RuleAttributes "syntax"  sm             Name  sm "="  sm Rule                     BodyDeclaration
     {
-      override RuleRefs = ruleRefs.Add(RuleRefSymbol(this, Name.Value()));
+      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     }
     ExtentionPointRuleDecl  = RuleAttributes "syntax"  sm             Name                                      BodyDeclaration
     {
-      override RuleRefs = ruleRefs.Add(RuleRefSymbol(this, Name.Value()));
+      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     }
     ExtendSyntax            =                "extend"  sm "syntax" sm BaseName nl "{" inl ExtendSyntaxMember* d "}"nl
-    { override OutScope = PassThrough(ExtendSyntaxMembers, inScope, _.OutScope(_)); }
+    {
+      //override OutScope = PassThrough(ExtendSyntaxMembers, inScope, _.OutScope(_));
+    }
     TokenRuleDecl           = RuleAttributes "token"   sm             Name  sm "="  sm TokenRule                BodyDeclaration
     {
-      override RuleRefs = ruleRefs.Add(RuleRefSymbol(this, Name.Value()));
+      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     }
     VoidRuleDecl            = RuleAttributes "void"    sm             Name  sm "="  sm Rule                     ";"nl
     {
-      override RuleRefs = ruleRefs.Add(RuleRefSymbol(this, Name.Value()));
+      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     }
-    Alias                   =                "alias"   sm             Name  sm "="  sm Rule                     ";"nl;
+    AliasDecl               =                RuleAlias
+    {
+      override CollectRuleDefinitions =  (RuleAlias.OutScope(inScope), ruleDefinitions);
+    }
     TokenField              =                "token"   sm "field"  sm Name  sm "="  sm (StringLiteral; ","sm)+  ";"nl
-    { override OutScope = inScope.Nested(SymbolEx.TokenField(StringLiterals[0], Name)); }
+    {
+      override GetTokenFieldNames
+      {
+        def name = Name.Identifier();
+        FoldThrough(StringLiterals[0], result, (strLit, result) => result.Replace(strLit.Value(), name))
+      }
+      override CollectRuleDefinitions = (inScope.AddTokenFieldNames(Name.Identifier(), StringLiterals[0]), ruleDefinitions);
+    }
     SpanClassDecl           =                "span"    sm "class"  sm Name MatchTokens                          ";"nl
-    { alias MatchTokens = ("=" TokenRule)?; }
+    {
+      alias MatchTokens = ("=" TokenRule)?;
+    }
     BracePairDecl           =                "braces"  sm             Open ","sm Close                          ";"nl
-    { alias Open = TokenRule; alias Close = TokenRule; }
+    {
+      alias Open = TokenRule; alias Close = TokenRule;
+    }
     MarkerDecl              =                "marker"  sm             Name                                      ";"nl
     {
-      override RuleRefs = ruleRefs.Add(RuleRefSymbol(this, Name.Value()));
+      override RuleRefs = ruleRefs.Add(MarkerSymbol(this, Name.Value(), false));
     }
-    KeywordRegexDecl        =                "keyword" sm "regex"  sm TokenRule as MatchTokens sm "rule" sm Name ";"nl;
+    KeywordRegexDecl        =                "keyword" sm "regex"  sm TokenRule as MatchTokens sm "rule" sm Name ";"nl
+    {
+    }
+  }
+
+  syntax RuleAlias = "alias"   sm             Name  sm "="  sm Rule                     ";"nl
+  {
+    OutScope(inScope : N2Scope) : N2Scope =  inScope.AddAlias(Name.Value(), Rule);
   }
 
   syntax ExtendSyntaxMember = RuleAttributes Name "=" Rule BodyDeclaration
-  { OutScope(inScope : N2.Scope) : N2.Scope = BodyDeclaration.OutScope(inScope); }
+  {
+    GetAliases(inScope : N2Scope) : N2Scope = BodyDeclaration.GetAliases(inScope);
+    //OutScope(inScope : N2.Scope) : N2.Scope = BodyDeclaration.OutScope(inScope);
+  }
 
-  syntax BodyDeclaration { OutScope(inScope : N2.Scope) : N2.Scope = inScope; }
+  syntax BodyDeclaration
+  {
+    GetPrecedence() : int = 0;
+    GetAliases(inScope : N2Scope) : N2Scope = inScope;
+    //OutScope(inScope : N2.Scope) : N2.Scope = inScope;
+  }
 
   extend syntax BodyDeclaration
   {
     EmptyBodyDeclaration = ";"nl;
     BlockBodyDeclaration = "{"  BodyMemberDeclaration* "}"nl
-    { override OutScope = PassThrough(BodyMemberDeclarations, inScope, _.OutScope(_)); }
+    {
+      override GetPrecedence
+      {
+        match (BodyMemberDeclarations.Map(_.GetPrecedence()).Filter(_.IsSome))
+        {
+          | [VSome((p, _))] => p
+          | [] => 0
+          | VSome((p, loc)) :: tail =>
+            using (rootMsg = Project.CurrentProject.RootError(loc, "Too many 'precedence' directives. You can define only one a 'precedence' directive.", -1))
+              foreach (other in tail)
+                rootMsg.Hint(other.Value[1], "   other definition.");
+            p
+          | _ => assert2(false); 0
+        }
+      }
+      override GetAliases = FoldThrough(BodyMemberDeclarations, inScope, _.GetAliases(_));
+      //OutScope = PassThrough(BodyMemberDeclarations, inScope, _.OutScope(_));
+    }
   }
 
   syntax FieldInitializer = "=" sm Expression;
 
-  syntax BodyMemberDeclaration { OutScope(inScope : N2.Scope) : N2.Scope = inScope; }
-
   syntax ExtraFieldsParam = Name sm ":" sm Type;
   [ExplicitSpaces]
   syntax ExtraFieldPrivate = "private" sm;
+
+  syntax BodyMemberDeclaration
+  {
+    GetPrecedence() : ValueOption[int * N2.Location] = VNone();
+    GetAliases(inScope : N2Scope) : N2Scope = inScope;
+  }
 
   extend syntax BodyMemberDeclaration
   {
@@ -339,9 +424,16 @@ syntax module GrammarParser2
     ExtraFieldDeclaration2 = "override"     sm  Name ExtraFieldBody;
     ExtraFieldDeclaration3 = "error"        sm  Name ExtraFieldBody;
     // TODO: Create "Once" attribute which prevent use rule more then one times.
-    InnerAliasDeclaration  = "alias"        sm  Name "=" sm Rule ";"nl; 
+    InnerAliasDeclaration  = RuleAlias
+    {
+      override GetAliases = RuleAlias.OutScope(inScope);
+    } 
     PrecedenceDeclaration  = "precedence"   sm  Precedence RightAssociative ";"
-    { alias Precedence = Number; alias RightAssociative = ("right-associative")?; }  // TODO: make precedence table
+    {
+      alias Precedence = Number;
+      alias RightAssociative = ("right-associative")?;
+      override GetPrecedence = VSome((if (RightAssociative.IsSome) -Precedence.Value() else Precedence.Value(), this.Location));
+    }  // TODO: make precedence table
   }
 
   syntax ExtraFieldBody;
@@ -409,7 +501,7 @@ syntax module GrammarParser2
           inCharSet.AddRange(cat)
         else
         {
-          Project.CurrentProject.Error(this, "Invalid unicode category.");
+          Project.CurrentProject.Error(this, "Invalid unicode category.", -1);
           inCharSet
         };
     }
@@ -485,9 +577,9 @@ syntax module GrammarParser2
 
   syntax Rule
   {
-    OutScope(inScope : N2.Scope) : N2.Scope = inScope;
+    //OutScope(inScope : N2.Scope) : N2.Scope = inScope;
     GetRule() : N2.Model.Rule;
-    //FieldNames(scope : Scope) : string = [];
+    //FieldNames(scope : N2Scope) : string = [];
   }
 
   extend syntax Rule
@@ -526,7 +618,7 @@ syntax module GrammarParser2
     {
       override GetRule
       {
-        Project.CurrentProject.Error(this, "The 'as' operator not allowed in subrules.");
+        Project.CurrentProject.Error(this, "The 'as' operator not allowed in subrules.", -1);
         this.Rule.GetRule()
       }
     }
@@ -536,7 +628,7 @@ syntax module GrammarParser2
     }
     StringRule                  = StringLiteral
     {
-      override GetRule = Rule.String(StringLiteral.NLocation(), RuleType.Void(), 0, StringLiteral.Value().ToString());
+      override GetRule = Rule.String(StringLiteral.NLocation(), RuleType.Void(), 0, StringLiteral.Value());
     }
     RoundsRule                  = "(" Rule ")"
     {
