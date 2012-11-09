@@ -177,6 +177,7 @@ syntax module GrammarParser2
   [StartRule, ExplicitSpaces]
   syntax Start                = s Using*  TopDeclaration* !Any
   {
+    CollectGlobalSymbols(rootNs : NamespaceSymbol) : void { _ = PassThrough(TopDeclarations, rootNs, _.CollectGlobalSymbols(_)); }
     Env(env : GlobalEnv) : GlobalEnv = FoldThrough(Usings, env, _.Env(_));
     GetSyntaxModules() : list[list[string] * SyntaxModule.Ast] = TopDeclarations.OfType.[SyntaxModule.Ast]().Select(ast => ([], ast)).NToList();
     GetSyntaxModuleDatas(inEnvironment : Environment[N2Project]) : list[SyntaxModuleData]
@@ -209,6 +210,7 @@ syntax module GrammarParser2
 
   syntax TopDeclaration
   {
+    CollectGlobalSymbols(ns : NamespaceSymbol) : NamespaceSymbol;
     RuleRefs(ruleRefs : List[RuleRefSymbol]) : void;
     GetSyntaxModuleData(inEnvironment : Environment[N2Project]) : SyntaxModuleData;
     GrammarRefs(env : GlobalEnv) : list[GrammarRef];
@@ -217,6 +219,13 @@ syntax module GrammarParser2
 
   syntax SyntaxModule is TopDeclaration = "syntax"sm "module"sm Name nl "{" inl Import* Declaration* d "}" nl
   {
+    override CollectGlobalSymbols
+    {
+      def sym = ParsedSyntaxModuleSymbol(this);
+      ns.Node.AddAndRepor(sym, Project.CurrentProject);
+      _ = PassThrough(Declarations, sym, _.CollectGlobalSymbols(_));
+      ns
+    }
     override RuleRefs = foreach (d in Declarations) d.RuleRefs(ruleRefs);
     override GetSyntaxModuleData
     {
@@ -304,8 +313,9 @@ syntax module GrammarParser2
   [StartRule]
   syntax Declaration
   {
-    CollectRuleDefinitions(inScope : N2Scope, ruleDefinitions : list[RuleDefinition2]) : N2Scope * list[RuleDefinition2] = (inScope, ruleDefinitions);
+    CollectGlobalSymbols(sm : ParsedSyntaxModuleSymbol) : ParsedSyntaxModuleSymbol = sm;
     RuleRefs(ruleRefs : List[RuleRefSymbol]) : void { _ = ruleRefs; }
+    CollectRuleDefinitions(inScope : N2Scope, ruleDefinitions : list[RuleDefinition2]) : N2Scope * list[RuleDefinition2] = (inScope, ruleDefinitions);
     GetTokenFieldNames(result : Map[string, N2.Model.Identifier]) : Map[string, N2.Model.Identifier] = result;
   }
 
@@ -313,18 +323,22 @@ syntax module GrammarParser2
   {
     ExtentionRuleDecl       = RuleAttributes "syntax"  sm             Name  sm "is" sm BaseName sm "=" sm Rule  BodyDeclaration
     {
+      override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
+      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
       override CollectRuleDefinitions = 
         (inScope, ExtentionRule(inScope, this.Location, RuleAttributes, Name, BaseName, Rule, BodyDeclaration) :: ruleDefinitions);
-      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     }
     SimpleRuleDecl          = RuleAttributes "syntax"  sm             Name  sm "="  sm Rule                     BodyDeclaration
     {
+      override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
+      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
       override CollectRuleDefinitions = 
         (inScope, SimpleRule(inScope, this.Location, RuleAttributes, Name, Rule, BodyDeclaration) :: ruleDefinitions);
-      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     }
     ExtentionPointRuleDecl  = RuleAttributes "syntax"  sm             Name                                      BodyDeclaration
     {
+      override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
+      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
       override CollectRuleDefinitions
       {
         def ruleSymbol = inScope.Bind(Name);
@@ -333,15 +347,17 @@ syntax module GrammarParser2
           BodyDeclaration.GetExtraFields(), RuleAttributes.Options(inScope));
         (inScope, ruleDefinition :: ruleDefinitions);
       }
-      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     }
     ExtendSyntax            =                "extend"  sm "syntax" sm BaseName nl "{" inl ExtendSyntaxMember* d "}"nl
     {
-      override CollectRuleDefinitions = FoldThrough(ExtendSyntaxMembers, (inScope, ruleDefinitions), (m, (s, r)) => m.CollectRuleDefinitions(s, r, BaseName));
+      //override CollectGlobalSymbols { foreach (m in ExtendSyntaxMembers) m.CollectGlobalSymbols(sm); sm }
       override RuleRefs = foreach (m in ExtendSyntaxMembers) m.RuleRefs(ruleRefs);
+      override CollectRuleDefinitions = FoldThrough(ExtendSyntaxMembers, (inScope, ruleDefinitions), (m, (s, r)) => m.CollectRuleDefinitions(s, r, BaseName));
     }
     TokenRuleDecl           = RuleAttributes "token"   sm             Name  sm "="  sm TokenRule                BodyDeclaration
     {
+      override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
+      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
       override CollectRuleDefinitions
       {
         def ruleSymbol = inScope.Bind(Name);
@@ -350,13 +366,13 @@ syntax module GrammarParser2
           BodyDeclaration.GetExtraFields(), RuleAttributes.Options(inScope), TokenRule.RegularRule());
         (inScope, ruleDefinition :: ruleDefinitions);
       }
-      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     }
     VoidRuleDecl            = RuleAttributes "void"    sm             Name  sm "="  sm Rule                     BodyDeclaration
     {
+      override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
+      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
       override CollectRuleDefinitions = 
         (inScope, SimpleRule(inScope, this.Location, RuleAttributes, Name, Rule, BodyDeclaration) :: ruleDefinitions);
-      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     }
     AliasDecl               =                RuleAlias
     {
@@ -383,6 +399,7 @@ syntax module GrammarParser2
     }
     MarkerDecl              =                "marker"  sm             Name                                      ";"nl
     {
+      override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
       override RuleRefs = ruleRefs.Add(MarkerSymbol(this, Name.Value(), false));
     }
     KeywordRegexDecl        =                "keyword" sm "regex"  sm TokenRule as MatchTokens sm "rule" sm Name ";"nl
