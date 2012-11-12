@@ -181,7 +181,7 @@ namespace N2
       }
     }
 
-    private LoadExternalSymbols(project : N2Project, root : HierarchyNode) : bool
+    private LoadExternalSymbols(project : N2Project, rootNamespace : NamespaceSymbol) : bool
     {
       def errorCount = project.ErrorCount;
       
@@ -189,14 +189,15 @@ namespace N2
       {
         foreach ((<[ N2.GrammarsAttribute ]>, [<[ array[..$(elems)] ]>]) in asm.GetCustomAttributes())
           foreach (<[ typeof($(PExpr.TypedType(FixedType.Class(grammarTI is LibraryReference.ExternalTypeInfo, []))))]> in elems)
-            LoadExternalSyntaxModule(project, root, grammarTI);
+            LoadExternalSyntaxModule(rootNamespace, grammarTI);
       }
       
       project.ErrorCount == errorCount
     }
     
-    private LoadExternalSyntaxModule(project : N2Project, root : HierarchyNode, grammarImplTI : LibraryReference.ExternalTypeInfo) : void
+    private LoadExternalSyntaxModule(rootNamespace : NamespaceSymbol, grammarImplTI : LibraryReference.ExternalTypeInfo) : void
     {
+      def root = rootNamespace.Node;
       def grammarTI   = grammarImplTI.BaseType;
       //Message.HintOnce($"   Grammar type: $glammarName");
 
@@ -232,11 +233,14 @@ namespace N2
           def tokenFieldNames = LoadExternalTokenFieldNames(grammarTI);
           
           def symbol = ExternalSyntaxModuleSymbol(grammarTI, grammarImplTI, keywordRegexs.NToList(), tokenFieldNames) : SyntaxModuleSymbol;
-          def node = root.AddAndRepor(grammarTI.NamespaceNode.Parent.FullName, symbol, project);
+          def node = root.AddAndRepor(grammarTI.NamespaceNode.Parent.FullName, symbol, symbol.FirstLocation);
           
 
           foreach(<[ N2.MarkerAttribute($(name : string)) ]> as attr in attrs)
-            _ = node.AddAndRepor([], MarkerSymbol(attr.Location.N2Location(), name, true), project);
+          {
+            def loc = attr.Location.N2Location();
+            _ = node.AddAndRepor([], MarkerSymbol(loc, name, true), loc);
+          }
               
           // load rules
           foreach (ruleTI in grammarDescriptorImplTI.GetNestedSubtypes())
@@ -267,7 +271,7 @@ namespace N2
                 | _ => ()
               }
               def symbol = ExternalRuleRefSymbol(loc, name, ruleType, attributes, isExtentionPoint, extraFields);
-              _ = node.AddAndRepor([], symbol, project);
+              _ = node.AddAndRepor([], symbol, loc);
             }
           }
 
@@ -284,15 +288,21 @@ namespace N2
 
       foreach ((_, [<[ $(name : string) ]>, <[ array[..$tokens] ]>]) in type.GetModifiers().FindAttributesWithArgs(attrType.TypeInfo, env))
         foreach (<[ $(token : string) ]> in tokens)
-          tokenFieldNames = tokenFieldNames.Replace(token, Identifier(loc, name));
+          tokenFieldNames = tokenFieldNames.Replace(token, Identifier(loc.N2Location(), name));
 
       tokenFieldNames
     }
 
-    private LoadParsedSymbols(project : N2Project, root : HierarchyNode, fileAsts : SCG.List[G.Start.Ast]) : bool
+    private LoadParsedSymbols(project : N2Project, rootNamespace : NamespaceSymbol, fileAsts : SCG.List[G.Start.Ast]) : bool
     {
       def errorCount = project.ErrorCount;
-            
+
+      //assert2(false);
+      
+      foreach (start in fileAsts)
+        start.CollectGlobalSymbols(rootNamespace);
+
+      /*
       foreach (start in fileAsts)
       foreach ((ns, syntaxModule) in start.GetSyntaxModules())
       {
@@ -305,19 +315,28 @@ namespace N2
         foreach (sym in ruleDefs)
           _ = node.AddAndRepor(sym, project);
       }
+      */
 
       project.ErrorCount == errorCount
     }
     
-    private TypeSyntaxModules(project : N2Project, root : HierarchyNode, fileAsts : SCG.List[G.Start.Ast]) : bool
+    private TypeSyntaxModules(project : N2Project, rootNamespace : NamespaceSymbol, fileAsts : SCG.List[G.Start.Ast]) : bool
     {
-      def errorCount = project.ErrorCount;
-      def syntaxModule = GetListUserData();
-      def env = Environment(root, project);
-          
+      def errorCount   = project.ErrorCount;
+      
+      def syntaxModules = GetListUserData();
+      def context = RootContext(Project.CurrentProject :> N2Project, rootNamespace);
+
       foreach (start in fileAsts)
-        foreach (sm in start.GetSyntaxModuleDatas(env))
-          syntaxModule.Add(sm);
+        syntaxModules.AddRange(start.Typing(context));
+      
+      //def syntaxModule = GetListUserData();
+      //def root         = rootNamespace.Node;
+      //def env          = Environment(root, project);
+      //
+      //foreach (start in fileAsts)
+      //  foreach (sm in start.GetSyntaxModuleDatas(env))
+      //    syntaxModule.Add(sm);
           
       project.ErrorCount == errorCount
     }
@@ -330,16 +349,19 @@ namespace N2
         {
           UpdateCurrentProjectContext();
         
-          def project = GetCurrentProjectContext();
-          def root    = GetUserData.[HierarchyNode]();
+          def project       = GetCurrentProjectContext();
+          def root          = GetUserData.[HierarchyNode]();
+          def rootNamespace = NamespaceSymbol(null : string);
+          
+          root.SetRootNamespaceSymbol(rootNamespace);
 
           def fileAsts : SCG.List[G.Start.Ast] = GetListUserData();
 
-          unless (LoadExternalSymbols(project, root))
+          unless (LoadExternalSymbols(project, rootNamespace))
             return;
-          unless (LoadParsedSymbols  (project, root, fileAsts))
+          unless (LoadParsedSymbols  (project, rootNamespace, fileAsts))
             return;
-          unless (TypeSyntaxModules  (project, root, fileAsts))
+          unless (TypeSyntaxModules  (project, rootNamespace, fileAsts))
             return;
         }
         finally ResetListUserData.[G.Start.Ast]();

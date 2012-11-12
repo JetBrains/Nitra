@@ -162,6 +162,7 @@ syntax module GrammarParser2
   syntax QIdentifier                      = Names
   {
     alias Names = (Identifier; ".")+;
+    Identifiers() : list[N2.Located] = Names[0].Map(_.Identifier());
     Parts() : list[string] = Names[0].Map(_.Value());
     CalcLocation() : N2.Location
     {
@@ -178,6 +179,12 @@ syntax module GrammarParser2
   syntax Start                = s Using*  TopDeclaration* !Any
   {
     CollectGlobalSymbols(rootNs : NamespaceSymbol) : void { _ = PassThrough(TopDeclarations, rootNs, _.CollectGlobalSymbols(_)); }
+    Typing(context : Context) : list[SyntaxModuleData]
+    {
+      def context = FoldThrough(Usings, context, _.GetContext(_));
+      FoldThrough(TopDeclarations, (context, []), _.Typing(_))[1]
+    }
+
     Env(env : GlobalEnv) : GlobalEnv = FoldThrough(Usings, env, _.Env(_));
     GetSyntaxModules() : list[list[string] * SyntaxModule.Ast] = TopDeclarations.OfType.[SyntaxModule.Ast]().Select(ast => ([], ast)).NToList();
     GetSyntaxModuleDatas(inEnvironment : Environment[N2Project]) : list[SyntaxModuleData]
@@ -190,6 +197,7 @@ syntax module GrammarParser2
 
   syntax Using
   {
+    GetContext(context : Context) : Context;
     Env(env : GlobalEnv) : GlobalEnv;
     GetEnvironment(inEnvironment : Environment[N2Project]) : Environment[N2Project];
   }
@@ -198,11 +206,13 @@ syntax module GrammarParser2
   {
     UsingOpen  = "using" sm NamespaceOrType ";"
     {
+      override GetContext = OpenNamespaceOrTypeContext(context, NamespaceOrType);
       override Env = env.AddOpenNamespace(NamespaceOrType.Parts(), NamespaceOrType.NLocation());
       override GetEnvironment = inEnvironment.AddOpen(NamespaceOrType.Parts(), NamespaceOrType.Location);
     }
     UsingAlias = "using" Name sm "=" sm NamespaceOrType ";"
     {
+      override GetContext = NamespaceOrTypeAliasContext(context, Name, NamespaceOrType);
       override Env = env.AddNamespaceAlias(Name.Value(), NamespaceOrType.Parts(), NamespaceOrType.NLocation());
       override GetEnvironment = inEnvironment.AddAlias(Name.Value(), NamespaceOrType.Parts(), NamespaceOrType.Location);
     }
@@ -211,7 +221,8 @@ syntax module GrammarParser2
   syntax TopDeclaration
   {
     CollectGlobalSymbols(ns : NamespaceSymbol) : NamespaceSymbol;
-    RuleRefs(ruleRefs : List[RuleRefSymbol]) : void;
+    Typing(context : Context, syntaxModules : list[SyntaxModuleData]) : Context * list[SyntaxModuleData];
+
     GetSyntaxModuleData(inEnvironment : Environment[N2Project]) : SyntaxModuleData;
     GrammarRefs(env : GlobalEnv) : list[GrammarRef];
     GetTokenFieldNames() : Map[string, N2.Model.Identifier];
@@ -222,11 +233,18 @@ syntax module GrammarParser2
     override CollectGlobalSymbols
     {
       def sym = ParsedSyntaxModuleSymbol(this);
-      ns.Node.AddAndRepor(sym, Project.CurrentProject);
+      _ = ns.Node.AddAndRepor(sym, Name.Location);
       _ = PassThrough(Declarations, sym, _.CollectGlobalSymbols(_));
       ns
     }
-    override RuleRefs = foreach (d in Declarations) d.RuleRefs(ruleRefs);
+    override Typing
+    {
+      def context = FoldThrough(Imports, context, _.GetContext(_));
+      def syntaxModuleContext = SyntaxModuleContext(context, Name);
+      def ruleDefinitions = FoldThrough(Declarations, (syntaxModuleContext, []), _.Typing(_));
+      (syntaxModuleContext, SyntaxModuleData(syntaxModuleContext.Module, ruleDefinitions[1]) :: syntaxModules)
+    }
+
     override GetSyntaxModuleData
     {
       def env = FoldThrough(Imports, inEnvironment.EnterIntoNode(Name.Value()), _.GetEnvironment(_));
@@ -242,6 +260,7 @@ syntax module GrammarParser2
 
   syntax Import
   {
+    GetContext(context : Context) : Context;
     GetEnvironment(inEnvironment : Environment[N2Project]) : Environment[N2Project];
     GrammarRef(env : GlobalEnv, index : int) : GrammarRef;
     //OutScope(inScope : N2.Scope) : N2.Scope = inScope;
@@ -249,16 +268,18 @@ syntax module GrammarParser2
 
   extend syntax Import
   {
-    ImportSyntaxModuleDecl  = "using" sm GrammarName                  ";"nl
+    ImportSyntaxModuleDecl  = "using" sm NamespaceOrType                  ";"nl
     {
-      override GetEnvironment = inEnvironment.AddOpen(GrammarName.Parts(), GrammarName.Location);
-      override GrammarRef = GrammarRef(GrammarName.NLocation(), index, None(), BindFixedType(env, GrammarName));
+      override GetContext = OpenNamespaceOrTypeContext(context, NamespaceOrType);
+      override GetEnvironment = inEnvironment.AddOpen(NamespaceOrType.Parts(), NamespaceOrType.Location);
+      override GrammarRef = GrammarRef(NamespaceOrType.NLocation(), index, None(), BindFixedType(env, NamespaceOrType));
     }
-    AliasSyntaxModuleDecl   = "using" sm Alias sm "="  sm GrammarName ";"nl
+    AliasSyntaxModuleDecl   = "using" sm Alias sm "="  sm NamespaceOrType ";"nl
     {
       alias Alias = Identifier;
-      override GetEnvironment = inEnvironment.AddAlias(Alias.Value(), GrammarName.Parts(), GrammarName.Location);
-      override GrammarRef = GrammarRef(GrammarName.NLocation(), index, Some(Alias.Identifier()), BindFixedType(env, GrammarName));
+      override GetContext = NamespaceOrTypeAliasContext(context, Alias, NamespaceOrType);
+      override GetEnvironment = inEnvironment.AddAlias(Alias.Value(), NamespaceOrType.Parts(), NamespaceOrType.Location);
+      override GrammarRef = GrammarRef(NamespaceOrType.NLocation(), index, Some(Alias.Identifier()), BindFixedType(env, NamespaceOrType));
     }
   }
 
@@ -313,7 +334,9 @@ syntax module GrammarParser2
   [StartRule]
   syntax Declaration
   {
-    CollectGlobalSymbols(sm : ParsedSyntaxModuleSymbol) : ParsedSyntaxModuleSymbol = sm;
+    CollectGlobalSymbols(sm : SyntaxModuleSymbol) : SyntaxModuleSymbol = sm;
+    Typing(context : Context, ruleDefinitions : list[RuleDefinition2]) : Context * list[RuleDefinition2] = (context, ruleDefinitions);
+
     RuleRefs(ruleRefs : List[RuleRefSymbol]) : void { _ = ruleRefs; }
     CollectRuleDefinitions(inScope : N2Scope, ruleDefinitions : list[RuleDefinition2]) : N2Scope * list[RuleDefinition2] = (inScope, ruleDefinitions);
     GetTokenFieldNames(result : Map[string, N2.Model.Identifier]) : Map[string, N2.Model.Identifier] = result;
@@ -324,21 +347,18 @@ syntax module GrammarParser2
     ExtentionRuleDecl       = RuleAttributes "syntax"  sm             Name  sm "is" sm BaseName sm "=" sm Rule  BodyDeclaration
     {
       override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
-      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
       override CollectRuleDefinitions = 
         (inScope, ExtentionRule(inScope, this.Location, RuleAttributes, Name, BaseName, Rule, BodyDeclaration) :: ruleDefinitions);
     }
     SimpleRuleDecl          = RuleAttributes "syntax"  sm             Name  sm "="  sm Rule                     BodyDeclaration
     {
       override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
-      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
       override CollectRuleDefinitions = 
         (inScope, SimpleRule(inScope, this.Location, RuleAttributes, Name, Rule, BodyDeclaration) :: ruleDefinitions);
     }
     ExtentionPointRuleDecl  = RuleAttributes "syntax"  sm             Name                                      BodyDeclaration
     {
       override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
-      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
       override CollectRuleDefinitions
       {
         def ruleSymbol = inScope.Bind(Name);
@@ -348,16 +368,9 @@ syntax module GrammarParser2
         (inScope, ruleDefinition :: ruleDefinitions);
       }
     }
-    ExtendSyntax            =                "extend"  sm "syntax" sm BaseName nl "{" inl ExtendSyntaxMember* d "}"nl
-    {
-      //override CollectGlobalSymbols { foreach (m in ExtendSyntaxMembers) m.CollectGlobalSymbols(sm); sm }
-      override RuleRefs = foreach (m in ExtendSyntaxMembers) m.RuleRefs(ruleRefs);
-      override CollectRuleDefinitions = FoldThrough(ExtendSyntaxMembers, (inScope, ruleDefinitions), (m, (s, r)) => m.CollectRuleDefinitions(s, r, BaseName));
-    }
     TokenRuleDecl           = RuleAttributes "token"   sm             Name  sm "="  sm TokenRule                BodyDeclaration
     {
       override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
-      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
       override CollectRuleDefinitions
       {
         def ruleSymbol = inScope.Bind(Name);
@@ -370,9 +383,22 @@ syntax module GrammarParser2
     VoidRuleDecl            = RuleAttributes "void"    sm             Name  sm "="  sm Rule                     BodyDeclaration
     {
       override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
-      override RuleRefs = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
       override CollectRuleDefinitions = 
         (inScope, SimpleRule(inScope, this.Location, RuleAttributes, Name, Rule, BodyDeclaration) :: ruleDefinitions);
+    }
+    MarkerDecl              =                "marker"  sm             Name                                      ";"nl
+    {
+      override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
+    }
+    ExtendSyntax            =                "extend"  sm "syntax" sm BaseName nl "{" inl ExtendSyntaxMember* d "}"nl
+    {
+      override CollectGlobalSymbols
+      {
+        foreach (m in ExtendSyntaxMembers)
+          m.CollectGlobalSymbols(sm);
+        sm
+      }
+      override CollectRuleDefinitions = FoldThrough(ExtendSyntaxMembers, (inScope, ruleDefinitions), (m, (s, r)) => m.CollectRuleDefinitions(s, r, BaseName));
     }
     AliasDecl               =                RuleAlias
     {
@@ -397,11 +423,6 @@ syntax module GrammarParser2
       alias Open = TokenRule; alias Close = TokenRule;
       override CollectRuleDefinitions = (inScope.AddBracePair(Open.RegularRule(), Close.RegularRule()), ruleDefinitions);
     }
-    MarkerDecl              =                "marker"  sm             Name                                      ";"nl
-    {
-      override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
-      override RuleRefs = ruleRefs.Add(MarkerSymbol(this, Name.Value(), false));
-    }
     KeywordRegexDecl        =                "keyword" sm "regex"  sm TokenRule as MatchTokens sm "rule" sm Name ";"nl
     {
       override CollectRuleDefinitions = (inScope.AddKeywordRegex(MatchTokens.RegularRule(), Name.Identifier()), ruleDefinitions);
@@ -415,10 +436,11 @@ syntax module GrammarParser2
 
   syntax ExtendSyntaxMember = RuleAttributes Name "=" Rule BodyDeclaration
   {
+    CollectGlobalSymbols(sm : SyntaxModuleSymbol) : void = _ = AddRefSymbol(sm, this, Name.Value());
+    RuleRefs(ruleRefs : List[RuleRefSymbol]) : void = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     CollectRuleDefinitions(inScope : N2Scope, ruleDefinitions : list[RuleDefinition2], baseName : QIdentifier) : N2Scope * list[RuleDefinition2] =
       (inScope, ExtentionRule(inScope, this.Location, RuleAttributes, Name, baseName, Rule, BodyDeclaration) :: ruleDefinitions);
     GetAliases(inScope : N2Scope) : N2Scope = BodyDeclaration.GetAliases(inScope);
-    RuleRefs(ruleRefs : List[RuleRefSymbol]) : void = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
   }
 
   syntax BodyDeclaration
