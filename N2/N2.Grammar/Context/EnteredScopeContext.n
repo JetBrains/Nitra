@@ -11,8 +11,126 @@ using System.Linq;
 
 namespace N2.Typing
 {
-  [Record]
   public abstract class EnteredScopeContext : Context
   {
+    public ParentScope      : EnteredScopeContext      { get; }
+    public OpenedNamespaces : list[Symbol]             { get; }
+    public AliasMap         : Map[string, AliasSymbol] { get; }
+
+    public this(parent : Context)
+    {
+      base(parent);
+      unless (this is RootContext)
+        ParentScope = GetParent();
+
+      def lookupSymbols(context, openedNamespaces, aliasMap : Map[string, AliasSymbol])
+      {
+        match(context)
+        {
+          | null
+          | EnteredScopeContext => (openedNamespaces, aliasMap)
+          | OpenNamespaceOrTypeContext(OpenSymbol = Some(symbol)) =>
+            lookupSymbols(context.Parent, symbol :: openedNamespaces, aliasMap)
+
+          | NamespaceOrTypeAliasContext(Alias = AliasSymbol as aliasSymbol) =>
+            when (aliasMap.Find(aliasSymbol.Name) is Some(previousDefinition))
+              using(rootMsg = N2Project.CurrentProject.RootError(aliasSymbol.FirstLocation, $"Redifinition of alias $(aliasSymbol.Name).", -1))
+                rootMsg.Error(previousDefinition.FirstLocation, "previous definition");
+            lookupSymbols(context.Parent, openedNamespaces, aliasMap.Replace(aliasSymbol.Name, aliasSymbol))
+
+          | _ => lookupSymbols(context.Parent, openedNamespaces, aliasMap)
+        }
+      }
+      (OpenedNamespaces, AliasMap) = lookupSymbols(Parent, [], Map());
+    }
+
+    public abstract CurrentSymbols : list[Symbol] { get; }
+
+    public sealed override Bind[T](name : list[Location]) : option[T]
+    {
+      //assert2(false);
+      def result = BindByEnteredSymbol(name);
+      if (result.IsNone)
+        BindByOpenedNamespace(name) : option[T]
+      else
+        result
+    }
+
+    BindByEnteredSymbol[T](name : list[Location]) : option[T]
+    {
+      // пробуем сбиндиться по AliasMap
+      // пробуем сбиндиться по ParentScope
+      // если успешен только один, возвращем его
+      // если оба успешны, сообщаем об ошибке и возвращаем алиас
+      // если оба обломались и парнт == корень, то возвращем None()
+      // если оба обломались делаем рекурсивный вызов у ParentScope
+      def bindByAliasMap(name : list[Location])
+      {
+        | null | [] => (None(), [])
+        | first :: tail => (AliasMap.Find(first.GetText()), tail)
+      }
+      def bindByCurrentSymbols(name : list[Location], symbols : list[Symbol]) : option[T]
+      {
+        match (symbols)
+        {
+          | null | [] => None()
+          | first :: tail =>
+            def result = first.Node.Bind.[T](name);
+            if (result.IsNone)
+              bindByCurrentSymbols(name, tail)
+            else
+              result
+        }
+      }
+      def bindAliasSymbol(aliasSymbol, nameTail) : option[T]
+      {
+        match (aliasSymbol.RealSymbol)
+        {
+          | None => None()
+          | Some(symbol) => symbol.Node.Bind(nameTail)
+        }
+      }
+
+      match (bindByAliasMap(name), bindByCurrentSymbols(name, ParentScope?.CurrentSymbols))
+      {
+        | ( (null, _), _) | ( _, null) => assert2(false); assert(false)
+        | ((Some(aliasSymbol), nameTail), Some(symbol is Symbol)) =>
+          using (rootMsg = N2Project.CurrentProject.RootError(aliasSymbol.FirstLocation, $"The $(aliasSymbol.Description) '$(symbol.Name)' contains a definition conflicting with alias '$(aliasSymbol.Name)'", -1))
+            foreach (loc in symbol.Locations)
+              rootMsg.Hint(loc, "Previous definition.");
+          bindAliasSymbol(aliasSymbol, nameTail)
+
+        | (                            _, Some as result) => result
+        | ((Some(aliasSymbol), nameTail),              _) => bindAliasSymbol(aliasSymbol, nameTail)
+        | (                    (None, _),           None) =>
+          if (ParentScope != null)
+            ParentScope.BindByEnteredSymbol(name)
+          else
+            None()
+      }
+    }
+
+    BindByOpenedNamespace[T](name : list[Location]) : option[T]
+    {
+      def bind(name : list[Location], symbols : list[Symbol]) : option[T]
+      {
+        match (symbols)
+        {
+          | null | [] =>
+            if (ParentScope != null)
+              ParentScope.BindByOpenedNamespace(name)
+            else
+              None()
+
+          | first :: tail =>
+            def result = first.Node.Bind.[T](name);
+            if (result.IsNone)
+              bind(name, tail)
+            else
+              result
+        }
+      }
+      bind(name, OpenedNamespaces)
+    }
   }
 }
