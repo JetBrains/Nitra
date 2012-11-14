@@ -292,7 +292,62 @@ namespace N2
             ""
       }
     }
+
+    ///////////////////
     
+    public MakeName(fieldName : option[string], rules : list[Rule2], _context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ =>
+          match (rules.Filter(r => !(r.Type is RuleType2.Void || r.Type is RuleType2.Chars)))
+          {
+            | [rule] => rule.FieldName
+            | _ => ""
+          }
+      }
+    }
+
+    public MakeName(fieldName : option[string], rule : Rule2, _separatorRule : Rule2, _context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ => rule.FieldName
+      }
+    }
+
+    public MakePlural(fieldName : option[string], rule : Rule2, _context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ => rule.FieldName + "s"
+      }
+    }
+
+    public MakeLiteralName(fieldName : option[string], value : string, context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ =>
+          if (context.GetTokenFieldNames().Find(value) is Some(id))
+            id.Value
+          else if (IsIdentifier(value))
+            ToPascalCase(value, "Kw")
+          else
+            ""
+      }
+    }
+    
+    public GetTokenFieldNames(this context : Context) : Map[string, Identifier]
+    {
+      def p : SyntaxModuleContext = context.GetParent();
+      p.Module.TokenFieldNames
+    }
+
     public MakeType(rule : Rule2, sepRule : Rule2) : RuleType2
     {
       def type1 = rule.Type;
@@ -349,6 +404,37 @@ namespace N2
       }
     }
 
+    public ExtentionRule(context : Context, loc : Location, ruleAttributes : G.RuleAttributes, name : G.Identifier, baseName : G.QIdentifier, rule : G.Rule, 
+      bodyDeclaration : G.BodyDeclaration) : RuleDefinition2
+    {
+      //assert2(false);
+      def project = context.GetProject();
+      def id = project.GetNextRuleId();
+      def ruleSymbol = context.Bind(name);
+      assert2(ruleSymbol.IsSome);
+      def baseRule = RuleRef(baseName, context.Bind(baseName));
+      def precedence = bodyDeclaration.GetPrecedence();
+      //assert2(precedence == 0);
+      def scopeWithAliases = bodyDeclaration.GetAliases2(context); // !!!
+      def extraFields = bodyDeclaration.GetExtraFields();
+      def rule2 = rule.GetRule3(baseRule.Ref, precedence, None(), scopeWithAliases);
+      def options = ruleAttributes.Options2(scopeWithAliases);
+      def type = baseRule.Ref.Map(sym => sym.Type) ?? RuleType2.Void();
+      def fieldName = baseName.Parts().LastOrDefault("?");
+      def ruleDefinition = 
+        match (rule2)
+        {
+          | Sequence((Call(callName, bindingPower) as call) :: rules) when callName.Equals(baseRule) =>
+            def prefix = Rule2.PrefixCall(call.Location, type, project.GetNextRuleId(), fieldName, baseRule, bindingPower);
+            def seq = Rule2.Sequence(loc, rule2.Type, project.GetNextRuleId(), "", prefix :: rules);
+            RuleDefinition2.ExtentionPostfix(loc, id, ruleSymbol.Value, extraFields, options, baseRule, seq, bindingPower)
+              
+          | _ => RuleDefinition2.ExtentionPrefix(loc, id, ruleSymbol.Value, extraFields, options, baseRule, EnsureSequence(context, loc, rule2))
+        };
+          
+      ruleDefinition
+    }
+
     public ExtentionRule(inScope : N2Scope, loc : Location, ruleAttributes : G.RuleAttributes, name : G.Identifier, baseName : G.QIdentifier, rule : G.Rule, 
       bodyDeclaration : G.BodyDeclaration) : RuleDefinition2
     {
@@ -378,7 +464,16 @@ namespace N2
           
       ruleDefinition
     }
-    
+
+    public EnsureSequence(context : Context, loc : Location, rule : Rule2) : Rule2.Sequence
+    {
+      match (rule)
+      {
+        | Rule2.Sequence as result => result
+        | _ => Rule2.Sequence(loc, rule.Type, context.GetProject().GetNextRuleId(), "", [rule]);
+      }
+    }
+
     public SimpleRule(inScope : N2Scope, loc : Location, ruleAttributes : G.RuleAttributes, name : G.Identifier, rule : G.Rule, 
       bodyDeclaration : G.BodyDeclaration) : RuleDefinition2
     {
@@ -405,7 +500,8 @@ namespace N2
     public GetProject(this context : Context) : N2Project
     {
       | c is RootContext => c.Project
-      | _ => context.GetProject()
+      | null => assert(false)
+      | _ => context.Parent.GetProject()
     }
 
     public GetParent[T](this context : Context) : T
