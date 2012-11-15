@@ -46,17 +46,25 @@ namespace N2.Typing
 
     public abstract CurrentSymbols : list[Symbol] { get; }
 
-    public sealed override Bind[T](name : list[Location]) : option[T]
+    public sealed override BindMany[T](name : list[Location]) : list[T]
     {
       //assert2(false);
-      def result = BindByEnteredSymbol(name);
-      if (result.IsNone)
-        BindByOpenedNamespace(name) : option[T]
-      else
-        result
+      match (BindByEnteredSymbol(name))
+      {
+        | []    => BindByOpenedNamespace(name, reportErrors)
+        | [one] => Some(one)
+        | head :: tail =>
+          when (reportErrors)
+          {
+            using (rootMsg = N2Project.CurrentProject.RootError(head.FirstLocation, $"The $(aliasSymbol.Description) '$(symbol.Name)' contains a definition conflicting with alias '$(aliasSymbol.Name)'", -1))
+              foreach (s in symbol.Locations)
+                rootMsg.Hint(loc, "Previous definition.");
+          }
+          None()
+      }
     }
 
-    BindByEnteredSymbol[T](name : list[Location]) : option[T]
+    BindByEnteredSymbol[T](name : list[Location]) : list[T]
     {
       // пробуем сбиндиться по AliasMap
       // пробуем сбиндиться по ParentScope
@@ -69,50 +77,55 @@ namespace N2.Typing
         | null | [] => (None(), [])
         | first :: tail => (AliasMap.Find(first.GetText()), tail)
       }
-      def bindByCurrentSymbols(name : list[Location], symbols : list[Symbol]) : option[T]
+      def bindByCurrentSymbols(name : list[Location], symbols : list[Symbol]) : list[T]
       {
         match (symbols)
         {
-          | null | [] => None()
+          | null | [] => []
           | first :: tail =>
-            def result = first.Node.Bind.[T](name);
-            if (result.IsNone)
-              bindByCurrentSymbols(name, tail)
-            else
-              result
+            match (first.Node.BindMany.[T](name))
+            {
+              | []     => bindByCurrentSymbols(name, tail)
+              | result => result
+            }
         }
       }
-      def bindAliasSymbol(aliasSymbol, nameTail) : option[T]
+      def bindRealSymbol(aliasSymbol, nameTail) : list[T]
       {
         match (aliasSymbol.RealSymbol)
         {
-          | None => None()
-          | Some(symbol) => symbol.Node.Bind(nameTail)
+          | None         => []
+          | Some(symbol) => symbol.Node.BindMany(nameTail)
         }
       }
 
       match (bindByAliasMap(name), bindByCurrentSymbols(name, ParentScope?.CurrentSymbols))
       {
         | ( (null, _), _) | ( _, null) => assert2(false); assert(false)
-        | ((Some(aliasSymbol), nameTail), Some(symbol is Symbol)) =>
-          using (rootMsg = N2Project.CurrentProject.RootError(aliasSymbol.FirstLocation, $"The $(aliasSymbol.Description) '$(symbol.Name)' contains a definition conflicting with alias '$(aliasSymbol.Name)'", -1))
-            foreach (loc in symbol.Locations)
-              rootMsg.Hint(loc, "Previous definition.");
-          bindAliasSymbol(aliasSymbol, nameTail)
+        | ((Some(aliasSymbol), nameTail), (_ :: _) as symbols) =>
+          // сообщаем об ошибке в любом случае!!!
+          // и возвращаем пустой список
+        
+          match (bindRealSymbol(aliasSymbol, nameTail))
+          {
+            | []    => symbols
+            | [one] => one :: symbols
+            | many  => many + symbols
+          }
 
-        | (                            _, Some as result) => result
-        | ((Some(aliasSymbol), nameTail),              _) => bindAliasSymbol(aliasSymbol, nameTail)
-        | (                    (None, _),           None) =>
+        | (                            _, (_ :: _) as symbols) => symbols
+        | ((Some(aliasSymbol), nameTail),                   _) => bindRealSymbol(aliasSymbol, nameTail)
+        | (                    (None, _),         []) =>
           if (ParentScope != null)
             ParentScope.BindByEnteredSymbol(name)
           else
-            None()
+            []
       }
     }
 
-    BindByOpenedNamespace[T](name : list[Location]) : option[T]
+    BindByOpenedNamespace[T](name : list[Location]) : list[T]
     {
-      def bind(name : list[Location], symbols : list[Symbol]) : option[T]
+      def bind(name : list[Location], symbols : list[Symbol], acc) : list[T]
       {
         match (symbols)
         {
@@ -120,17 +133,18 @@ namespace N2.Typing
             if (ParentScope != null)
               ParentScope.BindByOpenedNamespace(name)
             else
-              None()
+              []
 
           | first :: tail =>
-            def result = first.Node.Bind.[T](name);
-            if (result.IsNone)
-              bind(name, tail)
-            else
-              result
+            match (first.Node.BindMany.[T](name))
+            {
+              | []    => bind(name, tail, acc)
+              | [one] => bind(name, tail, one :: acc)
+              | many  => bind(name, tail, many + acc)
+            }
         }
       }
-      bind(name, OpenedNamespaces)
+      bind(name, OpenedNamespaces, [])
     }
   }
 }
