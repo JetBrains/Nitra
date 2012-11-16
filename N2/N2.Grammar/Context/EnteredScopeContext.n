@@ -1,4 +1,5 @@
 ﻿using N2.ProjectSystem;
+using N2.Runtime;
 
 using Nemerle;
 using Nemerle.Collections;
@@ -46,7 +47,7 @@ namespace N2.Typing
 
     public abstract CurrentSymbols : list[Symbol] { get; }
 
-    public sealed override BindMany[T](name : list[Location]) : list[T]
+    public sealed override BindMany[T](name : list[Location]) : BindingResult[T]
     {
       //assert2(false);
       match (BindByEnteredSymbol(name))
@@ -64,7 +65,7 @@ namespace N2.Typing
       }
     }
 
-    BindByEnteredSymbol[T](name : list[Location]) : list[T]
+    BindByEnteredSymbol[T](name : list[Location]) : BindingResult[T]
     {
       // пробуем сбиндиться по AliasMap
       // пробуем сбиндиться по ParentScope
@@ -72,25 +73,23 @@ namespace N2.Typing
       // если оба успешны, сообщаем об ошибке и возвращаем алиас
       // если оба обломались и парнт == корень, то возвращем None()
       // если оба обломались делаем рекурсивный вызов у ParentScope
-      def bindByAliasMap(name : list[Location])
+      def bindByAliasMap(name : list[Location]) : option[AliasSymbol] * list[Location]
       {
         | null | [] => (None(), [])
-        | first :: tail => (AliasMap.Find(first.GetText()), tail)
+        | first :: tail => (AliasMap.Find(first.GetText()), tail) //TODO: сделать Find по подстроке
       }
-      def bindByCurrentSymbols(name : list[Location], symbols : list[Symbol]) : list[T]
+      def bindByCurrentSymbols(name : list[Location], symbols : list[Symbol]) : list[Symbol] * list[Location] * list[Symbol]
       {
-        match (symbols)
-        {
-          | null | [] => []
-          | first :: tail =>
-            match (first.Node.BindMany.[T](name))
-            {
-              | []     => bindByCurrentSymbols(name, tail)
-              | result => result
-            }
-        }
+        | (firstName :: tailName, firstSymbol :: tailSymbols) =>
+          match (firstSymbol.Node.BindMany(firstName))
+          {
+            | []     => ([], name, symbols)
+            | result => (result, tailName, tailSymbols)
+          }
+        | (_, [])
+        | ([], _) => ([], name, symbols)
       }
-      def bindRealSymbol(aliasSymbol, nameTail) : list[T]
+      def bindRealSymbol(aliasSymbol : AliasSymbol, nameTail : list[Location]) : list[T]
       {
         match (aliasSymbol.RealSymbol)
         {
@@ -98,28 +97,49 @@ namespace N2.Typing
           | Some(symbol) => symbol.Node.BindMany(nameTail)
         }
       }
-
-      match (bindByAliasMap(name), bindByCurrentSymbols(name, ParentScope?.CurrentSymbols))
+      def currentSymbols = if (ParentScope != null) ParentScope.CurrentSymbols else [];
+      match (bindByAliasMap(name), bindByCurrentSymbols(name, currentSymbols))
       {
-        | ( (null, _), _) | ( _, null) => assert2(false); assert(false)
-        | ((Some(aliasSymbol), nameTail), (_ :: _) as symbols) =>
-          // сообщаем об ошибке в любом случае!!!
-          // и возвращаем пустой список
-        
-          match (bindRealSymbol(aliasSymbol, nameTail))
-          {
-            | []    => symbols
-            | [one] => one :: symbols
-            | many  => many + symbols
-          }
+        | ((Some(aliasSymbol), aliasTailName), ([], _, _)) =>
+          def candidates = bindRealSymbol(aliasSymbol, aliasTailName);
+          BindingResult(candidates, [])
 
-        | (                            _, (_ :: _) as symbols) => symbols
-        | ((Some(aliasSymbol), nameTail),                   _) => bindRealSymbol(aliasSymbol, nameTail)
-        | (                    (None, _),         []) =>
-          if (ParentScope != null)
-            ParentScope.BindByEnteredSymbol(name)
-          else
-            []
+        | ((Some(_aliasSymbol), _aliasTailName), ((_ :: _) as _result, _, _)) =>
+          def candidates = []; //bindRealSymbol(aliasSymbol, aliasTailName) + result;
+          def messages =
+            using (buffer = CompilerMessageList())
+            {
+              def currentSymbol = currentSymbols.Head;
+              buffer.Error(name.Head, $"The $(currentSymbol.Description) '$(currentSymbol.FullName)' contains a definition conflicting with alias '$(aliasSymbol.Name)'", -1);
+              buffer.GetMessages()
+            };
+          BindingResult(candidates, messages)
+
+        | ((None, _), ((_ :: _) as result, _, _)) =>
+          def candidates = result.OfType.[T]();
+          BindingResult(candidates, [])
+
+        | ((None, _), ([], _, _)) => ParentScope.BindByEnteredSymbol(name)
+
+        //| ( (null, _), _) | ( _, null) => assert2(false); assert(false)
+        //| ((Some(aliasSymbol), nameTail), (_ :: _) as symbols) =>
+        //  // сообщаем об ошибке в любом случае!!!
+        //  // и возвращаем пустой список
+        
+        //  match (bindRealSymbol(aliasSymbol, nameTail))
+        //  {
+        //    | []    => symbols
+        //    | [one] => one :: symbols
+        //    | many  => many + symbols
+        //  }
+
+        //| (                            _, (_ :: _) as symbols) => symbols
+        //| ((Some(aliasSymbol), nameTail),                   _) => bindRealSymbol(aliasSymbol, nameTail)
+        //| (                    (None, _),         []) =>
+        //  if (ParentScope != null)
+        //    ParentScope.BindByEnteredSymbol(name)
+        //  else
+        //    []
       }
     }
 
