@@ -47,25 +47,7 @@ namespace N2.Typing
 
     public abstract CurrentSymbols : list[Symbol] { get; }
 
-    public sealed override BindMany[T](name : list[Location]) : BindingResult[T]
-    {
-      //assert2(false);
-      match (BindByEnteredSymbol(name))
-      {
-        | []    => BindByOpenedNamespace(name, reportErrors)
-        | [one] => Some(one)
-        | head :: tail =>
-          when (reportErrors)
-          {
-            using (rootMsg = N2Project.CurrentProject.RootError(head.FirstLocation, $"The $(aliasSymbol.Description) '$(symbol.Name)' contains a definition conflicting with alias '$(aliasSymbol.Name)'", -1))
-              foreach (s in symbol.Locations)
-                rootMsg.Hint(loc, "Previous definition.");
-          }
-          None()
-      }
-    }
-
-    BindByEnteredSymbol[T](name : list[Location]) : BindingResult[T]
+    BindByEnteredSymbol(name : Location) : list[Symbol]
     {
       // пробуем сбиндиться по AliasMap
       // пробуем сбиндиться по ParentScope
@@ -73,79 +55,43 @@ namespace N2.Typing
       // если оба успешны, сообщаем об ошибке и возвращаем алиас
       // если оба обломались и парнт == корень, то возвращем None()
       // если оба обломались делаем рекурсивный вызов у ParentScope
-      def bindByAliasMap(name : list[Location]) : option[AliasSymbol] * list[Location]
+      def bindByAliasMap(name : Location) : option[AliasSymbol]
       {
-        | null | [] => (None(), [])
-        | first :: tail => (AliasMap.Find(first.GetText()), tail) //TODO: сделать Find по подстроке
+        AliasMap.Find(name.GetText()) //TODO: сделать Find по подстроке
       }
-      def bindByCurrentSymbols(name : list[Location], symbols : list[Symbol]) : list[Symbol] * list[Location] * list[Symbol]
+      def bindByCurrentSymbols(name : Location, symbols : list[Symbol]) : list[Symbol] * list[Symbol]
       {
-        | (firstName :: tailName, firstSymbol :: tailSymbols) =>
-          match (firstSymbol.Node.BindMany(firstName))
-          {
-            | []     => ([], name, symbols)
-            | result => (result, tailName, tailSymbols)
-          }
-        | (_, [])
-        | ([], _) => ([], name, symbols)
-      }
-      def bindRealSymbol(aliasSymbol : AliasSymbol, nameTail : list[Location]) : list[T]
-      {
-        match (aliasSymbol.RealSymbol)
+        match (symbols)
         {
-          | None         => []
-          | Some(symbol) => symbol.Node.BindMany(nameTail)
+          | first :: tail => (first.Node.BindMany(name), tail)
+          | [] => ([], [])
         }
       }
       def currentSymbols = if (ParentScope != null) ParentScope.CurrentSymbols else [];
       match (bindByAliasMap(name), bindByCurrentSymbols(name, currentSymbols))
       {
-        | ((Some(aliasSymbol), aliasTailName), ([], _, _)) =>
-          def candidates = bindRealSymbol(aliasSymbol, aliasTailName);
-          BindingResult(candidates, [])
-
-        | ((Some(_aliasSymbol), _aliasTailName), ((_ :: _) as _result, _, _)) =>
-          def candidates = []; //bindRealSymbol(aliasSymbol, aliasTailName) + result;
-          def messages =
-            using (buffer = CompilerMessageList())
-            {
-              def currentSymbol = currentSymbols.Head;
-              buffer.Error(name.Head, $"The $(currentSymbol.Description) '$(currentSymbol.FullName)' contains a definition conflicting with alias '$(aliasSymbol.Name)'", -1);
-              buffer.GetMessages()
-            };
-          BindingResult(candidates, messages)
-
-        | ((None, _), ((_ :: _) as result, _, _)) =>
-          def candidates = result.OfType.[T]();
-          BindingResult(candidates, [])
-
-        | ((None, _), ([], _, _)) => ParentScope.BindByEnteredSymbol(name)
-
-        //| ( (null, _), _) | ( _, null) => assert2(false); assert(false)
-        //| ((Some(aliasSymbol), nameTail), (_ :: _) as symbols) =>
-        //  // сообщаем об ошибке в любом случае!!!
-        //  // и возвращаем пустой список
-        
-        //  match (bindRealSymbol(aliasSymbol, nameTail))
-        //  {
-        //    | []    => symbols
-        //    | [one] => one :: symbols
-        //    | many  => many + symbols
-        //  }
-
-        //| (                            _, (_ :: _) as symbols) => symbols
-        //| ((Some(aliasSymbol), nameTail),                   _) => bindRealSymbol(aliasSymbol, nameTail)
-        //| (                    (None, _),         []) =>
-        //  if (ParentScope != null)
-        //    ParentScope.BindByEnteredSymbol(name)
-        //  else
-        //    []
+        | (Some(aliasSymbol), (                [],           _)) => [aliasSymbol]
+        | (Some(aliasSymbol), ((_ :: _) as result,           _)) => aliasSymbol :: result
+        | (             None, ((_ :: _) as result,           _)) => result
+        | (             None, (                [], tailSymbols)) =>
+          def loop(_)
+          {
+            | [] when ParentScope : object == null => []
+            | [] => ParentScope.BindByEnteredSymbol(name)
+            | symbol :: other =>
+              match (symbol.Node.BindMany(name))
+              {
+                | [] => loop(other)
+                | result => result
+              }
+          }
+          loop(tailSymbols)
       }
     }
 
-    BindByOpenedNamespace[T](name : list[Location]) : list[T]
+    BindByOpenedNamespace(name : Location) : list[Symbol]
     {
-      def bind(name : list[Location], symbols : list[Symbol], acc) : list[T]
+      def bind(name : Location, symbols : list[Symbol], acc) : list[Symbol]
       {
         match (symbols)
         {
@@ -156,7 +102,7 @@ namespace N2.Typing
               []
 
           | first :: tail =>
-            match (first.Node.BindMany.[T](name))
+            match (first.Node.BindMany(name))
             {
               | []    => bind(name, tail, acc)
               | [one] => bind(name, tail, one :: acc)
@@ -165,6 +111,74 @@ namespace N2.Typing
         }
       }
       bind(name, OpenedNamespaces, [])
+    }
+
+    BindPathTail[T](symbol : Symbol, nameTail : list[Location]) : list[T]
+    {
+      def bindTail(symbol : Symbol, nameTail) : list[T]
+      {
+        if (nameTail.IsEmpty)
+          if ((symbol : object) is T)
+            [(symbol : object) :> T]
+          else
+            []
+        else
+          symbol.Node.BindMany(nameTail)
+      }
+      match (symbol)
+      {
+        | AliasSymbol(RealSymbol = Some(realSymbol)) => bindTail(realSymbol, nameTail)
+        | AliasSymbol(RealSymbol = None)             => []
+        | _ => bindTail(symbol, nameTail)
+      }
+    }
+
+    public sealed override BindMany[T](path : list[Location]) : BindingResult[T]
+    {
+      def ambiguousBindingResult(name : Location, result : list[Symbol])
+      {
+        using (msgs = CompilerMessageList())
+        {
+          using (rootMsg = msgs.RootError(name, $"'$name' is an ambiguous reference (see related messages)", -1))
+            foreach (s in result)
+              foreach (loc in s.Locations)
+                rootMsg.Hint(loc, "Previous definition.");
+          BindingResult(result.OfType(), msgs.GetMessages())
+        }
+      }
+      match (path)
+      {
+        | [] => assert(false)
+        | name :: nameTail =>
+          match (BindByEnteredSymbol(name))
+          {
+            | []    =>
+              def loop(name, nameTail)
+              {
+                match (BindByOpenedNamespace(name))
+                {
+                  | []     => BindingResult([])
+                  | [one]  =>
+                    match (nameTail)
+                    {
+                      | [] =>
+                        if ((one : object) is T)
+                          BindingResult([(one : object) :> T])
+                        else
+                          BindingResult([])
+
+                      | nextName :: nextNameTail => loop(nextName, nextNameTail)
+                    }
+
+                  | many => ambiguousBindingResult(name, many)
+                }
+              }
+              loop(name, nameTail)
+
+            | [one] => BindingResult(BindPathTail(one, nameTail))
+            | many  => ambiguousBindingResult(name, many)
+          }
+      }
     }
   }
 }
