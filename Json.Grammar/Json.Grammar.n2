@@ -1,0 +1,168 @@
+﻿using N2;
+
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Compiler;
+
+using System.Collections.Generic;
+using System.Text;
+using System.Linq;
+
+syntax module JsonParser
+{
+  token field OpenBrace           = "(";
+  token field CloseBrace          = ")";
+  token field OpenBrace           = "{";
+  token field CloseBrace          = "}";
+  token field OpenSquareBrace     = "[";
+  token field CloseSquareBrace    = "]";
+  token field SingleQuote         = "\'";
+  token field Quote               = "\"";
+  token field Semicolon           = ";";
+  token field Comma               = ",";
+  token field Colon               = ":";
+  token field Assign              = "=";
+  token field Prefix              = "\\u";
+  token field DodDot              = "..";
+  token field Op                  = "+", "-", "*", "/", "?", "^", "%", "&", "!", ".";
+  token field Backslash           = "\\";
+
+  span class Comment;
+  span class Char;
+  span class String;
+  span class Number;
+  span class Keyword      = ['a'..'z']['a'..'z']+;
+  span class Operator     = ['+', '-', '/', '*', '^', '?', ':']+;
+  span class OpenBrace    = "(" | "{" | "[";
+  span class CloseBrace   = ")" | "}" | "]";
+
+  braces "(", ")";
+  braces "{", "}";
+  braces "[", "]";
+
+  keyword regex ['A'..'Z', 'a'..'z', '_'..'_']+['A'..'Z', 'a'..'z', '_'..'_', '-'..'-']* rule S;
+
+  marker i;   // increase a indent
+  marker d;   // decrease a indent
+  marker nl;  // optional spacer and plase for \n while pretty printing
+  marker inl; // i + nl
+  marker sm;  // optional spacer and prefer to print space while pretty printing
+
+  alias Name            = Identifier;
+  alias QualifiedName   = QIdentifier;
+  alias NamespaceOrType = QIdentifier;
+  alias Char            = Any;
+  alias GrammarName     = QIdentifier;
+  alias BaseName        = QIdentifier;
+
+  token Keyword = "as" | "syntax" | "token" | "alias" | "in" | "out" | "rule";
+
+  token Any = ['\u0000'..'\uFFFF'];
+  token NewLineCharacter  = '\n'
+                    | '\r'
+                    | '\u2028'    /*  line separator       */
+                    | '\u2029';   /*  paragraph separator  */
+  token NewLine  = "\r\n" | NewLineCharacter;
+  token Whitespace = [Zs]
+              | '\t'
+              | '\v'        /*  vertial tab          */
+              | '\f';       /*  form feed            */
+  token Space = Whitespace | NewLine;
+  token Spaces = Space+;
+
+
+  [ExplicitSpaces] syntax IgnoreToken;
+
+  extend syntax IgnoreToken
+  {
+    [ExplicitSpaces, SpanClass(Comment)] SingleLineComment = "//" as Start (!NewLine Any)* as Body NewLine? as End;
+    [ExplicitSpaces, SpanClass(Comment)] MultiLineComment  = "/*" as Start (!"*/" Any)*    as Body "*/"     as End;
+    [ExplicitSpaces]                     SpaceToken        = Spaces;
+  }
+
+  [ExplicitSpaces] void s   = IgnoreToken*;                // optional spacer
+  [ExplicitSpaces] void S   = !IdentifierPartCharacters s; // identifier break spacer
+
+  token LetterCharacter           = ['A'..'Z', 'a'..'z', 'а'..'я', 'А'..'Я'];//[Lu, Ll, Lt, Lm, Lo, Nl];
+  token CombiningCharacter        = [Mn, Mc];
+  token DecimalDigitCharacter     = [Nd];
+  token ConnectingCharacter       = [Pc];
+  token FormattingCharacter       = [Cf];
+  token IdentifierStartCharacter  = LetterCharacter | "_";
+  token IdentifierPartCharacters  = LetterCharacter | DecimalDigitCharacter | ConnectingCharacter 
+                                  | CombiningCharacter | FormattingCharacter;
+  token IdentifierBody            = IdentifierStartCharacter IdentifierPartCharacters*;
+  token HexDigit                  = ['0'..'9', 'a'..'f', 'A'..'F'];
+  token ReservedStringChar1       = '\"' | '\\';
+  token ReservedStringChar2       = '\'' | '\\';
+  token EscChar                   = '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 'u' HexDigit HexDigit HexDigit HexDigit;
+  token EscChar1                  = '\"' | EscChar;
+  token EscChar2                  = '\'' | EscChar;
+  token Esc1                      = '\\' EscChar1;
+  token Esc2                      = '\\' EscChar2;
+
+  [SpanClass(String), ExplicitSpaces]
+  syntax StringLiteral1 = "\""  StringPart1* "\"";
+
+  [ExplicitSpaces] syntax StringPart1;
+
+  extend syntax StringPart1
+  {
+    [ExplicitSpaces] EscStringPart   = Esc1;
+    [ExplicitSpaces] OtherStringPart = Chars
+    {
+      alias Chars = (!ReservedStringChar1 Any)+;
+    }
+  }
+
+  [SpanClass(String), ExplicitSpaces]
+  syntax StringLiteral2 = "\'"  StringPart2* "\'";
+
+  [ExplicitSpaces] syntax StringPart2;
+
+  extend syntax StringPart2
+  {
+    [ExplicitSpaces] EscStringPart2   = Esc;
+    [ExplicitSpaces] OtherStringPart2 = Chars
+    {
+      alias Chars = (!ReservedStringChar2 Any)+;
+    }
+  }
+
+  token Digits        = ['0'..'9']+;
+  token JDigits       = '0' | ['1'..'9'] Digits;
+  token ExponentPart  = ("E" | "e") ("-" | "+")? Digits;
+
+  [SpanClass(Number), ExplicitSpaces]
+  syntax Number = "-"? JDigits Fraction ExponentPart?;
+    
+  syntax Fraction = "." Digits as Digits;
+
+  [ExplicitSpaces]
+  syntax Identifier = !(Keyword !IdentifierPartCharacters) IdentifierBody;
+
+  [StartRule, ExplicitSpaces]
+  syntax Start = s Value !Any;
+
+  syntax Value;
+
+  extend syntax Value
+  {
+    IdentifierValue = Identifier;
+    StringValue     = StringLiteral;
+    NumberValue     = Number;
+    ObjectValue     = "{" inl (ObjectContent; "," nl)* nl d "}";
+    ArrayValue      = "[" (Value; "," sm)*  "]";
+    TrueValue       = "true";
+    FalseValue      = "false";
+    NullValue       = "null";
+  }
+
+  syntax ObjectContent;
+
+  extend syntax ObjectContent
+  {
+    ObjectContent1 = StringLiteral ":" sm Value;
+    ObjectContent2 = Identifier    ":" sm Value;
+  }
+}
