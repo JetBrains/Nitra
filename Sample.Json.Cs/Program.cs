@@ -24,7 +24,7 @@ namespace Sample.Json.Cs
       {
         var errors = parseResult.CollectErrors();
         var pos    = source.PositionToLineColumn(errors.Position);
-        Console.WriteLine("Parse error at (${0}, ${1}), rules: {2})", pos.Line, pos.Column, string.Join(", ", errors.Messges));
+        Console.WriteLine("Parse error at (${0}, ${1}), rules: {2})", pos.Line, pos.Column, string.Join(", ", errors.Messages));
       }
     }
 
