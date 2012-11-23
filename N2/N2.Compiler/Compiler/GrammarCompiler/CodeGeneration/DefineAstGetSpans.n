@@ -1,0 +1,213 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+
+using N2.Internal;
+using N2.Model;
+
+using System;
+using System.Diagnostics;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace N2
+{
+  internal partial class GrammarCompiler
+  {
+    private DefineAstGetSpans(astTb : TypeBuilder, rule : Rule, rd : RuleDefinition) : void
+    {
+      def isEmpty(code : PExpr) : bool { code is <[ () ]> }
+      def mapRules(rules : list[Rule], func) : PExpr
+      {
+        def exprs = rules.Map(func);
+        
+        if (exprs.ForAll(_ is <[ () ]>))
+          <[ () ]>
+        else if (exprs is [_])
+          exprs.Head
+        else
+          <[ { ..$exprs } ]>
+      }
+      def nameMap = SCG.Dictionary();
+      def rules = rule.GetSubRules();
+      def fieldNames = rd.GetNames(_tokenFieldNames);
+      assert(rules.Length == fieldNames.Length);
+      foreach ((name, rule) in fieldNames.Zip(rules))
+        nameMap[rule.Id] = name.AsName;
+      def getName(rule) : Name
+      {
+        mutable name;
+        def id = rule.Id;
+        
+        if (nameMap.TryGetValue(id, out name))
+          <[ $(name : dyn) ]>.name//Name.NameInCurrentColor(nameMap[id], astTb.GlobalEnv)
+        else
+           Name.NameInCurrentColor($"_ast_$id", astTb.GlobalEnv)
+      }
+      def makeGetSpans(rule : Rule) : PExpr
+      {
+        def varName = 
+          if (nameMap.ContainsKey(rule.Id))
+            <[ this.$(getName(rule) : name) ]>
+          else
+            <[ $(getName(rule) : name) ]>;
+        
+        match (rule : Rule)
+        {
+          | PrefixCall(ruleName, _)
+          | Call(ruleName, _) =>
+            def rd = TypedGrammar.GetRule(ruleName);
+            if (rd.Attributes.Find(_ is RuleAttribute.SpanClass) is Some(RuleAttribute.SpanClass as spanClass))
+            {
+              if (rd is RuleDefinition.Regular)
+                <[  when ($varName.IntersectsWith(startPos, endPos))
+                      spans.Add(N2.SpanInfo($varName, $(MakeSpanClassFieldName(spanClass.name) : dyn))) ]>
+              else
+                <[  when ($varName.IntersectsWith(startPos, endPos))
+                      $varName.GetSpans(spans, startPos, endPos) ]>
+            }
+            else
+            {
+              if (rd is RuleDefinition.Regular)
+                <[ () ]> // we not need SpanClass.Default spans 
+                //<[ when ($varName.IntersectsWith(startPos, endPos))
+                //     spans.Add(N2.SpanInfo($varName, N2.SpanClass.Default)) ]>
+              else
+                <[  when ($varName.IntersectsWith(startPos, endPos))
+                      $varName.GetSpans(spans, startPos, endPos) ]>
+            }
+
+          | String(str) =>
+            def spanClass = TypedGrammar.SpanClasses.Find(spanClass =>
+            {
+              match (spanClass.Match)
+              {
+                | Some(rr) => FSMMatch.MakeMatcher(ConvertRegularRuleToFsm(TypedGrammar, rr))(str)//TODO:Optimize
+                | None => false;
+              }
+            });
+            if (spanClass is Some(spanClass))
+              <[  when ($varName.IntersectsWith(startPos, endPos))
+                    spans.Add(N2.SpanInfo($varName, $(MakeSpanClassFieldName(spanClass.Name) : dyn))) ]>
+            else
+              <[ () ]> // we not need SpanClass.Default spans
+              //<[  when ($varName.IntersectsWith(startPos, endPos))
+              //      spans.Add(N2.SpanInfo($varName, N2.SpanClass.Default)) ]>
+
+          | Sequence(rules) =>
+            def rules = rules.Filter(rule => !(rule.Type is RuleType.Void));
+            def names = rules.Map(getName).Map(name => <[ $(name : name)]>);
+            def code  = mapRules(rules, makeGetSpans);
+            
+            match (names)
+            {
+              | [name] =>
+                if (!isEmpty(code))
+                  <[
+                    {
+                      def $name = $varName;
+                      $code;
+                    }
+                  ]>
+                else
+                  <[ () ]>
+                  
+              | [] | null => assert(false)
+              | names =>
+                if (!isEmpty(code))
+                  <[
+                    {
+                      def (..$names) = $varName;
+                      $code;
+                    }
+                  ]>
+                else
+                  <[ () ]>
+            }
+
+          | Repeat(0, Some(1), subRule) =>
+            def code = makeGetSpans(subRule);
+            
+            if (!isEmpty(code))
+              <[
+                match($varName)
+                {
+                  | Some($(getName(subRule) : name)) => $code
+                  | _ => ()
+                }
+              ]>
+            else
+              <[ () ]>
+
+          | Repeat(_, _, subRule) =>
+            def code = makeGetSpans(subRule);
+            
+            if (!isEmpty(code))
+              <[
+                foreach ($(getName(subRule) : name) in $varName)
+                  $code
+              ]>
+            else
+              <[ () ]>
+
+          | RepeatWithSeparator(_, _, rule, separator, _) =>
+            def codeForRule             = makeGetSpans(rule);
+            def codeForSeparator        = makeGetSpans(separator);
+            def isCodeForRuleEmpty      = isEmpty(codeForRule);
+            def isCodeForSeparatorEmpty = isEmpty(codeForSeparator);
+            
+            if (isCodeForRuleEmpty && isCodeForSeparatorEmpty)
+              <[ () ]>
+            else
+            {
+              def codeForRules =
+                if (isCodeForSeparatorEmpty)
+                  <[
+                    foreach ($(getName(rule) : name) in $varName[0])
+                      $codeForRule;
+                  ]>
+                else
+                  <[ () ]>;
+              def codeForSeparators =
+                if (isCodeForRuleEmpty)
+                  <[
+                    foreach ($(getName(separator) : name) in $varName[1])
+                      $codeForSeparator;
+                  ]>
+                else
+                  <[ () ]>;
+                  
+              <[ $codeForRules; $codeForSeparators; ]>
+            }
+              
+          | And | Not => assert(false);
+        }
+      }
+      def selfCode = 
+        if (rd.Attributes.Find(_ is RuleAttribute.SpanClass) is Some(RuleAttribute.SpanClass as spanClass))
+          <[ 
+            def loc = this.Location.NToken;
+            when (loc.IntersectsWith(startPos, endPos))
+              spans.Add(N2.SpanInfo(loc, $(MakeSpanClassFieldName(spanClass.name) : dyn)))
+          ]>
+        else
+          <[ () ]>;
+      def subRuleCode  = mapRules(rules, makeGetSpans);
+
+      _ = astTb.DefineWithSource(<[decl:
+        public override GetSpans(spans : System.Collections.Generic.List[N2.SpanInfo], startPos : int, endPos : int) : void
+        {
+          ignore(spans, startPos, endPos);
+
+          $selfCode;
+          $subRuleCode
+        }
+      ]>);
+    }
+  }
+}
