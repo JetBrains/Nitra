@@ -1,7 +1,7 @@
 ﻿using Nemerle;
+using Nemerle.Text;
 using Nemerle.Collections;
 using Nemerle.Imperative;
-using Nemerle.Text;
 using Nemerle.Utility;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
@@ -39,6 +39,15 @@ namespace N2
       def names = SCG.HashSet();
       def definedErrorHendlers = SCG.HashSet();
 
+      def cachingPropertyName(extraFieldName : Name) : Name
+      {
+        regexp match (extraFieldName.Id)
+        {
+          | "(Get|Compute|Calculate|Calc|Create|Make|Evaluate|Eval)(?<baseName>.*)" => <[ $(baseName : usesite) ]>.name
+          | _ =>  <[ $("Computed" + extraFieldName.Id : usesite) ]>.name
+        }
+      }
+
       def addRecursionCheck(tb : TypeBuilder, body : PExpr) : PExpr.Sequence
       {
         def bitField = tb.GetBitFieldManager().Allocate();
@@ -50,19 +59,36 @@ namespace N2
         ]>
       }
 
-      def addCaching(tb : TypeBuilder, type : PExpr, body : PExpr) : PExpr
+      def addCaching(tb : TypeBuilder, name : Name, type : PExpr, body : PExpr, isOverride : bool) : PExpr
       {
         def bitField = tb.GetBitFieldManager().Allocate();
-        def name = Util.tmpname("cache");
-        tb.Define(<[ decl: private mutable $(name : usesite) : $type ]>);
+        def fieldName = <[ $(Util.tmpname(name.Id + "_cache") : usesite) ]>.name;
+        tb.Define(<[ decl: private mutable $(fieldName : name) : $type ]>);
+        def mods = Modifiers(NemerleModifiers.Public %| if (isOverride) NemerleModifiers.Override else NemerleModifiers.Virtual, []);
+        tb.Define(<[ decl:
+          ..$mods $(cachingPropertyName(name) : name) : $type
+          {
+            get
+            {
+              unless ($(bitField.Read()))
+              {
+                //FIXME: fix compiler bug!!
+                //assert2(false, "Extra field value not computed yet.");
+                throw System.InvalidOperationException("Extra field value not computed yet.");
+              }
+              $(fieldName : name);
+            }
+          }
+        ]>);
+
         <[
           if ($(bitField.Read()))
-            $(name : usesite)
+            $(fieldName : name);
           else
           {
-            $(name : usesite) = $body;
+            $(fieldName : name) = $body;
             $(bitField.Set());
-            $(name : usesite)
+            $(fieldName : name);
           }
         ]>
       }
@@ -90,17 +116,23 @@ namespace N2
 
           if (rd is RuleDefinition.Simple)
           {
-            def body2 = if (field.IsCached) addCaching(astTb, type, body) else body;
+            when (field.IsCached)
+              baseAstTb.Define(<[ decl: public virtual $(cachingPropertyName(n) : name) : $type { get { throw System.NotImplementedException(); } } ]>);
+            def body2 = if (field.IsCached) addCaching(astTb, n, type, body, true) else body;
             def body3 = addRecursionCheck(astTb, body2);
             baseAstTb.Define(<[ decl: [$attrs] public abstract $(n : name)(..$parameters) : $type; ]>);
             astTb.Define(<[     decl: [$attrs] public override $(n : name)(..$parameters) : $type $body3 ]>);
           }
           else if (body == null)
+          {
+            when (field.IsCached)
+              baseAstTb.Define(<[ decl: public virtual $(cachingPropertyName(n) : name) : $type { get { throw System.NotImplementedException(); } } ]>);
             baseAstTb.Define(<[ decl: [$attrs] public abstract $(n : name)(..$parameters) : $type; ]>);
+          }
           else
           {
-            def body2 = if (field.IsCached) addCaching(baseAstTb, type, body) else body;
-            def body3 = addRecursionCheck(astTb, body2);
+            def body2 = if (field.IsCached) addCaching(baseAstTb, n, type, body, false) else body;
+            def body3 = addRecursionCheck(baseAstTb, body2);
             baseAstTb.Define(<[ decl: [$attrs] public virtual  $(n : name)(..$parameters) : $type $body3 ]>);
           }
 
@@ -129,7 +161,7 @@ namespace N2
 
               def attrs = <[ N2.Runtime.ExtraFieldAttribute($(field.IsCached || baseField.IsCached : bool)) ]>;
               def tb = if (field is ExtraField.OnError) errorTb else astTb;
-              def body2 = if (field.IsCached || baseField.IsCached) addCaching(tb, type, body) else body;
+              def body2 = if (field.IsCached || baseField.IsCached) addCaching(tb, n, type, body, baseField.IsCached) else body;
               def body3 = addRecursionCheck(astTb, body2);
               tb.Define(<[ decl: [$attrs] public override $(n : name)(..$parameters) : $type $body3 ]>);
 
@@ -152,16 +184,16 @@ namespace N2
             | Def(name, parameters, type, _) when !definedErrorHendlers.Contains(name) =>
               def n         = <[ $(name.AsName : dyn) ]>.name;
               def ignores   = parameters.Map(p => <[ _ = $(p.ReferencingExpr); ]>);
-              
+
               when (errorTb != null)
               {
                 def msg = $"Parse error handling for '$name' extra field of '$(rd.Name)' rule is not implemented.";
                 def errorBody = <[ 
-                  { ..$ignores } 
+                  { ..$ignores }
                   throw System.NotImplementedException($msg); ]>;
                 errorTb.Define(<[ decl: public override $(n : name)(..$parameters) : $type $errorBody ]>);
               }
-              
+
               when (spliceTb != null)
               {
                 def spliceBody = <[ 
