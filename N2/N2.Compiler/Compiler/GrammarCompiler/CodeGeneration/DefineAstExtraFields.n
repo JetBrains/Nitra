@@ -38,20 +38,48 @@ namespace N2
       def extraFields = rd.ExtraFields;
       def names = SCG.HashSet();
       def definedErrorHendlers = SCG.HashSet();
-      
+
+      def addRecursionCheck(tb : TypeBuilder, body : PExpr) : PExpr.Sequence
+      {
+        def bitField = tb.GetBitFieldManager().Allocate();
+        <[
+          when ($(bitField.Read()))
+            throw System.InvalidOperationException("Recursion detected (see stack trace for details).");
+          $(bitField.Set());
+          $body
+        ]>
+      }
+
+      def addCaching(tb : TypeBuilder, type : PExpr, body : PExpr) : PExpr
+      {
+        def bitField = tb.GetBitFieldManager().Allocate();
+        def name = Util.tmpname("cache");
+        tb.Define(<[ decl: private mutable $(name : usesite) : $type ]>);
+        <[
+          if ($(bitField.Read()))
+            $(name : usesite)
+          else
+          {
+            $(name : usesite) = $body;
+            $(bitField.Set());
+            $(name : usesite)
+          }
+        ]>
+      }
+
       foreach (field in extraFields with i)
       {
         | Abstract (name, parameters, type) with body = null
         | DefPrivate(name, parameters, type, body)  
         | Def(name, parameters, type, body) => 
           def n          = <[ $(name.AsName : dyn) ]>.name;
-          
+
           unless (names.Add(name))
           {
             Message.Error(name.Location, $"The rule '$(rd.Name)' already contains a definition for '$name'.");
             continue;
           }
-          
+
           unless (rd is RuleDefinition.ExtentionPoint || rd is RuleDefinition.Simple || field is ExtraField.DefPrivate)
           {
             Message.Error(name.Location, "A public extra field must be defined in a extention point rule or a simple rule only.");
@@ -62,13 +90,19 @@ namespace N2
 
           if (rd is RuleDefinition.Simple)
           {
+            def body2 = if (field.IsCached) addCaching(astTb, type, body) else body;
+            def body3 = addRecursionCheck(astTb, body2);
             baseAstTb.Define(<[ decl: [$attrs] public abstract $(n : name)(..$parameters) : $type; ]>);
-            astTb.Define(<[     decl: [$attrs] public override $(n : name)(..$parameters) : $type $body ]>);
+            astTb.Define(<[     decl: [$attrs] public override $(n : name)(..$parameters) : $type $body3 ]>);
           }
           else if (body == null)
             baseAstTb.Define(<[ decl: [$attrs] public abstract $(n : name)(..$parameters) : $type; ]>);
           else
-            baseAstTb.Define(<[ decl: [$attrs] public virtual  $(n : name)(..$parameters) : $type $body ]>);
+          {
+            def body2 = if (field.IsCached) addCaching(baseAstTb, type, body) else body;
+            def body3 = addRecursionCheck(astTb, body2);
+            baseAstTb.Define(<[ decl: [$attrs] public virtual  $(n : name)(..$parameters) : $type $body3 ]>);
+          }
 
         | OnError(name, body) | Override(name, body) =>
           match (rd)
@@ -84,19 +118,22 @@ namespace N2
                 continue;
               }
               def baseField = baseFieldOpt.Value;
-              
+
               def n          = <[ $(name.AsName : dyn) ]>.name;
               def parameters = baseField.Params;
               def type       = baseField.Type;
-              
+
               when (field is ExtraField.OnError)
                 unless (definedErrorHendlers.Add(name))
                   Message.Error(name.Location, "Redefinition of error hendler.");
-                
+
+              def attrs = <[ N2.Runtime.ExtraFieldAttribute($(field.IsCached || baseField.IsCached : bool)) ]>;
               def tb = if (field is ExtraField.OnError) errorTb else astTb;
-              tb.Define(<[ decl: public override $(n : name)(..$parameters) : $type $body ]>);
-              
-            | _ => 
+              def body2 = if (field.IsCached || baseField.IsCached) addCaching(tb, type, body) else body;
+              def body3 = addRecursionCheck(astTb, body2);
+              tb.Define(<[ decl: [$attrs] public override $(n : name)(..$parameters) : $type $body3 ]>);
+
+            | _ =>
               if (field is ExtraField.OnError)
                 Message.Error(name.Location, "A error hendler for a extra field can be defined only in extending rules.");
               else
