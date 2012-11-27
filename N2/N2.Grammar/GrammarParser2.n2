@@ -180,11 +180,13 @@ syntax module GrammarParser2
   syntax Start                = s Using*  TopDeclaration* !Any
   {
     CollectGlobalSymbols(rootNs : NamespaceSymbol) : void { _ = PassThrough(TopDeclarations, rootNs, _.CollectGlobalSymbols(_)); }
-    Typing(context : Context) : list[SyntaxModuleData]
+    [Cached] MakeContext(parent : Context) : Context
     {
-      def context = FoldThrough(Usings, context, _.GetContext(_));
-      FoldThrough(TopDeclarations, (context, []), _.Typing(_))[1]
+      def context1 = FoldThrough(Usings, parent, _.MakeContext(_));
+      def context2 = FoldThrough(TopDeclarations, context1, _.MakeContext(_));
+      context2
     }
+    Typing() : list[SyntaxModuleData] = FoldThrough(TopDeclarations, [], _.Typing(_));
 
     Env(env : GlobalEnv) : GlobalEnv = FoldThrough(Usings, env, _.Env(_));
     GetSyntaxModules() : list[list[string] * SyntaxModule.Ast] = TopDeclarations.OfType.[SyntaxModule.Ast]().Select(ast => ([], ast)).NToList();
@@ -197,7 +199,7 @@ syntax module GrammarParser2
 
   syntax Using
   {
-    GetContext(context : Context) : Context;
+    [Cached] MakeContext(parent : Context) : Context;
     Env(env : GlobalEnv) : GlobalEnv;
     GetEnvironment(inEnvironment : Environment[N2Project]) : Environment[N2Project];
   }
@@ -206,13 +208,13 @@ syntax module GrammarParser2
   {
     UsingOpen  = "using" sm NamespaceOrType ";"
     {
-      override GetContext = OpenNamespaceOrTypeContext(context, NamespaceOrType);
+      override MakeContext = OpenNamespaceOrTypeContext(parent, NamespaceOrType);
       override Env = env.AddOpenNamespace(NamespaceOrType.Parts(), NamespaceOrType.NLocation());
       override GetEnvironment = inEnvironment.AddOpen(NamespaceOrType.Parts(), NamespaceOrType.Location);
     }
     UsingAlias = "using" Name sm "=" sm NamespaceOrType ";"
     {
-      override GetContext = NamespaceOrTypeAliasContext(context, Name, NamespaceOrType);
+      override MakeContext = NamespaceOrTypeAliasContext(parent, Name, NamespaceOrType);
       override Env = env.AddNamespaceAlias(Name.Value(), NamespaceOrType.Parts(), NamespaceOrType.NLocation());
       override GetEnvironment = inEnvironment.AddAlias(Name.Value(), NamespaceOrType.Parts(), NamespaceOrType.Location);
     }
@@ -221,7 +223,8 @@ syntax module GrammarParser2
   syntax TopDeclaration
   {
     CollectGlobalSymbols(ns : NamespaceSymbol) : NamespaceSymbol;
-    Typing(context : Context, syntaxModules : list[SyntaxModuleData]) : Context * list[SyntaxModuleData];
+    [Cached] MakeContext(parent : Context) : Context;
+    Typing(syntaxModules : list[SyntaxModuleData]) : list[SyntaxModuleData];
 
     GetSyntaxModuleData(inEnvironment : Environment[N2Project]) : SyntaxModuleData;
     GrammarRefs(env : GlobalEnv) : list[GrammarRef];
@@ -237,13 +240,19 @@ syntax module GrammarParser2
       _ = PassThrough(Declarations, sym, _.CollectGlobalSymbols(_));
       ns
     }
+    [Cached] private MakeSyntaxModuleContext(parent : Context, name : Identifier) : SyntaxModuleContext = SyntaxModuleContext(parent, name);
+    override MakeContext
+    {
+      def context1 = MakeSyntaxModuleContext(parent, Name);
+      def context2 = FoldThrough(Imports, context1, _.MakeContext(_));
+      def context3 = SyntaxModuleBodyContext(context2);
+      _ = FoldThrough(Declarations, context3, _.MakeContext(_));
+      context3
+    }
     override Typing
     {
-      def context2 = SyntaxModuleContext(context, Name);
-      def context3 = FoldThrough(Imports, context2, _.GetContext(_));
-      def context4 = SyntaxModuleBodyContext(context3);
-      def ruleDefinitions = FoldThrough(Declarations, (context4, []), _.Typing(_));
-      (context4, SyntaxModuleData(context2.Module, ruleDefinitions[1]) :: syntaxModules)
+      def ruleDefinitions = FoldThrough(Declarations, [], _.Typing(_));
+      SyntaxModuleData(SyntaxModuleContext.Module, ruleDefinitions) :: syntaxModules
     }
 
     override GetSyntaxModuleData
@@ -261,7 +270,7 @@ syntax module GrammarParser2
 
   syntax Import
   {
-    GetContext(context : Context) : Context;
+    [Cached] MakeContext(parent : Context) : Context;
     GetEnvironment(inEnvironment : Environment[N2Project]) : Environment[N2Project];
     GrammarRef(env : GlobalEnv, index : int) : GrammarRef;
   }
@@ -270,14 +279,14 @@ syntax module GrammarParser2
   {
     ImportSyntaxModuleDecl  = "using" sm NamespaceOrType                  ";"nl
     {
-      override GetContext = OpenNamespaceOrTypeContext(context, NamespaceOrType);
+      override MakeContext = OpenNamespaceOrTypeContext(parent, NamespaceOrType);
       override GetEnvironment = inEnvironment.AddOpen(NamespaceOrType.Parts(), NamespaceOrType.Location);
       override GrammarRef = GrammarRef(NamespaceOrType.NLocation(), index, None(), BindFixedType(env, NamespaceOrType));
     }
     AliasSyntaxModuleDecl   = "using" sm Alias sm "="  sm NamespaceOrType ";"nl
     {
       alias Alias = Identifier;
-      override GetContext = NamespaceOrTypeAliasContext(context, Alias, NamespaceOrType);
+      override MakeContext = NamespaceOrTypeAliasContext(parent, Alias, NamespaceOrType);
       override GetEnvironment = inEnvironment.AddAlias(Alias.Value(), NamespaceOrType.Parts(), NamespaceOrType.Location);
       override GrammarRef = GrammarRef(NamespaceOrType.NLocation(), index, Some(Alias.Identifier()), BindFixedType(env, NamespaceOrType));
     }
@@ -343,7 +352,8 @@ syntax module GrammarParser2
   syntax Declaration
   {
     CollectGlobalSymbols(sm : SyntaxModuleSymbol) : SyntaxModuleSymbol = sm;
-    Typing(context : Context, ruleDefinitions : list[RuleDefinition2]) : Context * list[RuleDefinition2] = (context, ruleDefinitions);
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    Typing(ruleDefinitions : list[RuleDefinition2]) : list[RuleDefinition2] = ruleDefinitions;
 
     RuleRefs(ruleRefs : List[RuleRefSymbol]) : void { _ = ruleRefs; }
     CollectRuleDefinitions(inScope : N2Scope, ruleDefinitions : list[RuleDefinition2]) : N2Scope * list[RuleDefinition2] = (inScope, ruleDefinitions);
@@ -355,8 +365,7 @@ syntax module GrammarParser2
     ExtentionRuleDecl       = RuleAttributes "syntax"  sm             Name  sm "is" sm BaseName sm "=" sm Rule  BodyDeclaration
     {
       override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
-      override Typing = 
-        (context, ExtentionRule(context, this.Location, RuleAttributes, Name, BaseName, Rule, BodyDeclaration) :: ruleDefinitions);
+      override Typing = ExtentionRule(Context, this.Location, RuleAttributes, Name, BaseName, Rule, BodyDeclaration) :: ruleDefinitions;
 
       override CollectRuleDefinitions = 
         (inScope, ExtentionRule(inScope, this.Location, RuleAttributes, Name, BaseName, Rule, BodyDeclaration) :: ruleDefinitions);
@@ -364,8 +373,7 @@ syntax module GrammarParser2
     SimpleRuleDecl          = RuleAttributes "syntax"  sm             Name  sm "="  sm Rule                     BodyDeclaration
     {
       override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
-      override Typing = 
-        (context, SimpleRule(context, this.Location, RuleAttributes, Name, Rule, BodyDeclaration) :: ruleDefinitions);
+      override Typing = SimpleRule(Context, this.Location, RuleAttributes, Name, Rule, BodyDeclaration) :: ruleDefinitions;
 
       override CollectRuleDefinitions = 
         (inScope, SimpleRule(inScope, this.Location, RuleAttributes, Name, Rule, BodyDeclaration) :: ruleDefinitions);
@@ -373,8 +381,7 @@ syntax module GrammarParser2
     ExtentionPointRuleDecl  = RuleAttributes "syntax"  sm             Name                                      BodyDeclaration
     {
       override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
-      override Typing =
-        (context, ExtentionPointRule(context, this.Location, RuleAttributes, Name, BodyDeclaration) :: ruleDefinitions);
+      override Typing = ExtentionPointRule(Context, this.Location, RuleAttributes, Name, BodyDeclaration) :: ruleDefinitions;
 
       override CollectRuleDefinitions
       {
@@ -388,8 +395,12 @@ syntax module GrammarParser2
     TokenRuleDecl           = RuleAttributes "token"   sm             Name  sm "="  sm TokenRule                BodyDeclaration
     {
       override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
-      override Typing =
-        (context, TokenRule(context, this.Location, RuleAttributes, Name, TokenRule, BodyDeclaration) :: ruleDefinitions);
+      override MakeContext
+      {
+        _ = TokenRule.MakeContext(parent);
+        parent
+      }
+      override Typing = TokenRule(Context, this.Location, RuleAttributes, Name, TokenRule, BodyDeclaration) :: ruleDefinitions;
 
       override CollectRuleDefinitions
       {
@@ -403,8 +414,7 @@ syntax module GrammarParser2
     VoidRuleDecl            = RuleAttributes "void"    sm             Name  sm "="  sm Rule                     BodyDeclaration
     {
       override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value());
-      override Typing =
-        (context, SimpleRule(context, this.Location, RuleAttributes, Name, Rule, BodyDeclaration) :: ruleDefinitions);
+      override Typing = SimpleRule(Context, this.Location, RuleAttributes, Name, Rule, BodyDeclaration) :: ruleDefinitions;
 
       override CollectRuleDefinitions = 
         (inScope, SimpleRule(inScope, this.Location, RuleAttributes, Name, Rule, BodyDeclaration) :: ruleDefinitions);
@@ -421,13 +431,14 @@ syntax module GrammarParser2
           m.CollectGlobalSymbols(sm);
         sm
       }
-      override Typing = FoldThrough(ExtendSyntaxMembers, (context, ruleDefinitions), (m, (c, r)) => m.Typing(c, r, BaseName));
+      override MakeContext = FoldThrough(ExtendSyntaxMembers, parent, _.MakeContext(_));
+      override Typing = FoldThrough(ExtendSyntaxMembers, ruleDefinitions, (m, r) => m.Typing(r, BaseName));
 
       override CollectRuleDefinitions = FoldThrough(ExtendSyntaxMembers, (inScope, ruleDefinitions), (m, (s, r)) => m.CollectRuleDefinitions(s, r, BaseName));
     }
     AliasDecl               =                RuleAlias
     {
-      override Typing = (RuleAlias.GetContext(context), ruleDefinitions);
+      override MakeContext = RuleAlias.GetContext(parent);
       override CollectRuleDefinitions =  (RuleAlias.OutScope(inScope), ruleDefinitions);
     }
     TokenField              =                "token"   sm "field"  sm Name  sm "="  sm (StringLiteral; ","sm)+  ";"nl
@@ -437,25 +448,41 @@ syntax module GrammarParser2
         def name = Name.Identifier();
         FoldThrough(StringLiterals[0], result, (strLit, result) => result.Replace(strLit.Value(), name))
       }
-      override Typing = (TokenFieldContext(context, Name, StringLiterals[0]), ruleDefinitions);
+      override MakeContext = TokenFieldContext(parent, Name, StringLiterals[0]);
       override CollectRuleDefinitions = (inScope.AddTokenFieldNames(Name.Identifier(), StringLiterals[0]), ruleDefinitions);
     }
     SpanClassDecl           =                "span"    sm "class"  sm Name MatchTokens                          ";"nl
     {
       alias MatchTokens = ("=" TokenRule)?;
-      override Typing = (SpanClassContext(context, Name, MatchTokens.Map((_, tokenRule) => tokenRule)), ruleDefinitions);
+      override MakeContext
+      {
+        def context = SpanClassContext(parent, Name, MatchTokens.Map((_, tokenRule) => tokenRule));
+        _ = MatchTokens.Map((_, tokenRule) => tokenRule.MakeContext(context));
+        context
+      }
       override CollectRuleDefinitions = (inScope.AddSpanClass(Name.Identifier(), MatchTokens.Map((_, tr) => tr.RegularRule())), ruleDefinitions);
     }
     BracePairDecl           =                "braces"  sm             Open "," sm Close                          ";"nl
     {
       alias Open  = TokenRule;
       alias Close = TokenRule;
-      override Typing = (BracePairContext(context, Open, Close), ruleDefinitions);
+      override MakeContext
+      {
+        def context = BracePairContext(parent, Open, Close);
+        _ = Open.MakeContext(context);
+        _ = Close.MakeContext(context);
+        context
+      }
       override CollectRuleDefinitions = (inScope.AddBracePair(Open.RegularRule(), Close.RegularRule()), ruleDefinitions);
     }
     KeywordRegexDecl        =                "keyword" sm "regex"  sm TokenRule as MatchTokens sm "rule" sm Name ";"nl
     {
-      override Typing = (KeywordRegexContext(context, MatchTokens, Name), ruleDefinitions);
+      override MakeContext
+      {
+        def context = KeywordRegexContext(parent, MatchTokens, Name);
+        _ = MatchTokens.MakeContext(context);
+        context
+      }
       override CollectRuleDefinitions = (inScope.AddKeywordRegex(MatchTokens.RegularRule(), Name.Identifier()), ruleDefinitions);
     }
   }
@@ -470,8 +497,9 @@ syntax module GrammarParser2
   {
     CollectGlobalSymbols(sm : SyntaxModuleSymbol) : void = _ = AddRefSymbol(sm, this, Name.Value());
     RuleRefs(ruleRefs : List[RuleRefSymbol]) : void = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
-    Typing(context : Context, ruleDefinitions : list[RuleDefinition2], baseName : QIdentifier) : Context * list[RuleDefinition2]  = 
-      (context, ExtentionRule(context, this.Location, RuleAttributes, Name, baseName, Rule, BodyDeclaration) :: ruleDefinitions);
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    Typing(ruleDefinitions : list[RuleDefinition2], baseName : QIdentifier) : list[RuleDefinition2] =
+      ExtentionRule(Context, this.Location, RuleAttributes, Name, baseName, Rule, BodyDeclaration) :: ruleDefinitions;
     CollectRuleDefinitions(inScope : N2Scope, ruleDefinitions : list[RuleDefinition2], baseName : QIdentifier) : N2Scope * list[RuleDefinition2] =
       (inScope, ExtentionRule(inScope, this.Location, RuleAttributes, Name, baseName, Rule, BodyDeclaration) :: ruleDefinitions);
     GetAliases(inScope : N2Scope) : N2Scope = BodyDeclaration.GetAliases(inScope);
@@ -665,6 +693,8 @@ syntax module GrammarParser2
 
   syntax TokenRule
   {
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    Typing() : RegularRule2;
     RegularRule() : RegularRule;
   }
 
@@ -674,55 +704,91 @@ syntax module GrammarParser2
   {
     ChoiceTokenRule                  = LeftRule sm RightRules
     {
-      alias LeftRule = TokenRule : 10; alias RightRules = ("|" TokenRule : 10)+;
+      alias LeftRule = TokenRule : 10;
+      alias RightRules = ("|" TokenRule : 10)+;
+      override MakeContext
+      {
+        def context1 = LeftRule.MakeContext(parent);
+        def context2 = FoldThrough(RightRules, context1, ((_, r), c) => r.MakeContext(c));
+        context2
+      }
+      override Typing = RegularRule2.Choice(Location, LeftRule.Typing() :: RightRules.Map(r => r[1].Typing()));
       override RegularRule = RegularRule.Choice(this.NLocation(), LeftRule.RegularRule() :: RightRules.Map(r => r[1].RegularRule()));
     }
     SequenceTokenRule                = LeftRule sm RightRules
     {
-      alias LeftRule = TokenRule : 20; alias RightRules = (TokenRule : 20)+;
+      alias LeftRule = TokenRule : 20;
+      alias RightRules = (TokenRule : 20)+;
+      override MakeContext
+      {
+        def context1 = LeftRule.MakeContext(parent);
+        def context2 = FoldThrough(RightRules, context1, _.MakeContext(_));
+        context2
+      }
+      override Typing = RegularRule2.Sequence(Location, LeftRule.Typing() :: RightRules.Map(_.Typing()));
       override RegularRule = RegularRule.Sequence(this.NLocation(), LeftRule.RegularRule() :: RightRules.Map(_.RegularRule()));
     }
     OptionalTokenRule                = TokenRule "?"
     {
       precedence 30;
+      override MakeContext = TokenRule.MakeContext(parent);
+      override Typing = RegularRule2.Repeat(Location, 0, Some(1), this.TokenRule.Typing());
       override RegularRule = RegularRule.Repeat(this.NLocation(), 0, Some(1), this.TokenRule.RegularRule());
     }
     ZeroOrManyTokenRule              = TokenRule "*"
     {
       precedence 30;
+      override MakeContext = TokenRule.MakeContext(parent);
+      override Typing = RegularRule2.Repeat(Location, 0, None(), this.TokenRule.Typing());
       override RegularRule = RegularRule.Repeat(this.NLocation(), 0, None(), this.TokenRule.RegularRule());
     }
     OneOrManyTokenRule               = TokenRule "+"
     {
       precedence 30;
+      override MakeContext = TokenRule.MakeContext(parent);
+      override Typing = RegularRule2.Repeat(Location, 1, None(), this.TokenRule.Typing());
       override RegularRule = RegularRule.Repeat(this.NLocation(), 1, None(), this.TokenRule.RegularRule());
     }
     CharTokenRule                    = CharLiteral
     {
+      override Typing = RegularRule2.Chars(Location, [RangeSet().AddSingleCharRange(CharLiteral.Value())]);
       override RegularRule = RegularRule.Chars(this.NLocation(), [RangeSet().AddSingleCharRange(CharLiteral.Value())]);
     }
     StringTokenRule                  = StringLiteral
     {
+      override Typing = RegularRule2.Chars(Location, RangeSet.MakeString(StringLiteral.Value()));
       override RegularRule = RegularRule.Chars(this.NLocation(), RangeSet.MakeString(StringLiteral.Value()));
     }
     CallTokenRule                    = QualifiedName
     {
+      override Typing
+      {
+        def ruleRef = RuleRef(QualifiedName, Context.Bind(QualifiedName));
+        RegularRule2.Call(Location, ruleRef)
+      }
       override RegularRule { def n = this.QualifiedName.NameRef(); RegularRule.Call(n.Location,  n) }
     }
     RoundsTokenRule                  = "(" TokenRule ")" 
     {
+      override MakeContext = TokenRule.MakeContext(parent);
+      override Typing = TokenRule.Typing();
       override RegularRule = TokenRule.RegularRule();
     }
     RangeTokenRule                   = "[" (Range; ","sm)+ "]"
     {
+      override Typing = RegularRule2.Chars(Location, [FoldThrough(Ranges[0], RangeSet(), _.RangeSet(_))]);
       override RegularRule = RegularRule.Chars(this.NLocation(), [FoldThrough(Ranges[0], RangeSet(), _.RangeSet(_))]);
     }
     ZeroOrManyWithSeparatorTokenRule = "(" TokenRule ";"sm SeparatorToken ")" "*"
     {
+      override MakeContext = parent |> TokenRule.MakeContext |> SeparatorToken.MakeContext;
+      override Typing = RegularRule2.RepeatWithSeparator(Location, 0, None(), TokenRule.Typing(), SeparatorToken.Typing());
       override RegularRule = RegularRule.RepeatWithSeparator(this.NLocation(), 0, None(), TokenRule.RegularRule(), SeparatorToken.RegularRule());
     }
     OneOrManyWithSeparatorTokenRule  = "(" TokenRule ";"sm SeparatorToken ")" "+"
     {
+      override MakeContext = parent |> TokenRule.MakeContext |> SeparatorToken.MakeContext;
+      override Typing = RegularRule2.RepeatWithSeparator(Location, 1, None(), TokenRule.Typing(), SeparatorToken.Typing());
       override RegularRule = RegularRule.RepeatWithSeparator(this.NLocation(), 1, None(), TokenRule.RegularRule(), SeparatorToken.RegularRule());
     }
   }
