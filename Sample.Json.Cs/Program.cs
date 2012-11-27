@@ -3,13 +3,17 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
 
 namespace Sample.Json.Cs
 {
   class Program
   {
-    static void Main()
+    static void Main(string[] args)
     {
+      if (args.Length > 0)
+        text = File.ReadAllText(args[0]);
+
       var source = new SourceSnapshot(text);
       var parserHost = new ParserHost();
       var parseResult = parserHost.DoParsing(source, JsonParser.GrammarImpl.StartRuleDescriptor);
