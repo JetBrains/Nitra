@@ -1,0 +1,158 @@
+﻿using Nemerle.Collections;
+using Nemerle.Utility;
+using Nemerle.IO;
+using Nemerle.Compiler;
+
+using System;
+using System.IO;
+using System.Diagnostics;
+using System.Reflection;
+using SCG = System.Collections.Generic;
+
+namespace Nemerle.CommandlineCompiler
+{
+  module MainClass
+  {
+    mutable stack_kilos : int = 0;
+    mutable Manager : ManagerClass;
+    mutable Options : CompilationOptions;
+
+    public Main() : void
+    {
+      def path = Path.GetDirectoryName(Uri(Assembly.GetExecutingAssembly().CodeBase).LocalPath);
+      def is64bitProcess = IntPtr.Size == 8;
+      def is64BitOperatingSystem() : bool
+      {
+        // FIXME: Add support for Linux
+        #if NET_4_0
+        Environment.Is64BitOperatingSystem
+        #else
+          Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE") == "AMD64" || 
+          Environment.GetEnvironmentVariable("PROCESSOR_ARCHITEW6432") == "AMD64"
+        #endif
+      }
+      Options = CompilationOptions();
+      Manager = ManagerClass(Options);
+      Options.ColorMessages = false;
+      Options.OutputFileName = "";
+      Options.ProjectPath = "";
+      Options.TargetIsLibrary = true;
+      Manager.InitOutput(Console.Out);
+      parse_command_line();
+      
+      def files = Options.Sources.Map(source => Location.GetFileName(source.FileIndex));
+      def makeExt(options) { if (options.TargetIsLibrary) ".dll" else ".exe" }
+      
+      when (Options.OutputFileName == "")
+        Options.OutputFileName = 
+          if (Options.ProjectPath == "")
+            if (files.IsEmpty)
+              "out.exe"
+            else
+              Path.GetFileNameWithoutExtension(files.Head) + makeExt(Options)
+          else
+              Path.GetFileNameWithoutExtension(Options.ProjectPath) + makeExt(Options);
+      
+      def n2CompilerDll = Path.Combine(path, "N2.Compiler.dll");
+      def n2RuntimeDll  = Path.Combine(path, "N2.Runtime.dll");
+      def target        = if (Options.TargetIsSet) "" else "-target:library";
+      def cmdLineAdds   = $<#-m:"$n2CompilerDll" -r:"$n2RuntimeDll" -no-color -out:$(Options.OutputFileName) $target#>;
+      //Console.WriteLine($"cmdLineAdds='$cmdLineAdds'");
+
+      def runInAppropriateProcess(processName : string) : void
+      {
+        def dir = IO.Path.GetDirectoryName(Uri(typeof(list[_]).Assembly.CodeBase).LocalPath);
+        def path = IO.Path.Combine(dir, processName);
+        def argsList = Environment.GetCommandLineArgs().NToList();
+        def args = $<#..$(argsList.Tail; " ") $cmdLineAdds#>;
+        def process = Process();
+        process.StartInfo.UseShellExecute = false;
+        process.StartInfo.CreateNoWindow = false;
+        process.StartInfo.FileName = path;
+        process.StartInfo.Arguments = args;
+        if (process.Start())
+        {
+          process.WaitForExit();
+          when (process.ExitCode != 0)
+            Environment.Exit(process.ExitCode);
+        }
+        else
+          Environment.Exit(-1);
+      }
+      def eq(a, b) { string.Equals(a, b, StringComparison.InvariantCultureIgnoreCase) }
+
+      if (eq(Options.Platform, "x86"))
+        runInAppropriateProcess("ncc32.exe")
+      else if (eq(Options.Platform, "x64"))
+        if (is64BitOperatingSystem())
+          runInAppropriateProcess("ncc64.exe")
+        else
+        {
+          Message.Error("Compiling for the x64 platorm is possible only under 64-bit OS (restriction of System.Reflection.Emit).");
+          Environment.Exit(-1);
+        }
+      else if (is64bitProcess)
+        runInAppropriateProcess("ncc64.exe");
+      else
+        runInAppropriateProcess("ncc32.exe")
+    }
+    
+    parse_command_line() : void
+    {
+      def cOptions = Options;
+
+      def sources = SCG.List();
+
+      def print_version ()
+      {
+        def compilerAssembly = typeof(ManagerClass).Assembly;
+        def version = compilerAssembly.GetName().Version;
+        def copyright = (compilerAssembly.GetCustomAttributes(typeof(Reflection.AssemblyCopyrightAttribute), false)[0]
+            :> Reflection.AssemblyCopyrightAttribute).Copyright;
+        Console.Error.Write(
+          $ "Nitra Compiler version $version\n"
+            "$copyright \n"
+            "All rights reserved.\n");
+        Environment.Exit (0);
+      }
+
+      mutable help_opts = [];
+      def print_help ()
+      {
+        Console.WriteLine (Getopt.Usage (help_opts));
+        Environment.Exit (0);
+      }
+
+      def opts = cOptions.GetCommonOptions()
+      + [
+        Getopt.CliOption.Int (name = "-stack-size",
+                     aliases = [],
+                     help = "Set stack size of the compiler to INT megabytes",
+                     handler = fun (k) { stack_kilos = k * 1024; }),
+        Getopt.CliOption.Int (name = "-stack-size-k",
+                     aliases = [],
+                     help = "NOHELP",
+                     handler = fun (k) { stack_kilos = k; }),
+        Getopt.CliOption.Flag (name = "-version",
+                     aliases = ["-V"],
+                     help = "Output version information and exit",
+                     handler = print_version),
+        Getopt.CliOption.Flag (name = "-help",
+                     aliases = ["-h", "-?"],
+                     help = "Display this usage message and exit",
+                     handler = print_help),
+        Getopt.CliOption.NonOption (name = "",
+                          help = "Specify file to compile",
+                          handler = fun (s) { sources.Add(FileSource(s, cOptions.Warnings)) })
+      ];
+      help_opts = opts;
+
+      Getopt.Parse(opts);
+
+      if (sources.Count > 0)
+        cOptions.Sources = sources.ToNList();
+      else
+        Getopt.Error("need at least one file to compile\n" + Getopt.Usage(opts))
+    }
+  }
+}
