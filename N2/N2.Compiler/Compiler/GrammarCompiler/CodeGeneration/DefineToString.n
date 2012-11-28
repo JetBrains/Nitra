@@ -1,0 +1,162 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+
+using N2.Internal;
+using N2.Model;
+
+using System;
+using System.Diagnostics;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace N2
+{
+  internal partial class GrammarCompiler
+  {
+    private DefineToString(astTb : TypeBuilder, names : list[string], rules : list[Rule]) : void
+    {
+      //assert2(astTb.FullName != "N2Parser.NamespaceDeclaration.Ast");
+      def isNoNeedVar(rule : Rule) { rule.Type is RuleType.Void || rule is Rule.String }
+      def isVoid(ruleType : RuleType)
+      {
+        | Void
+        | Tuple(types) when types.ForAll(isVoid)
+        | Option(type) when isVoid(type)         => true
+        | _                                      => false
+      }
+      def zipWithNames(mutable names : list[string], rules : list[Rule]) : list[string * Rule]
+      {
+        def result = SCG.List();
+        
+        foreach (rule in rules)
+        {
+          def isVoid = isVoid(rule.Type);
+          def name   = if (isVoid) "_" else names.Head;
+          unless (isVoid)
+            names = names.Tail;
+          result.Add(name, rule);
+        }
+        
+        result.NToList()
+      }
+      def members = zipWithNames(names, rules);
+      def fieldToString(name : string, rule : Rule) : PExpr
+      {
+        def loop(expr : PExpr, rule : Rule) : PExpr
+        {
+          def result =
+            match (rule)
+            {
+              | String(str)                                     => <[ _ = code.Append($str); ]>
+              | And | Not                                       => <[ () ]>
+              | Sequence(rules)                                 => 
+                def members2 = rules.MapI((i, r) => if (isNoNeedVar(r)) (<[ _ ]>, r), else (<[ $($"_item$i" : dyn) ]>, r));
+                def noNeedVars = members2.ForAll((_, r) => isNoNeedVar(r));
+                def varNames = $[ n | (n, r) in members2, !(r.Type is RuleType.Void) ]; // make list of names for not void rules
+                def lines = members2.Map(loop);
+                match (varNames)
+                {
+                  | _ when noNeedVars
+                  | []        => <[ { ..$lines } ]>
+                  | [varName] => <[ { ..$(<[ def $varName      = $expr; ]> :: lines) } ]>
+                  | _         => <[ { ..$(<[ def (..$varNames) = $expr; ]> :: lines) } ]>
+                }
+              
+              | Call(name, _bp) when rule.Type is RuleType.Void =>
+                def Indent() : PExpr.Sequence
+                { <[ 
+                    Indent(code, currentIndent);
+                    lastIndntEnd = code.Length;
+                  ]>
+                }
+                def newLine() { <[ { ..$(<[ _ = code.AppendLine(); ]> :: <[ lastStartLine = code.Length; ]> :: Indent().body) } ]> }
+                def Unindent() : PExpr
+                { <[  currentIndent--;
+                      if (lastIndntEnd == code.Length)
+                      {
+                        code.Length = lastStartLine;
+                        Indent(code, currentIndent);
+                        lastIndntEnd = code.Length;
+                      }
+                      else if (options %&& N2.ToStringOptions.DebugIndent)
+                        _ = code.Append("!!! no new line before indentation decreasing !!!")
+                      else
+                        $(newLine());
+                  ]>
+                }
+                match (name.LastPartString)
+                {
+                  | "S"
+                  | "s"   => <[ () ]> // TODO: add analysis of a space usefulness
+                  | "nl"  => newLine()
+                  | "inl" 
+                  | "nli" => <[ currentIndent++; $(newLine()) ]>
+                  | "d"   => Unindent()
+                  | "i"   => <[ currentIndent++; 
+                                when (options %&& N2.ToStringOptions.DebugIndent && lastStartLine != code.Length)
+                                  _ = code.Append("!!! The indentation increasing not from the beginning of line. !!!");
+                                $(Indent()); ]>
+                  | _     => <[ _ = code.Append(' '); ]>
+                }
+
+              | Call when rule.Type is RuleType.Chars           => <[ def tok = $expr; _ = code.Append(this.Location.Source.Text, tok.StartPos, tok.Length); ]>
+              | Call | PrefixCall                               => <[ $expr.PrettyPrint(code, currentIndent, options, ref lastStartLine, ref lastIndntEnd); ]>
+              | Repeat(_, _, rule) when isVoid(rule.Type)       => <[ _ = code.Append(' '); ]>
+              | Repeat(0, Some(1), rule)                        => <[ when ($expr is Some(_x)) $(loop(<[ _x ]>, rule)) ]>
+              | Repeat(_, _, rule)                              => <[ foreach (_elem in $expr) $(loop(<[ _elem ]>, rule)); ]>
+              | RepeatWithSeparator(_, _, rule, separator, _)   => 
+                if (separator.GetAllSubRules().ForAll(isNoNeedVar))
+                  <[  def (elems, separators) = $expr;
+                      assert2(elems.IsEmpty || elems.Length >= separators.Length);
+                      def endIndex = separators.Length;
+                      
+                      foreach (elem in elems with i)
+                      {
+                        $(loop(<[ elem ]>, rule));
+                    
+                        when (endIndex != i)
+                          $(loop(<[ separator ]>, separator));
+                      } ]>
+                else
+                  <[  def (elems, separators) = $expr;
+                      assert2(elems.IsEmpty || elems.Length >= separators.Length);
+                      mutable separatorRest = separators;
+                    
+                      foreach (elem in elems)
+                      {
+                        $(loop(<[ elem ]>, rule));
+                    
+                        unless (separatorRest.IsEmpty)
+                        {
+                          def separator = separatorRest.Head;
+                          $(loop(<[ separator ]>, separator));
+                          separatorRest = separatorRest.Tail;
+                        }
+                      } ]>
+            };
+          
+          result
+        }
+
+        loop(<[ this.$(name : dyn) ]>, rule);
+      }
+
+      def code = members.Map(fieldToString);
+      def body = <[ { ..$code } ]>;
+      _ = astTb.DefineWithSource(<[ decl: 
+        public override PrettyPrint(code : System.Text.StringBuilder, mutable currentIndent : int, options : N2.ToStringOptions, 
+          lastStartLine : ref int, lastIndntEnd : ref int) : void
+        {
+          _ = $(astTb.FullName); // TODO: Remove at release!!!
+          ignore(currentIndent, options, currentIndent, lastStartLine, lastIndntEnd);
+          $body
+        } ]>);
+    }
+  }
+}
