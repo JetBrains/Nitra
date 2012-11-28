@@ -23,6 +23,7 @@ using PExpr = Nemerle.Compiler.Parsetree.PExpr;
 namespace N2
 {
   type IntOrStringList = int * list[string];
+  type RegularRuleMatcher = string -> bool;
   
   //[DebuggerStepThroughAttribute]
   public module Utils
@@ -414,7 +415,7 @@ namespace N2
       def precedence = bodyDeclaration.GetPrecedence();
       def contextWithAliases = bodyDeclaration.GetAliases2(context); // !!!
       def extraFields = bodyDeclaration.GetExtraFields();
-      def rule2 = rule.GetRule3(baseRule.Ref, precedence, None(), contextWithAliases);
+      def rule2 = rule.Typing(baseRule.Ref, precedence, None(), contextWithAliases);
       def options = ruleAttributes.Options2(contextWithAliases);
       def type = baseRule.Ref.Map(sym => sym.Type) ?? RuleType2.Void();
       def fieldName = baseName.Parts().LastOrDefault("?");
@@ -441,7 +442,7 @@ namespace N2
       def precedence = bodyDeclaration.GetPrecedence();
       def contextWithAliases = bodyDeclaration.GetAliases2(context); // !!!
       def extraFields = bodyDeclaration.GetExtraFields();
-      def rule2 = rule.GetRule3(None(), precedence, None(), contextWithAliases);
+      def rule2 = rule.Typing(None(), precedence, None(), contextWithAliases);
       def options = ruleAttributes.Options2(contextWithAliases);
       RuleDefinition2.Simple(loc, id, ruleSymbol, extraFields, options, EnsureSequence(context, loc, rule2))
     }
@@ -467,7 +468,7 @@ namespace N2
       def contextWithAliases = bodyDeclaration.GetAliases2(context); // !!!
       def extraFields = bodyDeclaration.GetExtraFields();
       def options = ruleAttributes.Options2(contextWithAliases);
-      RuleDefinition2.Regular(loc, id, ruleSymbol, extraFields, options, tokenRule.RegularRule())
+      RuleDefinition2.Regular(loc, id, ruleSymbol, extraFields, options, tokenRule.Typing())
     }
 
     public EnsureSequence(context : Context, loc : Location, rule : Rule2) : Rule2.Sequence
@@ -624,6 +625,37 @@ namespace N2
     public TotalLocation(this locations : list[Location]) : Location
     {
       locations.Head + locations.Last
+    }
+
+    public MakeMatcher(this regularRule : RegularRule2) : RegularRuleMatcher
+    {
+      def visitedRules = HashSet();
+      def convert(_ : RegularRule2) : FSM
+      {
+        | Choice(rules)                            => FSMBuilder.Choice(rules.Map(convert))
+        | Sequence(rules)                          => FSMBuilder.Seq(rules.Map(convert))
+        | Chars(chars)                             => FSMBuilder.Seq(chars)
+        | Repeat(min, max, rule)                   => FSMBuilder.Repeat(min, max, convert(rule))
+        | RepeatWithSeparator(min, max, rule, sep) => FSMBuilder.RepeatWithSeparator(min, max, convert(rule), convert(sep))
+        | Call(RuleRef(Ref = Some(symbol is ParsedRuleRefSymbol.[G.TokenRuleDecl.Ast]), Location = loc)) =>
+          if (visitedRules.Add(symbol))
+            convert(symbol.Value.TokenRule.Typing())
+          else
+          {
+            N2Project.CurrentProject.Error(loc, "Cyclic rule call found.", -1);
+            FSM()
+          }
+
+        | Call(RuleRef(Ref = Some, Location = loc)) =>
+          //TODO: add support for external token rules
+          N2Project.CurrentProject.Error(loc, "Expected parsed token rule name.", -1);
+          FSM()
+
+        | Call(RuleRef(Ref = None)) =>
+          // binding error already reported
+          FSM()
+      }
+      FSMMatch.MakeMatcher(convert(regularRule))
     }
   }
 }
