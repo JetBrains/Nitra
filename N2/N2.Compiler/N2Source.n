@@ -230,32 +230,29 @@ namespace N2
       match (grammarImplTI.GetNestedSubtypes().Filter(ti => ti.Name == AssemblyConstants.GrammarDescriptorImplName))
       {
         | [grammarDescriptorImplTI] =>
-          //assert2(false);
-          def loc = grammarDescriptorImplTI.Location.N2Location();
           def attrs = grammarImplTI.GetModifiers().CustomAttributes;
-          
+
           foreach(<[ N2.KeywordRegexesAttribute(array[ ..$sources ]) ]> in attrs)
             foreach(<[ $(source : string) ]> in sources)
               keywordRegexs.Add(parseKeywordRegex(source));
 
           def tokenFieldNames = LoadExternalTokenFieldNames(grammarTI);
-          
+
           def symbol = ExternalSyntaxModuleSymbol(grammarTI, grammarImplTI, keywordRegexs.NToList(), tokenFieldNames) : SyntaxModuleSymbol;
           def node = root.AddAndReport(grammarTI.NamespaceNode.Parent.FullName, symbol, symbol.FirstLocation);
-          
 
           foreach(<[ N2.MarkerAttribute($(name : string)) ]> as attr in attrs)
           {
             def loc = attr.Location.N2Location();
             _ = node.AddAndReport([], MarkerSymbol(loc, name, true), loc);
           }
-              
+
           // load rules
           foreach (ruleTI in grammarDescriptorImplTI.GetNestedSubtypes())
           {
             when (Util.ParseRuleClassName(ruleTI.Name) is Some((kind, name)))
             {
-              //def name = NameRef(ruleTI.NameLocation, name);
+              def loc = ruleTI.Location.N2Location();
               def (ruleType, typeInfo) =
                 ret:
                 {
@@ -270,7 +267,6 @@ namespace N2
                   (ExternalRuleRefSymbolType.Chars, null)
                 };
               def isExtentionPoint = kind is RuleDefinitionType.ExtentionPoint;
-              def extraFields = if (typeInfo == null) [] else Util.LoadExtraFields(typeInfo);
               mutable attributes = [];
               foreach(attr in ruleTI.GetModifiers().CustomAttributes)
               {
@@ -278,12 +274,39 @@ namespace N2
                 | <[ N2.SuppressTrailingSpacesAttribute() ]> => attributes ::= RuleAttribute.SuppressTrailingSpaces(Location.Default)
                 | _ => ()
               }
-              def symbol = ExternalRuleRefSymbol(loc, name, ruleType, attributes, isExtentionPoint, extraFields);
+              def symbol = ExternalRuleRefSymbol(loc, name, ruleType, attributes, isExtentionPoint);
               _ = node.AddAndReport([], symbol, loc);
+              when (typeInfo != null)
+                LoadExternalExtraFields(symbol, typeInfo);
             }
           }
 
         | _ => Message.Error(grammarTI.Location, $"$(grammarTI.FullName) not grammar.")
+      }
+    }
+
+    public LoadExternalExtraFields(ruleRefSymbol : ExternalRuleRefSymbol, type : TypeInfo) : void
+    {
+      def reflectExtraFieldAttribute(member : IMember) : IMember * option[bool]
+      {
+        mutable attrValue = None();
+        foreach(attr in member.GetModifiers().GetCustomAttributes())
+        {
+          | <[ N2.Runtime.ExtraFieldAttribute() ]>                   => attrValue = Some(false)
+          | <[ N2.Runtime.ExtraFieldAttribute($(isCached : bool)) ]> => attrValue = Some(isCached)
+          | _ => ()
+        }
+        (member, attrValue)
+      }
+      def reflectionResult = type.GetMembers(BindingFlags.Instance | BindingFlags.Public).Map(reflectExtraFieldAttribute);
+      foreach((method is IMethod, Some(isCached)) in reflectionResult)
+      {
+        def loc        = method.NameLocation.N2Location();
+        def modifier   = if (method.IsAbstract) ExtraFieldModifier.Abstract else ExtraFieldModifier.Def;
+        def parameters = method.Header.ParametersDeclarations;
+        def type       = <[ $(method.ReturnType : typed) ]>;
+        def symbol     = ExternalExtraFieldRefSymbol(loc, method.Name, modifier, isCached, parameters, type);
+        _ = ruleRefSymbol.Node.AddAndReport([], symbol, loc);
       }
     }
 
@@ -305,25 +328,8 @@ namespace N2
     {
       def errorCount = project.ErrorCount;
 
-      //assert2(false);
-      
       foreach (start in fileAsts)
         start.CollectGlobalSymbols(rootNamespace);
-
-      /*
-      foreach (start in fileAsts)
-      foreach ((ns, syntaxModule) in start.GetSyntaxModules())
-      {
-        def symbol = ParsedSyntaxModuleSymbol(syntaxModule) : SyntaxModuleSymbol;
-        def node = root.AddAndReport(ns, symbol, project);
-            
-        def ruleDefs = SCG.List();
-        syntaxModule.RuleRefs(ruleDefs);
-          
-        foreach (sym in ruleDefs)
-          _ = node.AddAndReport(sym, project);
-      }
-      */
 
       project.ErrorCount == errorCount
     }
@@ -658,20 +664,6 @@ namespace N2
         }
         def loop(members : list[G.BodyMemberDeclaration], acc)
         {
-          def isCached(extraFieldAttributes : G.ExtraFieldAttributes) : bool
-          {
-            | G.ExtraFieldAttributes.Ast(ExtraFieldAttributeLists = lists) =>
-              mutable isCachedValue;
-              foreach (G.ExtraFieldAttributeList.Ast(ExtraFieldAttributes = (attrs, _)) in lists)
-                foreach (attr in attrs)
-                {
-                  | G.Cached.Ast => isCachedValue = true
-                  | _ => ()
-                }
-              isCachedValue
-
-            | _ => false
-          }
           def parseBodyOpt(extraFieldBody : G.ExtraFieldBody) : option[PExpr]
           {
             match (extraFieldBody)
@@ -710,7 +702,7 @@ namespace N2
                 | e => Message.FatalError(e.Location.ToNemerleLocation(), "Parse error.")
               }
               def parameters = m.ExtraFieldsParams[0].Map(parseParam);
-              def isCached = isCached(m.ExtraFieldAttributes);
+              def isCached = m.ExtraFieldAttributes.IsCached();
               def field =
                 if (m.ExtraFieldPrivates.IsSome)
                   if (body.IsSome)
@@ -727,13 +719,13 @@ namespace N2
             | G.ExtraFieldDeclaration2.Ast as m :: tail =>
               def name = m.Name.NameRef();
               def loc = m.Location.ToNemerleLocation();
-              def isCached = isCached(m.ExtraFieldAttributes);
+              def isCached = m.ExtraFieldAttributes.IsCached();
               loop(tail, ExtraField.Override(loc, isCached, name, parseBody(m.ExtraFieldBody)) :: acc)
               
             | G.ExtraFieldDeclaration3.Ast as m :: tail =>
               def name = m.Name.NameRef();
               def loc = m.Location.ToNemerleLocation();
-              def isCached = isCached(m.ExtraFieldAttributes);
+              def isCached = m.ExtraFieldAttributes.IsCached();
               loop(tail, ExtraField.OnError(loc, isCached, name, parseBody(m.ExtraFieldBody)) :: acc)
               
             | _ :: tail                               => loop(tail, acc)

@@ -523,13 +523,36 @@ syntax module GrammarParser2
   [ExplicitSpaces]
   syntax ExtraFieldPrivate = "private" sm;
 
-  syntax ExtraFieldAttribute;
+  syntax ExtraFieldAttribute
+  {
+    IsCached() : bool;
+  }
   extend syntax ExtraFieldAttribute
   {
-    Cached = AttributeName { alias AttributeName = "Cached"; }
+    Cached = AttributeName
+    {
+      alias AttributeName = "Cached";
+      override IsCached = true;
+    }
   }
-  syntax ExtraFieldAttributeList = "[" (ExtraFieldAttribute; ",")+ "]";
-  syntax ExtraFieldAttributes = ExtraFieldAttributeList*;
+  syntax ExtraFieldAttributeList = "[" (ExtraFieldAttribute; ",")+ "]"
+  {
+    IsCached() : bool
+    {
+      foreach(x when x.IsCached() in ExtraFieldAttributes[0])
+        return true;
+      false
+    }
+  }
+  syntax ExtraFieldAttributes = ExtraFieldAttributeList*
+  {
+    IsCached() : bool
+    {
+      foreach(x when x.IsCached() in ExtraFieldAttributeLists)
+        return true;
+      false
+    }
+  }
 
   syntax BodyMemberDeclaration
   {
@@ -543,33 +566,43 @@ syntax module GrammarParser2
   {
     ExtraFieldDeclaration1 = ExtraFieldAttributes ExtraFieldPrivate? Name sm "(" (ExtraFieldsParam; "," sm)* ")" sm ":" sm Type ExtraFieldBody
     {
-      override CollectGlobalSymbols = AddRefSymbol(ruleRef, this, Name.Value())[0];
+      private GetModifier(privates : option[ExtraFieldPrivate], body : ExtraFieldBody) : ExtraFieldModifier
+      {
+        if (privates.IsSome)
+          ExtraFieldModifier.DefPrivate
+        else if (body.IsEmpty())
+          ExtraFieldModifier.Abstract
+        else
+          ExtraFieldModifier.Def
+      }
+      override CollectGlobalSymbols = AddRefSymbol(ruleRef, this, Name.Value(), GetModifier(ExtraFieldPrivates, ExtraFieldBody), ExtraFieldAttributes.IsCached())[0];
       override GetExtraFields
       {
-        def bodyLocation = ExtraFieldBody.BodyLocation();
+        match (GetModifier(ExtraFieldPrivates, ExtraFieldBody))
+        {
+          | DefPrivate =>
+            if (!ExtraFieldBody.IsEmpty())
+              ExtraField2.DefPrivate(this.Location, Name.Identifier(), ExtraFieldsParams[0], Type, ExtraFieldBody.BodyLocation()) :: result
+            else
+            {
+              Project.CurrentProject.Error(this.Location, "A private extra field must have body.", -1);
+              result
+            }
 
-        if (ExtraFieldPrivates.IsSome)
-          if (!bodyLocation.IsEmpty)
-            ExtraField2.DefPrivate(this.Location, Name.Identifier(), ExtraFieldsParams[0], Type, bodyLocation) :: result
-          else
-          {
-            Project.CurrentProject.Error(this.Location, "A private extra field must have body.", -1);
-            result
-          }
-        else if (!bodyLocation.IsEmpty)
-          ExtraField2.Def(this.Location, Name.Identifier(), ExtraFieldsParams[0], Type, bodyLocation) :: result
-        else
-          ExtraField2.Abstract(this.Location, Name.Identifier(), ExtraFieldsParams[0], Type) :: result
+          | Def      => ExtraField2.Def(this.Location, Name.Identifier(), ExtraFieldsParams[0], Type, ExtraFieldBody.BodyLocation()) :: result
+          | Abstract => ExtraField2.Abstract(this.Location, Name.Identifier(), ExtraFieldsParams[0], Type) :: result
+          | _        => assert(false)
+        }
       }
     }
     ExtraFieldDeclaration2 = ExtraFieldAttributes "override"     sm  Name ExtraFieldBody
     {
-      override CollectGlobalSymbols = AddRefSymbol(ruleRef, this, Name.Value())[0];
+      override CollectGlobalSymbols = AddRefSymbol(ruleRef, this, Name.Value(), ExtraFieldModifier.Override, ExtraFieldAttributes.IsCached())[0];
       override GetExtraFields = ExtraField2.Override(this.Location, Name.Identifier(), ExtraFieldBody.BodyLocation()) :: result;
     }
     ExtraFieldDeclaration3 = ExtraFieldAttributes "error"        sm  Name ExtraFieldBody
     {
-      override CollectGlobalSymbols = AddRefSymbol(ruleRef, this, Name.Value())[0];
+      override CollectGlobalSymbols = AddRefSymbol(ruleRef, this, Name.Value(), ExtraFieldModifier.OnError, ExtraFieldAttributes.IsCached())[0];
       override GetExtraFields = ExtraField2.Override(this.Location, Name.Identifier(), ExtraFieldBody.BodyLocation()) :: result;
     }
     // TODO: Create "Once" attribute which prevent use rule more then one times.
@@ -588,6 +621,7 @@ syntax module GrammarParser2
   syntax ExtraFieldBody
   {
     BodyLocation() : N2.Location;
+    IsEmpty() : bool;
   }
 
   extend syntax ExtraFieldBody
@@ -595,14 +629,17 @@ syntax module GrammarParser2
     ExtraFieldBody1     = Block
     {
       override BodyLocation = Block.Location;
+      override IsEmpty = false;
     }
     ExtraFieldBody2     = sm "=" sm Expression ";" nl
     {
       override BodyLocation = Expression.Location;
+      override IsEmpty = false;
     }
     ExtraFieldBodyEmpty = ";" nl
     {
       override BodyLocation = Location(this.Location.Source, this.Location.StartPos, this.Location.StartPos);
+      override IsEmpty = true;
     }
   }
 
