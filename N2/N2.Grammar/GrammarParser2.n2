@@ -579,10 +579,15 @@ syntax module GrammarParser2
         else
           ExtraFieldModifier.Def
       }
-      override CollectGlobalSymbols = AddRefSymbol(ruleRef, this, Name.Value(), GetModifier(ExtraFieldPrivates, ExtraFieldBody), ExtraFieldAttributes.IsCached())[0];
+      [Cached] private MakeSymbol(ruleRef : RuleRefSymbol, ast : ExtraFieldDeclaration1.Ast, name : string, modifier : ExtraFieldModifier, isCached : bool) : RuleRefSymbol * ExtraFieldRefSymbol =
+        AddRefSymbol(ruleRef, ast, name, modifier, isCached);
+      override CollectGlobalSymbols = MakeSymbol(ruleRef, this, Name.Value(), GetModifier(ExtraFieldPrivates, ExtraFieldBody), ExtraFieldAttributes.IsCached())[0];
+      [Cached] private MakeSignature(loc : N2.Location, paramsAst : list[ExtraFieldsParam], typeAst : Type, context : Context) : ExtraFieldSignature =
+        ExtraFieldSignature(loc, paramsAst.ParseNemerle(context), typeAst.ParseNemerle(context));
       override GetExtraFields
       {
         _ = ruleSymbol;
+        def extraFieldSymbol = Symbol[1];
         def isValidRule(_ : RuleDefinitionType)
         {
           | Simple | ExtentionPoint => true
@@ -601,58 +606,85 @@ syntax module GrammarParser2
         {
           | DefPrivate =>
             if (!ExtraFieldBody.IsEmpty())
-              ExtraField2.DefPrivate(this.Location, Name.Identifier(), ExtraFieldsParams[0].ParseNemerle(Context), Type.ParseNemerle(Context), ExtraFieldBody.ParseNemerle(Context)) :: result
+              ExtraField2.DefPrivate(this.Location, extraFieldSymbol, MakeSignature(this.Location, ExtraFieldsParams[0], Type, Context), ExtraFieldBody.ParseNemerle(Context)) :: result
             else
             {
               Project.CurrentProject.Error(this.Location, "A private extra field must have body.", -1);
-              result
+              ExtraField2.Abstract(this.Location, extraFieldSymbol, MakeSignature(this.Location, ExtraFieldsParams[0], Type, Context)) :: result
             }
 
           | Def when isValidRule(ruleDefinitionType) =>
-            ExtraField2.Def(this.Location, Name.Identifier(), ExtraFieldsParams[0].ParseNemerle(Context), Type.ParseNemerle(Context), ExtraFieldBody.ParseNemerle(Context)) :: result
+            ExtraField2.Def(this.Location, extraFieldSymbol, MakeSignature(this.Location, ExtraFieldsParams[0], Type, Context), ExtraFieldBody.ParseNemerle(Context)) :: result
 
           | Abstract when isValidRule(ruleDefinitionType) =>
-            ExtraField2.Abstract(this.Location, Name.Identifier(), ExtraFieldsParams[0].ParseNemerle(Context), Type.ParseNemerle(Context)) :: result
+            ExtraField2.Abstract(this.Location, extraFieldSymbol, MakeSignature(this.Location, ExtraFieldsParams[0], Type, Context)) :: result
 
           | _ =>
             Project.CurrentProject.Error(this.Location, "A public extra field must be defined in an extention point rule or a simple rule only.", -1);
-            result
+            ExtraField2.Def(this.Location, extraFieldSymbol, MakeSignature(this.Location, ExtraFieldsParams[0], Type, Context), ExtraFieldBody.ParseNemerle(Context)) :: result
         }
       }
     }
     ExtraFieldDeclaration2 = ExtraFieldAttributes "override"     sm  Name ExtraFieldBody
     {
-      override CollectGlobalSymbols = AddRefSymbol(ruleRef, this, Name.Value(), ExtraFieldModifier.Override, ExtraFieldAttributes.IsCached())[0];
+      [Cached] private MakeSymbol(ruleRef : RuleRefSymbol, ast : ExtraFieldDeclaration2.Ast, name : string, modifier : ExtraFieldModifier, isCached : bool) : RuleRefSymbol * ExtraFieldRefSymbol =
+        AddRefSymbol(ruleRef, ast, name, modifier, isCached);
+      override CollectGlobalSymbols = MakeSymbol(ruleRef, this, Name.Value(), ExtraFieldModifier.Override, ExtraFieldAttributes.IsCached())[0];
       override GetExtraFields
       {
         _ = ruleSymbol;
+        def extraFieldSymbol = Symbol[1];
         unless (ruleDefinitionType is RuleDefinitionType.ExtentionPrefix || ruleDefinitionType is RuleDefinitionType.ExtentionPostfix)
         {
           Project.CurrentProject.Error(this.Location, "An extra field can be overridden only in extending rules.", -1);
           return result;
         }
-        unless (baseRuleSymbol.Node.BindMany.[ExtraFieldRefSymbol](Name.Location) is [_])
+        match (baseRuleSymbol.Node.BindMany.[ExtraFieldRefSymbol](Name.Location))
         {
-          def name = Name.Value();
-          Project.CurrentProject.Error(this.Location, $"No '$name' extra field to override.", -1);
-          return result;
+          | [baseExtraFieldSymbol] when baseExtraFieldSymbol.Modifier == ExtraFieldModifier.Def
+                                     || baseExtraFieldSymbol.Modifier == ExtraFieldModifier.Abstract =>
+            ExtraField2.Override(this.Location, extraFieldSymbol, baseExtraFieldSymbol, ExtraFieldBody.ParseNemerle(Context)) :: result
+
+          | [_] =>
+            def name = Name.Value();
+            Project.CurrentProject.Error(this.Location, $"Cannot override '$name' extra field.", -1); //TODO: rewrite error message!
+            result
+
+          | _ =>
+            def name = Name.Value();
+            Project.CurrentProject.Error(this.Location, $"No '$name' extra field to override.", -1);
+            result
         }
-        ExtraField2.Override(this.Location, Name.Identifier(), ExtraFieldBody.ParseNemerle(Context)) :: result
       }
     }
     ExtraFieldDeclaration3 = ExtraFieldAttributes "error"        sm  Name ExtraFieldBody
     {
-      override CollectGlobalSymbols = AddRefSymbol(ruleRef, this, Name.Value(), ExtraFieldModifier.OnError, ExtraFieldAttributes.IsCached())[0];
+      [Cached] private MakeSymbol(ruleRef : RuleRefSymbol, ast : ExtraFieldDeclaration3.Ast, name : string, modifier : ExtraFieldModifier, isCached : bool) : RuleRefSymbol * ExtraFieldRefSymbol =
+        AddRefSymbol(ruleRef, ast, name, modifier, isCached);
+      override CollectGlobalSymbols = MakeSymbol(ruleRef, this, Name.Value(), ExtraFieldModifier.OnError, ExtraFieldAttributes.IsCached())[0];
       override GetExtraFields
       {
-        _ = ruleSymbol;
-        _ = baseRuleSymbol;
-        unless (ruleDefinitionType is RuleDefinitionType.ExtentionPrefix || ruleDefinitionType is RuleDefinitionType.ExtentionPostfix)
+        def extraFieldSymbol = Symbol[1];
+        match (ruleDefinitionType)
         {
-          Project.CurrentProject.Error(this.Location, "An error handler for a extra field can be defined only in extending rules.", -1);
-          return result;
+          | RuleDefinitionType.Simple           with targetRuleSymbol = ruleSymbol
+          | RuleDefinitionType.ExtentionPrefix  with targetRuleSymbol = baseRuleSymbol
+          | RuleDefinitionType.ExtentionPostfix with targetRuleSymbol = baseRuleSymbol =>
+            match (targetRuleSymbol.Node.BindMany.[ExtraFieldRefSymbol](Name.Location))
+            {
+              | [baseExtraFieldSymbol] =>
+                ExtraField2.OnError(this.Location, extraFieldSymbol, baseExtraFieldSymbol, ExtraFieldBody.ParseNemerle(Context)) :: result
+
+              | _ =>
+                def name = Name.Value();
+                Project.CurrentProject.Error(this.Location, $"No '$name' extra field to handle error.", -1);
+                result
+            }
+
+          | _ =>
+            Project.CurrentProject.Error(this.Location, "An error handler for a extra field can be defined only in extending rules.", -1);
+            result
         }
-        ExtraField2.OnError(this.Location, Name.Identifier(), ExtraFieldBody.ParseNemerle(Context)) :: result
       }
     }
     // TODO: Create "Once" attribute which prevent use rule more then one times.
