@@ -362,8 +362,8 @@ namespace N2
       def precedence = bodyDeclaration.GetPrecedence();
       def contextWithAliases = bodyDeclaration.MakeContext(context); // !!!
       def extraFields = bodyDeclaration.GetExtraFields();
-      def rule2 = rule.Typing(baseRule.Ref, precedence, None(), contextWithAliases);
       def options = ruleAttributes.Options2(contextWithAliases);
+      def rule2 = rule.Typing(baseRule.Ref, precedence, None(), contextWithAliases, options);
       def type = baseRule.Ref.Map(sym => sym.Type) ?? RuleType2.Void();
       def fieldName = baseName.Parts().LastOrDefault("?");
       def ruleDefinition = 
@@ -389,8 +389,8 @@ namespace N2
       def precedence = bodyDeclaration.GetPrecedence();
       def contextWithAliases = bodyDeclaration.MakeContext(context); // !!!
       def extraFields = bodyDeclaration.GetExtraFields();
-      def rule2 = rule.Typing(None(), precedence, None(), contextWithAliases);
       def options = ruleAttributes.Options2(contextWithAliases);
+      def rule2 = rule.Typing(None(), precedence, None(), contextWithAliases, options);
       RuleDefinition2.Simple(loc, id, context, ruleSymbol, extraFields, options, EnsureSequence(context, loc, rule2))
     }
 
@@ -445,6 +445,17 @@ namespace N2
       }
     }
 
+    public GetContext[T](this context : Context) : T
+      where T: Context
+    {
+      match (context)
+      {
+        | null   => assert2(false); assert(false);
+        | c is T => c
+        | c      => GetContext.[T](c.Parent)
+      }
+    }
+
     public GetParent[T](this context : Context) : T
       where T: Context
     {
@@ -472,7 +483,7 @@ namespace N2
       (rule, field)
     }
 
-    BindImpl[T](result : BindingResult[T]) : option[T]
+    internal BindImpl[T](result : BindingResult[T]) : option[T]
     {
       when (!result.Messages.IsEmpty)
         result.Messages.TranslateTo(N2Project.CurrentProject);
@@ -585,40 +596,54 @@ namespace N2
       else
         Location(source, tok)
     }
-
-    public CallRuleTyping(_baseRule : option[RuleRefSymbol], _precedence : int, _fieldName : option[string], context : Context, 
+    
+    public CallRuleTyping(baseRule : option[RuleRefSymbol], _precedence : int, _fieldName : option[string], context : Context, options : RuleDefinitionOptions,
       QualifiedName : G.QIdentifier, BindingPower :  option[NToken * G.Number]) : Rule2
     {
-        def parts = QualifiedName.Parts();
-        def newFieldName = _fieldName ?? parts.LastOrDefault("");
+      def parts = QualifiedName.Parts();
+      def newFieldName : string = _fieldName ?? LastOrDefault(parts, "");
 
-        when (context.TryBind.[RuleAliasSymbol](QualifiedName) is Some(alias))
-          return alias.Rule.Typing(_baseRule, _precedence, Some(newFieldName), context);
+      when (TryBind.[RuleAliasSymbol](context, QualifiedName) is Some(alias))
+        return alias.Rule.Typing(baseRule, _precedence, Some(newFieldName), context, options);
 
-        def ruleRef = RuleRef(QualifiedName, context.Bind(QualifiedName));
-        def type = 
-          if (ruleRef.Ref is Some(ruleSymbol))
-          {
-            when (ruleSymbol is ParsedRuleRefSymbol[G.ExtendSyntaxMember.Ast])
-              Project.CurrentProject.Error(QualifiedName, 
-                "You can't use directly reference to a extending rule. Use reference to extending rule instead or make a separate rule.", -1);
-            ruleSymbol.Type
-          }
-          else
-            RuleType2.Void();
-        def bp =
-          match (BindingPower)
-          {
-            | None
-            | Some((_, num)) when num.Value() == 0 => if (_baseRule.Equals(ruleRef.Ref)) _precedence  else 0
-            | Some((_, num)) =>
-              when (_precedence != 0)
-                Project.CurrentProject.Error(num, "You can't set a binding power if you set a precedence.", -1);
-              num.Value()
-          };
-          
-        
-        Rule2.Call(QualifiedName.Location, type, 0, newFieldName, ruleRef, bp);
+      def ruleRef = RuleRef(QualifiedName, Bind(context, QualifiedName));
+      def type = 
+        if (ruleRef.Ref is Some(ruleSymbol))
+        {
+          when (ruleSymbol is ParsedRuleRefSymbol[G.ExtendSyntaxMember.Ast])
+            Project.CurrentProject.Error(QualifiedName, 
+              "You can't use directly reference to a extending rule. Use reference to extending rule instead or make a separate rule.", -1);
+          ruleSymbol.Type
+        }
+        else
+          RuleType2.Void();
+      def bp =
+        match (BindingPower)
+        {
+          | None
+          | Some((_, num)) when num.Value() == 0 => if (baseRule.Equals(ruleRef.Ref)) _precedence  else 0
+          | Some((_, num)) =>
+            when (_precedence != 0)
+              Project.CurrentProject.Error(num, "You can't set a binding power if you set a precedence.", -1);
+            num.Value()
+        };
+
+      def callRule = Rule2.Call(QualifiedName.Location, type, 0, newFieldName, ruleRef, bp);
+
+      // Подставляем s-ки...
+      //
+
+      match (type)
+      {
+        | _ when options.IsSuppressTrailingSpaces => callRule // Whitespace rule is NOT inserted after 'syntax' rules marked with 'SuppressTrailingSpaces' attribute
+        | _ when options.IsExplicitSpaces // Whitespace rule is inserted after 'syntax' rules marked with 'ExplicitSpaces' attribute
+        | Chars => // Whitespace rule is inserted after all 'token' rules 
+          def moduleContext = context.GetContext.[SyntaxModuleBodyContext](); 
+          def s = moduleContext.GetSpaceRule(context);
+          Rule2.Sequence(callRule.Location, type, 0, newFieldName, [callRule, s])
+
+        | _ => callRule
+      }
     }
   } // module
 } // ns
