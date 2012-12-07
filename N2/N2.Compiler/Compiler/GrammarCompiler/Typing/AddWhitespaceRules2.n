@@ -1,0 +1,149 @@
+﻿using N2.Model;
+using N2.Typing;
+using N2.Util;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Parsetree.PExpr;
+using Nemerle.Compiler.Token;
+
+using System;
+using System.Linq;
+
+using SCG = System.Collections.Generic;
+using G = GrammarParser2;
+
+namespace N2
+{
+  internal partial class GrammarCompiler
+  {
+    private AddWhitespaceRules2(context : Context, syntaxModule : SyntaxModuleData, s : RuleRefSymbol, S : RuleRefSymbol) : SyntaxModuleData
+    {
+      def parentContext = context.TryGetParent.[KeywordRegexContext]();
+      //def syntaxModules = Manager.GetListUserData.[SyntaxModuleData]();
+      
+      //def sName = NameRef(Location.Default, "s");
+      //def SName = NameRef(Location.Default, "S");
+      //def sNameLookupResult = ParsedGrammar.TryGetRule(sName);
+      //def SNameLookupResult = ParsedGrammar.TryGetRule(SName);
+
+      //def externalKeywordRegexes = ParsedGrammar.KeywordRegexes.Filter(_.IsExternal);
+      //def compiledKeywordRegex = ParsedGrammar.KeywordRegexes.ToDictionary(_.Id, kr => FSMMatch.MakeMatcher(ConvertRegularRuleToFsm(ParsedGrammar, kr.Match)));
+
+      def convertRule(rd : RuleDefinition2, r : Rule2.Sequence) : Rule2.Sequence
+      {
+        def convert(r : Rule2) : list[Rule2]
+        {
+          def isKeyword(keyword : string) : bool
+          {
+            parentContext?.IsMatch(keyword)
+          }
+          def isKeywordChoice(rr : RegularRule2) : bool // TODO: may be annotate tokens with attribute 'Keywords'?
+          {
+            | Choice(rules) => rules.ForAll(isKeywordChoice)
+            | Call(name) =>
+              match (name.Ref)
+              {
+                | Some(ruleSymbol is ParsedRuleRefSymbol[G.TokenRuleDecl]) =>
+                  ruleSymbol.Value.MakeMatcher() // ??? 
+                //| Some(RuleDefinition2.Regular(rr)) => isKeywordChoice(rr)
+                | Some(_)
+                | None => false
+              }
+
+            | Chars(chars) as rule when rule.IsString =>
+              def str = chars.FoldLeft(Text.StringBuilder(), (rangeSet, acc) => rangeSet.Ranges.FoldLeft(acc, (range, acc) => acc.Append(range.from))).ToString();
+              isKeyword(str)
+
+            | Chars
+            | Sequence
+            | Repeat
+            | RepeatWithSeparator => false
+          }
+          def makeWhitespaceRuleCall(r : Rule2, whitespaceRuleLookupResult : option[RuleDefinition2], whitespaceRuleName : NameRef)
+          {
+            def loc = r.Location.FromEndAsGenerated();
+            def nameLocated = NameRef(loc, whitespaceRuleName.Parts);
+            match (whitespaceRuleLookupResult)
+            {
+              | Some => Rule2.Call(loc, RuleType2.Void(), 0, nameLocated, 0)
+              | None => Message.FatalError(rd.Name.Location, $"Whitespace rule '$whitespaceRuleName' is required")
+            }
+          }
+          def convertFlattened(r : Rule2) : Rule2
+          {
+            match(convert(r))
+            {
+              | []    => assert(false)
+              | [x]   => x
+              | rules => Rule2.Sequence(r, rules)
+            }
+          }
+          match (r)
+          {
+            | PrefixCall(name, _)
+            | Call(name, _) =>
+              match (ParsedGrammar.TryGetRule(name))
+              {
+                | Some(_) as nameLookupResult when nameLookupResult.Equals(sNameLookupResult) || nameLookupResult.Equals(SNameLookupResult) =>
+                  Message.Error(r.Location, "Unexpected whitespace rule. Mark rule with 'ExplicitSpaces' attribute.");
+                  [r]
+
+                | Some(targetRd) when targetRd.IsSuppressTrailingSpaces => [r]
+
+                | Some(targetRd) when targetRd.IsExplicitSpaces =>
+                  [r, makeWhitespaceRuleCall(r, sNameLookupResult, sName)]
+
+                | Some(RuleDefinition2.Regular(rr)) =>
+                  def whitespaceRuleCall = 
+                    if (isKeywordChoice(rr))
+                      makeWhitespaceRuleCall(r, SNameLookupResult, SName)
+                    else
+                      makeWhitespaceRuleCall(r, sNameLookupResult, sName);
+                  [r, whitespaceRuleCall]
+
+                | Some(_)
+                | None => [r]
+              }
+
+            | String(str) =>
+              def whitespaceRuleCall = 
+                if (isKeyword(str))
+                  makeWhitespaceRuleCall(r, SNameLookupResult, SName)
+                else
+                  makeWhitespaceRuleCall(r, sNameLookupResult, sName);
+              [r, whitespaceRuleCall]
+
+            | Repeat(min, max, rule)                                           => [Rule2.Repeat(r, min, max, convertFlattened(rule))]
+            | RepeatWithSeparator(min, max, rule, separator, hangingSeparator) => [Rule2.RepeatWithSeparator(r, min, max, convertFlattened(rule), convertFlattened(separator), hangingSeparator)]
+            | Not(rule)                                                        => [Rule2.Not(r, convertFlattened(rule))]
+            | And(rule)                                                        => [Rule2.And(r, convertFlattened(rule))]
+            | Sequence(rules)                                                  => [Rule2.Sequence(r, rules.Map(convert).Flatten())]
+          }
+        }
+        def ruleList1 = r.Rules.Map(convert);
+        def ruleList2 = ruleList1.Flatten();
+        Rule2.Sequence(r, ruleList2)
+      }
+      def convertRuleDefinition(rd : RuleDefinition2)
+      {
+        | ExtentionPoint
+        | ExtentionPrefix  when rd.IsExplicitSpaces
+        | ExtentionPostfix when rd.IsExplicitSpaces
+        | Simple           when rd.IsExplicitSpaces
+        | Regular
+        | Marker => rd
+        | ExtentionPrefix(baseRule, rule)      => RuleDefinition2.ExtentionPrefix(rd, baseRule, rule)
+        | ExtentionPostfix(baseRule, rule, bp) => RuleDefinition2.ExtentionPostfix(rd, baseRule, convertRule(rd, rule), bp)
+        | Simple(rule)                         => RuleDefinition2.Simple(rd, convertRule(rd, rule))
+      }
+
+      SyntaxModuleData(syntaxModule.Name, syntaxModule.RuleDefs.Map(convertRuleDefinition))
+    }
+  }
+}
