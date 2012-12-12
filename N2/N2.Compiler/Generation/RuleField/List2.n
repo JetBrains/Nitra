@@ -1,0 +1,164 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal partial abstract class RuleField2
+  {
+    [Record]
+    public sealed class List2 : RuleField2
+    {
+      fieldsRule : array[RuleField2];
+      fieldsSeparator : array[RuleField2];
+      min     : int;
+      max     : option[int];
+      public hangingSeparator : bool;
+
+      public override InitChildren(compiler : RuleParserEmitter, parent : RuleField2, level : int, allFields : SCG.List[RuleField2]) : void
+      {
+        foreach (field in fieldsRule)
+          field.Init(compiler, parent, level, allFields);
+        foreach (field in fieldsSeparator)
+          field.Init(compiler, parent, level, allFields);
+      }
+
+      [RecordIgnore] public Field            : AstStruct2.StructField { get; private set; }
+      [RecordIgnore] public NextRuleRef      : AstStruct2.StructField { get; private set; }
+      [RecordIgnore] public NextSeparatorRef : AstStruct2.StructField { get; private set; }
+
+      [RecordIgnore] public  mutable astRuleStruct        : AstStruct2;
+      [RecordIgnore] private mutable astRulePtr           : AstPointer2;
+      [RecordIgnore] private mutable listTailRulePtr      : AstPointer2;
+
+      [RecordIgnore] public  mutable astSeparatorStruct   : AstStruct2;
+      [RecordIgnore] private mutable astSeparatorPtr      : AstPointer2;
+      [RecordIgnore] private mutable listTailSeparatorPtr : AstPointer2;
+
+      public override CalculateAstInfo() : void
+      {
+        astRuleStruct        = InternalAstStruct2(this, "Rule");
+        astSeparatorStruct   = InternalAstStruct2(this, "Separator");
+        astRulePtr           = AstPointer2(astRuleStruct,      "astPtr", this);
+        listTailRulePtr      = AstPointer2(astRuleStruct,      "listTailPtr", this);
+        astSeparatorPtr      = AstPointer2(astSeparatorStruct, "astPtr", this);
+        listTailSeparatorPtr = AstPointer2(astSeparatorStruct, "listTailPtr", this);
+
+        Field                = AstStruct2.StructField(ParentAstStruct, this, true, true);
+        NextRuleRef          = AstStruct2.StructField(astRuleStruct, this, true, false);
+        NextSeparatorRef     = AstStruct2.StructField(astSeparatorStruct, this, true, false);
+        CalculateAstInfo(astRuleStruct, astRulePtr, fieldsRule);
+        CalculateAstInfo(astSeparatorStruct, astSeparatorPtr, fieldsSeparator);
+      }
+
+      public Counter : PExpr { get { Compiler.GetName($"counter$Level") } }
+      public SeparatorPos : PExpr { get { Compiler.GetName($"separatorPos$Level") } }
+
+      public override Compile() : void
+      {
+        def useCounter = min > 0 || max is Some(_);
+        def counterInit() { if (useCounter) <[ $Counter  = 0 ]> else <[ {} ]> }
+        def counterInc()  { if (useCounter) <[ ++ $Counter   ]> else <[ {} ]> }
+        def ifCounterEqualsToMaxThenContinue()
+        {
+          if (max is Some(max))
+            <[
+              when ($Counter == $max)
+                $(ContinueParseLabel.Goto());
+            ]>
+          else
+            <[ {} ]>
+        }
+        def ifCounterLessThanMinThenFail()
+        {
+          if (min > 0)
+            <[
+              when ($Counter < $min)
+                $(FailParseLabel.Goto());
+            ]>
+          else
+            <[ {} ]>
+        }
+        def separatorPosLoad() { if (hangingSeparator) <[ $SeparatorPos ]> else <[ $TextPos ]> }
+        def separatorPosSave() { if (hangingSeparator) <[ $SeparatorPos = $CurTextPos ]> else <[ {} ]> }
+
+        def firstRuleChild = fieldsRule[0];
+        def firstSeparatorChild = fieldsSeparator[0];
+        def code = SCG.List();
+        code.Add(<[
+          $(ParseLabel.Label());
+            $(AllocateParentAst());
+            $(counterInit());
+            $(listTailRulePtr.Var) = -1;
+            $StartTextPos = $CurTextPos;
+            $TextPos = $CurTextPos;
+            $(separatorPosSave());
+            $(firstRuleChild.ParseLabel.Goto());
+
+          $(astRuleStruct.OkLabel.Label());
+            $(counterInc());
+            $(astRulePtr.AstRef(NextRuleRef)) = -1;
+            if ($(listTailSeparatorPtr.Var) == -1)
+              $(ParentAstPtr.AstRef(Field)) = $(astRulePtr.Var);
+            else
+              $(listTailSeparatorPtr.AstRef(NextSeparatorRef)) = $(astRulePtr.Var);
+            $(ParentAstPtr.SizeRef(Field)) = $CurTextPos - $StartTextPos;
+            $(listTailRulePtr.Var) = $(astRulePtr.Var);
+            $(ifCounterEqualsToMaxThenContinue());
+            $TextPos = $CurTextPos;
+            $(firstSeparatorChild.ParseLabel.Goto());
+
+          $(astRuleStruct.FailLabel.Label());
+            when ($(IsAstAllocatetdCode(astRuleStruct))) // АСТ создано
+            {
+              $(astRulePtr.AstRef(NextRuleRef)) = -1;
+              if ($(listTailRulePtr.Var) == -1)
+                $(ParentAstPtr.AstRef(Field)) = ~ $(astRulePtr.Var);
+              else
+                $(listTailSeparatorPtr.AstRef(NextSeparatorRef)) = ~ $(astRulePtr.Var);
+            }
+            $(ifCounterLessThanMinThenFail());
+            $CurTextPos = $(separatorPosLoad());
+            $(ParentAstPtr.SizeRef(Field)) = $CurTextPos - $StartTextPos;
+            $(ContinueParseLabel.Goto());
+
+          $(astSeparatorStruct.OkLabel.Label());
+            $(astSeparatorPtr.AstRef(NextSeparatorRef)) = -1;
+            $(listTailRulePtr.AstRef(NextRuleRef)) = $(astSeparatorPtr.Var);
+            $(listTailSeparatorPtr.Var) = $(astSeparatorPtr.Var);
+            $(separatorPosSave());
+            $(firstRuleChild.ParseLabel.Goto());
+
+          $(astSeparatorStruct.FailLabel.Label());
+            when ($(IsAstAllocatetdCode(astSeparatorStruct))) // АСТ создано
+            {
+              $(astSeparatorPtr.AstRef(NextSeparatorRef)) = -1;
+              if ($(listTailRulePtr.Var) == -1)
+                $(ParentAstPtr.AstRef(Field)) = ~ $(astSeparatorPtr.Var);
+              else
+                $(listTailRulePtr.AstRef(NextRuleRef)) = ~ $(astSeparatorPtr.Var);
+            }
+            $(ifCounterLessThanMinThenFail());
+            $CurTextPos = $TextPos;
+            $(ParentAstPtr.SizeRef(Field)) = $CurTextPos - $StartTextPos;
+            $(ContinueParseLabel.Goto());
+        ]>);
+        ParseCode = PExpr.Sequence(code.FlattenPExprSequence());
+      }
+
+      public override PrintContent() : string * string
+      {
+        def hanging = if(hangingSeparator) "hanging" else "";
+        ("List2", $<#$(PrintChildren(fieldsRule)) $(PrintChildren(fieldsSeparator)) $hanging $min $max#>)
+      }
+    }
+  }
+}
