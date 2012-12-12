@@ -71,7 +71,7 @@ namespace N2.Internal
     public readonly ExtentionRuleParser[] PostfixRules;
 
     public ExtensibleRuleParser(ExtensibleRuleParserData parserData, int bindingPower)
-      : base(parserData.Grammar)
+      : base(parserData.Grammar, parserData.Descriptor)
     {
       PrefixId = parserData.PrefixId;
       PostfixId = parserData.PostfixId;
@@ -84,11 +84,7 @@ namespace N2.Internal
       FirstPostfixRuleId = PostfixRules[FirstPostfixRule].RuleId;
     }
 
-    public override void Init()
-    {
-    }
-
-    public sealed override int Parse(int curEndPos, string text, ref int resultPtr, ref Parser parser)
+    public override int Parse(int curEndPos, string text, ref int resultPtr, ref Parser parser)
     {
       unchecked
       {
