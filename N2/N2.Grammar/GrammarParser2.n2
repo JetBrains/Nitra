@@ -375,7 +375,6 @@ syntax module GrammarParser2
         parent
       }
       override Typing = TokenRule(Context, this.Location, RuleAttributes, Name, TokenRule, BodyDeclaration) :: ruleDefinitions;
-      //private MakeMatcher() : RegularRuleMatcher = this.TokenRule.MakeMatcher();
     }
     VoidRuleDecl            = RuleAttributes "void"    sm             Name  sm "="  sm Rule                     BodyDeclaration
     {
@@ -478,7 +477,7 @@ syntax module GrammarParser2
     CollectGlobalSymbols(ruleRef : RuleRefSymbol) : RuleRefSymbol = ruleRef;
     GetPrecedence() : int = 0;
     MakeContext(parent : Context) : Context = parent;
-    GetExtraFields() : list[ExtraField2];
+    GetExtraFields(ruleDefinitionType : RuleDefinitionType, ruleSymbol : RuleRefSymbol, baseRuleSymbol : RuleRefSymbol) : list[ExtraField2];
     GetLastLocation() : N2.Location;
   }
 
@@ -486,13 +485,13 @@ syntax module GrammarParser2
   {
     EmptyBodyDeclaration = ";"nl
     {
-      override GetExtraFields = [];
+      override GetExtraFields { ignore(ruleDefinitionType, ruleSymbol, baseRuleSymbol); [] }
       override GetLastLocation = MakeLastLocation(this, Semicolon);
     }
     BlockBodyDeclaration = "{"  BodyMemberDeclaration* "}"nl
     {
       override CollectGlobalSymbols = PassThrough(BodyMemberDeclarations, ruleRef, _.CollectGlobalSymbols(_));
-      override GetExtraFields = FoldThrough(BodyMemberDeclarations, [], _.GetExtraFields(_));
+      override GetExtraFields = FoldThrough(BodyMemberDeclarations, [], _.GetExtraFields(ruleDefinitionType, ruleSymbol, baseRuleSymbol, _));
       override GetPrecedence
       {
         match (BodyMemberDeclarations.Map(_.GetPrecedence()).Filter(_.IsSome))
@@ -553,8 +552,12 @@ syntax module GrammarParser2
   {
     CollectGlobalSymbols(ruleRef : RuleRefSymbol) : RuleRefSymbol = ruleRef;
     GetPrecedence() : ValueOption[int * N2.Location] = VNone();
-    MakeContext(parent : Context) : Context = parent;
-    GetExtraFields(result : list[ExtraField2]) : list[ExtraField2] = result;
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    GetExtraFields(ruleDefinitionType : RuleDefinitionType, ruleSymbol : RuleRefSymbol, baseRuleSymbol : RuleRefSymbol, result : list[ExtraField2]) : list[ExtraField2]
+    {
+      ignore(ruleDefinitionType, ruleSymbol, baseRuleSymbol);
+      result
+    }
   }
 
   extend syntax BodyMemberDeclaration
@@ -570,35 +573,113 @@ syntax module GrammarParser2
         else
           ExtraFieldModifier.Def
       }
-      override CollectGlobalSymbols = AddRefSymbol(ruleRef, this, Name.Value(), GetModifier(ExtraFieldPrivates, ExtraFieldBody), ExtraFieldAttributes.IsCached())[0];
+      [Cached] private MakeSymbol(ruleRef : RuleRefSymbol, ast : ExtraFieldDeclaration1.Ast, name : string, modifier : ExtraFieldModifier, isCached : bool) : RuleRefSymbol * ExtraFieldRefSymbol =
+        AddRefSymbol(ruleRef, ast, name, modifier, isCached);
+      override CollectGlobalSymbols = MakeSymbol(ruleRef, this, Name.Value(), GetModifier(ExtraFieldPrivates, ExtraFieldBody), ExtraFieldAttributes.IsCached())[0];
+      [Cached] private MakeSignature(loc : N2.Location, paramsAst : list[ExtraFieldsParam], typeAst : Type, context : Context) : ExtraFieldSignature =
+        ExtraFieldSignature(loc, paramsAst.ParseNemerle(context), typeAst.ParseNemerle(context));
       override GetExtraFields
       {
+        _ = ruleSymbol;
+        def extraFieldSymbol = Symbol[1];
+        def isValidRule(_ : RuleDefinitionType)
+        {
+          | Simple | ExtentionPoint => true
+          | _ => false
+        }
+
+        when (baseRuleSymbol != null)
+        when (baseRuleSymbol.Node.BindMany.[ExtraFieldRefSymbol](Name.Location) is [existingSymbol])
+        {
+          def name = Name.Value();
+          using (rootMsg = Project.CurrentProject.RootError(this.Location, $"Redefinition of extra field '$name'.", -1))
+            rootMsg.Hint(existingSymbol.FirstLocation, "previous definition.");
+          return result;
+        }
         match (GetModifier(ExtraFieldPrivates, ExtraFieldBody))
         {
           | DefPrivate =>
             if (!ExtraFieldBody.IsEmpty())
-              ExtraField2.DefPrivate(this.Location, Name.Identifier(), ExtraFieldsParams[0], Type, ExtraFieldBody.BodyLocation()) :: result
+              ExtraField2.DefPrivate(this.Location, extraFieldSymbol, MakeSignature(this.Location, ExtraFieldsParams[0], Type, Context), ExtraFieldBody.ParseNemerle(Context)) :: result
             else
             {
               Project.CurrentProject.Error(this.Location, "A private extra field must have body.", -1);
-              result
+              ExtraField2.Abstract(this.Location, extraFieldSymbol, MakeSignature(this.Location, ExtraFieldsParams[0], Type, Context)) :: result
             }
 
-          | Def      => ExtraField2.Def(this.Location, Name.Identifier(), ExtraFieldsParams[0], Type, ExtraFieldBody.BodyLocation()) :: result
-          | Abstract => ExtraField2.Abstract(this.Location, Name.Identifier(), ExtraFieldsParams[0], Type) :: result
-          | _        => assert(false)
+          | Def when isValidRule(ruleDefinitionType) =>
+            ExtraField2.Def(this.Location, extraFieldSymbol, MakeSignature(this.Location, ExtraFieldsParams[0], Type, Context), ExtraFieldBody.ParseNemerle(Context)) :: result
+
+          | Abstract when isValidRule(ruleDefinitionType) =>
+            ExtraField2.Abstract(this.Location, extraFieldSymbol, MakeSignature(this.Location, ExtraFieldsParams[0], Type, Context)) :: result
+
+          | _ =>
+            Project.CurrentProject.Error(this.Location, "A public extra field must be defined in an extention point rule or a simple rule only.", -1);
+            ExtraField2.Def(this.Location, extraFieldSymbol, MakeSignature(this.Location, ExtraFieldsParams[0], Type, Context), ExtraFieldBody.ParseNemerle(Context)) :: result
         }
       }
     }
     ExtraFieldDeclaration2 = ExtraFieldAttributes "override"     sm  Name ExtraFieldBody
     {
-      override CollectGlobalSymbols = AddRefSymbol(ruleRef, this, Name.Value(), ExtraFieldModifier.Override, ExtraFieldAttributes.IsCached())[0];
-      override GetExtraFields = ExtraField2.Override(this.Location, Name.Identifier(), ExtraFieldBody.BodyLocation()) :: result;
+      [Cached] private MakeSymbol(ruleRef : RuleRefSymbol, ast : ExtraFieldDeclaration2.Ast, name : string, modifier : ExtraFieldModifier, isCached : bool) : RuleRefSymbol * ExtraFieldRefSymbol =
+        AddRefSymbol(ruleRef, ast, name, modifier, isCached);
+      override CollectGlobalSymbols = MakeSymbol(ruleRef, this, Name.Value(), ExtraFieldModifier.Override, ExtraFieldAttributes.IsCached())[0];
+      override GetExtraFields
+      {
+        _ = ruleSymbol;
+        def extraFieldSymbol = Symbol[1];
+        unless (ruleDefinitionType is RuleDefinitionType.ExtentionPrefix || ruleDefinitionType is RuleDefinitionType.ExtentionPostfix)
+        {
+          Project.CurrentProject.Error(this.Location, "An extra field can be overridden only in extending rules.", -1);
+          return result;
+        }
+        match (baseRuleSymbol.Node.BindMany.[ExtraFieldRefSymbol](Name.Location))
+        {
+          | [baseExtraFieldSymbol] when baseExtraFieldSymbol.Modifier == ExtraFieldModifier.Def
+                                     || baseExtraFieldSymbol.Modifier == ExtraFieldModifier.Abstract =>
+            ExtraField2.Override(this.Location, extraFieldSymbol, baseExtraFieldSymbol, ExtraFieldBody.ParseNemerle(Context)) :: result
+
+          | [_] =>
+            def name = Name.Value();
+            Project.CurrentProject.Error(this.Location, $"Cannot override '$name' extra field.", -1); //TODO: rewrite error message!
+            result
+
+          | _ =>
+            def name = Name.Value();
+            Project.CurrentProject.Error(this.Location, $"No '$name' extra field to override.", -1);
+            result
+        }
+      }
     }
     ExtraFieldDeclaration3 = ExtraFieldAttributes "error"        sm  Name ExtraFieldBody
     {
-      override CollectGlobalSymbols = AddRefSymbol(ruleRef, this, Name.Value(), ExtraFieldModifier.OnError, ExtraFieldAttributes.IsCached())[0];
-      override GetExtraFields = ExtraField2.Override(this.Location, Name.Identifier(), ExtraFieldBody.BodyLocation()) :: result;
+      [Cached] private MakeSymbol(ruleRef : RuleRefSymbol, ast : ExtraFieldDeclaration3.Ast, name : string, modifier : ExtraFieldModifier, isCached : bool) : RuleRefSymbol * ExtraFieldRefSymbol =
+        AddRefSymbol(ruleRef, ast, name, modifier, isCached);
+      override CollectGlobalSymbols = MakeSymbol(ruleRef, this, Name.Value(), ExtraFieldModifier.OnError, ExtraFieldAttributes.IsCached())[0];
+      override GetExtraFields
+      {
+        def extraFieldSymbol = Symbol[1];
+        match (ruleDefinitionType)
+        {
+          | RuleDefinitionType.Simple           with targetRuleSymbol = ruleSymbol
+          | RuleDefinitionType.ExtentionPrefix  with targetRuleSymbol = baseRuleSymbol
+          | RuleDefinitionType.ExtentionPostfix with targetRuleSymbol = baseRuleSymbol =>
+            match (targetRuleSymbol.Node.BindMany.[ExtraFieldRefSymbol](Name.Location))
+            {
+              | [baseExtraFieldSymbol] =>
+                ExtraField2.OnError(this.Location, extraFieldSymbol, baseExtraFieldSymbol, ExtraFieldBody.ParseNemerle(Context)) :: result
+
+              | _ =>
+                def name = Name.Value();
+                Project.CurrentProject.Error(this.Location, $"No '$name' extra field to handle error.", -1);
+                result
+            }
+
+          | _ =>
+            Project.CurrentProject.Error(this.Location, "An error handler for a extra field can be defined only in extending rules.", -1);
+            result
+        }
+      }
     }
     // TODO: Create "Once" attribute which prevent use rule more then one times.
     InnerAliasDeclaration  = RuleAlias
@@ -924,8 +1005,8 @@ syntax module GrammarParser2
       {
         def rule    = this.Rule.Typing(None(), 0, None(), context, options);
         def sepRule = SeparatorRule.Typing(None(), 0, None(), context, options);
-        def type  = MakeType(rule, sepRule);
-        Rule2.RepeatWithSeparator(this.Location, type, 0, MakeName(_fieldName, rule, sepRule, context), 0, None(), rule, sepRule, false);
+        def type    = MakeType(rule, sepRule);
+        Rule2.RepeatWithSeparator(this.Location, type, 0, MakePlural(_fieldName, rule, sepRule, context), 0, None(), rule, sepRule, false);
       }
     }
     ZeroOrManyWithHangingSeparatorRule = "(" Rule ";"sm SeparatorRule ";"sm "?" ")" "*"
@@ -935,8 +1016,8 @@ syntax module GrammarParser2
       {
         def rule    = this.Rule.Typing(None(), 0, None(), context, options);
         def sepRule = SeparatorRule.Typing(None(), 0, None(), context, options);
-        def type  = MakeType(rule, sepRule);
-        Rule2.RepeatWithSeparator(this.Location, type, 0, MakeName(_fieldName, rule, sepRule, context), 0, None(), rule, sepRule, true);
+        def type    = MakeType(rule, sepRule);
+        Rule2.RepeatWithSeparator(this.Location, type, 0, MakePlural(_fieldName, rule, sepRule, context), 0, None(), rule, sepRule, true);
       }
     }
     OneOrManyWithSeparatorRule         = "(" Rule ";"sm SeparatorRule ")" "+"
@@ -946,8 +1027,8 @@ syntax module GrammarParser2
       {
         def rule    = this.Rule.Typing(None(), 0, None(), context, options);
         def sepRule = SeparatorRule.Typing(_baseRule, 0, None(), context, options);
-        def type  = MakeType(rule, sepRule);
-        Rule2.RepeatWithSeparator(this.Location, type, 0, MakeName(_fieldName, rule, sepRule, context), 1, None(), rule, sepRule, false);
+        def type    = MakeType(rule, sepRule);
+        Rule2.RepeatWithSeparator(this.Location, type, 0, MakePlural(_fieldName, rule, sepRule, context), 1, None(), rule, sepRule, false);
       }
     }
     OneOrManyWithHangingSeparatorRule  = "(" Rule ";"sm SeparatorRule ";"sm "?" ")" "+"
@@ -957,8 +1038,8 @@ syntax module GrammarParser2
       {
         def rule    = this.Rule.Typing(None(), 0, None(), context, options);
         def sepRule = SeparatorRule.Typing(_baseRule, 0, None(), context, options);
-        def type  = MakeType(rule, sepRule);
-        Rule2.RepeatWithSeparator(this.Location, type, 0, MakeName(_fieldName, rule, sepRule, context), 1, None(), rule, sepRule, true);
+        def type    = MakeType(rule, sepRule);
+        Rule2.RepeatWithSeparator(this.Location, type, 0, MakePlural(_fieldName, rule, sepRule, context), 1, None(), rule, sepRule, true);
       }
     }
   }

@@ -257,21 +257,21 @@ namespace N2
       }
     }
 
-    public MakeName(fieldName : option[string], rule : Rule2, _separatorRule : Rule2, _context : Context) : string
-    {
-      match (fieldName)
-      {
-        | Some(name) => name
-        | _ => rule.FieldName
-      }
-    }
-
     public MakePlural(fieldName : option[string], rule : Rule2, _context : Context) : string
     {
       match (fieldName)
       {
         | Some(name) => name
-        | _ => rule.FieldName + "s"
+        | _ => rule.FieldName + "s" // TODO: make correct english plural name
+      }
+    }
+
+    public MakePlural(fieldName : option[string], rule : Rule2, _separatorRule : Rule2, _context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ => rule.FieldName + "s" // TODO: make correct english plural name
       }
     }
 
@@ -304,11 +304,11 @@ namespace N2
       if (type1 is RuleType2.Void && type2 is RuleType2.Void)
         RuleType2.Void()
       else if (type1 is RuleType2.Void)
-        type2
+        RuleType2.List(type2)
       else if (type2 is RuleType2.Void)
-        type1
+        RuleType2.List(type1)
       else
-        RuleType2.Tuple([type1, type2])
+        RuleType2.Tuple([RuleType2.List(type1), RuleType2.List(type2)])
     }
   
     public LastOrDefault[T](this source : list[T], defaultValue : T) : T
@@ -361,22 +361,23 @@ namespace N2
       def baseRule = RuleRef(baseName, context.Bind(baseName));
       def precedence = bodyDeclaration.GetPrecedence();
       def contextWithAliases = bodyDeclaration.MakeContext(context); // !!!
-      def extraFields = bodyDeclaration.GetExtraFields();
       def options = ruleAttributes.Options2(contextWithAliases);
       def rule2 = rule.Typing(baseRule.Ref, precedence, None(), contextWithAliases, options);
       def type = baseRule.Ref.Map(sym => sym.Type) ?? RuleType2.Void();
-      def fieldName = baseName.Parts().LastOrDefault("?");
       def ruleDefinition = 
         match (rule2)
         {
           | Sequence((Call(callName, bindingPower) as call) :: rules) when callName.Equals(baseRule) =>
-            def prefix = Rule2.PrefixCall(call.Location, type, project.GetNextRuleId(), fieldName, baseRule, bindingPower);
+            def prefix = Rule2.PrefixCall(call.Location, type, project.GetNextRuleId(), call.FieldName, baseRule, bindingPower);
             def seq = Rule2.Sequence(loc, rule2.Type, project.GetNextRuleId(), "", prefix :: rules);
+            def extraFields = bodyDeclaration.GetExtraFields(RuleDefinitionType.ExtentionPostfix(), ruleSymbol, baseRule.Ref ?? null : RuleRefSymbol);
             RuleDefinition2.ExtentionPostfix(loc, id, context, ruleSymbol, extraFields, options, baseRule, seq, bindingPower)
-              
-          | _ => RuleDefinition2.ExtentionPrefix(loc, id, context, ruleSymbol, extraFields, options, baseRule, EnsureSequence(context, loc, rule2))
+
+          | _ =>
+            def extraFields = bodyDeclaration.GetExtraFields(RuleDefinitionType.ExtentionPrefix(), ruleSymbol, baseRule.Ref ?? null : RuleRefSymbol);
+            RuleDefinition2.ExtentionPrefix(loc, id, context, ruleSymbol, extraFields, options, baseRule, EnsureSequence(context, loc, rule2))
         };
-          
+
       ruleDefinition
     }
 
@@ -388,9 +389,9 @@ namespace N2
       def ruleSymbol = context.GetParent.[SyntaxModuleContext]().Module.BindByHierarchy(name);
       def precedence = bodyDeclaration.GetPrecedence();
       def contextWithAliases = bodyDeclaration.MakeContext(context); // !!!
-      def extraFields = bodyDeclaration.GetExtraFields();
       def options = ruleAttributes.Options2(contextWithAliases);
       def rule2 = rule.Typing(None(), precedence, None(), contextWithAliases, options);
+      def extraFields = bodyDeclaration.GetExtraFields(RuleDefinitionType.Simple(), ruleSymbol, null);
       RuleDefinition2.Simple(loc, id, context, ruleSymbol, extraFields, options, EnsureSequence(context, loc, rule2))
     }
 
@@ -401,8 +402,8 @@ namespace N2
       def id = project.GetNextRuleId();
       def ruleSymbol = context.GetParent.[SyntaxModuleContext]().Module.BindByHierarchy(name);
       def contextWithAliases = bodyDeclaration.MakeContext(context); // !!!
-      def extraFields = bodyDeclaration.GetExtraFields();
       def options = ruleAttributes.Options2(contextWithAliases);
+      def extraFields = bodyDeclaration.GetExtraFields(RuleDefinitionType.ExtentionPoint(), ruleSymbol, null);
       RuleDefinition2.ExtentionPoint(loc, id, context, ruleSymbol, extraFields, options)
     }
 
@@ -413,9 +414,11 @@ namespace N2
       def id = project.GetNextRuleId();
       def ruleSymbol = context.GetParent.[SyntaxModuleContext]().Module.BindByHierarchy(name);
       def contextWithAliases = bodyDeclaration.MakeContext(context); // !!!
-      def extraFields = bodyDeclaration.GetExtraFields();
       def options = ruleAttributes.Options2(contextWithAliases);
-      RuleDefinition2.Regular(loc, id, context, ruleSymbol, extraFields, options, tokenRule.Typing())
+      def extraFields = bodyDeclaration.GetExtraFields(RuleDefinitionType.Regular(), ruleSymbol, null);
+      def regularRule = tokenRule.Typing();
+      def regularRuleFsm = regularRule.ConvertRegularRuleToFsm();
+      RuleDefinition2.Regular(loc, id, context, ruleSymbol, extraFields, options, regularRule, regularRuleFsm)
     }
 
     public EnsureSequence(context : Context, loc : Location, rule : Rule2) : Rule2.Sequence
@@ -541,7 +544,7 @@ namespace N2
       locations.Head + locations.Last
     }
 
-    public MakeMatcher(this regularRule : RegularRule2) : RegularRuleMatcher
+    public ConvertRegularRuleToFsm(this regularRule : RegularRule2) : FSM
     {
       def visitedRules = HashSet();
       def convert(_ : RegularRule2) : FSM
@@ -553,7 +556,11 @@ namespace N2
         | RepeatWithSeparator(min, max, rule, sep) => FSMBuilder.RepeatWithSeparator(min, max, convert(rule), convert(sep))
         | Call(RuleRef(Ref = Some(symbol is ParsedRuleRefSymbol.[G.TokenRuleDecl.Ast]), Location = loc)) =>
           if (visitedRules.Add(symbol))
-            convert(symbol.Value.TokenRule.Typing())
+          {
+            def result = convert(symbol.Value.TokenRule.Typing());
+            _ = visitedRules.Remove(symbol);
+            result
+          }
           else
           {
             N2Project.CurrentProject.Error(loc, "Cyclic rule call found.", -1);
@@ -569,7 +576,12 @@ namespace N2
           // binding error already reported
           FSM()
       }
-      FSMMatch.MakeMatcher(convert(regularRule))
+      convert(regularRule)
+    }
+
+    public MakeMatcher(this regularRule : RegularRule2) : RegularRuleMatcher
+    {
+      FSMMatch.MakeMatcher(ConvertRegularRuleToFsm(regularRule))
     }
     
     IsNewLine(ch : char) : bool
@@ -595,6 +607,75 @@ namespace N2
         Location(source, NToken(start, start+1))
       else
         Location(source, tok)
+    }
+
+    ParseNemerleInternal(ast : N2.Ast, context : Context) : PExpr
+    {
+      def env = context.GetNemerleEnvironment();
+      def simpleParse(ast : N2.Ast) : PExpr
+      {
+        def text = ast.Location.GetText();
+        MainParser.ParseExpr(env, text, ast.NLocation())
+      }
+      def parseAndAddIt(ast : N2.Ast) : PExpr
+      {
+        def e = simpleParse(ast);
+
+        def addIt(e)
+        {
+          | <[ value ]> => e
+          | <[ $(n : name) ]> => <[ it.$(n : name)]>
+          | <[ $x = $y ]> => <[ $(addIt(x)) = $(addIt(y)) ]>
+          | _ => e
+        }
+
+        addIt(e)
+      }
+
+      match (ast)
+      {
+        | G.Expression.Ast(ExpressionContents=[G.ExpressionContent1.Ast(Content=G.Content6.Ast as fold)]) => 
+          def collection = simpleParse(fold.Identifier);
+          def expr1 = simpleParse(fold.Expression);
+          def exprs = fold.Expressions[0].Map(parseAndAddIt);
+          //exprs.Fold()
+          <[ $collection.Fold($expr1, fun((it, value)) { ..$exprs }) ]>
+
+        | _ => simpleParse(ast)
+      }
+    }
+
+    public ParseNemerle(this body : G.ExtraFieldBody, context : Context) : PExpr
+    {
+      match (body)
+      {
+        | G.ExtraFieldBody1.Ast as b => ParseNemerleInternal(b.Block, context)
+        | G.ExtraFieldBody2.Ast as b => ParseNemerleInternal(b.Expression, context)
+        | G.ExtraFieldBodyEmpty      => <[ () ]>
+        | _                          => <[ () ]>
+      }
+    }
+
+    public ParseNemerle(this parms : list[G.ExtraFieldsParam], context : Context) : list[PParameter]
+    {
+      def parsed = List();
+      foreach (parm in parms)
+      {
+        | G.ExtraFieldsParam.Ast as p => 
+          match (ParseNemerleInternal(p.Name, context))
+          {
+            | <[ $(n : name) ]> => parsed.Add(<[ parameter: $n : $(ParseNemerleInternal(p.Type, context)) ]>)
+            | _ => N2Project.CurrentProject.FatalError(p.Name, "Expected simple name.", -1)
+          }
+
+        | e => N2Project.CurrentProject.FatalError(e, "Parse error.", -1)
+      }
+      parsed.ToNList()
+    }
+
+    public ParseNemerle(this type : G.Type, context : Context) : PExpr
+    {
+      ParseNemerleInternal(type, context)
     }
     
     public CallRuleTyping(baseRule : option[RuleRefSymbol], _precedence : int, _fieldName : option[string], context : Context, options : RuleDefinitionOptions,
