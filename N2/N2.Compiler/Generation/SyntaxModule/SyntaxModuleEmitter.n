@@ -1,0 +1,87 @@
+﻿using N2.Model;
+
+using Nemerle;
+using Nemerle.Compiler;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  internal partial class SyntaxModuleEmitter
+  {
+    public Environment  : EmitterEnvironment { get; }
+    public Env          : GlobalEnv          { get; }
+    public SyntaxModule : SyntaxModuleData   { get; }
+
+    public GrammarTB               : TypeBuilder { get; }
+    public GrammarImplTB           : TypeBuilder { get; }
+    public GrammarDescriptorImplTB : TypeBuilder { get; }
+
+    private _ruleParserEmitters        : list[RuleParserEmitter];
+
+    private _allAstEmitters            : list[RuleAstEmitter];
+    private _extentionPointAstEmitters : list[RuleAstEmitter];
+    private _otherAstEmitters          : list[RuleAstEmitter];
+
+    public this(environment : EmitterEnvironment, syntaxModule : SyntaxModuleData)
+    {
+      Environment  = environment;
+      SyntaxModule = syntaxModule;
+      Env          = Environment.Manager.CoreEnv.EnterIntoNamespace(["TEMP"]).EnterIntoNamespace(syntaxModule.Name.Node.Parent.FullNameParts);
+
+      GrammarTB               = Env.Define(<[ decl: public abstract partial class $(syntaxModule.Name.Name : usesite) { } ]>);
+      GrammarImplTB           = GrammarTB.DefineNestedType(MakeGrammarImpl());
+      GrammarDescriptorImplTB = GrammarImplTB.DefineNestedType(MakeGrammarDescriptorImpl());
+
+      _ruleParserEmitters = SyntaxModule.RuleDefs.FoldLeft([], fun(rd : RuleDefinition2, acc)
+      {
+        match (rd)
+        {
+          | ExtentionPoint         => acc
+          | ExtentionPrefix  as rd => ExtentionPrefixRuleParserEmitter(this, rd) :: acc
+          | ExtentionPostfix as rd => ExtentionPostfixRuleParserEmitter(this, rd) :: acc
+          | Simple           as rd => SimpleRuleParserEmitter(this, rd) :: acc
+          | Regular          as rd => RegularRuleParserEmitter(this, rd) :: acc
+          | Marker                 => acc
+        }
+      });
+
+      _allAstEmitters = SyntaxModule.RuleDefs.MapFiltered(_.IsAst, RuleAstEmitter(this, _));
+      (_extentionPointAstEmitters, _otherAstEmitters) = _allAstEmitters.Partition(x => x.RuleDefinition is RuleDefinition2.ExtentionPoint);
+    }
+
+    public DefineExtentionPointAstTypes() : void
+    {
+      foreach (emitter in _extentionPointAstEmitters)
+        emitter.DefineTypes();
+    }
+
+    public DefineOtherAstTypes() : void
+    {
+      foreach (emitter in _otherAstEmitters)
+        emitter.DefineTypes();
+    }
+
+    public DefineAstMembers() : void
+    {
+      foreach (emitter in _allAstEmitters)
+        emitter.DefineMembers();
+    }
+
+    public Emit() : void
+    {
+      foreach (emitter in _ruleParserEmitters)
+        emitter.Emit();
+      foreach (emitter in _allAstEmitters)
+        emitter.Emit();
+      GrammarDescriptorImplTB.Compile();
+      GrammarImplTB.Compile();
+      GrammarTB.Compile();
+    }
+  }
+}
