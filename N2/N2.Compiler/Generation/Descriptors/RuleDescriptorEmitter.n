@@ -1,7 +1,5 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
-using Nemerle.Compiler;
-using Nemerle.Compiler.Parsetree;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -15,125 +13,15 @@ using System.Linq;
 namespace N2.Compiler
 {
   [Record]
-  internal sealed class RuleDescriptorEmitter
+  internal abstract class RuleDescriptorEmitter
   {
     public Owner          : SyntaxModuleEmitter { get; }
     public RuleDefinition : RuleDefinition2     { get; }
 
-    [RecordIgnore] private mutable _descriptorTb : TypeBuilder;
+    public abstract NeedsAstSize : bool         { get; }
 
-    public DefineDescriptor(astSize : int) : void
-    {
-      assert(_descriptorTb == null);
-      def baseType = match(RuleDefinition)
-      {
-        | ExtentionPoint   => <[ ExtensibleRuleDescriptor ]>
-        | ExtentionPrefix  => <[ PrefixRuleDescriptor ]>
-        | ExtentionPostfix => <[ PostfixRuleDescriptor ]>
-        | Simple           => <[ SimpleRuleDescriptor ]>
-        | Regular          => <[ RegularRuleDescriptor ]>
-        | Marker           => assert(false)
-      }
-      def baseTypes = baseType :: if (RuleDefinition.IsStart) [<[ N2.IStartRuleDescriptor ]>] else [];
-      def descriptorClass = <[decl:
-        public sealed class $(RuleDefinition.DecorateRuleClassName() : dyn) : ..$baseTypes
-        {
-          private this() {}
-        }
-      ]>;
-      when (RuleDefinition.IsExplicitSpaces)
-        descriptorClass.AddCustomAttribute(<[ N2.ExplicitSpacesAttribute ]>);
-      when (RuleDefinition.IsSuppressTrailingSpaces)
-        descriptorClass.AddCustomAttribute(<[ N2.SuppressTrailingSpacesAttribute ]>);
+    public abstract DefineDescriptor(astSize : int) : void;
 
-      _descriptorTb = Owner.GrammarDescriptorImplTB.DefineNestedType(descriptorClass);
-      _descriptorTb.DefineConditional(<[decl: public  override Name              : string                                          { get { $(RuleDefinition.RuleSymbol.Name : string) } } ]>);
-      _descriptorTb.DefineConditional(<[decl: public  override Grammar           : N2.GrammarDescriptor                            { get { $(Owner.GrammarImplTB.GetMemType() : typed).StaticDescriptor } } ]>);
-      _descriptorTb.DefineConditional(<[decl: public  override AstSize           : int                                             { get { $(astSize : int) } } ]>);
-      _descriptorTb.DefineConditional(<[decl: private static   _staticDescriptor : $(RuleDefinition.DecorateRuleClassName() : dyn) = $(RuleDefinition.DecorateRuleClassName() : dyn)(); ]>);
-      _descriptorTb.DefineConditional(<[decl: public  static   StaticDescriptor  : $(RuleDefinition.DecorateRuleClassName() : dyn) { get { _staticDescriptor } } ]>);
-
-      when (RuleDefinition.IsStart)
-        _descriptorTb.DefineConditional(<[decl:
-          public Parse(source : N2.SourceSnapshot, parserHost : N2.ParserHost) : N2.ParseResult
-          {
-            parserHost.DoParsing(source, this)
-          }
-        ]>);
-
-      match (RuleDefinition.Type)
-      {
-        | Chars => ()
-        | Void  => _descriptorTb.DefineConditional(<[decl: public ResultType() : void {} ]>)
-        | t     => _descriptorTb.DefineConditional(<[decl: public ResultType() : $(Owner.RuleTypeToNType(t) : typed) { mutable res; res } ]>)
-      }
-
-      def defineNewParserMethod(returnType)
-      {
-        _descriptorTb.DefineConditional(<[decl:
-          public override NewParser(ruleId : int, grammar : N2.CompositeGrammar) : $returnType
-          {
-            $(Owner.GrammarImplTB.GetMemType() : typed).$(RuleDefinition.DecorateRuleClassName() : dyn)(ruleId, grammar)
-          }
-        ]>);
-      }
-      def defineExtentionRuleMethods(baseRuleSymbol)
-      {
-        defineNewParserMethod(<[ N2.Internal.ExtentionRuleParser ]>);
-        _descriptorTb.DefineConditional(<[decl:
-          public override BaseRule : ExtensibleRuleDescriptor { get { $(Owner.Environment.GetDescriptorClassRef(baseRuleSymbol)).StaticDescriptor } }
-        ]>);
-      }
-      match (RuleDefinition)
-      {
-        | ExtentionPoint => ()
-        | ExtentionPrefix(BaseRule = RuleRef(Ref = Some(baseRuleSymbol))) =>
-          defineExtentionRuleMethods(baseRuleSymbol)
-
-        | ExtentionPostfix(BaseRule = RuleRef(Ref = Some(baseRuleSymbol)), BindingPower = bindingPower) =>
-          defineExtentionRuleMethods(baseRuleSymbol);
-          _descriptorTb.DefineConditional(<[decl: public override BindingPower : int { get { $(bindingPower : int) } } ]>);
-
-        | Simple  => defineNewParserMethod(<[ N2.Internal.RuleParser ]>);
-        | Regular => ()
-        | _       => assert(false)
-      }
-
-      //TODO: implement these methods
-      _descriptorTb.DefineConditional(<[decl:
-        public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
-        {
-          ignore(source, parserHost, ast, index, pos);
-          throw System.NotImplementedException();
-        }
-      ]>);
-      _descriptorTb.DefineConditional(<[decl:
-        public override FillDebugAst(parser : N2.Debug.DebugParser, index : int, debugAst : array[object]) : void
-        {
-          ignore(parser, index, debugAst);
-          throw System.NotImplementedException();
-        }
-      ]>);
-      _descriptorTb.DefineConditional(<[decl:
-        public override GetAstLength(parserHost : N2.ParserHost, ast : array[int], index : int) : int
-        {
-          ignore(parserHost, ast, index);
-          throw System.NotImplementedException();
-        }
-      ]>);
-      _descriptorTb.DefineConditional(<[ decl:
-        public override GetSpans(parserHost : N2.ParserHost, ast : array[int], index : int, pos : int, length : int, startPos : int, endPos : int, spans : System.Collections.Generic.List[SpanInfo]) : void
-        {
-          ignore(parserHost, ast, index, pos, length, startPos, endPos, spans);
-          throw System.NotImplementedException();
-        }
-      ]>)
-    }
-
-    public Emit() : void
-    {
-      assert(_descriptorTb != null);
-      _descriptorTb.Compile();
-    }
+    public abstract Emit() : void;
   }
 }
