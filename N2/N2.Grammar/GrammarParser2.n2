@@ -31,6 +31,7 @@ syntax module GrammarParser2
   token field DodDot              = "..";
   token field Op                  = "+", "-", "*", "/", "?", "^", "%", "&", "!", ".";
   token field Backslash           = "\\";
+  token field Pipe                = "|";
 
   span class Comment;
   span class Char;
@@ -342,7 +343,7 @@ syntax module GrammarParser2
         sm
       }
       override MakeContext = MakeContext(parent, RuleAttributes, BodyDeclaration);
-      override Typing = ExtentionRule(Context, this.Location, RuleAttributes, Name, BaseName, Rule, BodyDeclaration) :: ruleDefinitions;
+      override Typing = ExtentionRule(Context, this.Location, RuleAttributes, Name, RuleRef(BaseName, Context.Bind(BaseName)), Rule, BodyDeclaration) :: ruleDefinitions;
     }
     SimpleRuleDecl          = RuleAttributes "syntax"  sm             Name  sm "="  sm Rule                     BodyDeclaration
     {
@@ -364,7 +365,8 @@ syntax module GrammarParser2
         sm
       }
       override MakeContext = MakeContext(parent, RuleAttributes, BodyDeclaration);
-      override Typing = ExtentionPointRule(Context, this.Location, RuleAttributes, Name, BodyDeclaration) :: ruleDefinitions;
+      override Typing = ExtentionPointRule(Context, this.Location, RuleAttributes, Name, BodyDeclaration) 
+          :: BodyDeclaration.Typing(ruleDefinitions, RuleRef(Name, Context.Bind(Name)));
     }
     TokenRuleDecl           = RuleAttributes "token"   sm             Name  sm "="  sm TokenRule                BodyDeclaration
     {
@@ -391,13 +393,16 @@ syntax module GrammarParser2
     MarkerDecl              =                "marker"  sm             Name                                      ";"nl
     {
       override CollectGlobalSymbols = AddRefSymbol(sm, this, Name.Value())[0];
-      override Typing = MarkerRule(Context, this.Location, Name) :: ruleDefinitions;
     }
     ExtendSyntaxDecl        =                "extend"  sm "syntax" sm BaseName nl "{" inl ExtendSyntaxMember* d "}"nl
     {
       override CollectGlobalSymbols = PassThrough(ExtendSyntaxMembers, sm, _.CollectGlobalSymbols(_));
       override MakeContext = FoldThrough(ExtendSyntaxMembers, parent, _.MakeContext(_));
-      override Typing = FoldThrough(ExtendSyntaxMembers, ruleDefinitions, (m, r) => m.Typing(r, BaseName));
+      override Typing
+      {
+        def baseRule = RuleRef(BaseName, Context.Bind(BaseName));
+        FoldThrough(ExtendSyntaxMembers, ruleDefinitions, (m, r) => m.Typing(r, baseRule));
+      }
     }
     AliasDecl               =                RuleAlias
     {
@@ -471,8 +476,8 @@ syntax module GrammarParser2
     }
     RuleRefs(ruleRefs : List[RuleRefSymbol]) : void = ruleRefs.Add(ParsedRuleRefSymbol(this, Name.Value()));
     [Cached] MakeContext(parent : Context) : Context = MakeContext(parent, RuleAttributes, BodyDeclaration);
-    Typing(ruleDefinitions : list[RuleDefinition2], baseName : QIdentifier) : list[RuleDefinition2] =
-      ExtentionRule(Context, this.Location, RuleAttributes, Name, baseName, Rule, BodyDeclaration) :: ruleDefinitions;
+    Typing(ruleDefinitions : list[RuleDefinition2], baseRule : RuleRef) : list[RuleDefinition2] =
+      ExtentionRule(Context, this.Location, RuleAttributes, Name, baseRule, Rule, BodyDeclaration) :: ruleDefinitions;
   }
 
   syntax BodyDeclaration
@@ -482,6 +487,7 @@ syntax module GrammarParser2
     [Cached] MakeContext(parent : Context) : Context = parent;
     GetExtraFields(ruleDefinitionType : RuleDefinitionType, ruleSymbol : RuleRefSymbol, baseRuleSymbol : RuleRefSymbol) : list[ExtraField2];
     GetLastLocation() : N2.Location;
+    Typing(ruleDefinitions : list[RuleDefinition2], _baseRule : RuleRef) : list[RuleDefinition2] = ruleDefinitions;
   }
 
   extend syntax BodyDeclaration
@@ -511,6 +517,7 @@ syntax module GrammarParser2
       }
       override MakeContext = FoldThrough(BodyMemberDeclarations, parent, _.MakeContext(_));
       override GetLastLocation = MakeLastLocation(this, OpenBrace);
+      override Typing = FoldThrough(BodyMemberDeclarations, ruleDefinitions, _.Typing(_, _baseRule));
     }
   }
 
@@ -561,10 +568,18 @@ syntax module GrammarParser2
       ignore(ruleDefinitionType, ruleSymbol, baseRuleSymbol);
       result
     }
+    Typing(ruleDefinitions : list[RuleDefinition2], _baseRule : RuleRef) : list[RuleDefinition2] = ruleDefinitions;
   }
 
   extend syntax BodyMemberDeclaration
   {
+    InlineExtendSyntaxMember = "|" ExtendSyntaxMember
+    {
+      override CollectGlobalSymbols { _ = ExtendSyntaxMember.CollectGlobalSymbols(ruleRef.Node.Parent.Symbol :> SyntaxModuleSymbol); ruleRef }
+      override Typing = ExtendSyntaxMember.Typing(ruleDefinitions, _baseRule);
+      override MakeContext = ExtendSyntaxMember.MakeContext(parent);
+    }
+
     ExtraFieldDeclaration1 = ExtraFieldAttributes ExtraFieldPrivate? Name sm "(" (ExtraFieldsParam; "," sm)* ")" sm ":" sm Type ExtraFieldBody
     {
       private GetModifier(privates : option[ExtraFieldPrivate], body : ExtraFieldBody) : ExtraFieldModifier
