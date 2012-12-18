@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
+using N2.Runtime;
 
 //структура правила расширения.
 
@@ -64,33 +65,30 @@ namespace N2.Internal
       public static const int Mark =  (3 << 30);
     }
 
-    private int PrefixId;
-    private int PostfixId;
+    public readonly int BindingPower;
+    public readonly int PrefixId;
+    public readonly int PostfixId;
 
-    private int FirstPostfixRule;
-    private int FirstPostfixRuleId;
-    private ExtentionRuleParser[] PrefixRules;
-    private ExtentionRuleParser[] PostfixRules;
+    public readonly int FirstPostfixRule;
+    public readonly int FirstPostfixRuleId;
+    public readonly ExtentionRuleParser[] PrefixRules;
+    public readonly ExtentionRuleParser[] PostfixRules;
 
-    public ExtensibleRuleParser(int prefixId, int postfixId, ExtensibleRuleDescriptor descriptor, int bindingPower, CompositeGrammar grammar)
-      : base(grammar)
+    public ExtensibleRuleParser(ExtensibleRuleParserData parserData, int bindingPower)
+      : base(parserData.Grammar, parserData.Descriptor)
     {
-      PrefixId = prefixId;
-      PostfixId = postfixId;
-      var rules = grammar.GetExtentionRules(descriptor);
-      var postfixRules = rules[0];
-      PrefixRules = rules[1];
-      PostfixRules = rules[2];
+      PrefixId = parserData.PrefixId;
+      PostfixId = parserData.PostfixId;
+      PrefixRules = parserData.PrefixParsers;
+      PostfixRules = parserData.PostfixParsers;
       FirstPostfixRule = 0;
-      for (; FirstPostfixRule < postfixRules.Length && bindingPower >= postfixRules[FirstPostfixRule].BindingPower; ++FirstPostfixRule) ;
+      var postfixRules = parserData.PostfixDescriptors;
+      while (FirstPostfixRule < postfixRules.Length && bindingPower >= postfixRules[FirstPostfixRule].BindingPower)
+        ++FirstPostfixRule;
       FirstPostfixRuleId = PostfixRules[FirstPostfixRule].RuleId;
     }
 
-    public override void Init()
-    {
-    }
-
-    public sealed override int Parse(int curEndPos, string text, ref int resultPtr, ref Parser parser)
+    public override int Parse(int curEndPos, string text, ref int resultPtr, ref Parser parser)
     {
       unchecked
       {
@@ -275,7 +273,7 @@ prefix_loop:
         parser.memoize[curEndPos] = postfixAst;
         bestResult = 0;
         lastResult = 0;
-        i = PostfixRules.Length - 1;
+        i = PostfixRules.Length;
       postfix_parse:
         parser.ast[postfixAst + PostfixOfs.FirstRuleIndex] = FirstPostfixRule;
         c = text[curEndPos];
