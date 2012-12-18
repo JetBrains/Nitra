@@ -11,42 +11,22 @@ using N2.Internal;
 
 namespace N2.Runtime
 {
-  public class AstWalkers
+  public abstract class WalkerHost
   {
-    public Grammar                  : CompositeGrammar;
-    public AstWalkerDescriptors     : SCG.HashSet[AstWalkerDescriptor];
-    public AstWalkerHost            : AstWalkerHost;
-
-    public SimpleWalkers            : Hashtable[SimpleRuleDescriptor, Internal.SimpleRuleParser];
-    public ExtensibleRules          : Hashtable[ExtensibleRuleDescriptor, ExtensibleRuleParserData] = Hashtable();
-
-    public this(host : AstWalkerHost, grammar : CompositeGrammar)
-    {
-      AstWalkerHost        = host;
-      Grammar              = grammar;
-      AstWalkerDescriptors = SCG.HashSet(grammar.Grammars.MapLazy(host.FindAstWalkerDescriptor));
-    }
+    public abstract Type : WalkerTypeDescriptor { get; }
+    public abstract FindGrammarWalkerDescriptor(grammar : GrammarDescriptor) : GrammarWalkerDescriptor;
   }
 
-  public abstract class AstWalkerHost
-  {
-    public abstract Type : AstWalkerTypeDescriptor { get; }
-    public abstract FindAstWalkerDescriptor(grammar : GrammarDescriptor) : AstWalkerDescriptor;
-    public NewAstWalkers(grammar : CompositeGrammar) : AstWalkers
-    {
-      AstWalkers(this, grammar);
-    }
-  }
-
-  public abstract class AstWalkerTypeDescriptor
+  public abstract class WalkerTypeDescriptor
   {
   }
 
-  public abstract class AstWalkerDescriptor
+  public abstract class GrammarWalkerDescriptor
   {
-    public abstract Type    : AstWalkerTypeDescriptor { get; }
+    public abstract Type    : WalkerTypeDescriptor { get; }
     public abstract Grammar : GrammarDescriptor { get; }
-    public abstract NewWalker(rd : RuleParser) : AstWalkerBase;
+    public abstract NewWalker(ruleParser : RuleParser) : AstWalkerBase;
+    public abstract NewExtensibleRuleAstWalkerData(parserData : ExtensibleRuleParserData, compositeAstWalker : CompositeAstWalker) : object;
   }
 
   public abstract class AstWalkerBase
@@ -54,22 +34,22 @@ namespace N2.Runtime
     public abstract Init() : void;
   }
 
-  public abstract class SimpleAstWalker[T]
+  public abstract class SimpleAstWalker[T] : AstWalkerBase
   {
     public abstract Walk(pos : ref int, astPtr : int, parser : ref Parser) : T;
   }
 
-  public abstract class PrefixAstWalker[T]
+  public abstract class PrefixAstWalker[T] : AstWalkerBase
   {
     public abstract Walk(pos : ref int, astPtr : int, parser : ref Parser) : T;
   }
 
-  public abstract class PostfixAstWalker[T]
+  public abstract class PostfixAstWalker[T] : AstWalkerBase
   {
     public abstract Walk(pos : ref int, prefix : T, astPtr : int, parser : ref Parser) : T;
   }
 
-  public class ExtensibleRuleWalker[T]
+  public class ExtensibleAstWalker[T]
   {
     public PrefixId : int;
     public PostfixId : int;
@@ -77,11 +57,26 @@ namespace N2.Runtime
     public FirstPostfixRule : int;
     public FirstPostfixRuleId : int;
 
-    public PrefixRules : array[PrefixAstWalker[T]];
-    public PostfixRules : array[PostfixAstWalker[T]];
+    public PrefixWalkers : array[PrefixAstWalker[T]];
+    public PostfixWalkers : array[PostfixAstWalker[T]];
 
-    public PrefixRulesOfs : int;
-    public PostfixRulesOfs : int;
+    public PrefixWalkersOffset : int;
+    public PostfixWalkersOffset : int;
+
+    public this(walkerData : ExtensibleRuleAstWalkerData[T], parser : ExtensibleRuleParser)
+    {
+      PrefixWalkers         = walkerData.PrefixWalkers;
+      PostfixWalkers        = walkerData.PostfixWalkers;
+
+      PrefixId              = parser.PrefixId;
+      PostfixId             = parser.PostfixId;
+
+      FirstPostfixRule      = parser.FirstPostfixRule;
+      FirstPostfixRuleId    = parser.FirstPostfixRuleId;
+
+      PrefixWalkersOffset   = parser.PrefixRules[0].RuleId;//FIXME empty array
+      PostfixWalkersOffset  = parser.PostfixRules[0].RuleId;//FIXME empty array
+    }
 
     public virtual OnPrefixAmbiguility(pos : int, parser : ref Parser, walker : PrefixAstWalker[T], value : T, nextWalker : PrefixAstWalker[T], nextValue : T) : T
     {
@@ -112,17 +107,13 @@ namespace N2.Runtime
       throw Exception("PrefixMissed");
     }
 
-    public this(parser : ExtensibleRuleParser)
-    {
-    }
-
     public Walk(pos : ref int, parser : ref Parser) : T
     {
       mutable newPos;
       mutable ast = FindFirstPrefix(pos, ref parser);
       if (ast > 0)
       {
-        mutable prefixWalker = PrefixRules[parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] - PrefixRulesOfs];
+        mutable prefixWalker = PrefixWalkers[parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] - PrefixWalkersOffset];
         newPos = pos;
         mutable prefixValue = prefixWalker.Walk(ref newPos, ast, ref parser);
         ast = FindNextPrefix(ast, ref parser);
@@ -131,7 +122,7 @@ namespace N2.Runtime
           def firstNewPos = newPos;
           while (ast > 0)
           {
-            def nextPrefixWalker = PrefixRules[parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] - PrefixRulesOfs];
+            def nextPrefixWalker = PrefixWalkers[parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] - PrefixWalkersOffset];
             newPos = pos;
             def nextValue = nextPrefixWalker.Walk(ref newPos, ast, ref parser);
             assert(newPos == firstNewPos);
@@ -146,7 +137,7 @@ namespace N2.Runtime
         mutable postfixValue;
         for (ast = FindFirstPostfix(pos, ref parser); ast > 0; ast = FindFirstPostfix(pos, ref parser))
         {
-          postfixWalker = PostfixRules[(parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] & ExtensibleRuleParser.PostfixMask.Id) - PostfixRulesOfs];
+          postfixWalker = PostfixWalkers[(parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] & ExtensibleRuleParser.PostfixMask.Id) - PostfixWalkersOffset];
           newPos = pos;
           postfixValue = postfixWalker.Walk(ref newPos, prefixValue, ast, ref parser);
           ast = FindNextPostfix(ast, ref parser);
@@ -155,7 +146,7 @@ namespace N2.Runtime
             def firstNewPos = newPos;
             while (ast > 0)
             {
-              def nextWalker = PostfixRules[(parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] & ExtensibleRuleParser.PostfixMask.Id) - PostfixRulesOfs];
+              def nextWalker = PostfixWalkers[(parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] & ExtensibleRuleParser.PostfixMask.Id) - PostfixWalkersOffset];
               newPos = pos;
               def nextValue = nextWalker.Walk(ref newPos, prefixValue, ast, ref parser);
               assert(newPos == firstNewPos);
