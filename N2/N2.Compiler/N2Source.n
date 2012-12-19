@@ -191,85 +191,68 @@ namespace N2
       
       project.ErrorCount == errorCount
     }
-    
+
     private LoadExternalSyntaxModule(rootNamespace : NamespaceSymbol, grammarImplTI : LibraryReference.ExternalTypeInfo) : void
     {
       def root = rootNamespace.Node;
       def grammarTI   = grammarImplTI.BaseType;
       //Message.HintOnce($"   Grammar type: $glammarName");
 
-      def parserHost = ParserHost();
-      def parseKeywordRegex(text : string) : KeywordRegex
-      {
-        def parseResult = parserHost.DoParsing(SourceSnapshot(text), G.GrammarImpl.DeclarationRuleDescriptor);
-        if (parseResult.IsSuccess)
-          match (parseResult.CreateAst.[G.Declaration]())
-          {
-            | G.KeywordRegexDecl.Ast as decl =>
-              def name        = decl.QualifiedName.ToNameRef();
-              def matchTokens = decl.MatchTokens.RegularRule();
-              KeywordRegex(Location.Default, N2SourceImpl.NextKeywordRegexId(), text, matchTokens, name, true);
-
-            | _ => Message.FatalError($"Expected keyword regex '$text'");
-          }
-        else
-          Message.FatalError($"Failed to parse keyword regex '$text'");
-      }
-      def keywordRegexs = SCG.List();
       match (grammarImplTI.GetNestedSubtypes().Filter(ti => ti.Name == AssemblyConstants.GrammarDescriptorImplName))
       {
         | [grammarDescriptorImplTI] =>
-          def attrs = grammarImplTI.GetModifiers().CustomAttributes;
-
-          foreach(<[ N2.KeywordRegexesAttribute(array[ ..$sources ]) ]> in attrs)
-            foreach(<[ $(source : string) ]> in sources)
-              keywordRegexs.Add(parseKeywordRegex(source));
-
+          def keywordRegexes  = LoadExternalKeywordRegexes(grammarImplTI);
           def tokenFieldNames = LoadExternalTokenFieldNames(grammarTI);
-
-          def symbol = ExternalSyntaxModuleSymbol(grammarTI, grammarImplTI, keywordRegexs.NToList(), tokenFieldNames) : SyntaxModuleSymbol;
+          def symbol = ExternalSyntaxModuleSymbol(grammarTI, grammarImplTI, keywordRegexes, tokenFieldNames) : SyntaxModuleSymbol;
           def node = root.AddAndReport(grammarTI.NamespaceNode.Parent.FullName, symbol, symbol.FirstLocation);
-
-          foreach(<[ N2.MarkerAttribute($(name : string)) ]> as attr in attrs)
-          {
-            def loc = attr.Location.N2Location();
-            _ = node.AddAndReport([], MarkerSymbol(loc, name, true), loc);
-          }
-
-          // load rules
-          foreach (ruleTI in grammarDescriptorImplTI.GetNestedSubtypes())
-          {
-            when (Util.ParseRuleClassName(ruleTI.Name) is Some((ruleDefinitionType, name)))
-            {
-              def loc = ruleTI.Location.N2Location();
-              def (ruleType, typeInfo) =
-                ret:
-                {
-                  foreach (method is IMethod when (method.Name == "ResultType") in ruleTI.GetMembers())
-                    if (method.ReturnType.TryUnify(Manager.InternalType.Void))
-                      ret(ExternalRuleRefSymbolType.Void, null);
-                    else
-                    {
-                      def ti = method.ReturnType.Fix().TypeInfo;
-                      ret(ExternalRuleRefSymbolType.Ref, ti);
-                    }
-                  (ExternalRuleRefSymbolType.Chars, null)
-                };
-              def options = RuleDefinitionOptions();
-              foreach(attr in ruleTI.GetModifiers().CustomAttributes)
-              {
-                | <[ N2.ExplicitSpacesAttribute() ]>         => options.SetExplicitSpaces(true);
-                | <[ N2.SuppressTrailingSpacesAttribute() ]> => options.SetSuppressTrailingSpaces(true);
-                | _ => ()
-              }
-              def symbol = ExternalRuleRefSymbol(loc, name, ruleType, options, ruleDefinitionType);
-              _ = node.AddAndReport([], symbol, loc);
-              when (typeInfo != null)
-                LoadExternalExtraFields(symbol, typeInfo);
-            }
-          }
+          LoadExternalMarkers(grammarImplTI, node);
+          LoadExternalRules(grammarDescriptorImplTI, node);
 
         | _ => Message.Error(grammarTI.Location, $"$(grammarTI.FullName) not grammar.")
+      }
+    }
+
+    public LoadExternalMarkers(type : TypeInfo, node : HierarchyNode) : void
+    {
+      foreach(<[ N2.MarkerAttribute($(name : string)) ]> as attr in type.GetModifiers().CustomAttributes)
+      {
+        def loc = attr.Location.N2Location();
+        _ = node.AddAndReport([], MarkerSymbol(loc, name, true), loc);
+      }
+    }
+
+    public LoadExternalRules(type : LibraryReference.ExternalTypeInfo, node : HierarchyNode) : void
+    {
+      foreach (ruleTI in type.GetNestedSubtypes())
+      {
+        when (Util.ParseRuleClassName(ruleTI.Name) is Some((ruleDefinitionType, name)))
+        {
+          def loc = ruleTI.Location.N2Location();
+          def (ruleType, typeInfo) =
+            ret:
+            {
+              foreach (method is IMethod when (method.Name == "ResultType") in ruleTI.GetMembers())
+                if (method.ReturnType.TryUnify(Manager.InternalType.Void))
+                  ret(ExternalRuleRefSymbolType.Void, null);
+                else
+                {
+                  def ti = method.ReturnType.Fix().TypeInfo;
+                  ret(ExternalRuleRefSymbolType.Ref, ti);
+                }
+              (ExternalRuleRefSymbolType.Chars, null)
+            };
+          def options = RuleDefinitionOptions();
+          foreach(attr in ruleTI.GetModifiers().CustomAttributes)
+          {
+            | <[ N2.ExplicitSpacesAttribute() ]>         => options.SetExplicitSpaces(true);
+            | <[ N2.SuppressTrailingSpacesAttribute() ]> => options.SetSuppressTrailingSpaces(true);
+            | _ => ()
+          }
+          def symbol = ExternalRuleRefSymbol(loc, name, ruleType, options, ruleDefinitionType);
+          _ = node.AddAndReport([], symbol, loc);
+          when (typeInfo != null)
+            LoadExternalExtraFields(symbol, typeInfo);
+        }
       }
     }
 
@@ -311,6 +294,32 @@ namespace N2
           tokenFieldNames = tokenFieldNames.Replace(token, Identifier(loc.N2Location(), name));
 
       tokenFieldNames
+    }
+
+    public LoadExternalKeywordRegexes(type : TypeInfo) : list[KeywordRegex]
+    {
+      def parserHost = ParserHost();
+      def parseKeywordRegex(text : string) : KeywordRegex
+      {
+        def parseResult = parserHost.DoParsing(SourceSnapshot(text), G.GrammarImpl.DeclarationRuleDescriptor);
+        if (parseResult.IsSuccess)
+          match (parseResult.CreateAst.[G.Declaration]())
+          {
+            | G.KeywordRegexDecl.Ast as decl =>
+              def name        = decl.QualifiedName.ToNameRef();
+              def matchTokens = decl.MatchTokens.RegularRule();
+              KeywordRegex(Location.Default, N2SourceImpl.NextKeywordRegexId(), text, matchTokens, name, true);
+
+            | _ => Message.FatalError($"Expected keyword regex '$text'");
+          }
+        else
+          Message.FatalError($"Failed to parse keyword regex '$text'");
+      }
+      def keywordRegexs = SCG.List();
+      foreach(<[ N2.KeywordRegexesAttribute(array[ ..$sources ]) ]> in type.GetModifiers().CustomAttributes)
+        foreach(<[ $(source : string) ]> in sources)
+          keywordRegexs.Add(parseKeywordRegex(source));
+      keywordRegexs.ToNList()
     }
 
     private LoadParsedSymbols(project : N2Project, rootNamespace : NamespaceSymbol, fileAsts : SCG.List[G.Start.Ast]) : bool
