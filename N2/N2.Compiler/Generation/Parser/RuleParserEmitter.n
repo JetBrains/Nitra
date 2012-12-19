@@ -132,38 +132,47 @@ namespace N2.Compiler
           | PrefixCall => assert(false)
         }
       }
-      def loc = rule.NLocation();
-      def rule = match (rule)
+      if (Owner.Environment.IsIdeMode)
       {
-        | Sequence(PrefixCall :: postfixRules) as rule => Rule2.Sequence(rule, postfixRules)
-        | rule => rule
+        _fields = array[];
+        astSize = 0;
+        rootAstStruct = None();
       }
-      def ast = RuleField2.Ast(loc, Owner.Environment.IsDebug, conv(rule), rd);
-      def fields = List();
-      ast.Init(this, null, 0, fields);
-      ast.CalculateAstInfo();
-      foreach (field in fields)
-        field.Compile();
-      _fields = fields.NToArray();
-
-      match (ast.astStruct)
+      else
       {
-        | null =>
-          astSize       = 0;
-          rootAstStruct = None();
+        def loc = rule.NLocation();
+        def rule = match (rule)
+        {
+          | Sequence(PrefixCall :: postfixRules) as rule => Rule2.Sequence(rule, postfixRules)
+          | rule => rule
+        }
+        def ast = RuleField2.Ast(loc, Owner.Environment.IsDebug, conv(rule), rd);
+        def fields = List();
+        ast.Init(this, null, 0, fields);
+        ast.CalculateAstInfo();
+        foreach (field in fields)
+          field.Compile();
+        _fields = fields.NToArray();
 
-        | astStruct =>
-          astSize       = astStruct.AstSize;
-          rootAstStruct = Some(astStruct);
+        match (ast.astStruct)
+        {
+          | null =>
+            astSize       = 0;
+            rootAstStruct = None();
+
+          | astStruct =>
+            astSize       = astStruct.AstSize;
+            rootAstStruct = Some(astStruct);
+        }
+
+        def grammarNode = rd.RuleSymbol.Node.Parent;
+        foreach ((callSymbol, _) in _simpleCalls)
+          when (callSymbol.Node.Parent : object != grammarNode)
+            externalCalls.Add(callSymbol);
+        foreach ((callSymbol, _, _) in _extensibleCalls)
+          when (callSymbol.Node.Parent : object != grammarNode)
+            externalCalls.Add(callSymbol);
       }
-
-      def grammarNode = rd.RuleSymbol.Node.Parent;
-      foreach ((callSymbol, _) in _simpleCalls)
-        when (callSymbol.Node.Parent : object != grammarNode)
-          externalCalls.Add(callSymbol);
-      foreach ((callSymbol, _, _) in _extensibleCalls)
-        when (callSymbol.Node.Parent : object != grammarNode)
-          externalCalls.Add(callSymbol);
     }
 
     protected DefineInit(tb : TypeBuilder) : void
@@ -195,28 +204,32 @@ namespace N2.Compiler
     {
       assert(_fields != null);
       def code = List();
-      code.Add(<[ _ = $(rule.ToString()) ]>);
-      code.AddRange(_fields.Map(field => <[ _= $(field.Print()) ]>));
-      code.Add(<[
-        def startEndPos             = curEndPos;
-        _ = startEndPos; // TODO: We have warning: N168. Maybe this is a bug?
-        mutable tmpResult  : int; _ = tmpResult;
-        mutable tmpSize    : int; _ = tmpSize;
-        mutable parseState : int; _ = parseState;
-        mutable newPos     : int; _ = newPos;
-      ]>);
-      code.AddRange(_names.Filter(kv => kv.Key != "resultRef").Map(kv => <[ mutable $(kv.Key : dyn) ]>));
-      code.AddRange(_fields.Map(field => field.ParseCode));
-      if (rd.LastLocation is Some(loc) when Owner.Environment.Manager.Options.EmitDebug)
-      {
-        //assert2(false);
-        def debugCode = <[ () ]>;
-        debugCode.Location = loc.NLocation();
-        code.Add(<[ $(EndLabel.Label()); $debugCode; curEndPos; ]>);
-      }
+      if (Owner.Environment.IsIdeMode)
+        code.Add(<[ _ = curEndPos; _ = text; _ = resultRef; _ = parser; -1 ]>);
       else
-        code.Add(<[ $(EndLabel.Label()); curEndPos; ]>);
-
+      {
+        code.Add(<[ _ = $(rule.ToString()) ]>);
+        code.AddRange(_fields.Map(field => <[ _= $(field.Print()) ]>));
+        code.Add(<[
+          def startEndPos             = curEndPos;
+          _ = startEndPos; // TODO: We have warning: N168. Maybe this is a bug?
+          mutable tmpResult  : int; _ = tmpResult;
+          mutable tmpSize    : int; _ = tmpSize;
+          mutable parseState : int; _ = parseState;
+          mutable newPos     : int; _ = newPos;
+        ]>);
+        code.AddRange(_names.Filter(kv => kv.Key != "resultRef").Map(kv => <[ mutable $(kv.Key : dyn) ]>));
+        code.AddRange(_fields.Map(field => field.ParseCode));
+        if (rd.LastLocation is Some(loc) when Owner.Environment.Manager.Options.EmitDebug)
+        {
+          //assert2(false);
+          def debugCode = <[ () ]>;
+          debugCode.Location = loc.NLocation();
+          code.Add(<[ $(EndLabel.Label()); $debugCode; curEndPos; ]>);
+        }
+        else
+          code.Add(<[ $(EndLabel.Label()); curEndPos; ]>);
+      }
       tb.DefineConditional(<[decl:
         public override Parse(mutable curEndPos : int, text : string, resultRef : ref int, parser : ref N2.Internal.Parser) : int
         {
