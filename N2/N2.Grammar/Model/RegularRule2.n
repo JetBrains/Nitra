@@ -9,10 +9,12 @@ using Nemerle.Extensions;
 using Nemerle.Utility;
 
 using System;
+using System.Text;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 
 using PExpr = Nemerle.Compiler.Parsetree.PExpr;
+using G = GrammarParser2;
 
 namespace N2.Model
 {
@@ -46,32 +48,82 @@ namespace N2.Model
 
     public override ToString() : string
     {
-      def p(rule : RegularRule2)
+      def callHandler(buffer, callRule)
       {
-        if (rule.Priority <= this.Priority)
-          $"($rule)"
-        else
-          rule.ToString()
+        buffer.Append(callRule.ruleRef.ToString())
       }
+      def stringHandler(buffer, stringRule)
+      {
+        _ = buffer.Append("''");
+        foreach (rangeSet in stringRule.chars)
+          _ = buffer.Append(EscapeStringChar(rangeSet.Ranges.Head.from));
+        buffer.Append("''")
+      }
+      StringBuilder().AppendRegularRule(this, callHandler, stringHandler, 0).ToString()
+    }
+  }
 
-      match (this)
+  public module RegularRuleExtensions
+  {
+    public AppendRegularRule(this buffer : StringBuilder,
+      rule            : RegularRule2,
+      callHandler     : StringBuilder * RegularRule2.Call -> StringBuilder,
+      stringHandler   : StringBuilder * RegularRule2.Chars -> StringBuilder,
+      currentPriority : int) : System.Text.StringBuilder
+    {
+      def priority = rule.Priority;
+      when (priority <= currentPriority)
+        _ = buffer.Append("(");
+      _ = match (rule)
       {
-        | Call(ruleRef)                                  => ruleRef.ToString()
-        | Choice(rules)                                  => $<#..$(rules; " | "; p)#>
-        | Sequence(rules)                                => $<#..$(rules; " "; p)#>
-        | Repeat(0, None, rule)                          => $"$(p(rule))*"
-        | Repeat(1, None, rule)                          => $"$(p(rule))+"
-        | Repeat(min, None, rule)                        => $"$(p(rule)){$min,}"
-        | Repeat(0, Some(1), rule)                       => $"$(p(rule))?"
-        | Repeat(min, Some(max), rule) when min == max   => $"$(p(rule)){$min}"
-        | Repeat(min, Some(max), rule)                   => $"$(p(rule)){$min, $max}"
-        | RepeatWithSeparator(0, None, rule, separator)  => $"($(p(rule)), $(p(separator)))*"
-        | RepeatWithSeparator(1, None, rule, separator)  => $"($(p(rule)), $(p(separator)))+"
-        | RepeatWithSeparator                            => assert(false);
-        | Chars(chars) as c when c.IsString              => $<#''..$(chars; ""; r => $"$(EscapeStringChar(r.Ranges.Head.from))")''#>
-        | Chars([chars])                                 => $"[$chars]"
-        | Chars(chars)                                   => $<#(..$(chars; ", "; ch => $"[$ch]"))#>
+        | Call as call                                   => callHandler(buffer, call)
+        | Choice(rules)                                  => buffer.AppendRegularRules(rules, callHandler, stringHandler, priority, " | ")
+        | Sequence(rules)                                => buffer.AppendRegularRules(rules, callHandler, stringHandler, priority, " ")
+        | Repeat(0, None, rule)                          => buffer.AppendRegularRule(rule, callHandler, stringHandler, priority).Append('*')
+        | Repeat(1, None, rule)                          => buffer.AppendRegularRule(rule, callHandler, stringHandler, priority).Append('+')
+        | Repeat(min, None, rule)                        => buffer.AppendRegularRule(rule, callHandler, stringHandler, priority).Append('{').Append(min).Append(",}")
+        | Repeat(0, Some(1), rule)                       => buffer.AppendRegularRule(rule, callHandler, stringHandler, priority).Append('?')
+        | Repeat(min, Some(max), rule) when min == max   => buffer.AppendRegularRule(rule, callHandler, stringHandler, priority).Append('{').Append(min).Append('}')
+        | Repeat(min, Some(max), rule)                   => buffer.AppendRegularRule(rule, callHandler, stringHandler, priority).Append('{').Append(min).Append(',').Append(max).Append('}')
+        | RepeatWithSeparator(0, None, rule, separator)  => buffer.Append('(').AppendRegularRule(rule, callHandler, stringHandler, 0).Append(", ").AppendRegularRule(separator, callHandler, stringHandler, 0).Append(")*")
+        | RepeatWithSeparator(1, None, rule, separator)  => buffer.Append('(').AppendRegularRule(rule, callHandler, stringHandler, 0).Append(", ").AppendRegularRule(separator, callHandler, stringHandler, 0).Append(")+")
+        | RepeatWithSeparator                            => assert(false)
+        | Chars as chars when chars.IsString             => stringHandler(buffer, chars)
+        | Chars([rangeSet])                              => buffer.AppendRangeSet(rangeSet)
+        | Chars(rangeSets)                               =>
+          _ = buffer.Append('(');
+          foreach (rangeSet in rangeSets with index)
+          {
+            when (index > 0)
+              _ = buffer.Append(" | ");
+            _ = buffer.AppendRangeSet(rangeSet)
+          }
+          buffer.Append(')')
       }
+      when (priority <= currentPriority)
+        _ = buffer.Append(")");
+      buffer
+    }
+
+    public AppendRegularRules(this buffer : System.Text.StringBuilder,
+      rules           : list[RegularRule2],
+      callHandler     : StringBuilder * RegularRule2.Call -> StringBuilder,
+      stringHandler   : StringBuilder * RegularRule2.Chars -> StringBuilder,
+      currentPriority : int,
+      separator       : string) : System.Text.StringBuilder
+    {
+      foreach (rule in rules with index)
+      {
+        when (index > 0)
+          _ = buffer.Append(separator);
+        _ = buffer.AppendRegularRule(rule, callHandler, stringHandler, currentPriority)
+      }
+      buffer
+    }
+
+    public AppendRangeSet(this buffer : StringBuilder, chars : RangeSet) : StringBuilder
+    {
+      buffer.Append('[').Append(chars.ToString()).Append(']')
     }
   }
 }
