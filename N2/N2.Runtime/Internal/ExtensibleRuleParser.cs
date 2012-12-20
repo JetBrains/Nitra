@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
+using N2.Runtime;
 
 //структура правила расширения.
 
@@ -20,46 +21,84 @@ namespace N2.Internal
 #endif
   public sealed class ExtensibleRuleParser : RuleParser
   {
-    public static const int IdOfs      = 0;
-    public static const int SizeOfs    = 1;
-    public static const int StateOfs   = 2;
-    public static const int AstOfs     = 3; //ссылка на разобранное правило
-    public static const int BestAstOfs = 4; //ссылка на лучшее текущее правило
-
-    public static const int PrefixOfs  = 2;
-
-    private int                   FirstPostfixRule;
-    private ExtentionRuleParser[] PrefixRules;
-    private ExtentionRuleParser[] PostfixRules;
-
-    public ExtensibleRuleParser(int RuleId, ExtensibleRuleDescriptor descriptor, int bindingPower, CompositeGrammar grammar)
-      : base(RuleId, grammar)
+    public static class AstOfs
     {
-      var rules = grammar.GetExtentionRules(descriptor);
-      var postfixRules = rules[0];
-      PrefixRules      = rules[1];
-      PostfixRules     = rules[2];
+      public static const int Id = 0;
+      public static const int Next = 1;
+      public static const int State = 2;
+      public static const int Sizes = 3;
+    }
+
+    public static class PrefixOfs
+    {
+      public static const int Id = 0;
+      public static const int Next = 1;
+      public static const int List = 2;
+      public static const int NodeSize = 3;
+    }
+
+    public static class PostfixOfs
+    {
+      public static const int Id = 0;
+      public static const int Next = 1;
+      public static const int AstList = 2;
+      public static const int FirstRuleIndex = 3;
+      public static const int NodeSize = 4;
+    }
+
+    public static class PostfixAstOfs
+    {
+      public static const int Id = 0;
+      public static const int Next = 1;
+    }
+
+    public static class PostfixMark
+    {
+      public static const int Bad   = 0 << 30;
+      public static const int Equal = 1 << 30;
+      public static const int Best  = 2 << 30;
+    }
+
+    public static class PostfixMask
+    {
+      public static const int Id   = ~(3 << 30);
+      public static const int Mark =  (3 << 30);
+    }
+
+    public readonly int BindingPower;
+    public readonly int PrefixId;
+    public readonly int PostfixId;
+
+    public readonly int FirstPostfixRule;
+    public readonly int FirstPostfixRuleId;
+    public readonly ExtentionRuleParser[] PrefixRules;
+    public readonly ExtentionRuleParser[] PostfixRules;
+
+    public ExtensibleRuleParser(ExtensibleRuleParserData parserData, int bindingPower)
+      : base(parserData.Grammar, parserData.Descriptor)
+    {
+      PrefixId = parserData.PrefixId;
+      PostfixId = parserData.PostfixId;
+      PrefixRules = parserData.PrefixParsers;
+      PostfixRules = parserData.PostfixParsers;
       FirstPostfixRule = 0;
-      for (; FirstPostfixRule < postfixRules.Length && bindingPower >= postfixRules[FirstPostfixRule].BindingPower; ++FirstPostfixRule);
+      var postfixRules = parserData.PostfixDescriptors;
+      while (FirstPostfixRule < postfixRules.Length && bindingPower >= postfixRules[FirstPostfixRule].BindingPower)
+        ++FirstPostfixRule;
+      FirstPostfixRuleId = PostfixRules[FirstPostfixRule].RuleId;
     }
 
-    public override void Init()
-    {
-    }
-
-    public sealed override int Parse(int curEndPos, string text, ref int resultPtr, ref Parser parser)
+    public override int Parse(int curEndPos, string text, ref int resultPtr, ref Parser parser)
     {
       unchecked
       {
-#if DEBUG || PARSER_DEBUG
-        if (parser.ruleCalls[curEndPos] == null)
-          parser.ruleCalls[curEndPos] = System.Collections.Generic.List();
-        parser.ruleCalls[curEndPos].Add(parser.parserHost.GetRuleDescriptorById(RuleId));
-#endif
+        int postfixAst;
+        int prefixAst;
         int newEndPos;
         int newResult;
         int bestEndPos;
         int bestResult;
+        int lastResult;
         int i;
         int j;
         char c; // временная переменная для отсечения правил по первой букве
@@ -69,42 +108,67 @@ namespace N2.Internal
         else
           goto error_recovery;
 
-start_parsing:
+      start_parsing:
         if (curEndPos >= text.Length) // конец текста
           return -1;
 
-        resultPtr = parser.Allocate(5, RuleId);
         goto prefix_loop;
 
-error_recovery:
+      error_recovery:
         throw System.Exception();
-        //resultPtr = ~resultPtr;
+      //resultPtr = ~resultPtr;
 
         //int bestAst = parser.ast[astPos + BestAstOfs];
-        //if (bestAst < 0)
-        //  return -1; // ни одно правило не съело ни одного токена // TODO: Сделать восстановление
+      //if (bestAst < 0)
+      //  return -1; // ни одно правило не съело ни одного токена // TODO: Сделать восстановление
 
         //i = parser.ast[bestAst] - PrefixRules[0].RuleId; // восстанавливаем состояние из Id правила которое было разобрано дальше всех.
-        //if (i < PrefixRules.Length)
-        //{ // префикное правило
-        //  RuleParser prefixRule = PrefixRules[i];
-        //  curEndPos = prefixRule.Parse(curEndPos, text, ~astPos, ref parser);
-        //}
-        //else
-        //{ // постфиксное правило
-        //  i -= PrefixRules.Length;
-        //  RuleParser postfixRule = PostfixRules[i];
-        //  curEndPos = curEndPos + parser.ast[parser.ast[astPos + ParsedAstOfs] + 1]; // к стартовой позиции в тексте добавляем размер уже разобранного AST
-        //  curEndPos = postfixRule.Parse(curEndPos, text, ~astPos, ref parser);
-        //}
-        //assert(curEndPos >= 0);
-        //goto postfix_loop;
+      //if (i < PrefixRules.Length)
+      //{ // префикное правило
+      //  RuleParser prefixRule = PrefixRules[i];
+      //  curEndPos = prefixRule.Parse(curEndPos, text, ~astPos, ref parser);
+      //}
+      //else
+      //{ // постфиксное правило
+      //  i -= PrefixRules.Length;
+      //  RuleParser postfixRule = PostfixRules[i];
+      //  curEndPos = curEndPos + parser.ast[parser.ast[astPos + ParsedAstOfs] + 1]; // к стартовой позиции в тексте добавляем размер уже разобранного AST
+      //  curEndPos = postfixRule.Parse(curEndPos, text, ~astPos, ref parser);
+      //}
+      //assert(curEndPos >= 0);
+      //goto postfix_loop;
 
 prefix_loop:
+        for (prefixAst = parser.memoize[curEndPos]; prefixAst > 0; prefixAst = parser.ast[prefixAst + PrefixOfs.Next])
+        {
+          if (parser.ast[prefixAst + PrefixOfs.Id] == PrefixId)
+          {
+            bestResult = parser.ast[prefixAst + PrefixOfs.List];
+            if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == -1)
+            {
+              //TODO: убрать цикл
+              for (i = bestResult + AstOfs.Sizes; parser.ast[i] >= 0; ++i)
+                curEndPos += parser.ast[i];
+              bestEndPos = curEndPos;
+              goto postfix_loop;
+            }
+            else
+              return -1; // облом разбора
+          }
+        }
+
+#if DEBUG || PARSER_DEBUG
+        if (parser.ruleCalls[curEndPos] == null)
+          parser.ruleCalls[curEndPos] = System.Collections.Generic.List();
+        parser.ruleCalls[curEndPos].Add(parser.parserHost.GetRuleDescriptorById(PrefixId));
+#endif
+        //нет мемоизации префикса
+        prefixAst = parser.Allocate(PrefixOfs.NodeSize, PrefixId);
+        parser.ast[prefixAst + PrefixOfs.Next] = parser.memoize[curEndPos];
+        parser.memoize[curEndPos] = prefixAst;
         i = 0;
         c = text[curEndPos];
-        bestEndPos = -1;
-        bestResult = -1;
+        bestResult = 0;
         for (; i < PrefixRules.Length; ++i)
         {
           var prefixRule = PrefixRules[i];
@@ -112,83 +176,164 @@ prefix_loop:
           {
             newResult = -1;
             newEndPos = prefixRule.Parse(curEndPos, text, ref newResult, ref parser);
-            if (newEndPos > 0)
+            if (newResult > 0)
             {
-              if (bestResult < 0)
+              if (bestResult > 0)
               {
-                bestEndPos = newEndPos;
-                bestResult = newResult;
-              }
-              else
-                for (j = 3; true; ++j)
+                if (bestEndPos < 0) { if (newEndPos >= 0) goto prefix_new_better; }
+                else                { if (newEndPos < 0)  goto prefix_best_better; }
+                for (j = AstOfs.Sizes; true; ++j)
                 {
                   var newSize  = parser.ast[newResult + j];
+                  var bestSize = parser.ast[bestResult + j];
                   if (newSize < 0)
-                    break;
-                  if (parser.ast[bestResult + j] < newSize)
                   {
-                    bestEndPos = newEndPos;
-                    bestResult = newResult;
-                    break;
+                    if (bestSize < 0)
+                      goto prefix_equal;
+                    else
+                      goto prefix_best_better;
                   }
+                  if (bestSize < newSize)
+                    goto prefix_new_better;
+                  if (bestSize > newSize)
+                    goto prefix_best_better;
                 }
+              }
+              else
+                goto prefix_new_better;
+            prefix_equal://АСТ равен лучшему. Неоднозначность.
+              parser.ast[bestResult + AstOfs.Next] = newResult;
+              bestResult = newResult;
+              assert(bestEndPos == newEndPos);
+              continue;
+            prefix_new_better://Новый АСТ лучше
+              bestResult = newResult;
+              bestEndPos = newEndPos;
+              continue;
+            prefix_best_better:
+              continue;
             }
           }
         }
 
-        parser.ast[resultPtr + AstOfs] = bestResult;
+        parser.ast[prefixAst + PrefixOfs.List] = bestResult;
 
         if (bestEndPos < 0)// не смогли разобрать префикс
           return -1;
 
-postfix_loop:
+      postfix_loop:
         curEndPos = bestEndPos;
-        while (curEndPos < text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
-                                        // при достижении конца текста есть нечего
+        if (curEndPos >= text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
+          return curEndPos;// при достижении конца текста есть нечего
+        //ищем запомненое
+        for (postfixAst = parser.memoize[curEndPos]; postfixAst > 0; postfixAst = parser.ast[postfixAst + PostfixOfs.Next])
         {
-          bestResult = -1;
-          i = FirstPostfixRule;
-          c = text[curEndPos];
-          for (; i < PostfixRules.Length; ++i)
+          if (parser.ast[postfixAst + PostfixOfs.Id] == PostfixId)//нашли
           {
-            var postfixRule = PostfixRules[i];
-            if (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound)
+            lastResult = parser.ast[postfixAst + PostfixOfs.AstList];//список разобраных с этого места правил
+            bestResult = lastResult;
+            i = parser.ast[postfixAst + PostfixOfs.FirstRuleIndex] - 1;//индекс первого не разобранного правила
+            if (i >= FirstPostfixRule)// не всё разобрано
             {
-              newResult = parser.ast[resultPtr + AstOfs];
-              newEndPos = postfixRule.Parse(curEndPos, text, ref newResult, ref parser);
-              if (newEndPos > 0)
+              //ищем лучшее правило
+              while (bestResult > 0 && (parser.ast[bestResult] & PostfixMask.Mark) != PostfixMark.Best)
+                bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
+              goto postfix_parse;//парсим то что не распарсили раньше
+            }
+            else
+            {
+              // пропускаем правила с низкой силой связывания.
+              while (bestResult > 0 && (parser.ast[bestResult] & PostfixMask.Id) < FirstPostfixRuleId)
+                bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
+              // ищем лучшее правило среди тех у кого подходящая сила связывания.
+              while (bestResult > 0 && (parser.ast[bestResult] & PostfixMask.Mark) != PostfixMark.Best)
+                bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
+              if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == -1)//Убеждаемся что разбор успешный
               {
-                if (bestResult < 0)
+                bestEndPos = curEndPos;
+                //TODO: убрать цикл
+                //вычисляем длинну разобранного правила
+                for (bestResult += AstOfs.Sizes; true; ++bestResult)
                 {
-                  bestEndPos = newEndPos;
-                  bestResult = newResult;
+                  var size = parser.ast[bestResult];
+                  if (size >= 0)
+                    bestEndPos += size;
+                  else
+                    goto postfix_loop;//нашли терминатор. Парсим следующее правило.
                 }
-                else
-                  for (j = 3; true; ++j)
-                  {
-                    var newSize  = parser.ast[newResult + j];
-                    if (newSize < 0)
-                      break;
-                    if (parser.ast[bestResult + j] < newSize)
-                    {
-                      bestEndPos = newEndPos;
-                      bestResult = newResult;
-                      break;
-                    }
-                  }
               }
+              else
+                return curEndPos;//облом. Заканчиваем разбор.
             }
           }
-
-          if (bestEndPos == curEndPos)
-            break; // если нам не удалось продвинуться то заканчиваем разбор
-          parser.ast[resultPtr + AstOfs] = bestResult;
-
-          curEndPos = bestEndPos;
+        }
+        //нет мемоизации
+        postfixAst = parser.Allocate(PostfixOfs.NodeSize, PostfixId);
+        parser.ast[postfixAst + PostfixOfs.Next] = parser.memoize[curEndPos];
+        parser.memoize[curEndPos] = postfixAst;
+        bestResult = 0;
+        lastResult = 0;
+        i = PostfixRules.Length;
+      postfix_parse:
+        parser.ast[postfixAst + PostfixOfs.FirstRuleIndex] = FirstPostfixRule;
+        c = text[curEndPos];
+        for (; i >= FirstPostfixRule; --i)
+        {
+          var postfixRule = PostfixRules[i];
+          if (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound)
+          {
+            newResult = -1;
+            newEndPos = postfixRule.Parse(curEndPos, text, ref newResult, ref parser);
+            if (newResult > 0)//АСТ создано
+            {
+              parser.ast[newResult + AstOfs.Next] = lastResult; lastResult = newResult;//добавляем в список
+              //определяем является ли даный АСТ лучшим из тех что разобрали
+              if (bestResult > 0)
+              {
+                if (bestEndPos < 0) { if (newEndPos >= 0) goto postfix_new_better; }
+                else                { if (newEndPos < 0)  goto postfix_best_better; }
+                for (j = AstOfs.Sizes; true; ++j)
+                {
+                  var newSize  = parser.ast[newResult + j];
+                  var bestSize = parser.ast[bestResult + j];
+                  if (newSize < 0)
+                  {
+                    if (bestSize < 0)
+                      goto postfix_equal;
+                    else
+                      goto postfix_best_better;
+                  }
+                  if (bestSize < newSize)
+                    goto postfix_new_better;
+                  if (bestSize > newSize)
+                    goto postfix_best_better;
+                }
+              }
+              else
+                goto postfix_new_better;
+            postfix_equal://АСТ равен лучшему. Неоднозначность.
+              parser.ast[newResult] = parser.ast[newResult] | PostfixMark.Equal;
+              assert(bestEndPos == newEndPos);
+              continue;
+            postfix_new_better://Новый АСТ лучше
+              bestEndPos = newEndPos;
+              bestResult = newResult;
+              parser.ast[newResult] = parser.ast[newResult] | PostfixMark.Best;
+              continue;
+            postfix_best_better:
+              continue;
+            }
+          }
         }
 
-        return curEndPos;
+        if (bestEndPos <= curEndPos)
+          return curEndPos; // если нам не удалось продвинуться то заканчиваем разбор
+
+        parser.ast[postfixAst + PostfixOfs.AstList] = bestResult;
+        goto postfix_loop;
       }
+      assert(false);
+      return -1;
     }
   }
 }

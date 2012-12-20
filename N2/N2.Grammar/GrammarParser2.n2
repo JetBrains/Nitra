@@ -30,6 +30,7 @@ syntax module GrammarParser2
   token field DodDot              = "..";
   token field Op                  = "+", "-", "*", "/", "?", "^", "%", "&", "!", ".";
   token field Backslash           = "\\";
+  token field Pipe                = "|";
 
   span class Comment;
   span class Char;
@@ -183,7 +184,7 @@ syntax module GrammarParser2
       def context2 = PassThrough(TopDeclarations, context1, _.MakeContext(_));
       context2
     }
-    Typing() : list[SyntaxModuleData] = FoldThrough(TopDeclarations, [], _.Typing(_));
+    Typing() : list[Data] = FoldThrough(TopDeclarations, [], _.Typing(_));
   }
 
   syntax Using
@@ -207,36 +208,86 @@ syntax module GrammarParser2
   {
     CollectGlobalSymbols(ns : NamespaceSymbol) : NamespaceSymbol;
     [Cached] MakeContext(parent : Context) : Context;
-    Typing(syntaxModules : list[SyntaxModuleData]) : list[SyntaxModuleData];
+    Typing(syntaxModules : list[Data]) : list[Data];
     GetTokenFieldNames() : Map[string, N2.Model.Identifier];
   }
 
-  syntax SyntaxModule is TopDeclaration = "syntax"sm "module"sm Name nl "{" inl Import* Declaration* d "}" nl
+  extend syntax TopDeclaration
   {
-    override CollectGlobalSymbols
+    SyntaxModule = "syntax"sm "module"sm Name nl "{" inl Import* Declaration* d "}" nl
     {
-      def sym = ParsedSyntaxModuleSymbol(this);
-      _ = ns.Node.AddAndReport(sym, Name.Location);
-      _ = PassThrough(Declarations, sym, _.CollectGlobalSymbols(_));
-      ns
-    }
-    [Cached] private MakeInitialContext(contextToSave : SyntaxModuleContext) : SyntaxModuleContext = contextToSave;
-    [Cached] private MakeFinalContext(contextToSave : Context) : Context = contextToSave;
-    override MakeContext
-    {
-      def context1 = MakeInitialContext(SyntaxModuleContext(parent, Name));
-      def context2 = FoldThrough(Imports, context1, _.MakeContext(_));
-      def context3 = SyntaxModuleBodyContext(context2);
-      _ = MakeFinalContext(FoldThrough(Declarations, context3, _.MakeContext(_)));
-      parent
-    }
-    override Typing
-    {
-      def ruleDefinitions = FoldThrough(Declarations, [], _.Typing(_));
-      SyntaxModuleData(InitialContext.Module, FinalContext, ruleDefinitions) :: syntaxModules
+      override CollectGlobalSymbols
+      {
+        def sym = ParsedSyntaxModuleSymbol(this);
+        _ = ns.Node.AddAndReport(sym, Name.Location);
+        _ = PassThrough(Declarations, sym, _.CollectGlobalSymbols(_));
+        ns
+      }
+      [Cached] private MakeInitialContext(contextToSave : SyntaxModuleContext) : SyntaxModuleContext = contextToSave;
+      [Cached] private MakeFinalContext(contextToSave : Context) : Context = contextToSave;
+      override MakeContext
+      {
+        def context1 = MakeInitialContext(SyntaxModuleContext(parent, Name));
+        def context2 = FoldThrough(Imports, context1, _.MakeContext(_));
+        def context3 = SyntaxModuleBodyContext(context2);
+        _ = MakeFinalContext(FoldThrough(Declarations, context3, _.MakeContext(_)));
+        parent
+      }
+      override Typing
+      {
+        def ruleDefinitions = FoldThrough(Declarations, [], _.Typing(_));
+        Data.SyntaxModule(InitialContext.Module, FinalContext, ruleDefinitions) :: syntaxModules
+      }
+
+      override GetTokenFieldNames = FoldThrough(Declarations, Map(), _.GetTokenFieldNames(_));
     }
 
-    override GetTokenFieldNames = FoldThrough(Declarations, Map(), _.GetTokenFieldNames(_));
+    VisitorType = "visitor" sm "type" sm Name nl "{" inl Import* VisitorTypeMember* d "}" nl
+    {
+      override CollectGlobalSymbols
+      {
+        def sym = ParsedVisitorTypeSymbol(this);
+        _ = ns.Node.AddAndReport(sym, Name.Location);
+        ns
+      }
+      override MakeContext
+      {
+        def context2 = FoldThrough(Imports, parent, _.MakeContext(_));
+        //def context3 = SyntaxModuleBodyContext(context2);
+        parent
+      }
+      override Typing = VisitorTypeTyping(this.Context, Name, VisitorTypeMembers) :: syntaxModules;
+      override GetTokenFieldNames = Map();
+    }
+
+    Visitor = "visitor" sm VisitorTypeName sm "for" sm SyntaxModuleName nl "{" inl Import* DefaultRuturnType? VisitorMember* d "}" nl
+    {
+      alias SyntaxModuleName = QIdentifier;
+      alias VisitorTypeName  = QIdentifier;
+
+      override CollectGlobalSymbols = ns;
+      override MakeContext
+      {
+        def context2 = FoldThrough(Imports, parent, _.MakeContext(_));
+        //def context3 = SyntaxModuleBodyContext(context2);
+        parent
+      }
+      override Typing = VisitorTyping(this.Context, VisitorTypeName, SyntaxModuleName, DefaultRuturnTypeOpt, VisitorMembers) :: syntaxModules;
+      override GetTokenFieldNames = Map();
+    }
+  }
+
+  syntax DefaultRuturnType = "default" sm "ruturn" sm "type" Type ";";
+
+  syntax VisitorTypeMember;
+
+  extend syntax VisitorTypeMember
+  {
+    VisitorTypeDefaultRuturnType = "default" sm "parameter" sm Name sm ":" sm Type ";";
+  }
+
+  syntax VisitorMember = "map" sm (Identifier; "," sm)+ sm ":" sm Type
+  {
   }
 
   syntax Import
@@ -320,7 +371,7 @@ syntax module GrammarParser2
         sm
       }
       override MakeContext = MakeContext(parent, RuleAttributes, BodyDeclaration);
-      override Typing = ExtentionRule(Context, this.Location, RuleAttributes, Name, BaseName, Rule, BodyDeclaration) :: ruleDefinitions;
+      override Typing = ExtentionRule(Context, this.Location, RuleAttributes, Name, RuleRef(BaseName, Context.Bind(BaseName)), Rule, BodyDeclaration) :: ruleDefinitions;
     }
     SimpleRuleDecl          = RuleAttributes "syntax"  sm             Name  sm "="  sm Rule                     BodyDeclaration
     {
@@ -342,7 +393,8 @@ syntax module GrammarParser2
         sm
       }
       override MakeContext = MakeContext(parent, RuleAttributes, BodyDeclaration);
-      override Typing = ExtentionPointRule(Context, this.Location, RuleAttributes, Name, BodyDeclaration) :: ruleDefinitions;
+      override Typing = ExtentionPointRule(Context, this.Location, RuleAttributes, Name, BodyDeclaration) 
+          :: BodyDeclaration.Typing(ruleDefinitions, RuleRef(Name, Context.Bind(Name)));
     }
     TokenRuleDecl           = RuleAttributes "token"   sm             Name  sm "="  sm TokenRule                BodyDeclaration
     {
@@ -375,7 +427,11 @@ syntax module GrammarParser2
     {
       override CollectGlobalSymbols = PassThrough(ExtendSyntaxMembers, sm, _.CollectGlobalSymbols(_));
       override MakeContext = FoldThrough(ExtendSyntaxMembers, parent, _.MakeContext(_));
-      override Typing = FoldThrough(ExtendSyntaxMembers, ruleDefinitions, (m, r) => m.Typing(r, BaseName));
+      override Typing
+      {
+        def baseRule = RuleRef(BaseName, Context.Bind(BaseName));
+        FoldThrough(ExtendSyntaxMembers, ruleDefinitions, (m, r) => m.Typing(r, baseRule));
+      }
     }
     AliasDecl               =                RuleAlias
     {
@@ -448,8 +504,8 @@ syntax module GrammarParser2
       sm
     }
     [Cached] MakeContext(parent : Context) : Context = MakeContext(parent, RuleAttributes, BodyDeclaration);
-    Typing(ruleDefinitions : list[RuleDefinition2], baseName : QIdentifier) : list[RuleDefinition2] =
-      ExtentionRule(Context, this.Location, RuleAttributes, Name, baseName, Rule, BodyDeclaration) :: ruleDefinitions;
+    Typing(ruleDefinitions : list[RuleDefinition2], baseRule : RuleRef) : list[RuleDefinition2] =
+      ExtentionRule(Context, this.Location, RuleAttributes, Name, baseRule, Rule, BodyDeclaration) :: ruleDefinitions;
   }
 
   syntax BodyDeclaration
@@ -459,6 +515,7 @@ syntax module GrammarParser2
     [Cached] MakeContext(parent : Context) : Context = parent;
     GetExtraFields(ruleDefinitionType : RuleDefinitionType, ruleSymbol : RuleRefSymbol, baseRuleSymbol : RuleRefSymbol) : list[ExtraField2];
     GetLastLocation() : N2.Location;
+    Typing(ruleDefinitions : list[RuleDefinition2], _baseRule : RuleRef) : list[RuleDefinition2] = ruleDefinitions;
   }
 
   extend syntax BodyDeclaration
@@ -488,6 +545,7 @@ syntax module GrammarParser2
       }
       override MakeContext = FoldThrough(BodyMemberDeclarations, parent, _.MakeContext(_));
       override GetLastLocation = MakeLastLocation(this, OpenBrace);
+      override Typing = FoldThrough(BodyMemberDeclarations, ruleDefinitions, _.Typing(_, _baseRule));
     }
   }
 
@@ -538,10 +596,18 @@ syntax module GrammarParser2
       ignore(ruleDefinitionType, ruleSymbol, baseRuleSymbol);
       result
     }
+    Typing(ruleDefinitions : list[RuleDefinition2], _baseRule : RuleRef) : list[RuleDefinition2] = ruleDefinitions;
   }
 
   extend syntax BodyMemberDeclaration
   {
+    InlineExtendSyntaxMember = "|" ExtendSyntaxMember
+    {
+      override CollectGlobalSymbols { _ = ExtendSyntaxMember.CollectGlobalSymbols(ruleRef.Node.Parent.Symbol :> SyntaxModuleSymbol); ruleRef }
+      override Typing = ExtendSyntaxMember.Typing(ruleDefinitions, _baseRule);
+      override MakeContext = ExtendSyntaxMember.MakeContext(parent);
+    }
+
     ExtraFieldDeclaration1 = ExtraFieldAttributes ExtraFieldPrivate? Name sm "(" (ExtraFieldsParam; "," sm)* ")" sm ":" sm Type ExtraFieldBody
     {
       private GetModifier(privates : option[ExtraFieldPrivate], body : ExtraFieldBody) : ExtraFieldModifier
@@ -998,5 +1064,5 @@ syntax module GrammarParser2
         Rule2.RepeatWithSeparator(this.Location, type, 0, MakePlural(_fieldName, rule, sepRule, context), 1, None(), rule, sepRule, true);
       }
     }
-  }
-}
+  } // extend syntax Rule
+} // syntax module
