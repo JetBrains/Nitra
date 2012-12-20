@@ -29,30 +29,21 @@ namespace N2
 
     private Path          : string                 { get; }
     private Manager       : ManagerClass           { get; }
-    private Env           : GlobalEnv              { get; private set; }
-    private SyntaxModules : SCG.List[SyntaxModule] = SCG.List();
     private ParserHost    : ParserHost             = ParserHost();
 
     public this(path : string, manager : ManagerClass)
     {
       Path    = path;
       Manager = manager;
-      Env     = Manager.CoreEnv;
       UpdateCurrentProjectContext();
     }
-    
-    //IsUserDataPresent[T]() : bool
-    //  where T: new(), class
-    //{
-    //  Manager.UserData[typeof(T)] != null
-    //}
-    
+
     IsListUserDataPresent[T]() : bool
     {
       def map = Manager.UserData[typeof(SCG.List[T])];
       map != null
     }
-    
+
     GetUserData[T]() : T
       where T: new(), class
     {
@@ -70,33 +61,16 @@ namespace N2
     {
       Manager.UserData[typeof(SCG.List[T])] = null
     }
-    
-    //ResetUserData[T]() : void
-    //  where T: new(), class
-    //{
-    //  Manager.UserData[typeof(T)] = null
-    //}
 
     UpdateCurrentProjectContext() : void
     {
       Project.CurrentProject = GetUserData.[N2Project]();
     }
-    
+
     GetCurrentProjectContext() : N2Project
     {
       Project.CurrentProject :> N2Project
     }
-    //GetSyntaxModules() : SCG.List[SyntaxModuleInfos] // Namespace * Name * SyntaxModule
-    //{
-    //  def key = typeof(G.SyntaxModule.Ast);
-    //  mutable syntaxModules = Manager.UserData[key] :> SCG.List[_];
-    //  when (syntaxModules == null)
-    //  {
-    //    syntaxModules = SCG.List();
-    //    Manager.UserData[key] = syntaxModules;
-    //  }
-    //  syntaxModules
-    //}
 
     public static Instance(path : string, manager : ManagerClass) : N2SourceImpl
     {
@@ -113,7 +87,7 @@ namespace N2
           path;
         else
           IO.Path.Combine(projDir, path);
-          
+
       if (manager.UserData.Contains(path))
         manager.UserData[path] :> N2SourceImpl;
       else
@@ -150,19 +124,8 @@ namespace N2
       if (parseResult.IsSuccess) 
       {
         def start = parseResult.CreateAst.[G.Start.Ast]();
-        Env = start.Env(Env);
-        
-        //def loc = start.NLocation();
-        //Message.Hint(loc, $"File $(loc.File) is parsed.");
-        
         def fileAsts : SCG.List[G.Start.Ast] = Manager.GetListUserData();
         fileAsts.Add(start);
-        
-        foreach (rd in start.TopDeclarations)
-        {
-          | G.SyntaxModule.Ast as syntaxModule =>  SyntaxModules.Add(ConvertSyntaxModule(syntaxModule));
-          | _ => assert(false);
-        }
       }
       else
       {
@@ -196,7 +159,6 @@ namespace N2
     {
       def root = rootNamespace.Node;
       def grammarTI   = grammarImplTI.BaseType;
-      //Message.HintOnce($"   Grammar type: $glammarName");
 
       match (grammarImplTI.GetNestedSubtypes().Filter(ti => ti.Name == AssemblyConstants.GrammarDescriptorImplName))
       {
@@ -331,7 +293,7 @@ namespace N2
 
       project.ErrorCount == errorCount
     }
-    
+
     private TypeSyntaxModules(project : N2Project, rootNamespace : NamespaceSymbol, fileAsts : SCG.List[G.Start.Ast]) : bool
     {
       def errorCount   = project.ErrorCount;
@@ -392,12 +354,18 @@ namespace N2
       def syntaxModuleEmitters = Manager.GetListUserData.[SyntaxModuleEmitter]();
       foreach (emitter in syntaxModuleEmitters)
         emitter.Emit();
+      when (!Manager.IsIntelliSenseMode && syntaxModuleEmitters.Count > 0)
+      {
+        def grammarImpls = SCG.List();
+        foreach (emitter in syntaxModuleEmitters)
+          grammarImpls.Add(<[ typeof($(emitter.GrammarImplTB.GetMemType() : typed)) ]>);
+        Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ N2.GrammarsAttribute(array[..$(grammarImpls.ToNList())]) ]>);
+      }
       ResetListUserData.[SyntaxModuleEmitter]();
     }
 
     public BeforeTypedMembers() : void
     {
-      //Message.Hint("BeforeTypedMembers(). Prarsed SyntaxModules:");
       when (IsListUserDataPresent.[G.Start.Ast]())
         try
         {
@@ -423,74 +391,11 @@ namespace N2
           DefineOtherMembers();
         }
         finally ResetListUserData.[G.Start.Ast]();
-
-      foreach (sm in SyntaxModules)
-      {
-        try
-        {
-          sm.GrammarCompiler = GrammarCompiler(Manager, Env, sm.TypeBuilder, sm.Name, sm.Grammar);
-          sm.TypeBuilder.UserData[typeof(GrammarCompiler)] = sm.GrammarCompiler;
-        }
-        catch
-        {
-          | _ is Nemerle.Compiler.Recovery => ()
-          | e is GrammarException =>
-            def loc = if (e.Location != Location.Default) e.Location else sm.TypeBuilder.Location;
-            Message.Error(loc, e.Message);
-            
-          | e is Exception =>
-            assert2(false, e.ToString());
-            Message.Error(sm.TypeBuilder.Location,  $"Exception $e");
-        }
-      }
-
-      foreach (sm in SyntaxModules)
-        sm.GrammarCompiler.AddGrammarRefs(sm.Ast.GrammarRefs(Env)); // require initialized TypeBuilders
-
-     //Message.Hint($<#BeforeTypedMembers() - Grammsr: ..$(SyntaxModules; ", "; x => x.Name.AsName)#>);
-        
-      //foreach (sm in SyntaxModules)
-      //{
-      //  //Message.Hint($"BeforeTypedMembers() - Grammsr: $(sm.GrammarCompiler.GrammarTB.Name)");
-      //  sm.GrammarCompiler.LoadExternalGrammars();
-      //}
     }
 
     public WithTypedMembers() : void
     {
       EmitSyntaxModules();
-      foreach (sm in SyntaxModules)
-      {
-        try
-        {
-          when (sm.GrammarCompiler == null) // new typing is failed
-            return;
-          
-          if (sm.GrammarCompiler.Manager.IsIntelliSenseMode)
-            IntelliSenseSupport.AddIntelliSenseSupport(sm.GrammarCompiler);
-          else
-            when (sm.GrammarCompiler.AllRules)
-            {
-              sm.GrammarCompiler.CompileGrammar();
-              sm.GrammarCompiler.DefineDescriptors();
-              sm.GrammarCompiler.DefineStartDescriptors();
-            }
-
-          sm.GrammarCompiler.GrammarDescriptorImplTB.Compile();
-          sm.GrammarCompiler.GrammarImplTB.Compile();
-          sm.TypeBuilder.Compile();
-        }
-        catch
-        {
-          | e is GrammarException =>
-            def loc = if (e.Location != Location.Default) e.Location else sm.TypeBuilder.Location;
-            Message.Error(loc,  e.Message);
-          | _ is Nemerle.Compiler.Recovery => ()
-          | e is Exception =>
-            assert2(false, e.ToString());
-            Message.Error(sm.TypeBuilder.Location,  $"Exception $e");
-        }
-      }
     }
 
     public SubscribeSourceChangedWithCounter(manager : ManagerClass, fileIndex : int, handler : ISource * int -> void) : void
@@ -503,382 +408,6 @@ namespace N2
       });
     }
 
-    internal static NextKeywordRegexId : void -> int = Util.CreateIdGenerator(0);
-    
-    private DefineTokenFieldName(typeBuilder : TypeBuilder, tokenFieldNames : Map[string, NameRef]) : void
-    {
-      foreach (g in tokenFieldNames.GroupBy((_, name) => name))
-      {
-        def tokens = g.Map((tok, _) => <[ $(tok : string) ]>);
-        typeBuilder.Ast.AddCustomAttribute(
-          <[ N2.TokenFieldNameAttribute($(g.Key.AsName : string), array[..$tokens]) ]>);
-      }
-    }
-
-    private AddPrecedence(rule : Rule.Sequence, baseName : NameRef, precedence : G.Number, rightAssociative : bool) : Rule.Sequence
-    {
-      def newBindingPower = precedence.Value();
-      def updateCall(call, bindingPower, newBindingPower) : Rule
-      {
-        def bp = 
-          if (bindingPower == 0)
-            newBindingPower
-          else
-          {
-            Message.Warning(call.Location, "You can't use Binding Power and 'precedence' simultaneously.");
-            bindingPower
-          };
-          
-        Rule.Call(call.Location, RuleType.Void(), 0, baseName, bp)
-      }
-      def checkUnary(call)
-      {
-        when (rightAssociative)
-          Message.Error(call.Location, "You can't use 'right-associative' for a unary extending rule.");
-      }
-      match (rule.rules)
-      {
-        | (Call(n1, bp1) as call1) :: (String as op)                                     :: (Call(n2, bp2) as call2) :: rest when n1 == baseName && n2 == baseName with (s1 = null, s2 = null) // rec   "op"   rec
-        | (Call(n1, bp1) as call1) :: (String as op) :: (Rule(Type=RuleType.Void) as s2) :: (Call(n2, bp2) as call2) :: rest when n1 == baseName && n2 == baseName with (s1 = null)            // rec   "op" s rec
-        | (Call(n1, bp1) as call1) :: (Rule(Type=RuleType.Void) as s1) :: (String as op) :: (Rule(Type=RuleType.Void) as s2) :: (Call(n2, bp2) as call2) :: rest when n1 == baseName && n2 == baseName  =>           // rec s "op" s rec
-          def newCall1 = updateCall(call1, bp1, newBindingPower + if (rightAssociative) 1 else 0);
-          def newCall2 = updateCall(call2, bp2, newBindingPower);
-          def prependIfNotNull(e, lst) { if (e == null) lst else e :: lst }
-          def rest2 = prependIfNotNull(s2, newCall2 :: rest);
-          Rule.Sequence(rule.Location, RuleType.Void(), 0, newCall1 :: prependIfNotNull(s1, op :: rest2))
-
-        | [Call(n, bp) as call, String as op]                                when n == baseName with s = null // rec "op"
-        | [Call(n, bp) as call, String as op, Rule(Type=RuleType.Void) as s] when n == baseName =>            // rec "op" s
-          checkUnary(call);
-          def newCall = updateCall(call, bp, newBindingPower);
-          def rest    = if (s == null) [op] else [op, s];
-          Rule.Sequence(rule.Location, RuleType.Void(), 0, newCall :: rest)
-
-        | [String as op,                                Call(n, bp) as call] when n == baseName with s = null // "op"   rec 
-        | [String as op, Rule(Type=RuleType.Void) as s, Call(n, bp) as call] when n == baseName =>            // "op" s rec
-          checkUnary(call);
-          def newCall = updateCall(call, bp, newBindingPower);
-          def rest    = if (s == null) [newCall] else [s, newCall];
-
-          Rule.Sequence(rule.Location, RuleType.Void(), 0, op :: rest)
-
-        | _ => 
-          assert2(false);
-          Message.Error(precedence.Location.ToNemerleLocation(), 
-            "You can use the 'precedence' for only rules satisfying the following patterns: 'E op E', 'op E', 'E op', 'E op s E', 'op E s', 'E op s'. Where op is literal and s is void rule call. Use a binding power instead.");
-          rule
-      }
-    }
-    
-    public ConvertSyntaxModule(syntaxModule : G.SyntaxModule.Ast) : SyntaxModule
-    {
-      mutable grammar = Grammar();
-      mutable tokenFieldNames = Map();
-      mutable keywordRegexes = [];
-      mutable aliases = Map();
-      def processBody[T](decl : G.BodyDeclaration, func : _ -> T, defaultValue : T) : T
-      {
-        match (decl)
-        {
-          | G.BlockBodyDeclaration.Ast(BodyMemberDeclarations=members) => func(members)
-          | _ => defaultValue
-        }
-      }
-      def processLocalAliases(members)
-      {
-        def localAliasDecls = members.OfType.[G.InnerAliasDeclaration.Ast]();
-        mutable localAliasesMap = Map();
-            
-        foreach (G.InnerAliasDeclaration.Ast(RuleAlias=G.RuleAlias.Ast as alias) in localAliasDecls)
-        {
-          def name        = alias.Name.NameRef();
-          def rule        = alias.Rule.GetRule();
-          localAliasesMap = localAliasesMap.Replace(name, rule);
-        }
-            
-        localAliasesMap
-      }
-      def addSequence(n2Rule : G.Rule, localAliases) : Rule.Sequence * list[NameRef]
-      {
-        def definedNames = SCG.List();
-        def extractName(n2Rule) : G.Rule
-        {
-          | G.FieldName.Ast as r => definedNames.Add(r.Name.NameRef()); r.Rule
-          | _                    => definedNames.Add(null); n2Rule
-        }        
-        def extractNames(n2Rule)
-        {
-          | G.FieldName.Ast as r => extractName(r.Rule).GetRule();
-          | G.SequenceRule.Ast as rule =>
-            def rules = extractName(rule.LeftRule).GetRule() :: rule.RightRules.Map(r => extractName(r).GetRule());
-            Rule.Sequence(rule.NLocation(), RuleType.Void(), 0, rules)
-          | _ => extractName(n2Rule).GetRule();
-        }        
-        def rule : Rule = extractNames(n2Rule);
-        
-        def isAlias(rule) : bool
-        {
-          | Rule.Call(n, _) when localAliases.Contains(n)
-          | Rule.Call(n, _) when aliases.Contains(n) => true
-          | _ => false
-        }
-        def names = SCG.List();
-        def none  = NameRef(LocationStack.Top(), "_");
-        def replaceAlias(rule) : Rule
-        {
-          | Rule.Call(n, _) when localAliases.Contains(n) => names.Add(n); localAliases.Get(n)
-          | Rule.Call(n, _) when aliases.Contains(n)      => names.Add(n); aliases.Get(n)
-          | _ => names.Add(none); rule
-        }
-        def makeNames()
-        {
-          assert2(definedNames.Count == names.Count);
-          def res = definedNames.Map2Lazy(names, (dn, n) => dn ?? n ?? none).NToList();
-          assert2(res.ForAll(_ != null));
-          res
-        }
-        match (rule)
-        {
-          | Rule.Sequence(rules) when rules.Exists(isAlias) => (Rule.Sequence(rule.Location, rule.Type, rule.Id, rules.Map(replaceAlias)), makeNames())
-          | Rule.Sequence as rule => (rule, definedNames.Map(x => x ?? none))
-          | _                     => (Rule.Sequence(rule.Location, RuleType.Void(), 0, [replaceAlias(rule)]), makeNames())
-        }
-      }
-      def processExtraFields(members : list[G.BodyMemberDeclaration]) : list[ExtraField]
-      {
-        def parse(ast : N2.Ast) : PExpr
-        {
-          def simpleParse(ast : N2.Ast) : PExpr
-          {
-            def text = ast.Location.GetText();
-            MainParser.ParseExpr(Env, text, ast.NLocation())
-          }
-          def parseAndAddIt(ast : N2.Ast) : PExpr
-          {
-            def e = simpleParse(ast);
-            
-            def addIt(e)
-            {
-              | <[ value ]> => e
-              | <[ $(n : name) ]> => <[ it.$(n : name)]>
-              | <[ $x = $y ]> => <[ $(addIt(x)) = $(addIt(y)) ]>
-              | _ => e
-            }
-            
-            addIt(e)
-          }
-          
-          match (ast)
-          {
-            | G.Expression.Ast(ExpressionContents=[G.ExpressionContent1.Ast(Content=G.Content6.Ast as fold)]) => 
-              def collection = simpleParse(fold.Identifier);
-              def expr1 = simpleParse(fold.Expression);
-              def exprs = fold.Expressions[0].Map(parseAndAddIt);
-              //exprs.Fold()
-              <[ $collection.Fold($expr1, fun((it, value)) { ..$exprs }) ]>
-              
-            | _ => simpleParse(ast)
-          }
-          
-        }
-        def loop(members : list[G.BodyMemberDeclaration], acc)
-        {
-          def parseBodyOpt(extraFieldBody : G.ExtraFieldBody) : option[PExpr]
-          {
-            match (extraFieldBody)
-            {
-              | G.ExtraFieldBody1.Ast as b => Some(parse(b.Block))
-              | G.ExtraFieldBody2.Ast as b => Some(parse(b.Expression))
-              | G.ExtraFieldBodyEmpty      => None()
-              | _                          => None()
-            }
-          }
-          def parseBody(extraFieldBody : G.ExtraFieldBody) : PExpr
-          {
-            match (parseBodyOpt(extraFieldBody))
-            {
-              | Some(e) => e
-              | _ =>
-                def loc = extraFieldBody.Location.ToNemerleLocation();
-                Message.Error(loc, "Expected '= Expression' or block.");
-                PExpr.Error(loc)
-            }
-          }
-          match (members)
-          {
-            | G.ExtraFieldDeclaration1.Ast as m :: tail =>
-              def name = m.Name.NameRef();
-              def loc = m.Location.ToNemerleLocation();
-              def body = parseBodyOpt(m.ExtraFieldBody);
-              def toName(e)
-              {
-                | <[ $(x : name) ]> => x
-                | _ => Message.FatalError(e.Location, "Expected simple name.")
-              }
-              def parseParam(_ : G.ExtraFieldsParam)
-              {
-                | G.ExtraFieldsParam.Ast as p => <[ parameter: $(toName(parse(p.Name))) : $(parse(p.Type)) ]>
-                | e => Message.FatalError(e.Location.ToNemerleLocation(), "Parse error.")
-              }
-              def parameters = m.ExtraFieldsParams[0].Map(parseParam);
-              def isCached = m.ExtraFieldAttributes.IsCached();
-              def field =
-                if (m.ExtraFieldPrivates.IsSome)
-                  if (body.IsSome)
-                    ExtraField.DefPrivate(loc, isCached, name, parameters, parse(m.Type), body.Value)
-                  else
-                    Message.FatalError(loc, "A private extra field must have body.");
-                else if (body.IsSome)
-                  ExtraField.Def(loc, isCached, name, parameters, parse(m.Type), body.Value)
-                else
-                  ExtraField.Abstract(loc, isCached, name, parameters, parse(m.Type));
-                
-              loop(tail, field :: acc)
-              
-            | G.ExtraFieldDeclaration2.Ast as m :: tail =>
-              def name = m.Name.NameRef();
-              def loc = m.Location.ToNemerleLocation();
-              def isCached = m.ExtraFieldAttributes.IsCached();
-              loop(tail, ExtraField.Override(loc, isCached, name, parseBody(m.ExtraFieldBody)) :: acc)
-              
-            | G.ExtraFieldDeclaration3.Ast as m :: tail =>
-              def name = m.Name.NameRef();
-              def loc = m.Location.ToNemerleLocation();
-              def isCached = m.ExtraFieldAttributes.IsCached();
-              loop(tail, ExtraField.OnError(loc, isCached, name, parseBody(m.ExtraFieldBody)) :: acc)
-              
-            | _ :: tail                               => loop(tail, acc)
-            | []                                      => acc
-          }
-        }
-          
-        loop(members, [])
-      }
-      def addExtentionRule(nameId : G.Identifier, ruleAttributes : G.RuleAttributes, bodyDeclaration : G.BodyDeclaration, 
-                          rule : G.Rule, baseName : G.QIdentifier) : void
-      {
-        def name            = nameId.NameRef();
-        //assert2(name.AsName != "add");
-        def ruleId          = grammar.Count;
-        def attributes      = ruleAttributes.Value();
-        def localAliases    = processBody(bodyDeclaration, processLocalAliases, Map());
-        def (rule1, names)  = addSequence(rule, localAliases);
-        def baseName        = baseName.NameRef();
-        def processPrecedence(members : list[G.BodyMemberDeclaration]) : Rule.Sequence
-        {
-          def precedence = members.Once.[G.PrecedenceDeclaration.Ast]();
-                
-          if (precedence is Some(prec))
-            AddPrecedence(rule1, baseName, prec.Precedence, prec.RightAssociative.IsSome)
-          else
-            rule1
-        }
-        def rule2 = processBody(bodyDeclaration, processPrecedence, rule1);
-        def extraFields = processBody(bodyDeclaration, processExtraFields, []);
-        def lastLoc       = Some(bodyDeclaration.GetLastLocation().NLocation());
-        def ruleDefinition = 
-          match (rule2)
-          {
-            | Sequence((Call(callName, bindingPower) as call) :: rules) when callName == baseName =>
-              RuleDefinition.ExtentionPostfix(name.Location, ruleId, name, attributes, tokenFieldNames, keywordRegexes, extraFields, lastLoc, baseName, bindingPower, 
-                Rule.Sequence(rule1.Location, RuleType.Void(), 0, 
-                Rule.PrefixCall(call.Location, RuleType.Void(), 0, baseName, bindingPower) :: rules), names)
-
-            | _ => RuleDefinition.ExtentionPrefix(name.Location, ruleId, name, attributes, tokenFieldNames, keywordRegexes, extraFields, lastLoc, baseName, rule2, names)
-          };
-            
-        try { grammar = grammar.Add(ruleDefinition); }
-        catch { | e is Exception => Message.Error(name.Location, "Exception: " + e.Message); }
-      }
-      
-      foreach (decl in syntaxModule.Declarations)
-      {
-        | G.TokenRuleDecl.Ast as decl =>
-          def name        = decl.Name.NameRef();
-          def ruleId      = grammar.Count;
-          def attributes  = decl.RuleAttributes.Value();
-          def rule        = decl.TokenRule.RegularRule();
-          def extraFields = processBody(decl.BodyDeclaration, processExtraFields, []);
-          def lastLoc       = Some(decl.BodyDeclaration.GetLastLocation().NLocation());
-          grammar = grammar.Add(RuleDefinition.Regular(name.Location, ruleId, name, attributes, tokenFieldNames, keywordRegexes, extraFields, lastLoc, rule));
-
-        | G.VoidRuleDecl.Ast   (RuleAttributes=attr, Name=name, Rule=rule, BodyDeclaration=body) with (type = RuleType.Void())
-        | (G.SimpleRuleDecl.Ast(RuleAttributes=attr, Name=name, Rule=rule, BodyDeclaration=body)) with type = RuleType.PType(<[ Ast ]>) =>
-          def name          = name.NameRef();
-          //assert2(name.AsName != "CatchExceptionFulter");
-          def ruleId        = grammar.Count;
-          def attributes    = attr.Value();
-          def localAliases  = processBody(body, processLocalAliases, Map());
-          def (rule, names) = addSequence(rule, localAliases);
-          def extraFields   = processBody(body, processExtraFields, []);
-          def lastLoc       = Some(body.GetLastLocation().NLocation());
-          def rd            = RuleDefinition.Simple(name.Location, ruleId, name, attributes, tokenFieldNames, keywordRegexes, extraFields, lastLoc, type, rule, names);
-            
-          grammar = grammar.Add(rd);
-
-        | G.ExtentionPointRuleDecl.Ast as decl =>
-          def name        = decl.Name.NameRef();
-          def ruleId      = grammar.Count;
-          def attributes  = decl.RuleAttributes.Value();
-          def ruleType    = RuleType.PType(<[ Ast ]>);
-          def extraFields = processBody(decl.BodyDeclaration, processExtraFields, []);
-          def lastLoc       = Some(decl.BodyDeclaration.GetLastLocation().NLocation());
-          
-          grammar = grammar.Add(RuleDefinition.ExtentionPoint(name.Location, ruleId, name, attributes, tokenFieldNames, keywordRegexes, extraFields, lastLoc, ruleType));
-
-        | G.ExtendSyntaxDecl.Ast as decl =>
-          def baseName = decl.BaseName;
-          foreach (m is G.ExtendSyntaxMember.Ast in decl.ExtendSyntaxMembers)
-            addExtentionRule(m.Name, m.RuleAttributes, m.BodyDeclaration, m.Rule, baseName);
-            
-        | G.ExtentionRuleDecl.Ast as decl => addExtentionRule(decl.Name, decl.RuleAttributes, decl.BodyDeclaration, decl.Rule, decl.BaseName);
-        | G.AliasDecl.Ast(RuleAlias=G.RuleAlias.Ast as alias) =>
-          def name = alias. Name.NameRef();
-          def rule = alias.Rule.GetRule();
-          aliases  = aliases.Replace(name, rule);
-          
-        | G.TokenField.Ast(StringLiterals=lits) as decl => 
-          foreach (strLit in lits[0])
-            tokenFieldNames = tokenFieldNames.Replace(strLit.Value(), decl.Name.NameRef());
-
-        | G.SpanClassDecl.Ast as decl =>
-          def name        = decl.Name.NameRef();
-          def matchTokens = 
-            if (decl.MatchTokens is Some((_, matchTokens)))
-            Some(matchTokens.RegularRule())
-          else
-            None();
-          grammar = grammar.Add(SpanClassModel(decl.Location.ToNemerleLocation(), name, matchTokens));
-
-        | G.BracePairDecl.Ast as decl =>
-          def open  = decl.Open.RegularRule();
-          def close = decl.Close.RegularRule();
-          grammar = grammar.Add(BracePair(decl.Location.ToNemerleLocation(), open, close));
-
-        | G.MarkerDecl.Ast as decl =>
-          def name   = decl.Name.NameRef();
-          def ruleId = grammar.Count;
-          grammar = grammar.Add(RuleDefinition.Marker(name.Location, ruleId, name, [], tokenFieldNames, keywordRegexes, [], None(), false));
-
-        | G.KeywordRegexDecl.Ast as decl =>
-          def name        = decl.QualifiedName.NameRef();
-          def matchTokens = decl.MatchTokens.RegularRule();
-          def keywordRegex = KeywordRegex(decl.Location.ToNemerleLocation(), NextKeywordRegexId(), decl.Location.GetText(), matchTokens, name, false);
-          keywordRegexes ::= keywordRegex;
-          grammar = grammar.Add(keywordRegex);
-
-        | error => Message.Error(error.NLocation(), "Error. Unknown declaration.");
-      }
-      def name = syntaxModule.Name.NameRef();
-      def typeBuilder = Manager.CoreEnv.Define(<[decl:
-          public partial abstract class $(name.AsName : dyn)
-          {
-          }
-        ]>);
-      
-      DefineTokenFieldName(typeBuilder, tokenFieldNames);
-      
-      SyntaxModule(name, grammar, syntaxModule, null, typeBuilder)
-    }
+    internal static NextKeywordRegexId : void -> int = Util.CreateIdGenerator(0);//TODO Жестоко выпилить
   }
 }
