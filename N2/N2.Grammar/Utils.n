@@ -682,18 +682,21 @@ namespace N2
       }
     }
 
+    public PraseParameter(context : Context, name : N2.Ast, type : N2.Ast) : PParameter
+    {
+      match (ParseNemerleInternal(name, context))
+      {
+        | <[ $(n : name) ]> => <[ parameter: $n : $(ParseNemerleInternal(type, context)) ]>
+        | _ => N2Project.CurrentProject.FatalError(name, "Expected simple name.", -1); assert(false);
+      }
+    }
+    
     public ParseNemerle(this parms : list[G.ExtraFieldsParam], context : Context) : list[PParameter]
     {
       def parsed = List();
       foreach (parm in parms)
       {
-        | G.ExtraFieldsParam.Ast as p => 
-          match (ParseNemerleInternal(p.Name, context))
-          {
-            | <[ $(n : name) ]> => parsed.Add(<[ parameter: $n : $(ParseNemerleInternal(p.Type, context)) ]>)
-            | _ => N2Project.CurrentProject.FatalError(p.Name, "Expected simple name.", -1)
-          }
-
+        | G.ExtraFieldsParam.Ast as p => parsed.Add(PraseParameter(context, p.Name, p.Type))
         | e => N2Project.CurrentProject.FatalError(e, "Parse error.", -1)
       }
       parsed.ToNList()
@@ -787,20 +790,73 @@ namespace N2
         Rule2.Sequence(loc, type, 0, newFieldName, [str, S])
       }
     }
-    
-    public VisitorTypeTyping(context : Context, name : G.Identifier, visitorTypeMembers : list[G.VisitorTypeMember]) : Data
+
+    public VisitorTypeTyping(context : Context, name : G.Identifier, defaultRuturnType : option[G.DefaultRuturnType], visitorTypeMembers : list[G.VisitorTypeDefaultParameter]) : Data
     {
       def sym = context.Bind.[VisitorTypeSymbol](name);
-      ignore(visitorTypeMembers, sym);
-      Data.VisitorType()
+
+      def retType =
+        if (defaultRuturnType is Some(ret))
+          ParseNemerleInternal(ret, context)
+        else
+          <[ void ]>;
+          
+      def parameters = visitorTypeMembers.Map(m => m.Typing());
+
+      Data.VisitorType(sym.Value, retType, parameters)
     }
     
-    public VisitorTyping(context : Context, visitorTypeName : G.QIdentifier, syntaxModuleName : G.QIdentifier, defaultRuturnType : option[G.DefaultRuturnType], visitorMembers : list[G.VisitorMember]) : Data
+    public VisitorTyping(result : list[Data], context : Context, visitorTypeName : G.QIdentifier, syntaxModuleName : G.QIdentifier, visitorMembers : list[G.VisitorMember]) : list[Data]
     {
-      def visitorTypeSym = context.Bind.[VisitorTypeSymbol](visitorTypeName);
+      def visitorTypeSym  = context.Bind.[VisitorTypeSymbol](visitorTypeName);
       def syntaxModuleSym = context.Bind.[SyntaxModuleSymbol](syntaxModuleName);
-      ignore(defaultRuturnType, visitorMembers, visitorTypeSym, syntaxModuleSym);
-      Data.Visitor()
+      
+      match (visitorTypeSym, syntaxModuleSym)
+      {
+        | (Some(visitorTypeSymbol), Some(syntaxModuleSymbol)) =>
+          def res : list[list[RuleRef] * PExpr] = visitorMembers.Map(m => m.Typing(syntaxModuleSymbol));
+        
+          def project = Project.CurrentProject;
+          def used    = Hashtable();
+        
+          foreach ((rules, _) in res)
+            foreach (rule in rules)
+              when (rule.Ref is Some(sym))
+                if (used.Contains(sym))
+                  using (root = project.RootError(rule.Location, $"Type mapping for rule $(sym.Name) declared ​​more than once.", -1))
+                    root.Warning(used[sym].Location, "previous declaration.", -1);
+                else
+                  used[sym] = rule;
+        
+          def convert(rules : list[RuleRef], type : PExpr) : list[RuleRefSymbol] * PExpr
+          {
+            (rules.Filter(r => r.Ref.IsSome).Map(r => r.Ref.Value), type)
+          }
+          def typesMapping = res.Map(convert);
+        
+          Data.Visitor(visitorTypeSymbol, syntaxModuleSymbol, typesMapping) :: result
+          
+        | _ => result
+      }
+    }
+    
+    public VisitorMemberTyping(syntaxModuleSymbol : SyntaxModuleSymbol, context : Context, identifiers : list[G.Identifier], type : G.Type) : list[RuleRef] * PExpr
+    {
+      def bind(identifier : G.Identifier)
+      {
+        match (syntaxModuleSymbol.Node.BindMany.[RuleRefSymbol](identifier.Location))
+        {
+          | [sym] =>
+            Project.CurrentProject.AddSymbolRef(sym, identifier.Location); // это надо делать здесь???
+            RuleRef(identifier, Some(sym))
+            
+          | _ => RuleRef(identifier, None())
+        }
+      }
+      
+      def symbols = identifiers.Map(bind);
+      def t       = ParseNemerle(type, context);
+      (symbols, t)
     }
   } // module
 } // ns
