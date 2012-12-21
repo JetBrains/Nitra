@@ -1,6 +1,7 @@
 @echo off
 if not defined Configuration set Configuration=Debug
-if not defined Nemerle set Nemerle="%ProgramFiles%\Nemerle\Net-4.0"
+if not defined NemerleBinPathRoot set NemerleBinPathRoot=%ProgramFiles%\Nemerle
+if not defined Nemerle set Nemerle=%NemerleBinPathRoot%\Net-4.0
 set RuntimeDllPath=%~dp0\..\N2\N2.Runtime\bin\%Configuration%
 set N2CompilerDllPath=%~dp0\..\N2\N2.Compiler\bin\%Configuration%\Stage2
 
