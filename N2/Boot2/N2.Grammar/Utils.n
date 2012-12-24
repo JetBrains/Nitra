@@ -1,0 +1,782 @@
+﻿using N2.Model;
+using N2.ProjectSystem;
+using N2.Runtime;
+using N2.Typing;
+
+using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+
+using System.Text;
+using G = GrammarParser2;
+using PExpr = Nemerle.Compiler.Parsetree.PExpr;
+
+namespace N2
+{
+  type IntOrStringList = int * list[string];
+  type RegularRuleMatcher = string -> bool;
+  
+  //[DebuggerStepThroughAttribute]
+  public module Utils
+  {
+    [DebuggerStepThroughAttribute]
+    public PassThrough[TElem, TValue](elems : list[TElem], value : TValue, func : TElem * TValue -> TValue) : TValue
+    {
+      mutable acc = value;
+      
+      foreach (elem in elems)
+        acc = func(elem, acc);
+        
+      value
+    }
+
+    [DebuggerStepThroughAttribute]
+    public FoldThrough[TElem, TValue](elems : list[TElem], mutable value : TValue, func : TElem * TValue -> TValue) : TValue
+    {
+      foreach (elem in elems)
+        value = func(elem, value);
+        
+      value
+    }
+
+    //public FoldRightThrough[TElem, TValue](elems : list[TElem], mutable value : TValue, func : TElem * TValue -> TValue) : TValue
+    //{
+    //  def elems = List(elems);
+    //  elems.Reverse();
+    //  foreach (elem in elems)
+    //    value = func(elem, value);
+    //
+    //  value
+    //}
+
+    [DebuggerStepThroughAttribute]
+    public NLocation(this loc : N2.Location) : Compiler.Location
+    {
+      def (startLine, startCol) = loc.StartLineColumn;
+      def (endLine, endCol) = loc.EndLineColumn;
+      Location(loc.Source.FileIndex, startLine, startCol, endLine, endCol)
+    }
+
+    [DebuggerStepThroughAttribute]
+    public NLocation(this located : N2.Located) : Compiler.Location
+    {
+      assert2(located != null);
+      NLocation(located.Location)
+    }
+
+    [DebuggerStepThroughAttribute]
+    public NLocation(located : N2.Located, tok : NToken) : Compiler.Location
+    {
+      def loc = located.Location;
+      def source = loc.Source;
+      def (startLine, startCol) = source.PositionToLineColumn(tok.StartPos);
+      def (endLine,   endCol)   = source.PositionToLineColumn(tok.EndPos);
+      Location(loc.Source.FileIndex, startLine, startCol, endLine, endCol)
+    }
+
+    public N2Location(this location : Compiler.Location) : N2.Location
+    {
+      def source = SourceSnapshot("", "", location.FileIndex, location.File, array(0), 0);
+      def tok = NToken(0, 0);
+      N2.Location(source, tok)
+    }
+
+    [DebuggerStepThroughAttribute]
+    private HexDigit(c : char) : int
+    {
+      | c when '0' <= c && c <= '9' => c : int - '0' : int
+      | c when 'a' <= c && c <= 'f' => c : int - 'a' : int + 10
+      | c when 'A' <= c && c <= 'F' => c : int - 'A' : int + 10
+      | _ => assert2(false); assert(false);
+    }
+
+    [DebuggerStepThroughAttribute]
+    private DecDigit(c : char) : int
+    {
+      | c when '0' <= c && c <= '9' => c : int - '0' : int
+      | _ => assert2(false); assert(false);
+    }
+
+    [DebuggerStepThroughAttribute]
+    public HexToChar(ast : N2.Ast, startPos : int, endPos : int) : char
+    {
+      unchecked HexToInt(ast, startPos, endPos) :> char
+    }
+    
+    [DebuggerStepThroughAttribute]
+    public HexToInt(ast : N2.Ast, startPos : int, endPos : int) : int
+    {
+      assert2(startPos < endPos);
+
+      def text = ast.Location.Source.OriginalText;
+      mutable result = HexDigit(text[startPos]);
+
+      for (mutable i = startPos + 1; i < endPos; i++)
+        unchecked result = (result << 4) + HexDigit(text[i]);
+      
+      result
+    }
+
+    [DebuggerStepThroughAttribute]
+    public DecToInt(ast : N2.Ast, startPos : int, endPos : int) : int
+    {
+      assert2(startPos < endPos);
+
+      def text = ast.Location.Source.OriginalText;
+      mutable result = DecDigit(text[startPos]);
+
+      for (mutable i = startPos + 1; i < endPos; i++)
+        unchecked result = result * 10 + DecDigit(text[i]);
+      
+      result
+    }
+    
+    //public Appent(this source : StringBuilder, text : N2.Located) : StringBuilder
+    //{
+    //  def loc = text.Location;
+    //  source.Append(loc.Source.Text, loc.StartPos, loc.Length)
+    //}
+    
+    //public LastOrDefault[T](this source : list[T], defaultValue : T) : T
+    //{
+    //  if (source.IsEmpty)
+    //    defaultValue
+    //  else
+    //    source.Last
+    //}
+
+    [DebuggerStepThroughAttribute]
+    public LastOrDefault[TElem, TResult](this source : list[TElem], func : TElem -> TResult, defaultValue : TResult) : TResult
+    {
+      if (source.IsEmpty)
+        defaultValue
+      else
+        func(source.Last)
+    }
+
+    [DebuggerStepThroughAttribute]
+    public static EscapeSequence(c : char) : char
+    {
+      | '\'' => '\'' | '\"' => '\"' | '\\' => '\\' | '0'  => '\0'
+      | 'a'  => '\a' | 'b'  => '\b' | 'f'  => '\f' | 'n'  => '\n'
+      | 'r'  => '\r' | 't'  => '\t' | 'v'  => '\v' | c    => c
+    }
+    
+    [DebuggerStepThroughAttribute]
+    public EscapeChar(ch : char) : string
+    {
+      | '\0' => @"'\0'"
+      | '\t' => @"'\t'"
+      | '\n' => @"'\n'"
+      | '\r' => @"'\r'"
+      | '\\' => @"'\\'"
+      | '\'' => @"'\''"
+      | x when x == char.MaxValue  => @" char.MaxValue"
+      | c when char.IsLetter(c)
+      | c when char.IsDigit(c)
+      | c when char.IsPunctuation(c)
+      | c when char.IsSeparator(c)
+      | c when char.IsSymbol(c)      => $"'$c'"
+      | c =>
+        def c = c : uint;
+        string.Format(<#'\u{0,4:X}'#>, c).Replace(' ', '0');
+    }
+
+    [DebuggerStepThroughAttribute]
+    public EscapeStringChar(ch : char) : string
+    {
+      | '\0' => @"\0"
+      | '\t' => @"\t"
+      | '\n' => @"\n"
+      | '\r' => @"\r"
+      | '\\' => @"\\"
+      | '\'' => @"\'"
+      | c when char.IsLetter(c)
+      | c when char.IsDigit(c)
+      | c when char.IsPunctuation(c)
+      | c when char.IsSeparator(c)
+      | c when char.IsSymbol(c)      => $"$c"
+      | c =>
+        def c = c : uint;
+        string.Format(<#\u{0,4:X}#>, c).Replace(' ', '0');
+    }
+
+    [DebuggerStepThroughAttribute]
+    public MakeType(types : list[RuleType2]) : RuleType2
+    {
+      foreach (ty in types)
+        unless (ty is RuleType2.Void)
+          return RuleType2.Tuple(types);
+          
+      RuleType2.Void()
+    }
+
+    [DebuggerStepThroughAttribute]
+    public OptimizeType(ty : RuleType2) : RuleType2
+    {
+      | List(Void)
+      | Option(Void)
+      | Tuple(types) when types.ForAll(_ is RuleType2.Void) => RuleType2.Void()
+      | _ => ty
+    }
+
+    ///////////////////
+    
+    public MakeName(fieldName : option[string], rules : list[Rule2], _context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ =>
+          match (rules.Filter(r => !(r.Type is RuleType2.Void || r.Type is RuleType2.Chars)))
+          {
+            | [rule] => rule.FieldName
+            | _ => ""
+          }
+      }
+    }
+
+    public MakePlural(fieldName : option[string], rule : Rule2, _context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ => rule.FieldName + "s" // TODO: make correct english plural name
+      }
+    }
+
+    public MakePlural(fieldName : option[string], rule : Rule2, _separatorRule : Rule2, _context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ => rule.FieldName + "s" // TODO: make correct english plural name
+      }
+    }
+
+    public MakeLiteralName(fieldName : option[string], value : string, context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ =>
+          if (context.GetTokenFieldNames().Find(value) is Some(id))
+            id.Value
+          else if (IsIdentifier(value))
+            ToPascalCase(value, "Kw")
+          else
+            ""
+      }
+    }
+    
+    public GetTokenFieldNames(this context : Context) : Map[string, Identifier]
+    {
+      def p : SyntaxModuleContext = context.GetParent();
+      p.Module.TokenFieldNames
+    }
+
+    public MakeType(rule : Rule2, sepRule : Rule2) : RuleType2
+    {
+      def type1 = rule.Type;
+      def type2 = sepRule.Type;
+      
+      if (type1 is RuleType2.Void && type2 is RuleType2.Void)
+        RuleType2.Void()
+      else if (type1 is RuleType2.Void)
+        RuleType2.List(type2)
+      else if (type2 is RuleType2.Void)
+        RuleType2.List(type1)
+      else
+        RuleType2.Tuple([RuleType2.List(type1), RuleType2.List(type2)])
+    }
+  
+    public LastOrDefault[T](this source : list[T], defaultValue : T) : T
+    {
+      match (source)
+      {
+        | [] | null => defaultValue
+        | _         => source.Last
+      }
+    }
+    
+    public ToPascalCase(str : string, suffix : string = null) : string
+    {
+      def suffixIsEmpty = string.IsNullOrEmpty(suffix);
+      if (str.Length == 0 || (char.IsUpper(str[0]) && suffixIsEmpty))
+        str
+      else
+      {
+        def suffixLength = if (suffixIsEmpty) 0 else suffix.Length;
+        def buffer = array(suffixLength + str.Length);
+        when (suffixLength > 0)
+          suffix.CopyTo(0, buffer, 0, suffixLength);
+        str.CopyTo(0, buffer, suffixLength, str.Length);
+        buffer[suffixLength] = char.ToUpperInvariant(buffer[suffixLength]);
+        string(buffer)
+      }
+    }
+    
+    IsIdentifier(str : string) : bool
+    {
+      if (str.Length == 0)
+        false
+      else
+      {
+        def ch = str[0];
+                  
+        if (ch == '_' || char.IsLetter(ch))
+        {
+          foreach (ch in str)
+            unless (ch == '_' || char.IsLetterOrDigit(ch))
+              return false;
+          true
+        }
+        else
+          false
+      }
+    }
+
+    public MakeContext(parent : Context, ruleAttributes : G.RuleAttributes, bodyDeclaration : G.BodyDeclaration) : Context
+    {
+      _ = ruleAttributes.MakeContext(parent);
+      _ = bodyDeclaration.MakeContext(parent);
+      parent
+    }
+
+    public MakeContext(parent : Context, ruleAttributes : G.RuleAttributes, tokenRule : G.TokenRule, bodyDeclaration : G.BodyDeclaration) : Context
+    {
+      _ = tokenRule.MakeContext(parent);
+      MakeContext(parent, ruleAttributes, bodyDeclaration)
+    }
+    
+    public ExtentionRule(context : Context, loc : Location, ruleAttributes : G.RuleAttributes, name : G.Identifier, baseName : G.QIdentifier, rule : G.Rule, 
+      bodyDeclaration : G.BodyDeclaration) : RuleDefinition2
+    {
+      def project = context.GetProject();
+      def id = project.GetNextRuleId();
+      def ruleSymbol = context.GetParent.[SyntaxModuleContext]().Module.BindByHierarchy(name);
+      def baseRule = RuleRef(baseName, context.Bind(baseName));
+      def precedence = bodyDeclaration.GetPrecedence();
+      def options = ruleAttributes.Options2();
+      def rule2 = rule.Typing(baseRule.Ref, precedence, None(), bodyDeclaration.Context, options);
+      def type = baseRule.Ref.Map(sym => sym.Type) ?? RuleType2.Void();
+      def lastLoc = Some(bodyDeclaration.GetLastLocation());
+      def ruleDefinition = 
+        match (rule2)
+        {
+          | Sequence((Call(callName, bindingPower) as call) :: rules) when callName.Equals(baseRule) =>
+            def prefix = Rule2.PrefixCall(call.Location, type, project.GetNextRuleId(), call.FieldName, baseRule, bindingPower);
+            def seq = Rule2.Sequence(loc, rule2.Type, project.GetNextRuleId(), "", prefix :: rules);
+            def extraFields = bodyDeclaration.GetExtraFields(RuleDefinitionType.ExtentionPostfix(), ruleSymbol, baseRule.Ref ?? null : RuleRefSymbol);
+            RuleDefinition2.ExtentionPostfix(loc, id, context, ruleSymbol, extraFields, lastLoc, options, baseRule, seq, bindingPower)
+
+          | _ =>
+            def extraFields = bodyDeclaration.GetExtraFields(RuleDefinitionType.ExtentionPrefix(), ruleSymbol, baseRule.Ref ?? null : RuleRefSymbol);
+            RuleDefinition2.ExtentionPrefix(loc, id, context, ruleSymbol, extraFields, lastLoc, options, baseRule, EnsureSequence(context, loc, rule2))
+        };
+
+      ruleDefinition
+    }
+
+    public SimpleRule(context : Context, loc : Location, ruleAttributes : G.RuleAttributes, name : G.Identifier, rule : G.Rule, 
+      bodyDeclaration : G.BodyDeclaration) : RuleDefinition2
+    {
+      def project = context.GetProject();
+      def id = project.GetNextRuleId();
+      def ruleSymbol = context.GetParent.[SyntaxModuleContext]().Module.BindByHierarchy(name);
+      def precedence = bodyDeclaration.GetPrecedence();
+      def options = ruleAttributes.Options2();
+      def rule2 = rule.Typing(None(), precedence, None(), bodyDeclaration.Context, options);
+      def extraFields = bodyDeclaration.GetExtraFields(RuleDefinitionType.Simple(), ruleSymbol, null);
+      def lastLoc = Some(bodyDeclaration.GetLastLocation());
+      RuleDefinition2.Simple(loc, id, context, ruleSymbol, extraFields, lastLoc, options, EnsureSequence(context, loc, rule2))
+    }
+
+    public ExtentionPointRule(context : Context, loc : Location, ruleAttributes : G.RuleAttributes, name : G.Identifier,
+      bodyDeclaration : G.BodyDeclaration) : RuleDefinition2
+    {
+      def project = context.GetProject();
+      def id = project.GetNextRuleId();
+      def ruleSymbol = context.GetParent.[SyntaxModuleContext]().Module.BindByHierarchy(name);
+      def options = ruleAttributes.Options2();
+      def extraFields = bodyDeclaration.GetExtraFields(RuleDefinitionType.ExtentionPoint(), ruleSymbol, null);
+      def lastLoc = Some(bodyDeclaration.GetLastLocation());
+      RuleDefinition2.ExtentionPoint(loc, id, context, ruleSymbol, extraFields, lastLoc, options)
+    }
+
+    public TokenRule(context : Context, loc : Location, ruleAttributes : G.RuleAttributes, name : G.Identifier, tokenRule : G.TokenRule, 
+      bodyDeclaration : G.BodyDeclaration) : RuleDefinition2
+    {
+      def project = context.GetProject();
+      def id = project.GetNextRuleId();
+      def ruleSymbol = context.GetParent.[SyntaxModuleContext]().Module.BindByHierarchy(name);
+      def options = ruleAttributes.Options2();
+      def extraFields = bodyDeclaration.GetExtraFields(RuleDefinitionType.Regular(), ruleSymbol, null);
+      def lastLoc = Some(bodyDeclaration.GetLastLocation());
+      def regularRule = tokenRule.Typing();
+      def regularRuleFsm = regularRule.ConvertRegularRuleToFsm();
+      RuleDefinition2.Regular(loc, id, context, ruleSymbol, extraFields, lastLoc, options, regularRule, regularRuleFsm)
+    }
+
+    public MarkerRule(context : Context, loc : Location, name : G.Identifier) : RuleDefinition2
+    {
+      def project = context.GetProject();
+      def id = project.GetNextRuleId();
+      def ruleSymbol = context.GetParent.[SyntaxModuleContext]().Module.BindByHierarchy(name);
+      RuleDefinition2.Marker(loc, id, context, ruleSymbol, [], None(), RuleDefinitionOptions())
+    }
+
+    public EnsureSequence(context : Context, loc : Location, rule : Rule2) : Rule2.Sequence
+    {
+      match (rule)
+      {
+        | Rule2.Sequence as result => result
+        | _ => Rule2.Sequence(loc, rule.Type, context.GetProject().GetNextRuleId(), "", [rule]);
+      }
+    }
+
+    public GetProject(this context : Context) : N2Project
+    {
+      | c is RootContext => c.Project
+      | null => assert(false)
+      | _ => context.Parent.GetProject()
+    }
+
+    public TryGetContext[T](this context : Context) : T
+      where T: Context
+    {
+      match (context)
+      {
+        | null   => null
+        | c is T => c
+        | c      => TryGetContext.[T](c.Parent)
+      }
+    }
+
+    public TryGetParent[T](this context : Context) : T
+      where T: Context
+    {
+      TryGetContext.[T](context.Parent)
+    }
+
+    public GetContext[T](this context : Context) : T
+      where T: Context
+    {
+      match (context)
+      {
+        | null   => assert2(false); assert(false);
+        | c is T => c
+        | c      => GetContext.[T](c.Parent)
+      }
+    }
+
+    public GetParent[T](this context : Context) : T
+      where T: Context
+    {
+      GetContext(context.Parent)
+    }
+
+    public AddRefSymbol[T](sm : SyntaxModuleSymbol, ast : T, name : string) : SyntaxModuleSymbol * RuleRefSymbol
+      where T: N2.Ast
+    {
+      def rule = ParsedRuleRefSymbol(ast, name);
+      _ = sm.Node.AddAndReport(rule, ast.Location);
+      (sm, rule)
+    }
+
+    public AddRefSymbol[T](rule : RuleRefSymbol, ast : T, name : string, modifier : ExtraFieldModifier, isCached : bool) : RuleRefSymbol * ExtraFieldRefSymbol
+      where T: N2.Ast
+    {
+      def field = ParsedExtraFieldRefSymbol(ast, name, modifier, isCached);
+      _ = rule.Node.AddAndReport(field, ast.Location);
+      (rule, field)
+    }
+
+    internal BindImpl[T](result : BindingResult[T]) : option[T]
+    {
+      unless (result.Messages.IsEmpty)
+        result.Messages.TranslateTo(N2Project.CurrentProject);
+
+      TryBindImpl(result)
+    }
+
+    TryBindImpl[T](result : BindingResult[T]) : option[T]
+    {
+      match (result.Candidates)
+      {
+        | [one] => Some(one)
+        | _ => None()
+      }
+    }
+
+    public Bind[T](this context : Context, name : G.QIdentifier) : option[T]
+      where T: Symbol
+    {
+      BindImpl(context.BindMany.[T](name.CalcLocations()))
+    }
+
+    public Bind[T](this context : Context, name : G.Identifier) : option[T]
+      where T: Symbol
+    {
+      BindImpl(context.BindMany.[T](name.Location))
+    }
+
+    public BindByHierarchy[T](this symbol : Symbol, name : G.Identifier) : T
+      where T: Symbol
+    {
+      match (symbol.Node.BindMany(name.Location))
+      {
+        | [one is T] =>   one
+        | _ =>
+          assert2(false);
+          assert(false);
+      }
+    }
+
+    public TryBind[T](this context : Context, name : G.QIdentifier) : option[T]
+      where T: Symbol
+    {
+      TryBindImpl(context.BindMany.[T](name.CalcLocations()))
+    }
+
+    public TryBind[T](this context : Context, name : G.Identifier) : option[T]
+      where T: Symbol
+    {
+      TryBindImpl(context.BindMany.[T](name.Location))
+    }
+
+    public TotalLocation(this locations : list[Location]) : Location
+    {
+      locations.Head + locations.Last
+    }
+
+    public ConvertRegularRuleToFsm(this regularRule : RegularRule2) : FSM
+    {
+      def visitedRules = HashSet();
+      def convert(_ : RegularRule2) : FSM
+      {
+        | Choice(rules)                            => FSMBuilder.Choice(rules.Map(convert))
+        | Sequence(rules)                          => FSMBuilder.Seq(rules.Map(convert))
+        | Chars(chars)                             => FSMBuilder.Seq(chars)
+        | Repeat(min, max, rule)                   => FSMBuilder.Repeat(min, max, convert(rule))
+        | RepeatWithSeparator(min, max, rule, sep) => FSMBuilder.RepeatWithSeparator(min, max, convert(rule), convert(sep))
+        | Call(RuleRef(Ref = Some(symbol is ParsedRuleRefSymbol.[G.TokenRuleDecl.Ast]), Location = loc)) =>
+          if (visitedRules.Add(symbol))
+          {
+            def result = convert(symbol.Value.TokenRule.Typing());
+            _ = visitedRules.Remove(symbol);
+            result
+          }
+          else
+          {
+            N2Project.CurrentProject.Error(loc, "Cyclic rule call found.", -1);
+            FSM()
+          }
+
+        | Call(RuleRef(Ref = Some, Location = loc)) =>
+          //TODO: add support for external token rules
+          N2Project.CurrentProject.Error(loc, "Expected parsed token rule name.", -1);
+          FSM()
+
+        | Call(RuleRef(Ref = None)) =>
+          // binding error already reported
+          FSM()
+      }
+      convert(regularRule)
+    }
+
+    public MakeMatcher(this regularRule : RegularRule2) : RegularRuleMatcher
+    {
+      FSMMatch.MakeMatcher(ConvertRegularRuleToFsm(regularRule))
+    }
+    
+    IsNewLine(ch : char) : bool
+    {
+      ch == '\n' || ch == '\r'
+    }
+    
+    public MakeLastLocation(ast : Ast, tok : NToken) : Location
+    {
+      def source = ast.Location.Source;
+      def text   = source.Text;
+      mutable start = -1;
+      for (mutable i = tok.StartPos - 1; i >= 0; i--)
+      {
+        def ch = text[i];
+        if (char.IsWhiteSpace(ch))
+          start = i;
+        else when (!IsNewLine(ch))
+          break;
+      }
+          
+      if (start >= 0)
+        Location(source, NToken(start, start+1))
+      else
+        Location(source, tok)
+    }
+
+    ParseNemerleInternal(ast : N2.Ast, context : Context) : PExpr
+    {
+      def env = context.GetNemerleEnvironment();
+      def simpleParse(ast : N2.Ast) : PExpr
+      {
+        def text = ast.Location.GetText();
+        MainParser.ParseExpr(env, text, ast.NLocation())
+      }
+      def parseAndAddIt(ast : N2.Ast) : PExpr
+      {
+        def e = simpleParse(ast);
+
+        def addIt(e)
+        {
+          | <[ value ]> => e
+          | <[ $(n : name) ]> => <[ it.$(n : name)]>
+          | <[ $x = $y ]> => <[ $(addIt(x)) = $(addIt(y)) ]>
+          | _ => e
+        }
+
+        addIt(e)
+      }
+
+      match (ast)
+      {
+        | G.Expression.Ast(ExpressionContents=[G.ExpressionContent1.Ast(Content=G.Content6.Ast as fold)]) => 
+          def collection = simpleParse(fold.Identifier);
+          def expr1 = simpleParse(fold.Expression);
+          def exprs = fold.Expressions[0].Map(parseAndAddIt);
+          //exprs.Fold()
+          <[ $collection.Fold($expr1, fun((it, value)) { ..$exprs }) ]>
+
+        | _ => simpleParse(ast)
+      }
+    }
+
+    public ParseNemerle(this body : G.ExtraFieldBody, context : Context) : PExpr
+    {
+      match (body)
+      {
+        | G.ExtraFieldBody1.Ast as b => ParseNemerleInternal(b.Block, context)
+        | G.ExtraFieldBody2.Ast as b => ParseNemerleInternal(b.Expression, context)
+        | G.ExtraFieldBodyEmpty      => <[ () ]>
+        | _                          => <[ () ]>
+      }
+    }
+
+    public ParseNemerle(this parms : list[G.ExtraFieldsParam], context : Context) : list[PParameter]
+    {
+      def parsed = List();
+      foreach (parm in parms)
+      {
+        | G.ExtraFieldsParam.Ast as p => 
+          match (ParseNemerleInternal(p.Name, context))
+          {
+            | <[ $(n : name) ]> => parsed.Add(<[ parameter: $n : $(ParseNemerleInternal(p.Type, context)) ]>)
+            | _ => N2Project.CurrentProject.FatalError(p.Name, "Expected simple name.", -1)
+          }
+
+        | e => N2Project.CurrentProject.FatalError(e, "Parse error.", -1)
+      }
+      parsed.ToNList()
+    }
+
+    public ParseNemerle(this type : G.Type, context : Context) : PExpr
+    {
+      ParseNemerleInternal(type, context)
+    }
+    
+    public CallRuleTyping(baseRule : option[RuleRefSymbol], _precedence : int, _fieldName : option[string], context : Context, options : RuleDefinitionOptions,
+      QualifiedName : G.QIdentifier, BindingPower :  option[NToken * G.Number]) : Rule2
+    {
+      def parts = QualifiedName.Parts();
+      def newFieldName : string = _fieldName ?? LastOrDefault(parts, "");
+
+      when (TryBind.[RuleAliasSymbol](context, QualifiedName) is Some(alias))
+        return alias.Rule.Typing(baseRule, _precedence, Some(newFieldName), context, options);
+
+      def ruleRef = RuleRef(QualifiedName, Bind(context, QualifiedName));
+      def (type, callRuleOptions) = 
+        if (ruleRef.Ref is Some(ruleSymbol))
+        {
+          when (ruleSymbol is ParsedRuleRefSymbol[G.ExtendSyntaxMember.Ast])
+            Project.CurrentProject.Error(QualifiedName, 
+              "You can't use directly reference to a extending rule. Use reference to extending rule instead or make a separate rule.", -1);
+          (ruleSymbol.Type, ruleSymbol.Options)
+        }
+        else
+          (RuleType2.Void(), RuleDefinitionOptions());
+
+      def bp =
+        match (BindingPower)
+        {
+          | None
+          | Some((_, num)) when num.Value() == 0 => if (baseRule.Equals(ruleRef.Ref)) _precedence  else 0
+          | Some((_, num)) =>
+            when (_precedence != 0)
+              Project.CurrentProject.Error(num, "You can't set a binding power if you set a precedence.", -1);
+            num.Value()
+        };
+
+      def callRule = Rule2.Call(QualifiedName.Location, type, 0, newFieldName, ruleRef, bp);
+
+      // Подставляем s-ки...
+
+      match (type)
+      {
+        // Whitespace rule is inserted after 'syntax' rules marked with 'ExplicitSpaces' attribute
+        // Whitespace rule is NOT inserted after 'syntax' rules marked with 'SuppressTrailingSpaces' attribute
+        | _ when options.IsExplicitSpaces || callRuleOptions.IsSuppressTrailingSpaces => callRule
+        | _ when callRuleOptions.IsExplicitSpaces
+        | Chars => // Whitespace rule is inserted after all 'token' rules 
+          def moduleContext = context.GetContext.[SyntaxModuleBodyContext]();
+          def loc           = callRule.Location.FromEnd();
+          def symbol        = moduleContext.GetSpaceRule(context, "s");
+          def ruleRef       = RuleRef(loc, symbol, true);
+          def s             = Rule2.Call(loc, RuleType2.Void(), 0, "", ruleRef, 0);
+          Rule2.Sequence(callRule.Location, type, 0, newFieldName, [callRule : Rule2, s])
+
+        | _ => callRule
+      }
+    }
+    
+    public FromEnd(this loc : Location) : Location
+    {
+      Location(loc.Source, NToken(loc.EndPos, loc.EndPos))
+    }
+    
+    public StringRuleTyping(loc : Location, value : string, fieldName : option[string], context : Context, options : RuleDefinitionOptions) : Rule2
+    {
+      def keywordContext = context.TryGetParent.[KeywordRegexContext]();
+      def newFieldName   = MakeLiteralName(fieldName, value, context);
+      def type           = RuleType2.Chars();
+      def str            = Rule2.String(loc, type, 0, newFieldName, value);
+      def loc            = loc.FromEnd();
+      
+      if (options.IsExplicitSpaces)
+        str
+      else
+      {
+        def symbol =
+          if (keywordContext?.FindRule(value) is Some as sym)
+            sym : option[_]
+          else
+          {
+            def moduleContext = context.GetContext.[SyntaxModuleBodyContext](); 
+            moduleContext.GetSpaceRule(context, "s");
+          };
+        def ruleRef = RuleRef(loc, symbol, true);
+        def S = Rule2.Call(loc, RuleType2.Void(), 0, "", ruleRef, 0);
+        Rule2.Sequence(loc, type, 0, newFieldName, [str, S])
+      }
+    }
+  } // module
+} // ns
