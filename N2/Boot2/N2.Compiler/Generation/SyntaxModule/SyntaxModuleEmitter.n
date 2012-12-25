@@ -1,0 +1,169 @@
+﻿using N2.Model;
+using N2.Typing;
+
+using Nemerle;
+using Nemerle.Compiler;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  internal partial class SyntaxModuleEmitter
+  {
+    public Environment  : EmitterEnvironment { get; }
+    public Env          : GlobalEnv          { get; }
+    public SyntaxModule : SyntaxModuleData   { get; }
+
+    public GrammarTB               : TypeBuilder { get; }
+    public GrammarImplTB           : TypeBuilder { get; }
+    public GrammarDescriptorImplTB : TypeBuilder { get; }
+
+    private _ruleParserEmitters        : list[RuleParserEmitter];
+
+    private _ruleDescriptorEmitters    : list[RuleDescriptorEmitter];
+
+    private _allAstEmitters            : list[RuleAstEmitter];
+    private _extentionPointAstEmitters : list[RuleAstEmitter];
+    private _otherAstEmitters          : list[RuleAstEmitter];
+
+    private _tokenFieldEmitters        : list[TokenFieldEmitter];
+
+    private _spanClassEmitters         : list[SpanClassEmitter];
+
+    public this(environment : EmitterEnvironment, syntaxModule : SyntaxModuleData)
+    {
+      Environment  = environment;
+      SyntaxModule = syntaxModule;
+      Env          = Environment.Manager.CoreEnv.EnterIntoNamespace(syntaxModule.Name.Node.Parent.FullNameParts);
+
+      GrammarTB               = Env.Define(<[ decl: public abstract partial class $(syntaxModule.Name.Name : usesite) { } ]>);
+      GrammarImplTB           = GrammarTB.DefineNestedType(MakeGrammarImpl());
+      GrammarDescriptorImplTB = GrammarImplTB.DefineNestedType(MakeGrammarDescriptorImpl());
+
+      _ruleParserEmitters = SyntaxModule.RuleDefs.FoldLeft([], fun(rd : RuleDefinition2, acc)
+      {
+        match (rd)
+        {
+          | ExtentionPoint         => acc
+          | ExtentionPrefix  as rd => ExtentionPrefixRuleParserEmitter(this, rd) :: acc
+          | ExtentionPostfix as rd => ExtentionPostfixRuleParserEmitter(this, rd) :: acc
+          | Simple           as rd => SimpleRuleParserEmitter(this, rd) :: acc
+          | Regular          as rd => RegularRuleParserEmitter(this, rd) :: acc
+          | Marker                 => acc
+        }
+      });
+
+      _ruleDescriptorEmitters = SyntaxModule.RuleDefs.Map(fun(_ : RuleDefinition2)
+      {
+        | Marker as markerRule => MarkerRuleDescriptorEmitter(this, markerRule)
+        | parsingRule          => ParsingRuleDescriptorEmitter(this, parsingRule)
+      });
+
+      _allAstEmitters = SyntaxModule.RuleDefs.MapFiltered(_.IsAst, RuleAstEmitter(this, _));
+      (_extentionPointAstEmitters, _otherAstEmitters) = _allAstEmitters.Partition(x => x.RuleDefinition is RuleDefinition2.ExtentionPoint);
+
+      _tokenFieldEmitters = match (syntaxModule.FinalContext.TryGetContext.[TokenFieldContext]())
+      {
+        | null    => []
+        | context => context.SymbolMap.MapToList((_, symbol) => TokenFieldEmitter(this, symbol))
+      };
+
+      _spanClassEmitters = match (syntaxModule.FinalContext.TryGetContext.[SpanClassContext]())
+      {
+        | null    => []
+        | context => context.SymbolMap.MapToList((_, symbol) => SpanClassEmitter(this, symbol))
+      };
+    }
+
+    public DefineExtentionPointAstTypes() : void
+    {
+      foreach (emitter in _extentionPointAstEmitters)
+        emitter.DefineTypes();
+    }
+
+    public DefineOtherAstTypes() : void
+    {
+      foreach (emitter in _otherAstEmitters)
+        emitter.DefineTypes();
+    }
+
+    public DefineAstMembers() : void
+    {
+      foreach (emitter in _allAstEmitters)
+        emitter.DefineMembers();
+    }
+
+    public DefineParserTypes() : void
+    {
+      def astSizes = Dictionary();
+      def externalCalls = List();
+      foreach (emitter in _ruleParserEmitters)
+      {
+        mutable astSize;
+        mutable rootAstStruct;
+        emitter.DefineParser(out astSize, out rootAstStruct, externalCalls);
+        astSizes[emitter.RuleDefinition.RuleSymbol] = (astSize, rootAstStruct);
+      }
+      foreach (emitter in _ruleDescriptorEmitters)
+        match (emitter.RuleDefinition)
+        {
+          | _ when !emitter.NeedsAstInfo =>
+            emitter.DefineDescriptor(0, None())
+
+          | ExtentionPoint =>
+            emitter.DefineDescriptor(5, None())
+
+          | rd =>
+            assert2(astSizes.ContainsKey(rd.RuleSymbol));
+            emitter.DefineDescriptor(astSizes[rd.RuleSymbol])
+        }
+
+      GrammarDescriptorImplTB.DefineConditional(<[decl:
+        public override Rules : array[N2.RuleDescriptor]
+        {
+          get { array[..$(_ruleDescriptorEmitters.MapFiltered(x => x is ParsingRuleDescriptorEmitter, emitter => <[ $(Environment.GetDescriptorClassRef(emitter.RuleDefinition.RuleSymbol)).StaticDescriptor ]>))] }
+        }
+      ]>);
+
+      def externalGrammars = externalCalls.Select(x => x.Node.Parent).Distinct().NToList();
+      GrammarDescriptorImplTB.DefineConditional(<[decl:
+        public override Dependencies : array[N2.GrammarDescriptor]
+        {
+          get { array[..$(externalGrammars.Map(node => <[ $(PExprUtils.FromQualifiedIdentifier(node.FullNameParts + [AssemblyConstants.GrammarImplName])).StaticDescriptor ]>))] }
+        }
+      ]>);
+    }
+
+    public DefineParserMethods() : void
+    {
+      foreach (emitter in _ruleParserEmitters)
+        emitter.DefineParserMethods();
+    }
+
+    public DefineOtherMembers() : void
+    {
+      foreach (emitter in _tokenFieldEmitters)
+        emitter.Emit();
+      foreach (emitter in _spanClassEmitters)
+        emitter.Emit();
+    }
+
+    public Emit() : void
+    {
+      foreach (emitter in _ruleParserEmitters)
+        emitter.Emit();
+      foreach (emitter in _ruleDescriptorEmitters)
+        emitter.Emit();
+      foreach (emitter in _allAstEmitters)
+        emitter.Emit();
+      GrammarDescriptorImplTB.Compile();
+      GrammarImplTB.Compile();
+      GrammarTB.Compile();
+    }
+  }
+}

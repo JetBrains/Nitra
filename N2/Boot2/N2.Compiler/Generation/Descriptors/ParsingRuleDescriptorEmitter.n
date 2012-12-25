@@ -1,0 +1,566 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using N2.Model;
+using N2.Typing;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  [Record]
+  internal sealed class ParsingRuleDescriptorEmitter : RuleDescriptorEmitter, IVariableEmitter
+  {
+    [RecordIgnore] private mutable _descriptorTb : TypeBuilder;
+
+    public override NeedsAstInfo : bool { get { true } }
+
+    public override DefineDescriptor(astSize : int, rootAstStruct : option[RootAstStruct2]) : void
+    {
+      assert(_descriptorTb == null);
+      def baseType = match(RuleDefinition)
+      {
+        | ExtentionPoint   => <[ ExtensibleRuleDescriptor ]>
+        | ExtentionPrefix  => <[ PrefixRuleDescriptor ]>
+        | ExtentionPostfix => <[ PostfixRuleDescriptor ]>
+        | Simple           => <[ SimpleRuleDescriptor ]>
+        | Regular          => <[ RegularRuleDescriptor ]>
+        | Marker           => assert(false)
+      }
+      def baseTypes = baseType :: if (RuleDefinition.IsStart) [<[ N2.IStartRuleDescriptor ]>] else [];
+      def descriptorClass = <[decl:
+        public sealed class $(RuleDefinition.DecorateRuleClassName() : dyn) : ..$baseTypes
+        {
+          private this() {}
+        }
+      ]>;
+      when (RuleDefinition.IsExplicitSpaces)
+        descriptorClass.AddCustomAttribute(<[ N2.ExplicitSpacesAttribute ]>);
+      when (RuleDefinition.IsSuppressTrailingSpaces)
+        descriptorClass.AddCustomAttribute(<[ N2.SuppressTrailingSpacesAttribute ]>);
+
+      _descriptorTb = Owner.GrammarDescriptorImplTB.DefineNestedType(descriptorClass);
+      _descriptorTb.DefineConditional(<[decl: public  override Name              : string                                          { get { $(RuleDefinition.RuleSymbol.Name : string) } } ]>);
+      _descriptorTb.DefineConditional(<[decl: public  override Grammar           : N2.GrammarDescriptor                            { get { $(Owner.GrammarImplTB.GetMemType() : typed).StaticDescriptor } } ]>);
+      _descriptorTb.DefineConditional(<[decl: public  override AstSize           : int                                             { get { $(astSize : int) } } ]>);
+      _descriptorTb.DefineConditional(<[decl: private static   _staticDescriptor : $(RuleDefinition.DecorateRuleClassName() : dyn) = $(RuleDefinition.DecorateRuleClassName() : dyn)(); ]>);
+      _descriptorTb.DefineConditional(<[decl: public  static   StaticDescriptor  : $(RuleDefinition.DecorateRuleClassName() : dyn) { get { _staticDescriptor } } ]>);
+
+      when (RuleDefinition.IsStart)
+      {
+        _descriptorTb.DefineConditional(<[decl:
+          public Parse(source : N2.SourceSnapshot, parserHost : N2.ParserHost) : N2.ParseResult
+          {
+            parserHost.DoParsing(source, this)
+          }
+        ]>);
+        Owner.GrammarImplTB.DefineConditional(<[ decl:
+          public static $(RuleDefinition.RuleSymbol.Name + "RuleDescriptor" : usesite) : $(Owner.Environment.GetDescriptorClassRef(RuleDefinition.RuleSymbol))
+          {
+            get { $(Owner.Environment.GetDescriptorClassRef(RuleDefinition.RuleSymbol)).StaticDescriptor }
+          }
+        ]>);
+      }
+
+      match (RuleDefinition.Type)
+      {
+        | Chars => ()
+        | Void  => _descriptorTb.DefineConditional(<[decl: public ResultType() : void {} ]>)
+        | t     => _descriptorTb.DefineConditional(<[decl: public ResultType() : $(Owner.RuleTypeToNType(t) : typed) { mutable res; res } ]>)
+      }
+
+      def defineNewParserMethod(returnType)
+      {
+        _descriptorTb.DefineConditional(<[decl:
+          public override NewParser(ruleId : int, grammar : N2.CompositeGrammar) : $returnType
+          {
+            $(Owner.GrammarImplTB.GetMemType() : typed).$(RuleDefinition.DecorateRuleClassName() : dyn)(ruleId, grammar)
+          }
+        ]>);
+      }
+      def defineExtentionRuleMethods(baseRuleSymbol)
+      {
+        defineNewParserMethod(<[ N2.Internal.ExtentionRuleParser ]>);
+        _descriptorTb.DefineConditional(<[decl:
+          public override BaseRule : ExtensibleRuleDescriptor { get { $(Owner.Environment.GetDescriptorClassRef(baseRuleSymbol)).StaticDescriptor } }
+        ]>);
+      }
+      match (RuleDefinition)
+      {
+        | ExtentionPoint => ()
+        | ExtentionPrefix(BaseRule = RuleRef(Ref = Some(baseRuleSymbol))) =>
+          defineExtentionRuleMethods(baseRuleSymbol)
+
+        | ExtentionPostfix(BaseRule = RuleRef(Ref = Some(baseRuleSymbol)), BindingPower = bindingPower) =>
+          defineExtentionRuleMethods(baseRuleSymbol);
+          _descriptorTb.DefineConditional(<[decl: public override BindingPower : int { get { $(bindingPower : int) } } ]>);
+
+        | Simple  => defineNewParserMethod(<[ N2.Internal.RuleParser ]>);
+        | Regular => ()
+        | _       => assert(false)
+      }
+
+      DefineCreateAst(rootAstStruct);
+      DefineDebugView(rootAstStruct);
+      DefineGetAstLength(rootAstStruct);
+      //TODO: implement these methods
+      _descriptorTb.DefineConditional(<[ decl:
+        public override GetSpans(parserHost : N2.ParserHost, ast : array[int], index : int, pos : int, length : int, startPos : int, endPos : int, spans : System.Collections.Generic.List[SpanInfo]) : void
+        {
+          ignore(parserHost, ast, index, pos, length, startPos, endPos, spans);
+          throw System.NotImplementedException();
+        }
+      ]>)
+    }
+
+    public override Emit() : void
+    {
+      assert(_descriptorTb != null);
+      _descriptorTb.Compile();
+    }
+
+    Environment : EmitterEnvironment implements IVariableEmitter.Environment { get { Owner.Environment } }
+
+    CreateVariable(name : string) : PExpr implements IVariableEmitter.CreateVariable
+    {
+      <[ $(name : dyn) ]>
+    }
+
+    private DefineCreateAst(rootAstStruct : option[RootAstStruct2]) : void
+    {
+      def defaultImplementation()
+      {
+        _descriptorTb.DefineConditional(<[decl:
+          public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
+          {
+            ignore(source, parserHost, ast, index, pos);
+            throw System.NotImplementedException();
+          }
+        ]>);
+      }
+      def rootAstMaker(arguments : list[PExpr]) : PExpr
+      {
+        def arguments = <[ N2.Location(source, pos, curPos) ]> :: <[ [] ]> :: arguments;
+        <[ $(Owner.RuleTypeToNType(RuleDefinition.Type) : typed).Ast(..$arguments) ]>
+      }
+      def internalAstMaker(_ : list[PExpr]) : PExpr
+      {
+        | []   => assert(false)
+        | [x]  => x
+        | many => <[ (..$many) ]>
+      }
+      def makeReader(structField : AstStruct2.StructField, astPointer : AstPointer2) : PExpr
+      {
+        match(structField.Field)
+        {
+          | RuleField2.TokenString
+          | RuleField2.TokenCall =>
+            <[ N2.NToken(curPos, curPos + curLength) ]>
+
+          | RuleField2.ExternalAst(ruleSymbol = ruleSymbol) =>
+            <[
+              $(Owner.Environment.GetDescriptorClassRef(ruleSymbol))
+                .StaticCreateAst(source, parserHost, ast, ast[$(astPointer.AstOffset(structField))], curPos)
+            ]>
+
+          | RuleField2.ExtentionPoint(ruleSymbol = ruleSymbol) =>
+            <[
+              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              parserHost.GetRuleDescriptorById(ast[astIndex])
+                .CreateAst(source, parserHost, ast, astIndex, curPos)
+                :> $(Owner.RuleTypeToNType(ruleSymbol.Type) : typed)
+            ]>
+
+          | RuleField2.List(astStruct = itemStruct, NextRef = nextRef) =>
+            def itemPointer   = AstPointer2(itemStruct, "astIndex", this);
+            <[
+              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              if (astIndex > 0)
+              {
+                def astBuffer = System.Collections.Generic.List(16);
+                def loop(astIndex)
+                {
+                  astBuffer.Add($(makeAst(itemStruct, itemPointer, internalAstMaker)));
+                  def astIndex = ast[$(itemPointer.AstOffset(nextRef))];
+                  when (astIndex > 0)
+                    loop(astIndex);
+                }
+                loop(astIndex);
+                Nemerle.Collections.NList.ToList(astBuffer)
+              }
+              else []
+            ]>
+
+          | RuleField2.List2(astRuleStruct = itemStruct, astSeparatorStruct = separatorStruct, NextRuleRef = nextItemRef, NextSeparatorRef = nextSeparatorRef, hangingSeparator = hangingSeparator) =>
+            def itemPointer = AstPointer2(itemStruct, "astIndex", this);
+            def separatorPointer = AstPointer2(separatorStruct, "separatorIndex", this);
+            def readNextAst()
+            {
+              if (hangingSeparator)
+                <[
+                  separatorBuffer.Add($(makeAst(separatorStruct, separatorPointer, internalAstMaker)));
+                  def nextAstIndex = ast[$(separatorPointer.AstOffset(nextSeparatorRef))];
+                  when (nextAstIndex > 0)
+                    loop(nextAstIndex);
+                ]>
+              else
+                <[
+                  def nextAstIndex = ast[$(separatorPointer.AstOffset(nextSeparatorRef))];
+                  when (nextAstIndex > 0)
+                  {
+                    separatorBuffer.Add($(makeAst(separatorStruct, separatorPointer, internalAstMaker)));
+                    loop(nextAstIndex);
+                  }
+                ]>
+            }
+            <[
+              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              if (astIndex > 0)
+              {
+                def astBuffer = System.Collections.Generic.List(16);
+                def separatorBuffer = System.Collections.Generic.List(16);
+                def loop(astIndex)
+                {
+                  astBuffer.Add($(makeAst(itemStruct, itemPointer, internalAstMaker)));
+                  def separatorIndex = ast[$(itemPointer.AstOffset(nextItemRef))];
+                  when (separatorIndex > 0)
+                    $(readNextAst());
+                }
+                loop(astIndex);
+                (Nemerle.Collections.NList.ToList(astBuffer), Nemerle.Collections.NList.ToList(separatorBuffer))
+              }
+              else ([], [])
+            ]>
+
+          | RuleField2.Option(astStruct = valueAstStruct) =>
+            <[
+              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              if (astIndex > 0)
+                Some($(makeAst(valueAstStruct, AstPointer2(valueAstStruct, "astIndex", this), internalAstMaker)))
+              else
+                None()
+            ]>
+
+          | _ => assert(false)
+        }
+      }
+      and makeAst(astStruct : AstStruct2, astPointer : AstPointer2, maker : list[PExpr] -> PExpr) : PExpr
+      {
+        def statements = SCG.List();
+        def arguments = SCG.List();
+        def visitStructField(structField : AstStruct2.StructField, isPrefixRef : bool) : void
+        {
+          def getLengthExpr()
+          {
+            if(isPrefixRef)
+              <[
+                curLength =
+                {
+                  def astIndex = ast[$(astPointer.AstOffset(structField))];
+                  parserHost.GetRuleDescriptorById(ast[astIndex]).GetAstLength(parserHost, ast, astIndex)
+                }
+              ]>
+            else
+              <[ curLength = ast[$(astPointer.SizeOffset(structField))] ]>
+          }
+          match (structField.Field)
+          {
+            | RuleField2.Ast
+            | RuleField2.Predicate => ()
+            | RuleField2.Void =>
+              statements.Add(getLengthExpr());
+              statements.Add(<[ curPos += curLength ]>);
+
+            | RuleField2.List   with incrementPos = false
+            | RuleField2.List2  with incrementPos = false
+            | RuleField2.Option with incrementPos = false
+            | _                 with incrementPos = true =>
+              def varName = Util.tmpname("ast");
+              statements.Add(getLengthExpr());
+              statements.Add(<[ def $(varName : usesite) = $(makeReader(structField, astPointer)) ]>);
+              arguments.Add(<[ $(varName : usesite) ]>);
+              when (incrementPos)
+                statements.Add(<[ curPos += curLength ]>);
+          }
+        }
+        when (astStruct is PostfixAstStruct2 as astStruct)
+          visitStructField(astStruct.PrefixRef, true);
+        foreach (sizeField in astStruct.SizeFields)
+          visitStructField(sizeField, false);
+        statements.Add(maker(arguments.ToNList()));
+        <[ { ..$(statements.ToNList()) } ]>
+      }
+      match (RuleDefinition)
+      {
+        | _ when Owner.Environment.IsIdeMode => defaultImplementation()
+        | Simple           when RuleDefinition.IsAst =>
+          def astStruct  = rootAstStruct.Value;
+          def astPointer = AstPointer2(astStruct, "index", this);
+          _descriptorTb.DefineConditional(<[decl:
+            public static StaticCreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : $(Owner.RuleTypeToNType(RuleDefinition.Type) : typed)
+            {
+              assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1);
+              mutable curPos = pos;
+              mutable curLength;
+              ignore(source, parserHost, ast, index, curPos, curLength);
+              $(makeAst(astStruct, astPointer, rootAstMaker))
+            }
+          ]>);
+          _descriptorTb.DefineConditional(<[decl:
+            public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
+            {
+              StaticCreateAst(source, parserHost, ast, index, pos)
+            }
+          ]>);
+
+        | ExtentionPrefix  when RuleDefinition.IsAst
+        | ExtentionPostfix when RuleDefinition.IsAst =>
+          def astStruct  = rootAstStruct.Value;
+          def astPointer = AstPointer2(astStruct, "index", this);
+          _descriptorTb.DefineConditional(<[decl:
+            public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
+            {
+              assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1);
+              mutable curPos = pos;
+              mutable curLength;
+              ignore(source, parserHost, ast, index, curPos, curLength);
+              $(makeAst(astStruct, astPointer, rootAstMaker))
+            }
+          ]>);
+
+        | ExtentionPoint when RuleDefinition.IsAst =>
+          def astStruct = ExtensibleAstStruct2(this, RuleDefinition);
+          def astPointer = AstPointer2(astStruct, "index", this);
+          _descriptorTb.DefineConditional(<[decl:
+            public override CreateAst(source : N2.SourceSnapshot, parserHost : N2.ParserHost, ast : array[int], index : int, pos : int) : N2.Ast
+            {
+              assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1);
+              def astIndex = ast[$(astPointer.AstOffset(astStruct.AstRef))];
+              parserHost.GetRuleDescriptorById(ast[astIndex]).CreateAst(source, parserHost, ast, astIndex, pos)
+            }
+          ]>);
+
+        | _ => defaultImplementation()
+      }
+    }
+
+    private DefineDebugView(rootAstStruct : option[RootAstStruct2]) : void
+    {
+      def makeFieldViews(astStruct : AstStruct2)
+      {
+        def makeHeaderSetter(field) { <[ debugAst[index + $(field.Offset)] = N2.Debug.DebugViewHeader(parser, index + $(field.Offset)) ]> }
+        def makeSizeSetter(field)
+        {
+          def ofs = astStruct.SizesOffset + field.SizeOffset;
+          <[ debugAst[index + $ofs] = N2.Debug.DebugViewSize(parser, index + $ofs) ]>
+        }
+        def makeAstSetter(field)
+        {
+          def ofs = astStruct.AstOffset + field.AstOffset;
+          def makeAstRef(ruleSymbol)
+          {
+            <[ debugAst[index + $ofs] = N2.Debug.DebugViewAstRef(parser, index + $ofs, $(Owner.Environment.GetDescriptorClassRef(ruleSymbol)).StaticDescriptor) ]>
+          }
+          match (field.Field)
+          {
+            | RuleField2.ExtentionPoint as ruleField => makeAstRef(ruleField.ruleSymbol)
+            | RuleField2.ExternalAst    as ruleField => makeAstRef(ruleField.ruleSymbol)
+            | RuleField2.Void           as ruleField => makeAstRef(ruleField.ruleSymbol)
+            | RuleField2.Option         as ruleField =>
+              <[
+                debugAst[index + $ofs] = N2.Debug.DebugViewInternalRef(parser, index + $ofs, "Option", $(ruleField.astStruct.AstSize));
+                when (parser.parser.ast[index + $ofs] > 0)
+                {
+                  def index = parser.parser.ast[index + $ofs];
+                  $(makeFieldViews(ruleField.astStruct));
+                }
+              ]>
+
+            | RuleField2.List           as ruleField =>
+              def owner = ruleField.NextRef.Owner;
+              def loop = if (!object.ReferenceEquals(owner, astStruct))
+              {
+                <[
+                  def loop(index)
+                  {
+                    when (parser.parser.ast[index] > 0)
+                    {
+                      def index = parser.parser.ast[index];
+                      $(makeFieldViews(owner));
+                      loop(index + $(owner.AstOffset + ruleField.NextRef.AstOffset))
+                    }
+                  }
+                  loop(index + $ofs)
+                ]>
+              }
+              else
+                <[ {} ]>;
+              <[
+                debugAst[index + $ofs] = N2.Debug.DebugViewInternalRef(parser, index + $ofs, "List", $(owner.AstSize));
+                $loop
+              ]>
+
+            | RuleField2.List2          as ruleField =>
+              def ruleOwner      = ruleField.NextRuleRef.Owner;
+              def separatorOwner = ruleField.NextSeparatorRef.Owner;
+              def loop = if (!(object.ReferenceEquals(ruleOwner, astStruct) || object.ReferenceEquals(separatorOwner, astStruct)))
+              {
+                <[
+                  def loopRule(index)
+                  {
+                    when (parser.parser.ast[index] > 0)
+                    {
+                      def index = parser.parser.ast[index];
+                      $(makeFieldViews(ruleOwner));
+                      loopSeparator(index + $(ruleOwner.AstOffset + ruleField.NextRuleRef.AstOffset))
+                    }
+                  }
+                  and loopSeparator(index)
+                  {
+                    when (parser.parser.ast[index] > 0)
+                    {
+                      def index = parser.parser.ast[index];
+                      $(makeFieldViews(separatorOwner));
+                      loopRule(index + $(separatorOwner.AstOffset + ruleField.NextSeparatorRef.AstOffset))
+                    }
+                  }
+                  loopRule(index + $ofs)
+                ]>
+              }
+              else
+                <[ {} ]>;
+              def astSize = if (object.ReferenceEquals(ruleOwner, astStruct)) separatorOwner.AstSize else ruleOwner.AstSize;
+              <[
+                debugAst[index + $ofs] = N2.Debug.DebugViewInternalRef(parser, index + $ofs, "List2", $astSize);
+                $loop
+              ]>
+            | _ => <[ _ = $(field?.Field?.GetType()?.Name ?? "null?") ]>
+          }
+        }
+        def astStruct = astStruct;
+        def headerSetters = astStruct.HeaderFields.Map(makeHeaderSetter);
+        def sizeSetters   = astStruct.SizeFields.Map(makeSizeSetter);
+        def astSetters    = astStruct.AstFields.Map(makeAstSetter);
+        <[ { ..$headerSetters } { ..$astSetters } { ..$sizeSetters } ]>;
+      }
+      if (Owner.Environment.IsIdeMode)
+      {
+        _descriptorTb.DefineConditional(<[decl:
+          public override FillDebugAst(parser : N2.Debug.DebugParser, index : int, debugAst : array[object]) : void
+          {
+            _ = parser;
+            _ = index;
+            _ = debugAst;
+          }
+        ]>);
+      }
+      else
+      {
+        def setters = match (RuleDefinition)
+        {
+          | ExtentionPrefix | ExtentionPostfix =>
+            def rootAstStruct = rootAstStruct.Value;
+            def terminatorOffset = rootAstStruct.TerminatorOffset;
+            <[
+              debugAst[index + $terminatorOffset] = N2.Debug.DebugViewTerminator(parser, index + $terminatorOffset);
+              $(makeFieldViews(rootAstStruct));
+            ]>
+
+          | Simple => makeFieldViews(rootAstStruct.Value)
+          | ExtentionPoint => makeFieldViews(ExtensibleAstStruct2(this, RuleDefinition))
+
+          | _ => <[ {} ]>
+        }
+        _descriptorTb.DefineConditional(<[decl:
+          public override FillDebugAst(parser : N2.Debug.DebugParser, index : int, debugAst : array[object]) : void
+          {
+            $setters;
+            debugAst[index] = N2.Debug.DebugViewAstDef(parser, index, $(Owner.Environment.GetDescriptorClassRef(RuleDefinition.RuleSymbol)).StaticDescriptor);
+          }
+        ]>);
+      }
+    }
+
+    private DefineGetAstLength(rootAstStruct : option[RootAstStruct2]) : void
+    {
+      def defaultImplementation()
+      {
+        _descriptorTb.DefineConditional(<[decl:
+          public override GetAstLength(parserHost : N2.ParserHost, ast : array[int], index : int) : int
+          {
+            ignore(parserHost, ast, index);
+            throw System.NotImplementedException();
+          }
+        ]>);
+      }
+      def makeLength(astStruct : AstStruct2, astPointer : AstPointer2) : PExpr
+      {
+        def statements = SCG.List();
+        statements.Add(<[ mutable length ]>);
+        def visitStructField(structField : AstStruct2.StructField, isPrefixRef : bool) : void
+        {
+          match (structField.Field)
+          {
+            | RuleField2.Ast
+            | RuleField2.Predicate => ()
+            | _ =>
+              def expr =
+                if(isPrefixRef)
+                  <[
+                    {
+                      def astIndex = ast[$(astPointer.AstOffset(structField))];
+                      length += parserHost.GetRuleDescriptorById(ast[astIndex]).GetAstLength(parserHost, ast, astIndex)
+                    }
+                  ]>
+                else
+                  <[ length += ast[$(astPointer.SizeOffset(structField))] ]>;
+              statements.Add(expr);
+          }
+        }
+        when (astStruct is PostfixAstStruct2 as astStruct)
+          visitStructField(astStruct.PrefixRef, true);
+        foreach (sizeField in astStruct.SizeFields)
+          visitStructField(sizeField, false);
+        statements.Add(<[ length ]>);
+        <[ { ..$(statements.ToNList()) } ]>
+      }
+      match (RuleDefinition)
+      {
+        | _ when Owner.Environment.IsIdeMode => defaultImplementation()
+        | ExtentionPrefix
+        | ExtentionPostfix
+        | Simple =>
+          def astStruct = rootAstStruct.Value;
+          def astPointer = AstPointer2(astStruct, "index", this);
+          _descriptorTb.DefineConditional(<[decl:
+            public override GetAstLength(parserHost : N2.ParserHost, ast : array[int], index : int) : int
+            {
+              assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1);
+              ignore(parserHost, ast, index);
+              $(makeLength(astStruct, astPointer))
+            }
+          ]>);
+
+        | ExtentionPoint =>
+          def astStruct = ExtensibleAstStruct2(this, RuleDefinition);
+          def astPointer = AstPointer2(astStruct, "index", this);
+          _descriptorTb.DefineConditional(<[decl:
+            public override GetAstLength(parserHost : N2.ParserHost, ast : array[int], index : int) : int
+            {
+              assert(ast[$(astPointer.HeaderOffset(astStruct.StateRef))] == -1);
+              def astIndex = ast[$(astPointer.AstOffset(astStruct.AstRef))];
+              parserHost.GetRuleDescriptorById(ast[astIndex]).GetAstLength(parserHost, ast, astIndex)
+            }
+          ]>);
+
+        | _ => defaultImplementation()
+      }
+    }
+  }
+}

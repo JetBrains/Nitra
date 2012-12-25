@@ -1,0 +1,197 @@
+﻿using N2.ProjectSystem;
+using N2.Runtime;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Typing
+{
+  public abstract class EnteredScopeContext : Context
+  {
+    public ParentScope      : EnteredScopeContext      { get; }
+    public OpenedNamespaces : list[Symbol]             { get; }
+    public AliasMap         : Map[string, AliasSymbol] { get; }
+
+    public this(parent : Context)
+    {
+      base(parent);
+      ParentScope = TryGetParent();
+
+      def lookupSymbols(context, openedNamespaces, aliasMap : Map[string, AliasSymbol])
+      {
+        match(context)
+        {
+          | null
+          | EnteredScopeContext => (openedNamespaces, aliasMap)
+          | OpenNamespaceOrTypeContext(OpenSymbol = Some(symbol)) =>
+            lookupSymbols(context.Parent, symbol :: openedNamespaces, aliasMap)
+
+          | NamespaceOrTypeAliasContext(Alias = AliasSymbol as aliasSymbol) =>
+            when (aliasMap.Find(aliasSymbol.Name) is Some(previousDefinition))
+              using(rootMsg = N2Project.CurrentProject.RootError(aliasSymbol.FirstLocation, $"Redifinition of alias $(aliasSymbol.Name).", -1))
+                rootMsg.Error(previousDefinition.FirstLocation, "previous definition");
+            lookupSymbols(context.Parent, openedNamespaces, aliasMap.Replace(aliasSymbol.Name, aliasSymbol))
+
+          | _ => lookupSymbols(context.Parent, openedNamespaces, aliasMap)
+        }
+      }
+      (OpenedNamespaces, AliasMap) = lookupSymbols(Parent, [], Map());
+    }
+
+    public abstract CurrentSymbols : list[Symbol] { get; }
+
+    public sealed override BindMany[T](path : list[Location]) : BindingResult[T]
+    {
+      BindManyImpl(path)
+    }
+
+    public sealed override BindMany[T](name : Location) : BindingResult[T]
+    {
+      BindManyImpl([name])
+    }
+
+    BindByEnteredSymbol(name : Location) : list[Symbol]
+    {
+      // пробуем сбиндиться по AliasMap
+      // пробуем сбиндиться по ParentScope
+      // если успешен только один, возвращем его
+      // если оба успешны, сообщаем об ошибке и возвращаем алиас
+      // если оба обломались и парнт == корень, то возвращем None()
+      // если оба обломались делаем рекурсивный вызов у ParentScope
+      def bindByAliasMap(name : Location) : option[AliasSymbol]
+      {
+        AliasMap.Find(name.GetText()) //TODO: сделать Find по подстроке
+      }
+      def bindByCurrentSymbols(name : Location, symbols : list[Symbol]) : list[Symbol] * list[Symbol]
+      {
+        match (symbols)
+        {
+          | first :: tail => (first.Node.BindMany(name), tail)
+          | [] => ([], [])
+        }
+      }
+      match (bindByAliasMap(name), bindByCurrentSymbols(name, CurrentSymbols))
+      {
+        | (Some(aliasSymbol), (                [],           _)) => [aliasSymbol]
+        | (Some(aliasSymbol), ((_ :: _) as result,           _)) => aliasSymbol :: result
+        | (             None, ((_ :: _) as result,           _)) => result
+        | (             None, (                [], tailSymbols)) =>
+          def loop(_)
+          {
+            | [] when ParentScope : object == null => []
+            | [] => ParentScope.BindByEnteredSymbol(name)
+            | symbol :: other =>
+              match (symbol.Node.BindMany(name))
+              {
+                | [] => loop(other)
+                | result => result
+              }
+          }
+          loop(tailSymbols)
+      }
+    }
+
+    BindByOpenedNamespace(name : Location) : list[Symbol]
+    {
+      mutable result =
+        if (ParentScope != null)
+          ParentScope.BindByOpenedNamespace(name)
+        else
+          [];
+      foreach (ns in OpenedNamespaces)
+        match (ns.Node.BindMany(name))
+        {
+          | []    => ()
+          | [one] => result = one :: result
+          | many  => result = many + result
+        }
+      result
+    }
+
+    BindPathTail[T](symbol : Symbol, nameTail : list[Location]) : list[T]
+      where T: Symbol
+    {
+      def bindTail(symbol : Symbol, nameTail) : list[T]
+      {
+        if (nameTail.IsEmpty)
+          match (symbol)
+          {
+            | symbol is T => [symbol]
+            | _ => []
+          }
+        else
+          symbol.Node.BindMany(nameTail)
+      }
+      match (symbol)
+      {
+        | AliasSymbol(RealSymbol = Some(realSymbol)) => bindTail(realSymbol, nameTail)
+        | AliasSymbol(RealSymbol = None)             => []
+        | _ => bindTail(symbol, nameTail)
+      }
+    }
+
+    BindManyImpl[T](path : list[Location]) : BindingResult[T]
+      where T: Symbol
+    {
+      def unboundBindingResult(name : Location)
+      {
+        using (msgs = CompilerMessageList())
+        {
+          msgs.Error(name, $"Unbound name '$(name.GetText())'", -1);
+          BindingResult([], msgs.GetMessages())
+        }
+      }
+      def ambiguousBindingResult(name : Location, result : list[Symbol])
+      {
+        using (msgs = CompilerMessageList())
+        {
+          using (rootMsg = msgs.RootError(name, $"'$(name.GetText())' is an ambiguous reference (see related messages)", -1))
+            foreach (s in result)
+              foreach (loc in s.Locations)
+                rootMsg.Hint(loc, "Previous definition.");
+          BindingResult(result.OfType(), msgs.GetMessages())
+        }
+      }
+      match (path)
+      {
+        | [] => assert(false)
+        | name :: nameTail =>
+          match (BindByEnteredSymbol(name))
+          {
+            | []    =>
+              def loop(name, nameTail)
+              {
+                match (BindByOpenedNamespace(name))
+                {
+                  | []     => unboundBindingResult(name)
+                  | [one]  =>
+                    match (nameTail)
+                    {
+                      | [] =>
+                        match (one : Symbol)
+                        {
+                          | one is T => BindingResult([one])
+                          | _ => BindingResult([])
+                        }
+
+                      | nextName :: nextNameTail => loop(nextName, nextNameTail)
+                    }
+
+                  | many => ambiguousBindingResult(name, many)
+                }
+              }
+              loop(name, nameTail)
+
+            | [one] => BindingResult(BindPathTail(one, nameTail))
+            | many  => ambiguousBindingResult(name, many)
+          }
+      }
+    }
+  }
+}
