@@ -1,0 +1,529 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+
+using N2.Internal;
+using N2.Model;
+using N2.Typing;
+
+using System;
+using System.Diagnostics;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace N2.Compiler
+{
+  internal partial class RuleAstEmitter
+  {
+    public DefineMembers() : void
+    {
+      assert(_baseTb != null);
+      DefineBaseAstExtraFields();
+      when (_astTb != null)
+      {
+        CreateAstFields();
+        DefineAstFields();
+        DefineAstCtor();
+        DefineAstPrettyPrint();
+        DefineAstGetErrors();
+        DefineAstGetDump();
+        DefineAstExtraFields();
+      }
+      when (_spliceTb != null)
+      {
+        DefineSpliceGetDump();
+        DefineSpliceExtraFields();
+      }
+      when (_errorTb != null)
+      {
+        DefineErrorGetDump();
+        DefineErrorExtraFields();
+      }
+    }
+
+    private CreateAstFields() : void
+    {
+      assert(_astFields == null);
+      def fieldNameUniqueness = SCG.Dictionary();
+      def plainAstFields = SCG.List();
+      foreach (rule in RuleDefinition.GetSubRules())
+      {
+        def fieldName =
+          if (!string.IsNullOrEmpty(rule.FieldName))
+            Utils.ToPascalCase(rule.FieldName)
+          else if (rule.Type is RuleType2.Void)
+            "_"
+          else
+            "Node";
+        plainAstFields.Add(fieldName, rule);
+        fieldNameUniqueness[fieldName] = !fieldNameUniqueness.ContainsKey(fieldName);
+      }
+      def fieldNameCounters = SCG.Dictionary();
+      def finalAstFields = SCG.List();
+      foreach ((fieldName, fieldRule) in plainAstFields)
+      {
+        def indexedFieldName =
+          if (fieldNameUniqueness[fieldName])
+            fieldName
+          else
+          {
+            mutable counter;
+            _ = fieldNameCounters.TryGetValue(fieldName, out counter);
+            counter += 1;
+            fieldNameCounters[fieldName] = counter;
+            if (char.IsDigit(fieldName, fieldName.Length - 1))
+              fieldName + "_" + counter.ToString()
+            else
+              fieldName + counter.ToString()
+          }
+        finalAstFields.Add(indexedFieldName, fieldRule);
+      }
+      _astFieldsWithVoid = finalAstFields.ToNList();
+      _astFields         = _astFieldsWithVoid.Filter((_, rule) => !(rule.Type is RuleType2.Void));
+    }
+
+    private DefineAstFields() : void
+    {
+      foreach ((fieldName, fieldRule) in _astFields)
+        _astTb.DefineConditional(<[decl: public $(fieldName : usesite) : $(Owner.RuleTypeToNType(fieldRule.Type) : typed) ]>);
+    }
+
+    private DefineAstCtor() : void
+    {
+      def args = SCG.List();
+      args.Add(<[ parameter: location : N2.Location ]>);
+      args.Add(<[ parameter: error : list[N2.ErrorInfo] ]>);
+      def init = SCG.List();
+      init.Add(<[ base(location, error) ]>);
+      foreach ((fieldName, fieldRule) in _astFields)
+      {
+        args.Add(<[ parameter: $(fieldName : usesite) : $(Owner.RuleTypeToNType(fieldRule.Type) : typed)  ]>);
+        init.Add(<[ this.$(fieldName : usesite) = $(fieldName : usesite) ]>);
+      }
+      _astTb.DefineConditional(<[decl: public this(..$(args.ToNList())) { ..$(init.ToNList()) } ]>);
+    }
+
+    private DefineAstGetErrors() : void
+    {
+      def makeGetErrors(expr : PExpr, type) : PExpr // TODO: Оптимизировать списоки токенов.
+      {
+        match (type : RuleType2)
+        {
+          | _ when type.IsVoidDeep() => <[ () ]>
+          | _ when Owner.RuleTypeToNType(type).TryUnify(Owner.Environment.NTokenTypeVar)
+          | Chars        => <[ () ]>
+          | Ref          => <[ $expr.GetErrors(errors); ]>
+          | List(type)   =>
+            <[
+              foreach (_item in $expr)
+                $(makeGetErrors(<[ $("_item" : dyn) ]>, type));
+            ]>
+
+          | Option(type) =>
+            <[
+              match ($expr)
+              {
+                | Some(_item) => $(makeGetErrors(<[ $("_item" : dyn) ]>, type));
+                | _ => ()
+              }
+            ]>
+
+          | Tuple(types) when types.Count(ty => !(ty is RuleType2.Void)) == 1 => <[ $expr.GetErrors(errors); ]>
+          | Tuple(types) =>
+            def types = types.Filter(ty => !(ty is RuleType2.Void));
+            def fields = types.Length;
+            def names = $[0..fields - 1].Map(n => <[ $($"_item$n" : dyn) ]>);
+            <[
+              {
+                def (..$names) = $expr;
+                { ..$(names.Zip(types).Map(makeGetErrors)) };
+              }
+            ]>
+          | Void => assert(false);
+        }
+      }
+      _astTb.DefineConditional(<[decl:
+        public override GetErrors(errors : System.Collections.Generic.List[ErrorInfo]) : void
+        {
+          base.GetErrors(errors);
+          { ..$(_astFields.Map((name, rule) => makeGetErrors(<[ this.$(name : dyn) ]>, rule.Type))) }
+        }
+      ]>);
+    }
+
+    private DefineAstPrettyPrint() : void
+    {
+      def isNoNeedVar(rule : Rule2) { rule.Type is RuleType2.Void || rule is Rule2.String }
+      def isVoid(ruleType : RuleType2)
+      {
+        | Void
+        | Tuple(types) when types.ForAll(isVoid)
+        | Option(type) when isVoid(type)         => true
+        | _                                      => false
+      }
+      def fieldToString(name : string, rule : Rule2) : PExpr
+      {
+        def loop(expr : PExpr, rule : Rule2) : PExpr
+        {
+          def result =
+            match (rule)
+            {
+              | String(str)                                     => <[ _ = code.Append($str); ]>
+              | And | Not                                       => <[ () ]>
+              | Sequence(rules)                                 => 
+                def members2 = rules.MapI((i, r) => if (isNoNeedVar(r)) (<[ _ ]>, r), else (<[ $($"_item$i" : dyn) ]>, r));
+                def noNeedVars = members2.ForAll((_, r) => isNoNeedVar(r));
+                def varNames = $[ n | (n, r) in members2, !(r.Type is RuleType2.Void) ]; // make list of names for not void rules
+                def lines = members2.Map(loop);
+                match (varNames)
+                {
+                  | _ when noNeedVars
+                  | []        => <[ { ..$lines } ]>
+                  | [varName] => <[ { ..$(<[ def $varName      = $expr; ]> :: lines) } ]>
+                  | _         => <[ { ..$(<[ def (..$varNames) = $expr; ]> :: lines) } ]>
+                }
+
+              | Call(ruleRef, _bp) when rule.Type is RuleType2.Void =>
+                def Indent() : PExpr.Sequence
+                { <[ 
+                    Indent(code, currentIndent);
+                    lastIndntEnd = code.Length;
+                  ]>
+                }
+                def newLine() { <[ { ..$(<[ _ = code.AppendLine(); ]> :: <[ lastStartLine = code.Length; ]> :: Indent().body) } ]> }
+                def Unindent() : PExpr
+                { <[  currentIndent--;
+                      if (lastIndntEnd == code.Length)
+                      {
+                        code.Length = lastStartLine;
+                        Indent(code, currentIndent);
+                        lastIndntEnd = code.Length;
+                      }
+                      else if (options %&& N2.ToStringOptions.DebugIndent)
+                        _ = code.Append("!!! no new line before indentation decreasing !!!")
+                      else
+                        $(newLine());
+                  ]>
+                }
+                match (ruleRef.Ref.Value.Name)
+                {
+                  | "S"
+                  | "s"   => <[ () ]> // TODO: add analysis of a space usefulness
+                  | "nl"  => newLine()
+                  | "inl" 
+                  | "nli" => <[ currentIndent++; $(newLine()) ]>
+                  | "d"   => Unindent()
+                  | "i"   => <[ currentIndent++; 
+                                when (options %&& N2.ToStringOptions.DebugIndent && lastStartLine != code.Length)
+                                  _ = code.Append("!!! The indentation increasing not from the beginning of line. !!!");
+                                $(Indent()); ]>
+                  | _     => <[ _ = code.Append(' '); ]>
+                }
+
+              | Call when rule.Type is RuleType2.Chars          => <[ def tok = $expr; _ = code.Append(this.Location.Source.Text, tok.StartPos, tok.Length); ]>
+              | Call | PrefixCall                               => <[ $expr.PrettyPrint(code, currentIndent, options, ref lastStartLine, ref lastIndntEnd); ]>
+              | Repeat(_, _, rule) when isVoid(rule.Type)       => <[ _ = code.Append(' '); ]>
+              | Repeat(0, Some(1), rule)                        => <[ when ($expr is Some(_x)) $(loop(<[ _x ]>, rule)) ]>
+              | Repeat(_, _, rule)                              => <[ foreach (_elem in $expr) $(loop(<[ _elem ]>, rule)); ]>
+              | RepeatWithSeparator(_, _, rule, separator, _)   => 
+                if (separator.GetAllSubRules().ForAll(isNoNeedVar))
+                  <[  def (elems, separators) = $expr;
+                      assert2(elems.IsEmpty || elems.Length >= separators.Length);
+                      def endIndex = separators.Length;
+                      
+                      foreach (elem in elems with i)
+                      {
+                        $(loop(<[ elem ]>, rule));
+                    
+                        when (endIndex != i)
+                          $(loop(<[ separator ]>, separator));
+                      } ]>
+                else
+                  <[  def (elems, separators) = $expr;
+                      assert2(elems.IsEmpty || elems.Length >= separators.Length);
+                      mutable separatorRest = separators;
+                    
+                      foreach (elem in elems)
+                      {
+                        $(loop(<[ elem ]>, rule));
+                    
+                        unless (separatorRest.IsEmpty)
+                        {
+                          def separator = separatorRest.Head;
+                          $(loop(<[ separator ]>, separator));
+                          separatorRest = separatorRest.Tail;
+                        }
+                      } ]>
+            };
+          result
+        }
+        loop(<[ this.$(name : dyn) ]>, rule);
+      }
+
+      def code = _astFieldsWithVoid.Map(fieldToString);
+      def body = <[ { ..$code } ]>;
+      _astTb.DefineConditional(<[ decl: 
+        public override PrettyPrint(code : System.Text.StringBuilder, mutable currentIndent : int, options : N2.ToStringOptions, 
+          lastStartLine : ref int, lastIndntEnd : ref int) : void
+        {
+          ignore(currentIndent, options, currentIndent, lastStartLine, lastIndntEnd);
+          $body
+        }
+      ]>);
+    }
+
+    private DefineAstGetDump() : void
+    {
+      def makeDump(expr : PExpr, type) : PExpr // TODO: Оптимизировать списоки токенов.
+      {
+        match (type : RuleType2)
+        {
+          | _ when type.IsVoidDeep() => <[ () ]>
+          | _ when Owner.RuleTypeToNType(type).TryUnify(Owner.Environment.NTokenTypeVar)
+          | Chars        => <[ N2.Internal.AstDump.Token(GetText($expr)) ]>
+          | Ref          => <[ $expr.GetDump(); ]>
+          | List(type)   =>
+            <[
+              N2.Internal.AstDump.List($expr.Map(fun(_item)
+              {
+                $(makeDump(<[ $("_item" : dyn) ]>, type))
+              }))
+            ]>
+
+          | Option(Void) => <[ () ]>
+          | Option(type) =>
+            <[
+              match ($expr)
+              {
+                | Some(_item) => N2.Internal.AstDump.Option(Some($(makeDump(<[ $("_item" : dyn) ]>, type))));
+                | _ => N2.Internal.AstDump.Option(None())
+              }
+            ]>
+
+          | Tuple(types) when types.Count(ty => !(ty is RuleType2.Void)) == 1 => <[ $expr.GetDump(); ]>
+          | Tuple(types) =>
+            def types = types.Filter(ty => !(ty is RuleType2.Void));
+            def fields = types.Length;
+            def names = $[0..fields - 1].Map(n => <[ $($"_item$n" : dyn) ]>);
+            <[
+              {
+                def (..$names) = $expr;
+                N2.Internal.AstDump.Tuple([..$(names.Zip(types).Map(makeDump))]);
+              }
+            ]>
+
+          | Void => assert(false);
+        }
+      }
+      def makeFieldDump(name, rule) : PExpr
+      {
+        <[ N2.Internal.AstDump.Field($(name : string), $(makeDump(<[ this.$(name : dyn) ]>, rule.Type))) ]>
+      }
+      _astTb.DefineConditional(<[decl:
+        public override GetDump() : N2.Internal.AstDump
+        {
+          N2.Internal.AstDump.Ast($(_baseTb.FullName : string), [..$(_astFields.Map(makeFieldDump))])
+        }
+      ]>);
+    }
+
+    private DefineSpliceGetDump() : void
+    {
+      _spliceTb.DefineConditional(<[decl:
+        public override GetDump() : N2.Internal.AstDump
+        {
+          N2.Internal.AstDump.Splice($(_baseTb.FullName : string))
+        }
+      ]>);
+    }
+
+    private DefineErrorGetDump() : void
+    {
+      _errorTb.DefineConditional(<[decl:
+        public override GetDump() : N2.Internal.AstDump
+        {
+          N2.Internal.AstDump.Error($(_baseTb.FullName : string), GetText())
+        }
+      ]>);
+    }
+
+    private DefineBaseAstExtraFields() : void
+    {
+      foreach (field in RuleDefinition.ExtraFields)
+      {
+        | Abstract  (ExtraFieldSignature(Params = parameters, Type = type))
+        | DefPrivate(ExtraFieldSignature(Params = parameters, Type = type), _) =>
+          def n     = <[ $(field.Symbol.Name : dyn) ]>.name;
+          def attrs = <[ N2.Runtime.ExtraFieldAttribute($(field.Symbol.IsCached : bool)) ]>;
+          when (field.Symbol.IsCached)
+            _baseTb.DefineConditional(<[ decl: public virtual $(cachingPropertyName(n) : name) : $type { get { throw System.NotImplementedException(); } } ]>);
+          _baseTb.DefineConditional(<[ decl: [$attrs] public abstract $(n : name)(..$parameters) : $type; ]>);
+
+        | Def       (ExtraFieldSignature(Params = parameters, Type = type), body) =>
+          def n     = <[ $(field.Symbol.Name : dyn) ]>.name;
+          def attrs = <[ N2.Runtime.ExtraFieldAttribute($(field.Symbol.IsCached : bool)) ]>;
+          if (RuleDefinition is RuleDefinition2.Simple)
+          {
+            when (field.Symbol.IsCached)
+              _baseTb.DefineConditional(<[ decl: public virtual $(cachingPropertyName(n) : name) : $type { get { throw System.NotImplementedException(); } } ]>);
+            _baseTb.DefineConditional(<[ decl: [$attrs] public abstract $(n : name)(..$parameters) : $type; ]>);
+          }
+          else
+          {
+            def body2 = if (field.Symbol.IsCached) addCaching(_baseTb, n, type, body, false) else body;
+            def body3 = addRecursionCheck(_baseTb, body2);
+            _baseTb.DefineConditional(<[ decl: [$attrs] public virtual  $(n : name)(..$parameters) : $type $body3 ]>);
+          }
+
+        | _ => ()
+      }
+    }
+
+    private DefineAstExtraFields() : void
+    {
+      foreach (field in RuleDefinition.ExtraFields)
+      {
+        | DefPrivate(ExtraFieldSignature(Params = parameters, Type = type), body)
+        | Def       (ExtraFieldSignature(Params = parameters, Type = type), body) when (RuleDefinition is RuleDefinition2.Simple) => 
+          def n     = <[ $(field.Symbol.Name : dyn) ]>.name;
+          def attrs = <[ N2.Runtime.ExtraFieldAttribute($(field.Symbol.IsCached : bool)) ]>;
+          def body2 = if (field.Symbol.IsCached) addCaching(_astTb, n, type, body, true) else body;
+          def body3 = addRecursionCheck(_astTb, body2);
+          _astTb.DefineConditional(<[  decl: [$attrs] public override $(n : name)(..$parameters) : $type $body3 ]>);
+
+        | Override(baseExtraFieldSymbol, body) =>
+          def n          = <[ $(field.Symbol.Name : dyn) ]>.name;
+          def signature  = baseExtraFieldSymbol.GetExtraFieldSignature();
+          def parameters = signature.Params;
+          def type       = signature.Type;
+          def attrs      = <[ N2.Runtime.ExtraFieldAttribute($(field.Symbol.IsCached || baseExtraFieldSymbol.IsCached : bool)) ]>;
+          def body2      = if (field.Symbol.IsCached || baseExtraFieldSymbol.IsCached) addCaching(_astTb, n, type, body, baseExtraFieldSymbol.IsCached) else body;
+          def body3      = addRecursionCheck(_astTb, body2);
+          _astTb.DefineConditional(<[ decl: [$attrs] public override $(n : name)(..$parameters) : $type $body3 ]>);
+
+        | _ => ()
+      }
+    }
+
+    private DefineSpliceExtraFields() : void
+    {
+      foreach (field in RuleDefinition.ExtraFields)
+      {
+        | Abstract  (ExtraFieldSignature(Params = parameters, Type = type))
+        | DefPrivate(ExtraFieldSignature(Params = parameters, Type = type), _)
+        | Def       (ExtraFieldSignature(Params = parameters, Type = type), _) =>
+          def n    = <[ $(field.Symbol.Name : dyn) ]>.name;
+          def body = SCG.List();
+          foreach (p in parameters)
+            body.Add(<[ _ = $(p.ReferencingExpr); ]>);
+          body.Add(<[ throw System.InvalidOperationException("This method should not be invoked.") ]>);
+          _spliceTb.DefineConditional(<[ decl:
+            public override $(n : name)(..$parameters) : $type
+            {
+              ..$(body.ToNList())
+            }
+          ]>);
+
+        | _ => ()
+      }
+    }
+
+    private DefineErrorExtraFields() : void
+    {
+      def extraFieldsWithErrorHandler = SCG.HashSet();
+      foreach (field is ExtraField2.OnError in RuleDefinition.ExtraFields)
+        _ = extraFieldsWithErrorHandler.Add(field.Symbol);
+
+      foreach (field in RuleDefinition.ExtraFields)
+      {
+        | Abstract  (ExtraFieldSignature(Params = parameters, Type = type))
+        | DefPrivate(ExtraFieldSignature(Params = parameters, Type = type), _) when !extraFieldsWithErrorHandler.Contains(field.Symbol)
+        | Def       (ExtraFieldSignature(Params = parameters, Type = type), _) when !extraFieldsWithErrorHandler.Contains(field.Symbol) =>
+          def n    = <[ $(field.Symbol.Name : dyn) ]>.name;
+          def body = SCG.List();
+          foreach (p in parameters)
+            body.Add(<[ _ = $(p.ReferencingExpr); ]>);
+          def msg = $"Parse error handling for '$(field.Symbol.Name)' extra field of '$(RuleDefinition.RuleSymbol.Name)' rule is not implemented.";
+          body.Add(<[ throw System.NotImplementedException($(msg : string)) ]>);
+          _errorTb.DefineConditional(<[ decl:
+            public override $(n : name)(..$parameters) : $type
+            {
+              ..$(body.ToNList())
+            }
+          ]>);
+
+        | OnError(body) =>
+          def n          = <[ $(field.Symbol.Name : dyn) ]>.name;
+          def signature  = field.Symbol.GetExtraFieldSignature();
+          def parameters = signature.Params;
+          def type       = signature.Type;
+          def attrs      = <[ N2.Runtime.ExtraFieldAttribute($(field.Symbol.IsCached : bool)) ]>;
+          def body2      = if (field.Symbol.IsCached) addCaching(_errorTb, n, type, body, true) else body;
+          def body3      = addRecursionCheck(_errorTb, body2);
+          _errorTb.DefineConditional(<[ decl: [$attrs] public override $(n : name)(..$parameters) : $type $body3 ]>);
+
+        | _ => ()
+      }
+    }
+
+    private static cachingPropertyName(extraFieldName : Name) : Name
+    {
+      regexp match (extraFieldName.Id)
+      {
+        | "(Get|Compute|Calculate|Calc|Create|Make|Evaluate|Eval)(?<baseName>.*)" => <[ $(baseName : usesite) ]>.name
+        | _ =>  <[ $("Computed" + extraFieldName.Id : usesite) ]>.name
+      }
+    }
+
+    private static addRecursionCheck(tb : TypeBuilder, body : PExpr) : PExpr.Sequence
+    {
+      def bitField = tb.GetBitFieldManager().Allocate();
+      <[
+        when ($(bitField.Read()))
+          throw System.InvalidOperationException("Recursion detected (see stack trace for details).");
+        $(bitField.Set());
+        try $body
+        finally $(bitField.Clear());
+      ]>
+    }
+
+    private static addCaching(tb : TypeBuilder, name : Name, type : PExpr, body : PExpr, isOverride : bool) : PExpr
+    {
+      def bitField = tb.GetBitFieldManager().Allocate();
+      def fieldName = <[ $(Util.tmpname(name.Id + "_cache") : usesite) ]>.name;
+      tb.DefineConditional(<[ decl: private mutable $(fieldName : name) : $type ]>);
+      def mods = Modifiers(NemerleModifiers.Public %| if (isOverride) NemerleModifiers.Override else NemerleModifiers.Virtual, []);
+      tb.DefineConditional(<[ decl:
+        ..$mods $(cachingPropertyName(name) : name) : $type
+        {
+          get
+          {
+            unless ($(bitField.Read()))
+            {
+              //FIXME: fix compiler bug!!
+              //assert2(false, "Extra field value not computed yet.");
+              throw System.InvalidOperationException("Extra field value not computed yet.");
+            }
+            $(fieldName : name);
+          }
+        }
+      ]>);
+
+      <[
+        if ($(bitField.Read()))
+          $(fieldName : name);
+        else
+        {
+          $(fieldName : name) = $body;
+          $(bitField.Set());
+          $(fieldName : name);
+        }
+      ]>
+    }
+  }
+}

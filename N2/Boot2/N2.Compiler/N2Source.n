@@ -1,0 +1,387 @@
+﻿using N2.Compiler;
+using N2.Model;
+using N2.ProjectSystem;
+using N2.Typing;
+using N2.Runtime;
+using N2.Util;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Imperative;
+
+using Nemerle.Utility;
+using System;
+using System.IO;
+using System.Diagnostics;
+using System.Linq;
+
+using System.Reflection;
+using SCG = System.Collections.Generic;
+using G = GrammarParser2;
+using PExpr = Nemerle.Compiler.Parsetree.PExpr;
+
+namespace N2
+{
+  internal class N2SourceImpl
+  {
+    type SyntaxModuleInfos = list[string] * G.SyntaxModule.Ast;
+
+    private Path          : string                 { get; }
+    private Manager       : ManagerClass           { get; }
+    private ParserHost    : ParserHost             = ParserHost();
+
+    public this(path : string, manager : ManagerClass)
+    {
+      Path    = path;
+      Manager = manager;
+      UpdateCurrentProjectContext();
+    }
+
+    IsListUserDataPresent[T]() : bool
+    {
+      def map = Manager.UserData[typeof(SCG.List[T])];
+      map != null
+    }
+
+    GetUserData[T]() : T
+      where T: new(), class
+    {
+      def key = typeof(T);
+      mutable result = Manager.UserData[key] :> T;
+      when (result == null)
+      {
+        result = T();
+        Manager.UserData[key] = result;
+      }
+      result
+    }
+
+    ResetListUserData[T]() : void
+    {
+      Manager.UserData[typeof(SCG.List[T])] = null
+    }
+
+    UpdateCurrentProjectContext() : void
+    {
+      Project.CurrentProject = GetUserData.[N2Project]();
+    }
+
+    GetCurrentProjectContext() : N2Project
+    {
+      Project.CurrentProject :> N2Project
+    }
+
+    public static Instance(path : string, manager : ManagerClass) : N2SourceImpl
+    {
+      def projPath = manager.Options.ProjectPath;
+      def projDir = 
+        if (File.Exists(projPath))
+          Path.GetFullPath(Path.GetDirectoryName(projPath))
+        else if (Directory.Exists(projPath))
+          Path.GetFullPath(projPath)
+        else
+          Environment.CurrentDirectory;
+      def path = 
+        if (IO.Path.IsPathRooted(path))
+          path;
+        else
+          IO.Path.Combine(projDir, path);
+
+      if (manager.UserData.Contains(path))
+        manager.UserData[path] :> N2SourceImpl;
+      else
+      {
+        def impl = N2SourceImpl(path, manager);
+        manager.UserData[path] = impl;
+        impl;
+      }
+    }
+
+    public BeforeInheritance() : void
+    {
+      when (!IO.File.Exists(Path))
+      {
+        Message.Error($<#The "$Path" not exists.#>);
+        return;
+      }
+
+      def makeWrapperClass(source : ISource, processingCount : int) : void
+      {
+        // request rebuilding type tree when code changed
+        if (processingCount > 1 && Manager.IsIntelliSenseMode)
+          Manager.RequestOnBuildTypesTree();
+        else
+          try Parse(source) catch { | e => Message.Error(e.Message); }
+      }
+      SubscribeSourceChangedWithCounter(Manager, Location.GetFileIndex(Path), makeWrapperClass);
+    }
+
+    public Parse(source : ISource) : void
+    {
+      def source = SourceSnapshot(source.GetText(), source.FileIndex, Path);
+      def parseResult = ParserHost.DoParsing(source, G.GrammarImpl.StartRuleDescriptor);
+      if (parseResult.IsSuccess) 
+      {
+        def start = parseResult.CreateAst.[G.Start.Ast]();
+        def fileAsts : SCG.List[G.Start.Ast] = Manager.GetListUserData();
+        fileAsts.Add(start);
+      }
+      else
+      {
+        //def (pos, tokens) = parser.Parser.GetErrors();
+        //def loc = N2.Location(parser.Parser.ParsingSource, pos, pos + 1).ToNemerleLocation();
+        //foreach (token in tokens)
+        //  Message.Error(loc, $"expected \"$(token.Name)\" in rule $(token.Rule.Grammar.Name).$(token.Rule.Name)");
+
+        def errors = parseResult.CollectErrors();
+        def pos = parseResult.Source.PositionToLineColumn(errors.Position);
+        def loc = Nemerle.Compiler.Location(source.FileIndex, pos.Line, pos.Column);
+        Message.Error(loc, $<#Parse failed: ..$(errors.Messages; ", ")#>);
+      }
+    }
+
+    private LoadExternalSymbols(project : N2Project, rootNamespace : NamespaceSymbol) : bool
+    {
+      def errorCount = project.ErrorCount;
+      
+      foreach (asm in Manager.ReferencedAssemblies)
+      {
+        foreach ((<[ N2.GrammarsAttribute ]>, [<[ array[..$(elems)] ]>]) in asm.GetCustomAttributes())
+          foreach (<[ typeof($(PExpr.TypedType(FixedType.Class(grammarTI is LibraryReference.ExternalTypeInfo, []))))]> in elems)
+            LoadExternalSyntaxModule(rootNamespace, grammarTI);
+      }
+      
+      project.ErrorCount == errorCount
+    }
+
+    private LoadExternalSyntaxModule(rootNamespace : NamespaceSymbol, grammarImplTI : LibraryReference.ExternalTypeInfo) : void
+    {
+      def root = rootNamespace.Node;
+      def grammarTI   = grammarImplTI.BaseType;
+
+      match (grammarImplTI.GetNestedSubtypes().Filter(ti => ti.Name == AssemblyConstants.GrammarDescriptorImplName))
+      {
+        | [grammarDescriptorImplTI] =>
+          def tokenFieldNames = LoadExternalTokenFieldNames(grammarTI);
+          def symbol = ExternalSyntaxModuleSymbol(grammarTI, grammarImplTI, tokenFieldNames) : SyntaxModuleSymbol;
+          def node = root.AddAndReport(grammarTI.NamespaceNode.Parent.FullName, symbol, symbol.FirstLocation);
+          LoadExternalMarkers(grammarImplTI, node);
+          LoadExternalRules(grammarDescriptorImplTI, node);
+
+        | _ => Message.Error(grammarTI.Location, $"$(grammarTI.FullName) not grammar.")
+      }
+    }
+
+    private LoadExternalMarkers(type : TypeInfo, node : HierarchyNode) : void
+    {
+      foreach(<[ N2.MarkerAttribute($(name : string)) ]> as attr in type.GetModifiers().CustomAttributes)
+      {
+        def loc = attr.Location.N2Location();
+        _ = node.AddAndReport([], MarkerSymbol(loc, name, true), loc);
+      }
+    }
+
+    private LoadExternalRules(type : LibraryReference.ExternalTypeInfo, node : HierarchyNode) : void
+    {
+      foreach (ruleTI in type.GetNestedSubtypes())
+      {
+        when (Util.ParseRuleClassName(ruleTI.Name) is Some((ruleDefinitionType, name)))
+        {
+          def loc = ruleTI.Location.N2Location();
+          def (ruleType, typeInfo) =
+            ret:
+            {
+              foreach (method is IMethod when (method.Name == "ResultType") in ruleTI.GetMembers())
+                if (method.ReturnType.TryUnify(Manager.InternalType.Void))
+                  ret(ExternalRuleRefSymbolType.Void, null);
+                else
+                {
+                  def ti = method.ReturnType.Fix().TypeInfo;
+                  ret(ExternalRuleRefSymbolType.Ref, ti);
+                }
+              (ExternalRuleRefSymbolType.Chars, null)
+            };
+          def options = RuleDefinitionOptions();
+          foreach(attr in ruleTI.GetModifiers().CustomAttributes)
+          {
+            | <[ N2.ExplicitSpacesAttribute() ]>         => options.SetExplicitSpaces(true);
+            | <[ N2.SuppressTrailingSpacesAttribute() ]> => options.SetSuppressTrailingSpaces(true);
+            | _ => ()
+          }
+          def symbol = ExternalRuleRefSymbol(loc, name, ruleType, options, ruleDefinitionType);
+          _ = node.AddAndReport([], symbol, loc);
+          when (typeInfo != null)
+            LoadExternalExtraFields(symbol, typeInfo);
+        }
+      }
+    }
+
+    private LoadExternalExtraFields(ruleRefSymbol : ExternalRuleRefSymbol, type : TypeInfo) : void
+    {
+      def reflectExtraFieldAttribute(member : IMember) : IMember * option[bool]
+      {
+        mutable attrValue = None();
+        foreach(attr in member.GetModifiers().GetCustomAttributes())
+        {
+          | <[ N2.Runtime.ExtraFieldAttribute() ]>                   => attrValue = Some(false)
+          | <[ N2.Runtime.ExtraFieldAttribute($(isCached : bool)) ]> => attrValue = Some(isCached)
+          | _ => ()
+        }
+        (member, attrValue)
+      }
+      def reflectionResult = type.GetMembers(BindingFlags.Instance | BindingFlags.Public).Map(reflectExtraFieldAttribute);
+      foreach((method is IMethod, Some(isCached)) in reflectionResult)
+      {
+        def loc        = method.NameLocation.N2Location();
+        def modifier   = if (method.IsAbstract) ExtraFieldModifier.Abstract else ExtraFieldModifier.Def;
+        def parameters = method.Header.ParametersDeclarations;
+        def type       = <[ $(method.ReturnType : typed) ]>;
+        def signature  = ExtraFieldSignature(loc, parameters, type);
+        def symbol     = ExternalExtraFieldRefSymbol(loc, method.Name, modifier, isCached, signature);
+        _ = ruleRefSymbol.Node.AddAndReport([], symbol, loc);
+      }
+    }
+
+    private LoadExternalTokenFieldNames(type : TypeInfo) : Map[string, Identifier]
+    {
+      def env      = type.Manager.CoreEnv;
+      def attrType = env.BindFixedType(<[ N2.TokenFieldNameAttribute ]>);
+      def loc      = LocationStack.Top();
+      mutable tokenFieldNames = Map();
+
+      foreach ((_, [<[ $(name : string) ]>, <[ array[..$tokens] ]>]) in type.GetModifiers().FindAttributesWithArgs(attrType.TypeInfo, env))
+        foreach (<[ $(token : string) ]> in tokens)
+          tokenFieldNames = tokenFieldNames.Replace(token, Identifier(loc.N2Location(), name));
+
+      tokenFieldNames
+    }
+
+    private LoadParsedSymbols(project : N2Project, rootNamespace : NamespaceSymbol, fileAsts : SCG.List[G.Start.Ast]) : bool
+    {
+      def errorCount = project.ErrorCount;
+
+      foreach (start in fileAsts)
+        start.CollectGlobalSymbols(rootNamespace);
+
+      project.ErrorCount == errorCount
+    }
+
+    private TypeSyntaxModules(project : N2Project, rootNamespace : NamespaceSymbol, fileAsts : SCG.List[G.Start.Ast]) : bool
+    {
+      def errorCount   = project.ErrorCount;
+
+      def syntaxModules = Manager.GetListUserData.[SyntaxModuleData]();
+      def context = RootContext(Project.CurrentProject :> N2Project, rootNamespace, Manager.CoreEnv);
+
+      foreach (start in fileAsts)
+        _ = start.MakeContext(context);
+
+      foreach (start in fileAsts)
+      {
+        def syntaxModule = start.Typing();
+        syntaxModules.AddRange(syntaxModule);
+      }
+
+      project.ErrorCount == errorCount
+    }
+
+    private CreateSyntaxModuleEmitters() : void
+    {
+      def syntaxModules = Manager.GetListUserData.[SyntaxModuleData]();
+      def syntaxModuleEmitters = Manager.GetListUserData.[SyntaxModuleEmitter]();
+      def environment = EmitterEnvironment(Manager, syntaxModules);
+      foreach (sm in syntaxModules)
+        syntaxModuleEmitters.Add(SyntaxModuleEmitter(environment, sm));
+    }
+
+    private DefineAst() : void
+    {
+      def syntaxModuleEmitters = Manager.GetListUserData.[SyntaxModuleEmitter]();
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.DefineExtentionPointAstTypes();
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.DefineOtherAstTypes();
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.DefineAstMembers();
+    }
+
+    private DefineParsers() : void
+    {
+      def syntaxModuleEmitters = Manager.GetListUserData.[SyntaxModuleEmitter]();
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.DefineParserTypes();
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.DefineParserMethods();
+    }
+
+    private DefineOtherMembers() : void
+    {
+      def syntaxModuleEmitters = Manager.GetListUserData.[SyntaxModuleEmitter]();
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.DefineOtherMembers();
+    }
+
+    private EmitSyntaxModules() : void
+    {
+      def syntaxModuleEmitters = Manager.GetListUserData.[SyntaxModuleEmitter]();
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.Emit();
+      when (!Manager.IsIntelliSenseMode && syntaxModuleEmitters.Count > 0)
+      {
+        def grammarImpls = SCG.List();
+        foreach (emitter in syntaxModuleEmitters)
+          grammarImpls.Add(<[ typeof($(emitter.GrammarImplTB.GetMemType() : typed)) ]>);
+        Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ N2.GrammarsAttribute(array[..$(grammarImpls.ToNList())]) ]>);
+      }
+      ResetListUserData.[SyntaxModuleEmitter]();
+    }
+
+    public BeforeTypedMembers() : void
+    {
+      when (IsListUserDataPresent.[G.Start.Ast]())
+        try
+        {
+          UpdateCurrentProjectContext();
+        
+          def project       = GetCurrentProjectContext();
+          def root          = GetUserData.[HierarchyNode]();
+          def rootNamespace = NamespaceSymbol(null : string);
+          
+          root.SetRootNamespaceSymbol(rootNamespace);
+
+          def fileAsts = Manager.GetListUserData.[G.Start.Ast]();
+
+          unless (LoadExternalSymbols(project, rootNamespace))
+            throw Recovery();
+          unless (LoadParsedSymbols  (project, rootNamespace, fileAsts))
+            throw Recovery();
+          unless (TypeSyntaxModules  (project, rootNamespace, fileAsts))
+            throw Recovery();
+
+          CreateSyntaxModuleEmitters();
+          DefineAst();
+          DefineParsers();
+          DefineOtherMembers();
+        }
+        finally ResetListUserData.[G.Start.Ast]();
+    }
+
+    public WithTypedMembers() : void
+    {
+      EmitSyntaxModules();
+    }
+
+    public SubscribeSourceChangedWithCounter(manager : ManagerClass, fileIndex : int, handler : ISource * int -> void) : void
+    {
+      mutable counter = 0;
+      manager.SubscribeSourceChanged(fileIndex, source =>
+      {
+        counter += 1;
+        handler(source, counter);
+      });
+    }
+
+    internal static NextKeywordRegexId : void -> int = Util.CreateIdGenerator(0);//TODO Жестоко выпилить
+  }
+}

@@ -47,20 +47,20 @@ namespace N2.Compiler
       | _                     => <[ $(Owner.GrammarImplTB.GetMemType() : typed).$(ruleSymbol.DecorateRuleName() : dyn) ]>
     }
 
-    private _simpleCalls : List[RuleSymbol * string] = List();
+    private _simpleCalls : List[SimpleRuleSymbol * string] = List();
 
     [Memoize]
-    public MakeCall(ruleSymbol : RuleSymbol) : PExpr
+    public MakeCall(ruleSymbol : SimpleRuleSymbol) : PExpr
     {
       def name = $"_parser_s$(_simpleCalls.Count)_$(ruleSymbol.Name)";
       _simpleCalls.Add((ruleSymbol, name));
       <[ $(name : dyn).Parse ]>
     }
 
-    private _extensibleCalls : List[RuleSymbol * int * string] = List();
+    private _extensibleCalls : List[ExtensibleRuleSymbol * int * string] = List();
 
     [Memoize]
-    public MakeCall(ruleSymbol : RuleSymbol, bindingPower : int) : PExpr
+    public MakeCall(ruleSymbol : ExtensibleRuleSymbol, bindingPower : int) : PExpr
     {
       def name = $"_parser_e$(_extensibleCalls.Count)_$(ruleSymbol.Name)";
       _extensibleCalls.Add((ruleSymbol, bindingPower, name));
@@ -89,7 +89,7 @@ namespace N2.Compiler
 
     private mutable _fields : array[RuleField2];
 
-    protected MakeRuleFields(rd : RuleDefSymbol, rule : Rule, astSize : out int, rootAstStruct : out option[RootAstStruct2], externalCalls : List[RuleSymbol]) : void
+    protected MakeRuleFields(ruleSymbol : RuleDefSymbol, rule : Rule, astSize : out int, rootAstStruct : out option[RootAstStruct2], externalCalls : List[RuleSymbol]) : void
     {
       assert(_fields == null);
       def conv(rule : Rule) : array[RuleField2]
@@ -104,32 +104,19 @@ namespace N2.Compiler
           | RepeatWithSeparator   as rule => array[RuleField2.List2      (loc, conv(rule.Rule), conv(rule.Separator), rule.MinCount, rule.MaxCount, rule.HangingSeparator)]
           | String                as rule => array[RuleField2.TokenString(loc, rule.Str)]
           | Sequence              as rule => rule.Rules.Map(conv(_)).Flatten().NToArray();
-          | Call(RuleRef(Ref = Some(ExternalRuleRefSymbol as ruleSymbol)), bindingPower) =>
-            if (ruleSymbol.IsExtentionPoint)
-              array[RuleField2.Extensible(loc, ruleSymbol, bindingPower)]
-            else if (ruleSymbol.Type is RuleType.Void)
-              array[RuleField2.Void(loc, ruleSymbol)]
-            else
-              array[RuleField2.ExternalAst(loc, ruleSymbol)]
-
-          // TODO: get rid of this
-          | Call(RuleRef(Ref = Some(_ is ParsedRuleRefSymbol.[GrammarParser2.MarkerDecl.Ast])), _)
-          | Call(RuleRef(Ref = Some(MarkerSymbol)), _) =>
-            array[]
-
+          | Call(RuleRef(Ref = Some(MarkerSymbol)), _) => array[]
           | Call(RuleRef(Ref = Some(ruleSymbol)), bindingPower) =>
-            match (Owner.Environment.GetruleSymbol(ruleSymbol))
+            match (ruleSymbol)
             {
-              | Extensible                => array[RuleField2.Extensible(loc, ruleSymbol, bindingPower)]
-              | Simple(Type = RuleType.Void) => array[RuleField2.Void(loc, ruleSymbol)]
-              | Simple                        => array[RuleField2.ExternalAst(loc, ruleSymbol)]
-              | Regular                       => array[RuleField2.TokenCall(loc, ruleSymbol)]
-              | Marker                        => array[]
-              | _                             => assert(false)
+              | ExtensibleRuleSymbol                   as rs => array[RuleField2.Extensible(loc, rs, bindingPower)]
+              | SimpleRuleSymbol(Type = RuleType.Void) as rs => array[RuleField2.Void(loc, rs)]
+              | SimpleRuleSymbol                       as rs => array[RuleField2.ExternalAst(loc, rs)]
+              | RegularRuleSymbol                      as rs => array[RuleField2.TokenCall(loc, rs)]
+              | MarkerSymbol                           as rs => array[]
+              | _                                            => assert(false)
             }
 
           | Call(RuleRef(Ref = None), _) => array[]
-          | PrefixCall => assert(false)
         }
       }
       if (Owner.Environment.IsIdeMode)
@@ -146,7 +133,7 @@ namespace N2.Compiler
           | Sequence(PrefixCall :: postfixRules) as rule => Rule.Sequence(rule, postfixRules)
           | rule => rule
         }
-        def ast = RuleField2.Ast(loc, Owner.Environment.IsDebug, conv(rule), rd);
+        def ast = RuleField2.Ast(loc, Owner.Environment.IsDebug, conv(rule), ruleSymbol);
         def fields = List();
         ast.Init(this, null, 0, fields);
         ast.CalculateAstInfo();
@@ -165,7 +152,7 @@ namespace N2.Compiler
             rootAstStruct = Some(astStruct);
         }
 
-        def grammarNode = rd.RuleSymbol.Node.Parent;
+        def grammarNode = ruleSymbol.Node.Parent;
         foreach ((callSymbol, _) in _simpleCalls)
           when (callSymbol.Node.Parent : object != grammarNode)
             externalCalls.Add(callSymbol);
@@ -177,9 +164,9 @@ namespace N2.Compiler
 
     protected DefineInit(tb : TypeBuilder) : void
     {
-      def getDescriptor(ruleSymbol)
+      def getDescriptor(ruleSymbol : RuleDefSymbol)
       {
-        <[ $(Owner.Environment.GetDescriptorClassRef(ruleSymbol)).StaticDescriptor ]>
+        <[ $(ruleSymbol.GetDescriptorClassRef()).StaticDescriptor ]>
       }
       def inits = List();
       foreach ((ruleSymbol, name) in _simpleCalls)
