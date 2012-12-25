@@ -139,7 +139,8 @@ namespace N2.Internal
       //goto postfix_loop;
 
 prefix_loop:
-        for (prefixAst = parser.memoize[curEndPos]; prefixAst > 0; prefixAst = parser.ast[prefixAst + PrefixOfs.Next])
+        prefixAst = parser.memoize[curEndPos];
+        for (; prefixAst > 0; prefixAst = parser.ast[prefixAst + PrefixOfs.Next])
         {
           if (parser.ast[prefixAst + PrefixOfs.Id] == PrefixId)
           {
@@ -147,7 +148,8 @@ prefix_loop:
             if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == -1)
             {
               //TODO: убрать цикл
-              for (i = bestResult + AstOfs.Sizes; parser.ast[i] >= 0; ++i)
+              i = bestResult + AstOfs.Sizes;
+              for (; parser.ast[i] >= 0; ++i)
                 curEndPos += parser.ast[i];
               bestEndPos = curEndPos;
               goto postfix_loop;
@@ -182,7 +184,8 @@ prefix_loop:
               {
                 if (bestEndPos < 0) { if (newEndPos >= 0) goto prefix_new_better; }
                 else                { if (newEndPos < 0)  goto prefix_best_better; }
-                for (j = AstOfs.Sizes; true; ++j)
+                j = AstOfs.Sizes;
+                for (; true; ++j)
                 {
                   var newSize  = parser.ast[newResult + j];
                   var bestSize = parser.ast[bestResult + j];
@@ -226,7 +229,8 @@ prefix_loop:
         if (curEndPos >= text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
           return curEndPos;// при достижении конца текста есть нечего
         //ищем запомненое
-        for (postfixAst = parser.memoize[curEndPos]; postfixAst > 0; postfixAst = parser.ast[postfixAst + PostfixOfs.Next])
+        postfixAst = parser.memoize[curEndPos];
+        for (; postfixAst > 0; postfixAst = parser.ast[postfixAst + PostfixOfs.Next])
         {
           if (parser.ast[postfixAst + PostfixOfs.Id] == PostfixId)//нашли
           {
@@ -253,13 +257,16 @@ prefix_loop:
                 bestEndPos = curEndPos;
                 //TODO: убрать цикл
                 //вычисляем длинну разобранного правила
-                for (bestResult += AstOfs.Sizes; true; ++bestResult)
+                bestResult += AstOfs.Sizes;
+                while (true)
                 {
                   var size = parser.ast[bestResult];
                   if (size >= 0)
                     bestEndPos += size;
                   else
                     goto postfix_loop;//нашли терминатор. Парсим следующее правило.
+
+                  ++bestResult;
                 }
               }
               else
@@ -292,7 +299,8 @@ prefix_loop:
               {
                 if (bestEndPos < 0) { if (newEndPos >= 0) goto postfix_new_better; }
                 else                { if (newEndPos < 0)  goto postfix_best_better; }
-                for (j = AstOfs.Sizes; true; ++j)
+                j = AstOfs.Sizes;
+                for (; true; ++j)
                 {
                   var newSize  = parser.ast[newResult + j];
                   var bestSize = parser.ast[bestResult + j];

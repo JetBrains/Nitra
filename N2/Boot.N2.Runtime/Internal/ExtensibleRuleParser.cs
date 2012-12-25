@@ -141,7 +141,7 @@ prefix_loop:
         if (bestEndPos < 0)// не смогли разобрать префикс
           return -1;
 
-postfix_loop:
+//postfix_loop:
         curEndPos = bestEndPos;
         while (curEndPos < text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
                                         // при достижении конца текста есть нечего
