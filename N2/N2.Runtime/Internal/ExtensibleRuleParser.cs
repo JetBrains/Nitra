@@ -85,7 +85,15 @@ namespace N2.Internal
       var postfixRules = parserData.PostfixDescriptors;
       while (FirstPostfixRule < postfixRules.Length && bindingPower >= postfixRules[FirstPostfixRule].BindingPower)
         ++FirstPostfixRule;
-      FirstPostfixRuleId = PostfixRules[FirstPostfixRule].RuleId;
+      if (PostfixRules.Length > 0)
+      {
+        if (FirstPostfixRule == PostfixRules.Length)
+          FirstPostfixRuleId = int.MaxValue;
+        else
+          FirstPostfixRuleId = PostfixRules[FirstPostfixRule].RuleId;
+      }
+      else
+        FirstPostfixRuleId = int.MaxValue;
     }
 
     public override int Parse(int curEndPos, string text, ref int resultPtr, ref Parser parser)
@@ -280,7 +288,7 @@ prefix_loop:
         parser.memoize[curEndPos] = postfixAst;
         bestResult = 0;
         lastResult = 0;
-        i = PostfixRules.Length;
+        i = PostfixRules.Length - 1;
       postfix_parse:
         parser.ast[postfixAst + PostfixOfs.FirstRuleIndex] = FirstPostfixRule;
         c = text[curEndPos];
