@@ -3,6 +3,7 @@ using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Text;
+using Nemerle.Imperative;
 using Nemerle.Utility;
 
 using System;
@@ -17,6 +18,18 @@ namespace N2.Compiler
     public TargetSymbolType   : TypeBuilder        { get; }
     public ExternalSymbolType : TypeBuilder        { get; }
 
+    private sealed class SymbolProperty
+    {
+      public this(property : IProperty)
+      {
+        Property = property;
+        FieldName = Util.tmpname(property.Name);
+      }
+
+      public Property : IProperty { get; }
+      public FieldName : string   { get; }
+    }
+
     public this (environment : EmitterEnvironment, symbolType : TypeBuilder)
     {
       Environment        = environment;
@@ -26,71 +39,110 @@ namespace N2.Compiler
         {
         }
       ]>);
+      ExternalSymbolType.DisableImplicitConstructor();
     }
 
     public DefineMembers() : void
     {
-      ExternalSymbolType.DefineConditional(<[ decl: 
-        public this(name : string)
-        {
-          base(name);
-        }
+      ExternalSymbolType.Define(<[ decl:
+        public override Description : string { get { $(MakeDescriptionText(ExternalSymbolType.Name) : string) } }
       ]>);
 
-      ExternalSymbolType.Define(<[ decl: 
-        public override Locations : list[N2.Location]
-        {
-          get { [] }
-        }
-      ]>);
-
-      ExternalSymbolType.Define(<[ decl: 
-        public override FirstLocation : N2.Location
-        {
-          get { N2.Location.Default }
-        }
-      ]>);
-
-      def makeDescriptionText(text) : string
+      def isSymbolProperty(p)
       {
-        def length =
+        !_systemProperties.Contains(p.Name)
+        &&
         {
-          def symbolText = "Symbol";
-          if (text.EndsWith(symbolText))
-            text.Length - symbolText.Length
-          else
-            text.Length;
+          def getter = p.GetGetter();
+          getter != null && getter.IsAbstract
         }
-        def buffer = System.Text.StringBuilder();
-        mutable needWordbreak = false;
-        for (mutable i = 0; i < length; ++i)
-        {
-          def c = text[i];
-          if (char.IsUpper(c))
-          {
-            when (needWordbreak)
-            {
-              _ = buffer.Append(' ');
-              needWordbreak = false;
-            }
-          }
-          else
-            needWordbreak = true;
-          _ = buffer.Append(char.ToLowerInvariant(c));
-        }
-        buffer.ToString()
       }
-      ExternalSymbolType.Define(<[ decl: 
-        public override Description : string
+      def init = List();
+      foreach (prop in TargetSymbolType.GetProperties(BindingFlags.Instance | BindingFlags.Public))
+        when (isSymbolProperty(prop))
         {
-          get { $(makeDescriptionText(ExternalSymbolType.Name) : string) }
+          def p = SymbolProperty(prop);
+          DefineSymbolProperty(p);
+          init.Add(<[ this.$(p.FieldName : usesite) = default($(p.Property.GetMemType() : typed)) ]>);
         }
-      ]>);
+
+      foreach (ctor when !ctor.IsStatic in TargetSymbolType.GetConstructors())
+        match (ctor.GetParameters())
+        {
+          | [p1, p2] when p1.Type.Equals(Environment.LocationTypeVar) && p2.Type.Equals(Environment.Manager.InternalType.String) =>
+            ExternalSymbolType.Define(<[ decl:
+              public this(definition : N2.Location, name : string)
+              {
+                base(definition, name);
+                { ..$(init.ToNList()) }
+              }
+            ]>);
+            break;
+
+          | [p1] when p1.Type.Equals(Environment.Manager.InternalType.String) =>
+            ExternalSymbolType.Define(<[ decl:
+              public this(definition : N2.Location, name : string)
+              {
+                base(name);
+                _definition = definition;
+                { ..$(init.ToNList()) }
+              }
+            ]>);
+            ExternalSymbolType.Define(<[ decl: private          _definition   : N2.Location                                 ]>);
+            ExternalSymbolType.Define(<[ decl: public  override Locations     : list[N2.Location] { get { [_definition] } } ]>);
+            ExternalSymbolType.Define(<[ decl: public  override FirstLocation : N2.Location       { get {  _definition  } } ]>);
+            break;
+
+          | _ => ()
+        }
     }
 
     public Emit() : void
     {
       ExternalSymbolType.Compile();
+    }
+
+    private DefineSymbolProperty(property : SymbolProperty) : void
+    {
+      ExternalSymbolType.Define(<[ decl: private mutable $(property.FieldName : usesite) : $(property.Property.GetMemType() : typed) ]>);
+      ExternalSymbolType.Define(<[ decl:
+        public override $(property.Property.Name : usesite) : $(property.Property.GetMemType() : typed)
+        {
+          get { this.$(property.FieldName : usesite) }
+        }
+      ]>);
+    }
+
+    private static _systemProperties : HashSet[string] = HashSet(["Description", "Locations", "FirstLocation"]);
+
+    private static MakeDescriptionText(text : string) : string
+    {
+      def length =
+      {
+        def symbolText = "Symbol";
+        if (text.EndsWith(symbolText))
+          text.Length - symbolText.Length
+        else
+          text.Length;
+      }
+      def buffer = System.Text.StringBuilder();
+      mutable needWordbreak = false;
+      for (mutable i = 0; i < length; ++i)
+      {
+        def c = text[i];
+        if (char.IsUpper(c))
+        {
+          when (needWordbreak)
+          {
+            _ = buffer.Append(' ');
+            needWordbreak = false;
+          }
+        }
+        else
+          needWordbreak = true;
+        _ = buffer.Append(char.ToLowerInvariant(c));
+      }
+      buffer.ToString()
     }
   }
 }
