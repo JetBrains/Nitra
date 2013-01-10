@@ -1,0 +1,102 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Typing
+{
+  public module ExportableSymbolWriter
+  {
+    public Write(root : NamespaceSymbol, buffer : BinaryWriter) : void
+    {
+      def exportableSymbols = CollectExportableSymbols(root);
+      def nodeIds = WriteNameTree(root.Node, exportableSymbols.Select(_.Node), buffer);
+      WriteSymbols(exportableSymbols, nodeIds, buffer);
+    }
+
+    private WriteNameTree(rootNode : HierarchyNode, nodes : Seq[HierarchyNode], buffer : BinaryWriter) : Dictionary[HierarchyNode, int]
+    {
+      def ids = Dictionary();
+      def write(node : HierarchyNode) : int
+      {
+        assert(node.Parent != null);
+
+        mutable id;
+        unless (ids.TryGetValue(node, out id))
+        {
+          def parentId = if (node.Parent : object != rootNode) write(node.Parent) else -1;
+          id = ids.Count;
+          ids.Add(node, id);
+          buffer.Write(id);
+          buffer.Write(parentId);
+          buffer.Write(node.PartName);
+        }
+        id
+      }
+      using (BlockSizeScope(buffer))
+        foreach (node in nodes)
+          _ = write(node);
+      ids
+    }
+
+    private WriteSymbols(symbols : Seq[IExportableSymbol], nodeIds : Dictionary[HierarchyNode, int], buffer : BinaryWriter) : void
+    {
+      using (BlockSizeScope(buffer))
+        foreach (group in symbols.GroupBy(_.SymbolTypeId))
+        {
+          buffer.Write(group.Key);
+          using (BlockSizeScope(buffer))
+            foreach (symbol in group)
+            {
+              buffer.Write(nodeIds[symbol.Node]);
+              symbol.Serialize(buffer);
+            }
+        }
+    }
+
+    private CollectExportableSymbols(rootNamespace : NamespaceSymbol) : List[IExportableSymbol]
+    {
+      def buffer = List();
+      def visitNode(node)
+      {
+        foreach (symbol in node.GetChildren.[Symbol]())
+          when (symbol.AssemblyId == AssemblyIds.CurrentAssembly && symbol is IExportableSymbol)
+            buffer.Add(symbol :> IExportableSymbol);
+        foreach (node in node.SubNodes)
+          visitNode(node);
+      }
+      visitNode(rootNamespace.Node);
+      buffer
+    }
+
+    private struct BlockSizeScope : IDisposable
+    {
+      private _buffer   : BinaryWriter;
+      private _startPos : long;
+
+      public this(buffer : BinaryWriter)
+      {
+        _buffer   = buffer;
+        _buffer.Flush();
+
+        _startPos = _buffer.BaseStream.Position;
+        buffer.Write(0 : int);
+      }
+
+      public Dispose() : void
+      {
+        _buffer.Flush();
+        def endPos = _buffer.BaseStream.Position;
+        def delta  = (endPos - _startPos) :> int;
+        _ = _buffer.Seek(-delta, SeekOrigin.Current);
+        _buffer.Write(delta : int);
+        _ = _buffer.Seek(delta, SeekOrigin.Current);
+      }
+    }
+  }
+}
