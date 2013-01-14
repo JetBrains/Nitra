@@ -6,34 +6,43 @@ using Nemerle.Utility;
 using N2.Typing;
 
 using System;
+using System.Reflection;
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 
 namespace N2.Serialization
 {
-  public module ExportableSymbolWriter
+  public sealed class ExportableSymbolWriter : ISymbolRefWriter
   {
     public Write(root : NamespaceSymbol, buffer : BinaryWriter) : void
     {
+      _nonTreeSymbols.Clear();
+      _externalSymbols.Clear();
+      _nodeIds.Clear();
+      _symbolIds.Clear();
+      _assemblyIds.Clear();
+
       def exportableSymbols = CollectExportableSymbols(root);
-      def nodeIds = WriteNameTree(root.Node, exportableSymbols.Select(_.Node), buffer);
-      WriteSymbols(exportableSymbols, nodeIds, buffer);
+      WriteNameTree(root.Node, exportableSymbols.Select(_.Node), buffer);
+      WriteSymbols(exportableSymbols, buffer);
+      WriteReferencedAssemblies(buffer);
+      WriteNameTree(root.Node, _externalSymbols.Select(_.Node), buffer);
+      WriteExternalSymbols(buffer);
     }
 
-    private WriteNameTree(rootNode : HierarchyNode, nodes : Seq[HierarchyNode], buffer : BinaryWriter) : Dictionary[HierarchyNode, int]
+    private WriteNameTree(rootNode : HierarchyNode, nodes : Seq[HierarchyNode], buffer : BinaryWriter) : void
     {
-      def ids = Dictionary();
       def write(node : HierarchyNode) : int
       {
         assert(node.Parent != null);
 
         mutable id;
-        unless (ids.TryGetValue(node, out id))
+        unless (_nodeIds.TryGetValue(node, out id))
         {
           def parentId = if (node.Parent : object != rootNode) write(node.Parent) else -1;
-          id = ids.Count;
-          ids.Add(node, id);
+          id = _nodeIds.Count + 1;
+          _nodeIds.Add(node, id);
           buffer.Write(id);
           buffer.Write(parentId);
           buffer.Write(node.PartName);
@@ -43,22 +52,102 @@ namespace N2.Serialization
       using (BlockSizeScope(buffer))
         foreach (node in nodes)
           _ = write(node);
-      ids
     }
 
-    private WriteSymbols(symbols : Seq[IExportableSymbol], nodeIds : Dictionary[HierarchyNode, int], buffer : BinaryWriter) : void
+    private WriteSymbols(symbols : Seq[IExportableSymbol], buffer : BinaryWriter) : void
     {
       using (BlockSizeScope(buffer))
+      {
+        // tree symbols
         foreach (group in symbols.GroupBy(_.SymbolTypeId))
         {
           buffer.Write(group.Key);
           using (BlockSizeScope(buffer))
             foreach (symbol in group)
             {
-              buffer.Write(nodeIds[symbol.Node]);
-              symbol.Serialize(buffer);
+              def symbolId = GetSymbolId(symbol);
+              def nodeId = GetNodeId(symbol);
+              buffer.Write(symbolId);
+              buffer.Write(nodeId);
+              symbol.Serialize(buffer, this);
             }
         }
+        // non tree symbols
+        while (_nonTreeSymbols.Count > 0)
+        {
+          def nonTreeGrouped = _nonTreeSymbols.GroupBy(_.SymbolTypeId).ToList();
+          _nonTreeSymbols.Clear();
+          foreach (group in nonTreeGrouped)
+          {
+            buffer.Write(group.Key);
+            using (BlockSizeScope(buffer))
+              foreach (symbol in group)
+              {
+                def symbolId = GetSymbolId(symbol);
+                def name = symbol.Name;
+                buffer.Write(symbolId);
+                buffer.Write(0 : int); // zero nodeId
+                buffer.Write(name);
+                symbol.Serialize(buffer, this);
+              }
+          }
+        }
+      }
+    }
+
+    private WriteReferencedAssemblies(buffer : BinaryWriter) : void
+    {
+      using (BlockSizeScope(buffer))
+        foreach (pair in _assemblyIds)
+        {
+          def assemblyName = pair.Key;
+          def assemblyId = pair.Value;
+          buffer.Write(assemblyName.FullName);
+          buffer.Write(assemblyId);
+        }
+    }
+
+    private WriteExternalSymbols(buffer : BinaryWriter) : void
+    {
+      using (BlockSizeScope(buffer))
+        foreach (group in _externalSymbols.GroupBy(_.SymbolTypeId))
+        {
+          buffer.Write(group.Key);
+          using (BlockSizeScope(buffer))
+            foreach (symbol in group)
+            {
+              def symbolId = GetSymbolId(symbol);
+              def nodeId = GetNodeId(symbol);
+              def assemblyId = GetAssemblyId(symbol);
+              buffer.Write(symbolId);
+              buffer.Write(nodeId);
+              buffer.Write(assemblyId);
+            }
+        }
+    }
+
+    private WriteSymbolRef(symbol : IExportableSymbol, buffer : BinaryWriter) : void implements ISymbolRefWriter.Write
+    {
+      if (symbol.Node == null)
+      {
+        unless (symbol.AssemblyId == AssemblyIds.CurrentAssembly)
+          throw NotSupportedException("Serialization of referencies to external non tree symbols not supported");
+
+        // локальный недревесный символ
+        AddNonTreeSymbol(symbol);
+        buffer.Write(GetSymbolId(symbol));
+      }
+      else if (symbol.AssemblyId == AssemblyIds.CurrentAssembly)
+      {
+        // локальный древесный символ
+        buffer.Write(GetSymbolId(symbol));
+      }
+      else
+      {
+        // внешний древесный символ
+        AddExternalSymbol(symbol);
+        buffer.Write(GetSymbolId(symbol));
+      }
     }
 
     private CollectExportableSymbols(rootNamespace : NamespaceSymbol) : List[IExportableSymbol]
@@ -74,6 +163,55 @@ namespace N2.Serialization
       }
       visitNode(rootNamespace.Node);
       buffer
+    }
+
+    private _nonTreeSymbols  : HashSet[IExportableSymbol]         = HashSet();
+    private _externalSymbols : HashSet[IExportableSymbol]         = HashSet();
+    private _nodeIds         : Dictionary[HierarchyNode, int]     = Dictionary();
+    private _symbolIds       : Dictionary[IExportableSymbol, int] = Dictionary();
+    private _assemblyIds     : Dictionary[AssemblyName, byte]     = Dictionary();
+
+    private AddNonTreeSymbol(symbol : IExportableSymbol) : void
+    {
+      _ = _nonTreeSymbols.Add(symbol);
+    }
+
+    private AddExternalSymbol(symbol : IExportableSymbol) : void
+    {
+      when (_externalSymbols.Add(symbol))
+      {
+        def assemblyName = N2.Runtime.Project.CurrentProject.GetAssemblyName(symbol.AssemblyId);
+        unless (_assemblyIds.ContainsKey(assemblyName))
+        {
+          def id = (_assemblyIds.Count + 1) :> byte;
+          _assemblyIds.Add(assemblyName, id);
+        }
+      }
+    }
+
+    private GetNodeId(symbol : IExportableSymbol) : int
+    {
+      _nodeIds[symbol.Node]
+    }
+
+    private GetSymbolId(symbol : IExportableSymbol) : int
+    {
+      mutable id;
+      unless (_symbolIds.TryGetValue(symbol, out id))
+      {
+        id = _symbolIds.Count + 1;
+        _symbolIds.Add(symbol, id);
+      }
+      id
+    }
+
+    private GetAssemblyId(symbol : IExportableSymbol) : byte
+    {
+      assert(symbol.AssemblyId != AssemblyIds.CurrentAssembly);
+      assert(symbol.AssemblyId != AssemblyIds.NoAssembly);
+
+      def assemblyName = N2.Runtime.Project.CurrentProject.GetAssemblyName(symbol.AssemblyId);
+      _assemblyIds[assemblyName]
     }
 
     // TODO: переписать на surroundwith
