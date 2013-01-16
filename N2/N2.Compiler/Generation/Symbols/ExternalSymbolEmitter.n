@@ -25,11 +25,10 @@ namespace N2.Compiler
       public this(property : IProperty)
       {
         Property = property;
-        FieldName = Util.tmpname(property.Name);
       }
 
-      public Property : IProperty { get; }
-      public FieldName : string   { get; }
+      public Property           : IProperty { get; }
+      public OverriddenProperty : IProperty { get; set; }
     }
 
     public this (environment : EmitterEnvironment, symbolType : TypeBuilder, serializationEmitter : BinarySerializationEmitter)
@@ -38,7 +37,7 @@ namespace N2.Compiler
       TargetSymbolType      = symbolType;
       _serializationEmitter = serializationEmitter;
       ExternalSymbolType    = TargetSymbolType.GlobalEnv.EnterIntoNamespace(["TEMP"]).Define(<[ decl:
-        public sealed class $("External" + symbolType.Name : usesite) : $(symbolType.GetMemType() : typed)
+        public sealed class $("External" + symbolType.Name : usesite) : $(symbolType.GetMemType() : typed), N2.Serialization.IImportableSymbol
         {
         }
       ]>);
@@ -62,20 +61,21 @@ namespace N2.Compiler
       def symbolProperties = TargetSymbolType
         .GetProperties(BindingFlags.Instance | BindingFlags.Public)
         .MapFiltered(isSymbolProperty, SymbolProperty(_));
-      foreach (prop in symbolProperties)
-        DefineSymbolProperty(prop);
 
-      def body = List();
-      body.Add(<[ ignore(writer, symbolRefWriter) ]>);
+      def serializeBody = List();
+      serializeBody.Add(<[ ignore(writer, symbolRefWriter) ]>);
       foreach (prop in symbolProperties)
-        body.Add(_serializationEmitter.MakeMemberSerializationCode(TargetSymbolType.GetMemType(), prop.Property, <[ this ]>));
+        serializeBody.Add(_serializationEmitter.MakeMemberSerializationCode(TargetSymbolType.GetMemType(), prop.Property, <[ this ]>));
 
       TargetSymbolType.DefineConditional(<[ decl: 
         Serialize(writer : System.IO.BinaryWriter, symbolRefWriter : N2.Serialization.ISymbolRefWriter) : void implements N2.Serialization.IExportableSymbol.Serialize
         {
-          ..$(body.ToNList())
+          ..$(serializeBody.ToNList())
         }
       ]>);
+
+      foreach (prop in symbolProperties)
+        DefineSymbolProperty(prop);
 
       ExternalSymbolType.Define(<[ decl:
         public override Description : string { get { $(MakeDescriptionText(ExternalSymbolType.Name) : string) } }
@@ -106,6 +106,17 @@ namespace N2.Compiler
               symbolRefReader.Register(symbol, symbolId);
             }
           }
+        }
+      ]>);
+
+      def deserializeBody = List();
+      deserializeBody.Add(<[ ignore(reader, symbolRefReader) ]>);
+      deserializeBody.Add(_serializationEmitter.MakeMembersDeserializationCode(ExternalSymbolType.GetMemType(), symbolProperties.Map(_.OverriddenProperty), <[ this ]>));
+
+      ExternalSymbolType.DefineConditional(<[ decl:
+        Deserialize(reader : System.IO.BinaryReader, symbolRefReader : N2.Serialization.ISymbolRefReader) : void implements N2.Serialization.IImportableSymbol.Deserialize
+        {
+          ..$(deserializeBody.ToNList())
         }
       ]>);
 
@@ -147,13 +158,13 @@ namespace N2.Compiler
 
     private DefineSymbolProperty(property : SymbolProperty) : void
     {
-      ExternalSymbolType.Define(<[ decl: private mutable $(property.FieldName : usesite) : $(property.Property.GetMemType() : typed) ]>);
-      ExternalSymbolType.Define(<[ decl:
+      property.OverriddenProperty = ExternalSymbolType.DefineAndReturn(<[ decl:
         public override $(property.Property.Name : usesite) : $(property.Property.GetMemType() : typed)
         {
-          get { this.$(property.FieldName : usesite) }
+          get;
+          private set;
         }
-      ]>);
+      ]>) :> IProperty;
     }
 
     private static _systemProperties : HashSet[string] = HashSet(["Description", "Locations", "FirstLocation"]);
