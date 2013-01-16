@@ -1,11 +1,12 @@
-﻿using Nemerle;
+﻿using N2.Serialization;
+
+using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
 using Nemerle.Utility;
-
-using N2.Serialization;
 
 using System;
 using System.Collections.Generic;
@@ -26,15 +27,17 @@ namespace N2.Compiler
     _helperType     : TypeBuilder;
     _emitWarning    : PExpr -> PExpr;
     _emitFatalError : PExpr -> PExpr;
+    _extentions     : array[IBinarySerializationEmitterExtention];
     
     [RecordIgnore] _typesMap       : Hashtable[FixedType, PExpr * PExpr] = Hashtable();
     [RecordIgnore] _typesToProcess : SCG.Queue[FixedType] = SCG.Queue();
 
-    public this(manager : ManagerClass, emitWarning : PExpr -> PExpr, emitFatalError : PExpr -> PExpr)
+    public this(manager : ManagerClass, emitWarning : PExpr -> PExpr, emitFatalError : PExpr -> PExpr, extentions : array[IBinarySerializationEmitterExtention])
     {
       _manager        = manager;
       _emitWarning    = emitWarning;
       _emitFatalError = emitFatalError;
+      _extentions     = extentions ?? array(0);
       def coreEnv     = manager.CoreEnv;
 
       _helperName = PExpr.FromQualifiedIdentifier(manager, "N2.Internal.SerializationHelper");
@@ -94,7 +97,7 @@ namespace N2.Compiler
         //def makeCode(f : IField) : PExpr
       def type = type.TypeOfMember(member).Fix();
       def typeCode = GetTypeCode(type) :> TypeTag;
-      if (typeCode == TypeTag.Object || typeCode == TypeTag.Variant)
+      if (typeCode == TypeTag.Object || typeCode == TypeTag.Variant || typeCode :> int >= TypeTag.FirstCustom :> int)
         MakeUserDefinedTypeWriteCode(type, member, objExpr)
       else
         <[
@@ -108,7 +111,7 @@ namespace N2.Compiler
     {
       def code = MakeMemberReadCode(type, member);
       def name = GetMemberName(member);
-      def memberType = type.TypeOfMember(member);
+      def memberType = type.TypeOfMember(member).Fix();
       <[
         def typeCode = reader.ReadByte() :> TypeTag;
         assert2($(GetTypeCode(memberType)) :> TypeTag == typeCode);
@@ -299,7 +302,6 @@ namespace N2.Compiler
         
         | TypeTag.Empty    => assert2(false); assert(false);
         | TypeTag.DateTime => assert2(false); assert(false);
-        | TypeTag.UserDefined => assert2(false); assert(false);
         | TypeTag.Boolean | TypeTag.Char   | TypeTag.SByte  | TypeTag.Byte 
         | TypeTag.Int16   | TypeTag.UInt16 | TypeTag.Int32  | TypeTag.UInt32  | TypeTag.Int64 
         | TypeTag.UInt64  | TypeTag.Single | TypeTag.Double | TypeTag.Decimal | TypeTag.String =>
@@ -327,10 +329,15 @@ namespace N2.Compiler
                 | TypeTag.String       => System.Convert.$cnvFuncName(reader.ReadString ())
                 | TypeTag.Variant      => assert2(false); assert(false); // ??? видимо нужно скипать variant!
                 | TypeTag.Object       => assert2(false); assert(false); // ??? видимо нужно скипать объект!
-                | TypeTag.UserDefined => assert2(false); assert(false); // ??? видимо нужно скипать UserDefined тип!
-                | _                        => assert2(false); assert(false);
+                | _                    => assert2(false); assert(false);
               }
             ]>;
+          | tag when (tag :> byte) < 0 => assert2(false); assert(false);
+          | tag =>
+            def serializerId = tag :> int - TypeTag.LastValue :> int;
+            def extention = _extentions[serializerId];
+            writerCode = extention.MakeWriteCode(ty, this);
+            readerCode = extention.MakeReadCode(ty, this);
       }
       
       when (writerCode != null)
@@ -373,17 +380,24 @@ namespace N2.Compiler
       }
     }
     
-    GetTypeCode(type : TypeVar) : byte
+    GetTypeCode(type : FixedType) : byte
     {
-      | FixedType.Class(ti, _) =>
-        if (ti.IsPrimitive || ti.Equals(_manager.InternalType.String_tc))
-          Type.GetTypeCode(ti.SystemType) :> byte
-        else if (IsVariant(ti))
-          TypeTag.Variant :> byte // пока используем Variant для указания, что значение это variant
-        else
-          TypeTag.Object :> byte
+      foreach (extention in _extentions with i)
+        when (extention.IsSupportedType(type))
+          return (i + TypeTag.FirstCustom) :> byte;
+      
+      match (type)
+      {
+        | FixedType.Class(ti, _) =>
+          if (ti.IsPrimitive || ti.Equals(_manager.InternalType.String_tc))
+            Type.GetTypeCode(ti.SystemType) :> byte
+          else if (IsVariant(ti))
+            TypeTag.Variant :> byte // пока используем Variant для указания, что значение это variant
+          else
+            TypeTag.Object :> byte
                 
-      | _ => 0
+        | _ => 0
+      }
     }
     
     GetMemberName(member : IMember) : string
@@ -416,7 +430,7 @@ namespace N2.Compiler
     {
       assert2(!manager.UserData.Contains(typeof(BinarySerializationEmitter)));
 
-      def instance = BinarySerializationEmitter(manager, emitWarning, emitFatalError);
+      def instance = BinarySerializationEmitter(manager, emitWarning, emitFatalError, array(0));
       manager.UserData[typeof(BinarySerializationEmitter)] = instance;
       instance
     }
