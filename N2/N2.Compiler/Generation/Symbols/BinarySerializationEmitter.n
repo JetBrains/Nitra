@@ -1,0 +1,395 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Utility;
+
+using N2.Serialization;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.RegularExpressions;
+
+using SCG = System.Collections.Generic;
+
+namespace N2.Compiler
+{
+  internal sealed class BinarySerializationEmitter : IDisposable
+  {
+    static _extractNameRx : Regex        = Regex(@"_N_((\w|\d|_)+)_\d+", RegexOptions.Compiled);
+    static _internalNs    : list[string] = ["N2", "Internal"];
+
+    _typer          : Typer;
+    _helperName     : PExpr;
+    _helperType     : TypeBuilder;
+    _emitWarning    : PExpr -> PExpr;
+    _emitFatalError : PExpr -> PExpr;
+    
+    [RecordIgnore] _typesMap       : Hashtable[FixedType, PExpr * PExpr] = Hashtable();
+    [RecordIgnore] _typesToProcess : SCG.Queue[FixedType] = SCG.Queue();
+    
+    public this(typer : Typer, emitWarning : PExpr -> PExpr, emitFatalError : PExpr -> PExpr)
+    {
+      _emitWarning    = emitWarning;
+      _emitFatalError = emitFatalError;
+      def manager     = typer.Manager;
+      def coreEnv     = manager.CoreEnv;
+      
+      _typer      = typer;
+      _helperName = PExpr.FromQualifiedIdentifier(manager, "N2.Internal.SerializationHelper");
+      def env        = coreEnv.EnterIntoNamespace(["N2", "Internal"]);
+      def getHelperType() : TypeBuilder
+      {
+        match (env.LookupType(["SerializationHelper"], null, 0))
+        {
+          | Some(type is TypeBuilder) => type
+          | Some => assert(false);
+          | _ => 
+            def result = env.Define(<[ decl: internal module SerializationHelper { } ]>);
+            def onTypeTreeBuildFinish(manager : ManagerClass) : void
+            {
+              manager.TypeTreeBuildFinish -= onTypeTreeBuildFinish;
+              result.Compile();
+            }
+
+            manager.TypeTreeBuildFinish += onTypeTreeBuildFinish;
+            result
+        }
+      }
+      _helperType = getHelperType();
+    }
+    
+    private GetSerializableMembers(ti : TypeInfo) : list[IMember]
+    {
+      def manager        = _typer.Manager;
+      def mappedMemberTi = manager.LookupTypeInfo("Nemerle.Internal.MappedMemberAttribute", 0);
+      def members        = ti.GetMembers(BindingFlags.Public | BindingFlags.Instance).Filter(m => m is IField || m is IProperty);
+      def memberMap      = members.ToDictionary(m => m.Name);
+      def ctors          = ti.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+      
+      mutable result;
+      
+      foreach (ctor in ctors)
+        when (ctor.IsCustomAttributeDefined("Nemerle.Internal.RecordCtorAttribute"))
+          when (result == null || ctor.Header.Parameters.Length > result.Header.Parameters.Length)
+            result = ctor;
+
+      def makeMember(p : TParameter) : IMember
+      {
+        match (p.AttributesAndModifiers.FindAttribute(mappedMemberTi, manager.CoreEnv))
+        {
+          | Some(<[ $_($(name : string)) ]>) => memberMap[name]
+          | e => assert2(false); _ = e; assert(false);
+        }
+      }
+
+      if (result == null)
+        []
+      else
+        result.Header.Parameters.Map(makeMember)
+    }
+    
+    public MakeMemberSerializationCode(type : FixedType, member : IMember, objExpr : PExpr) : PExpr
+    {
+        //def makeCode(f : IField) : PExpr
+      def type = type.TypeOfMember(member).Fix();
+      def typeCode = GetTypeCode(type) :> TypeTag;
+      if (typeCode == TypeTag.Object || typeCode == TypeTag.Variant)
+        MakeUserDefinedTypeWriteCode(type, member, objExpr)
+      else
+        <[ 
+          writer.Write($(GetTypeCode(type)));
+          writer.Write($(GetMemberName(member)));
+          writer.Write($objExpr.$(member.Name : usesite));
+        ]>
+    }
+
+    public MakeMemberDeserializationCode(type : FixedType, member : IMember) : PExpr
+    {
+      def code = MakeMemberReadCode(type, member);
+      def name = GetMemberName(member);
+      def memberType = type.TypeOfMember(member);
+      <[
+        def typeCode = reader.ReadByte() :> TypeTag;
+        assert2($(GetTypeCode(memberType)) :> TypeTag == typeCode);
+        def fieldName = reader.ReadString();
+        assert2($name == fieldName);
+        $code;
+      ]>
+    }
+
+    MakeMembersWriteCode(type : FixedType, objExpr : PExpr, ) : PExpr
+    {
+      def members = GetSerializableMembers(type.TypeInfo);
+      if (members is [])
+        <[ () ]>
+      else
+      {
+        def code    = members.Map(m => MakeMemberSerializationCode(type, m, objExpr));
+        <[ { ..$code } ]>
+      }
+    }
+    
+    MakeRecordReadCode(type : FixedType) : PExpr
+    {
+      def varPrefix = "_____";
+      def members = GetSerializableMembers(type.TypeInfo);
+      if (members is [])
+        <[ $(type : typed)() ]>
+      else
+      {
+        def vars  = List(members.MapLazy(m => <[ mutable $(varPrefix + m.Name : usesite); ]>));
+        def cases1 = members.RevMap(m => <[ case: | $(m.Name : string) => $(varPrefix + m.Name : usesite) = $(MakeMemberReadCode(type, m)) ]>);
+        def cases2 = <[ case: | name => $(_emitWarning(<[ "Data for the '" + name + "' member is ignored." ]>)) ]> :: cases1;
+        def parameters = members.Map(m => <[ $(varPrefix + m.Name : usesite) ]>);
+        def matchExpr = <[ 
+          def loop(typeCode : TypeTag)
+          {
+            when (typeCode != TypeTag.Empty)
+            {
+              def fieldName = reader.ReadString();
+              match (fieldName)
+              {
+                ..$(cases2.Reverse())
+              }
+              loop(reader.ReadByte() :> TypeTag)
+            }
+          }
+          loop(reader.ReadByte() :> TypeTag);
+          $(type : typed)(..$parameters)
+        ]>;
+        vars.Add(matchExpr);
+        <[ { ..$(vars.NToList()) } ]>
+      }
+    }
+
+    IsVariant(ti : TypeInfo) : bool
+    {
+      match (ti?.GetTydecl())
+      {
+        | TypeDeclaration.Alias(type) => IsVariant(type.TypeInfo)
+        | TypeDeclaration.Variant     => true
+        | _                           => false
+      }
+    }
+    
+    private MakeUserDefinedTypeWriteCode(type : FixedType, member : IMember, objExpr : PExpr) : PExpr
+    {
+      def ti = type.TypeOfMember(member).Fix();
+      def name = GetMemberName(member);
+      def (writer, _) = GetWriteReadMethods(ti);
+      <[ $writer($name, $objExpr.$(name : usesite), writer); ]>
+    }
+
+    private MakeMemberReadCode(type : FixedType, member : IMember) : PExpr
+    {
+      def memberType = type.TypeOfMember(member).Fix();
+      //def name = GetMemberName(member);
+      def (_, reader) = GetWriteReadMethods(memberType);
+      <[ $reader(reader, typeCode, fieldName) ]>
+    }
+
+    private GetVariantOptions(variantType : FixedType) : list[FixedType.Class]
+    {
+      def makeOptionType(o)
+      {
+        def e = _typer.BindFixedType(<[ $(variantType : typed).$(o.Name : usesite) ]>); // HACK: нужно разбираться, как правильно связать типы вхождений вариантов
+        e :> FixedType.Class
+      }
+      match (variantType.TypeInfo?.GetTydecl())
+      {
+        | TypeDeclaration.Alias(type)      => GetVariantOptions(type)
+        | TypeDeclaration.Variant(options) => options.Map(makeOptionType)
+        | _                                => Message.FatalError("Type must be 'variant'.");
+      }
+    }
+
+    private MakeVarianteReaderMethodBody(ty : FixedType) : PExpr
+    {
+      def makeCase(optionType : FixedType.Class)
+      {
+        def code = MakeRecordReadCode(optionType);
+        <[ case: | $(optionType.ToString() : string) => $code ]>
+      }
+      def options = GetVariantOptions(ty);
+      def cases1  = options.Map(makeCase);
+      def cases2  = cases1 + [<[ case: | m => $(_emitFatalError(<[ "The serialisation data for '" + m + "' member is ignored."]>)); ]>];
+      <[
+        assert(typeCode == TypeTag.Variant);
+        match (reader.ReadString())
+        {
+          ..$cases2
+        }
+      ]>
+    }
+
+    private MakeVarianteWriterMethodBody(ty : FixedType) : PExpr
+    {
+      def makeCase(optionType : FixedType.Class)
+      {
+        def code = MakeMembersWriteCode(optionType, <[ o ]>);
+        if (code is <[ () ]>)
+          <[ case:
+            | $(optionType.TypeInfo.Name : usesite) => 
+              writer.Write($(optionType.ToString() : string));
+          ]>
+        else
+          <[ case:
+            | $(optionType.TypeInfo.Name : usesite) as o => 
+              writer.Write($(optionType.ToString() : string));
+              $code
+          ]>
+      }
+      def options = GetVariantOptions(ty);
+      def cases1  = options.Map(makeCase);
+
+      <[
+        writer.Write($(TypeTag.Variant :> byte)); // Variant кодирует variant. Его формат отличается от объекта наличием строки поределяющей подтип.
+        writer.Write(memberName);
+        match (obj)
+        {
+          ..$cases1
+        };
+        writer.Write(0b);
+      ]>
+    }
+    
+    private MakeTypeWriteReadMethods(ty : FixedType, writer : Name, reader : Name) : void
+    {
+      def typeCode = GetTypeCode(ty) :> TypeTag;
+      mutable readerCode : PExpr;
+      mutable writerCode : PExpr;
+      
+      match (typeCode)
+      {
+        | TypeTag.Object =>
+          writerCode = <[ 
+              writer.Write($(TypeTag.Object :> byte));
+              writer.Write(memberName);
+              writer.Write($(MakeMembersWriteCode(ty, <[ obj ]>)));
+              writer.Write(0b);
+            ]>;
+
+          readerCode = MakeRecordReadCode(ty);
+            
+        | TypeTag.Variant =>
+          readerCode = MakeVarianteReaderMethodBody(ty);
+          writerCode = MakeVarianteWriterMethodBody(ty);
+        
+        | TypeTag.Empty    => assert2(false); assert(false);
+        | TypeTag.DateTime => assert2(false); assert(false);
+        | TypeTag.UserDefined => assert2(false); assert(false);
+        | TypeTag.Boolean | TypeTag.Char   | TypeTag.SByte  | TypeTag.Byte 
+        | TypeTag.Int16   | TypeTag.UInt16 | TypeTag.Int32  | TypeTag.UInt32  | TypeTag.Int64 
+        | TypeTag.UInt64  | TypeTag.Single | TypeTag.Double | TypeTag.Decimal | TypeTag.String =>
+          writerCode = null; // чтение примитивных типов производится инлайн
+
+          def cnvFuncName = <[ $("To" + typeCode.ToString() : usesite) ]>;
+          readerCode = <[
+              match (typeCode) //reader.ReadByte() :> TypeTag
+              {
+                | TypeTag.Empty        => assert2(false); assert(false);
+                | TypeTag.DateTime     => assert2(false); assert(false);
+                | TypeTag.Boolean      => System.Convert.$cnvFuncName(reader.ReadBoolean())
+                | TypeTag.Char         => System.Convert.$cnvFuncName(reader.ReadChar   ())
+                | TypeTag.SByte        => System.Convert.$cnvFuncName(reader.ReadSByte  ())
+                | TypeTag.Byte         => System.Convert.$cnvFuncName(reader.ReadByte   ())
+                | TypeTag.Int16        => System.Convert.$cnvFuncName(reader.ReadInt16  ())
+                | TypeTag.UInt16       => System.Convert.$cnvFuncName(reader.ReadUInt16 ())
+                | TypeTag.Int32        => System.Convert.$cnvFuncName(reader.ReadInt32  ())
+                | TypeTag.UInt32       => System.Convert.$cnvFuncName(reader.ReadUInt32 ())
+                | TypeTag.Int64        => System.Convert.$cnvFuncName(reader.ReadInt64  ())
+                | TypeTag.UInt64       => System.Convert.$cnvFuncName(reader.ReadUInt64 ())
+                | TypeTag.Single       => System.Convert.$cnvFuncName(reader.ReadSingle ())
+                | TypeTag.Double       => System.Convert.$cnvFuncName(reader.ReadDouble ())
+                | TypeTag.Decimal      => System.Convert.$cnvFuncName(reader.ReadDecimal())
+                | TypeTag.String       => System.Convert.$cnvFuncName(reader.ReadString ())
+                | TypeTag.Variant      => assert2(false); assert(false); // ??? видимо нужно скипать variant!
+                | TypeTag.Object       => assert2(false); assert(false); // ??? видимо нужно скипать объект!
+                | TypeTag.UserDefined => assert2(false); assert(false); // ??? видимо нужно скипать UserDefined тип!
+                | _                        => assert2(false); assert(false);
+              }
+            ]>;
+      }
+      
+      when (writerCode != null)
+        _ = _helperType.DefineWithSource(<[ decl: 
+          public $(writer : name)(memberName : string, obj : $(ty : typed), writer : System.IO.BinaryWriter) : void
+          {
+            $writerCode;
+          } ]>);
+
+      
+      assert2(readerCode != null);
+      
+      _ = _helperType.DefineWithSource(<[ decl:
+        public $(reader : name)(reader : System.IO.BinaryReader, typeCode : TypeTag, memberName : string) : $(ty : typed)
+        {
+          try { $readerCode }
+          catch 
+          { | e =>
+            $(_emitWarning(<[ "An exception occurred while deserializing data for the '" + memberName + "' field. Exception: " + e.Message + "." ]>));
+            $(TExpr.DefaultValue(ty) : typed);
+          }
+        } ]>);
+    }
+    
+    private GetWriteReadMethods(type : FixedType) : PExpr * PExpr
+    {
+      Macros.DefineCTX(_typer);
+      
+      mutable value;
+      
+      if (_typesMap.TryGetValue(type, out value))
+        value
+      else
+      {
+        def name = Util.tmpname(type.TypeInfo.Name);
+        def writerName = "Serialize_" + name;
+        def readerName = "Deserialize_" + name;
+        def result     = (<[ $_helperName . $(writerName : usesite) ]>, <[ $_helperName . $(readerName : usesite) ]>);
+        _typesMap.Add(type, result);
+        _typesToProcess.Enqueue(type);
+        result
+      }
+    }
+    
+    GetTypeCode(type : TypeVar) : byte
+    {
+      | FixedType.Class(ti, _) =>
+        if (ti.IsPrimitive || ti.Equals(_typer.InternalType.String_tc))
+          Type.GetTypeCode(ti.SystemType) :> byte
+        else if (IsVariant(ti))
+          TypeTag.Variant :> byte // пока используем Variant для указания, что значение это variant
+        else
+          TypeTag.Object :> byte
+                
+      | _ => 0
+    }
+    
+    GetMemberName(member : IMember) : string
+    {
+      def res = _extractNameRx.Match(member.Name);
+          
+      if (res.Success)
+        res.Groups[1].Value
+      else
+        member.Name
+    }
+    
+    public Dispose() : void
+    {
+      while (_typesToProcess.Count > 0)
+      {
+        def ti = _typesToProcess.Dequeue();
+        match (_typesMap[ti])
+        {
+          | (<[ $_.$(Splicable.Name(writer)) ]>, <[ $_.$(Splicable.Name(reader)) ]>) => MakeTypeWriteReadMethods(ti, writer, reader)
+          | _ => assert2(false); assert(false);
+        }
+      }
+    }
+  }
+}
