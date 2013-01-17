@@ -24,7 +24,6 @@ namespace N2.Compiler
 
     _manager        : ManagerClass;
     _helperName     : PExpr;
-    _helperType     : TypeBuilder;
     _messageEmitter : IBinarySerializationMessageEmitter;
     _extentions     : array[IBinarySerializationEmitterExtention];
     
@@ -36,29 +35,17 @@ namespace N2.Compiler
       _manager        = manager;
       _messageEmitter = messageEmitter;
       _extentions     = extentions ?? array(0);
-      def coreEnv     = manager.CoreEnv;
+
+      foreach (e in _extentions)
+        e.CreateParameters(this);
+
+      _serializationParams   = _serializationParameters.ToNList();
+      _serializationArgs     = _serializationParams.Map(p => <[ $(p.Name : usesite) ]>);
+
+      _deserializationParams = _deserializationParameters.ToNList();
+      _deserializationArgs   = _deserializationParams.Map(p => <[ $(p.Name : usesite) ]>);
 
       _helperName = PExpr.FromQualifiedIdentifier(manager, "N2.Internal.SerializationHelper");
-      def env        = coreEnv.EnterIntoNamespace(["N2", "Internal"]);
-      def getHelperType() : TypeBuilder
-      {
-        match (env.LookupType(["SerializationHelper"], null, 0))
-        {
-          | Some(type is TypeBuilder) => type
-          | Some => assert(false);
-          | _ => 
-            def result = env.Define(<[ decl: internal module SerializationHelper { } ]>);
-            def onTypeTreeBuildFinish(manager : ManagerClass) : void
-            {
-              manager.TypeTreeBuildFinish -= onTypeTreeBuildFinish;
-              result.Compile();
-            }
-
-            manager.TypeTreeBuildFinish += onTypeTreeBuildFinish;
-            result
-        }
-      }
-      _helperType = getHelperType();
     }
     
     private GetSerializableMembers(ti : TypeInfo) : list[IMember]
@@ -89,48 +76,96 @@ namespace N2.Compiler
       else
         result.Header.Parameters.Map(makeMember)
     }
-    
-    public MakeMemberSerializationCode(type : FixedType, member : IMember, objExpr : PExpr) : PExpr
+
+    public CreateSerializationParameter(desiredName : string, type : PExpr) : string
     {
-        //def makeCode(f : IField) : PExpr
-      def type = type.TypeOfMember(member).Fix();
-      def typeCode = GetTypeTag(type) :> TypeTag;
+      def name = Util.tmpname(desiredName);
+      _serializationParameters.Add(<[ parameter: $(name : usesite) : $type ]>);
+      name
+    }
+
+    private _serializationParameters : List[PParameter] = List();
+    private _serializationParams     : list[PParameter];
+    private _serializationArgs       : list[PExpr];
+
+    public CreateDeserializationParameter(desiredName : string, type : PExpr) : string
+    {
+      def name = Util.tmpname(desiredName);
+      _deserializationParameters.Add(<[ parameter: $(name : usesite) : $type ]>);
+      name
+    }
+
+    private _deserializationParameters : List[PParameter] = List();
+    private _deserializationParams     : list[PParameter];
+    private _deserializationArgs       : list[PExpr];
+
+    public MakeMembersSerializationCode(owner : FixedType, members : list[IMember], objAccess : PExpr, args : list[PExpr]) : PExpr
+    {
+      assert2(args.Length == _serializationParams.Length);
+
+      def body = List();
+      foreach ((p, e) in _serializationParams.Zip(args))
+        body.Add(<[ def $(p.Name : usesite) = $e ]>);
+      foreach (m in members)
+        body.Add(MakeMemberWriteCode(owner, m, objAccess));
+      <[ { ..$(body.ToNList()) } ]>
+    }
+
+    public MakeMembersDeserializationCode(owner : FixedType, members : list[IMember], objAccess : PExpr, args : list[PExpr]) : PExpr
+    {
+      assert2(args.Length == _deserializationParams.Length);
+
+      def body = List();
+      foreach ((p, e) in _deserializationParams.Zip(args))
+        body.Add(<[ def $(p.Name : usesite) = $e ]>);
+
+      def cases1 = members.RevMap(m => <[ case: | $(GetMemberName(m) : string) => $objAccess.$(m.Name : usesite) = $(MakeMemberReadCode(owner, m)) ]>);
+      def cases2 = <[ case: | name => $(_messageEmitter.EmitWarning(<[ "Data for the '" + name + "' member is ignored." ]>)) ]> :: cases1;
+
+      body.Add(<[
+        def loop(typeCode : TypeTag)
+        {
+          when (typeCode != TypeTag.Empty)
+          {
+            def fieldName = reader.ReadString();
+            match (fieldName)
+            {
+              ..$(cases2.Reverse())
+            }
+            loop(reader.ReadByte() :> TypeTag)
+          }
+        }
+      ]>);
+      body.Add(<[ loop(reader.ReadByte() :> TypeTag); ]>);
+      <[ { ..$(body.ToNList()) } ]>
+    }
+
+    MakeMemberWriteCode(type : FixedType, member : IMember, objExpr : PExpr) : PExpr
+    {
+      def memberType = type.TypeOfMember(member).Fix();
+      def typeCode = GetTypeTag(memberType) :> TypeTag;
       if (typeCode == TypeTag.Object || typeCode == TypeTag.Variant || typeCode :> int >= TypeTag.FirstCustom :> int)
         MakeUserDefinedTypeWriteCode(type, member, objExpr)
       else
         <[
-          writer.Write($(GetTypeTag(type)));
+          writer.Write($(GetTypeTag(memberType)));
           writer.Write($(GetMemberName(member)));
           writer.Write($objExpr.$(member.Name : usesite));
         ]>
     }
 
-    public MakeMemberDeserializationCode(type : FixedType, member : IMember) : PExpr
-    {
-      def code = MakeMemberReadCode(type, member);
-      def name = GetMemberName(member);
-      def memberType = type.TypeOfMember(member).Fix();
-      <[
-        def typeCode = reader.ReadByte() :> TypeTag;
-        assert2($(GetTypeTag(memberType)) :> TypeTag == typeCode);
-        def fieldName = reader.ReadString();
-        assert2($name == fieldName);
-        $code;
-      ]>
-    }
-
-    MakeMembersWriteCode(type : FixedType, objExpr : PExpr, ) : PExpr
+    MakeMembersWriteCode(type : FixedType, objExpr : PExpr) : PExpr
     {
       def members = GetSerializableMembers(type.TypeInfo);
       if (members is [])
         <[ () ]>
       else
       {
-        def code    = members.Map(m => MakeMemberSerializationCode(type, m, objExpr));
+        def code    = members.Map(m => MakeMemberWriteCode(type, m, objExpr));
         <[ { ..$code } ]>
       }
     }
-    
+
     MakeRecordReadCode(type : FixedType) : PExpr
     {
       def varPrefix = "_____";
@@ -164,27 +199,6 @@ namespace N2.Compiler
       }
     }
 
-    public MakeMembersDeserializationCode(type : FixedType, members : list[IMember], objAccess : PExpr) : PExpr
-    {
-      def cases1 = members.RevMap(m => <[ case: | $(GetMemberName(m) : string) => $objAccess.$(m.Name : usesite) = $(MakeMemberReadCode(type, m)) ]>);
-      def cases2 = <[ case: | name => $(_messageEmitter.EmitWarning(<[ "Data for the '" + name + "' member is ignored." ]>)) ]> :: cases1;
-      <[ 
-        def loop(typeCode : TypeTag)
-        {
-          when (typeCode != TypeTag.Empty)
-          {
-            def fieldName = reader.ReadString();
-            match (fieldName)
-            {
-              ..$(cases2.Reverse())
-            }
-            loop(reader.ReadByte() :> TypeTag)
-          }
-        }
-        loop(reader.ReadByte() :> TypeTag);
-      ]>;
-    }
-
     IsVariant(ti : TypeInfo) : bool
     {
       match (ti?.GetTydecl())
@@ -194,13 +208,14 @@ namespace N2.Compiler
         | _                           => false
       }
     }
-    
+
     private MakeUserDefinedTypeWriteCode(type : FixedType, member : IMember, objExpr : PExpr) : PExpr
     {
       def ti = type.TypeOfMember(member).Fix();
       def name = GetMemberName(member);
       def (writer, _) = GetWriteReadMethods(ti);
-      <[ $writer($name, $objExpr.$(name : usesite), writer); ]>
+      def args = <[ $(name : string) ]> :: <[ $objExpr.$(name : usesite) ]> :: <[ writer ]> :: _serializationArgs;
+      <[ $writer(..$args); ]>
     }
 
     private MakeMemberReadCode(type : FixedType, member : IMember) : PExpr
@@ -208,7 +223,8 @@ namespace N2.Compiler
       def memberType = type.TypeOfMember(member).Fix();
       //def name = GetMemberName(member);
       def (_, reader) = GetWriteReadMethods(memberType);
-      <[ $reader(reader, typeCode, fieldName) ]>
+      def args = <[ reader ]> :: <[ typeCode ]> :: <[ fieldName ]> :: _deserializationArgs;
+      <[ $reader(..$args) ]>
     }
 
     private GetVariantOptions(variantType : FixedType) : list[FixedType.Class]
@@ -276,12 +292,12 @@ namespace N2.Compiler
       ]>
     }
     
-    private MakeTypeWriteReadMethods(ty : FixedType, writer : Name, reader : Name) : void
+    private MakeTypeWriteReadMethods(helperType : TypeBuilder, ty : FixedType, writer : Name, reader : Name) : void
     {
       def typeCode = GetTypeTag(ty) :> TypeTag;
       mutable readerCode : PExpr;
       mutable writerCode : PExpr;
-      
+
       match (typeCode)
       {
         | TypeTag.Object =>
@@ -297,7 +313,7 @@ namespace N2.Compiler
         | TypeTag.Variant =>
           readerCode = MakeVarianteReaderMethodBody(ty);
           writerCode = MakeVarianteWriterMethodBody(ty);
-        
+
         | TypeTag.Empty    => assert2(false); assert(false);
         | TypeTag.DateTime => assert2(false); assert(false);
         | TypeTag.Boolean | TypeTag.Char   | TypeTag.SByte  | TypeTag.Byte 
@@ -330,26 +346,41 @@ namespace N2.Compiler
                 | _                    => assert2(false); assert(false);
               }
             ]>;
-          | tag when (tag :> byte) < 0 => assert2(false); assert(false);
-          | tag =>
-            def serializerId = tag :> int - TypeTag.FirstCustom :> int;
-            def extention = _extentions[serializerId];
-            writerCode = extention.MakeWriteCode(ty, this);
-            readerCode = extention.MakeReadCode(ty, this);
+        | tag when (tag :> byte) < 0 => assert2(false); assert(false);
+        | tag =>
+          def serializerId = tag :> int - TypeTag.FirstCustom :> int;
+          def extention = _extentions[serializerId];
+          writerCode = <[ 
+            writer.Write($(tag :> byte));
+            writer.Write(memberName);
+            $(extention.MakeWriteCode(ty, this));
+          ]>;
+          readerCode = extention.MakeReadCode(ty, this);
       }
-      
+
       when (writerCode != null)
-        _ = _helperType.DefineWithSource(<[ decl: 
-          public $(writer : name)(memberName : string, obj : $(ty : typed), writer : System.IO.BinaryWriter) : void
+      {
+        def parms = <[ parameter: memberName : string ]>
+          :: <[ parameter: obj : $(ty : typed) ]>
+          :: <[ parameter: writer : System.IO.BinaryWriter ]>
+          :: _serializationParams;
+
+        _ = helperType.DefineWithSource(<[ decl: 
+          public $(writer : name)(..$parms) : void
           {
             $writerCode;
           } ]>);
+      }
 
-      
       assert2(readerCode != null);
-      
-      _ = _helperType.DefineWithSource(<[ decl:
-        public $(reader : name)(reader : System.IO.BinaryReader, typeCode : TypeTag, memberName : string) : $(ty : typed)
+
+      def parms = <[ parameter: reader : System.IO.BinaryReader ]>
+        :: <[ parameter: typeCode : TypeTag ]>
+        :: <[ parameter: memberName : string ]>
+        :: _deserializationParams;
+
+      _ = helperType.DefineWithSource(<[ decl:
+        public $(reader : name)(..$parms) : $(ty : typed)
         {
           try { $readerCode }
           catch 
@@ -368,6 +399,7 @@ namespace N2.Compiler
         value
       else
       {
+        assert2(type.TypeInfo != null);
         def name = Util.tmpname(type.TypeInfo.Name);
         def writerName = "Serialize_" + name;
         def readerName = "Deserialize_" + name;
@@ -407,16 +439,36 @@ namespace N2.Compiler
       else
         member.Name
     }
-    
+
     public Dispose() : void
     {
-      while (_typesToProcess.Count > 0)
+      when (_typesToProcess.Count > 0)
       {
-        def ti = _typesToProcess.Dequeue();
-        match (_typesMap[ti])
+        def env        = _manager.CoreEnv.EnterIntoNamespace(["N2", "Internal"]);
+        def helperType =
+          match (env.LookupType(["SerializationHelper"], null, 0))
+          {
+            | Some(type is TypeBuilder) => type
+            | Some => assert(false);
+            | _ => 
+              def result = env.Define(<[ decl: internal module SerializationHelper { } ]>);
+              def onTypeTreeBuildFinish(manager : ManagerClass) : void
+              {
+                manager.TypeTreeBuildFinish -= onTypeTreeBuildFinish;
+                result.Compile();
+              }
+              _manager.TypeTreeBuildFinish += onTypeTreeBuildFinish;
+              result
+          };
+
+        while (_typesToProcess.Count > 0)
         {
-          | (<[ $_.$(Splicable.Name(writer)) ]>, <[ $_.$(Splicable.Name(reader)) ]>) => MakeTypeWriteReadMethods(ti, writer, reader)
-          | _ => assert2(false); assert(false);
+          def ti = _typesToProcess.Dequeue();
+          match (_typesMap[ti])
+          {
+            | (<[ $_.$(Splicable.Name(writer)) ]>, <[ $_.$(Splicable.Name(reader)) ]>) => MakeTypeWriteReadMethods(helperType, ti, writer, reader)
+            | _ => assert2(false); assert(false);
+          }
         }
       }
     }
