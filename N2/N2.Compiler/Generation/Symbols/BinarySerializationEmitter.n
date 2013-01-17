@@ -25,18 +25,16 @@ namespace N2.Compiler
     _manager        : ManagerClass;
     _helperName     : PExpr;
     _helperType     : TypeBuilder;
-    _emitWarning    : PExpr -> PExpr;
-    _emitFatalError : PExpr -> PExpr;
+    _messageEmitter : IBinarySerializationMessageEmitter;
     _extentions     : array[IBinarySerializationEmitterExtention];
     
     [RecordIgnore] _typesMap       : Hashtable[FixedType, PExpr * PExpr] = Hashtable();
     [RecordIgnore] _typesToProcess : SCG.Queue[FixedType] = SCG.Queue();
 
-    public this(manager : ManagerClass, emitWarning : PExpr -> PExpr, emitFatalError : PExpr -> PExpr, extentions : array[IBinarySerializationEmitterExtention])
+    public this(manager : ManagerClass, messageEmitter : IBinarySerializationMessageEmitter, extentions : array[IBinarySerializationEmitterExtention])
     {
       _manager        = manager;
-      _emitWarning    = emitWarning;
-      _emitFatalError = emitFatalError;
+      _messageEmitter = messageEmitter;
       _extentions     = extentions ?? array(0);
       def coreEnv     = manager.CoreEnv;
 
@@ -96,12 +94,12 @@ namespace N2.Compiler
     {
         //def makeCode(f : IField) : PExpr
       def type = type.TypeOfMember(member).Fix();
-      def typeCode = GetTypeCode(type) :> TypeTag;
+      def typeCode = GetTypeTag(type) :> TypeTag;
       if (typeCode == TypeTag.Object || typeCode == TypeTag.Variant || typeCode :> int >= TypeTag.FirstCustom :> int)
         MakeUserDefinedTypeWriteCode(type, member, objExpr)
       else
         <[
-          writer.Write($(GetTypeCode(type)));
+          writer.Write($(GetTypeTag(type)));
           writer.Write($(GetMemberName(member)));
           writer.Write($objExpr.$(member.Name : usesite));
         ]>
@@ -114,7 +112,7 @@ namespace N2.Compiler
       def memberType = type.TypeOfMember(member).Fix();
       <[
         def typeCode = reader.ReadByte() :> TypeTag;
-        assert2($(GetTypeCode(memberType)) :> TypeTag == typeCode);
+        assert2($(GetTypeTag(memberType)) :> TypeTag == typeCode);
         def fieldName = reader.ReadString();
         assert2($name == fieldName);
         $code;
@@ -143,7 +141,7 @@ namespace N2.Compiler
       {
         def vars  = List(members.MapLazy(m => <[ mutable $(varPrefix + m.Name : usesite); ]>));
         def cases1 = members.RevMap(m => <[ case: | $(GetMemberName(m) : string) => $(varPrefix + m.Name : usesite) = $(MakeMemberReadCode(type, m)) ]>);
-        def cases2 = <[ case: | name => $(_emitWarning(<[ "Data for the '" + name + "' member is ignored." ]>)) ]> :: cases1;
+        def cases2 = <[ case: | name => $(_messageEmitter.EmitWarning(<[ "Data for the '" + name + "' member is ignored." ]>)) ]> :: cases1;
         def parameters = members.Map(m => <[ $(varPrefix + m.Name : usesite) ]>);
         def matchExpr = <[ 
           def loop(typeCode : TypeTag)
@@ -169,7 +167,7 @@ namespace N2.Compiler
     public MakeMembersDeserializationCode(type : FixedType, members : list[IMember], objAccess : PExpr) : PExpr
     {
       def cases1 = members.RevMap(m => <[ case: | $(GetMemberName(m) : string) => $objAccess.$(m.Name : usesite) = $(MakeMemberReadCode(type, m)) ]>);
-      def cases2 = <[ case: | name => $(_emitWarning(<[ "Data for the '" + name + "' member is ignored." ]>)) ]> :: cases1;
+      def cases2 = <[ case: | name => $(_messageEmitter.EmitWarning(<[ "Data for the '" + name + "' member is ignored." ]>)) ]> :: cases1;
       <[ 
         def loop(typeCode : TypeTag)
         {
@@ -237,7 +235,7 @@ namespace N2.Compiler
       }
       def options = GetVariantOptions(ty);
       def cases1  = options.Map(makeCase);
-      def cases2  = cases1 + [<[ case: | m => $(_emitFatalError(<[ "The serialisation data for '" + m + "' member is ignored."]>)); ]>];
+      def cases2  = cases1 + [<[ case: | m => $(_messageEmitter.EmitFatalError(<[ "The serialisation data for '" + m + "' member is ignored."]>)); ]>];
       <[
         assert(typeCode == TypeTag.Variant);
         match (reader.ReadString())
@@ -280,7 +278,7 @@ namespace N2.Compiler
     
     private MakeTypeWriteReadMethods(ty : FixedType, writer : Name, reader : Name) : void
     {
-      def typeCode = GetTypeCode(ty) :> TypeTag;
+      def typeCode = GetTypeTag(ty) :> TypeTag;
       mutable readerCode : PExpr;
       mutable writerCode : PExpr;
       
@@ -356,7 +354,7 @@ namespace N2.Compiler
           try { $readerCode }
           catch 
           { | e =>
-            $(_emitWarning(<[ "An exception occurred while deserializing data for the '" + memberName + "' field. Exception: " + e.Message + "." ]>));
+            $(_messageEmitter.EmitWarning(<[ "An exception occurred while deserializing data for the '" + memberName + "' field. Exception: " + e.Message + "." ]>));
             $(TExpr.DefaultValue(ty) : typed);
           }
         } ]>);
@@ -380,7 +378,7 @@ namespace N2.Compiler
       }
     }
     
-    GetTypeCode(type : FixedType) : byte
+    GetTypeTag(type : FixedType) : byte
     {
       foreach (extention in _extentions with i)
         when (extention.IsSupportedType(type))
@@ -426,11 +424,11 @@ namespace N2.Compiler
 
   internal module BinarySerializationEmitterExtensions
   {
-    public CreateBinarySerializationEmitter(this manager : ManagerClass, emitWarning : PExpr -> PExpr, emitFatalError : PExpr -> PExpr) : BinarySerializationEmitter
+    public CreateBinarySerializationEmitter(this manager : ManagerClass, messageEmitter : IBinarySerializationMessageEmitter, params extentions : array[IBinarySerializationEmitterExtention]) : BinarySerializationEmitter
     {
       assert2(!manager.UserData.Contains(typeof(BinarySerializationEmitter)));
 
-      def instance = BinarySerializationEmitter(manager, emitWarning, emitFatalError, array(0));
+      def instance = BinarySerializationEmitter(manager, messageEmitter, extentions);
       manager.UserData[typeof(BinarySerializationEmitter)] = instance;
       instance
     }
