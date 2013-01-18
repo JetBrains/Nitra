@@ -77,13 +77,14 @@ namespace N2.Internal
     public ExtensibleRuleParser(ExtensibleRuleParserData parserData, int bindingPower)
       : base(parserData.Grammar, parserData.Descriptor)
     {
-      PrefixId = parserData.PrefixId;
-      PostfixId = parserData.PostfixId;
-      PrefixRules = parserData.PrefixParsers;
-      PostfixRules = parserData.PostfixParsers;
+      BindingPower     = bindingPower;
+      PrefixId         = parserData.PrefixId;
+      PostfixId        = parserData.PostfixId;
+      PrefixRules      = parserData.PrefixParsers;
+      PostfixRules     = parserData.PostfixParsers;
       FirstPostfixRule = 0;
       var postfixRules = parserData.PostfixDescriptors;
-      while (FirstPostfixRule < postfixRules.Length && bindingPower >= postfixRules[FirstPostfixRule].BindingPower)
+      while (FirstPostfixRule < postfixRules.Length && bindingPower < postfixRules[FirstPostfixRule].BindingPower)
         ++FirstPostfixRule;
       if (PostfixRules.Length > 0)
       {
