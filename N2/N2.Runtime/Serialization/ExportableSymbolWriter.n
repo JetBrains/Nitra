@@ -23,12 +23,23 @@ namespace N2.Serialization
       _symbolIds.Clear();
       _assemblyIds.Clear();
 
-      def exportableSymbols = CollectExportableSymbols(root);
-      WriteNameTree(root.Node, exportableSymbols.Select(_.Node), buffer);
-      WriteSymbols(exportableSymbols, buffer);
-      WriteReferencedAssemblies(buffer);
-      WriteNameTree(root.Node, _externalSymbols.Select(_.Node), buffer);
-      WriteExternalSymbols(buffer);
+      using(symbolBodyStream = MemoryStream())
+      {
+        _symbolBodyBuffer = BinaryWriter(symbolBodyStream);
+        try
+        {
+          def exportableSymbols = CollectExportableSymbols(root);
+          WriteNameTree(root.Node, exportableSymbols.Select(_.Node), buffer);
+          WriteSymbols(exportableSymbols, buffer);
+          WriteReferencedAssemblies(buffer);
+          WriteNameTree(root.Node, _externalSymbols.Select(_.Node), buffer);
+          WriteExternalSymbols(buffer);
+
+          buffer.Write(symbolBodyStream.GetBuffer(), 0, symbolBodyStream.Length :> int);
+          buffer.Write(0 : int);
+        }
+        finally _symbolBodyBuffer = null;
+      }
     }
 
     private WriteNameTree(rootNode : HierarchyNode, nodes : Seq[HierarchyNode], buffer : BinaryWriter) : void
@@ -66,32 +77,26 @@ namespace N2.Serialization
           def nodeId   = GetNodeId(symbol);
           buffer.Write(symbolId);
           buffer.Write(nodeId);
-          using (BlockSizeScope(buffer))
-            symbol.Serialize(buffer, this);
+          SerializeSymbol(symbol);
         }
         buffer.Write(0 : int);
       }
+
       // non tree symbols
-      while (_nonTreeSymbols.Count > 0)
+      foreach (group in _nonTreeSymbols.GroupBy(_.SymbolTypeId))
       {
-        def nonTreeGrouped = _nonTreeSymbols.GroupBy(_.SymbolTypeId).ToList();
-        _nonTreeSymbols.Clear();
-        foreach (group in nonTreeGrouped)
+        buffer.Write(group.Key);
+        foreach (symbol in group)
         {
-          buffer.Write(group.Key);
-          foreach (symbol in group)
-          {
-            def symbolId = GetSymbolId(symbol);
-            def name     = symbol.Name;
-            buffer.Write(symbolId);
-            buffer.Write(0 : int);
-            buffer.Write(name);
-            using (BlockSizeScope(buffer))
-              symbol.Serialize(buffer, this);
-          }
+          def symbolId = GetSymbolId(symbol);
+          def name     = symbol.Name;
+          buffer.Write(symbolId);
           buffer.Write(0 : int);
+          buffer.Write(name);
         }
+        buffer.Write(0 : int);
       }
+
       buffer.Write("");
     }
 
@@ -165,15 +170,24 @@ namespace N2.Serialization
       buffer
     }
 
-    private _nonTreeSymbols  : HashSet[IExportableSymbol]          = HashSet();
-    private _externalSymbols : HashSet[IExportableSymbol]          = HashSet();
-    private _nodeIds         : Dictionary[HierarchyNode,     int]  = Dictionary();
-    private _symbolIds       : Dictionary[IExportableSymbol, int]  = Dictionary();
-    private _assemblyIds     : Dictionary[AssemblyName,      byte] = Dictionary();
+    private SerializeSymbol(symbol : IExportableSymbol) : void
+    {
+      def symbolId = GetSymbolId(symbol);
+      _symbolBodyBuffer.Write(symbolId);
+      symbol.Serialize(_symbolBodyBuffer, this);
+    }
+
+    private mutable _symbolBodyBuffer : BinaryWriter;
+    private         _nonTreeSymbols   : HashSet[IExportableSymbol]          = HashSet();
+    private         _externalSymbols  : HashSet[IExportableSymbol]          = HashSet();
+    private         _nodeIds          : Dictionary[HierarchyNode,     int]  = Dictionary();
+    private         _symbolIds        : Dictionary[IExportableSymbol, int]  = Dictionary();
+    private         _assemblyIds      : Dictionary[AssemblyName,      byte] = Dictionary();
 
     private AddNonTreeSymbol(symbol : IExportableSymbol) : void
     {
-      _ = _nonTreeSymbols.Add(symbol);
+      when (_nonTreeSymbols.Add(symbol))
+        SerializeSymbol(symbol);
     }
 
     private AddExternalSymbol(symbol : IExportableSymbol) : void
@@ -212,31 +226,6 @@ namespace N2.Serialization
 
       def assemblyName = N2.Runtime.Project.CurrentProject.GetAssemblyName(symbol.AssemblyId);
       _assemblyIds[assemblyName]
-    }
-
-    // TODO: переписать на surroundwith
-    private sealed class BlockSizeScope : IDisposable
-    {
-      private _buffer   : BinaryWriter;
-      private _sizePos  : long;
-      private _startPos : long;
-
-      public this(buffer : BinaryWriter)
-      {
-        _buffer = buffer;
-        _sizePos = _buffer.BaseStream.Position;
-        _buffer.Write(0 : int);
-        _startPos = _buffer.BaseStream.Position;
-      }
-
-      public Dispose() : void
-      {
-        def endPos = _buffer.BaseStream.Position;
-        def size   = (endPos - _startPos) :> int;
-        _ = _buffer.Seek((_sizePos - endPos) :> int, SeekOrigin.Current);
-        _buffer.Write(size);
-        _ = _buffer.Seek(size, SeekOrigin.Current);
-      }
     }
   }
 }
