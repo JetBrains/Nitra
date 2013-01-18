@@ -15,34 +15,43 @@ using System.Linq;
 
 namespace N2.Serialization
 {
-  public sealed class ExportableSymbolReader : ISymbolRefReader
+  public sealed class ExportableSymbolReader : ISymbolRefReader, IDisposable
   {
-    public CreateSymbols(symbolRegistry : ExternalSymbolReaderRegistry, root : NamespaceSymbol, assemblyId : byte, buffer : BinaryReader) : void
+    public this(stream : Stream, symbolConstructorRegistry : ExternalSymbolConstructorRegistry, root : NamespaceSymbol, assemblyId : byte)
     {
-      ResetMutableFields(); // reset Memoize caches
-      _nodes.Clear();
-      _localSymbols.Clear();
-      _referencedAssemblies.Clear();
-      _externalSymbols.Clear();
-
-      AssemblyId = assemblyId;
-
-      ReadNameTree(root.Node, buffer);
-      ReadSymbols(symbolRegistry, buffer);
-      ReadReferencedAssemblies(buffer);
-      ReadNameTree(root.Node, buffer);
-      ReadExternalSymbols(buffer);
+      _reader                    = BinaryReader(stream, Text.Encoding.UTF8);
+      _symbolConstructorRegistry = symbolConstructorRegistry;
+      _root                      = root;
+      AssemblyId                 = assemblyId;
     }
 
-    public LoadSymbols(buffer : BinaryReader) : void
+    private _reader                    : BinaryReader;
+    private _symbolConstructorRegistry : ExternalSymbolConstructorRegistry;
+    private _root                      : NamespaceSymbol;
+
+    public Dispose() : void
+    {
+      _reader.Dispose();
+    }
+
+    public CreateSymbols() : void
+    {
+      ReadNameTree();
+      ReadSymbolHeaders();
+      ReadReferencedAssemblies();
+      ReadNameTree();
+      ReadExternalSymbolInfo();
+    }
+
+    public ReadSymbols() : void
     {
       def loop()
       {
-        def symbolId = buffer.ReadInt32();
+        def symbolId = _reader.ReadInt32();
         when (symbolId > 0)
         {
           def symbol = _localSymbols[symbolId];
-          symbol.Deserialize(buffer, this);
+          symbol.Deserialize(_reader, this);
           loop();
         }
       }
@@ -56,17 +65,17 @@ namespace N2.Serialization
       get { _referencedAssemblies.Values }
     }
 
-    private ReadNameTree(rootNode : HierarchyNode, buffer : BinaryReader) : void
+    private ReadNameTree() : void
     {
       def loop()
       {
-        def id = buffer.ReadInt32();
+        def id = _reader.ReadInt32();
         when (id > 0)
         {
-          def parentId = buffer.ReadInt32();
-          def partName = buffer.ReadString();
+          def parentId = _reader.ReadInt32();
+          def partName = _reader.ReadString();
 
-          def parent   = if (parentId == -1) rootNode else _nodes[parentId];
+          def parent   = if (parentId == -1) _root.Node else _nodes[parentId];
           def node     = parent.AddNode(partName);
           _nodes.Add(id, node);
           loop();
@@ -75,29 +84,29 @@ namespace N2.Serialization
       loop();
     }
 
-    private ReadSymbols(symbolReaderRegistry : ExternalSymbolReaderRegistry, buffer : BinaryReader) : void
+    private ReadSymbolHeaders() : void
     {
       def loop()
       {
-        def symbolTypeId = buffer.ReadString();
+        def symbolTypeId = _reader.ReadString();
         unless (string.IsNullOrEmpty(symbolTypeId))
         {
-          def symbolReader = symbolReaderRegistry.Resolve(symbolTypeId);
-          symbolReader.Invoke(this, buffer);
+          def symbolConstructor = _symbolConstructorRegistry.Resolve(symbolTypeId);
+          symbolConstructor.Invoke(this, _reader);
           loop();
         }
       }
       loop();
     }
 
-    private ReadReferencedAssemblies(buffer : BinaryReader) : void
+    private ReadReferencedAssemblies() : void
     {
       def loop()
       {
-        def assemblyId = buffer.ReadByte();
+        def assemblyId = _reader.ReadByte();
         when (assemblyId > 0)
         {
-          def assemblyName = buffer.ReadString();
+          def assemblyName = _reader.ReadString();
           _referencedAssemblies.Add(assemblyId, AssemblyName(assemblyName));
           loop();
         }
@@ -105,20 +114,20 @@ namespace N2.Serialization
       loop();
     }
 
-    private ReadExternalSymbols(buffer : BinaryReader) : void
+    private ReadExternalSymbolInfo() : void
     {
       def loopTypes()
       {
-        def symbolTypeId = buffer.ReadString();
+        def symbolTypeId = _reader.ReadString();
         unless (string.IsNullOrEmpty(symbolTypeId))
         {
           def loopSymbols()
           {
-            def symbolId = buffer.ReadInt32();
+            def symbolId = _reader.ReadInt32();
             when (symbolId > 0)
             {
-              def nodeId     = buffer.ReadInt32();
-              def assemblyId = buffer.ReadByte();
+              def nodeId     = _reader.ReadInt32();
+              def assemblyId = _reader.ReadByte();
               def symbolRef  = ExternalSymbolReference(symbolTypeId, nodeId, assemblyId);
               _externalSymbols.Add(symbolId, symbolRef);
               loopSymbols();
@@ -131,9 +140,9 @@ namespace N2.Serialization
       loopTypes();
     }
 
-    private ReadSymbolRef(buffer : BinaryReader) : ISymbol implements ISymbolRefReader.Read
+    private ReadSymbolRef(reader : BinaryReader) : ISymbol implements ISymbolRefReader.Read
     {
-      def symbolId = buffer.ReadInt32();
+      def symbolId = reader.ReadInt32();
       ResolveSymbol(symbolId)
     }
 
