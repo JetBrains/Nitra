@@ -17,7 +17,7 @@ using N2.Runtime;
 namespace N2.Internal
 {
 #if !PARSER_DEBUG
-  [DebuggerStepThroughAttribute]
+  //[DebuggerStepThroughAttribute]
 #endif
   public sealed class ExtensibleRuleParser : RuleParser
   {
@@ -229,7 +229,7 @@ prefix_loop:
 
         parser.ast[prefixAst + PrefixOfs.List] = bestResult;
 
-        if (bestEndPos < 0)// не смогли разобрать префикс
+        if (bestResult <= 0)// не смогли разобрать префикс
           return -1;
 
       postfix_loop:
