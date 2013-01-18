@@ -84,7 +84,7 @@ namespace N2.Internal
       PostfixRules     = parserData.PostfixParsers;
       FirstPostfixRule = 0;
       var postfixRules = parserData.PostfixDescriptors;
-      while (FirstPostfixRule < postfixRules.Length && bindingPower < postfixRules[FirstPostfixRule].BindingPower)
+      while (FirstPostfixRule < postfixRules.Length && bindingPower >= postfixRules[FirstPostfixRule].BindingPower)
         ++FirstPostfixRule;
       if (PostfixRules.Length > 0)
       {
