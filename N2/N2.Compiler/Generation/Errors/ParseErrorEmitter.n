@@ -1,0 +1,298 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using N2.Model;
+using N2.Typing;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  internal class ParseErrorEmitter : IVariableEmitter
+  {
+    public Owner      : SyntaxModuleEmitter { get; }
+    public RuleSymbol : RuleDefSymbol       { get; }
+
+    public this(owner      : SyntaxModuleEmitter, ruleSymbol : RuleDefSymbol)
+    {
+      Owner = owner;
+      RuleSymbol = ruleSymbol;
+    }
+
+    Environment : EmitterEnvironment implements IVariableEmitter.Environment { get { Owner.Environment } }
+
+    CreateVariable(name : string) : PExpr implements IVariableEmitter.CreateVariable
+    {
+      <[ $(name : dyn) ]>
+    }
+
+    public DefineWalker(rootAstStruct : option[RootAstStruct2]) : void
+    {
+      def parms = RuleSymbol.GetSubRules().Map(r => <[ parameter: $("_" + r.FieldName : usesite) : $(Owner.RuleTypeToNType(r.Type) : typed) ]>);
+      def tb = Owner.GrammarImplTB.DefineNestedType(<[ decl:
+        public abstract class $(RuleSymbol.Name + "Walker" : usesite) : $(GetWalkerBaseType(RuleSymbol))
+        {
+          public abstract Accept(..$parms) : T;
+        }
+      ]>);
+
+      def referencedWalkers = GetDependencies(RuleSymbol);
+      foreach(p in referencedWalkers)
+        tb.Define(<[ decl: private mutable $(p.Value.FieldName : usesite) : $(GetWalkerType(p.Key)) ]>);
+
+      def initBody = List();
+      foreach (p in referencedWalkers)
+        initBody.Add(<[ $(p.Value.FieldName : usesite) = compositeAstWalker.GetWalker($(p.Key.GetDescriptorClassRef()).StaticDescriptor) ]>);
+      tb.Define(<[ decl: 
+        public override Init(compositeAstWalker : N2.Runtime.CompositeAstWalker) : void
+        {
+          ..$(initBody.ToNList())
+        }
+      ]>);
+
+      DefineWalkMethod(tb, rootAstStruct.Value, referencedWalkers);
+    }
+
+    private DefineWalkMethod(tb : TypeBuilder, rootAstStruct : RootAstStruct2, referencedWalkers : Hashtable[RuleSymbol, WalkerInfo]) : void
+    {
+      def rootAstMaker(arguments : list[PExpr]) : PExpr
+      {
+        def arguments = <[ N2.Location(source, pos, curPos) ]> :: <[ [] ]> :: arguments;
+        <[ $(Owner.NTypeOfRuleSymbol(RuleSymbol) : typed).Ast(..$arguments) ]>
+      }
+      def internalAstMaker(_ : list[PExpr]) : PExpr
+      {
+        | []   => assert(false)
+        | [x]  => x
+        | many => <[ (..$many) ]>
+      }
+      def makeReader(structField : AstStruct2.StructField, astPointer : AstPointer2) : PExpr
+      {
+        match(structField.Field)
+        {
+          | RuleField2.TokenString
+          | RuleField2.TokenCall =>
+            <[ N2.NToken(curPos, curPos + curLength) ]>
+
+          | RuleField2.ExternalAst(RuleSymbol = ruleSymbol) =>
+            <[
+              $(ruleSymbol.GetDescriptorClassRef())
+                .StaticCreateAst(source, parserHost, ast, ast[$(astPointer.AstOffset(structField))], curPos)
+            ]>
+
+          | RuleField2.Extensible(RuleSymbol = ruleSymbol) =>
+            <[
+              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              parserHost.GetRuleDescriptorById(ast[astIndex])
+                .CreateAst(source, parserHost, ast, astIndex, curPos)
+                :> $(Owner.RuleTypeToNType(ruleSymbol.Type) : typed)
+            ]>
+
+          | RuleField2.List(astStruct = itemStruct, NextRef = nextRef) =>
+            def itemPointer   = AstPointer2(itemStruct, "astIndex", this);
+            <[
+              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              if (astIndex > 0)
+              {
+                def astBuffer = System.Collections.Generic.List(16);
+                def loop(astIndex)
+                {
+                  astBuffer.Add($(makeAst(itemStruct, itemPointer, internalAstMaker)));
+                  def astIndex = ast[$(itemPointer.AstOffset(nextRef))];
+                  when (astIndex > 0)
+                    loop(astIndex);
+                }
+                loop(astIndex);
+                Nemerle.Collections.NList.ToList(astBuffer)
+              }
+              else []
+            ]>
+
+          | RuleField2.List2(astRuleStruct = itemStruct, astSeparatorStruct = separatorStruct, NextRuleRef = nextItemRef, NextSeparatorRef = nextSeparatorRef, hangingSeparator = hangingSeparator) =>
+            def itemPointer = AstPointer2(itemStruct, "astIndex", this);
+            def separatorPointer = AstPointer2(separatorStruct, "separatorIndex", this);
+            def readNextAst()
+            {
+              if (hangingSeparator)
+                <[
+                  separatorBuffer.Add($(makeAst(separatorStruct, separatorPointer, internalAstMaker)));
+                  def nextAstIndex = ast[$(separatorPointer.AstOffset(nextSeparatorRef))];
+                  when (nextAstIndex > 0)
+                    loop(nextAstIndex);
+                ]>
+              else
+                <[
+                  def nextAstIndex = ast[$(separatorPointer.AstOffset(nextSeparatorRef))];
+                  when (nextAstIndex > 0)
+                  {
+                    separatorBuffer.Add($(makeAst(separatorStruct, separatorPointer, internalAstMaker)));
+                    loop(nextAstIndex);
+                  }
+                ]>
+            }
+            <[
+              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              if (astIndex > 0)
+              {
+                def astBuffer = System.Collections.Generic.List(16);
+                def separatorBuffer = System.Collections.Generic.List(16);
+                def loop(astIndex)
+                {
+                  astBuffer.Add($(makeAst(itemStruct, itemPointer, internalAstMaker)));
+                  def separatorIndex = ast[$(itemPointer.AstOffset(nextItemRef))];
+                  when (separatorIndex > 0)
+                    $(readNextAst());
+                }
+                loop(astIndex);
+                (Nemerle.Collections.NList.ToList(astBuffer), Nemerle.Collections.NList.ToList(separatorBuffer))
+              }
+              else ([], [])
+            ]>
+
+          | RuleField2.Option(astStruct = valueAstStruct) =>
+            <[
+              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              if (astIndex > 0)
+                Some($(makeAst(valueAstStruct, AstPointer2(valueAstStruct, "astIndex", this), internalAstMaker)))
+              else
+                None()
+            ]>
+
+          | _ => assert(false)
+        }
+      }
+      and makeAst(astStruct : AstStruct2, astPointer : AstPointer2, maker : list[PExpr] -> PExpr) : PExpr
+      {
+        def statements = List();
+        def arguments = List();
+        def visitStructField(structField : AstStruct2.StructField, isPrefixRef : bool) : void
+        {
+          def getLengthExpr()
+          {
+            if(isPrefixRef)
+              <[
+                curLength =
+                {
+                  def astIndex = ast[$(astPointer.AstOffset(structField))];
+                  parserHost.GetRuleDescriptorById(ast[astIndex]).GetAstLength(parserHost, ast, astIndex)
+                }
+              ]>
+            else
+              <[ curLength = ast[$(astPointer.SizeOffset(structField))] ]>
+          }
+          match (structField.Field)
+          {
+            | RuleField2.Ast
+            | RuleField2.Predicate => ()
+            | RuleField2.Void =>
+              statements.Add(getLengthExpr());
+              statements.Add(<[ curPos += curLength ]>);
+
+            | RuleField2.List   with incrementPos = false
+            | RuleField2.List2  with incrementPos = false
+            | RuleField2.Option with incrementPos = false
+            | _                 with incrementPos = true =>
+              def varName = Util.tmpname("ast");
+              statements.Add(getLengthExpr());
+              statements.Add(<[ def $(varName : usesite) = $(makeReader(structField, astPointer)) ]>);
+              arguments.Add(<[ $(varName : usesite) ]>);
+              when (incrementPos)
+                statements.Add(<[ curPos += curLength ]>);
+          }
+        }
+        when (astStruct is PostfixAstStruct2 as astStruct)
+          visitStructField(astStruct.PrefixRef, true);
+        foreach (sizeField in astStruct.SizeFields)
+          visitStructField(sizeField, false);
+        statements.Add(maker(arguments.ToNList()));
+        <[ { ..$(statements.ToNList()) } ]>
+      }
+      
+      match (RuleSymbol)
+      {
+        | SimpleRuleSymbol as s
+        | ExtentionRuleSymbol(ExtentionType = Prefix) as s =>
+          def astPointer = AstPointer2(rootAstStruct, "astPtr", this);
+          tb.DefineConditional(<[ decl:
+            public override Walk(pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(Owner.RuleTypeToNType(s.Type) : typed)
+            {
+              mutable curPos = pos;
+              mutable curLength;
+              $(makeAst(rootAstStruct, astPointer, rootAstMaker))
+            }
+          ]>);
+
+        | ExtentionRuleSymbol(ExtentionType = Postfix) as s =>
+          tb.DefineConditional(<[ decl:
+            public override Walk(prefix : $(Owner.RuleTypeToNType(s.Type) : typed), pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(Owner.RuleTypeToNType(s.Type) : typed)
+            {
+              
+            }
+          ]>);
+
+        | _ => assert2(false);
+      }
+    }
+
+    private static GetDependencies(rule : RuleSymbol) : Hashtable[RuleSymbol, WalkerInfo]
+    {
+      def refs = Hashtable();
+      def collect(rule : Rule) : void
+      {
+        | String
+        | Not
+        | And => ()
+        | Sequence            (rules)                    => foreach(r in rules) collect(r);
+        | Repeat              (_, _, rule)               => collect(rule)
+        | RepeatWithSeparator (_, _, rule, separator, _) => collect(rule); collect(separator)
+        | Call                (ruleRef, _) as callRule   =>
+          def symbol = ruleRef.Ref.Value;
+          unless (callRule.Type is RuleType.Chars)
+            unless (refs.ContainsKey(symbol))
+            _ = refs.Add(symbol, WalkerInfo(symbol));
+      }
+      match (rule)
+      {
+        | ExtentionRuleSymbol(Rule = r)
+        | SimpleRuleSymbol   (Rule = r) => collect(r);
+        | _ => assert2(false); assert(false)
+      }
+      refs
+    }
+
+    private struct WalkerInfo
+    {
+      public this(symbol : RuleSymbol)
+      {
+        FieldName = Util.tmpname(symbol.Name + "Walker");
+      }
+      public FieldName : string;
+    }
+
+    private static GetWalkerType(rule : RuleSymbol) : PExpr
+    {
+      | SimpleRuleSymbol as s => <[ N2.Runtime.SimpleAstWalker[$(Owner.RuleTypeToNType(s.Type) : typed)] ]>
+      | ExtensibleRuleSymbol as s => <[ N2.Runtime.ExtensibleAstWalker[$(Owner.RuleTypeToNType(s.Type) : typed)] ]>
+      | _ => assert2(false); assert(false)
+    }
+
+    private static GetWalkerBaseType(rule : RuleSymbol) : PExpr
+    {
+      | SimpleRuleSymbol                             as s => <[ N2.Runtime.SimpleAstWalker[$(Owner.RuleTypeToNType(s.Type) : typed)] ]>
+      | ExtentionRuleSymbol(ExtentionType = Prefix)  as s => <[ N2.Runtime.PrefixAstWalker[$(Owner.RuleTypeToNType(s.Type) : typed)] ]>
+      | ExtentionRuleSymbol(ExtentionType = Postfix) as s => <[ N2.Runtime.PostfixAstWalker[$(Owner.RuleTypeToNType(s.Type) : typed)] ]>
+      | _ => assert2(false); assert(false)
+    }
+
+    public Emit() : void
+    {
+      
+    }
+  }
+}
