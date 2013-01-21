@@ -17,7 +17,7 @@ using N2.Runtime;
 namespace N2.Internal
 {
 #if !PARSER_DEBUG
-  [DebuggerStepThroughAttribute]
+  //[DebuggerStepThroughAttribute]
 #endif
   public sealed class ExtensibleRuleParser : RuleParser
   {
@@ -77,10 +77,11 @@ namespace N2.Internal
     public ExtensibleRuleParser(ExtensibleRuleParserData parserData, int bindingPower)
       : base(parserData.Grammar, parserData.Descriptor)
     {
-      PrefixId = parserData.PrefixId;
-      PostfixId = parserData.PostfixId;
-      PrefixRules = parserData.PrefixParsers;
-      PostfixRules = parserData.PostfixParsers;
+      BindingPower     = bindingPower;
+      PrefixId         = parserData.PrefixId;
+      PostfixId        = parserData.PostfixId;
+      PrefixRules      = parserData.PrefixParsers;
+      PostfixRules     = parserData.PostfixParsers;
       FirstPostfixRule = 0;
       var postfixRules = parserData.PostfixDescriptors;
       while (FirstPostfixRule < postfixRules.Length && bindingPower >= postfixRules[FirstPostfixRule].BindingPower)
@@ -229,7 +230,7 @@ prefix_loop:
 
         parser.ast[prefixAst + PrefixOfs.List] = bestResult;
 
-        if (bestEndPos < 0)// не смогли разобрать префикс
+        if (bestResult <= 0)// не смогли разобрать префикс
           return -1;
 
       postfix_loop:
