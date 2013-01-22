@@ -14,7 +14,7 @@ using System.Linq;
 
 namespace N2.Compiler
 {
-  internal class ParseErrorEmitter : IVariableEmitter
+  internal class AbstractWalkerEmitter : IVariableEmitter
   {
     public Owner      : SyntaxModuleEmitter { get; }
     public RuleSymbol : RuleDefSymbol       { get; }
@@ -25,6 +25,8 @@ namespace N2.Compiler
       RuleSymbol = ruleSymbol;
     }
 
+    mutable _tb : TypeBuilder;
+
     Environment : EmitterEnvironment implements IVariableEmitter.Environment { get { Owner.Environment } }
 
     CreateVariable(name : string) : PExpr implements IVariableEmitter.CreateVariable
@@ -32,39 +34,57 @@ namespace N2.Compiler
       <[ $(name : dyn) ]>
     }
 
-    public DefineWalker(rootAstStruct : option[RootAstStruct2]) : void
+    public DefineTypes() : void
     {
-      def parms = RuleSymbol.GetSubRules().Map(r => <[ parameter: $("_" + r.FieldName : usesite) : $(Owner.RuleTypeToNType(r.Type) : typed) ]>);
-      def tb = Owner.GrammarImplTB.DefineNestedType(<[ decl:
-        public abstract class $(RuleSymbol.Name + "Walker" : usesite) : $(GetWalkerBaseType(RuleSymbol))
+      assert(_tb == null);
+      _tb = Owner.GrammarImplTB.DefineNestedType(<[ decl:
+        public class $(RuleSymbol.Name + "Walker" : usesite) : $(GetWalkerBaseType(RuleSymbol))
         {
-          public abstract Accept(..$parms) : T;
+        }
+      ]>);
+    }
+
+    public DefineMembers(rootAstStruct : option[RootAstStruct2]) : void
+    {
+      assert(_tb != null);
+
+      def parms =
+        <[ parameter: $("location" : usesite) : N2.Location ]>
+        :: <[ parameter: $("errorInfo" : usesite) : list[N2.ErrorInfo] ]> //TODO: удалить этот параметр
+        :: RuleSymbol.GetSubRules().Map(r => <[ parameter: $("_" + r.FieldName : usesite) : $(Owner.RuleTypeToNType(r.Type) : typed) ]>);
+      _tb.DefineConditional(<[ decl:
+        public Accept(..$parms) : $(Owner.RuleTypeToNType(RuleSymbol.Type) : typed)
+        {
+          $(Owner.NTypeOfRuleSymbol(RuleSymbol) : typed).Ast(..$(parms.Map(p => <[ $(p.Name : usesite) ]>)))
         }
       ]>);
 
       def referencedWalkers = GetDependencies(RuleSymbol);
       foreach(p in referencedWalkers)
-        tb.Define(<[ decl: private mutable $(p.Value.FieldName : usesite) : $(GetWalkerType(p.Key)) ]>);
+        _tb.Define(<[ decl: private mutable $(p.Value.FieldName : usesite) : $(GetWalkerType(p.Key)) ]>);
 
       def initBody = List();
       foreach (p in referencedWalkers)
         initBody.Add(<[ $(p.Value.FieldName : usesite) = compositeAstWalker.GetWalker($(p.Key.GetDescriptorClassRef()).StaticDescriptor) ]>);
-      tb.Define(<[ decl: 
+      _tb.DefineConditional(<[ decl: 
         public override Init(compositeAstWalker : N2.Runtime.CompositeAstWalker) : void
         {
           ..$(initBody.ToNList())
         }
       ]>);
 
-      DefineWalkMethod(tb, rootAstStruct.Value, referencedWalkers);
+      DefineWalkMethod(rootAstStruct.Value, referencedWalkers);
     }
 
-    private DefineWalkMethod(tb : TypeBuilder, rootAstStruct : RootAstStruct2, referencedWalkers : Hashtable[RuleSymbol, WalkerInfo]) : void
+    private DefineWalkMethod(rootAstStruct : RootAstStruct2, referencedWalkers : Hashtable[RuleSymbol, WalkerInfo]) : void
     {
       def rootAstMaker(arguments : list[PExpr]) : PExpr
       {
-        def arguments = <[ N2.Location(source, pos, curPos) ]> :: <[ [] ]> :: arguments;
-        <[ $(Owner.NTypeOfRuleSymbol(RuleSymbol) : typed).Ast(..$arguments) ]>
+        def acceptArgs =
+          <[ N2.Location(parser.Source, startPos, pos) ]>
+          :: <[ [] ]>
+          :: arguments;
+        <[ this.Accept(..$acceptArgs) ]>
       }
       def internalAstMaker(_ : list[PExpr]) : PExpr
       {
@@ -78,33 +98,35 @@ namespace N2.Compiler
         {
           | RuleField2.TokenString
           | RuleField2.TokenCall =>
-            <[ N2.NToken(curPos, curPos + curLength) ]>
+            <[
+              def tokenPos = pos;
+              pos += parser.ast[$(astPointer.SizeOffset(structField))];
+              N2.NToken(tokenPos, pos)
+            ]>
 
           | RuleField2.ExternalAst(RuleSymbol = ruleSymbol) =>
+            def walkerFieldName = referencedWalkers[ruleSymbol].FieldName;
             <[
-              $(ruleSymbol.GetDescriptorClassRef())
-                .StaticCreateAst(source, parserHost, ast, ast[$(astPointer.AstOffset(structField))], curPos)
+              this.$(walkerFieldName : usesite).Walk(ref pos, parser.ast[$(astPointer.AstOffset(structField))], ref parser);
             ]>
 
           | RuleField2.Extensible(RuleSymbol = ruleSymbol) =>
+            def walkerFieldName = referencedWalkers[ruleSymbol].FieldName;
             <[
-              def astIndex = ast[$(astPointer.AstOffset(structField))];
-              parserHost.GetRuleDescriptorById(ast[astIndex])
-                .CreateAst(source, parserHost, ast, astIndex, curPos)
-                :> $(Owner.RuleTypeToNType(ruleSymbol.Type) : typed)
+              this.$(walkerFieldName : usesite).Walk(ref pos, ref parser);
             ]>
 
           | RuleField2.List(astStruct = itemStruct, NextRef = nextRef) =>
             def itemPointer   = AstPointer2(itemStruct, "astIndex", this);
             <[
-              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              def astIndex = parser.ast[$(astPointer.AstOffset(structField))];
               if (astIndex > 0)
               {
                 def astBuffer = System.Collections.Generic.List(16);
                 def loop(astIndex)
                 {
                   astBuffer.Add($(makeAst(itemStruct, itemPointer, internalAstMaker)));
-                  def astIndex = ast[$(itemPointer.AstOffset(nextRef))];
+                  def astIndex = parser.ast[$(itemPointer.AstOffset(nextRef))];
                   when (astIndex > 0)
                     loop(astIndex);
                 }
@@ -122,13 +144,13 @@ namespace N2.Compiler
               if (hangingSeparator)
                 <[
                   separatorBuffer.Add($(makeAst(separatorStruct, separatorPointer, internalAstMaker)));
-                  def nextAstIndex = ast[$(separatorPointer.AstOffset(nextSeparatorRef))];
+                  def nextAstIndex = parser.ast[$(separatorPointer.AstOffset(nextSeparatorRef))];
                   when (nextAstIndex > 0)
                     loop(nextAstIndex);
                 ]>
               else
                 <[
-                  def nextAstIndex = ast[$(separatorPointer.AstOffset(nextSeparatorRef))];
+                  def nextAstIndex = parser.ast[$(separatorPointer.AstOffset(nextSeparatorRef))];
                   when (nextAstIndex > 0)
                   {
                     separatorBuffer.Add($(makeAst(separatorStruct, separatorPointer, internalAstMaker)));
@@ -137,7 +159,7 @@ namespace N2.Compiler
                 ]>
             }
             <[
-              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              def astIndex = parser.ast[$(astPointer.AstOffset(structField))];
               if (astIndex > 0)
               {
                 def astBuffer = System.Collections.Generic.List(16);
@@ -145,7 +167,7 @@ namespace N2.Compiler
                 def loop(astIndex)
                 {
                   astBuffer.Add($(makeAst(itemStruct, itemPointer, internalAstMaker)));
-                  def separatorIndex = ast[$(itemPointer.AstOffset(nextItemRef))];
+                  def separatorIndex = parser.ast[$(itemPointer.AstOffset(nextItemRef))];
                   when (separatorIndex > 0)
                     $(readNextAst());
                 }
@@ -157,7 +179,7 @@ namespace N2.Compiler
 
           | RuleField2.Option(astStruct = valueAstStruct) =>
             <[
-              def astIndex = ast[$(astPointer.AstOffset(structField))];
+              def astIndex = parser.ast[$(astPointer.AstOffset(structField))];
               if (astIndex > 0)
                 Some($(makeAst(valueAstStruct, AstPointer2(valueAstStruct, "astIndex", this), internalAstMaker)))
               else
@@ -171,68 +193,50 @@ namespace N2.Compiler
       {
         def statements = List();
         def arguments = List();
-        def visitStructField(structField : AstStruct2.StructField, isPrefixRef : bool) : void
-        {
-          def getLengthExpr()
-          {
-            if(isPrefixRef)
-              <[
-                curLength =
-                {
-                  def astIndex = ast[$(astPointer.AstOffset(structField))];
-                  parserHost.GetRuleDescriptorById(ast[astIndex]).GetAstLength(parserHost, ast, astIndex)
-                }
-              ]>
-            else
-              <[ curLength = ast[$(astPointer.SizeOffset(structField))] ]>
-          }
+        when (astStruct is PostfixAstStruct2)
+          arguments.Add(<[ prefix ]>);
+
+        foreach (structField in astStruct.SizeFields)
           match (structField.Field)
           {
             | RuleField2.Ast
             | RuleField2.Predicate => ()
             | RuleField2.Void =>
-              statements.Add(getLengthExpr());
-              statements.Add(<[ curPos += curLength ]>);
+              statements.Add(<[ pos += parser.ast[$(astPointer.SizeOffset(structField))]; ]>);
 
-            | RuleField2.List   with incrementPos = false
-            | RuleField2.List2  with incrementPos = false
-            | RuleField2.Option with incrementPos = false
-            | _                 with incrementPos = true =>
+            | RuleField2.List  
+            | RuleField2.List2 
+            | RuleField2.Option
+            | _                =>
               def varName = Util.tmpname("ast");
-              statements.Add(getLengthExpr());
               statements.Add(<[ def $(varName : usesite) = $(makeReader(structField, astPointer)) ]>);
               arguments.Add(<[ $(varName : usesite) ]>);
-              when (incrementPos)
-                statements.Add(<[ curPos += curLength ]>);
           }
-        }
-        when (astStruct is PostfixAstStruct2 as astStruct)
-          visitStructField(astStruct.PrefixRef, true);
-        foreach (sizeField in astStruct.SizeFields)
-          visitStructField(sizeField, false);
+
         statements.Add(maker(arguments.ToNList()));
         <[ { ..$(statements.ToNList()) } ]>
       }
-      
+
       match (RuleSymbol)
       {
         | SimpleRuleSymbol as s
         | ExtentionRuleSymbol(ExtentionType = Prefix) as s =>
           def astPointer = AstPointer2(rootAstStruct, "astPtr", this);
-          tb.DefineConditional(<[ decl:
+          _tb.DefineConditional(<[ decl:
             public override Walk(pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(Owner.RuleTypeToNType(s.Type) : typed)
             {
-              mutable curPos = pos;
-              mutable curLength;
+              def startPos = pos;
               $(makeAst(rootAstStruct, astPointer, rootAstMaker))
             }
           ]>);
 
         | ExtentionRuleSymbol(ExtentionType = Postfix) as s =>
-          tb.DefineConditional(<[ decl:
+          def astPointer = AstPointer2(rootAstStruct, "astPtr", this);
+          _tb.DefineConditional(<[ decl:
             public override Walk(prefix : $(Owner.RuleTypeToNType(s.Type) : typed), pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(Owner.RuleTypeToNType(s.Type) : typed)
             {
-              
+              def startPos = pos;
+              $(makeAst(rootAstStruct, astPointer, rootAstMaker))
             }
           ]>);
 
@@ -275,14 +279,14 @@ namespace N2.Compiler
       public FieldName : string;
     }
 
-    private static GetWalkerType(rule : RuleSymbol) : PExpr
+    private GetWalkerType(rule : RuleSymbol) : PExpr
     {
       | SimpleRuleSymbol as s => <[ N2.Runtime.SimpleAstWalker[$(Owner.RuleTypeToNType(s.Type) : typed)] ]>
       | ExtensibleRuleSymbol as s => <[ N2.Runtime.ExtensibleAstWalker[$(Owner.RuleTypeToNType(s.Type) : typed)] ]>
       | _ => assert2(false); assert(false)
     }
 
-    private static GetWalkerBaseType(rule : RuleSymbol) : PExpr
+    private GetWalkerBaseType(rule : RuleSymbol) : PExpr
     {
       | SimpleRuleSymbol                             as s => <[ N2.Runtime.SimpleAstWalker[$(Owner.RuleTypeToNType(s.Type) : typed)] ]>
       | ExtentionRuleSymbol(ExtentionType = Prefix)  as s => <[ N2.Runtime.PrefixAstWalker[$(Owner.RuleTypeToNType(s.Type) : typed)] ]>
@@ -292,7 +296,7 @@ namespace N2.Compiler
 
     public Emit() : void
     {
-      
+      _tb.Compile();
     }
   }
 }
