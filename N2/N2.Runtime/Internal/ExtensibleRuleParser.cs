@@ -266,16 +266,16 @@ prefix_loop:
                 bestEndPos = curEndPos;
                 //TODO: убрать цикл
                 //вычисляем длинну разобранного правила
-                bestResult += AstOfs.Sizes;
+                j = bestResult + AstOfs.Sizes;
                 while (true)
                 {
-                  var size = parser.ast[bestResult];
+                  var size = parser.ast[j];
                   if (size >= 0)
                     bestEndPos += size;
                   else
                     goto postfix_loop;//нашли терминатор. Парсим следующее правило.
 
-                  ++bestResult;
+                  ++j;
                 }
               }
               else
@@ -343,10 +343,11 @@ prefix_loop:
           }
         }
 
+        parser.ast[postfixAst + PostfixOfs.AstList] = bestResult;
+
         if (bestEndPos <= curEndPos)
           return curEndPos; // если нам не удалось продвинуться то заканчиваем разбор
 
-        parser.ast[postfixAst + PostfixOfs.AstList] = bestResult;
         goto postfix_loop;
       }
       assert(false);
