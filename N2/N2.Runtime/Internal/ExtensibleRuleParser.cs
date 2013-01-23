@@ -230,7 +230,7 @@ prefix_loop:
 
         parser.ast[prefixAst + PrefixOfs.List] = bestResult;
 
-        if (bestResult <= 0)// не смогли разобрать префикс
+        if (bestResult <= 0 || bestEndPos < 0)// не смогли разобрать префикс
           return -1;
 
       postfix_loop:
