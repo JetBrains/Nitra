@@ -62,7 +62,7 @@ namespace N2.Compiler
 
       def referencedWalkers = GetDependencies(RuleSymbol);
       foreach(p in referencedWalkers)
-        _tb.Define(<[ decl: private mutable $(p.Value.FieldName : usesite) : $(GetWalkerType(p.Key)) ]>);
+        _tb.Define(<[ decl: private mutable $(p.Value.FieldName : usesite) : $(GetWalkerType(p.Key[0])) ]>);
 
       def initBody = List();
       foreach (p in referencedWalkers)
@@ -70,10 +70,10 @@ namespace N2.Compiler
         def walkerInfo = p.Value;
         match (p.Key)
         {
-          | ExtensibleRuleSymbol as s =>
-            initBody.Add(<[ this.$(walkerInfo.FieldName : usesite) = compositeAstWalker.GetWalker($(s.GetDescriptorClassRef()).StaticDescriptor, $(walkerInfo.BindingPower : int)) ]>);
+          | (ExtensibleRuleSymbol as s, bp) =>
+            initBody.Add(<[ this.$(walkerInfo.FieldName : usesite) = compositeAstWalker.GetWalker($(s.GetDescriptorClassRef()).StaticDescriptor, $(bp : int)) ]>);
 
-          | s =>
+          | (s, _) =>
             initBody.Add(<[ this.$(walkerInfo.FieldName : usesite) = compositeAstWalker.GetWalker($(s.GetDescriptorClassRef()).StaticDescriptor) ]>);
         }
       }
@@ -87,7 +87,7 @@ namespace N2.Compiler
       DefineWalkMethod(rootAstStruct.Value, referencedWalkers);
     }
 
-    private DefineWalkMethod(rootAstStruct : RootAstStruct2, referencedWalkers : Hashtable[RuleSymbol, WalkerInfo]) : void
+    private DefineWalkMethod(rootAstStruct : RootAstStruct2, referencedWalkers : Hashtable[RuleSymbol * int, WalkerInfo]) : void
     {
       def rootAstMaker(arguments : list[PExpr]) : PExpr
       {
@@ -116,14 +116,14 @@ namespace N2.Compiler
             ]>
 
           | RuleField2.ExternalAst(RuleSymbol = ruleSymbol) =>
-            def walkerFieldName = referencedWalkers[ruleSymbol].FieldName;
+            def walkerFieldName = referencedWalkers[(ruleSymbol, 0)].FieldName;
             if (ruleSymbol.Type is RuleType.Void)
               <[ pos += parser.ast[$(astPointer.SizeOffset(structField))]; ]>
             else
               <[ this.$(walkerFieldName : usesite).Walk(ref pos, parser.ast[$(astPointer.AstOffset(structField))], ref parser); ]>
 
-          | RuleField2.Extensible(RuleSymbol = ruleSymbol) =>
-            def walkerFieldName = referencedWalkers[ruleSymbol].FieldName;
+          | RuleField2.Extensible(RuleSymbol = ruleSymbol, BindingPower = bp) =>
+            def walkerFieldName = referencedWalkers[(ruleSymbol, bp)].FieldName;
             if (ruleSymbol.Type is RuleType.Void)
               <[ pos += parser.ast[$(astPointer.SizeOffset(structField))]; ]>
             else
@@ -263,7 +263,7 @@ namespace N2.Compiler
       }
     }
 
-    private static GetDependencies(rule : RuleSymbol) : Hashtable[RuleSymbol, WalkerInfo]
+    private static GetDependencies(rule : RuleSymbol) : Hashtable[RuleSymbol * int, WalkerInfo]
     {
       def refs = Hashtable();
       def collect(rule : Rule) : void
@@ -275,16 +275,19 @@ namespace N2.Compiler
         | Repeat              (_, _, rule)               => collect(rule)
         | RepeatWithSeparator (_, _, rule, separator, _) => collect(rule); collect(separator)
         | Call                (ruleRef, bp) as callRule  =>
+          assert2(bp != 31);
           def symbol = ruleRef.Ref.Value;
           // TODO: deal with 'void'
           unless (callRule.Type is RuleType.Chars || callRule.Type is RuleType.Void || symbol is MarkerSymbol)
-            unless (refs.ContainsKey(symbol))
-            _ = refs.Add(symbol, WalkerInfo(symbol, bp));
+            unless (refs.ContainsKey((symbol, bp)))
+            _ = refs.Add((symbol, bp), WalkerInfo(symbol, bp));
       }
       match (rule)
       {
-        | ExtentionRuleSymbol(Rule = r)
-        | SimpleRuleSymbol   (Rule = r) => collect(r);
+        | ExtentionRuleSymbol(ExtentionType = Prefix, Rule = r)
+        | ExtentionRuleSymbol(ExtentionType = Postfix(_, r))
+        | SimpleRuleSymbol   (Rule = r)
+          => collect(r);
         | _ => assert2(false); assert(false)
       }
       refs
