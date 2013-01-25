@@ -1,0 +1,211 @@
+﻿using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using N2.Runtime;
+using N2.Typing;
+
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Linq;
+
+namespace N2.Serialization
+{
+  public sealed class ExportableSymbolReader : ISymbolRefReader, IDisposable
+  {
+    public this(stream : Stream, symbolConstructorRegistry : ExternalSymbolConstructorRegistry, assemblyId : byte, symbolLocation : Location)
+    {
+      this(stream, symbolConstructorRegistry, Project.CurrentProject.RootNamespace, assemblyId, symbolLocation)
+    }
+
+    public this(stream : Stream, symbolConstructorRegistry : ExternalSymbolConstructorRegistry, root : NamespaceSymbol, assemblyId : byte, symbolLocation : Location)
+    {
+      _reader                    = BinaryReader(stream, Text.Encoding.UTF8);
+      _symbolConstructorRegistry = symbolConstructorRegistry;
+      _root                      = root;
+      AssemblyId                 = assemblyId;
+      SymbolLocation             = symbolLocation;
+    }
+
+    private _reader                    : BinaryReader;
+    private _symbolConstructorRegistry : ExternalSymbolConstructorRegistry;
+    private _root                      : NamespaceSymbol;
+
+    public Dispose() : void
+    {
+      _reader.Dispose();
+    }
+
+    public CreateSymbols() : void
+    {
+      ReadNameTree();
+      ReadSymbolHeaders();
+      ReadReferencedAssemblies();
+      ReadNameTree();
+      ReadExternalSymbolInfo();
+    }
+
+    public ReadSymbols() : void
+    {
+      def loop()
+      {
+        def symbolId = _reader.ReadInt32();
+        when (symbolId > 0)
+        {
+          def symbol = _localSymbols[symbolId];
+          symbol.Deserialize(_reader, this);
+          loop();
+        }
+      }
+      loop();
+    }
+
+    public AssemblyId     : byte     { get; private set; }
+
+    public SymbolLocation : Location { get; private set; }
+
+    public ReferencedAssemblies : Seq[AssemblyName]
+    {
+      get { _referencedAssemblies.Values }
+    }
+
+    private ReadNameTree() : void
+    {
+      def loop()
+      {
+        def id = _reader.ReadInt32();
+        when (id > 0)
+        {
+          def parentId           = _reader.ReadInt32();
+          def partName           = _reader.ReadString();
+          def hasNamespaceSymbol = _reader.ReadBoolean();
+
+          def parent = if (parentId == -1) _root.Node else _nodes[parentId];
+          def node   = parent.AddNode(partName);
+          when (hasNamespaceSymbol)
+            foreach(nsSymbol in node.GetChildren.[NamespaceSymbol]())
+              nsSymbol.AddDefinition(SymbolLocation);
+            otherwise
+            {
+              def nsSymbol = NamespaceSymbol(node.PartName);
+              nsSymbol.AddDefinition(SymbolLocation);
+              node.SetSymbol(nsSymbol, SymbolLocation);
+            }
+          _nodes.Add(id, node);
+          loop();
+        }
+      }
+      loop();
+    }
+
+    private ReadSymbolHeaders() : void
+    {
+      def loop()
+      {
+        def symbolTypeId = _reader.ReadString();
+        unless (string.IsNullOrEmpty(symbolTypeId))
+        {
+          def symbolConstructor = _symbolConstructorRegistry.Resolve(symbolTypeId);
+          symbolConstructor.Invoke(this, _reader);
+          loop();
+        }
+      }
+      loop();
+    }
+
+    private ReadReferencedAssemblies() : void
+    {
+      def loop()
+      {
+        def assemblyId = _reader.ReadByte();
+        when (assemblyId > 0)
+        {
+          def assemblyName = _reader.ReadString();
+          _referencedAssemblies.Add(assemblyId, AssemblyName(assemblyName));
+          loop();
+        }
+      }
+      loop();
+    }
+
+    private ReadExternalSymbolInfo() : void
+    {
+      def loopTypes()
+      {
+        def symbolTypeId = _reader.ReadString();
+        unless (string.IsNullOrEmpty(symbolTypeId))
+        {
+          def loopSymbols()
+          {
+            def symbolId = _reader.ReadInt32();
+            when (symbolId > 0)
+            {
+              def nodeId     = _reader.ReadInt32();
+              def assemblyId = _reader.ReadByte();
+              def symbolRef  = ExternalSymbolReference(symbolTypeId, nodeId, assemblyId);
+              _externalSymbols.Add(symbolId, symbolRef);
+              loopSymbols();
+            }
+          }
+          loopSymbols();
+          loopTypes();
+        }
+      }
+      loopTypes();
+    }
+
+    private ReadSymbolRef(reader : BinaryReader) : ISymbol implements ISymbolRefReader.Read
+    {
+      def symbolId = reader.ReadInt32();
+      ResolveSymbol(symbolId)
+    }
+
+    private RegisterSymbol(symbolId : int, symbol : IImportableSymbol) : void implements ISymbolRefReader.Register
+    {
+      _localSymbols.Add(symbolId, symbol)
+    }
+
+    private GetNode(nodeId : int) : HierarchyNode implements ISymbolRefReader.GetNode
+    {
+      _nodes[nodeId]
+    }
+
+    [Memoize]
+    private ResolveSymbol(symbolId : int) : ISymbol
+    {
+      mutable localSymbol;
+      when (_localSymbols.TryGetValue(symbolId, out localSymbol))
+        return localSymbol;
+
+      mutable externalSymbolRef;
+      when (_externalSymbols.TryGetValue(symbolId, out externalSymbolRef))
+      {
+        def assemblyName = _referencedAssemblies[externalSymbolRef.ReferenceId];
+        def node         = _nodes[externalSymbolRef.NodeId];
+        def assemblyId   = Project.CurrentProject.GetAssemblyId(assemblyName);
+        foreach (s is IExportableSymbol in node.GetChildren.[Symbol]())
+          when (s.AssemblyId == assemblyId && string.Equals(s.SymbolTypeId, externalSymbolRef.SymbolTypeId, StringComparison.InvariantCulture))
+            return s;
+      }
+
+      null
+    }
+
+    private _nodes                : Dictionary[int,  HierarchyNode]           = Dictionary();
+    private _localSymbols         : Dictionary[int,  IImportableSymbol]       = Dictionary();
+    private _referencedAssemblies : Dictionary[byte, AssemblyName]            = Dictionary();
+    private _externalSymbols      : Dictionary[int,  ExternalSymbolReference] = Dictionary();
+
+    [Record]
+    private struct ExternalSymbolReference
+    {
+      public SymbolTypeId : string { get; }
+      public NodeId       : int    { get; }
+      public ReferenceId  : byte   { get; }
+    }
+  }
+}
