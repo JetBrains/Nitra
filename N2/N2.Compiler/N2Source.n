@@ -4,6 +4,7 @@ using N2.ProjectSystem;
 using N2.Typing;
 using N2.Runtime;
 using N2.Util;
+using N2.Serialization;
 
 using Nemerle;
 using Nemerle.Collections;
@@ -153,7 +154,9 @@ namespace N2
     private LoadExternalSymbols(project : N2Project, rootNamespace : NamespaceSymbol) : bool
     {
       def errorCount = project.ErrorCount;
-      
+
+      ReadMetadata(project, rootNamespace);
+
       foreach (asm in Manager.ReferencedAssemblies)
       {
         def foreachType(elems, fn)
@@ -448,6 +451,82 @@ namespace N2
       ResetListUserData.[VisitorEmitter]();
     }
 
+    private ReadMetadata(project : N2Project, rootNamespace : NamespaceSymbol) : void
+    {
+      def makeFakeSourceSnapshot(fileName)
+      {
+        def fileIndex = Nemerle.Compiler.Location.GetFileIndex(fileName);
+        SourceSnapshot("", fileIndex, fileName);
+      }
+
+      def reportSymbolLoadFailure(e, location)
+      {
+        project.Warning(location, $"Failed to read metadata from referenced assembly: $(e.Message)", -1);
+      }
+
+      // step 0: lookup symbol constructors in referenced assemblies
+      def registry = ExternalSymbolConstructorRegistry();
+      foreach (asm in Manager.ReferencedAssemblies)
+        registry.Register(asm.Assembly);
+
+      def initialReaders = SCG.List();
+      try 
+      {
+        // step 1: create all symbol readers
+        foreach (asm in Manager.ReferencedAssemblies)
+        {
+          def metadataStream = asm.Assembly.GetManifestResourceStream("N2.Metadata");
+          when (metadataStream != null)
+          {
+            def assemblyId = project.GetAssemblyId(asm.Assembly.GetName());
+            def location   = N2.Location(makeFakeSourceSnapshot(asm.Assembly.Location), 0, 0);
+            def reader     = ExportableSymbolReader(metadataStream, registry, rootNamespace, assemblyId, location);
+            initialReaders.Add(reader, location);
+          }
+        }
+
+        def readerWithCreatedSymbols = SCG.List();
+
+        // step 2: create symbols from all readers
+        foreach ((reader, location) in initialReaders)
+          try
+          {
+            reader.CreateSymbols();
+            readerWithCreatedSymbols.Add(reader, location);
+          }
+          catch { | e => reportSymbolLoadFailure(e, location); }
+
+        // step 3: read symbol bodies from readers that succeeded symbol creation
+        foreach ((reader, location) in readerWithCreatedSymbols)
+          try reader.ReadSymbols();
+          catch { | e => reportSymbolLoadFailure(e, location); }
+      }
+      finally
+      {
+        // step 4: dispose all readers
+        foreach ((reader, _) in initialReaders)
+          reader.Dispose();
+      }
+    }
+
+    private WriteMetadata(rootNamespace : NamespaceSymbol) : void
+    {
+      unless (Manager.IsIntelliSenseMode)
+      {
+        def matadataDirectory =
+          if (string.IsNullOrEmpty(Manager.Options.OutputPath))
+            Path.GetDirectoryName(Manager.Options.OutputFileName)
+          else
+            Manager.Options.OutputPath;
+
+        def metadataFileName = Path.Combine(matadataDirectory, "N2.Metadata");
+        using(symbolWriter = ExportableSymbolWriter(FileStream(metadataFileName, FileMode.Create, FileAccess.Write), rootNamespace))
+          symbolWriter.WriteSymbols();
+
+        Manager.Options.EmbeddedResources ::= metadataFileName;
+      }
+    }
+
     public BeforeTypedMembers() : void
     {
       when (IsListUserDataPresent.[G.Start.Ast]())
@@ -474,6 +553,8 @@ namespace N2
           DefineOtherMembers();
           DefineVisitorTypes();
           DefineVisitors();
+
+          WriteMetadata(rootNamespace);
         }
         finally ResetListUserData.[G.Start.Ast]();
     }
