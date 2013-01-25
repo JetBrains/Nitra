@@ -17,7 +17,7 @@ namespace N2.Compiler
   {
     public Environment  : EmitterEnvironment { get; }
     public Env          : GlobalEnv          { get; }
-    public SyntaxModule : SyntaxModuleData   { get; }
+    public SyntaxModule : SyntaxModuleSymbol { get; }
 
     public GrammarTB               : TypeBuilder { get; }
     public GrammarImplTB           : TypeBuilder { get; }
@@ -25,59 +25,64 @@ namespace N2.Compiler
 
     private _ruleParserEmitters        : list[RuleParserEmitter];
 
-    private _ruleDescriptorEmitters    : list[RuleDescriptorEmitter];
+    private _ruleDescriptorEmitters       : list[ParsingRuleDescriptorEmitter];
+    private _markerRuleDescriptorEmitters : list[MarkerRuleDescriptorEmitter];
 
-    private _allAstEmitters            : list[RuleAstEmitter];
-    private _extentionPointAstEmitters : list[RuleAstEmitter];
-    private _otherAstEmitters          : list[RuleAstEmitter];
+    private _allAstEmitters               : list[RuleAstEmitter];
+    private _extentionPointAstEmitters    : list[RuleAstEmitter];
+    private _otherAstEmitters             : list[RuleAstEmitter];
 
-    private _tokenFieldEmitters        : list[TokenFieldEmitter];
+    //TODO: переместить эмиттеры волкеров в более подходящее место
+    private _grammarDescriptorEmitters    : list[GrammarWalkerDescriptorEmitter];
+    private _abstractWalkerEmitters       : list[AbstractWalkerEmitter];
 
-    private _spanClassEmitters         : list[SpanClassEmitter];
+    private _tokenFieldEmitters           : list[TokenFieldEmitter];
+    private _spanClassEmitters            : list[SpanClassEmitter];
 
-    public this(environment : EmitterEnvironment, syntaxModule : SyntaxModuleData)
+    public this(environment : EmitterEnvironment, syntaxModule : SyntaxModuleSymbol)
     {
       Environment  = environment;
       SyntaxModule = syntaxModule;
-      Env          = Environment.Manager.CoreEnv.EnterIntoNamespace(syntaxModule.Name.Node.Parent.FullNameParts);
+      Env          = Environment.NamespaceOfSymbol(syntaxModule);
 
-      GrammarTB               = Env.Define(<[ decl: public abstract partial class $(syntaxModule.Name.Name : usesite) { } ]>);
+      GrammarTB               = Env.Define(<[ decl: public abstract partial class $(syntaxModule.Name : usesite) { } ]>);
       GrammarImplTB           = GrammarTB.DefineNestedType(MakeGrammarImpl());
       GrammarDescriptorImplTB = GrammarImplTB.DefineNestedType(MakeGrammarDescriptorImpl());
 
-      _ruleParserEmitters = SyntaxModule.RuleDefs.FoldLeft([], fun(rd : RuleDefinition2, acc)
-      {
-        match (rd)
+      _ruleParserEmitters = SyntaxModule.Node.GetChildren.[RuleDefSymbol]().FoldLeft([], 
+        fun(rs : RuleDefSymbol, acc)
         {
-          | ExtentionPoint         => acc
-          | ExtentionPrefix  as rd => ExtentionPrefixRuleParserEmitter(this, rd) :: acc
-          | ExtentionPostfix as rd => ExtentionPostfixRuleParserEmitter(this, rd) :: acc
-          | Simple           as rd => SimpleRuleParserEmitter(this, rd) :: acc
-          | Regular          as rd => RegularRuleParserEmitter(this, rd) :: acc
-          | Marker                 => acc
-        }
-      });
+          match (rs)
+          {
+            | ExtensibleRuleSymbol       => acc
+            | ExtentionRuleSymbol  as rs => ExtentionRuleParserEmitter(this, rs) :: acc
+            | SimpleRuleSymbol     as rs => SimpleRuleParserEmitter(this, rs) :: acc
+            | RegularRuleSymbol    as rs => RegularRuleParserEmitter(this, rs) :: acc
+            | _                          => assert(false);
+          }
+        });
 
-      _ruleDescriptorEmitters = SyntaxModule.RuleDefs.Map(fun(_ : RuleDefinition2)
-      {
-        | Marker as markerRule => MarkerRuleDescriptorEmitter(this, markerRule)
-        | parsingRule          => ParsingRuleDescriptorEmitter(this, parsingRule)
-      });
+      _ruleDescriptorEmitters       = SyntaxModule.Node.GetChildren.[RuleDefSymbol]().Map(ParsingRuleDescriptorEmitter(this, _));
+      _markerRuleDescriptorEmitters = SyntaxModule.Node.GetChildren.[MarkerSymbol]().Map(MarkerRuleDescriptorEmitter(this, _));
 
-      _allAstEmitters = SyntaxModule.RuleDefs.MapFiltered(_.IsAst, RuleAstEmitter(this, _));
-      (_extentionPointAstEmitters, _otherAstEmitters) = _allAstEmitters.Partition(x => x.RuleDefinition is RuleDefinition2.ExtentionPoint);
+      _allAstEmitters = SyntaxModule.Node.GetChildren.[SyntaxRuleSymbol]().Where(_.IsAst).Map(RuleAstEmitter(this, _));
+      (_extentionPointAstEmitters, _otherAstEmitters) = _allAstEmitters.Partition(x => x.RuleSymbol is ExtensibleRuleSymbol);
 
-      _tokenFieldEmitters = match (syntaxModule.FinalContext.TryGetContext.[TokenFieldContext]())
-      {
-        | null    => []
-        | context => context.SymbolMap.MapToList((_, symbol) => TokenFieldEmitter(this, symbol))
-      };
+      //TODO: сделать обработку для void
+      _abstractWalkerEmitters = SyntaxModule.Node.GetChildren.[SyntaxRuleSymbol]().NToList().MapFiltered(
+        r => r.IsAst && !r.IsExtentionPoint,
+        AbstractWalkerEmitter(this, _));
 
-      _spanClassEmitters = match (syntaxModule.FinalContext.TryGetContext.[SpanClassContext]())
-      {
-        | null    => []
-        | context => context.SymbolMap.MapToList((_, symbol) => SpanClassEmitter(this, symbol))
-      };
+      _grammarDescriptorEmitters = [
+        GrammarWalkerDescriptorEmitter(this,
+          WalkerTypeDescriptorInfo(
+            <[ N2.Runtime.AstWalkerTypeDescriptor.StaticDescriptor ]>,
+            _abstractWalkerEmitters,
+            SyntaxModule.Node.GetChildren.[ExtensibleRuleSymbol]().NToList()))
+      ];
+
+      _tokenFieldEmitters = SyntaxModule.FinalContext.TryGetContext.[TokenFieldContext]()?.SymbolMap?.MapToList((_, symbol) => TokenFieldEmitter(this, symbol)) ?? [];
+      _spanClassEmitters  = SyntaxModule.FinalContext.TryGetContext.[SpanClassContext]() ?.SymbolMap?.MapToList((_, symbol) => SpanClassEmitter(this, symbol))  ?? [];
     }
 
     public DefineExtentionPointAstTypes() : void
@@ -107,26 +112,41 @@ namespace N2.Compiler
         mutable astSize;
         mutable rootAstStruct;
         emitter.DefineParser(out astSize, out rootAstStruct, externalCalls);
-        astSizes[emitter.RuleDefinition.RuleSymbol] = (astSize, rootAstStruct);
+        astSizes[emitter.RuleSymbol] = (astSize, rootAstStruct);
       }
       foreach (emitter in _ruleDescriptorEmitters)
-        match (emitter.RuleDefinition)
+        match (emitter.RuleSymbol)
         {
           | _ when !emitter.NeedsAstInfo =>
             emitter.DefineDescriptor(0, None())
 
-          | ExtentionPoint =>
+          | ExtensibleRuleSymbol =>
             emitter.DefineDescriptor(5, None())
 
-          | rd =>
-            assert2(astSizes.ContainsKey(rd.RuleSymbol));
-            emitter.DefineDescriptor(astSizes[rd.RuleSymbol])
+          | rs =>
+            assert2(astSizes.ContainsKey(rs));
+            emitter.DefineDescriptor(astSizes[rs])
         }
+
+      foreach (emitter in _markerRuleDescriptorEmitters)
+        emitter.DefineDescriptor();
+
+      foreach (emitter in _abstractWalkerEmitters)
+      {
+        emitter.DefineTypes();
+        emitter.DefineMembers(astSizes[emitter.RuleSymbol][1]);
+      }
+
+      foreach (emitter in _grammarDescriptorEmitters)
+      {
+        emitter.DefineTypes();
+        emitter.DefineMembers();
+      }
 
       GrammarDescriptorImplTB.DefineConditional(<[decl:
         public override Rules : array[N2.RuleDescriptor]
         {
-          get { array[..$(_ruleDescriptorEmitters.MapFiltered(x => x is ParsingRuleDescriptorEmitter, emitter => <[ $(Environment.GetDescriptorClassRef(emitter.RuleDefinition.RuleSymbol)).StaticDescriptor ]>))] }
+          get { array[..$(_ruleDescriptorEmitters.Map(emitter => <[ $(emitter.RuleSymbol.GetDescriptorClassRef()).StaticDescriptor ]>))] }
         }
       ]>);
 
@@ -137,6 +157,26 @@ namespace N2.Compiler
           get { array[..$(externalGrammars.Map(node => <[ $(PExprUtils.FromQualifiedIdentifier(node.FullNameParts + [AssemblyConstants.GrammarImplName])).StaticDescriptor ]>))] }
         }
       ]>);
+
+      GrammarDescriptorImplTB.DefineConditional(<[decl:
+        public override GetAstWalkerDescriptor() : N2.Runtime.GrammarWalkerDescriptor
+        {
+          $(GrammarTB.GetMemType() : typed).$(SyntaxModule.Name + "AstWalkerDescriptor" : usesite).StaticDescriptor
+        }
+      ]>);
+    }
+
+    private _idInGrammarTable : Dictionary[RuleSymbol, int] = Dictionary();
+
+    internal GetIdInGrammar(ruleSymbol : RuleSymbol) : int
+    {
+      mutable id;
+      unless (_idInGrammarTable.TryGetValue(ruleSymbol, out id))
+      {
+        id = _idInGrammarTable.Count;
+        _idInGrammarTable.Add(ruleSymbol, id);
+      }
+      id
     }
 
     public DefineParserMethods() : void
@@ -145,7 +185,7 @@ namespace N2.Compiler
         emitter.DefineParserMethods();
     }
 
-    public DefineOtherMembers() : void
+    public DefineMetadataMembers() : void
     {
       foreach (emitter in _tokenFieldEmitters)
         emitter.Emit();
@@ -160,6 +200,12 @@ namespace N2.Compiler
       foreach (emitter in _ruleDescriptorEmitters)
         emitter.Emit();
       foreach (emitter in _allAstEmitters)
+        emitter.Emit();
+      foreach (emitter in _grammarDescriptorEmitters)
+        emitter.Emit();
+      foreach (emitter in _abstractWalkerEmitters)
+        emitter.Emit();
+      foreach (emitter in _grammarDescriptorEmitters)
         emitter.Emit();
       GrammarDescriptorImplTB.Compile();
       GrammarImplTB.Compile();
