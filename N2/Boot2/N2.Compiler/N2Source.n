@@ -4,6 +4,7 @@ using N2.ProjectSystem;
 using N2.Typing;
 using N2.Runtime;
 using N2.Util;
+using N2.Serialization;
 
 using Nemerle;
 using Nemerle.Collections;
@@ -130,30 +131,27 @@ namespace N2
     {
       def source = SourceSnapshot(source.GetText(), source.FileIndex, Path);
       def parseResult = ParserHost.DoParsing(source, G.GrammarImpl.StartRuleDescriptor);
-      if (parseResult.IsSuccess) 
+
+      try
       {
         def start = parseResult.CreateAst.[G.Start]() :> G.Start.Ast;     // TODO: добавить проверку на ошибки
         def fileAsts : SCG.List[G.Start.Ast] = Manager.GetListUserData();
         fileAsts.Add(start);
       }
-      else
+      catch
       {
-        //def (pos, tokens) = parser.Parser.GetErrors();
-        //def loc = N2.Location(parser.Parser.ParsingSource, pos, pos + 1).ToNemerleLocation();
-        //foreach (token in tokens)
-        //  Message.Error(loc, $"expected \"$(token.Name)\" in rule $(token.Rule.Grammar.Name).$(token.Rule.Name)");
-
-        def errors = parseResult.CollectErrors();
-        def pos = parseResult.Source.PositionToLineColumn(errors.Position);
-        def loc = Nemerle.Compiler.Location(source.FileIndex, pos.Line, pos.Column);
-        Message.Error(loc, $<#Parse failed: ..$(errors.Messages; ", ")#>);
+        | e is AstWalkerException =>
+          def loc = N2.Location(source, e.Pos, e.Pos + 1);
+          Message.Error(loc.ToNemerleLocation(), e.Message);
       }
     }
 
     private LoadExternalSymbols(project : N2Project, rootNamespace : NamespaceSymbol) : bool
     {
       def errorCount = project.ErrorCount;
-      
+
+      ReadMetadata(project, rootNamespace);
+
       foreach (asm in Manager.ReferencedAssemblies)
       {
         def foreachType(elems, fn)
@@ -215,22 +213,16 @@ namespace N2
       match (grammarImplTI.GetNestedSubtypes().Filter(ti => ti.Name == AssemblyConstants.GrammarDescriptorImplName))
       {
         | [grammarDescriptorImplTI] =>
-          def tokenFieldNames = LoadExternalTokenFieldNames(grammarTI);
-          def symbol = ExternalSyntaxModuleSymbol(grammarTI, grammarImplTI, tokenFieldNames);
-          def node = root.AddAndReport(grammarTI.NamespaceNode.Parent.FullName, symbol, symbol.FirstLocation);
-          LoadExternalMarkers(grammarImplTI, node);
-          LoadExternalRules(grammarDescriptorImplTI, node);
+          match (root.BindMany.[SyntaxModuleSymbol](grammarTI.NamespaceNode.FullName))
+          {
+            | [symbol] =>
+              assert(symbol.AssemblyId != AssemblyIds.CurrentAssembly);
+              LoadExternalRules(grammarDescriptorImplTI, symbol.Node);
+
+            | _ => assert2(false)
+          }
 
         | _ => Message.Error(grammarTI.Location, $"$(grammarTI.FullName) not grammar.")
-      }
-    }
-
-    private LoadExternalMarkers(type : TypeInfo, node : HierarchyNode) : void
-    {
-      foreach(<[ N2.MarkerAttribute($(name : string)) ]> as attr in type.GetModifiers().CustomAttributes)
-      {
-        def loc = attr.Location.N2Location();
-        _ = node.AddAndReport([], MarkerSymbol(loc, name), loc);
       }
     }
 
@@ -283,20 +275,6 @@ namespace N2
 
         _ = ruleSymbol.Node.AddAndReport([], symbol, loc);
       }
-    }
-
-    private LoadExternalTokenFieldNames(type : TypeInfo) : Map[string, Identifier]
-    {
-      def env      = type.Manager.CoreEnv;
-      def attrType = env.BindFixedType(<[ N2.TokenFieldNameAttribute ]>);
-      def loc      = LocationStack.Top();
-      mutable tokenFieldNames = Map();
-
-      foreach ((_, [<[ $(name : string) ]>, <[ array[..$tokens] ]>]) in type.GetModifiers().FindAttributesWithArgs(attrType.TypeInfo, env))
-        foreach (<[ $(token : string) ]> in tokens)
-          tokenFieldNames = tokenFieldNames.Replace(token, Identifier(loc.N2Location(), name));
-
-      tokenFieldNames
     }
 
     private LoadParsedSymbols(project : N2Project, rootNamespace : NamespaceSymbol, fileAsts : SCG.List[G.Start.Ast]) : bool
@@ -448,6 +426,82 @@ namespace N2
       ResetListUserData.[VisitorEmitter]();
     }
 
+    private ReadMetadata(project : N2Project, rootNamespace : NamespaceSymbol) : void
+    {
+      def makeFakeSourceSnapshot(fileName)
+      {
+        def fileIndex = Nemerle.Compiler.Location.GetFileIndex(fileName);
+        SourceSnapshot("", fileIndex, fileName);
+      }
+
+      def reportSymbolLoadFailure(e, location)
+      {
+        assert2(false);
+        project.Warning(location, $"Failed to read metadata from referenced assembly: $(e.Message)", -1);
+      }
+
+      // step 0: lookup symbol constructors
+      def registry = ExternalSymbolConstructorRegistry();
+      registry.Register(typeof(SyntaxModuleSymbol).Assembly);
+
+      def initialReaders = SCG.List();
+      try 
+      {
+        // step 1: create all symbol readers
+        foreach (asm in Manager.ReferencedAssemblies)
+        {
+          def metadataStream = asm.Assembly.GetManifestResourceStream("N2.Metadata");
+          when (metadataStream != null)
+          {
+            def assemblyId = project.GetAssemblyId(asm.Assembly.GetName());
+            def location   = N2.Location(makeFakeSourceSnapshot(asm.Assembly.Location), 0, 0);
+            def reader     = ExportableSymbolReader(metadataStream, registry, rootNamespace, assemblyId, location);
+            initialReaders.Add(reader, location);
+          }
+        }
+
+        def readerWithCreatedSymbols = SCG.List();
+
+        // step 2: create symbols from all readers
+        foreach ((reader, location) in initialReaders)
+          try
+          {
+            reader.CreateSymbols();
+            readerWithCreatedSymbols.Add(reader, location);
+          }
+          catch { | e => reportSymbolLoadFailure(e, location); }
+
+        // step 3: read symbol bodies from readers that succeeded symbol creation
+        foreach ((reader, location) in readerWithCreatedSymbols)
+          try reader.ReadSymbols();
+          catch { | e => reportSymbolLoadFailure(e, location); }
+      }
+      finally
+      {
+        // step 4: dispose all readers
+        foreach ((reader, _) in initialReaders)
+          reader.Dispose();
+      }
+    }
+
+    private WriteMetadata(rootNamespace : NamespaceSymbol) : void
+    {
+      unless (Manager.IsIntelliSenseMode)
+      {
+        def matadataDirectory =
+          if (string.IsNullOrEmpty(Manager.Options.OutputPath))
+            Path.GetDirectoryName(Manager.Options.OutputFileName)
+          else
+            Manager.Options.OutputPath;
+
+        def metadataFileName = Path.Combine(matadataDirectory, "N2.Metadata");
+        using(symbolWriter = ExportableSymbolWriter(FileStream(metadataFileName, FileMode.Create, FileAccess.Write), rootNamespace))
+          symbolWriter.WriteSymbols();
+
+        Manager.Options.EmbeddedResources ::= metadataFileName;
+      }
+    }
+
     public BeforeTypedMembers() : void
     {
       when (IsListUserDataPresent.[G.Start.Ast]())
@@ -474,6 +528,8 @@ namespace N2
           DefineOtherMembers();
           DefineVisitorTypes();
           DefineVisitors();
+
+          WriteMetadata(rootNamespace);
         }
         finally ResetListUserData.[G.Start.Ast]();
     }
