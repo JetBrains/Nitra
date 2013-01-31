@@ -510,7 +510,7 @@ namespace N2
         | Chars(chars)                             => FSMBuilder.Seq(chars)
         | Repeat(min, max, rule)                   => FSMBuilder.Repeat(min, max, convert(rule))
         | RepeatWithSeparator(min, max, rule, sep) => FSMBuilder.RepeatWithSeparator(min, max, convert(rule), convert(sep))
-        | Call(RuleRef(Ref = Some(symbol is ParsedRegularRuleSymbol), Location = loc)) =>
+        | Call(RuleRef.Some(symbol) as ruleRef) =>
           if (visitedRules.Add(symbol))
           {
             def result = convert(symbol.Rule);
@@ -519,16 +519,11 @@ namespace N2
           }
           else
           {
-            N2Project.CurrentProject.Error(loc, "Cyclic rule call found.", -1);
+            N2Project.CurrentProject.Error(ruleRef.Location, "Cyclic rule call found.", -1);
             FSM()
           }
 
-        | Call(RuleRef(Ref = Some, Location = loc)) =>
-          //TODO: add support for external token rules
-          N2Project.CurrentProject.Error(loc, "Expected parsed token rule name.", -1);
-          FSM()
-
-        | Call(RuleRef(Ref = None)) =>
+        | Call(RuleRef.None) =>
           // binding error already reported
           FSM()
       }
@@ -651,9 +646,9 @@ namespace N2
       when (TryBind.[RuleAliasSymbol](context, QualifiedName) is Some(alias))
         return alias.Rule.Typing(baseRule, _precedence, Some(newFieldName), context, options);
 
-      def ruleRef = RuleRef(QualifiedName, Bind(context, QualifiedName));
+      def ruleRef = RuleRef.Create(QualifiedName, Bind(context, QualifiedName));
       def (type, callRuleOptions) = 
-        if (ruleRef.Ref is Some(RuleDefSymbol as ruleSymbol))
+        if (ruleRef is RuleRef.Some(RuleDefSymbol as ruleSymbol))
         {
           when (ruleSymbol is ExtentionRuleSymbol)
             Project.CurrentProject.Error(QualifiedName, 
@@ -668,9 +663,9 @@ namespace N2
         {
           | None
           | Some((_, num)) when num.Value() == 0 =>
-            match (baseRule, ruleRef.Ref)
+            match (baseRule, ruleRef)
             {
-              | (Some(baseRuleSymbol), Some(ruleRefSymbol)) when baseRuleSymbol == ruleRefSymbol => _precedence
+              | (Some(baseRuleSymbol), RuleRef.Some(ruleRefSymbol)) when baseRuleSymbol == ruleRefSymbol => _precedence
               | _ => 0
             }
             
@@ -694,7 +689,7 @@ namespace N2
           def moduleContext = context.GetContext.[SyntaxModuleBodyContext]();
           def loc           = callRule.Location.FromEnd();
           def symbol        = moduleContext.GetSpaceRule(context, "s");
-          def ruleRef       = RuleRef(loc, symbol, true);
+          def ruleRef       = RuleRef.Create(loc, symbol, true);
           def s             = Rule.Call(loc, RuleType.Void(), "", ruleRef, 0);
           Rule.Sequence(callRule.Location, type, newFieldName, [callRule : Rule, s])
 
@@ -727,7 +722,7 @@ namespace N2
             def moduleContext = context.GetContext.[SyntaxModuleBodyContext](); 
             moduleContext.GetSpaceRule(context, "s");
           };
-        def ruleRef = RuleRef(loc, symbol, true);
+        def ruleRef = RuleRef.Create(loc, symbol, true);
         def S = Rule.Call(loc, RuleType.Void(), "", ruleRef, 0);
         Rule.Sequence(loc, type, newFieldName, [str, S])
       }
@@ -750,7 +745,7 @@ namespace N2
           def res : list[list[RuleRef] * PExpr] = visitorMembers.Map(m => m.Typing(syntaxModuleSymbol));
           def convert(rules : list[RuleRef], type : PExpr) : list[RuleSymbol] * PExpr
           {
-            (rules.Filter(r => r.Ref.IsSome).Map(r => r.Ref.Value), type)
+            (rules.Filter(r => r.IsSome).Map(r => r.Value), type)
           }
           def typesMapping = res.Map(convert);
         
@@ -774,7 +769,7 @@ namespace N2
         
           foreach ((rules, _) in res)
             foreach (rule in rules)
-              when (rule.Ref is Some(sym))
+              when (rule is RuleRef.Some(sym))
                 if (used.Contains(sym))
                   using (root = project.RootError(rule.Location, $"Type mapping for '$(sym.Name)' rule declared more than once.", -1))
                     root.Warning(used[sym].Location, "previous declaration.", -1);
@@ -786,21 +781,22 @@ namespace N2
         | _ => None()
       }
     }
-    
+
     public VisitorMemberTyping(syntaxModuleSymbol : SyntaxModuleSymbol, context : Context, identifiers : list[G.Identifier], type : G.Type) : list[RuleRef] * PExpr
     {
       def bind(identifier : G.Identifier)
       {
-        match (syntaxModuleSymbol.Node.BindMany.[RuleSymbol](identifier.Location))
+        def loc = identifier.Location;
+        match (syntaxModuleSymbol.Node.BindMany.[RuleSymbol](loc))
         {
           | [sym] =>
-            Project.CurrentProject.AddSymbolRef(sym, identifier.Location); // это надо делать здесь???
-            RuleRef(identifier, Some(sym))
-            
-          | _ => RuleRef(identifier, None())
+            Project.CurrentProject.AddSymbolRef(sym, loc); // это надо делать здесь???
+            RuleRef.Some(loc, false, sym)
+
+          | _ => RuleRef.None(loc, false)
         }
       }
-      
+
       def symbols = identifiers.Map(bind);
       def t       = ParseNemerle(type, context);
       (symbols, t)
