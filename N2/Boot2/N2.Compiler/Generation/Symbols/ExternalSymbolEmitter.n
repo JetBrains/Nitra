@@ -20,6 +20,7 @@ namespace N2.Compiler
     public TargetSymbolType   : TypeBuilder        { get; }
     public ExternalSymbolType : TypeBuilder        { get; }
 
+    private _manualReadWrite  : bool;
     private _serializationEmitter : BinarySerializationEmitter;
 
     private sealed class SymbolProperty
@@ -33,17 +34,26 @@ namespace N2.Compiler
       public OverriddenProperty : IProperty { get; set; }
     }
 
-    public this (environment : EmitterEnvironment, symbolType : TypeBuilder, serializationEmitter : BinarySerializationEmitter)
+    public this (environment : EmitterEnvironment, symbolType : TypeBuilder, externalSymbolType : option[TypeBuilder], serializationEmitter : BinarySerializationEmitter)
     {
       Environment           = environment;
       TargetSymbolType      = symbolType;
       _serializationEmitter = serializationEmitter;
-      ExternalSymbolType    = TargetSymbolType.GlobalEnv.EnterIntoNamespace(["TEMP"]).Define(<[ decl:
-        public sealed class $("External" + symbolType.Name : usesite) : $(symbolType.GetMemType() : typed), N2.Serialization.IImportableSymbol
-        {
-        }
-      ]>);
-      ExternalSymbolType.DisableImplicitConstructor();
+      match (externalSymbolType)
+      {
+        | None =>
+          ExternalSymbolType = TargetSymbolType.GlobalEnv.Define(<[ decl:
+            public sealed class $("External" + symbolType.Name : usesite) : $(symbolType.GetMemType() : typed), N2.Serialization.IImportableSymbol
+            {
+            }
+          ]>);
+          ExternalSymbolType.DisableImplicitConstructor();
+          _manualReadWrite = false;
+
+        | Some(tb) =>
+          ExternalSymbolType = tb;
+          _manualReadWrite = true;
+      }
     }
 
     public DefineMembers() : void
@@ -64,20 +74,23 @@ namespace N2.Compiler
         .GetProperties(BindingFlags.Instance | BindingFlags.Public)
         .MapFiltered(isSymbolProperty, SymbolProperty(_));
 
-      def serializeCode = _serializationEmitter.MakeMembersSerializationCode(
-        ExternalSymbolType.GetMemType(),
-        symbolProperties.Map(_.Property),
-        <[ this ]>,
-        [ <[ n2TypesWriter ]> ]);
+      unless (_manualReadWrite)
+      {
+        def serializeCode = _serializationEmitter.MakeMembersSerializationCode(
+          ExternalSymbolType.GetMemType(),
+          symbolProperties.Map(_.Property),
+          <[ this ]>,
+          [ <[ n2TypesWriter ]> ]);
 
-      TargetSymbolType.DefineConditional(<[ decl: 
-        Serialize(writer : System.IO.BinaryWriter, n2TypesWriter : N2.Serialization.IN2TypesWriter) : void implements N2.Serialization.IExportableSymbol.Serialize
-        {
-          ignore(writer, n2TypesWriter);
-          $serializeCode;
-          writer.Write($(TypeTag.Empty :> byte));
-        }
-      ]>);
+        TargetSymbolType.DefineConditional(<[ decl: 
+          Serialize(writer : System.IO.BinaryWriter, n2TypesWriter : N2.Serialization.IN2TypesWriter) : void implements N2.Serialization.IExportableSymbol.Serialize
+          {
+            ignore(writer, n2TypesWriter);
+            $serializeCode;
+            writer.Write($(TypeTag.Empty :> byte));
+          }
+        ]>);
+      }
 
       foreach (prop in symbolProperties)
         DefineSymbolProperty(prop);
@@ -117,19 +130,22 @@ namespace N2.Compiler
         }
       ]>);
 
-      def deserializeCode = _serializationEmitter.MakeMembersDeserializationCode(
-        ExternalSymbolType.GetMemType(),
-        symbolProperties.Map(_.OverriddenProperty),
-        <[ this ]>,
-        [ <[ n2TypesReader ]> ]);
+      unless (_manualReadWrite)
+      {
+        def deserializeCode = _serializationEmitter.MakeMembersDeserializationCode(
+          ExternalSymbolType.GetMemType(),
+          symbolProperties.Map(_.OverriddenProperty),
+          <[ this ]>,
+          [ <[ n2TypesReader ]> ]);
 
-      ExternalSymbolType.DefineConditional(<[ decl:
-        Deserialize(reader : System.IO.BinaryReader, n2TypesReader : N2.Serialization.IN2TypesReader) : void implements N2.Serialization.IImportableSymbol.Deserialize
-        {
-          ignore(reader, n2TypesReader);
-          $deserializeCode
-        }
-      ]>);
+        ExternalSymbolType.DefineConditional(<[ decl:
+          Deserialize(reader : System.IO.BinaryReader, n2TypesReader : N2.Serialization.IN2TypesReader) : void implements N2.Serialization.IImportableSymbol.Deserialize
+          {
+            ignore(reader, n2TypesReader);
+            $deserializeCode
+          }
+        ]>);
+      }
 
       foreach (ctor when !ctor.IsStatic in TargetSymbolType.GetConstructors())
         match (ctor.GetParameters())
