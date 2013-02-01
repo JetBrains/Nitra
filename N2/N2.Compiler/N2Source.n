@@ -66,13 +66,13 @@ namespace N2
 
     UpdateCurrentProjectContext() : void
     {
-      Project.CurrentProject = GetUserData.[N2Project](p => 
+      Project.CurrentProject = GetUserData.[CompilingN2Project](p => 
         p.Init(Manager.ReferencedAssemblies.Select(a => a.Assembly.GetName())));
     }
 
-    GetCurrentProjectContext() : N2Project
+    GetCurrentProjectContext() : CompilingN2Project
     {
-      Project.CurrentProject :> N2Project
+      Project.CurrentProject :> CompilingN2Project
     }
 
     public static Instance(path : string, manager : ManagerClass) : N2SourceImpl
@@ -219,36 +219,6 @@ namespace N2
       ignore(rootNamespace, visitorTI)
     }
 
-    private LoadExternalExtraFields(ruleSymbol : RuleSymbol, type : TypeInfo) : void
-    {
-      def reflectExtraFieldAttribute(member : IMember) : IMember * option[bool]
-      {
-        mutable attrValue = None();
-        foreach(attr in member.GetModifiers().GetCustomAttributes())
-        {
-          | <[ N2.Runtime.ExtraFieldAttribute() ]>                   => attrValue = Some(false)
-          | <[ N2.Runtime.ExtraFieldAttribute($(isCached : bool)) ]> => attrValue = Some(isCached)
-          | _ => ()
-        }
-        (member, attrValue)
-      }
-      def reflectionResult = type.GetMembers(BindingFlags.Instance | BindingFlags.Public).Map(reflectExtraFieldAttribute);
-      foreach((method is IMethod, Some(isCached)) in reflectionResult)
-      {
-        def loc        = method.NameLocation.N2Location();
-        def parameters = method.Header.ParametersDeclarations;
-        def type       = <[ $(method.ReturnType : typed) ]>;
-        def signature  = ExtraField.ExtraFieldSignature(loc, parameters, type);
-
-        def symbol     = if (method.IsAbstract)
-          ExtraField.ExternalAbstractSymbol(loc, method.Name, isCached, signature);
-        else
-          ExtraField.ExternalDefSymbol(loc, method.Name, isCached, signature);
-
-        _ = ruleSymbol.Node.AddAndReport([], symbol, loc);
-      }
-    }
-
     private LoadParsedSymbols(project : N2Project, rootNamespace : NamespaceSymbol, fileAsts : SCG.List[G.Start.Ast]) : bool
     {
       def errorCount = project.ErrorCount;
@@ -263,7 +233,7 @@ namespace N2
     {
       def errorCount   = project.ErrorCount;
 
-      def context = RootContext(Project.CurrentProject :> N2Project, rootNamespace, Manager.CoreEnv);
+      def context = RootContext(project, rootNamespace, Manager.CoreEnv);
 
       foreach (start in fileAsts)
         _ = start.MakeContext(context);
@@ -274,17 +244,16 @@ namespace N2
       project.ErrorCount == errorCount
     }
 
-    private DeclarationEmitters(rootNamespace : NamespaceSymbol) : void
+    private DeclarationEmitters(project : CompilingN2Project) : void
     {
-      def environment = EmitterEnvironment(Manager, rootNamespace.Node);
-      MakeEmitters.[ParsedSyntaxModuleSymbol, _](environment, SyntaxModuleEmitter);
-      MakeEmitters.[ParsedVisitorTypeSymbol,  _](environment, VisitorTypeEmitter);
-      MakeEmitters.[ParsedVisitorSymbol,      _](environment, VisitorEmitter);
+      MakeEmitters.[ParsedSyntaxModuleSymbol, _](project.Environment, SyntaxModuleEmitter);
+      MakeEmitters.[ParsedVisitorTypeSymbol,  _](project.Environment, VisitorTypeEmitter);
+      MakeEmitters.[ParsedVisitorSymbol,      _](project.Environment, VisitorEmitter);
 
       def externalSymbolEmitters = Manager.GetListUserData.[ExternalSymbolEmitter]();
-      def serializationEmitter = Manager.CreateBinarySerializationEmitter(N2BinarySerializationMessageEmitter(), N2SymbolRefBinarySerializationEmitterExtention(environment));
+      def serializationEmitter = Manager.CreateBinarySerializationEmitter(N2BinarySerializationMessageEmitter(), N2SymbolRefBinarySerializationEmitterExtention(project.Environment));
       foreach (data in Manager.GetListUserData.[ExportableSymbolData]())
-        externalSymbolEmitters.Add(ExternalSymbolEmitter(environment, data.TypeBuilder, data.ExportableSymbolType, serializationEmitter));
+        externalSymbolEmitters.Add(ExternalSymbolEmitter(project.Environment, data.TypeBuilder, data.ExportableSymbolType, serializationEmitter));
       ResetListUserData.[ExportableSymbolData]();
     }
 
@@ -494,7 +463,7 @@ namespace N2
           unless (TypeSyntaxModules  (project, rootNamespace, fileAsts))
             throw Recovery();
 
-          DeclarationEmitters(rootNamespace);
+          DeclarationEmitters(project);
           DefineAst();
           DefineParsers();
           DefineOtherMembers();
