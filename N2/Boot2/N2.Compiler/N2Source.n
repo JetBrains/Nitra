@@ -35,7 +35,7 @@ namespace N2
     {
       Path    = path;
       Manager = manager;
-      UpdateCurrentProjectContext();
+      _ = UpdateCurrentProjectContext();
     }
 
     IsListUserDataPresent[T]() : bool
@@ -64,15 +64,12 @@ namespace N2
       Manager.UserData[typeof(SCG.List[T])] = null
     }
 
-    UpdateCurrentProjectContext() : void
+    UpdateCurrentProjectContext() : CompilingN2Project
     {
-      Project.CurrentProject = GetUserData.[N2Project](p => 
+      def project = GetUserData.[CompilingN2Project](p => 
         p.Init(Manager.ReferencedAssemblies.Select(a => a.Assembly.GetName())));
-    }
-
-    GetCurrentProjectContext() : N2Project
-    {
-      Project.CurrentProject :> N2Project
+      Project.CurrentProject = project;
+      project
     }
 
     public static Instance(path : string, manager : ManagerClass) : N2SourceImpl
@@ -163,107 +160,21 @@ namespace N2
       }
     }
 
-    private LoadExternalSymbols(project : N2Project, rootNamespace : NamespaceSymbol) : bool
-    {
-      def errorCount = project.ErrorCount;
-
-      ReadMetadata(project, rootNamespace);
-
-      foreach (asm in Manager.ReferencedAssemblies)
-      {
-        def foreachType(elems, fn)
-        {
-          foreach (<[ typeof($(PExpr.TypedType(FixedType.Class(elem is LibraryReference.ExternalTypeInfo, []))))]> in elems)
-            fn(elem);
-        }
-
-        foreach (attrubute in asm.GetCustomAttributes())
-        {
-          | (<[ N2.VisitorAttribute]>, [<[ array[..$(types)] ]>, <[ array[..$(visitors)] ]>]) =>
-            foreachType(types, LoadExternalVisitorType(rootNamespace, _));
-            foreachType(visitors, LoadExternalVisitor(rootNamespace, _));
-
-          | _ => ()
-        }
-      }
-      
-      project.ErrorCount == errorCount
-    }
-
-    public static FindMethods(this ti : LibraryReference.ExternalTypeInfo, name : string) : list[IMethod]
-    {
-      ti.GetMembers().OfType.[IMethod]().Where(method => (method.Name == name)).NToList()
-    }
-
-    private LoadExternalVisitorType(rootNamespace : NamespaceSymbol, visitorTypeTI : LibraryReference.ExternalTypeInfo) : void
-    {
-      def root = rootNamespace.Node;
-      def defaultReturnType = match (visitorTypeTI.FindMethods("DefaultReturnType"))
-      {
-        | [method] => Some(<[ $(method.ReturnType : typed) ]>)
-        | []       => None()
-        | _        => Message.Error(visitorTypeTI.Location, $"$(visitorTypeTI.FullName) invalid visitor type."); None()
-      }
-
-      def parameters = match (visitorTypeTI.FindMethods("CommonParameters"))
-      {
-        | [method] => method.GetParameters().Map(tp => tp.AsParsed())
-        | _        => Message.Error(visitorTypeTI.Location, $"$(visitorTypeTI.FullName) invalid visitor type."); []
-      }
-      def symbol = ExternalVisitorTypeSymbol(visitorTypeTI.Location.N2Location(), defaultReturnType, parameters);
-      _ = root.AddAndReport(visitorTypeTI.NamespaceNode.Parent.FullName, symbol, symbol.FirstLocation);
-    }
-
-    private LoadExternalVisitor(rootNamespace : NamespaceSymbol, visitorTI : LibraryReference.ExternalTypeInfo) : void
-    {
-      ignore(rootNamespace, visitorTI)
-    }
-
-    private LoadExternalExtraFields(ruleSymbol : RuleSymbol, type : TypeInfo) : void
-    {
-      def reflectExtraFieldAttribute(member : IMember) : IMember * option[bool]
-      {
-        mutable attrValue = None();
-        foreach(attr in member.GetModifiers().GetCustomAttributes())
-        {
-          | <[ N2.Runtime.ExtraFieldAttribute() ]>                   => attrValue = Some(false)
-          | <[ N2.Runtime.ExtraFieldAttribute($(isCached : bool)) ]> => attrValue = Some(isCached)
-          | _ => ()
-        }
-        (member, attrValue)
-      }
-      def reflectionResult = type.GetMembers(BindingFlags.Instance | BindingFlags.Public).Map(reflectExtraFieldAttribute);
-      foreach((method is IMethod, Some(isCached)) in reflectionResult)
-      {
-        def loc        = method.NameLocation.N2Location();
-        def parameters = method.Header.ParametersDeclarations;
-        def type       = <[ $(method.ReturnType : typed) ]>;
-        def signature  = ExtraField.ExtraFieldSignature(loc, parameters, type);
-
-        def symbol     = if (method.IsAbstract)
-          ExtraField.ExternalAbstractSymbol(loc, method.Name, isCached, signature);
-        else
-          ExtraField.ExternalDefSymbol(loc, method.Name, isCached, signature);
-
-        _ = ruleSymbol.Node.AddAndReport([], symbol, loc);
-      }
-    }
-
-    private LoadParsedSymbols(project : N2Project, rootNamespace : NamespaceSymbol, fileAsts : SCG.List[G.Start.Ast]) : bool
+    private LoadParsedSymbols(project : N2Project, fileAsts : SCG.List[G.Start.Ast]) : bool
     {
       def errorCount = project.ErrorCount;
 
       foreach (start in fileAsts)
-        start.CollectGlobalSymbols(rootNamespace);
+        start.CollectGlobalSymbols(project.RootNamespace);
 
       project.ErrorCount == errorCount
     }
 
-    private TypeSyntaxModules(project : N2Project, rootNamespace : NamespaceSymbol, fileAsts : SCG.List[G.Start.Ast]) : bool
+    private TypeSyntaxModules(project : N2Project, fileAsts : SCG.List[G.Start.Ast]) : bool
     {
       def errorCount   = project.ErrorCount;
 
-      def context = RootContext(Project.CurrentProject :> N2Project, rootNamespace, Manager.CoreEnv);
+      def context = RootContext(project, project.RootNamespace, Manager.CoreEnv);
 
       foreach (start in fileAsts)
         _ = start.MakeContext(context);
@@ -274,17 +185,16 @@ namespace N2
       project.ErrorCount == errorCount
     }
 
-    private DeclarationEmitters(rootNamespace : NamespaceSymbol) : void
+    private DeclarationEmitters(project : CompilingN2Project) : void
     {
-      def environment = EmitterEnvironment(Manager, rootNamespace.Node);
-      MakeEmitters.[ParsedSyntaxModuleSymbol, _](environment, SyntaxModuleEmitter);
-      MakeEmitters.[ParsedVisitorTypeSymbol,  _](environment, VisitorTypeEmitter);
-      MakeEmitters.[ParsedVisitorSymbol,      _](environment, VisitorEmitter);
+      MakeEmitters.[ParsedSyntaxModuleSymbol, _](project.Environment, SyntaxModuleEmitter);
+      MakeEmitters.[ParsedVisitorTypeSymbol,  _](project.Environment, VisitorTypeEmitter);
+      MakeEmitters.[ParsedVisitorSymbol,      _](project.Environment, VisitorEmitter);
 
       def externalSymbolEmitters = Manager.GetListUserData.[ExternalSymbolEmitter]();
-      def serializationEmitter = Manager.CreateBinarySerializationEmitter(N2BinarySerializationMessageEmitter(), N2SymbolRefBinarySerializationEmitterExtention(environment));
+      def serializationEmitter = Manager.CreateBinarySerializationEmitter(N2BinarySerializationMessageEmitter(), N2SymbolRefBinarySerializationEmitterExtention(project.Environment));
       foreach (data in Manager.GetListUserData.[ExportableSymbolData]())
-        externalSymbolEmitters.Add(ExternalSymbolEmitter(environment, data.TypeBuilder, data.ExportableSymbolType, serializationEmitter));
+        externalSymbolEmitters.Add(ExternalSymbolEmitter(project.Environment, data.TypeBuilder, data.ExportableSymbolType, serializationEmitter));
       ResetListUserData.[ExportableSymbolData]();
     }
 
@@ -347,59 +257,73 @@ namespace N2
     private EmitExternalSymbols() : void
     {
       def externalSymbolEmitters = Manager.GetListUserData.[ExternalSymbolEmitter]();
-      foreach (emitter in externalSymbolEmitters)
-        emitter.Emit();
-      when (!Manager.IsIntelliSenseMode && externalSymbolEmitters.Count > 0)
+      try
       {
-        def buffer = SCG.List();
         foreach (emitter in externalSymbolEmitters)
-          buffer.Add(<[ typeof($(emitter.TargetSymbolType.GetMemType() : typed)) ]>);
-        Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ N2.Serialization.ExportableSymbolsAttribute(array[..$(buffer.ToNList())]) ]>);
+          emitter.Emit();
+        when (!Manager.IsIntelliSenseMode && externalSymbolEmitters.Count > 0)
+        {
+          def buffer = SCG.List();
+          foreach (emitter in externalSymbolEmitters)
+            buffer.Add(<[ typeof($(emitter.TargetSymbolType.GetMemType() : typed)) ]>);
+          Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ N2.Serialization.ExportableSymbolsAttribute(array[..$(buffer.ToNList())]) ]>);
+        }
+        Manager.DisposeBinarySerializationEmitter();
       }
-      Manager.DisposeBinarySerializationEmitter();
-      ResetListUserData.[ExternalSymbolEmitter]();
+      finally ResetListUserData.[ExternalSymbolEmitter]();
     }
 
     private EmitSyntaxModules() : void
     {
       def syntaxModuleEmitters = Manager.GetListUserData.[SyntaxModuleEmitter]();
-      foreach (emitter in syntaxModuleEmitters)
-        emitter.Emit();
-      when (!Manager.IsIntelliSenseMode && syntaxModuleEmitters.Count > 0)
+      try
       {
-        def buffer = SCG.List();
         foreach (emitter in syntaxModuleEmitters)
-          buffer.Add(<[ typeof($(emitter.GrammarImplTB.GetMemType() : typed)) ]>);
-        Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ N2.GrammarsAttribute(array[..$(buffer.ToNList())]) ]>);
+          emitter.Emit();
+        when (!Manager.IsIntelliSenseMode && syntaxModuleEmitters.Count > 0)
+        {
+          def buffer = SCG.List();
+          foreach (emitter in syntaxModuleEmitters)
+            buffer.Add(<[ typeof($(emitter.GrammarImplTB.GetMemType() : typed)) ]>);
+          Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ N2.GrammarsAttribute(array[..$(buffer.ToNList())]) ]>);
+        }
       }
-      ResetListUserData.[SyntaxModuleEmitter]();
+      finally ResetListUserData.[SyntaxModuleEmitter]();
     }
 
     private EmitVisitorTypes() : void
     {
       def visitorTypeEmitters = Manager.GetListUserData.[VisitorTypeEmitter]();
-      foreach (emitter in visitorTypeEmitters)
-        emitter.Emit();
-      when (!Manager.IsIntelliSenseMode && visitorTypeEmitters.Count > 0)
+      try
       {
-        def buffer = SCG.List();
         foreach (emitter in visitorTypeEmitters)
-          buffer.Add(<[ typeof($(emitter.VisitorTypeDescriptorTB.GetMemType() : typed)) ]>);
-        Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ N2.VisitorAttribute(array[..$(buffer.ToNList())], array[]) ]>);
+          emitter.Emit();
+        when (!Manager.IsIntelliSenseMode && visitorTypeEmitters.Count > 0)
+        {
+          def buffer = SCG.List();
+          foreach (emitter in visitorTypeEmitters)
+            buffer.Add(<[ typeof($(emitter.VisitorTypeDescriptorTB.GetMemType() : typed)) ]>);
+          Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ N2.VisitorAttribute(array[..$(buffer.ToNList())], array[]) ]>);
+        }
       }
-      ResetListUserData.[VisitorTypeEmitter]();
+      finally ResetListUserData.[VisitorTypeEmitter]();
     }
 
     private EmitVisitors() : void
     {
       def visitorEmitters = Manager.GetListUserData.[VisitorEmitter]();
+      try
+      {
       foreach (emitter in visitorEmitters)
         emitter.Emit();
-      ResetListUserData.[VisitorEmitter]();
+      }
+      finally ResetListUserData.[VisitorEmitter]();
     }
 
-    private ReadMetadata(project : N2Project, rootNamespace : NamespaceSymbol) : void
+    private ReadMetadata(project : N2Project) : bool
     {
+      def errorCount = project.ErrorCount;
+
       def makeFakeSourceSnapshot(fileName)
       {
         def fileIndex = Nemerle.Compiler.Location.GetFileIndex(fileName);
@@ -427,7 +351,7 @@ namespace N2
           {
             def assemblyId = project.GetAssemblyId(asm.Assembly.GetName());
             def location   = N2.Location(makeFakeSourceSnapshot(asm.Assembly.Location), 0, 0);
-            def reader     = MetadataReader(metadataStream, registry, rootNamespace, assemblyId, location);
+            def reader     = MetadataReader(metadataStream, registry, project, assemblyId, location);
             initialReaders.Add(reader, location);
           }
         }
@@ -454,9 +378,11 @@ namespace N2
         foreach ((reader, _) in initialReaders)
           reader.Dispose();
       }
+
+      project.ErrorCount == errorCount
     }
 
-    private WriteMetadata(rootNamespace : NamespaceSymbol) : void
+    private WriteMetadata(project : Project) : void
     {
       unless (Manager.IsIntelliSenseMode)
       {
@@ -467,7 +393,7 @@ namespace N2
             Manager.Options.OutputPath;
 
         def metadataFileName = Path.Combine(matadataDirectory, "N2.Metadata");
-        using(symbolWriter = MetadataWriter(FileStream(metadataFileName, FileMode.Create, FileAccess.Write), rootNamespace))
+        using(symbolWriter = MetadataWriter(FileStream(metadataFileName, FileMode.Create, FileAccess.Write), project))
           symbolWriter.WriteSymbols();
 
         Manager.Options.EmbeddedResources ::= metadataFileName;
@@ -479,29 +405,24 @@ namespace N2
       when (IsListUserDataPresent.[G.Start.Ast]())
         try
         {
-          UpdateCurrentProjectContext();
-        
-          def project       = GetCurrentProjectContext();
-          def rootNamespace = project.RootNamespace;
-          assert2(rootNamespace != null);
-          
+          def project  = UpdateCurrentProjectContext();
           def fileAsts = Manager.GetListUserData.[G.Start.Ast]();
 
-          unless (LoadExternalSymbols(project, rootNamespace))
+          unless (ReadMetadata(project))
             throw Recovery();
-          unless (LoadParsedSymbols  (project, rootNamespace, fileAsts))
+          unless (LoadParsedSymbols(project, fileAsts))
             throw Recovery();
-          unless (TypeSyntaxModules  (project, rootNamespace, fileAsts))
+          unless (TypeSyntaxModules(project, fileAsts))
             throw Recovery();
 
-          DeclarationEmitters(rootNamespace);
+          DeclarationEmitters(project);
           DefineAst();
           DefineParsers();
           DefineOtherMembers();
           DefineVisitorTypes();
           DefineVisitors();
 
-          WriteMetadata(rootNamespace);
+          WriteMetadata(project);
         }
         finally ResetListUserData.[G.Start.Ast]();
     }
@@ -525,7 +446,5 @@ namespace N2
         handler(source, counter);
       });
     }
-
-    internal static NextKeywordRegexId : void -> int = Util.CreateIdGenerator(0);//TODO Жестоко выпилить
   }
 }
