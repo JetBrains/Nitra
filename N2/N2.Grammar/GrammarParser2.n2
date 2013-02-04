@@ -61,8 +61,11 @@ syntax module GrammarParser2
   alias Char            = Any;
   alias GrammarName     = QIdentifier;
   alias BaseName        = QIdentifier;
+  alias SeparatorToken  = TokenRule;
+  alias SeparatorRule   = Rule;
 
-  token Keyword = "as" | "syntax" | "token" | "alias" | "in" | "out" | "rule";
+
+  token Keyword = "as" | "syntax" | "token" | "alias" | "in" | "out" | "rule" | "precedence";
 
   token Any = ['\u0000'..'\uFFFF'];
   token NewLineCharacter  = '\n'
@@ -82,8 +85,8 @@ syntax module GrammarParser2
 
   extend syntax IgnoreToken
   {
-    [ExplicitSpaces, SpanClass(Comment)] SingleLineComment = "//" as Start (!NewLine Any)* as Body NewLine? as End;
-    [ExplicitSpaces, SpanClass(Comment)] MultiLineComment  = "/*" as Start (!"*/" Any)*    as Body "*/"     as End;
+    [ExplicitSpaces, SpanClass(Comment)] SingleLineComment = Start="//" Body=(!NewLine Any)* End=NewLine?;
+    [ExplicitSpaces, SpanClass(Comment)] MultiLineComment  = Start="/*" Body=(!"*/" Any)*    End="*/";
     [ExplicitSpaces]                     SpaceToken        = Spaces;
   }
 
@@ -121,9 +124,8 @@ syntax module GrammarParser2
     {
       override Value = sb.Append(EscapeSequence(FirstChar(Char)));
     }
-    [ExplicitSpaces] SimpleStringPart                = Chars
+    [ExplicitSpaces] SimpleStringPart                = Chars=(!ReservedStringChar !NewLine Any)+
     {
-      alias Chars = (!ReservedStringChar !NewLine Any)+;
       override Value = sb.Append(this.GetText());
     }
   }
@@ -160,15 +162,15 @@ syntax module GrammarParser2
     Value() : string = GetText(IdentifierBody);
     Identifier() : N2.Model.Identifier = N2.Model.Identifier(this, IdentifierBody);
   }
-  syntax QIdentifier                      = Names
+
+  [ExplicitSpaces]
+  syntax QIdentifier                      = Names=(Identifier; s "." s)+
   {
-    alias Names = (Identifier; ".")+;
     Identifiers() : list[N2.Located] = Names[0].Map(_.Identifier());
     Parts() : list[string] = Names[0].Map(_.Value());
     CalcLocation() : N2.Location
     {
-      def loc = this.Location;
-      N2.Location(loc.Source, loc.StartPos, Names[0].LastOrDefault(n => n.Location.EndPos, loc.StartPos))
+      this.Location // At present QIdentifier have no 's' at the end of rule. This allows the use rule location.
     }
     CalcLocations() : list[N2.Location] = Names[0].Map(_.Location);
   }
@@ -268,11 +270,8 @@ syntax module GrammarParser2
       }
     }
 
-    Visitor = "visitor" sm VisitorTypeName sm "for" sm SyntaxModuleName nl "{" inl Import* VisitorMember* d "}" nl
+    Visitor = "visitor" sm VisitorTypeName=QIdentifier sm "for" sm SyntaxModuleName=QIdentifier nl "{" inl Import* VisitorMember* d "}" nl
     {
-      alias SyntaxModuleName = QIdentifier;
-      alias VisitorTypeName  = QIdentifier;
-
       [Cached] private MakeSymbol() : ParsedVisitorSymbol = ParsedVisitorSymbol(this);
       override CollectGlobalSymbols
       {
@@ -326,9 +325,8 @@ syntax module GrammarParser2
     {
       override MakeContext = OpenNamespaceOrTypeContext(parent, NamespaceOrType);
     }
-    AliasSyntaxModuleDecl   = "using" sm Alias sm "="  sm NamespaceOrType ";"nl
+    AliasSyntaxModuleDecl   = "using" sm Alias=Identifier sm "="  sm NamespaceOrType ";"nl
     {
-      alias Alias = Identifier;
       override MakeContext = NamespaceOrTypeAliasContext(parent, Alias, NamespaceOrType);
     }
   }
@@ -341,25 +339,20 @@ syntax module GrammarParser2
 
   extend syntax RuleAttribute
   {
-    StartAttribute                  = AttributeName
+    StartAttribute                  = AttributeName="StartRule"
     {
-      alias AttributeName = "StartRule";
       override Options2 = inOptions.SetStart(this, true);
     }
-    SpanClassAttribute              = AttributeName "(" Class ")"
+    SpanClassAttribute              = AttributeName="SpanClass" "(" Class=Identifier ")"
     {
-      alias AttributeName = "SpanClass";
-      alias Class = Identifier;
       override Options2 = Context.Bind.[SpanClassSymbol](Class).Map(inOptions.SetSpanClass(Class, _)) ?? inOptions;
     }
-    ExplicitSpacesAttribute         = AttributeName
+    ExplicitSpacesAttribute         = AttributeName="ExplicitSpaces"
     {
-      alias AttributeName = "ExplicitSpaces";
       override Options2 = inOptions.SetExplicitSpaces(this, true);
     }
-    SuppressTrailingSpacesAttribute = AttributeName
+    SuppressTrailingSpacesAttribute = AttributeName="SuppressTrailingSpaces"
     {
-      alias AttributeName = "SuppressTrailingSpaces";
       override Options2 = inOptions.SetSuppressTrailingSpaces(this, true);
     }
   }
@@ -394,7 +387,7 @@ syntax module GrammarParser2
       {
         _ = MakeSymbol();
         _ = sm.Node.AddAndReport(Symbol, Location);
-        _ = BodyDeclaration.CollectGlobalSymbols(Symbol);
+        _ = BodyDeclaration.CollectGlobalSymbols(Symbol, None());
         sm
       }
       override MakeContext = MakeContext(parent, RuleAttributes, BodyDeclaration);
@@ -416,7 +409,7 @@ syntax module GrammarParser2
       {
         _ = MakeSymbol();
         _ = sm.Node.AddAndReport(Symbol, Location);
-        _ = BodyDeclaration.CollectGlobalSymbols(Symbol);
+        _ = BodyDeclaration.CollectGlobalSymbols(Symbol, None());
         sm
       }
       override MakeContext = MakeContext(parent, RuleAttributes, BodyDeclaration);
@@ -434,7 +427,7 @@ syntax module GrammarParser2
       {
         _ = MakeSymbol();
         _ = sm.Node.AddAndReport(Symbol, Location);
-        _ = BodyDeclaration.CollectGlobalSymbols(Symbol);
+        _ = BodyDeclaration.CollectGlobalSymbols(Symbol, Some(Name.GetText()));
         sm
       }
       override MakeContext = MakeContext(parent, RuleAttributes, BodyDeclaration);
@@ -450,7 +443,7 @@ syntax module GrammarParser2
       {
         _ = MakeSymbol();
         _ = sm.Node.AddAndReport(Symbol, Location);
-        _ = BodyDeclaration.CollectGlobalSymbols(Symbol);
+        _ = BodyDeclaration.CollectGlobalSymbols(Symbol, None());
         sm
       }
       override MakeContext = MakeContext(parent, RuleAttributes, TokenRule, BodyDeclaration);
@@ -468,7 +461,7 @@ syntax module GrammarParser2
       {
         _ = MakeSymbol();
         _ = sm.Node.AddAndReport(Symbol, Location);
-        _ = BodyDeclaration.CollectGlobalSymbols(Symbol);
+        _ = BodyDeclaration.CollectGlobalSymbols(Symbol, None());
         sm
       }
       override MakeContext = MakeContext(parent, RuleAttributes, BodyDeclaration);
@@ -491,7 +484,7 @@ syntax module GrammarParser2
     }
     ExtendSyntaxDecl        =                "extend"  sm "syntax" sm BaseName nl "{" inl ExtendSyntaxMember* d "}"nl
     {
-      override CollectGlobalSymbols = PassThrough(ExtendSyntaxMembers, sm, _.CollectGlobalSymbols(_));
+      override CollectGlobalSymbols = PassThrough(ExtendSyntaxMembers, sm, _.CollectGlobalSymbols(_, Some(BaseName.Parts().LastOrDefault(""))));
       override MakeContext = FoldThrough(ExtendSyntaxMembers, parent, _.MakeContext(_));
       override Typing
       {
@@ -513,9 +506,8 @@ syntax module GrammarParser2
       }
       override MakeContext = TokenFieldContext(parent, Name, StringLiterals[0]);
     }
-    SpanClassDecl           =                "span"    sm "class"  sm Name MatchTokens                          ";"nl
+    SpanClassDecl           =                "span"    sm "class"  sm Name MatchTokens=("=" TokenRule)?         ";"nl
     {
-      alias MatchTokens = ("=" TokenRule)?;
       [Cached] private MakeSymbol() : SpanClassSymbol
       {
         def symbol = ParsedSpanClassSymbol(this);
@@ -539,10 +531,8 @@ syntax module GrammarParser2
         _ = MakeRegularRule();
       }
     }
-    BracePairDecl           =                "braces"  sm             Open "," sm Close                          ";"nl
+    BracePairDecl           =                "braces"  sm Open=TokenRule "," sm Close=TokenRule                 ";"nl
     {
-      alias Open  = TokenRule;
-      alias Close = TokenRule;
       override MakeContext
       {
         def context = BracePairContext(parent, Open, Close);
@@ -556,7 +546,7 @@ syntax module GrammarParser2
         Close.Typing().ValidateRegularRule();
       }
     }
-    KeywordRegexDecl        =                "keyword" sm "regex"  sm TokenRule as MatchTokens sm "rule" sm QualifiedName ";"nl
+    KeywordRegexDecl        =                "keyword" sm "regex"  sm MatchTokens=TokenRule sm "rule" sm QualifiedName ";"nl
     {
       override MakeContext
       {
@@ -583,12 +573,12 @@ syntax module GrammarParser2
 
   syntax ExtendSyntaxMember = RuleAttributes Name "=" Rule BodyDeclaration
   {
-    [Cached] private MakeSymbol() : ParsedExtendSyntaxMember = ParsedExtendSyntaxMember(this);
-    CollectGlobalSymbols(sm : SyntaxModuleSymbol) : SyntaxModuleSymbol
+    [Cached] private MakeSymbol(baseName : string) : ParsedExtendSyntaxMember = ParsedExtendSyntaxMember(this, baseName);
+    CollectGlobalSymbols(sm : SyntaxModuleSymbol, baseName : option[string]) : SyntaxModuleSymbol
     {
-      _ = MakeSymbol();
+      _ = MakeSymbol(baseName.Value);
       _ = sm.Node.AddAndReport(Symbol, Location);
-      _ = BodyDeclaration.CollectGlobalSymbols(Symbol);
+      _ = BodyDeclaration.CollectGlobalSymbols(Symbol, None());
       sm
     }
     [Cached] MakeContext(parent : Context)                          : Context           = MakeContext(parent, RuleAttributes, BodyDeclaration);
@@ -606,7 +596,7 @@ syntax module GrammarParser2
 
   syntax BodyDeclaration
   {
-    CollectGlobalSymbols(ruleRef : RuleSymbol) : RuleSymbol = ruleRef;
+    CollectGlobalSymbols(ruleRef : RuleSymbol, _baseName : option[string]) : RuleSymbol = ruleRef;
     GetPrecedence() : int = 0;
     [Cached] MakeContext(parent : Context) : Context = parent;
     GetLastLocation() : N2.Location;
@@ -621,7 +611,7 @@ syntax module GrammarParser2
     }
     BlockBodyDeclaration = "{"  BodyMemberDeclaration* "}"nl
     {
-      override CollectGlobalSymbols = PassThrough(BodyMemberDeclarations, ruleRef, _.CollectGlobalSymbols(_));
+      override CollectGlobalSymbols = PassThrough(BodyMemberDeclarations, ruleRef, _.CollectGlobalSymbols(_, _baseName));
       override GetPrecedence
       {
         match (BodyMemberDeclarations.Map(_.GetPrecedence()).Filter(_.IsSome))
@@ -642,8 +632,6 @@ syntax module GrammarParser2
     }
   }
 
-  syntax FieldInitializer = "=" sm Expression;
-
   syntax ExtraFieldsParam = Name sm ":" sm Type;
   [ExplicitSpaces]
   syntax ExtraFieldPrivate = "private" sm;
@@ -654,9 +642,8 @@ syntax module GrammarParser2
   }
   extend syntax ExtraFieldAttribute
   {
-    Cached = AttributeName
+    Cached = AttributeName="Cached"
     {
-      alias AttributeName = "Cached";
       override IsCached = true;
     }
   }
@@ -681,7 +668,7 @@ syntax module GrammarParser2
 
   syntax BodyMemberDeclaration
   {
-    CollectGlobalSymbols(ruleSymbol : RuleSymbol) : RuleSymbol = ruleSymbol;
+    CollectGlobalSymbols(ruleSymbol : RuleSymbol, _baseName : option[string]) : RuleSymbol = ruleSymbol;
     GetPrecedence() : ValueOption[int * N2.Location] = VNone();
     [Cached] MakeContext(parent : Context) : Context = parent;
     Typing(_baseRule : ExtensibleRuleRef) : void { }
@@ -691,7 +678,7 @@ syntax module GrammarParser2
   {
     InlineExtendSyntaxMember = "|" ExtendSyntaxMember
     {
-      override CollectGlobalSymbols { _ = ExtendSyntaxMember.CollectGlobalSymbols(ruleSymbol.Node.Parent.Symbol :> SyntaxModuleSymbol); ruleSymbol }
+      override CollectGlobalSymbols { _ = ExtendSyntaxMember.CollectGlobalSymbols(ruleSymbol.Node.Parent.Symbol :> SyntaxModuleSymbol, _baseName); ruleSymbol }
       override Typing = ExtendSyntaxMember.Typing(_baseRule);
       override MakeContext = ExtendSyntaxMember.MakeContext(parent);
     }
@@ -840,10 +827,8 @@ syntax module GrammarParser2
     {
       override MakeContext = RuleAlias.MakeContext(parent);
     } 
-    PrecedenceDeclaration  = "precedence"   sm  Precedence RightAssociative ";"
+    PrecedenceDeclaration  = "precedence"   sm  Precedence=Number RightAssociative=("right-associative")? ";"
     {
-      alias Precedence = Number;
-      alias RightAssociative = ("right-associative")?;
       override GetPrecedence = VSome((if (RightAssociative.IsSome) -Precedence.Value() else Precedence.Value(), this.Location));
     }  // TODO: make precedence table
   }
@@ -885,7 +870,7 @@ syntax module GrammarParser2
     Type3 = Type "*" Type       { precedence 10; }
   }
 
-  syntax Block = nl "{" inl (Expression; ";" nl)* ";"* as Semicolons d "}" nl;
+  syntax Block = nl "{" inl (Expression; ";" nl)* ";"* d "}" nl;
   syntax Parentheses = "(" Expression? ")";
 
   syntax Content;
@@ -941,14 +926,10 @@ syntax module GrammarParser2
     [Cached] Typing() : RegularRule;
   }
 
-  alias SeparatorToken = TokenRule;
-  
   extend syntax TokenRule
   {
-    ChoiceTokenRule                  = LeftRule sm RightRules
+    ChoiceTokenRule                  = LeftRule=TokenRule ^ 10 sm RightRules=("|" TokenRule ^ 10)+
     {
-      alias LeftRule = TokenRule ^ 10;
-      alias RightRules = ("|" TokenRule ^ 10)+;
       override MakeContext
       {
         def context1 = LeftRule.MakeContext(parent);
@@ -957,10 +938,8 @@ syntax module GrammarParser2
       }
       override Typing = RegularRule.Choice(Location, LeftRule.Typing() :: RightRules.Map(r => r[1].Typing()));
     }
-    SequenceTokenRule                = LeftRule sm RightRules
+    SequenceTokenRule                = LeftRule=TokenRule ^ 20 sm RightRules=(TokenRule ^ 20)+
     {
-      alias LeftRule = TokenRule ^ 20;
-      alias RightRules = (TokenRule ^ 20)+;
       override MakeContext
       {
         def context1 = LeftRule.MakeContext(parent);
@@ -1024,8 +1003,6 @@ syntax module GrammarParser2
     }
   }
 
-  alias SeparatorRule = Rule;
-
   syntax Rule
   {
     Typing(_baseRule : option[ExtensibleRuleSymbol], _precedence : int, _fieldName : option[string], context : Context, options : RuleDefinitionOptions) : N2.Model.Rule;  // precedence < 0 if it is right-associative
@@ -1033,11 +1010,8 @@ syntax module GrammarParser2
 
   extend syntax Rule
   {
-    SequenceRule                = LeftRule RightRules
+    SequenceRule                = LeftRule=Rule ^ 10 RightRules=(sm Rule ^ 10)+
     {
-      alias LeftRule = Rule ^ 10;
-      alias RightRules = (sm Rule ^ 10)+;
-
       override Typing
       {
         def bp1   = if (_precedence < 0) -_precedence + 1 else _precedence;
@@ -1110,7 +1084,11 @@ syntax module GrammarParser2
         Rule.Repeat(this.Location, type, MakePlural(_fieldName, rule, context), 1, None(), rule);
       }
     }
-    FieldName                   = Rule ^ 11 sm "as" sm Name
+    FieldName1                  = Rule ^ 12 sm "as" sm Name
+    {
+      override Typing = this.Rule.Typing(_baseRule, _precedence, Some(Name.Value()), context, options);
+    }
+    FieldName2                  = Name sm "=" sm Rule ^ 11
     {
       override Typing = this.Rule.Typing(_baseRule, _precedence, Some(Name.Value()), context, options);
     }
@@ -1126,9 +1104,8 @@ syntax module GrammarParser2
     {
       override Typing = this.Rule.Typing(_baseRule, _precedence, _fieldName, context, options);
     }
-    CallRule                    = QualifiedName BindingPower
+    CallRule                    = QualifiedName BindingPower=(sm "^" sm Number)?
     {
-      alias BindingPower = (sm "^" sm Number)?;
       override Typing = CallRuleTyping(_baseRule, _precedence, _fieldName, context, options, QualifiedName, BindingPower);
     }
     ZeroOrManyWithSeparatorRule        = "(" Rule ";"sm SeparatorRule ")" "*"
