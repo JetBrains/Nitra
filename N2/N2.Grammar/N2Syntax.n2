@@ -15,30 +15,22 @@ using System.Linq;
 
 syntax module N2Syntax
 {
-  token field OpenBrace           = "(";
-  token field CloseBrace          = ")";
-  token field OpenBrace           = "{";
-  token field CloseBrace          = "}";
-  token field OpenSquareBrace     = "[";
-  token field CloseSquareBrace    = "]";
-  token field SingleQuote         = "\'";
-  token field Quote               = "\"";
-  token field Semicolon           = ";";
-  token field Comma               = ",";
-  token field Colon               = ":";
-  token field Power               = "^";
-  token field Assign              = "=";
+  using PrettyPrint;
+  using TokenNames;
+  using Whitespaces;
+  using Identifiers;
+  using CStyleComments;
+
   token field Prefix              = "\\u";
   token field DodDot              = "..";
-  token field Op                  = "+", "-", "*", "/", "?", "^", "%", "&", "!", ".";
-  token field Backslash           = "\\";
+  token field Op                  = ".";
   token field Pipe                = "|";
 
   span class Comment;
   span class Char;
   span class String;
   span class Number;
-  span class Keyword      = ['a'..'z']['a'..'z']+;
+  span class Keyword      = IdentifierStartCharacter IdentifierPartCharacters*;
   span class Operator     = ['+', '-', '/', '*', '^', '?', ':']+;
   span class OpenBrace    = "(" | "{" | "[";
   span class CloseBrace   = ")" | "}" | "]";
@@ -47,13 +39,7 @@ syntax module N2Syntax
   braces "{", "}";
   braces "[", "]";
 
-  keyword regex ['A'..'Z', 'a'..'z', '_'..'_']+['A'..'Z', 'a'..'z', '_'..'_', '-'..'-']* rule S;
-
-  marker i;   // increase a indent
-  marker d;   // decrease a indent
-  marker nl;  // optional spacer and plase for \n while pretty printing
-  marker inl; // i + nl
-  marker sm;  // optional spacer and prefer to print space while pretty printing
+  keyword regex IdentifierStartCharacter (IdentifierPartCharacters | '-')* rule S;
 
   alias Name            = Identifier;
   alias QualifiedName   = QualifiedIdentifier;
@@ -64,42 +50,14 @@ syntax module N2Syntax
   alias SeparatorToken  = TokenRule;
   alias SeparatorRule   = Rule;
 
-
   token Keyword = "as" | "syntax" | "token" | "alias" | "in" | "out" | "rule" | "precedence";
 
-  token Any = ['\u0000'..'\uFFFF'];
-  token NewLineCharacter  = '\n'
-                    | '\r'
-                    | '\u2028'    /*  line separator       */
-                    | '\u2029';   /*  paragraph separator  */
-  token NewLine  = "\r\n" | NewLineCharacter;
-  token Whitespace = [Zs]
-              | '\t'
-              | '\v'        /*  vertial tab          */
-              | '\f';       /*  form feed            */
-  token Space = Whitespace | NewLine;
-  token Spaces = Space+;
-
-
-  [ExplicitSpaces] syntax IgnoreToken
+  extend syntax IgnoreToken
   {
-    | [ExplicitSpaces, SpanClass(Comment)] SingleLineComment = Start="//" Body=(!NewLine Any)* End=NewLine?;
-    | [ExplicitSpaces, SpanClass(Comment)] MultiLineComment  = Start="/*" Body=(!"*/" Any)*    End="*/";
-    | [ExplicitSpaces]                     SpaceToken        = Spaces;
+    | [ExplicitSpaces, SpanClass(Comment)] SingleLineComment;
+    | [ExplicitSpaces, SpanClass(Comment)] MultiLineComment;
   }
 
-  [ExplicitSpaces] void s   = IgnoreToken*;                // optional spacer
-  [ExplicitSpaces] void S   = !IdentifierPartCharacters s; // identifier break spacer
-
-  token LetterCharacter           = ['A'..'Z', 'a'..'z', 'а'..'я', 'А'..'Я'];//[Lu, Ll, Lt, Lm, Lo, Nl];
-  token CombiningCharacter        = [Mn, Mc];
-  token DecimalDigitCharacter     = [Nd];
-  token ConnectingCharacter       = [Pc];
-  token FormattingCharacter       = [Cf];
-  token IdentifierStartCharacter  = LetterCharacter | "_";
-  token IdentifierPartCharacters  = LetterCharacter | DecimalDigitCharacter | ConnectingCharacter 
-                                  | CombiningCharacter | FormattingCharacter;
-  token IdentifierBody            = IdentifierStartCharacter IdentifierPartCharacters*;
   token HexDigit                  = ['0'..'9', 'a'..'f', 'A'..'F'];
   token ReservedStringChar        = "\"" | "\\";
   token ReservedCharChar          = "\'" | "\\";
@@ -674,7 +632,7 @@ syntax module N2Syntax
                 Project.CurrentProject.Error(this.Location, "A public extra field must be defined in an extention point rule or a simple rule only.", -1);
               ExtraField.ParsedDefSymbol(this)
             }
-          _ = ruleSymbol.Node.AddAndReport.[ExtraField.ExtraFieldSymbol](symbol, this.Location);
+          _ = ruleSymbol.Node.AddAndReport.[ExtraField.DefinitionSymbol](symbol, this.Location);
           symbol
         }
         override CollectGlobalSymbols
@@ -699,7 +657,7 @@ syntax module N2Syntax
           when (ExtraFieldBody.IsEmpty())
             Project.CurrentProject.Error(this.Location, "A overriding extra field must have a body.", -1);
           def symbol = ExtraField.ParsedOverrideSymbol(this);
-          _ = ruleSymbol.Node.AddAndReport.[ExtraField.ExtraFieldSymbol](symbol, this.Location);
+          _ = ruleSymbol.Node.AddAndReport.[ExtraField.DefinitionSymbol](symbol, this.Location);
           symbol
         }
         override CollectGlobalSymbols
@@ -747,7 +705,7 @@ syntax module N2Syntax
         {
           when (ExtraFieldBody.IsEmpty())
             Project.CurrentProject.Error(this.Location, "An 'missing' handler must have a body.", -1);
-          def symbol = ExtraField.ParsedOnErrorSymbol(this);
+          def symbol = ExtraField.ParsedExtraFieldMissingValueSymbol(this);
           _ = ruleSymbol.Node.AddAndReport.[ExtraField.ExtraFieldMissingValueSymbol](symbol, this.Location);
           symbol
         }
@@ -760,16 +718,11 @@ syntax module N2Syntax
         {
           match (this.Symbol.DeclaringRule)
           {
-            | ExtentionRuleSymbol(BaseRule = SymbolRef.None) => SymbolRef.None(Name.Location, false)
-            | ExtentionRuleSymbol(BaseRule = SymbolRef.Some(targetRuleSymbol)) with isExtention = true
-            | SimpleRuleSymbol as targetRuleSymbol                             with isExtention = false =>
+            | ExtensibleRuleSymbol as targetRuleSymbol
+            | SimpleRuleSymbol     as targetRuleSymbol =>
               match (targetRuleSymbol.Node.BindMany.[ExtraField.DefinitionSymbol](Name.Location))
               {
-                | [extraFieldSymbol] =>
-                  when (isExtention && extraFieldSymbol is ExtraField.DefPrivateSymbol)
-                    Project.CurrentProject.Error(this.Location, "Cannot define 'missing' handler for private extra field in extention rule.", -1);
-                  SymbolRef.Some(Name.Location, false, extraFieldSymbol)
-
+                | [extraFieldSymbol] => SymbolRef.Some(Name.Location, false, extraFieldSymbol)
                 | _ =>
                   def name = Name.Value();
                   Project.CurrentProject.Error(this.Location, $"No '$name' extra field to handle 'missing'.", -1);
@@ -777,7 +730,7 @@ syntax module N2Syntax
               }
 
             | _ => 
-              Project.CurrentProject.Error(this.Location, "An 'missing' handler for a extra field can be defined only in extending rules.", -1);
+              Project.CurrentProject.Error(this.Location, "An 'missing' handler for a extra field can be defined in simple and extensible rules.", -1);
               SymbolRef.None(Name.Location, false)
           }
         }
