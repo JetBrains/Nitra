@@ -5,6 +5,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.IO;
 
+using N2.Tests;
+
 namespace Sample.Json.Cs
 {
   class Program
