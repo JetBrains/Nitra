@@ -5,6 +5,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.IO;
 
+using N2.Tests;
+
 namespace Sample.Json.Cs
 {
   class Program
@@ -19,7 +21,7 @@ namespace Sample.Json.Cs
       var parseResult = parserHost.DoParsing(source, JsonParser.GrammarImpl.StartRuleDescriptor);
       if (parseResult.IsSuccess)
       {
-        var ast = parseResult.CreateAst<JsonParser.Start.Ast>();
+        var ast = parseResult.CreateAst<JsonParser.Start>();
         Console.WriteLine("Pretty print: " + ast);
         Console.WriteLine();
       }
