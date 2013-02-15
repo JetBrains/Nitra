@@ -31,6 +31,7 @@
       this._code = new System.Windows.Forms.TextBox();
       this.splitContainer1 = new System.Windows.Forms.SplitContainer();
       this._lbRules = new System.Windows.Forms.ListBox();
+      this._lbLoop = new System.Windows.Forms.ListBox();
       ((System.ComponentModel.ISupportInitialize)(this.splitContainer1)).BeginInit();
       this.splitContainer1.Panel1.SuspendLayout();
       this.splitContainer1.Panel2.SuspendLayout();
@@ -48,6 +49,7 @@
       this._code.ScrollBars = System.Windows.Forms.ScrollBars.Both;
       this._code.Size = new System.Drawing.Size(856, 347);
       this._code.TabIndex = 0;
+      this._code.WordWrap = false;
       this._code.KeyUp += new System.Windows.Forms.KeyEventHandler(this._code_KeyUp);
       this._code.MouseDown += new System.Windows.Forms.MouseEventHandler(this._code_MouseDown);
       // 
@@ -64,6 +66,7 @@
       // 
       // splitContainer1.Panel2
       // 
+      this.splitContainer1.Panel2.Controls.Add(this._lbLoop);
       this.splitContainer1.Panel2.Controls.Add(this._lbRules);
       this.splitContainer1.Size = new System.Drawing.Size(856, 586);
       this.splitContainer1.SplitterDistance = 347;
@@ -71,14 +74,26 @@
       // 
       // _lbRules
       // 
-      this._lbRules.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) 
-            | System.Windows.Forms.AnchorStyles.Left) 
-            | System.Windows.Forms.AnchorStyles.Right)));
+      this._lbRules.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom)
+            | System.Windows.Forms.AnchorStyles.Left)
+           )));
       this._lbRules.FormattingEnabled = true;
       this._lbRules.Location = new System.Drawing.Point(12, 38);
       this._lbRules.Name = "_lbRules";
       this._lbRules.Size = new System.Drawing.Size(301, 186);
       this._lbRules.TabIndex = 0;
+      this._lbRules.SelectedIndexChanged += new System.EventHandler(this._lbRules_SelectedIndexChanged);
+      // 
+      // _lbLoop
+      // 
+      this._lbLoop.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom)
+            | System.Windows.Forms.AnchorStyles.Left)
+            | System.Windows.Forms.AnchorStyles.Right)));
+      this._lbLoop.FormattingEnabled = true;
+      this._lbLoop.Location = new System.Drawing.Point(335, 37);
+      this._lbLoop.Name = "_lbLoop";
+      this._lbLoop.Size = new System.Drawing.Size(301, 186);
+      this._lbLoop.TabIndex = 1;
       // 
       // ParseResultViewer
       // 
@@ -102,5 +117,6 @@
     private System.Windows.Forms.TextBox _code;
     private System.Windows.Forms.SplitContainer splitContainer1;
     private System.Windows.Forms.ListBox _lbRules;
+    private System.Windows.Forms.ListBox _lbLoop;
   }
 }

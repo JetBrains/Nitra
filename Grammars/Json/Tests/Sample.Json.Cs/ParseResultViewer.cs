@@ -10,6 +10,26 @@ using N2;
 
 namespace Sample.Json.Cs
 {
+  public class Data
+  {
+    public Data(object obj, int pos)
+    {
+      Obj = obj;
+      Pos = pos;
+    }
+
+    public readonly object Obj;
+    public readonly int    Pos;
+
+    public bool IsLoop { get { return ToString().StartsWith("Loop:"); } }
+    public bool IsLoopWithSeparator { get { return ToString().StartsWith("Loop with separator:"); } }
+
+    public override string ToString()
+    {
+      return Obj.ToString();
+    }
+  }
+
   public partial class ParseResultViewer : Form
   {
     List<object> Rules;
@@ -44,11 +64,14 @@ namespace Sample.Json.Cs
 
         int i = Mem[pos];
 
-        while (pos > 0 && i == 0)
-          i = Mem[--pos];
+        //while (pos > 0 && i == 0)
+        //  i = Mem[--pos];
 
         for (; i > 0; i = Ast[i + 1])
-          rules.Add(Rules[Ast[i]]);
+          if (Rules[Ast[i]] != null)
+            rules.Add(new Data(Rules[Ast[i]], i));
+          else
+            rules.Add(new Data("Loop or optuion", i));
 
         _lbRules.Items.AddRange(rules.ToArray());
       }
@@ -57,6 +80,25 @@ namespace Sample.Json.Cs
         _lbRules.EndUpdate();
       }
     }
+
+    void ShowLoopInfo(int pos)
+    {
+      var rules = new List<object>();
+      try
+      {
+        _lbLoop.Items.Clear();
+
+
+
+
+        _lbLoop.Items.AddRange(rules.ToArray());
+      }
+      finally
+      {
+        _lbLoop.EndUpdate();
+      }
+    }
+
 
     private void _code_MouseDown(object sender, MouseEventArgs e)
     {
@@ -68,6 +110,21 @@ namespace Sample.Json.Cs
     {
       this.Text = _code.SelectionStart.ToString();
       ShowInfo(_code.SelectionStart);
+    }
+
+    private void _lbRules_SelectedIndexChanged(object sender, EventArgs e)
+    {
+      if (_lbRules.SelectedItem == null)
+        return;
+
+      var data = (Data)_lbRules.SelectedItem;
+
+      if (data.IsLoop)
+      {
+        var elemIndex = Ast[data.Pos + 2];
+      }
+
+      ShowLoopInfo(_code.SelectionStart);
     }
   }
 }
