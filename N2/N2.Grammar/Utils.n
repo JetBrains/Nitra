@@ -6,8 +6,6 @@ using N2.Typing;
 using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Collections;
-using Nemerle.Compiler;
-using Nemerle.Compiler.Parsetree;
 using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -19,6 +17,7 @@ using System.Linq;
 using System.Text;
 
 using G = N2Syntax;
+using PExpr = Nemerle.Compiler.Parsetree.PExpr;
 
 namespace N2
 {
@@ -63,7 +62,10 @@ namespace N2
     {
       def (startLine, startCol) = loc.StartLineColumn;
       def (endLine, endCol) = loc.EndLineColumn;
-      Location(loc.Source.FileIndex, startLine, startCol, endLine, endCol)
+      if (loc.Source.FileIndex != 0)
+        Compiler.Location(loc.Source.FileIndex, startLine, startCol, endLine, endCol)
+      else
+        Compiler.Location.Default
     }
 
     [DebuggerStepThroughAttribute]
@@ -80,7 +82,10 @@ namespace N2
       def source = loc.Source;
       def (startLine, startCol) = source.PositionToLineColumn(tok.StartPos);
       def (endLine,   endCol)   = source.PositionToLineColumn(tok.EndPos);
-      Location(loc.Source.FileIndex, startLine, startCol, endLine, endCol)
+      if (source.FileIndex != 0)
+        Compiler.Location(source.FileIndex, startLine, startCol, endLine, endCol)
+      else
+        Compiler.Location.Default
     }
 
     public N2Location(this location : Compiler.Location) : N2.Location
@@ -376,7 +381,7 @@ namespace N2
       else
         0
     }
-    
+
     public EnsureSequence(rule : Rule) : Rule.Sequence
     {
       def createUniqueFieldNames(rules : list[Rule]) : list[Rule]
@@ -422,47 +427,6 @@ namespace N2
         | Rule.Sequence(rules) => Rule.Sequence(rule, createUniqueFieldNames(rules))
         | _ => Rule.Sequence(rule.Location, rule.Type, "", createUniqueFieldNames([rule]));
       }
-    }
-
-    public GetProject(this context : Context) : N2Project
-    {
-      | c is RootContext => c.Project
-      | null => assert(false)
-      | _ => context.Parent.GetProject()
-    }
-
-    public TryGetContext[T](this context : Context) : T
-      where T: IContext, class
-    {
-      match (context)
-      {
-        | null   => null
-        | c is T => c
-        | c      => TryGetContext.[T](c.Parent)
-      }
-    }
-
-    public TryGetParent[T](this context : Context) : T
-      where T: IContext, class
-    {
-      TryGetContext.[T](context.Parent)
-    }
-
-    public GetContext[T](this context : Context) : T
-      where T: IContext, class
-    {
-      match (context)
-      {
-        | null   => assert2(false); assert(false);
-        | c is T => c
-        | c      => GetContext.[T](c.Parent)
-      }
-    }
-
-    public GetParent[T](this context : Context) : T
-      where T: IContext, class
-    {
-      GetContext(context.Parent)
     }
 
     internal BindImpl[T](result : BindingResult[T]) : option[T]
@@ -608,84 +572,12 @@ namespace N2
         Location(source, tok)
     }
 
-    ParseNemerleInternal(ast : N2.Ast, context : Context) : PExpr
-    {
-      def env = context.GetNemerleEnvironment();
-      def simpleParse(ast : N2.Ast) : PExpr
-      {
-        def text = ast.Location.GetText();
-        MainParser.ParseExpr(env, text, ast.NLocation())
-      }
-      def parseAndAddIt(ast : N2.Ast) : PExpr
-      {
-        def e = simpleParse(ast);
-
-        def addIt(e)
-        {
-          | <[ value ]> => e
-          | <[ $(n : name) ]> => <[ it.$(n : name)]>
-          | <[ $x = $y ]> => <[ $(addIt(x)) = $(addIt(y)) ]>
-          | _ => e
-        }
-
-        addIt(e)
-      }
-
-      match (ast)
-      {
-        | G.Expression.Ast(ExpressionContents=[G.ExpressionContent_Content1.Ast(Content=G.Content_Fold.Ast as fold)]) => 
-          def collection = simpleParse(fold.Identifier);
-          def expr1 = simpleParse(fold.Expression);
-          def exprs = fold.Expressions[0].Map(parseAndAddIt);
-          //exprs.Fold()
-          <[ $collection.Fold($expr1, fun((it, value)) { ..$exprs }) ]>
-
-        | _ => simpleParse(ast)
-      }
-    }
-
-    public ParseNemerle(this body : G.ExtraFieldBody, context : Context) : PExpr
-    {
-      match (body)
-      {
-        | G.ExtraFieldBody_Block.Ast      as b => ParseNemerleInternal(b.Block, context)
-        | G.ExtraFieldBody_Expression.Ast as b => ParseNemerleInternal(b.Expression, context)
-        | G.ExtraFieldBody_Empty               => <[ () ]>
-        | _                                    => <[ () ]>
-      }
-    }
-
-    public PraseParameter(context : Context, name : N2.Ast, type : N2.Ast) : PParameter
-    {
-      match (ParseNemerleInternal(name, context))
-      {
-        | <[ $(n : name) ]> => <[ parameter: $n : $(ParseNemerleInternal(type, context)) ]>
-        | _ => N2Project.CurrentProject.FatalError(name, "Expected simple name.", -1); assert(false);
-      }
-    }
-    
-    public ParseNemerle(this parms : list[G.ExtraFieldsParam], context : Context) : list[PParameter]
-    {
-      def parsed = List();
-      foreach (parm in parms)
-      {
-        | G.ExtraFieldsParam.Ast as p => parsed.Add(PraseParameter(context, p.Name, p.Type))
-        | e => N2Project.CurrentProject.FatalError(e, "Parse error.", -1)
-      }
-      parsed.ToNList()
-    }
-
-    public ParseNemerle(this type : G.Type, context : Context) : PExpr
-    {
-      ParseNemerleInternal(type, context)
-    }
-    
     public CallRuleTyping(baseRule : option[ExtensibleRuleSymbol], _precedence : int, _fieldName : option[string], context : Context, options : RuleDefinitionOptions,
       QualifiedName : G.QualifiedIdentifier, BindingPower :  option[NToken * G.Number]) : Rule
     {
       def parts = QualifiedName.Parts();
       def newFieldName : string = _fieldName ?? LastOrDefault(parts, "");
-
+      
       when (TryBind.[RuleAliasSymbol](context, QualifiedName) is Some(alias))
         return alias.Rule.Typing(baseRule, _precedence, Some(newFieldName), context, options);
 
@@ -731,10 +623,14 @@ namespace N2
         | Chars => // Whitespace rule is inserted after all 'token' rules 
           def moduleContext = context.GetContext.[SyntaxModuleBodyContext]();
           def loc           = callRule.Location.FromEnd();
-          def symbol        = moduleContext.GetSpaceRule(context, "s");
-          def ruleRef       = RuleRef.Create(loc, symbol, true);
-          def s             = Rule.Call(loc, RuleType.Void(), "", ruleRef, 0);
-          Rule.Sequence(callRule.Location, type, newFieldName, [callRule : Rule, s])
+          match (moduleContext.GetSpaceRule(context, "s", loc))
+          {
+            | None          => callRule
+            | Some(sSymbol) =>
+              def ruleRef = RuleRef.Some(loc, true, sSymbol);
+              def s       = Rule.Call(loc, RuleType.Void(), "", ruleRef, 0);
+              Rule.Sequence(callRule.Location, type, newFieldName, [callRule : Rule, s])
+          }
 
         | _ => callRule
       }
@@ -777,7 +673,7 @@ namespace N2
           else
           {
             def moduleContext = context.GetContext.[SyntaxModuleBodyContext](); 
-            moduleContext.GetSpaceRule(context, "s");
+            moduleContext.GetSpaceRule(context, "s", loc);
           };
         def ruleRef = RuleRef.Create(loc, symbol, true);
         def S = Rule.Call(loc, RuleType.Void(), "", ruleRef, 0);
@@ -855,7 +751,7 @@ namespace N2
       }
 
       def symbols = identifiers.Map(bind);
-      def t       = ParseNemerle(type, context);
+      def t       = NemerleParser.Parse(type, context);
       (symbols, t)
     }
     

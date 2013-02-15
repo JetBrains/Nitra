@@ -1,0 +1,95 @@
+﻿using N2.Model;
+using N2.ProjectSystem;
+using N2.Runtime;
+using N2.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+using G = N2Syntax;
+
+namespace N2
+{
+  public module NemerleParser
+  {
+    public Parse(body : G.ExtraFieldBody, context : Context) : PExpr
+    {
+      match (body)
+      {
+        | G.ExtraFieldBody_Block.Ast      as b => ParseImpl(b.Block, context)
+        | G.ExtraFieldBody_Expression.Ast as b => ParseImpl(b.Expression, context)
+        | G.ExtraFieldBody_Empty               => <[ () ]>
+        | _                                    => <[ () ]>
+      }
+    }
+
+    public ParseParameter(context : Context, name : N2.Ast, type : N2.Ast) : PParameter
+    {
+      match (ParseImpl(name, context))
+      {
+        | <[ $(n : name) ]> => <[ parameter: $n : $(ParseImpl(type, context)) ]>
+        | _ => N2Project.CurrentProject.FatalError(name, "Expected simple name.", -1); assert(false);
+      }
+    }
+
+    public Parse(parms : list[G.ExtraFieldsParam], context : Context) : list[PParameter]
+    {
+      def parsed = List();
+      foreach (parm in parms)
+      {
+        | G.ExtraFieldsParam.Ast as p => parsed.Add(ParseParameter(context, p.Name, p.Type))
+        | e => N2Project.CurrentProject.FatalError(e, "Parse error.", -1)
+      }
+      parsed.ToNList()
+    }
+
+    public Parse(type : G.Type, context : Context) : PExpr
+    {
+      ParseImpl(type, context)
+    }
+
+    ParseImpl(ast : N2.Ast, context : Context) : PExpr
+    {
+      def env = context.GetNemerleEnvironment();
+      def simpleParse(ast : N2.Ast) : PExpr
+      {
+        def text = ast.Location.GetText();
+        MainParser.ParseExpr(env, text, ast.NLocation())
+      }
+      def parseAndAddIt(ast : N2.Ast) : PExpr
+      {
+        def e = simpleParse(ast);
+
+        def addIt(e)
+        {
+          | <[ value ]> => e
+          | <[ $(n : name) ]> => <[ it.$(n : name)]>
+          | <[ $x = $y ]> => <[ $(addIt(x)) = $(addIt(y)) ]>
+          | _ => e
+        }
+
+        addIt(e)
+      }
+
+      match (ast)
+      {
+        | G.Expression.Ast(ExpressionContents=[G.ExpressionContent_Content1.Ast(Content=G.Content_Fold.Ast as fold)]) => 
+          def collection = simpleParse(fold.Identifier);
+          def expr1 = simpleParse(fold.Expression);
+          def exprs = fold.Expressions[0].Map(parseAndAddIt);
+          //exprs.Fold()
+          <[ $collection.Fold($expr1, fun((it, value)) { ..$exprs }) ]>
+
+        | _ => simpleParse(ast)
+      }
+    }
+  }
+}
