@@ -28,7 +28,7 @@
     /// </summary>
     private void InitializeComponent()
     {
-      this.textBox1 = new System.Windows.Forms.TextBox();
+      this._code = new System.Windows.Forms.TextBox();
       this.splitContainer1 = new System.Windows.Forms.SplitContainer();
       this._lbRules = new System.Windows.Forms.ListBox();
       ((System.ComponentModel.ISupportInitialize)(this.splitContainer1)).BeginInit();
@@ -37,15 +37,19 @@
       this.splitContainer1.SuspendLayout();
       this.SuspendLayout();
       // 
-      // textBox1
+      // _code
       // 
-      this.textBox1.Dock = System.Windows.Forms.DockStyle.Fill;
-      this.textBox1.Location = new System.Drawing.Point(0, 0);
-      this.textBox1.Multiline = true;
-      this.textBox1.Name = "textBox1";
-      this.textBox1.ScrollBars = System.Windows.Forms.ScrollBars.Both;
-      this.textBox1.Size = new System.Drawing.Size(856, 347);
-      this.textBox1.TabIndex = 0;
+      this._code.Dock = System.Windows.Forms.DockStyle.Fill;
+      this._code.Font = new System.Drawing.Font("Consolas", 14.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(204)));
+      this._code.Location = new System.Drawing.Point(0, 0);
+      this._code.Multiline = true;
+      this._code.Name = "_code";
+      this._code.ReadOnly = true;
+      this._code.ScrollBars = System.Windows.Forms.ScrollBars.Both;
+      this._code.Size = new System.Drawing.Size(856, 347);
+      this._code.TabIndex = 0;
+      this._code.KeyUp += new System.Windows.Forms.KeyEventHandler(this._code_KeyUp);
+      this._code.MouseDown += new System.Windows.Forms.MouseEventHandler(this._code_MouseDown);
       // 
       // splitContainer1
       // 
@@ -56,12 +60,11 @@
       // 
       // splitContainer1.Panel1
       // 
-      this.splitContainer1.Panel1.Controls.Add(this.textBox1);
+      this.splitContainer1.Panel1.Controls.Add(this._code);
       // 
       // splitContainer1.Panel2
       // 
       this.splitContainer1.Panel2.Controls.Add(this._lbRules);
-      this.splitContainer1.Panel2.Paint += new System.Windows.Forms.PaintEventHandler(this.splitContainer1_Panel2_Paint);
       this.splitContainer1.Size = new System.Drawing.Size(856, 586);
       this.splitContainer1.SplitterDistance = 347;
       this.splitContainer1.TabIndex = 1;
@@ -96,7 +99,7 @@
 
     #endregion
 
-    private System.Windows.Forms.TextBox textBox1;
+    private System.Windows.Forms.TextBox _code;
     private System.Windows.Forms.SplitContainer splitContainer1;
     private System.Windows.Forms.ListBox _lbRules;
   }
