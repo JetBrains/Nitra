@@ -131,21 +131,41 @@ namespace N2.Compiler
         | [x]  => x
         | many => <[ (..$many) ]>
       }
-      def getAstPrt(astId)
+      def makeAstPointer(astStruct : AstStruct2, name : string)
       {
-        <[
-          {
-            astPtr:
-            {
-              for (mutable ast = parser.memoize[pos]; ast > 0; ast = parser.ast[ast + 1])
-                when (parser.ast[ast] == $(astId : dyn))
-                  astPtr(ast);
-              0;
-            }
-          }
-        ]>
+        mutable astPointer = null;
+        def getPointer()
+        {
+          when (astPointer == null)
+            astPointer = AstPointer2(astStruct, name, this);
+          astPointer
+        }
+        def initPointer()
+        {
+          if (astPointer == null)
+            <[ () ]>
+          else
+            <[
+              def $(name : dyn) = {
+                astPtr:
+                {
+                  for (mutable ast = parser.memoize[pos]; ast > 0; ast = parser.ast[ast + 1])
+                    when (parser.ast[ast] == $(astStruct.AstId : dyn))
+                      astPtr(ast);
+                  assert(false);
+                }
+              }
+            ]>
+        }
+        (getPointer, initPointer)
       }
-      def makeReader(structField : AstStruct2.StructField, astPointer : AstPointer2) : PExpr
+      and makeInternalAst(astStruct : AstStruct2, name : string)
+      {
+        def (getPointer, initPointer) = makeAstPointer(astStruct, name);
+        def ast = makeAst(astStruct, getPointer, internalAstMaker);
+        (ast, initPointer());
+      }
+      and makeReader(structField : AstStruct2.StructField, astPointer : void -> AstPointer2) : PExpr
       {
         match(structField.Field)
         {
@@ -153,36 +173,35 @@ namespace N2.Compiler
           | RuleField2.TokenCall =>
             <[
               def tokenPos = pos;
-              pos += $(astPointer.SizeRef(structField));
+              pos += $(astPointer().SizeRef(structField));
               N2.NToken(tokenPos, pos)
             ]>
 
           | RuleField2.ExternalAst(RuleSymbol = ruleSymbol) =>
             def walkerFieldName = referencedWalkers[(ruleSymbol, 0)].FieldName;
             if (ruleSymbol.Type is RuleType.Void)
-              <[ pos += $(astPointer.SizeRef(structField)); ]>
+              <[ pos += $(astPointer().SizeRef(structField)); ]>
             else
               <[ this.$(walkerFieldName : usesite).Walk(ref pos, ref parser); ]>
 
           | RuleField2.Extensible(RuleSymbol = ruleSymbol, BindingPower = bp) =>
             def walkerFieldName = referencedWalkers[(ruleSymbol, bp)].FieldName;
             if (ruleSymbol.Type is RuleType.Void)
-              <[ pos += $(astPointer.SizeRef(structField)); ]>
+              <[ pos += $(astPointer().SizeRef(structField)); ]>
             else
               <[ this.$(walkerFieldName : usesite).Walk(ref pos, ref parser); ]>
 
           | RuleField2.List(astStruct = itemStruct) =>
-            def itemPointer   = AstPointer2(itemStruct, "itemPointer", this);
+            def (itemAst, itemPointerInit) = makeInternalAst(itemStruct, "itemPointer");
             <[
-              def listEnd = pos + $(astPointer.SizeRef(structField));
+              def listEnd = pos + $(astPointer().SizeRef(structField));
               if (listEnd > pos)
               {
                 def astBuffer = System.Collections.Generic.List(16);
                 def loop()
                 {
-                  def itemPointer = $(getAstPrt(itemStruct.AstId));
-                  assert(itemPointer > 0);
-                  astBuffer.Add($(makeAst(itemStruct, itemPointer, internalAstMaker)));
+                  $itemPointerInit;
+                  astBuffer.Add($itemAst);
                   if (listEnd > pos)
                     loop();
                   else
@@ -195,22 +214,22 @@ namespace N2.Compiler
             ]>
 
           | RuleField2.List2(astRuleStruct = itemStruct, astSeparatorStruct = separatorStruct) =>
-            def itemPointer = AstPointer2(itemStruct, "itemPointer", this);
-            def separatorPointer = AstPointer2(separatorStruct, "separatorPointer", this);
+            def (itemAst, itemPointerInit) = makeInternalAst(itemStruct, "itemPointer");
+            def (separatorAst, separatorPointerInit) = makeInternalAst(separatorStruct, "separatorPointer");
             <[
-              def listEnd = pos + $(astPointer.SizeRef(structField));
+              def listEnd = pos + $(astPointer().SizeRef(structField));
               if (listEnd > pos)
               {
                 def astBuffer = System.Collections.Generic.List(16);
                 def separatorBuffer = System.Collections.Generic.List(16);
                 def loop()
                 {
-                  def itemPointer = $(getAstPrt(itemStruct.AstId));
-                  astBuffer.Add($(makeAst(itemStruct, itemPointer, internalAstMaker)));
+                  $itemPointerInit;
+                  astBuffer.Add($itemAst);
                   if (listEnd > pos)
                   {
-                    def separatorPointer = $(getAstPrt(separatorStruct.AstId));
-                    separatorBuffer.Add($(makeAst(separatorStruct, separatorPointer, internalAstMaker)));
+                    $separatorPointerInit;
+                    separatorBuffer.Add($separatorAst);
                     if (listEnd > pos)
                       loop();
                     else
@@ -227,12 +246,12 @@ namespace N2.Compiler
             ]>
 
           | RuleField2.Option(astStruct = valueAstStruct) =>
-            def valuePointer = AstPointer2(valueAstStruct, "valuePointer", this);
+            def (valueAst, valuePointerInit) = makeInternalAst(valueAstStruct, "valuePointer");
             <[
-              if ($(astPointer.SizeRef(structField)) > 0)
+              if ($(astPointer().SizeRef(structField)) > 0)
               {
-                def valuePointer = $(getAstPrt(valueAstStruct.AstId));
-                Some($(makeAst(valueAstStruct, valuePointer, internalAstMaker)))
+                $valuePointerInit;
+                Some($valueAst)
               }
               else
                 None()
@@ -242,7 +261,7 @@ namespace N2.Compiler
         }
         //<[ throw System.NotImplementedException(); ]>
       }
-      and makeAst(astStruct : AstStruct2, astPointer : AstPointer2, maker : list[PExpr] -> PExpr) : PExpr
+      and makeAst(astStruct : AstStruct2, astPointer : void -> AstPointer2, maker : list[PExpr] -> PExpr) : PExpr
       {
         def statements = List();
         def arguments = List();
@@ -255,7 +274,7 @@ namespace N2.Compiler
             | RuleField2.Ast
             | RuleField2.Predicate => ()
             | RuleField2.Void =>
-              statements.Add(<[ pos += $(astPointer.SizeRef(structField)); ]>);
+              statements.Add(<[ pos += $(astPointer().SizeRef(structField)); ]>);
 
             | RuleField2.List  
             | RuleField2.List2 
@@ -274,36 +293,23 @@ namespace N2.Compiler
       match (RuleSymbol)
       {
         | SimpleRuleSymbol as s =>
-          def astPointer = AstPointer2(rootAstStruct.Value, "astPtr", this);
-          def walkLabel = Owner.Environment.MakeLabel("walkLabel");
+          def (astPointer, initPointer) = makeAstPointer(rootAstStruct.Value, "astPtr");
+          def ast = makeAst(rootAstStruct.Value, astPointer, rootAstMaker);
           _tb.DefineConditional(<[ decl:
             public override Walk(pos : ref int, parser : ref N2.Internal.Parser) : $(Owner.Environment.RuleTypeToNType(s.Type) : typed)
             {
               ignore(pos, parser);
               unchecked
               {
-                def text = parser.Text;
                 def startPos = pos;
-                mutable astPtr;
-                when (startPos < text.Length)
-                {
-                  for (astPtr = parser.memoize[startPos]; astPtr > 0; astPtr = parser.ast[astPtr + 1])
-                  {
-                    when (parser.ast[astPtr] == RuleId)
-                    {
-                      $(walkLabel.Goto());
-                    }
-                  }
-                }
-                throw System.Exception("astPtr not found");//TODO: нормальная обработка
-              $(walkLabel.Label());
-                $(makeAst(rootAstStruct.Value, astPointer, rootAstMaker))
+                $(initPointer());
+                $ast
               }
             }
           ]>);
 
         | ExtentionRuleSymbol(ExtentionType = Prefix) as s =>
-          def astPointer = AstPointer2(rootAstStruct.Value, "astPtr", this);
+          def astPointer() { AstPointer2(rootAstStruct.Value, "astPtr", this) }
           _tb.DefineConditional(<[ decl:
             public override Walk(pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(Owner.Environment.RuleTypeToNType(s.Type) : typed)
             {
@@ -317,7 +323,7 @@ namespace N2.Compiler
           ]>);
 
         | ExtentionRuleSymbol(ExtentionType = Postfix) as s =>
-          def astPointer = AstPointer2(rootAstStruct.Value, "astPtr", this);
+          def astPointer() { AstPointer2(rootAstStruct.Value, "astPtr", this) }
           _tb.DefineConditional(<[ decl:
             public override Walk(prefix : $(Owner.Environment.RuleTypeToNType(s.Type) : typed), startPos : int, pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(Owner.Environment.RuleTypeToNType(s.Type) : typed)
             {
