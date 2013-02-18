@@ -12,27 +12,26 @@ namespace Sample.Json.Cs
 {
   public class Data
   {
-    public Data(object obj, int pos)
+    public Data(Tuple<string, string, int>[] obj, int pos)
     {
       Obj = obj;
       Pos = pos;
     }
 
-    public readonly object Obj;
+    public readonly Tuple<string, string, int>[] Obj;
     public readonly int    Pos;
 
-    public bool IsLoop { get { return ToString().StartsWith("Loop:"); } }
-    public bool IsLoopWithSeparator { get { return ToString().StartsWith("Loop with separator:"); } }
+    //public bool IsLoop { get { return ToString().StartsWith("Loop:"); } }
+    //public bool IsLoopWithSeparator { get { return ToString().StartsWith("Loop with separator:"); } }
 
     public override string ToString()
     {
-      return Obj.ToString();
+      return string.Join("; ", Obj.Select(t => t.ToString()));
     }
   }
 
   public partial class ParseResultViewer : Form
   {
-    List<object> Rules;
     int[]       Ast;
     int[]       Mem;
     int         Res;
@@ -40,7 +39,6 @@ namespace Sample.Json.Cs
 
     public ParseResultViewer(ParseResult parseResult)
     {
-      Rules       = parseResult.ParserHost.Grammars;
       Ast         = parseResult.RawAst;
       Mem         = parseResult.RawMemoize;
       Res         = parseResult.RawResult;
@@ -68,10 +66,7 @@ namespace Sample.Json.Cs
         //  i = Mem[--pos];
 
         for (; i > 0; i = Ast[i + 1])
-          if (Rules[Ast[i]] != null)
-            rules.Add(new Data(Rules[Ast[i]], i));
-          else
-            rules.Add(new Data("Loop or optuion", i));
+          rules.Add(new Data(ParseResult.ParserHost.Reflection(Ast[i]), i));
 
         _lbRules.Items.AddRange(rules.ToArray());
       }
@@ -119,9 +114,9 @@ namespace Sample.Json.Cs
 
       var data = (Data)_lbRules.SelectedItem;
 
-      if (data.IsLoop)
+      //if (data.IsLoop)
       {
-        var elemIndex = Ast[data.Pos + 2];
+        //var elemIndex = Ast[data.Pos + 2];
       }
 
       ShowLoopInfo(_code.SelectionStart);
