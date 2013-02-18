@@ -75,7 +75,7 @@
       // _lbRules
       // 
       this._lbRules.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom)
-            | System.Windows.Forms.AnchorStyles.Left)
+            | System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right)
            )));
       this._lbRules.FormattingEnabled = true;
       this._lbRules.Location = new System.Drawing.Point(12, 38);
@@ -87,7 +87,7 @@
       // _lbLoop
       // 
       this._lbLoop.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom)
-            | System.Windows.Forms.AnchorStyles.Left)
+            )
             | System.Windows.Forms.AnchorStyles.Right)));
       this._lbLoop.FormattingEnabled = true;
       this._lbLoop.Location = new System.Drawing.Point(335, 37);

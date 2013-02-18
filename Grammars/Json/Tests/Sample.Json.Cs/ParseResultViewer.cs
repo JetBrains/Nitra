@@ -12,14 +12,12 @@ namespace Sample.Json.Cs
 {
   public class Data
   {
-    public Data(Tuple<string, string, int>[] obj, int pos)
+    public Data(Tuple<string, string, int>[] obj)
     {
       Obj = obj;
-      Pos = pos;
     }
 
     public readonly Tuple<string, string, int>[] Obj;
-    public readonly int    Pos;
 
     //public bool IsLoop { get { return ToString().StartsWith("Loop:"); } }
     //public bool IsLoopWithSeparator { get { return ToString().StartsWith("Loop with separator:"); } }
@@ -52,7 +50,6 @@ namespace Sample.Json.Cs
 
     void ShowInfo(int pos)
     {
-      var rules = new List<object>();
       try
       {
         _lbRules.Items.Clear();
@@ -60,15 +57,7 @@ namespace Sample.Json.Cs
         if (pos > Mem.Length)
           return;
 
-        int i = Mem[pos];
-
-        //while (pos > 0 && i == 0)
-        //  i = Mem[--pos];
-
-        for (; i > 0; i = Ast[i + 1])
-          rules.Add(new Data(ParseResult.ParserHost.Reflection(Ast[i]), i));
-
-        _lbRules.Items.AddRange(rules.ToArray());
+        _lbRules.Items.AddRange(ParseResult.ParserHost.Reflection(ParseResult, pos).Select(x => new Data(x)).ToArray());
       }
       finally
       {
