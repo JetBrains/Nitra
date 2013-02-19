@@ -17,7 +17,7 @@ namespace N2.Compiler
   internal partial abstract class RuleField2
   {
     public this(location : N.Location) { this.Location = location; }
-    
+
     public Location : N.Location;
     public mutable ParseCode : PExpr;
     public abstract Compile() : void;
@@ -25,21 +25,60 @@ namespace N2.Compiler
     public ContinueParseLabel : PExprLabel { get { if (NextSibling == null) ParentAstStruct.OkLabel else NextSibling.ParseLabel } }
     public FailParseLabel     : PExprLabel { get { ParentAstStruct.FailLabel } }
 
-    public CurTextPos     : PExpr { get { <[ curEndPos ]> } }
-    public StartTextPos   : PExpr { get { (Compiler : IVariableEmitter).CreateVariable($"startTextPos$Level") } }
-    public TextPos        : PExpr { get { (Compiler : IVariableEmitter).CreateVariable($"textPos$Level") } }
+    public CurTextPos     : PExpr { get { <[ curEndPos ]> } }//TODO: Rename
 
     public AllocateParentAst() : PExpr
     {
-      if (AllocateAst)
+      if (AllocateAst && !(ParentAstStruct.RuleField is Predicate))
       {
-        if (Parent is Ast)
-          <[ $(ParentAstPtr.Var) = parser.Allocate($(ParentAstStruct.AstSize), RuleId) ]>
-        else
-          <[ $(ParentAstPtr.Var) = parser.Allocate($(ParentAstStruct.AstSize)) ]>
+        match (Parent)
+        {
+          | RuleField2.Ast(RuleSymbol = N2.Typing.ExtentionRuleSymbol) =>
+            <[
+              $(ParentAstPtr.Var) = parser.Allocate($(ParentAstStruct.AstSize), $(ParentAstStruct.AstId : dyn));
+              parser.ast[$(ParentAstPtr.Var) + $(ParentAstStruct.TerminatorOffset)] = -1;
+            ]>
+          | _ =>
+            <[
+              $(ParentAstPtr.Var) = parser.Allocate($(ParentAstStruct.AstSize), $(ParentAstStruct.AstId : dyn));
+              $(ParentAstPtr.HeaderRef(ParentAstStruct.NextRef)) = parser.memoize[$(ParentAstStruct.AstStart)];
+              parser.memoize[$(ParentAstStruct.AstStart)] = $(ParentAstPtr.Var);
+            ]>
+        }
       }
       else
         <[ {} ]>
+    }
+
+    public StartParse(resultPtr : AstPointer2) : PExpr
+    {
+      def astStruct = resultPtr.AstStruct;
+      def ruleField = astStruct.RuleField;
+      <[
+        $(astStruct.AstStart) = $CurTextPos;
+        when ($(astStruct.AstStart) <= text.Length)
+        {
+          for (mutable ast = parser.memoize[$(astStruct.AstStart)]; ast > 0; ast = parser.ast[ast + 1])
+          {
+            when (parser.ast[ast] == $(astStruct.AstId))
+            {
+              if (parser.ast[ast + 2] == -1)
+              {
+                $(resultPtr.Var) = ast;
+                mutable i = ast + $(astStruct.SizesOffset);
+                mutable end = i + $(astStruct.SizeFields.Count);
+                for (; i < end; ++i)
+                  $CurTextPos += parser.ast[i];
+                $(ruleField.ContinueParseLabel.Goto());
+              }
+              else 
+              {
+                $(ruleField.FailParseLabel.Goto());
+              }
+            }
+          }
+        }
+      ]>
     }
 
     public IsAstAllocatetdCode(astStruct : AstStruct2) : PExpr
@@ -54,18 +93,12 @@ namespace N2.Compiler
 
     public MakeCallCodeImpl(call : PExpr, field : AstStruct2.StructField) : PExpr
     {
-      def setAst = if (field.HaveAst)
-        <[ $(ParentAstPtr.AstRef(field)) = tmpResult ]>
-      else
-        <[ () ]>;
-
       def (debugSetLastResult, exit) =
         if (this.Compiler.Owner.Environment.Manager.Options.EmitDebug)
           (<[ parser.LastParseStart = curEndPos; parser.LastParseEnd = newPos; ]>, <[ () ]>);
         else
           (<[ () ]>, <[ () ]>);
-    
-        
+
         when (!this.Location.IsEmpty && this.Location.IsSourceAvailable)
         {
           call.Location = this.Location;
@@ -74,7 +107,7 @@ namespace N2.Compiler
         }
 
       <[
-        $(ParseLabel.Label());
+      $(ParseLabel.Label());
         tmpResult = -1;
         newPos = $call;
         tmpSize = newPos - curEndPos;
@@ -82,7 +115,6 @@ namespace N2.Compiler
         if (newPos >= 0)
         {
           $(AllocateParentAst());
-          $setAst;
           $(ParentAstPtr.SizeRef(field)) = tmpSize;
           curEndPos = newPos;
           $exit;

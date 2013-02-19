@@ -15,7 +15,7 @@ using System.Linq;
 namespace N2.Compiler
 {
   [Record]
-  internal sealed class ParsingRuleDescriptorEmitter : IVariableEmitter
+  internal sealed class ParsingRuleDescriptorEmitter
   {
     public Owner      : SyntaxModuleEmitter { get; }
     public RuleSymbol : RuleDefSymbol       { get; }
@@ -24,7 +24,7 @@ namespace N2.Compiler
 
     public NeedsAstInfo : bool { get { true } }
 
-    public DefineDescriptor(astSize : int, rootAstStruct : option[RootAstStruct2]) : void
+    public DefineDescriptor(astSize : int) : void
     {
       assert(_descriptorTb == null);
       def baseType = match(RuleSymbol)
@@ -88,7 +88,7 @@ namespace N2.Compiler
         _descriptorTb.DefineConditional(<[decl:
           public override NewParser(grammar : N2.CompositeGrammar) : $returnType
           {
-            $(Owner.GrammarImplTB.GetMemType() : typed).$(RuleSymbol.DecorateRuleClassName() : dyn)(grammar.NewRuleId(this), grammar)
+            $(Owner.GrammarImplTB.GetMemType() : typed).$(RuleSymbol.DecorateRuleClassName() : dyn)(grammar)
           }
         ]>);
       }
@@ -113,158 +113,12 @@ namespace N2.Compiler
         | RegularRuleSymbol => ()
         | _       => assert(false)
       }
-
-      DefineDebugView(rootAstStruct);
     }
 
     public Emit() : void
     {
       assert(_descriptorTb != null);
       _descriptorTb.Compile();
-    }
-
-    Environment : EmitterEnvironment implements IVariableEmitter.Environment { get { Owner.Environment } }
-
-    CreateVariable(name : string) : PExpr implements IVariableEmitter.CreateVariable
-    {
-      <[ $(name : dyn) ]>
-    }
-
-    private DefineDebugView(rootAstStruct : option[RootAstStruct2]) : void
-    {
-      def makeFieldViews(astStruct : AstStruct2)
-      {
-        def makeHeaderSetter(field) { <[ debugAst[index + $(field.Offset)] = N2.Debug.DebugViewHeader(parser, index + $(field.Offset)) ]> }
-        def makeSizeSetter(field)
-        {
-          def ofs = astStruct.SizesOffset + field.SizeOffset;
-          <[ debugAst[index + $ofs] = N2.Debug.DebugViewSize(parser, index + $ofs) ]>
-        }
-        def makeAstSetter(field)
-        {
-          def ofs = astStruct.AstOffset + field.AstOffset;
-          def makeAstRef(ruleSymbol)
-          {
-            <[ debugAst[index + $ofs] = N2.Debug.DebugViewAstRef(parser, index + $ofs, $(ruleSymbol.GetDescriptorClassRef()).StaticDescriptor) ]>
-          }
-          match (field.Field)
-          {
-            | RuleField2.Extensible     as ruleField => makeAstRef(ruleField.RuleSymbol)
-            | RuleField2.ExternalAst    as ruleField => makeAstRef(ruleField.RuleSymbol)
-            | RuleField2.Void           as ruleField => makeAstRef(ruleField.RuleSymbol)
-            | RuleField2.Option         as ruleField =>
-              <[
-                debugAst[index + $ofs] = N2.Debug.DebugViewInternalRef(parser, index + $ofs, "Option", $(ruleField.astStruct.AstSize));
-                when (parser.parser.ast[index + $ofs] > 0)
-                {
-                  def index = parser.parser.ast[index + $ofs];
-                  $(makeFieldViews(ruleField.astStruct));
-                }
-              ]>
-
-            | RuleField2.List           as ruleField =>
-              def owner = ruleField.NextRef.Owner;
-              def loop = if (!object.ReferenceEquals(owner, astStruct))
-              {
-                <[
-                  def loop(index)
-                  {
-                    when (parser.parser.ast[index] > 0)
-                    {
-                      def index = parser.parser.ast[index];
-                      $(makeFieldViews(owner));
-                      loop(index + $(owner.AstOffset + ruleField.NextRef.AstOffset))
-                    }
-                  }
-                  loop(index + $ofs)
-                ]>
-              }
-              else
-                <[ {} ]>;
-              <[
-                debugAst[index + $ofs] = N2.Debug.DebugViewInternalRef(parser, index + $ofs, "List", $(owner.AstSize));
-                $loop
-              ]>
-
-            | RuleField2.List2          as ruleField =>
-              def ruleOwner      = ruleField.NextRuleRef.Owner;
-              def separatorOwner = ruleField.NextSeparatorRef.Owner;
-              def loop = if (!(object.ReferenceEquals(ruleOwner, astStruct) || object.ReferenceEquals(separatorOwner, astStruct)))
-              {
-                <[
-                  def loopRule(index)
-                  {
-                    when (parser.parser.ast[index] > 0)
-                    {
-                      def index = parser.parser.ast[index];
-                      $(makeFieldViews(ruleOwner));
-                      loopSeparator(index + $(ruleOwner.AstOffset + ruleField.NextRuleRef.AstOffset))
-                    }
-                  }
-                  and loopSeparator(index)
-                  {
-                    when (parser.parser.ast[index] > 0)
-                    {
-                      def index = parser.parser.ast[index];
-                      $(makeFieldViews(separatorOwner));
-                      loopRule(index + $(separatorOwner.AstOffset + ruleField.NextSeparatorRef.AstOffset))
-                    }
-                  }
-                  loopRule(index + $ofs)
-                ]>
-              }
-              else
-                <[ {} ]>;
-              def astSize = if (object.ReferenceEquals(ruleOwner, astStruct)) separatorOwner.AstSize else ruleOwner.AstSize;
-              <[
-                debugAst[index + $ofs] = N2.Debug.DebugViewInternalRef(parser, index + $ofs, "List2", $astSize);
-                $loop
-              ]>
-            | _ => <[ _ = $(field?.Field?.GetType()?.Name ?? "null?") ]>
-          }
-        }
-        def astStruct = astStruct;
-        def headerSetters = astStruct.HeaderFields.Map(makeHeaderSetter);
-        def sizeSetters   = astStruct.SizeFields.Map(makeSizeSetter);
-        def astSetters    = astStruct.AstFields.Map(makeAstSetter);
-        <[ { ..$headerSetters } { ..$astSetters } { ..$sizeSetters } ]>;
-      }
-      if (Owner.Environment.IsIdeMode)
-      {
-        _descriptorTb.DefineConditional(<[decl:
-          public override FillDebugAst(parser : N2.Debug.DebugParser, index : int, debugAst : array[object]) : void
-          {
-            _ = parser;
-            _ = index;
-            _ = debugAst;
-          }
-        ]>);
-      }
-      else
-      {
-        def setters = match (RuleSymbol)
-        {
-          | ExtentionRuleSymbol =>
-            def rootAstStruct = rootAstStruct.Value;
-            def terminatorOffset = rootAstStruct.TerminatorOffset;
-            <[
-              debugAst[index + $terminatorOffset] = N2.Debug.DebugViewTerminator(parser, index + $terminatorOffset);
-              $(makeFieldViews(rootAstStruct));
-            ]>
-
-          | SimpleRuleSymbol => makeFieldViews(rootAstStruct.Value)
-          | ExtensibleRuleSymbol as rs => makeFieldViews(ExtensibleAstStruct2(this, rs))
-
-          | _ => <[ {} ]>
-        }
-        _descriptorTb.DefineConditional(<[decl:
-          public override FillDebugAst(parser : N2.Debug.DebugParser, index : int, debugAst : array[object]) : void
-          {
-            $setters;
-            debugAst[index] = N2.Debug.DebugViewAstDef(parser, index, $(RuleSymbol.GetDescriptorClassRef()).StaticDescriptor);
-          }
-        ]>);
-      }
     }
   }
 }

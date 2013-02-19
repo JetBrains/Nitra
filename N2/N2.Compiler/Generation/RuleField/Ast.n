@@ -23,9 +23,7 @@ namespace N2.Compiler
       private fields : array[RuleField2];
       public RuleSymbol : RuleDefSymbol;
 
-      public IsPrefix    : bool { get { RuleSymbol is ExtentionRuleSymbol(ExtentionType = Prefix) } }
-      public IsPostfix   : bool { get { RuleSymbol is ExtentionRuleSymbol(ExtentionType = Postfix) } }
-      public IsExtension : bool { get { RuleSymbol is ExtentionRuleSymbol } }
+      public IsSimple : bool { get { RuleSymbol is SimpleRuleSymbol } }
 
       public override InitChildren(compiler : RuleParserEmitter, parent : RuleField2, level : int, allFields : SCG.List[RuleField2]) : void
       {
@@ -39,71 +37,32 @@ namespace N2.Compiler
       {
         astStruct = match (RuleSymbol)
         {
-          | ExtensibleRuleSymbol as rs => ExtensibleAstStruct2(Compiler, rs)
+          | ExtensibleRuleSymbol       => assert2(false); assert(false);
           | ExtentionRuleSymbol  as rs =>
             match (rs.ExtentionType)
             {
-              | Prefix  => PrefixAstStruct2(Compiler)
-              | Postfix => PostfixAstStruct2(Compiler, rs)
+              | Prefix  => PrefixAstStruct2(Compiler, this)
+              | Postfix => PostfixAstStruct2(Compiler, this)
             }
-          | SimpleRuleSymbol           => SimpleAstStruct2(Compiler)
+          | SimpleRuleSymbol           => SimpleAstStruct2(Compiler, this)
           | _                          => assert(false);
         }
         astPtr = AstPointer2(astStruct, "astPtr", this);
         CalculateAstInfo(astStruct, astPtr, fields);
-        astStruct.MultipleVariants = IsExtension;
       }
 
       public override Compile() : void
       {
         def code = SCG.List();
-        when (!IsExtension)
-        code.Add(<[
-          when (startEndPos < text.Length)
-          {
-            for (mutable ast = parser.memoize[startEndPos]; ast > 0; ast = parser.ast[ast + 1])
-            {
-              when (parser.ast[ast] == RuleId)
-              {
-                if (parser.ast[ast + 2] == -1)
-                {
-                  resultRef = ast;
-                  mutable i = ast + $(astStruct.SizesOffset);
-                  mutable end = i + $(astStruct.SizeFields.Count);
-                  for (; i < end; ++i)
-                    curEndPos += parser.ast[i];
-                  $(Compiler.EndLabel.Goto());
-                }
-                else
-                {
-                  curEndPos = -1;
-                  $(Compiler.EndLabel.Goto());
-                }
-              }
-            }
-          }
-        ]>);
-
-        when (isDebug)
-          code.Add(<[
-            when (parser.ruleCalls[startEndPos] == null)
-              parser.ruleCalls[startEndPos] = System.Collections.Generic.List();
-            parser.ruleCalls[startEndPos].Add(parser.parserHost.GetRuleDescriptorById(RuleId));
-          ]>);
-
+        code.Add(<[ $(astStruct.AstStart) = $CurTextPos; ]>);
+        code.Add(CheckAstMemoize());
+        code.Add(DebugCode());
         code.Add(<[ $(fields[0].ParseLabel.Goto()); ]>);
+
         //parse ok
         code.Add(<[ $(astStruct.OkLabel.Label()); ]>);
         code.Add(<[ $(astPtr.HeaderRef(astStruct.StateRef)) = -1; ]>);// состояние разбора -1 если правило полностью разобрано.
         code.Add(<[ resultRef = $(astPtr.Var); ]>);
-        when (!IsExtension)
-          code.Add(<[
-                    when (startEndPos < text.Length)
-                    {
-                      parser.ast[resultRef + 1] = parser.memoize[startEndPos];
-                      parser.memoize[startEndPos] = resultRef;
-                    }
-        ]>);
         code.Add(<[ $(Compiler.EndLabel.Goto()); ]>);
 
         //parse fail
@@ -116,6 +75,50 @@ namespace N2.Compiler
         ]>);
         code.Add(<[ curEndPos = -1; $(Compiler.EndLabel.Goto()); ]>);
         ParseCode = PExpr.Sequence(code.FlattenPExprSequence());
+      }
+
+      private DebugCode() : PExpr
+      {
+        if (false)//isDebug)
+          <[
+            when (parser.ruleCalls[$CurTextPos] == null)
+              parser.ruleCalls[$CurTextPos] = System.Collections.Generic.List();
+            parser.ruleCalls[$CurTextPos].Add(parser.parserHost.GetRuleDescriptorById(RuleId));
+          ]>
+        else
+          <[ () ]>
+      }
+
+      private CheckAstMemoize() : PExpr
+      {
+        if (IsSimple)
+          <[
+            when ($CurTextPos <= text.Length)
+            {
+              for (mutable ast = parser.memoize[$CurTextPos]; ast > 0; ast = parser.ast[ast + 1])
+              {
+                when (parser.ast[ast] == RuleId)
+                {
+                  if (parser.ast[ast + 2] == -1)
+                  {
+                    resultRef = ast;
+                    mutable i = ast + $(astStruct.SizesOffset);
+                    mutable end = i + $(astStruct.SizeFields.Count);
+                    for (; i < end; ++i)
+                      curEndPos += parser.ast[i];
+                    $(Compiler.EndLabel.Goto());
+                  }
+                  else 
+                  {
+                    curEndPos = -1;
+                    $(Compiler.EndLabel.Goto());
+                  }
+                }
+              }
+            }
+          ]>
+        else
+          <[ () ]>
       }
 
       public override PrintContent() : string * string { ("Ast", $<#$(PrintChildren(fields))#>) }
