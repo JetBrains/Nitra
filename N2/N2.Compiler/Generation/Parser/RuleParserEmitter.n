@@ -180,53 +180,60 @@ namespace N2.Compiler
       def inits = List();
 
       def reflectionCases = List();
-      mutable i : int;
-      def structReflect(ruleField : RuleField, offset : int, reflectionAccess : PExpr) : list[PExpr]
+      def reflectionFields = List();
+      def structReflect(ruleField : RuleField) : PExpr
       {
-        def makeCode(tag, desc, astStruct) : PExpr
+        def makeCode(type, desc, astStruct) : PExpr
         {
-          def reflectionFields = List();
-          when (astStruct is Some(astStruct))
+          def subrules = List();
+          if (astStruct is Some(astStruct))
           {
             foreach (sizeField in astStruct.SizeFields)
             {
-              reflectionFields.AddRange(structReflect(sizeField.Field, sizeField.Offset, <[ $(reflectionAccess).Subrules[$i] ]>));
+              def subrule = structReflect(sizeField.Field);
+              subrules.Add(<[ N2.Runtime.Reflection.SubruleInfo($(sizeField.Offset), $subrule) ]>);
             }
-            reflectionCases.Add(<[case: | _ when ruleId == $(astStruct.AstId : dyn) => $reflectionAccess ]>);
+            def field = $"reflectionField$(reflectionFields.Count)";
+            reflectionFields.Add((field, type));
+            reflectionCases.Add(<[case: | _ when ruleId == $(astStruct.AstId : dyn) => $(field : dyn) ]>);
+            <[ { $(field : dyn) = $type($desc, System.Collections.ObjectModel.ReadOnlyCollection(array[..$(subrules.NToList())])); $(field : dyn) } ]>
           }
-          i++;
-          <[ N2.Runtime.Reflection.RuleInfo($tag, $desc, $offset, { array[..$(reflectionFields.NToList())] }); ]>
+          else
+            <[ $type($desc) ]>
         }
         match (ruleField)
         {
-          | RuleField.Ast                as x => [makeCode(<[ N2.Runtime.Reflection.RuleTypeTag.Ast                        ]>, x.RuleSymbol.Name, Some(x.astStruct))]
-          | RuleField.ExtensibleRuleCall as x => [makeCode(<[ N2.Runtime.Reflection.RuleTypeTag.ExtensibleRuleCall         ]>, x.RuleSymbol.Name, None())]
-          | RuleField.SimpleRuleCall     as x => [makeCode(<[ N2.Runtime.Reflection.RuleTypeTag.SimpleRuleCall             ]>, x.RuleSymbol.Name, None())]
-          | RuleField.TokenRuleCall      as x => [makeCode(<[ N2.Runtime.Reflection.RuleTypeTag.TokenRuleCall              ]>, x.RuleSymbol.Name, None())]
-          | RuleField.Void               as x => [makeCode(<[ N2.Runtime.Reflection.RuleTypeTag.Void                       ]>, x.RuleSymbol.Name, None())]
-          | RuleField.List               as x => [makeCode(<[ N2.Runtime.Reflection.RuleTypeTag.List                       ]>, x.Rule.ToString(), Some(x.astStruct))]
-          | RuleField.List2              as x => [makeCode(<[ N2.Runtime.Reflection.RuleTypeTag.ListWithSeparatorRule      ]>, x.Rule.ToString(), Some(x.astRuleStruct)),
-                                                  makeCode(<[ N2.Runtime.Reflection.RuleTypeTag.ListWithSeparatorSeparator ]>, x.Rule.ToString(), Some(x.astSeparatorStruct))]
-          | RuleField.Option             as x => [makeCode(<[ N2.Runtime.Reflection.RuleTypeTag.Option                     ]>, x.Rule.ToString(), Some(x.astStruct))]
-          | RuleField.Predicate          as x => [makeCode(<[ N2.Runtime.Reflection.RuleTypeTag.Predicate                  ]>, x.Rule.ToString(), None())]
-          | RuleField.TokenString        as x => [makeCode(<[ N2.Runtime.Reflection.RuleTypeTag.TokenString                ]>, x.Rule.ToString(), None())]
+          | RuleField.Ast                as x => makeCode(<[ N2.Runtime.Reflection.RuleInfo.Ast         ]>, x.RuleSymbol.Name, Some(x.astStruct))
+          | RuleField.ExtensibleRuleCall as x => makeCode(<[ N2.Runtime.Reflection.RuleInfo.Call        ]>, x.RuleSymbol.Name, None())
+          | RuleField.SimpleRuleCall     as x => makeCode(<[ N2.Runtime.Reflection.RuleInfo.Call        ]>, x.RuleSymbol.Name, None())
+          | RuleField.TokenRuleCall      as x => makeCode(<[ N2.Runtime.Reflection.RuleInfo.Call        ]>, x.RuleSymbol.Name, None())
+          | RuleField.Void               as x => makeCode(<[ N2.Runtime.Reflection.RuleInfo.Call        ]>, x.RuleSymbol.Name, None())
+          | RuleField.List               as x => makeCode(<[ N2.Runtime.Reflection.RuleInfo.List        ]>, x.Rule.ToString(), Some(x.astStruct))
+          | RuleField.Option             as x => makeCode(<[ N2.Runtime.Reflection.RuleInfo.Option      ]>, x.Rule.ToString(), Some(x.astStruct))
+          | RuleField.Predicate          as x => makeCode(<[ N2.Runtime.Reflection.RuleInfo.Predicate   ]>, x.Rule.ToString(), Some(x.astStruct))
+          | RuleField.TokenString        as x => makeCode(<[ N2.Runtime.Reflection.RuleInfo.TokenString ]>, x.Rule.ToString(), None())
+          | RuleField.List2              as x => 
+            def rule      = makeCode(<[ N2.Runtime.Reflection.RuleInfo.ListWithSeparatorRule      ]>, $"ListRule = $(x.Rule.Rule)", Some(x.astRuleStruct));
+            def separator = makeCode(<[ N2.Runtime.Reflection.RuleInfo.ListWithSeparatorSeparator ]>, $"ListSeparator = $(x.Rule.Separator)", Some(x.astSeparatorStruct));
+            <[ N2.Runtime.Reflection.RuleInfo.ListWithSeparator($(x.Rule.ToString()), $rule, $separator) ]>
           | _                       => assert(false);
         }
       }
-      def reflection = structReflect(_fields[0], -1, <[ _reflection ]>).Head;
+      def reflection = structReflect(_fields[0]);
       reflectionCases.Add(<[case: | _ => assert(false) ]>);
       foreach ((_astStruct, id) in InternalRuleIds.KeyValuePairs)
       {
         tb.DefineConditional(<[decl: public mutable $(id : dyn) : int; ]>);
         inits.Add(<[ $(id : dyn) = Grammar.NewRuleId(this); ]>);
       }
+      foreach ((field, type) in reflectionFields)
+        tb.DefineConditional(<[decl: private mutable static $(field : dyn) : $type ]>);
 
-      tb.DefineConditional(<[decl: private mutable _reflection : N2.Runtime.Reflection.RuleInfo ]>);
       tb.DefineConditional(<[decl: 
         public override Reflection(ruleId : int) : N2.Runtime.Reflection.RuleInfo
         {
-          when (_reflection == null)
-            _reflection = $(reflection);
+          when ($(reflectionFields[reflectionFields.Count - 1][0] : dyn) == null)
+            _ = $(reflection);
           
           match (ruleId)
           {
