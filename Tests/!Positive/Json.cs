@@ -1,7 +1,7 @@
 // REFERENCE: Json.Grammar.dll
 
 using N2;
-//using N2.Tests;
+using N2.Tests;
 
 using System;
 using System.IO;
@@ -195,7 +195,7 @@ namespace Sample.Json.Cs
       var parseResult = parserHost.DoParsing(source, JsonParser.GrammarImpl.StartRuleDescriptor);
       if (parseResult.IsSuccess)
       {
-        var ast = (JsonParser.Start.Ast) parseResult.CreateAst<JsonParser.Start>();
+        var ast = parseResult.CreateAst<JsonParser.Start>();
         Console.WriteLine("Pretty print: " + ast);
       }
       else
