@@ -26,6 +26,7 @@ namespace Sample.Json.Gui
   {
     ParserHost _parserHost;
     ParseResult _parseResult;
+    bool _doTreeOperation;
 
     public MainWindow()
     {
@@ -42,10 +43,17 @@ namespace Sample.Json.Gui
 
       _parserHost = new ParserHost();
       Parse();
+      textBox1.TextArea.Caret.PositionChanged += (o, ea) =>
+      {
+        ShowInfo(textBox1.CaretOffset);
+      };
     }
 
     private void Parse()
     {
+      if (_doTreeOperation)
+        return;
+
       if (_parserHost == null)
         return;
 
@@ -55,6 +63,9 @@ namespace Sample.Json.Gui
 
     void ShowInfo(int pos)
     {
+      if (_doTreeOperation)
+        return;
+
       try
       {
         if (_parseResult == null)
@@ -80,17 +91,12 @@ namespace Sample.Json.Gui
       foreach (RuleApplication ruleApplication in ruleApplications)
       {
         var node = new TreeViewItem();
-        node.Header = ruleApplication.ToString();
+        node.Header = ruleApplication;
         //node.IsExpanded = true;
         items.Add(node);
 
-        Fill(node.Items, ruleApplication.Subrules);
+        //Fill(node.Items, ruleApplication.Subrules);
       }
-    }
-
-    private void textBox1_SelectionChanged(object sender, RoutedEventArgs e)
-    {
-      ShowInfo(textBox1.CaretIndex);
     }
 
     static string text =
@@ -117,10 +123,46 @@ namespace Sample.Json.Gui
       }
 }";
 
-    private void textBox1_TextChanged(object sender, TextChangedEventArgs e)
+    private void textBox1_TextChanged(object sender, EventArgs e)
     {
       Parse();
-      ShowInfo(textBox1.CaretIndex);
+      ShowInfo(textBox1.CaretOffset);
+    }
+
+    private void textBox1_LostFocus(object sender, RoutedEventArgs e)
+    {
+      textBox1.TextArea.Caret.Show();
+    }
+
+    private void treeView1_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+      _doTreeOperation = true;
+      try
+      {
+        var caretOffset = textBox1.CaretOffset;
+        var item = (TreeViewItem)e.NewValue;
+
+        if (item == null)
+          return;
+
+        var info = (RuleApplication)item.Header;
+        var size = 0;
+
+        var ptr = info.AstPointer;
+        foreach (var rul in info.Info.Subrules)
+        {
+          size += _parseResult.RawAst[ptr + rul.Offset];
+        }
+
+        textBox1.TextArea.AllowCaretOutsideSelection();
+        textBox1.SelectionStart = caretOffset;
+        textBox1.SelectionLength = size;
+        textBox1.CaretOffset = caretOffset;
+      }
+      finally
+      {
+        _doTreeOperation = false;
+      }
     }
   }
 }
