@@ -20,21 +20,18 @@ namespace Sample.Json.Cs
       var parserHost = new ParserHost();
       var parseResult = parserHost.DoParsing(source, JsonParser.GrammarImpl.StartRuleDescriptor);
 
-      var wnd = new ParseResultViewer(parseResult);
-      wnd.ShowDialog();
-      
-      //if (parseResult.IsSuccess)
-      //{
-      //  var ast = parseResult.CreateAst<JsonParser.Start>();
-      //  Console.WriteLine("Pretty print: " + ast);
-      //  Console.WriteLine();
-      //}
-      //else
-      //{
-      //  var errors = parseResult.CollectErrors();
-      //  var pos    = source.PositionToLineColumn(errors.Position);
-      //  Console.WriteLine("Parse error at ({0}, {1}), rules: {2})", pos.Line, pos.Column, string.Join(", ", errors.Messages));
-      //}
+      if (parseResult.IsSuccess)
+      {
+        var ast = parseResult.CreateAst<JsonParser.Start>();
+        Console.WriteLine("Pretty print: " + ast);
+        Console.WriteLine();
+      }
+      else
+      {
+        var errors = parseResult.CollectErrors();
+        var pos = source.PositionToLineColumn(errors.Position);
+        Console.WriteLine("Parse error at ({0}, {1}), rules: {2})", pos.Line, pos.Column, string.Join(", ", errors.Messages));
+      }
     }
 
     static string text = 
