@@ -95,7 +95,7 @@ namespace Sample.Json.Gui
         //node.IsExpanded = true;
         items.Add(node);
 
-        //Fill(node.Items, ruleApplication.Subrules);
+        Fill(node.Items, ruleApplication.Subrules);
       }
     }
 
