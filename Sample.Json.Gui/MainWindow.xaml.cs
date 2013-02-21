@@ -95,7 +95,7 @@ namespace Sample.Json.Gui
         //node.IsExpanded = true;
         items.Add(node);
 
-        Fill(node.Items, ruleApplication.Subrules);
+        //Fill(node.Items, ruleApplication.Subrules);
       }
     }
 
@@ -146,7 +146,7 @@ namespace Sample.Json.Gui
           return;
 
         var info = (RuleApplication)item.Header;
-        var size = info.Info.CalcSize(_parseResult, info.AstPointer);
+        var size = info.Structure.CalcSize(_parseResult, info.AstPointer);
 
         textBox1.TextArea.AllowCaretOutsideSelection();
         textBox1.SelectionStart = caretOffset;
