@@ -92,6 +92,15 @@ namespace Sample.Json.Gui
       {
         var node = new TreeViewItem();
         node.Header = ruleApplication;
+
+        if (ruleApplication.Structure is RuleStructure.Ast)
+        {
+          var sate = _parseResult.RawAst[ruleApplication.AstPointer + 2];
+
+          if (sate >= 0)
+            node.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
+        }
+
         //node.IsExpanded = true;
         items.Add(node);
 
