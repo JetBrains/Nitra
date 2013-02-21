@@ -116,7 +116,12 @@ namespace Sample.Json.Gui
                           'para': 'A meta-markup language, used to create markup languages such as DocBook.',
               'GlossSeeAlso': ['GML', 'XML']
                       },
-            'GlossSee': 'markup'
+            'GlossSee': 'markup',
+            'A': 42,
+            'B': null,
+            'B': nullx,
+            'B': true,
+            'B': false
                   }
               }
           }
