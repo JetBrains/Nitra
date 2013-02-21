@@ -128,9 +128,10 @@ namespace Sample.Json.Gui
             'GlossSee': 'markup',
             'A': 42,
             'B': null,
-            'B': nullx,
-            'B': true,
-            'B': false
+            'C': nullx,
+            'D': xnull,
+            'E': true,
+            'F': false
                   }
               }
           }
