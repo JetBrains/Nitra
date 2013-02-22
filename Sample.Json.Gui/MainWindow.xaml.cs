@@ -193,7 +193,7 @@ namespace Sample.Json.Gui
       this.Close();
     }
 
-    private void MenuItem_Click_1(object sender, RoutedEventArgs e)
+    private void ParserLoad_Click(object sender, RoutedEventArgs e)
     {
       var dialog = new OpenFileDialog();
       dialog.DefaultExt = ".dll";
@@ -218,6 +218,17 @@ namespace Sample.Json.Gui
 
           treeView1.Items.Clear();
         }
+      }
+    }
+
+    private void FileOpen_Click(object sender, RoutedEventArgs e)
+    {
+      var dialog = new OpenFileDialog();
+      dialog.Filter = "C# (.cs)|*.cs|Text (.txt)|*.txt|All|*.*";
+
+      if (dialog.ShowDialog(this) ?? false)
+      {
+        textBox1.Text = File.ReadAllText(dialog.FileName);
       }
     }
   }
