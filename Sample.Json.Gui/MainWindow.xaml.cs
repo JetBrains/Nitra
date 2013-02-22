@@ -93,6 +93,11 @@ namespace Sample.Json.Gui
         var node = new TreeViewItem();
         node.Header = ruleApplication;
 
+        var size = ruleApplication.Structure.CalcSize(_parseResult, ruleApplication.AstPointer);
+
+        if (size == 0)
+          node.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
+
         if (ruleApplication.Structure is RuleStructure.Ast)
         {
           var sate = _parseResult.RawAst[ruleApplication.AstPointer + 2];
