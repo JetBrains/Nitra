@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -16,6 +17,7 @@ using N2;
 using N2.Tests;
 using N2.Runtime.Reflection;
 using System.Collections.ObjectModel;
+using Microsoft.Win32;
 
 namespace Sample.Json.Gui
 {
@@ -24,9 +26,10 @@ namespace Sample.Json.Gui
   /// </summary>
   public partial class MainWindow : Window
   {
-    ParserHost _parserHost;
-    ParseResult _parseResult;
-    bool _doTreeOperation;
+    ParserHost      _parserHost;
+    ParseResult     _parseResult;
+    RuleDescriptor  _ruleDescriptor = JsonParser.GrammarImpl.StartRuleDescriptor;
+    bool            _doTreeOperation;
 
     public MainWindow()
     {
@@ -58,7 +61,13 @@ namespace Sample.Json.Gui
         return;
 
       var source = new SourceSnapshot(textBox1.Text);
-      _parseResult = _parserHost.DoParsing(source, JsonParser.GrammarImpl.StartRuleDescriptor);
+
+      var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
+
+      if (simpleRule != null)
+        _parseResult = _parserHost.DoParsing(source, simpleRule);
+      else
+        _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
     }
 
     void ShowInfo(int pos)
@@ -176,6 +185,39 @@ namespace Sample.Json.Gui
       finally
       {
         _doTreeOperation = false;
+      }
+    }
+
+    private void MenuItem_Click(object sender, RoutedEventArgs e)
+    {
+      this.Close();
+    }
+
+    private void MenuItem_Click_1(object sender, RoutedEventArgs e)
+    {
+      var dialog = new OpenFileDialog();
+      dialog.DefaultExt = ".dll";
+      dialog.Filter = "Parser module (.dll)|*.dll";
+
+      if (dialog.ShowDialog(this) ?? false)
+      {
+        var asm = Assembly.LoadFrom(dialog.FileName);
+        var grammarAttrs = asm.GetCustomAttributes(typeof(GrammarsAttribute), false).OfType<GrammarsAttribute>();
+        var grammarTypes = new List<Type>();
+
+        foreach (var attr in grammarAttrs)
+          grammarTypes.AddRange(attr.Grammars);
+
+        var choiceParser = new ChoiceParser(grammarTypes.ToArray());
+        choiceParser.Owner = this;
+        if (choiceParser.ShowDialog() ?? false)
+        {
+          _ruleDescriptor = choiceParser.Result;
+          _parserHost     = new ParserHost();
+          _parseResult    = null;
+
+          treeView1.Items.Clear();
+        }
       }
     }
   }
