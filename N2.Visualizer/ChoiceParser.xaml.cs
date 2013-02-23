@@ -14,7 +14,7 @@ using N2;
 using System.Reflection;
 using System.Diagnostics;
 
-namespace Sample.Json.Gui
+namespace N2.Visualizer
 {
   /// <summary>
   /// Interaction logic for ChoiceParser.xaml

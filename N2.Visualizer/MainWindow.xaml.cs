@@ -19,7 +19,7 @@ using N2.Runtime.Reflection;
 using System.Collections.ObjectModel;
 using Microsoft.Win32;
 
-namespace Sample.Json.Gui
+namespace N2.Visualizer
 {
   /// <summary>
   /// Interaction logic for MainWindow.xaml

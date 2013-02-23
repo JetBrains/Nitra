@@ -4,7 +4,7 @@ using System.Configuration;
 using System.Linq;
 using System.Windows;
 
-namespace Sample.Json.Gui
+namespace N2.Visualizer
 {
   /// <summary>
   /// Interaction logic for App.xaml
