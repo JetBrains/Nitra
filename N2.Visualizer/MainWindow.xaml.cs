@@ -68,6 +68,14 @@ namespace N2.Visualizer
         _parseResult = _parserHost.DoParsing(source, simpleRule);
       else
         _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
+
+      if (!_parseResult.IsSuccess)
+      {
+        var i = _parseResult.LastSuccessPos;
+        textBox1.CaretOffset = i;
+        textBox1.SelectionStart = i;
+        textBox1.SelectionLength = 1;
+      }
     }
 
     void ShowInfo(int pos)
