@@ -123,10 +123,50 @@ namespace N2.Visualizer
             node.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
         }
 
-        //node.IsExpanded = true;
-        items.Add(node);
+        node.Expanded += new RoutedEventHandler(node_Expanded);
 
-        //Fill(node.Items, ruleApplication.Subrules);
+        if (ruleApplication.GetChildren().Any())
+          node.Items.Add(new TreeViewItem());
+
+        items.Add(node);
+      }
+    }
+
+    void node_Expanded(object sender, RoutedEventArgs e)
+    {
+      var node = (TreeViewItem)e.Source;
+      if (node.Items.Count == 1 && ((TreeViewItem)node.Items[0]).Header == null)
+      {
+        node.Items.Clear();
+
+        if (node.Header is RuleApplication)
+        {
+          var ruleApplication = (RuleApplication)node.Header;
+          var calls = ruleApplication.GetChildren();
+          var failed = ruleApplication.LastFailedIndex;
+          var i = 0;
+
+          foreach (var call in calls)
+          {
+            var subNode = new TreeViewItem();
+            subNode.Tag = call;
+            subNode.Header = call;
+            var hasChildren = call.GetChildren().Any();
+            if (hasChildren)
+              subNode.Items.Add(new TreeViewItem());
+
+            if (i >= failed)
+              subNode.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
+
+            node.Items.Add(subNode);
+            i++;
+          }
+        }
+        else if (node.Header is RuleCall)
+        {
+          var call = (RuleCall)node.Header;
+          Fill(node.Items, call.GetChildren());
+        }
       }
     }
 
@@ -176,19 +216,19 @@ namespace N2.Visualizer
       _doTreeOperation = true;
       try
       {
-        var caretOffset = textBox1.CaretOffset;
+        //var caretOffset = textBox1.CaretOffset;
         var item = (TreeViewItem)e.NewValue;
 
         if (item == null)
           return;
 
-        var info = (RuleApplication)item.Header;
+        var info = (IRuleApplication)item.Header;
         var size = info.Size;
 
         textBox1.TextArea.AllowCaretOutsideSelection();
-        textBox1.SelectionStart = caretOffset;
+        //textBox1.CaretOffset = info.Position;
+        textBox1.SelectionStart = info.Position;
         textBox1.SelectionLength = size;
-        textBox1.CaretOffset = caretOffset;
       }
       finally
       {
