@@ -110,7 +110,7 @@ namespace N2.Visualizer
         var node = new TreeViewItem();
         node.Header = ruleApplication;
 
-        var size = ruleApplication.Structure.CalcSize(_parseResult, ruleApplication.AstPointer);
+        var size = ruleApplication.Size;
 
         if (size == 0)
           node.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
@@ -183,7 +183,7 @@ namespace N2.Visualizer
           return;
 
         var info = (RuleApplication)item.Header;
-        var size = info.Structure.CalcSize(_parseResult, info.AstPointer);
+        var size = info.Size;
 
         textBox1.TextArea.AllowCaretOutsideSelection();
         textBox1.SelectionStart = caretOffset;
