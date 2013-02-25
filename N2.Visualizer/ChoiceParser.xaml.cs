@@ -13,6 +13,7 @@ using System.Windows.Shapes;
 using N2;
 using System.Reflection;
 using System.Diagnostics;
+using System.ComponentModel;
 
 namespace N2.Visualizer
 {
@@ -54,24 +55,52 @@ namespace N2.Visualizer
     private void _parsersListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
       _startRulesListBox.Items.Clear();
+      _allRulesListBox.Items.Clear();
+
       var grammarType = (Type)((ListBoxItem)_parsersListBox.SelectedItem).Tag;
       var startRuleDescriptor = typeof(IStartRuleDescriptor);
       var props = grammarType.GetProperties(BindingFlags.Public | BindingFlags.Static);
-      foreach (var p in props)
+
       {
-        if (startRuleDescriptor.IsAssignableFrom(p.PropertyType))
+        foreach (var p in props)
         {
-          var item = new ListBoxItem();
-          item.Tag = p;
-          const string sufix = "RuleDescriptor";
-          Trace.Assert(p.Name.EndsWith(sufix));
-          item.Content = p.Name.Substring(0, p.Name.Length - sufix.Length);
-          _startRulesListBox.Items.Add(item);
+          if (startRuleDescriptor.IsAssignableFrom(p.PropertyType))
+          {
+            var item = new ListBoxItem();
+            item.Tag = p;
+            const string sufix = "RuleDescriptor";
+            Trace.Assert(p.Name.EndsWith(sufix));
+            item.Content = p.Name.Substring(0, p.Name.Length - sufix.Length);
+            _startRulesListBox.Items.Add(item);
+          }
         }
+
+        _startRulesListBox.Items.SortDescriptions.Add(new SortDescription("Content", ListSortDirection.Ascending));
+      }
+
+      var desc = grammarType.GetProperty("StaticDescriptor", BindingFlags.Public | BindingFlags.Static);
+      var grammarDescriptor = (GrammarDescriptor)desc.GetValue(null, null);
+
+      {
+        foreach (var rule in grammarDescriptor.Rules)
+        {
+          if (rule is SimpleRuleDescriptor || rule is ExtensibleRuleDescriptor)
+          {
+            var node = new ListBoxItem();
+            node.Content = rule.Name;
+            node.Tag = rule;
+            _allRulesListBox.Items.Add(node);
+          }
+        }
+
+        _allRulesListBox.Items.SortDescriptions.Add(new SortDescription("Content", ListSortDirection.Ascending));
       }
 
       if (_startRulesListBox.Items.Count > 0)
         _startRulesListBox.SelectedItem = _startRulesListBox.Items[0];
+
+      if (_allRulesListBox.Items.Count > 0)
+        _allRulesListBox.SelectedItem = _allRulesListBox.Items[0];
     }
   }
 }
