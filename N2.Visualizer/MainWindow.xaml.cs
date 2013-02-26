@@ -155,7 +155,7 @@ namespace N2.Visualizer
             if (hasChildren)
               subNode.Items.Add(new TreeViewItem());
 
-            if (i >= failed)
+            if (failed >= 0 && i >= failed)
               subNode.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
 
             node.Items.Add(subNode);
@@ -216,19 +216,15 @@ namespace N2.Visualizer
       _doTreeOperation = true;
       try
       {
-        //var caretOffset = textBox1.CaretOffset;
         var item = (TreeViewItem)e.NewValue;
 
         if (item == null)
           return;
 
         var info = (IRuleApplication)item.Header;
-        var size = info.Size;
 
         textBox1.TextArea.AllowCaretOutsideSelection();
-        //textBox1.CaretOffset = info.Position;
-        textBox1.SelectionStart = info.Position;
-        textBox1.SelectionLength = size;
+        textBox1.Select(info.Position, info.Size);
       }
       finally
       {
