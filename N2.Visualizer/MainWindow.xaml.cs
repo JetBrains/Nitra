@@ -159,6 +159,8 @@ namespace N2.Visualizer
 
             if (failed >= 0 && i >= failed)
               subNode.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
+            else if (call.Size == 0)
+              subNode.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
 
             node.Items.Add(subNode);
             i++;
