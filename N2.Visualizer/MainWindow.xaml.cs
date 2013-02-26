@@ -115,7 +115,7 @@ namespace N2.Visualizer
         if (size == 0)
           node.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
 
-        if (ruleApplication.Structure is RuleStructure.Ast)
+        if (ruleApplication.FirstFailedIndex > 0)
         {
           var sate = _parseResult.RawAst[ruleApplication.AstPointer + 2];
 
@@ -143,7 +143,7 @@ namespace N2.Visualizer
         {
           var ruleApplication = (RuleApplication)node.Header;
           var calls = ruleApplication.GetChildren();
-          var failed = ruleApplication.LastFailedIndex;
+          var failed = ruleApplication.FirstFailedIndex;
           var i = 0;
 
           foreach (var call in calls)
