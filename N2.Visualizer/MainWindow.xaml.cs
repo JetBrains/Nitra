@@ -88,7 +88,44 @@ namespace N2.Visualizer
       if (_parseResult.IsSuccess)
         _errorHighlighter.ErrorPos = -1;
       else
-        _errorHighlighter.ErrorPos = _parseResult.LastSuccessPos;
+        ReportError();
+    }
+
+    private void ReportError()
+    {
+      var errPos = _parseResult.LastSuccessPos;
+      _errorHighlighter.ErrorPos = errPos;
+      var set = new HashSet<string>();
+      for (int i = errPos; i >= 0; i--)
+      {
+        var applications = _parseResult.ParserHost.Reflection(_parseResult, i);
+        foreach (var a in applications)
+        {
+          var failed = a.FirstFailedIndex;
+          if (failed >= 0)
+          {
+            var sate = _parseResult.RawAst[a.AstPointer + 2];
+            var calls = a.GetChildren();
+            var e = 0;
+            var size = 0;
+
+            foreach (var call in calls)
+            {
+              if (failed >= 0 && e >= failed)
+              {
+                if (size > 0)
+                {
+                  _status.Text = "Expected: " + call;
+                  return;
+                }
+              }
+              else
+                size += call.Size;
+              e++;
+            }
+          }
+        }
+      }
     }
 
     void ShowInfo(int pos)

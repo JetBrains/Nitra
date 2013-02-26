@@ -17,7 +17,7 @@ namespace N2.Visualizer
     public int ErrorPos
     { 
       get { return _errorPos; }
-      set { _errorPos = value; }
+      set { _errorPos = value; /*_editor.TextView.Redraw();*/ }
     }
 
     public HighlightErrorBackgroundRendere(TextEditor editor)
@@ -36,12 +36,13 @@ namespace N2.Visualizer
         return;
 
       textView.EnsureVisualLines();
-      //_editor.Document.Rec
-      var segment = new Segment { Offset = _errorPos, EndOffset = _errorPos + 1 }; //GetLineByOffset(_errorPos);
+
+      var segment = new Segment(_errorPos, _editor.Text.Length); //GetLineByOffset(_errorPos);
+ 
       foreach (var rect in BackgroundGeometryBuilder.GetRectsForSegment(textView, segment))
       {
         drawingContext.DrawRectangle(
-            new SolidColorBrush(Color.FromArgb(0x40, 0, 0, 0xFF)), null,
+            new SolidColorBrush(Color.FromArgb(0x40, 255, 100, 100)), null,
             new Rect(rect.Location, new Size(Math.Max(textView.ActualWidth - 32, 0), rect.Height)));
       }
     }
@@ -49,23 +50,18 @@ namespace N2.Visualizer
 
   class Segment : ISegment
   {
-
-    public int EndOffset
+    public Segment(int startOffset, int endOffset)
     {
-      get;
-      set;
+      Offset    = startOffset;
+      EndOffset = endOffset;
     }
+
+    public int Offset    { get; private set; }
+    public int EndOffset { get; private set; }
 
     public int Length
     {
       get { return EndOffset - Offset; }
     }
-
-    public int Offset
-    {
-      get;
-      set;
-    }
   }
-
 }
