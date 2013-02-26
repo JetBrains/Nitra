@@ -85,14 +85,18 @@ namespace N2.Visualizer
       else
         _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
 
-      if (_parseResult.IsSuccess)
-        _errorHighlighter.ErrorPos = -1;
-      else
-        ReportError();
+      TryReportError();
     }
 
-    private void ReportError()
+    private void TryReportError()
     {
+      if (_parseResult.IsSuccess)
+      {
+        _errorHighlighter.ErrorPos = -1;
+        _status.Text = "OK";
+        return;
+      }
+
       var errPos = _parseResult.LastSuccessPos;
       _errorHighlighter.ErrorPos = errPos;
       var set = new HashSet<string>();
