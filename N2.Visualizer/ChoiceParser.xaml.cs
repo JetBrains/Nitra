@@ -42,6 +42,16 @@ namespace N2.Visualizer
 
     private void button1_Click(object sender, RoutedEventArgs e)
     {
+      TryClose();
+    }
+
+    private void _startRulesListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+      TryClose();
+    }
+
+    private void TryClose()
+    {
       if (_startRulesListBox.SelectedItem == null)
         return;
 

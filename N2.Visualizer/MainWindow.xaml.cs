@@ -18,6 +18,8 @@ using N2.Tests;
 using N2.Runtime.Reflection;
 using System.Collections.ObjectModel;
 using Microsoft.Win32;
+using System.Diagnostics;
+using ICSharpCode.AvalonEdit.Rendering;
 
 namespace N2.Visualizer
 {
@@ -30,10 +32,16 @@ namespace N2.Visualizer
     ParseResult     _parseResult;
     RuleDescriptor  _ruleDescriptor = JsonParser.GrammarImpl.StartRuleDescriptor;
     bool            _doTreeOperation;
+    HighlightErrorBackgroundRendere _errorHighlighter;
 
     public MainWindow()
     {
       InitializeComponent();
+      //textBox1.TextArea.TextView.LineTransformers.Add();// Services.AddService(typeof(ITextMarkerService), textMarkerService);
+      //textBox1.TextArea.TextView.Services.AddService(typeof(ITextMarkerService), textMarkerService);
+    
+      _errorHighlighter = new HighlightErrorBackgroundRendere(textBox1);
+      textBox1.TextArea.TextView.BackgroundRenderers.Add(_errorHighlighter);
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -46,10 +54,18 @@ namespace N2.Visualizer
 
       _parserHost = new ParserHost();
       Parse();
-      textBox1.TextArea.Caret.PositionChanged += (o, ea) =>
-      {
-        ShowInfo(textBox1.CaretOffset);
-      };
+      textBox1.TextArea.Caret.PositionChanged += new EventHandler(Caret_PositionChanged);
+    }
+
+
+    private void textBox1_GotFocus(object sender, RoutedEventArgs e)
+    {
+      ShowInfo(textBox1.CaretOffset);
+    }
+
+    void Caret_PositionChanged(object sender, EventArgs e)
+    {
+      ShowInfo(textBox1.CaretOffset);
     }
 
     private void Parse()
@@ -69,13 +85,10 @@ namespace N2.Visualizer
       else
         _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
 
-      if (!_parseResult.IsSuccess)
-      {
-        var i = _parseResult.LastSuccessPos;
-        textBox1.CaretOffset = i;
-        textBox1.SelectionStart = i;
-        textBox1.SelectionLength = 1;
-      }
+      if (_parseResult.IsSuccess)
+        _errorHighlighter.ErrorPos = -1;
+      else
+        _errorHighlighter.ErrorPos = _parseResult.LastSuccessPos;
     }
 
     void ShowInfo(int pos)
@@ -125,7 +138,7 @@ namespace N2.Visualizer
 
         node.Expanded += new RoutedEventHandler(node_Expanded);
 
-        if (ruleApplication.GetChildren().Any())
+        if (ruleApplication.HasChildren)
           node.Items.Add(new TreeViewItem());
 
         items.Add(node);
@@ -148,30 +161,43 @@ namespace N2.Visualizer
 
           foreach (var call in calls)
           {
-            var subNode = new TreeViewItem();
-            subNode.Tag = call;
-            subNode.Header = call;
-            var hasChildren = call.GetChildren().Any();
-            if (hasChildren)
-              subNode.Items.Add(new TreeViewItem());
-            subNode.BorderThickness = new Thickness(1);
-            subNode.BorderBrush = new SolidColorBrush(Colors.Brown);
+            if (isSimpleCall(call) && call.HasChildren)
+            {
+              var children = call.GetChildren();
+              Trace.Assert(children.Count == 1);
+              Fill(node.Items, children);
+            }
+            else
+            {
+              var subNode = new TreeViewItem();
+              subNode.Tag = call;
+              subNode.Header = call;
+              var hasChildren = call.HasChildren;
+              if (hasChildren)
+                subNode.Items.Add(new TreeViewItem());
+              
+              //subNode.FontWeight = FontWeights.Bold;
 
-            if (failed >= 0 && i >= failed)
-              subNode.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
-            else if (call.Size == 0)
-              subNode.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
+              if (failed >= 0 && i >= failed)
+                subNode.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
+              else if (call.Size == 0)
+                subNode.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
 
-            node.Items.Add(subNode);
+              node.Items.Add(subNode);
+            }
             i++;
           }
         }
         else if (node.Header is RuleCall)
         {
-          var call = (RuleCall)node.Header;
-          Fill(node.Items, call.GetChildren());
+          Fill(node.Items, ((RuleCall)node.Header).GetChildren());
         }
       }
+    }
+
+    private static bool isSimpleCall(RuleCall call)
+    {
+      return call.RuleInfo.Visit<bool>(simpleCall: id => true, noMatch: () => false);
     }
 
     static string text =
