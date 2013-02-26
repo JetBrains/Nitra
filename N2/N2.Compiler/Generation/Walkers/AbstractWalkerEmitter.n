@@ -14,7 +14,64 @@ using System.Linq;
 
 namespace N2.Compiler
 {
-  internal class AbstractWalkerEmitter : IVariableEmitter
+  [Record]
+  internal class AstAbstractWalkerEmitter : AbstractWalkerEmitter
+  {
+    public override WalkerTypeName() : string
+    {
+      RuleSymbol.Name + "AstWalker"
+    }
+
+    public override DefineMembers(rootAstStruct : option[RootAstStruct]) : void
+    {
+      base.DefineMembers(rootAstStruct);
+      def parms =
+        <[ parameter: $("location" : usesite) : N2.Location ]>
+        :: <[ parameter: $("errorInfo" : usesite) : list[N2.ErrorInfo] ]> //TODO: удалить этот параметр
+        :: RuleSymbol.NonVoidSubRules.Map(r => <[ parameter: $(r.FieldName : usesite) : $(Owner.Environment.RuleTypeToNType(r.Type) : typed) ]>);
+      TB.DefineConditional(<[ decl:
+        public Accept(..$parms) : $(Owner.Environment.RuleTypeToNType(RuleSymbol.Type) : typed)
+        {
+          $(Owner.Environment.NTypeOfRuleSymbol(RuleSymbol) : typed).Ast(..$(parms.Map(p => <[ $(p.Name : usesite) ]>)))
+        }
+      ]>);
+    }
+
+    public override RootAstMaker(arguments : list[PExpr]) : PExpr
+    {
+      def acceptArgs =
+        <[ N2.Location(parser.Source, startPos, pos) ]>
+        :: <[ [] ]>
+        :: arguments;
+      <[ this.Accept(..$acceptArgs) ]>
+    }
+
+    public override WalkMethodReturnType(ruleType : RuleType) : PExpr
+    {
+      <[ $(Owner.Environment.RuleTypeToNType(ruleType) : typed) ]>
+    }
+  }
+
+  [Record]
+  internal class ReflectionAbstractWalkerEmitter : AbstractWalkerEmitter
+  {
+    public override WalkerTypeName() : string
+    {
+      RuleSymbol.Name + "ReflectionWalker"
+    }
+
+    public override RootAstMaker(_arguments : list[PExpr]) : PExpr
+    {
+      <[ N2.Runtime.Reflection.ReflectionStruct("", System.Collections.ObjectModel.ReadOnlyCollection.[N2.Runtime.Reflection.ReflectionStruct](array(0))) ]>
+    }
+
+    public override WalkMethodReturnType(_ruleType : RuleType) : PExpr
+    {
+      <[ N2.Runtime.Reflection.ReflectionStruct ]>
+    }
+  }
+
+  internal abstract class AbstractWalkerEmitter : IVariableEmitter
   {
     public Owner      : SyntaxModuleEmitter { get; }
     public RuleSymbol : SyntaxRuleSymbol    { get; }
@@ -48,11 +105,12 @@ namespace N2.Compiler
       }
     }
 
+    public abstract WalkerTypeName() : string;
     public DefineTypes() : void
     {
       assert(_tb == null);
       _tb = Owner.GrammarTB.DefineNestedType(<[ decl:
-        public class $(RuleSymbol.Name + "Walker" : usesite) : $(GetWalkerBaseType(RuleSymbol))
+        public class $(WalkerTypeName() : usesite) : $(GetWalkerBaseType(RuleSymbol))
         {
           private RuleParser : $(RuleSymbol.GetParserClassRef());
           public this(ruleParser : $(RuleParserBaseType))
@@ -63,20 +121,9 @@ namespace N2.Compiler
       ]>);
     }
 
-    public DefineMembers(rootAstStruct : option[RootAstStruct]) : void
+    public virtual DefineMembers(rootAstStruct : option[RootAstStruct]) : void
     {
       assert(_tb != null);
-
-      def parms =
-        <[ parameter: $("location" : usesite) : N2.Location ]>
-        :: <[ parameter: $("errorInfo" : usesite) : list[N2.ErrorInfo] ]> //TODO: удалить этот параметр
-        :: RuleSymbol.NonVoidSubRules.Map(r => <[ parameter: $(r.FieldName : usesite) : $(Owner.Environment.RuleTypeToNType(r.Type) : typed) ]>);
-      _tb.DefineConditional(<[ decl:
-        public Accept(..$parms) : $(Owner.Environment.RuleTypeToNType(RuleSymbol.Type) : typed)
-        {
-          $(Owner.Environment.NTypeOfRuleSymbol(RuleSymbol) : typed).Ast(..$(parms.Map(p => <[ $(p.Name : usesite) ]>)))
-        }
-      ]>);
 
       def referencedWalkers = GetDependencies(RuleSymbol);
       foreach(p in referencedWalkers)
@@ -115,16 +162,10 @@ namespace N2.Compiler
       DefineWalkMethod(rootAstStruct, referencedWalkers);
     }
 
+    public abstract RootAstMaker(arguments : list[PExpr]) : PExpr;
+    public abstract WalkMethodReturnType(ruleType : RuleType) : PExpr;
     private DefineWalkMethod(rootAstStruct : option[RootAstStruct], referencedWalkers : Hashtable[RuleSymbol * int, WalkerInfo]) : void
     {
-      def rootAstMaker(arguments : list[PExpr]) : PExpr
-      {
-        def acceptArgs =
-          <[ N2.Location(parser.Source, startPos, pos) ]>
-          :: <[ [] ]>
-          :: arguments;
-        <[ this.Accept(..$acceptArgs) ]>
-      }
       def internalAstMaker(_ : list[PExpr]) : PExpr
       {
         | []   => assert(false)
@@ -294,9 +335,9 @@ namespace N2.Compiler
       {
         | SimpleRuleSymbol as s =>
           def (astPointer, initPointer) = makeAstPointer(rootAstStruct.Value, "astPtr");
-          def ast = makeAst(rootAstStruct.Value, astPointer, rootAstMaker);
+          def ast = makeAst(rootAstStruct.Value, astPointer, RootAstMaker);
           _tb.DefineConditional(<[ decl:
-            public override Walk(pos : ref int, parser : ref N2.Internal.Parser) : $(Owner.Environment.RuleTypeToNType(s.Type) : typed)
+            public override Walk(pos : ref int, parser : ref N2.Internal.Parser) : $(WalkMethodReturnType(s.Type))
             {
               ignore(pos, parser);
               unchecked
@@ -311,13 +352,13 @@ namespace N2.Compiler
         | ExtentionRuleSymbol(ExtentionType = Prefix) as s =>
           def astPointer() { AstPointer(rootAstStruct.Value, "astPtr", this) }
           _tb.DefineConditional(<[ decl:
-            public override Walk(pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(Owner.Environment.RuleTypeToNType(s.Type) : typed)
+            public override Walk(pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(WalkMethodReturnType(s.Type))
             {
               ignore(pos, astPtr, parser);
               unchecked
               {
                 def startPos = pos;
-                $(makeAst(rootAstStruct.Value, astPointer, rootAstMaker))
+                $(makeAst(rootAstStruct.Value, astPointer, RootAstMaker))
               }
             }
           ]>);
@@ -325,12 +366,12 @@ namespace N2.Compiler
         | ExtentionRuleSymbol(ExtentionType = Postfix) as s =>
           def astPointer() { AstPointer(rootAstStruct.Value, "astPtr", this) }
           _tb.DefineConditional(<[ decl:
-            public override Walk(prefix : $(Owner.Environment.RuleTypeToNType(s.Type) : typed), startPos : int, pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(Owner.Environment.RuleTypeToNType(s.Type) : typed)
+            public override Walk(prefix : $(WalkMethodReturnType(s.Type)), startPos : int, pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(WalkMethodReturnType(s.Type))
             {
               ignore(prefix, startPos, pos, astPtr, parser);
               unchecked
               {
-                $(makeAst(rootAstStruct.Value, astPointer, rootAstMaker))
+                $(makeAst(rootAstStruct.Value, astPointer, RootAstMaker))
               }
             }
           ]>);
@@ -382,16 +423,16 @@ namespace N2.Compiler
 
     private GetWalkerType(rule : RuleSymbol) : PExpr
     {
-      | SimpleRuleSymbol as s => <[ N2.Runtime.SimpleAstWalker[$(Owner.Environment.RuleTypeToNType(s.Type) : typed)] ]>
-      | ExtensibleRuleSymbol as s => <[ N2.Runtime.ExtensibleAstWalker[$(Owner.Environment.RuleTypeToNType(s.Type) : typed)] ]>
+      | SimpleRuleSymbol     as s => <[ N2.Runtime.SimpleRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
+      | ExtensibleRuleSymbol as s => <[ N2.Runtime.ExtensibleRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
       | _ => assert2(false); assert(false)
     }
 
-    private GetWalkerBaseType(rule : RuleSymbol) : PExpr
+    public GetWalkerBaseType(rule : RuleSymbol) : PExpr
     {
-      | SimpleRuleSymbol                             as s => <[ N2.Runtime.SimpleAstWalker[$(Owner.Environment.RuleTypeToNType(s.Type) : typed)] ]>
-      | ExtentionRuleSymbol(ExtentionType = Prefix)  as s => <[ N2.Runtime.PrefixAstWalker[$(Owner.Environment.RuleTypeToNType(s.Type) : typed)] ]>
-      | ExtentionRuleSymbol(ExtentionType = Postfix) as s => <[ N2.Runtime.PostfixAstWalker[$(Owner.Environment.RuleTypeToNType(s.Type) : typed)] ]>
+      | SimpleRuleSymbol                             as s => <[ N2.Runtime.SimpleRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
+      | ExtentionRuleSymbol(ExtentionType = Prefix)  as s => <[ N2.Runtime.PrefixRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
+      | ExtentionRuleSymbol(ExtentionType = Postfix) as s => <[ N2.Runtime.PostfixRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
       | _ => assert2(false); assert(false)
     }
 
