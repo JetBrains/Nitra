@@ -154,6 +154,8 @@ namespace N2.Visualizer
             var hasChildren = call.GetChildren().Any();
             if (hasChildren)
               subNode.Items.Add(new TreeViewItem());
+            subNode.BorderThickness = new Thickness(1);
+            subNode.BorderBrush = new SolidColorBrush(Colors.Brown);
 
             if (failed >= 0 && i >= failed)
               subNode.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
