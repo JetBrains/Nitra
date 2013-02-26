@@ -214,7 +214,7 @@ prefix_loop:
               else
                 goto prefix_new_better;
             prefix_equal://АСТ равен лучшему. Неоднозначность.
-              parser.ast[bestResult + AstOfs.Next] = newResult;
+              parser.ast[newResult + AstOfs.Next] = bestResult;
               bestResult = newResult;
               assert(bestEndPos == newEndPos);
               continue;
