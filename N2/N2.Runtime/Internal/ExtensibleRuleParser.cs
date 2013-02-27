@@ -168,11 +168,6 @@ prefix_loop:
           }
         }
 
-#if DEBUG || PARSER_DEBUG
-        if (parser.ruleCalls[curEndPos] == null)
-          parser.ruleCalls[curEndPos] = System.Collections.Generic.List();
-        parser.ruleCalls[curEndPos].Add(parser.parserHost.GetRuleDescriptorById(PrefixId));
-#endif
         //нет мемоизации префикса
         prefixAst = parser.Allocate(PrefixOfs.NodeSize, PrefixId);
         parser.ast[prefixAst + PrefixOfs.Next] = parser.memoize[curEndPos];
