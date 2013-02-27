@@ -32,6 +32,7 @@ namespace N2.Visualizer
     ParseResult     _parseResult;
     RuleDescriptor  _ruleDescriptor = JsonParser.GrammarImpl.StartRuleDescriptor;
     bool            _doTreeOperation;
+    bool            _doChangeCaretPos;
     HighlightErrorBackgroundRendere _errorHighlighter;
 
     public MainWindow()
@@ -60,12 +61,52 @@ namespace N2.Visualizer
 
     private void textBox1_GotFocus(object sender, RoutedEventArgs e)
     {
-      ShowInfo(textBox1.CaretOffset);
+      ShowInfoOld(textBox1.CaretOffset);
     }
 
     void Caret_PositionChanged(object sender, EventArgs e)
     {
-      ShowInfo(textBox1.CaretOffset);
+      if (_doTreeOperation)
+        return;
+
+      _doChangeCaretPos = true;
+      try
+      {
+        //ShowInfoOld(textBox1.CaretOffset);
+        var node = FindNode(treeView1.Items, textBox1.CaretOffset);
+
+        if (node != null)
+        {
+          node.IsSelected = true;
+          node.BringIntoView();
+        }
+      }
+      finally
+      {
+        _doChangeCaretPos = false;
+      }
+    }
+
+    private TreeViewItem FindNode(ItemCollection items, int p)
+    {
+
+      foreach (TreeViewItem item in items)
+      {
+        var node = (ReflectionStruct)item.Tag;
+
+        if (node.Location.StartPos <= p && p < node.Location.EndPos)
+        {
+          item.IsExpanded = true;
+          //item.Focus();
+
+          if (item.Items.Count == 0)
+            return item;
+
+          return FindNode(item.Items, p);
+        }
+      }
+
+      return null;
     }
 
     private void Parse()
@@ -86,6 +127,7 @@ namespace N2.Visualizer
         _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
 
       TryReportError();
+      ShowInfo();
     }
 
     private void TryReportError()
@@ -132,8 +174,51 @@ namespace N2.Visualizer
       }
     }
 
-    void ShowInfo(int pos)
+    void ShowInfo()
     {
+      try
+      {
+        if (_parseResult == null)
+          return;
+
+        treeView1.Items.Clear();
+
+        var root = _parseResult.Reflection();
+        var treeNode = new TreeViewItem();
+        treeNode.Header = root.Description;
+        treeNode.Tag = root;
+        treeView1.Items.Add(treeNode);
+        Fill(treeNode.Items, root.Children);
+        
+      }
+      catch
+      {
+      }
+      finally
+      {
+        //_lbRules.EndUpdate();
+      }
+    }
+
+    void Fill(ItemCollection treeNodes, ReadOnlyCollection<ReflectionStruct> nodes)
+    {
+      foreach (var node in nodes)
+	    {
+        var treeNode = new TreeViewItem();
+        treeNode.Header = node.Description;
+        treeNode.Tag = node;
+        if (node.Location.Length == 0)
+          treeNode.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
+        treeNodes.Add(treeNode);
+        Fill(treeNode.Items, node.Children);
+	    }
+    }
+
+
+    void ShowInfoOld(int pos)
+    {
+      return;
+
       if (_doTreeOperation)
         return;
 
@@ -188,6 +273,8 @@ namespace N2.Visualizer
 
     void node_Expanded(object sender, RoutedEventArgs e)
     {
+      return;
+
       var node = (TreeViewItem)e.Source;
       if (node.Items.Count == 1 && ((TreeViewItem)node.Items[0]).Header == null)
       {
@@ -274,7 +361,7 @@ namespace N2.Visualizer
     private void textBox1_TextChanged(object sender, EventArgs e)
     {
       Parse();
-      ShowInfo(textBox1.CaretOffset);
+      //ShowInfoOld(textBox1.CaretOffset);
     }
 
     private void textBox1_LostFocus(object sender, RoutedEventArgs e)
@@ -284,6 +371,30 @@ namespace N2.Visualizer
 
     private void treeView1_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
+      if (_doChangeCaretPos)
+        return;
+
+      _doTreeOperation = true;
+      try
+      {
+        var item = (TreeViewItem)e.NewValue;
+
+        if (item == null)
+          return;
+
+        var info = (ReflectionStruct)item.Tag;
+
+        textBox1.TextArea.AllowCaretOutsideSelection();
+        textBox1.Select(info.Location.StartPos, info.Location.Length);
+      }
+      finally
+      {
+        _doTreeOperation = false;
+      }
+
+
+      return;
+
       _doTreeOperation = true;
       try
       {
