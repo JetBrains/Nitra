@@ -64,21 +64,52 @@ namespace N2.Compiler
       _ruleDescriptorEmitters       = SyntaxModule.Node.GetChildren.[RuleDefSymbol]().Map(ParsingRuleDescriptorEmitter(this, _));
       _markerRuleDescriptorEmitters = SyntaxModule.Node.GetChildren.[MarkerSymbol]().Map(MarkerRuleDescriptorEmitter(this, _));
 
-      _allAstEmitters = SyntaxModule.Node.GetChildren.[SyntaxRuleSymbol]().Where(_.IsAst).Map(RuleAstEmitter(this, _));
+      def isAst(symbol) : bool
+      {
+        | SimpleRuleSymbol as symbol => !(symbol.Type is RuleType.Void)
+        | ExtensibleRuleSymbol       => true
+        | ExtentionRuleSymbol        => true
+        | _                          => false
+      }
+
+      _allAstEmitters = SyntaxModule.Node.GetChildren.[SyntaxRuleSymbol]().Where(isAst).Map(RuleAstEmitter(this, _));
       (_extentionPointAstEmitters, _otherAstEmitters) = _allAstEmitters.Partition(x => x.RuleSymbol is ExtensibleRuleSymbol);
 
       //TODO: сделать обработку для void
-      _abstractWalkerEmitters =
+      def makeEmmiters(makeEmmiter, skipVoid)
+      {
+        def needEmmiter(symbol) : bool
+        {
+          | SimpleRuleSymbol as symbol => !(skipVoid && symbol.Type is RuleType.Void)
+          | ExtentionRuleSymbol        => true
+          | _                          => false
+        }
         if (this.Environment.IsIdeMode)
           []
         else
-          SyntaxModule.Node.GetChildren.[SyntaxRuleSymbol]().NToList().MapFiltered(r => r.IsAst && !r.IsExtentionPoint, AbstractWalkerEmitter(this, _));
+        {
+          SyntaxModule.Node.GetChildren.[SyntaxRuleSymbol]().NToList().MapFiltered(needEmmiter, makeEmmiter);
+        }
+      }
+
+      def astWalkerEmitters = makeEmmiters(AstAbstractWalkerEmitter(this, _), true);
+      def reflectionWalkerEmitters = makeEmmiters(ReflectionAbstractWalkerEmitter(this, _), false);
+      _abstractWalkerEmitters = astWalkerEmitters + reflectionWalkerEmitters;
 
       _grammarDescriptorEmitters = [
         GrammarWalkerDescriptorEmitter(this,
           WalkerTypeDescriptorInfo(
+            "Ast",
             <[ N2.Runtime.AstWalkerTypeDescriptor.StaticDescriptor ]>,
-            _abstractWalkerEmitters,
+            symbol => <[ N2.Runtime.ExtensibleRuleAstWalkerData.[$(Environment.RuleTypeToNType(symbol.Type) : typed)] ]>,
+            astWalkerEmitters,
+            SyntaxModule.Node.GetChildren.[ExtensibleRuleSymbol]().NToList())),
+        GrammarWalkerDescriptorEmitter(this,
+          WalkerTypeDescriptorInfo(
+            "Reflection",
+            <[ N2.Runtime.Reflection.ReflectionWalkerTypeDescriptor.StaticDescriptor ]>,
+            _ => <[ N2.Runtime.Reflection.ExtensibleRuleReflectionWalkerData ]>,
+            reflectionWalkerEmitters,
             SyntaxModule.Node.GetChildren.[ExtensibleRuleSymbol]().NToList()))
       ];
 
@@ -162,6 +193,13 @@ namespace N2.Compiler
         public override GetAstWalkerDescriptor() : N2.Runtime.GrammarWalkerDescriptor
         {
           $(GrammarTB.GetMemType() : typed).$(SyntaxModule.Name + "AstWalkerDescriptor" : usesite).StaticDescriptor
+        }
+      ]>);
+
+      GrammarDescriptorImplTB.DefineConditional(<[decl:
+        public override GetReflectionWalkerDescriptor() : N2.Runtime.GrammarWalkerDescriptor
+        {
+          $(GrammarTB.GetMemType() : typed).$(SyntaxModule.Name + "ReflectionWalkerDescriptor" : usesite).StaticDescriptor
         }
       ]>);
     }

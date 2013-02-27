@@ -14,7 +14,172 @@ using System.Linq;
 
 namespace N2.Compiler
 {
-  internal class AbstractWalkerEmitter : IVariableEmitter
+  [Record]
+  internal class AstAbstractWalkerEmitter : AbstractWalkerEmitter
+  {
+    public override WalkerTypeName() : string
+    {
+      RuleSymbol.Name + "AstWalker"
+    }
+
+    public override DefineMembers(rootAstStruct : option[RootAstStruct]) : void
+    {
+      base.DefineMembers(rootAstStruct);
+      def parms =
+        <[ parameter: $("location" : usesite) : N2.Location ]>
+        :: <[ parameter: $("errorInfo" : usesite) : list[N2.ErrorInfo] ]> //TODO: удалить этот параметр
+        :: RuleSymbol.NonVoidSubRules.Map(r => <[ parameter: $(r.FieldName : usesite) : $(Owner.Environment.RuleTypeToNType(r.Type) : typed) ]>);
+      TB.DefineConditional(<[ decl:
+        public Accept(..$parms) : $(Owner.Environment.RuleTypeToNType(RuleSymbol.Type) : typed)
+        {
+          $(Owner.Environment.NTypeOfRuleSymbol(RuleSymbol) : typed).Ast(..$(parms.Map(p => <[ $(p.Name : usesite) ]>)))
+        }
+      ]>);
+    }
+
+    public override RootAstMaker(_astStruct : AstStruct, arguments : list[PExpr]) : PExpr
+    {
+      def acceptArgs =
+        <[ N2.Location(parser.Source, startPos, pos) ]>
+        :: <[ [] ]>
+        :: arguments;
+      <[ this.Accept(..$acceptArgs) ]>
+    }
+
+    public override InternalAstMaker(_astStruct : AstStruct, arguments : list[PExpr]) : PExpr
+    {
+      match (arguments)
+      {
+        | []   => assert(false)
+        | [x]  => x
+        | many => <[ (..$many) ]>
+      }
+    }
+
+    public override WalkMethodReturnType(ruleType : RuleType) : PExpr
+    {
+      <[ $(Owner.Environment.RuleTypeToNType(ruleType) : typed) ]>
+    }
+
+    public override TokenWalkCode(_structField : AstStruct.StructField) : PExpr
+    {
+      <[ N2.NToken(tokenPos, pos) ]>
+    }
+
+    public override ListWalkCode(_structField : AstStruct.StructField, itemAst : PExpr) : PExpr * PExpr * PExpr * PExpr
+    {
+      def init       = <[ def astBuffer = System.Collections.Generic.List(16); ]>;
+      def addItem    = <[ astBuffer.Add($itemAst); ]>;
+      def returnCode = <[ Nemerle.Collections.NList.ToList(astBuffer) ]>;
+      def emptyCode  = <[ [] ]>;
+      (init, addItem, returnCode, emptyCode)
+    }
+
+    public override List2WalkCode(_structField : AstStruct.StructField, itemAst : PExpr, separatorAst : PExpr) : PExpr * PExpr * PExpr * PExpr * PExpr
+    {
+      def init         = <[ def astBuffer = System.Collections.Generic.List(16); def separatorBuffer = System.Collections.Generic.List(16); ]>;
+      def addItem      = <[ astBuffer.Add($itemAst); ]>;
+      def addSeparator = <[ separatorBuffer.Add($separatorAst); ]>;
+      def returnCode   = <[ (Nemerle.Collections.NList.ToList(astBuffer), Nemerle.Collections.NList.ToList(separatorBuffer)) ]>;
+      def emptyCode    = <[ ([], []) ]>;
+      (init, addItem, addSeparator, returnCode, emptyCode)
+    }
+
+    public override OptionWalkCode(_structField : AstStruct.StructField, valueAst : PExpr) : PExpr * PExpr
+    {
+      def someCode = <[ Some($valueAst) ]>;
+      def noneCode = <[ None() ]>;
+      (someCode, noneCode)
+    }
+
+    public override SkipVoid() : bool { true }
+  }
+
+  [Record]
+  internal class ReflectionAbstractWalkerEmitter : AbstractWalkerEmitter
+  {
+    public override WalkerTypeName() : string
+    {
+      RuleSymbol.Name + "ReflectionWalker"
+    }
+
+    private MakeReflectionStruct(name : PExpr, location : PExpr, items : PExpr) : PExpr
+    {
+      <[ N2.Runtime.Reflection.ReflectionStruct($name, $location, System.Collections.ObjectModel.ReadOnlyCollection.[N2.Runtime.Reflection.ReflectionStruct]($items)) ]>
+    }
+
+    private MakeName(ruleField : RuleField) : string
+    {
+      match (ruleField)
+      {
+        | RuleField.List               as x => x.Rule.ToString()
+        | RuleField.List2              as x => x.Rule.ToString()
+        | RuleField.Option             as x => x.Rule.ToString()
+        | RuleField.Predicate          as x => x.Rule.ToString()
+        | RuleField.ExtensibleRuleCall as x => x.RuleSymbol.Name
+        | RuleField.TokenRuleCall      as x => x.RuleSymbol.Name
+        | RuleField.SimpleRuleCall     as x => x.RuleSymbol.Name
+        | RuleField.Void               as x => x.RuleSymbol.Name
+        | RuleField.TokenString        as x => x.Rule.ToString()
+        | RuleField.Ast                as x => x.RuleSymbol.Name
+        | _                                 => assert(false);
+      }
+    }
+
+    public override RootAstMaker(astStruct : AstStruct, arguments : list[PExpr]) : PExpr
+    {
+      MakeReflectionStruct(<[ $(MakeName(astStruct.RuleField)) ]>, <[ N2.NToken(startPos, pos) ]>, <[ array[..$arguments] ]>);
+    }
+
+    public override InternalAstMaker(astStruct : AstStruct, arguments : list[PExpr]) : PExpr
+    {
+      MakeReflectionStruct(<[ $(MakeName(astStruct.RuleField)) ]>, <[ N2.NToken(startPos, pos) ]>, <[ array[..$arguments] ]>);
+    }
+
+    public override WalkMethodReturnType(_ruleType : RuleType) : PExpr
+    {
+      <[ N2.Runtime.Reflection.ReflectionStruct ]>
+    }
+
+    public override TokenWalkCode(structField : AstStruct.StructField) : PExpr
+    {
+      MakeReflectionStruct(<[ $(MakeName(structField.Field)) ]>, <[ N2.NToken(tokenPos, pos) ]>, <[ array(0) ]>);
+    }
+
+    public override ListWalkCode(structField : AstStruct.StructField, itemAst : PExpr) : PExpr * PExpr * PExpr * PExpr
+    {
+      def init       = <[ def listStartPos = pos; def astBuffer = System.Collections.Generic.List(16); ]>;
+      def addItem    = <[ astBuffer.Add($itemAst); ]>;
+      def returnCode = MakeReflectionStruct(<[ $(MakeName(structField.Field)) ]>, <[ N2.NToken(listStartPos, pos) ]>, <[ astBuffer ]>);
+      def emptyCode  = MakeReflectionStruct(<[ $(MakeName(structField.Field)) ]>, <[ N2.NToken(pos, pos) ]>, <[ array(0) ]>);
+      (init, addItem, returnCode, emptyCode)
+    }
+
+    public override List2WalkCode(structField : AstStruct.StructField, itemAst : PExpr, separatorAst : PExpr) : PExpr * PExpr * PExpr * PExpr * PExpr
+    {
+      def init         = <[ def listStartPos = pos; def astBuffer = System.Collections.Generic.List(16); ]>;
+      def addItem      = <[ astBuffer.Add($itemAst); ]>;
+      def addSeparator = <[ astBuffer.Add($separatorAst); ]>;
+      def returnCode   = MakeReflectionStruct(<[ $(MakeName(structField.Field)) ]>, <[ N2.NToken(listStartPos, pos) ]>, <[ astBuffer ]>);
+      def emptyCode    = MakeReflectionStruct(<[ $(MakeName(structField.Field)) ]>, <[ N2.NToken(pos, pos) ]>, <[ array(0) ]>);
+      (init, addItem, addSeparator, returnCode, emptyCode)
+    }
+
+    public override OptionWalkCode(structField : AstStruct.StructField, valueAst : PExpr) : PExpr * PExpr
+    {
+      def someCode = <[
+        def startOprionPos = pos;
+        def value = $valueAst;
+        $(MakeReflectionStruct(<[ $(MakeName(structField.Field)) ]>, <[ N2.NToken(startOprionPos, pos) ]>, <[ array[value] ]>));
+      ]>;
+      def noneCode = MakeReflectionStruct(<[ $(MakeName(structField.Field)) ]>, <[ N2.NToken(pos, pos) ]>, <[ array(0) ]>);
+      (someCode, noneCode)
+    }
+
+    public override SkipVoid() : bool { false }
+  }
+
+  internal abstract class AbstractWalkerEmitter : IVariableEmitter
   {
     public Owner      : SyntaxModuleEmitter { get; }
     public RuleSymbol : SyntaxRuleSymbol    { get; }
@@ -48,11 +213,12 @@ namespace N2.Compiler
       }
     }
 
+    public abstract WalkerTypeName() : string;
     public DefineTypes() : void
     {
       assert(_tb == null);
       _tb = Owner.GrammarTB.DefineNestedType(<[ decl:
-        public class $(RuleSymbol.Name + "Walker" : usesite) : $(GetWalkerBaseType(RuleSymbol))
+        public class $(WalkerTypeName() : usesite) : $(GetWalkerBaseType(RuleSymbol))
         {
           private RuleParser : $(RuleSymbol.GetParserClassRef());
           public this(ruleParser : $(RuleParserBaseType))
@@ -63,20 +229,9 @@ namespace N2.Compiler
       ]>);
     }
 
-    public DefineMembers(rootAstStruct : option[RootAstStruct]) : void
+    public virtual DefineMembers(rootAstStruct : option[RootAstStruct]) : void
     {
       assert(_tb != null);
-
-      def parms =
-        <[ parameter: $("location" : usesite) : N2.Location ]>
-        :: <[ parameter: $("errorInfo" : usesite) : list[N2.ErrorInfo] ]> //TODO: удалить этот параметр
-        :: RuleSymbol.NonVoidSubRules.Map(r => <[ parameter: $(r.FieldName : usesite) : $(Owner.Environment.RuleTypeToNType(r.Type) : typed) ]>);
-      _tb.DefineConditional(<[ decl:
-        public Accept(..$parms) : $(Owner.Environment.RuleTypeToNType(RuleSymbol.Type) : typed)
-        {
-          $(Owner.Environment.NTypeOfRuleSymbol(RuleSymbol) : typed).Ast(..$(parms.Map(p => <[ $(p.Name : usesite) ]>)))
-        }
-      ]>);
 
       def referencedWalkers = GetDependencies(RuleSymbol);
       foreach(p in referencedWalkers)
@@ -115,22 +270,18 @@ namespace N2.Compiler
       DefineWalkMethod(rootAstStruct, referencedWalkers);
     }
 
+    public abstract RootAstMaker(astStruct : AstStruct, arguments : list[PExpr]) : PExpr;
+    public abstract InternalAstMaker(astStruct : AstStruct, arguments : list[PExpr]) : PExpr;
+    public abstract WalkMethodReturnType(ruleType : RuleType) : PExpr;
+
+    public abstract SkipVoid() : bool;
+    public abstract TokenWalkCode(structField : AstStruct.StructField) : PExpr;
+    public abstract OptionWalkCode(structField : AstStruct.StructField, valueAst : PExpr) : PExpr * PExpr;
+    public abstract ListWalkCode(structField : AstStruct.StructField, itemAst : PExpr) : PExpr * PExpr * PExpr * PExpr;
+    public abstract List2WalkCode(structField : AstStruct.StructField, itemAst : PExpr, separatorAst : PExpr) : PExpr * PExpr * PExpr * PExpr * PExpr;
+
     private DefineWalkMethod(rootAstStruct : option[RootAstStruct], referencedWalkers : Hashtable[RuleSymbol * int, WalkerInfo]) : void
     {
-      def rootAstMaker(arguments : list[PExpr]) : PExpr
-      {
-        def acceptArgs =
-          <[ N2.Location(parser.Source, startPos, pos) ]>
-          :: <[ [] ]>
-          :: arguments;
-        <[ this.Accept(..$acceptArgs) ]>
-      }
-      def internalAstMaker(_ : list[PExpr]) : PExpr
-      {
-        | []   => assert(false)
-        | [x]  => x
-        | many => <[ (..$many) ]>
-      }
       def makeAstPointer(astStruct : AstStruct, name : string)
       {
         mutable astPointer = null;
@@ -162,74 +313,76 @@ namespace N2.Compiler
       and makeInternalAst(astStruct : AstStruct, name : string)
       {
         def (getPointer, initPointer) = makeAstPointer(astStruct, name);
-        def ast = makeAst(astStruct, getPointer, internalAstMaker);
+        def ast = makeAst(astStruct, getPointer, InternalAstMaker);
         (ast, initPointer());
       }
       and makeReader(structField : AstStruct.StructField, astPointer : void -> AstPointer) : PExpr
       {
-        match(structField.Field)
+        match (structField.Field)
         {
           | RuleField.TokenString
           | RuleField.TokenRuleCall =>
             <[
               def tokenPos = pos;
               pos += $(astPointer().SizeRef(structField));
-              N2.NToken(tokenPos, pos)
+              $(TokenWalkCode(structField));
             ]>
 
+          | RuleField.Void(RuleSymbol = ruleSymbol)
           | RuleField.SimpleRuleCall(RuleSymbol = ruleSymbol) =>
             def walkerFieldName = referencedWalkers[(ruleSymbol, 0)].FieldName;
-            if (ruleSymbol.Type is RuleType.Void)
+            if (SkipVoid() && ruleSymbol.Type is RuleType.Void)
               <[ pos += $(astPointer().SizeRef(structField)); ]>
             else
               <[ this.$(walkerFieldName : usesite).Walk(ref pos, ref parser); ]>
 
           | RuleField.ExtensibleRuleCall(RuleSymbol = ruleSymbol, BindingPower = bp) =>
             def walkerFieldName = referencedWalkers[(ruleSymbol, bp)].FieldName;
-            if (ruleSymbol.Type is RuleType.Void)
+            if (SkipVoid() && ruleSymbol.Type is RuleType.Void)
               <[ pos += $(astPointer().SizeRef(structField)); ]>
             else
               <[ this.$(walkerFieldName : usesite).Walk(ref pos, ref parser); ]>
 
           | RuleField.List(astStruct = itemStruct) =>
             def (itemAst, itemPointerInit) = makeInternalAst(itemStruct, "itemPointer");
+            def (init, addItem, returnCode, emptyCode) = ListWalkCode(structField, itemAst);
             <[
               def listEnd = pos + $(astPointer().SizeRef(structField));
               if (listEnd > pos)
               {
-                def astBuffer = System.Collections.Generic.List(16);
+                $init;
                 def loop()
                 {
                   $itemPointerInit;
-                  astBuffer.Add($itemAst);
+                  $addItem;
                   if (listEnd > pos)
                     loop();
                   else
                     assert(listEnd == pos);
                 }
                 loop();
-                Nemerle.Collections.NList.ToList(astBuffer)
+                $returnCode;
               }
-              else []
+              else $emptyCode
             ]>
 
           | RuleField.List2(astRuleStruct = itemStruct, astSeparatorStruct = separatorStruct) =>
             def (itemAst, itemPointerInit) = makeInternalAst(itemStruct, "itemPointer");
             def (separatorAst, separatorPointerInit) = makeInternalAst(separatorStruct, "separatorPointer");
+            def (init, addItem, addSeparator, returnCode, emptyCode) = List2WalkCode(structField, itemAst, separatorAst);
             <[
               def listEnd = pos + $(astPointer().SizeRef(structField));
               if (listEnd > pos)
               {
-                def astBuffer = System.Collections.Generic.List(16);
-                def separatorBuffer = System.Collections.Generic.List(16);
+                $init;
                 def loop()
                 {
                   $itemPointerInit;
-                  astBuffer.Add($itemAst);
+                  $addItem;
                   if (listEnd > pos)
                   {
                     $separatorPointerInit;
-                    separatorBuffer.Add($separatorAst);
+                    $addSeparator;
                     if (listEnd > pos)
                       loop();
                     else
@@ -239,46 +392,50 @@ namespace N2.Compiler
                     assert(listEnd == pos);
                 }
                 loop();
-                (Nemerle.Collections.NList.ToList(astBuffer), Nemerle.Collections.NList.ToList(separatorBuffer))
+                $returnCode
               }
               else
-                ([], [])
+                $emptyCode
             ]>
 
           | RuleField.Option(astStruct = valueAstStruct) =>
             def (valueAst, valuePointerInit) = makeInternalAst(valueAstStruct, "valuePointer");
+            def (someCode, noneCode) = OptionWalkCode(structField, valueAst);
             <[
               if ($(astPointer().SizeRef(structField)) > 0)
               {
                 $valuePointerInit;
-                Some($valueAst)
+                $someCode;
               }
               else
-                None()
+                $noneCode;
             ]>
 
           | _ => assert(false)
         }
         //<[ throw System.NotImplementedException(); ]>
       }
-      and makeAst(astStruct : AstStruct, astPointer : void -> AstPointer, maker : list[PExpr] -> PExpr) : PExpr
+      and makeAst(astStruct : AstStruct, astPointer : void -> AstPointer, maker : AstStruct * list[PExpr] -> PExpr) : PExpr
       {
         def statements = List();
         def arguments = List();
         when (astStruct is RootAstStruct(IsPostfix = true))
           arguments.Add(<[ prefix ]>);
 
+        when (!(astStruct is RootAstStruct))
+        {
+          statements.Add(<[ def startPos = pos; ]>);
+          statements.Add(<[ _ = startPos; ]>);
+        }
+
         foreach (structField in astStruct.SizeFields)
           match (structField.Field)
           {
-            | RuleField.Ast
+            | RuleField.Ast       => assert(false)
             | RuleField.Predicate => ()
-            | RuleField.Void =>
+            | RuleField.Void when SkipVoid() =>
               statements.Add(<[ pos += $(astPointer().SizeRef(structField)); ]>);
 
-            | RuleField.List
-            | RuleField.List2
-            | RuleField.Option
             | _                =>
               def varName = Util.tmpname("ast");
               statements.Add(<[ def $(varName : usesite) = $(makeReader(structField, astPointer)) ]>);
@@ -286,7 +443,7 @@ namespace N2.Compiler
           }
 
         statements.Add(<[ _ = $(astStruct.RuleField.Print()) ]>);
-        statements.Add(maker(arguments.ToNList()));
+        statements.Add(maker(astStruct, arguments.ToNList()));
         <[ { ..$(statements.ToNList()) } ]>
       }
 
@@ -294,9 +451,9 @@ namespace N2.Compiler
       {
         | SimpleRuleSymbol as s =>
           def (astPointer, initPointer) = makeAstPointer(rootAstStruct.Value, "astPtr");
-          def ast = makeAst(rootAstStruct.Value, astPointer, rootAstMaker);
+          def ast = makeAst(rootAstStruct.Value, astPointer, RootAstMaker).FlattenPExpr();
           _tb.DefineConditional(<[ decl:
-            public override Walk(pos : ref int, parser : ref N2.Internal.Parser) : $(Owner.Environment.RuleTypeToNType(s.Type) : typed)
+            public override Walk(pos : ref int, parser : ref N2.Internal.Parser) : $(WalkMethodReturnType(s.Type))
             {
               ignore(pos, parser);
               unchecked
@@ -311,13 +468,13 @@ namespace N2.Compiler
         | ExtentionRuleSymbol(ExtentionType = Prefix) as s =>
           def astPointer() { AstPointer(rootAstStruct.Value, "astPtr", this) }
           _tb.DefineConditional(<[ decl:
-            public override Walk(pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(Owner.Environment.RuleTypeToNType(s.Type) : typed)
+            public override Walk(pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(WalkMethodReturnType(s.Type))
             {
               ignore(pos, astPtr, parser);
               unchecked
               {
                 def startPos = pos;
-                $(makeAst(rootAstStruct.Value, astPointer, rootAstMaker))
+                $(makeAst(rootAstStruct.Value, astPointer, RootAstMaker).FlattenPExpr())
               }
             }
           ]>);
@@ -325,12 +482,12 @@ namespace N2.Compiler
         | ExtentionRuleSymbol(ExtentionType = Postfix) as s =>
           def astPointer() { AstPointer(rootAstStruct.Value, "astPtr", this) }
           _tb.DefineConditional(<[ decl:
-            public override Walk(prefix : $(Owner.Environment.RuleTypeToNType(s.Type) : typed), startPos : int, pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(Owner.Environment.RuleTypeToNType(s.Type) : typed)
+            public override Walk(prefix : $(WalkMethodReturnType(s.Type)), startPos : int, pos : ref int, astPtr : int, parser : ref N2.Internal.Parser) : $(WalkMethodReturnType(s.Type))
             {
               ignore(prefix, startPos, pos, astPtr, parser);
               unchecked
               {
-                $(makeAst(rootAstStruct.Value, astPointer, rootAstMaker))
+                $(makeAst(rootAstStruct.Value, astPointer, RootAstMaker).FlattenPExpr())
               }
             }
           ]>);
@@ -339,7 +496,7 @@ namespace N2.Compiler
       }
     }
 
-    private static GetDependencies(rule : RuleSymbol) : Hashtable[RuleSymbol * int, WalkerInfo]
+    private GetDependencies(rule : RuleSymbol) : Hashtable[RuleSymbol * int, WalkerInfo]
     {
       def refs = Hashtable();
       def collect(rule : Rule) : void
@@ -354,7 +511,7 @@ namespace N2.Compiler
           assert2(bp != 31);
           def symbol = ruleRef.Value;
           // TODO: deal with 'void'
-          unless (callRule.Type is RuleType.Chars || callRule.Type is RuleType.Void || symbol is MarkerSymbol)
+          unless (callRule.Type is RuleType.Chars || (SkipVoid() && callRule.Type is RuleType.Void) || symbol is MarkerSymbol)
             unless (refs.ContainsKey((symbol, bp)))
               _ = refs.Add((symbol, bp), WalkerInfo(symbol, bp));
       }
@@ -382,16 +539,16 @@ namespace N2.Compiler
 
     private GetWalkerType(rule : RuleSymbol) : PExpr
     {
-      | SimpleRuleSymbol as s => <[ N2.Runtime.SimpleAstWalker[$(Owner.Environment.RuleTypeToNType(s.Type) : typed)] ]>
-      | ExtensibleRuleSymbol as s => <[ N2.Runtime.ExtensibleAstWalker[$(Owner.Environment.RuleTypeToNType(s.Type) : typed)] ]>
+      | SimpleRuleSymbol     as s => <[ N2.Runtime.SimpleRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
+      | ExtensibleRuleSymbol as s => <[ N2.Runtime.ExtensibleRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
       | _ => assert2(false); assert(false)
     }
 
-    private GetWalkerBaseType(rule : RuleSymbol) : PExpr
+    public GetWalkerBaseType(rule : RuleSymbol) : PExpr
     {
-      | SimpleRuleSymbol                             as s => <[ N2.Runtime.SimpleAstWalker[$(Owner.Environment.RuleTypeToNType(s.Type) : typed)] ]>
-      | ExtentionRuleSymbol(ExtentionType = Prefix)  as s => <[ N2.Runtime.PrefixAstWalker[$(Owner.Environment.RuleTypeToNType(s.Type) : typed)] ]>
-      | ExtentionRuleSymbol(ExtentionType = Postfix) as s => <[ N2.Runtime.PostfixAstWalker[$(Owner.Environment.RuleTypeToNType(s.Type) : typed)] ]>
+      | SimpleRuleSymbol                             as s => <[ N2.Runtime.SimpleRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
+      | ExtentionRuleSymbol(ExtentionType = Prefix)  as s => <[ N2.Runtime.PrefixRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
+      | ExtentionRuleSymbol(ExtentionType = Postfix) as s => <[ N2.Runtime.PostfixRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
       | _ => assert2(false); assert(false)
     }
 
