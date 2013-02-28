@@ -58,13 +58,18 @@ namespace N2.Visualizer
       textBox1.TextArea.Caret.PositionChanged += new EventHandler(Caret_PositionChanged);
     }
 
-
     private void textBox1_GotFocus(object sender, RoutedEventArgs e)
     {
-      ShowInfoOld(textBox1.CaretOffset);
+      ShowNodeForCaret();
     }
 
     void Caret_PositionChanged(object sender, EventArgs e)
+    {
+      _pos.Text = textBox1.CaretOffset.ToString();
+      ShowNodeForCaret();
+    }
+
+    private void ShowNodeForCaret()
     {
       if (_doTreeOperation)
         return;
@@ -72,7 +77,6 @@ namespace N2.Visualizer
       _doChangeCaretPos = true;
       try
       {
-        //ShowInfoOld(textBox1.CaretOffset);
         var node = FindNode(treeView1.Items, textBox1.CaretOffset);
 
         if (node != null)
@@ -92,12 +96,12 @@ namespace N2.Visualizer
 
       foreach (TreeViewItem item in items)
       {
+        item.IsExpanded = true;
         var node = (ReflectionStruct)item.Tag;
 
         if (node.Location.StartPos <= p && p < node.Location.EndPos)
         {
           item.IsExpanded = true;
-          //item.Focus();
 
           if (item.Items.Count == 0)
             return item;
@@ -178,26 +182,22 @@ namespace N2.Visualizer
     {
       try
       {
-        if (_parseResult == null)
-          return;
-
         treeView1.Items.Clear();
+
+        if (_parseResult == null || !_parseResult.IsSuccess)
+          return;
 
         var root = _parseResult.Reflection();
         var treeNode = new TreeViewItem();
+        treeNode.Expanded += new RoutedEventHandler(node_Expanded);
         treeNode.Header = root.Description;
         treeNode.Tag = root;
+        if (root.Children.Count != 0)
+          treeNode.Items.Add(new TreeViewItem());
         treeView1.Items.Add(treeNode);
-        Fill(treeNode.Items, root.Children);
         
       }
-      catch
-      {
-      }
-      finally
-      {
-        //_lbRules.EndUpdate();
-      }
+      catch { }
     }
 
     void Fill(ItemCollection treeNodes, ReadOnlyCollection<ReflectionStruct> nodes)
@@ -207,119 +207,32 @@ namespace N2.Visualizer
         var treeNode = new TreeViewItem();
         treeNode.Header = node.Description;
         treeNode.Tag = node;
+        treeNode.Expanded += new RoutedEventHandler(node_Expanded);
         if (node.Location.Length == 0)
           treeNode.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
+        //if (ruleApplication.FirstFailedIndex > 0)
+        //{
+        //  var sate = _parseResult.RawAst[ruleApplication.AstPointer + 2];
+        //  if (sate >= 0)
+        //    node.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
+        //}
+
         treeNodes.Add(treeNode);
-        Fill(treeNode.Items, node.Children);
+
+        if (node.Children.Count != 0)
+          treeNode.Items.Add(new TreeViewItem());
 	    }
-    }
-
-
-    void ShowInfoOld(int pos)
-    {
-      return;
-
-      if (_doTreeOperation)
-        return;
-
-      try
-      {
-        if (_parseResult == null)
-          return;
-
-        treeView1.Items.Clear();
-
-        if (pos > _parseResult.RawMemoize.Length)
-          return;
-
-        Fill(treeView1.Items, _parseResult.ParserHost.Reflection(_parseResult, pos));
-
-        //_lbRules.Items.AddRange(ParseResult.ParserHost.Reflection(ParseResult, pos));
-      }
-      finally
-      {
-        //_lbRules.EndUpdate();
-      }
-    }
-
-    private void Fill(ItemCollection items, ReadOnlyCollection<RuleApplication> ruleApplications)
-    {
-      foreach (RuleApplication ruleApplication in ruleApplications)
-      {
-        var node = new TreeViewItem();
-        node.Header = ruleApplication;
-
-        var size = ruleApplication.Size;
-
-        if (size == 0)
-          node.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
-
-        if (ruleApplication.FirstFailedIndex > 0)
-        {
-          var sate = _parseResult.RawAst[ruleApplication.AstPointer + 2];
-
-          if (sate >= 0)
-            node.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
-        }
-
-        node.Expanded += new RoutedEventHandler(node_Expanded);
-
-        if (ruleApplication.HasChildren)
-          node.Items.Add(new TreeViewItem());
-
-        items.Add(node);
-      }
     }
 
     void node_Expanded(object sender, RoutedEventArgs e)
     {
-      return;
-
-      var node = (TreeViewItem)e.Source;
-      if (node.Items.Count == 1 && ((TreeViewItem)node.Items[0]).Header == null)
+      var treeNode = (TreeViewItem)e.Source;
+      if (treeNode.Items.Count == 1 && ((TreeViewItem)treeNode.Items[0]).Header == null)
       {
-        node.Items.Clear();
-
-        if (node.Header is RuleApplication)
-        {
-          var ruleApplication = (RuleApplication)node.Header;
-          var calls = ruleApplication.GetChildren();
-          var failed = ruleApplication.FirstFailedIndex;
-          var i = 0;
-
-          foreach (var call in calls)
-          {
-            if (isSimpleCall(call) && call.HasChildren)
-            {
-              var children = call.GetChildren();
-              Trace.Assert(children.Count == 1);
-              Fill(node.Items, children);
-            }
-            else
-            {
-              var subNode = new TreeViewItem();
-              subNode.Tag = call;
-              subNode.Header = call;
-              var hasChildren = call.HasChildren;
-              if (hasChildren)
-                subNode.Items.Add(new TreeViewItem());
-              
-              //subNode.FontWeight = FontWeights.Bold;
-
-              if (failed >= 0 && i >= failed)
-                subNode.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
-              else if (call.Size == 0)
-                subNode.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
-
-              node.Items.Add(subNode);
-            }
-            i++;
-          }
-        }
-        else if (node.Header is RuleCall)
-        {
-          Fill(node.Items, ((RuleCall)node.Header).GetChildren());
-        }
+        treeNode.Items.Clear();
+        var node = (ReflectionStruct)treeNode.Tag;
+        Fill(treeNode.Items, node.Children);
+        treeNode.Expanded -= new RoutedEventHandler(node_Expanded);
       }
     }
 
@@ -361,7 +274,6 @@ namespace N2.Visualizer
     private void textBox1_TextChanged(object sender, EventArgs e)
     {
       Parse();
-      //ShowInfoOld(textBox1.CaretOffset);
     }
 
     private void textBox1_LostFocus(object sender, RoutedEventArgs e)
@@ -369,44 +281,41 @@ namespace N2.Visualizer
       textBox1.TextArea.Caret.Show();
     }
 
+    string MakePath(TreeViewItem item)
+    {
+      var path = new List<string>();
+
+      for (TreeViewItem curr = item; curr != null; curr = curr.Parent as TreeViewItem)
+        path.Add(curr.Header.ToString());
+
+      path.Reverse();
+
+      if (path.Count == 0)
+          return "";
+
+      return string.Join(@"\", path);
+    }
+
     private void treeView1_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
+      var item = (TreeViewItem)e.NewValue;
+
+      if (item == null)
+        return;
+
+      if (_parseResult != null && _parseResult.IsSuccess)
+        _status.Text = MakePath(item);
+
       if (_doChangeCaretPos)
         return;
 
       _doTreeOperation = true;
       try
       {
-        var item = (TreeViewItem)e.NewValue;
-
-        if (item == null)
-          return;
-
         var info = (ReflectionStruct)item.Tag;
 
         textBox1.TextArea.AllowCaretOutsideSelection();
         textBox1.Select(info.Location.StartPos, info.Location.Length);
-      }
-      finally
-      {
-        _doTreeOperation = false;
-      }
-
-
-      return;
-
-      _doTreeOperation = true;
-      try
-      {
-        var item = (TreeViewItem)e.NewValue;
-
-        if (item == null)
-          return;
-
-        var info = (IRuleApplication)item.Header;
-
-        textBox1.TextArea.AllowCaretOutsideSelection();
-        textBox1.Select(info.Position, info.Size);
       }
       finally
       {
