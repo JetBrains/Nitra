@@ -1,0 +1,101 @@
+﻿using N2.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  [Record]
+  internal variant RuleStructure
+  {
+                   public         SrcRule          : N2.Model.Rule;
+                   public         Fields           : array[RuleStructureField];
+    [RecordIgnore] public mutable Owner            : RuleStructureField;
+    [RecordIgnore] public mutable Header           : array[RuleStructureHeaderField];
+    [RecordIgnore] public mutable AstId            : string;
+    [RecordIgnore] public mutable AllocateState    : int;
+    [RecordIgnore] public mutable OkLabel          : PExprLabel;
+    [RecordIgnore] public mutable FailLabel        : PExprLabel;
+                   public         HasTerminator    : bool { get { this is Ast(Symbol = ExtentionRuleSymbol) } }
+                   public         TerminatorOffset : int  { get { Fields[Fields.Length - 1].Offset + Fields[Fields.Length - 1].Size} }
+                   public         Size             : int  { get { TerminatorOffset + if (HasTerminator) 1 else 0 } }
+
+    | Ast { Symbol : RuleSymbol }
+    | Option
+    | List
+    | ListWithSeparatorRule
+    | ListWithSeparatorSeparator
+    | Predicate
+
+    public Init(variableEmitter : IVariableEmitter) : void
+    {
+      assert(this is Ast);
+      mutable state = 0;
+      def initStructure(structure, owner, level)
+      {
+        structure.Owner     = owner;
+        if (owner == null)
+        {
+          assert(structure is Ast);
+          structure.OkLabel   = variableEmitter.Environment.MakeLabel("Ast_Ok");
+          structure.FailLabel = variableEmitter.Environment.MakeLabel("Ast_Fail");
+          structure.Header    = array[RuleStructureHeaderField.Id(structure, 0), RuleStructureHeaderField.Next(structure, 1), RuleStructureHeaderField.State(structure, 2)];
+        }
+        else
+        {
+          assert(!(structure is Ast));
+          structure.OkLabel   = variableEmitter.Environment.MakeLabel($"$(structure.GetType().Name)_$(owner.State)_Ok");
+          structure.FailLabel = variableEmitter.Environment.MakeLabel($"$(structure.GetType().Name)_$(owner.State)_Fail");
+          structure.Header    = array[RuleStructureHeaderField.Id(structure, 0), RuleStructureHeaderField.Next(structure, 1)];
+        }
+
+        def fields = structure.Fields;
+        for (mutable i = 0; i < fields.Length - 1; ++i)
+          fields[i].NextSibling = fields[i + 1];
+
+        for (mutable i = 0; i < fields.Length; ++i)
+          fields[i].Owner = structure;
+
+        for (mutable i = 0; i < fields.Length; ++i)
+          initField(fields[i], level);
+
+        fields[0].Offset = structure.Header.Length;
+        for (mutable i = 1; i < fields.Length; ++i)
+          fields[i].Offset = fields[i - 1].Offset + fields[i - 1].Size;
+
+        match (fields.Find(field => !(field is RuleStructureField.Predicate)))
+        {
+          | Some(field) =>
+            field.AllocateAst = true;
+            structure.AllocateState = field.State;
+
+          | None()      => assert(false);
+        }
+      }
+      and initField(field : RuleStructureField, level)
+      {
+        field.Level         = level;
+        field.State         = state; ++state;
+        field.ParseLabel    = variableEmitter.Environment.MakeLabel($"Parse_$(field.GetType().Name)_$(field.State)");
+        field.RecoveryLabel = variableEmitter.Environment.MakeLabel($"Recovery_$(field.GetType().Name)_$(field.State)");
+        match (field)
+        {
+          | TokenString                                 => field.Size = 1;
+          | TokenCall                                   => field.Size = 1;
+          | ExtensibleCall                              => field.Size = 1;
+          | SimpleCall                                  => field.Size = 1;
+          | Option           (rule)                     => field.Size = 1; initStructure(rule, field, level + 1);
+          | List             (rule, _, _)               => field.Size = 1; initStructure(rule, field, level + 1);
+          | Predicate        (rule, _)                  => field.Size = 0; initStructure(rule, field, level + 1);
+          | ListWithSeparator(rule, separator, _, _, _) => field.Size = 1; initStructure(rule, field, level + 1); initStructure(separator, field, level + 1);
+        }
+      }
+      initStructure(this, null, 0);
+    }
+  }
+}
