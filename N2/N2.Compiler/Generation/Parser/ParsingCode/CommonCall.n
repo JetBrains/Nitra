@@ -1,0 +1,102 @@
+﻿using N2.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+using N = Nemerle.Compiler;
+
+namespace N2.Compiler
+{
+  internal abstract partial class RuleParserEmitter
+  {
+    [Memoize]
+    public MakeTokenCall(ruleSymbol : RegularRuleSymbol) : PExpr
+    {
+      def grammarType = PExprUtils.FromQualifiedIdentifier(ruleSymbol.DeclaringModule.Node.FullNameParts);
+      <[ $grammarType.GrammarImpl.$(ruleSymbol.DecorateRuleName() : dyn) ]>
+    }
+
+    private _simpleCalls : SCG.List[SimpleRuleSymbol * string] = SCG.List();
+
+    [Memoize]
+    public MakeParserName(ruleSymbol : SimpleRuleSymbol) : string
+    {
+      def name = $"_parser_s$(_simpleCalls.Count)_$(ruleSymbol.Name)";
+      _simpleCalls.Add((ruleSymbol, name));
+      name
+    }
+
+    private _extensibleCalls : SCG.List[ExtensibleRuleSymbol * int * string] = SCG.List();
+
+    [Memoize]
+    public MakeParserName(ruleSymbol : ExtensibleRuleSymbol, bindingPower : int) : string
+    {
+      def name = $"_parser_e$(_extensibleCalls.Count)_$(ruleSymbol.Name)";
+      _extensibleCalls.Add((ruleSymbol, bindingPower, name));
+      name
+    }
+
+    public MakeCall(ruleSymbol : SimpleRuleSymbol) : PExpr
+    {
+      <[ $(MakeParserName(ruleSymbol) : dyn).Parse ]>
+    }
+
+    public MakeCall(ruleSymbol : ExtensibleRuleSymbol, bindingPower : int) : PExpr
+    {
+      <[ $(MakeParserName(ruleSymbol, bindingPower) : dyn).Parse ]>
+    }
+
+    public MakeSyntaxCallCode(call : PExpr, field : RuleStructureField) : PExpr
+    {
+      MakeCallCodeImpl(<[ $call(curEndPos, text, ref tmpResult, ref parser) ]>, field)
+    }
+
+    public MakeCallCodeImpl(call : PExpr, field : RuleStructureField) : PExpr
+    {
+      def (debugSetLastResult, exit) =
+        if (this.Compiler.Owner.Environment.Manager.Options.EmitDebug)
+          (<[ parser.LastParseStart = curEndPos; parser.LastParseEnd = newPos; ]>, <[ () ]>);
+        else
+          (<[ () ]>, <[ () ]>);
+
+      def loc = field.SrcRule.Location.NLocation();
+      when (!loc.IsEmpty && loc.IsSourceAvailable)
+      {
+        call.Location = loc;
+        // Make the location directly behind the rule call. This allows you to see the result of the parsing rules.
+        exit.Location = N.Location(loc.FileIndex, loc.EndLine, loc.EndColumn, loc.Line, loc.EndColumn + 1);
+      }
+
+      <[
+      $(field.ParseLabel.Label());
+        tmpResult = -1;
+        newPos = $call;
+        tmpSize = newPos - curEndPos;
+        $debugSetLastResult;
+        if (newPos >= 0)
+        {
+          $(AllocateParentAst(field));
+          $(field.Owner.AstPtr.Set(field, <[ tmpSize ]>));
+          curEndPos = newPos;
+          $exit;
+          $(field.ContinueParseLabel.Goto());
+        }
+        else
+        {
+          parseState = $(field.State : int);//состояние
+          $exit;
+          $(field.FailParseLabel.Goto());
+        }
+      ]>
+    }
+  }
+}
