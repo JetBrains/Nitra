@@ -1,0 +1,93 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal abstract partial class RuleParserEmitter
+  {
+    public CompileListWithSeparator(code : SCG.List[PExpr], field : RuleStructureField.ListWithSeparator) : void
+    {
+      def counter     () { <[ $(CreateVariable($"counter$(field.Level)") : dyn) ]> }
+      def listStartPos() { <[ $(CreateVariable($"listStartPos$(field.Level)") : dyn) ]> }
+      def listEndPos  () { <[ $(CreateVariable($"listEndPos$(field.Level)") : dyn) ]> }
+      def useCounter = field.MinCount > 0 || field.MaxCount is Some(_);
+      def counterInit() { if (useCounter) <[ $(counter())  = 0 ]> else <[ {} ]> }
+      def counterInc()  { if (useCounter) <[ ++ $(counter())   ]> else <[ {} ]> }
+      def ifCounterEqualsToMaxThenContinue()
+      {
+        if (field.MaxCount is Some(max))
+          <[
+            when ($(counter()) == $max)
+              $(field.ContinueParseLabel.Goto());
+          ]>
+        else
+          <[ {} ]>
+      }
+      def ifCounterLessThanMinThenFail()
+      {
+        if (field.MinCount > 0)
+          <[
+            when ($(counter()) < $(field.MinCount))
+              $(field.FailParseLabel.Goto());
+          ]>
+        else
+          <[ {} ]>
+      }
+      def hangingSeparatorCode = if (field.HangingSeparator)
+        <[
+          $(listEndPos()) = $CurTextPos;
+          $(field.Owner.AstPtr.Set(field, <[ $(listEndPos()) - $(listStartPos()) ]>));
+        ]>
+      else
+        <[ {} ]>;
+
+      def firstRuleChild = field.Rule.Fields[0];
+      def firstSeparatorChild = field.Separator.Fields[0];
+      code.Add(<[
+        $(field.ParseLabel.Label());
+          $(AllocateParentAst(field));
+          $(counterInit());
+          $(listStartPos()) = $CurTextPos;
+          $(listEndPos()) = $CurTextPos;
+          $(field.Rule.AstStart) = $CurTextPos;
+          $(firstRuleChild.ParseLabel.Goto());
+
+        $(field.Rule.OkLabel.Label());
+          $(counterInc());
+          $(listEndPos()) = $CurTextPos;
+          $(field.Owner.AstPtr.Set(field, <[ $(listEndPos()) - $(listStartPos()) ]>));
+          $(ifCounterEqualsToMaxThenContinue());
+          $(field.Separator.AstStart) = $CurTextPos;
+          $(firstSeparatorChild.ParseLabel.Goto());
+
+        $(field.Rule.FailLabel.Label());
+          $(ifCounterLessThanMinThenFail());
+          $CurTextPos = $(listEndPos());
+          $(field.Owner.AstPtr.Set(field, <[ $(listEndPos()) - $(listStartPos()) ]>));
+          $(field.ContinueParseLabel.Goto());
+
+        $(field.Separator.OkLabel.Label());
+          $hangingSeparatorCode;
+          $(field.Rule.AstStart) = $CurTextPos;
+          $(firstRuleChild.ParseLabel.Goto());
+
+        $(field.Separator.FailLabel.Label());
+          $(ifCounterLessThanMinThenFail());
+          $CurTextPos = $(listEndPos());
+          $(field.Owner.AstPtr.Set(field, <[ $(listEndPos()) - $(listStartPos()) ]>));
+          $(field.ContinueParseLabel.Goto());
+      ]>);
+      CompileFields(code, field.Rule.Fields);
+      CompileFields(code, field.Separator.Fields);
+    }
+  }
+}
