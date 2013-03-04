@@ -1,0 +1,176 @@
+﻿using N2.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  [Record]
+  public class WalkerCode
+  {
+    public CodeForAst : PExpr;
+    public Parameters : list[PParameter];
+    public ReturnType : PExpr;
+  }
+
+  public abstract class WalkerGenerator
+  {
+    public abstract MakeGenerator(ruleStructure : RuleStructure.Ast) : WalkerCode;
+    public abstract MakeCodeForField(field : RuleStructureField, parentAstPointer : void -> AstPointer) : PExpr;
+    public abstract RootAstMaker(ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr;
+    public abstract InternalAstMaker(ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr;
+
+    public MakeInternalAst(ruleStructure : RuleStructure, name : string) : PExpr
+    {
+      def (getPointer, initPointer) = MakeAstPointer(ruleStructure, name);
+      def ast = MakeAst(ruleStructure, getPointer, InternalAstMaker);
+      <[ $(initPointer()); $ast ]>
+    }
+
+    public MakeAstPointer(ruleStructure : RuleStructure, name : string) : (void -> AstPointer) * (void -> PExpr)
+    {
+      mutable astPointer = null;
+      def getPointer()
+      {
+        when (astPointer == null)
+          astPointer = AstPointer(ruleStructure, name);
+        astPointer
+      }
+      def initPointer()
+      {
+        if (astPointer == null)
+          <[ () ]>
+        else
+          <[
+            def $(name : dyn) = {
+              astPtr:
+              {
+                for (mutable ast = parser.memoize[pos]; ast > 0; ast = parser.ast[ast + 1])
+                  when (parser.ast[ast] == $(ruleStructure.AstId : dyn))
+                    astPtr(ast);
+                assert(false);
+              }
+            }
+          ]>
+      }
+      (getPointer, initPointer)
+    }
+
+    public MakeAst(ruleStructure : RuleStructure, astPointer : void -> AstPointer, maker : RuleStructure * list[PExpr] -> PExpr) : PExpr
+    {
+      def statements = List();
+      def arguments = List();
+      when (ruleStructure is RuleStructure.Ast(Symbol = ExtentionRuleSymbol(ExtentionType = Postfix)))
+        arguments.Add(<[ prefix ]>);
+
+      when (!(ruleStructure is RuleStructure.Ast))
+      {
+        statements.Add(<[ def startPos = pos; ]>);
+        statements.Add(<[ _ = startPos; ]>);
+      }
+
+      foreach (field in ruleStructure.Fields)
+        match (field)
+        {
+          | RuleStructureField.Predicate => ()
+          //| RuleStructureField.Void when SkipVoid() =>
+          //  statements.Add(<[ pos += $(astPointer().SizeRef(structField)); ]>);
+
+          | _                =>
+            def varName = Nemerle.Compiler.Util.tmpname("ast");
+            statements.Add(<[ def $(varName : usesite) = $(MakeCodeForField(field, astPointer)) ]>);
+            arguments.Add(<[ $(varName : usesite) ]>);
+        }
+
+      statements.Add(maker(ruleStructure, arguments.ToNList()));
+      <[ { ..$(statements.ToNList()) } ]>
+    }
+
+    public MakeOption
+      ( field            : RuleStructureField.Option
+      , parentAstPointer : void -> AstPointer
+      , someCode         : PExpr
+      , noneCode         : PExpr
+      ) : PExpr
+    {
+      <[
+        if ($(parentAstPointer().Get(field)) > 0)
+          $someCode;
+        else
+          $noneCode;
+      ]>
+    }
+
+    public MakeForEach
+      ( field            : RuleStructureField.List
+      , parentAstPointer : void -> AstPointer
+      , init             : PExpr
+      , item             : PExpr
+      , returnCode       : PExpr
+      , emptyCode        : PExpr
+      ) : PExpr
+    {
+      <[
+        def listEnd = pos + $(parentAstPointer().Get(field));
+        if (listEnd > pos)
+        {
+          $init;
+          def loop()
+          {
+            $item;
+            if (listEnd > pos)
+              loop();
+            else
+              assert(listEnd == pos);
+          }
+          loop();
+          $returnCode;
+        }
+        else $emptyCode
+      ]>
+    }
+
+    public MakeForEachWithSeparator
+      ( field            : RuleStructureField.ListWithSeparator
+      , parentAstPointer : void -> AstPointer
+      , init             : PExpr
+      , item             : PExpr
+      , separator        : PExpr
+      , returnCode       : PExpr
+      , emptyCode        : PExpr
+      ) : PExpr
+    {
+      <[
+        def listEnd = pos + $(parentAstPointer().Get(field));
+        if (listEnd > pos)
+        {
+          $init;
+          def loop()
+          {
+            $item;
+            if (listEnd > pos)
+            {
+              $separator;
+              if (listEnd > pos)
+                loop();
+              else
+                assert(listEnd == pos);
+            }
+            else
+              assert(listEnd == pos);
+          }
+          loop();
+          $returnCode
+        }
+        else
+          $emptyCode
+      ]>
+    }
+  }
+}
