@@ -21,10 +21,40 @@ namespace N2.Compiler
 
   public abstract class WalkerGenerator
   {
+    private calls : Hashtable[RuleSymbol * int, string] = Hashtable();
+    public CallWalker(ruleSymbol : RuleSymbol, bp : int) : string
+    {
+      def key = (ruleSymbol, bp);
+      if (calls.ContainsKey(key))
+        calls[key];
+      else
+      {
+        def name = $"walkerRef$(calls.Count)";
+        calls.Add(key, name);
+        name
+      }
+    }
+
     public abstract MakeGenerator(ruleStructure : RuleStructure.Ast) : WalkerCode;
     public abstract MakeCodeForField(field : RuleStructureField, parentAstPointer : void -> AstPointer) : PExpr;
     public abstract RootAstMaker(ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr;
     public abstract InternalAstMaker(ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr;
+
+    public abstract WalkMethodReturnType(ruleType : RuleType) : PExpr;
+    private GetWalkerType(rule : RuleSymbol) : PExpr
+    {
+      | SimpleRuleSymbol     as s => <[ N2.Runtime.SimpleRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
+      | ExtensibleRuleSymbol as s => <[ N2.Runtime.ExtensibleRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
+      | _ => assert2(false); assert(false)
+    }
+
+    public GetWalkerBaseType(rule : RuleSymbol) : PExpr
+    {
+      | SimpleRuleSymbol                             as s => <[ N2.Runtime.SimpleRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
+      | ExtentionRuleSymbol(ExtentionType = Prefix)  as s => <[ N2.Runtime.PrefixRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
+      | ExtentionRuleSymbol(ExtentionType = Postfix) as s => <[ N2.Runtime.PostfixRuleWalker[$(WalkMethodReturnType(s.Type))] ]>
+      | _ => assert2(false); assert(false)
+    }
 
     public MakeInternalAst(ruleStructure : RuleStructure, name : string) : PExpr
     {
@@ -62,7 +92,7 @@ namespace N2.Compiler
       (getPointer, initPointer)
     }
 
-    public MakeAst(ruleStructure : RuleStructure, astPointer : void -> AstPointer, maker : RuleStructure * list[PExpr] -> PExpr) : PExpr
+    public abstract MakeAst(ruleStructure : RuleStructure, astPointer : void -> AstPointer, maker : RuleStructure * list[PExpr] -> PExpr) : PExpr
     {
       def statements = List();
       def arguments = List();
@@ -79,8 +109,9 @@ namespace N2.Compiler
         match (field)
         {
           | RuleStructureField.Predicate => ()
-          //| RuleStructureField.Void when SkipVoid() =>
-          //  statements.Add(<[ pos += $(astPointer().SizeRef(structField)); ]>);
+          | RuleStructureField.SimpleCall(symbol)          when symbol.Type is RuleType.Void
+          | RuleStructureField.ExExtensibleCall(symbol, _) when symbol.Type is RuleType.Void =>
+            statements.Add(<[ pos += $(astPointer().SizeRef(structField)); ]>);
 
           | _                =>
             def varName = Nemerle.Compiler.Util.tmpname("ast");
@@ -90,6 +121,19 @@ namespace N2.Compiler
 
       statements.Add(maker(ruleStructure, arguments.ToNList()));
       <[ { ..$(statements.ToNList()) } ]>
+    }
+
+    public MakeToken
+      ( field            : RuleStructureField
+      , parentAstPointer : void -> AstPointer
+      , code             : PExpr
+      ) : PExpr
+    {
+      <[
+        def tokenPos = pos;
+        pos += $(parentAstPointer().Get(field));
+        $code;
+      ]>
     }
 
     public MakeOption
