@@ -11,8 +11,11 @@ using System.Linq;
 
 namespace N2.Compiler
 {
+  [Record]
   public class AstWalkerGenerator : WalkerGenerator
   {
+    public Environment : EmitterEnvironment { get; }
+
     public override MakeCodeForField(field : RuleStructureField, parentAstPointer : void -> AstPointer) : PExpr
     {
       match (field)
@@ -61,13 +64,13 @@ namespace N2.Compiler
       }
     }
 
-    public override RootAstMaker(_ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr
+    public override RootAstMaker(ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr
     {
-      def acceptArgs =
+      def astArgs =
         <[ N2.Location(parser.Source, startPos, pos) ]>
         :: <[ [] ]>
         :: arguments;
-      <[ this.Accept(..$acceptArgs) ]>
+      <[ $(Environment.NTypeOfRuleSymbol((ruleStructure :> RuleStructure.Ast).Symbol) : typed).Ast(..$astArgs) ]>
     }
 
     public override InternalAstMaker(_ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr
@@ -80,14 +83,83 @@ namespace N2.Compiler
       }
     }
 
-    public Emit() : void
+    public override WalkMethodReturnType(ruleType : RuleType) : PExpr
     {
-      assert(_tb != null);
-      _tb.Compile();
+      <[ $(Environment.RuleTypeToNType(ruleType) : typed) ]>
     }
 
     public override MakeGenerator(ruleStruct : RuleStructure.Ast) : WalkerCode
     {
+      def makeCodeForField(field : RuleStructureField) : PExpr
+      {
+        def fieldLocCode = NTokenOf(field);
+
+        match (field)
+        {
+          | SimpleCall(ruleSymbol) | ExtensibleCall(ruleSymbol , _) =>
+            <[  when ($fieldLocCode.IntersectsWith(startPos, endPos))
+                  $(MakeVisit(field))(spans, startPos, endPos) ]>
+
+          | TokenCall(symbol) =>
+            if (symbol.Options.SetSpanClass != null)
+              <[ 
+                def loc = $fieldLocCode;
+                when (loc.IntersectsWith(startPos, endPos))
+                  spans.Add(N2.SpanInfo(loc, 
+                    $(MakeSpanClassFieldName(symbol.Options.SetSpanClass.Name) : dyn)))
+              ]>
+            else
+              <[ () ]>
+        
+          | String(str, None) => ()
+          | String(str, Some(spanClass)) =>
+            <[  when ($fieldLocCode.IntersectsWith(startPos, endPos))
+                  spans.Add(N2.SpanInfo($fieldLocCode, 
+                    $(MakeSpanClassFieldName(spanClass.Name) : dyn))) ]>
+
+          | Option(subRuleStruct) as field =>
+            MakeOption(field, MakeCodeForStruct(subRuleStruct))
+
+          | List(subRuleStruct, _, _) as lst =>
+            // если MakeCodeForStruct(subRuleStruct) вернет <[ () ]> 
+            // то результатом ForEach будет <[ () ]>
+            MakeForEach(lst, MakeCodeForStruct(subRuleStruct))
+
+          | ListWithSeparator(ruleStruct, separatorStruct, _, _) as lst =>
+            // если MakeCodeForStruct(subRuleStruct) вернет <[ () ]> 
+            // то результатом ForEachWithSeparator будет <[ () ]>
+            MakeForEachWithSeparator(lst, 
+              makeCodeForField(ruleStruct), makeCodeForField(separatorStruct))
+            
+          | Predicate => ()
+        }
+      }
+
+      def code = ruleStruct.MapAst(makeCodeForField);
+      def codeForAst =
+        if (symbol.Options.SetSpanClass != null)
+          <[ 
+            { ..$code }
+            def loc = $(NTokenOf(ruleStruct));
+            when (loc.IntersectsWith(startPos, endPos))
+              spans.Add(N2.SpanInfo(loc, 
+                $(MakeSpanClassFieldName(symbol.Options.SetSpanClass.Name) : dyn)))
+          ]>
+        else
+          <[ ..$code ]>;
+
+      WalkerCode(codeForAst, 
+            [<[ parameter: spans    : System.Collections.Generic.List[N2.SpanInfo] ]>,
+             <[ parameter: startPos : int ]>,
+             <[ parameter: endPos   : int ]>
+            ], 
+            <[ void ]>)
+    }
+
+    MakeCodeForStruct(ruleStruct : RuleStructure) : PExpr
+    {
+      def code = ruleStruct.Fields.Map(MakeCodeForField);
+      <[ ..$code ]>
     }
   }
 }
