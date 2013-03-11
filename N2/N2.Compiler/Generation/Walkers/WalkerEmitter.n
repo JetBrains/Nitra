@@ -21,6 +21,7 @@ namespace N2.Compiler
     public Generator    : WalkerGenerator    { get; }
 
     private mutable _walkerModuleTB     : TypeBuilder;
+    private mutable _walkerDescriptorTB : TypeBuilder;
     private         _ruleWalkerEmitters : List[IRuleWalkerEmitter] = List();
 
     public this(environment : EmitterEnvironment, syntaxModule : SyntaxModuleSymbol, generator : WalkerGenerator)
@@ -48,6 +49,73 @@ namespace N2.Compiler
       def name = SyntaxModule.Name + Generator.Name + "Walkers";
       _walkerModuleTB = Environment.NamespaceOfSymbol(SyntaxModule).Define(<[ decl: public module $(name : usesite) {} ]>);
 
+      _walkerDescriptorTB = _walkerModuleTB.DefineNestedType(<[ decl:
+        private sealed class $("WalkerDescriptor" : usesite) : N2.Runtime.GrammarWalkerDescriptor
+        {
+          public this () {}
+        }
+      ]>);
+
+      _walkerDescriptorTB.DefineConditional(<[ decl:
+        public override Type : N2.Runtime.WalkerTypeDescriptor
+        {
+          get { $(Generator.GetWalkerTypeDescriptorExpr()) }
+        }
+      ]>);
+
+      _walkerDescriptorTB.DefineConditional(<[ decl:
+        public override Grammar : N2.GrammarDescriptor
+        {
+          get { $(PExprUtils.FromQualifiedIdentifier(SyntaxModule.Node.FullNameParts)).$(AssemblyConstants.GrammarImplName : usesite).StaticDescriptor }
+        }
+      ]>);
+
+      def cases = List();
+      foreach (walkerEmitter when !(walkerEmitter is ExtensibleRuleWalkerEmitter) in _ruleWalkerEmitters)
+        cases.Add(<[ case:
+          | $(SyntaxModule.GetIdInGrammar(walkerEmitter.Rule) : int) =>
+            $(walkerEmitter.WalkerTb.GetMemType() : typed)(ruleParser :> $(walkerEmitter.RuleParserBaseType))
+        ]>);
+      cases.Add(<[ case: | _ => null ]>); // TODO FIXME assert(false)
+
+      _walkerDescriptorTB.DefineConditional(<[ decl:
+        public override NewWalker(ruleParser : N2.Internal.RuleParser) : N2.Runtime.WalkerBase
+        {
+          assert(Grammar.Equals(ruleParser.Descriptor.Grammar));
+          match (ruleParser.Descriptor.IdInGrammar)
+          {
+            ..$(cases.ToNList())
+          }
+        }
+      ]>);
+
+      def cases = List();
+      foreach (walkerEmitter is ExtensibleRuleWalkerEmitter in _ruleWalkerEmitters)
+        cases.Add(<[ case:
+          | $(SyntaxModule.GetIdInGrammar(walkerEmitter.Rule) : int) =>
+            $(walkerEmitter.WalkerDataTb.GetMemType() : typed)(parserData, compositeAstWalker)
+        ]>);
+      cases.Add(<[ case: | _ => assert(false) ]>);
+
+      _walkerDescriptorTB.DefineConditional(<[ decl:
+        public override NewExtensibleRuleWalkerData(parserData : N2.Runtime.ExtensibleRuleParserData, compositeAstWalker : N2.Runtime.CompositeAstWalker) : object
+        {
+          ignore(parserData, compositeAstWalker);
+          match (parserData.Descriptor.IdInGrammar)
+          {
+            ..$(cases.ToNList())
+          }
+        }
+      ]>);
+
+      _walkerModuleTB.DefineConditional(<[ decl:
+        private static _staticDescriptor : N2.Runtime.GrammarWalkerDescriptor = $(_walkerDescriptorTB.GetMemType() : typed)();
+      ]>);
+
+      _walkerModuleTB.DefineConditional(<[ decl:
+        public static StaticDescriptor : N2.Runtime.GrammarWalkerDescriptor { get { _staticDescriptor } }
+      ]>);
+
       foreach (emitter in _ruleWalkerEmitters)
         emitter.Define(_walkerModuleTB);
     }
@@ -58,6 +126,7 @@ namespace N2.Compiler
       foreach (emitter in _ruleWalkerEmitters)
         emitter.Emit();
 
+      _walkerDescriptorTB.Compile();
       _walkerModuleTB.Compile();
     }
   }
