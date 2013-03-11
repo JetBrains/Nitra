@@ -27,6 +27,7 @@ namespace N2.Compiler
       public override Define(walkersModule : TypeBuilder) : void
       {
         def signature = Generator.GetSignature(Rule.Structure);
+        def returnTypeIsVoid = signature.ReturnType is <[ void ]>; // TODO: сделать более точную проверку на void
 
         def prefixParameters =
           <[ parameter: pos : ref int ]>
@@ -41,16 +42,18 @@ namespace N2.Compiler
           }
         ]>);
 
-        def mandatoryPostfixParameters =
-          <[ parameter: startPos : int ]>
-          :: <[ parameter: pos : ref int ]>
-          :: <[ parameter: astPtr : int ]>
-          :: <[ parameter: parser : ref N2.Internal.Parser ]>
-          :: signature.Parameters;
-        // TODO: сделать более точную проверку на void
         def postfixParameters =
-          if (signature.ReturnType is <[ void ]>) mandatoryPostfixParameters
-          else <[ parameter: prefix : T ]> :: mandatoryPostfixParameters;
+        {
+          def mandatoryParameters =
+            <[ parameter: startPos : int ]>
+            :: <[ parameter: pos : ref int ]>
+            :: <[ parameter: astPtr : int ]>
+            :: <[ parameter: parser : ref N2.Internal.Parser ]>
+            :: signature.Parameters;
+
+          if (returnTypeIsVoid) mandatoryParameters
+          else <[ parameter: prefix : $(signature.ReturnType) ]> :: mandatoryParameters;
+        }
 
         _postfixWalkerTB = walkersModule.DefineNestedType(<[ decl:
           public abstract class $(Rule.Name + "_PostfixWalker" : usesite) : N2.Runtime.WalkerBase
@@ -66,7 +69,6 @@ namespace N2.Compiler
             public ParserData         : ExtensibleRuleParserData;
             public PrefixWalkers      : array[$(FixedType.Class(_prefixWalkerTB, []) : typed)];
             public PostfixWalkers     : array[$(FixedType.Class(_postfixWalkerTB, []) : typed)];
-            public Walkers            : array[ExtensibleRuleWalker[T]];
 
             public this(parserData : N2.Runtime.ExtensibleRuleParserData, compositeAstWalker : N2.Runtime.CompositeAstWalker)
             {
@@ -97,6 +99,88 @@ namespace N2.Compiler
           }
         ]>);
 
+        def prefixWalkCallArguments =
+          <[ ref newPos ]>
+          :: <[ ast ]>
+          :: <[ ref parser ]>
+          :: signature.Parameters.Map(p => <[ $(p.Name : usesite)]>);
+
+        def postfixWalkCallArguments = 
+        {
+          def mandatoryArguments =
+            <[ prefixStartPos ]>
+            :: <[ ref newPos ]>
+            :: <[ ast ]>
+            :: <[ ref parser ]>
+            :: signature.Parameters.Map(p => <[ $(p.Name : usesite)]>);
+
+          if (returnTypeIsVoid) mandatoryArguments
+          else <[ prefixValue ]> :: mandatoryArguments
+        }
+
+        def walkParameters =
+          <[ parameter: pos : ref int ]>
+          :: <[ parameter: parser : ref Parser ]>
+          :: signature.Parameters;
+
+        def addAmbiguilityArguments(valueExpr, walkerExpr)
+        {
+          if (returnTypeIsVoid)
+            walkerExpr
+          else
+            <[ ($valueExpr, $walkerExpr) ]>
+        }
+
+        def onPrefixAmbiguityParameters =
+        {
+          def ambiguityListType =
+            if(returnTypeIsVoid) <[ System.Collections.Generic.List[$(FixedType.Class(_prefixWalkerTB, []) : typed)] ]>
+            else <[ System.Collections.Generic.List[$(signature.ReturnType) * $(FixedType.Class(_prefixWalkerTB, []) : typed)] ]>;
+
+          <[ parameter: startPos : int ]>
+          :: <[ parameter: endPos : int ]>
+          :: <[ parameter: parser : ref N2.Internal.Parser ]>
+          :: <[ parameter: ambiguities : $ambiguityListType ]>
+          :: signature.Parameters;
+        }
+
+        def onPrefixAmbiguityArguments =
+          <[ pos ]>
+          :: <[ firstNewPos ]>
+          :: <[ ref parser ]>
+          :: <[ ambiguilitys ]>
+          :: signature.Parameters.Map(p => <[ $(p.Name : usesite)]>);
+
+        def onPostfixAmbiguityParameters =
+        {
+          def ambiguityListType =
+            if(returnTypeIsVoid) <[ System.Collections.Generic.List[$(FixedType.Class(_postfixWalkerTB, []) : typed)] ]>
+            else <[ System.Collections.Generic.List[$(signature.ReturnType) * $(FixedType.Class(_postfixWalkerTB, []) : typed)] ]>;
+
+          <[ parameter: startPos : int ]>
+          :: <[ parameter: endPos : int ]>
+          :: <[ parameter: parser : ref N2.Internal.Parser ]>
+          :: <[ parameter: ambiguities : $ambiguityListType ]>
+          :: signature.Parameters;
+        }
+
+        def onPostfixAmbiguityArguments =
+          <[ pos ]>
+          :: <[ firstNewPos ]>
+          :: <[ ref parser ]>
+          :: <[ ambiguilitys ]>
+          :: signature.Parameters.Map(p => <[ $(p.Name : usesite)]>);
+
+        def onPrefixMissedParameters =
+          <[ parameter: pos : int ]>
+          :: <[ parameter: parser : ref N2.Internal.Parser ]>
+          :: signature.Parameters;
+
+        def onPrefixMissedArguments =
+          <[ pos ]>
+          :: <[ ref parser ]>
+          :: signature.Parameters.Map(p => <[ $(p.Name : usesite)]>);
+
         _walkerTB = walkersModule.DefineNestedType(<[ decl:
           public sealed class $(Rule.Name + "_Walker" : usesite) : N2.Runtime.ExtensibleRuleWalkerBase
           {
@@ -111,28 +195,28 @@ namespace N2.Compiler
               PostfixWalkers        = walkerData.PostfixWalkers;
             }
 
-            public OnPrefixAmbiguity(startPos : int, endPos : int, parser : ref Parser, ambiguities : SCG.List[T * PrefixRuleWalker[T]]) : T
+            public OnPrefixAmbiguity(..$onPrefixAmbiguityParameters) : $(signature.ReturnType)
             {
               _ = parser;
               _ = endPos;
               throw N2.Runtime.PrefixAmbiguityException($"Ambiguity between prefix rules of '$RuleFullName'.", startPos, Parser, ambiguities);
             }
 
-            public OnPostfixAmbiguity(startPos : int, endPos : int, parser : ref Parser, ambiguities : SCG.List[T * PostfixRuleWalker[T]]) : T
+            public OnPostfixAmbiguity(..$onPostfixAmbiguityParameters) : $(signature.ReturnType)
             {
               _ = parser;
               _ = endPos;
               throw N2.Runtime.PostfixAmbiguityException($"Ambiguity between postfix rules of '$RuleFullName'.", startPos, Parser, ambiguities);
             }
 
-            public OnPrefixMissed(pos : int, parser : ref Parser) : T
+            public OnPrefixMissed(..$onPrefixMissedParameters) : $(signature.ReturnType)
             {
               _ = parser;
               throw N2.Runtime.PrefixMissedException($"Expected '$RuleFullName' rule.", pos, Parser);
             }
 
             // этот код должен генерироваться, так как через него протаскиваются параметры и возвращаемое значение.
-            public Walk(pos : ref int, parser : ref Parser) : T
+            public Walk(..$walkParameters) : $(signature.ReturnType)
             {
               mutable newPos;
               mutable ast = FindFirstPrefix(pos, ref parser);
@@ -141,24 +225,24 @@ namespace N2.Compiler
                 mutable prefixWalker = PrefixWalkers[parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] - PrefixWalkersOffset];
                 newPos = pos;
                 def prefixStartPos = pos;
-                mutable prefixValue = prefixWalker.Walk(ref newPos, ast, ref parser);
+                mutable prefixValue = prefixWalker.Walk(..$prefixWalkCallArguments);
                 ast = FindNextPrefix(ast, ref parser);
                 when (ast > 0)
                 {
                   def firstNewPos = newPos;
-                  def ambiguilitys = SCG.List();
-                  ambiguilitys.Add((prefixValue, prefixWalker));
+                  def ambiguilitys = System.Collections.Generic.List();
+                  ambiguilitys.Add($(addAmbiguilityArguments(<[ prefixValue ]>, <[ prefixWalker ]>)));
                   while (ast > 0)
                   {
                     def nextPrefixWalker = PrefixWalkers[parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] - PrefixWalkersOffset];
                     newPos = pos;
-                    def nextValue = nextPrefixWalker.Walk(ref newPos, ast, ref parser);
+                    def nextValue = nextPrefixWalker.Walk(..$prefixWalkCallArguments);
                     assert(newPos == firstNewPos);
-                    ambiguilitys.Add((nextValue, nextPrefixWalker));
+                    ambiguilitys.Add($(addAmbiguilityArguments(<[ nextValue ]>, <[ nextPrefixWalker ]>)));
                     prefixWalker = nextPrefixWalker;
                     ast = FindNextPrefix(ast, ref parser);
                   }
-                  prefixValue = OnPrefixAmbiguity(pos, firstNewPos, ref parser, ambiguilitys);
+                  prefixValue = OnPrefixAmbiguity(..$onPrefixAmbiguityArguments);
                 }
                 pos = newPos;
 
@@ -168,26 +252,26 @@ namespace N2.Compiler
                 {
                   postfixWalker = PostfixWalkers[(parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] & ExtensibleRuleParser.PostfixMask.Id) - PostfixWalkersOffset];
                   newPos = pos;
-                  postfixValue = postfixWalker.Walk(prefixValue, prefixStartPos, ref newPos, ast, ref parser);
+                  postfixValue = postfixWalker.Walk(..$postfixWalkCallArguments);
                   when (newPos == pos)
                     break;
                   ast = FindNextPostfix(ast, ref parser);
                   when (ast > 0)
                   {
                     def firstNewPos = newPos;
-                    def ambiguilitys = SCG.List();
-                    ambiguilitys.Add((postfixValue, postfixWalker));
+                    def ambiguilitys = System.Collections.Generic.List();
+                    ambiguilitys.Add($(addAmbiguilityArguments(<[ postfixValue ]>, <[ postfixWalker ]>)));
                     while (ast > 0)
                     {
                       def nextWalker = PostfixWalkers[(parser.ast[ast + ExtensibleRuleParser.AstOfs.Id] & ExtensibleRuleParser.PostfixMask.Id) - PostfixWalkersOffset];
                       newPos = pos;
-                      def nextValue = nextWalker.Walk(prefixValue, prefixStartPos, ref newPos, ast, ref parser);
+                      def nextValue = nextWalker.Walk(..$postfixWalkCallArguments);
                       assert(newPos == firstNewPos);
-                      ambiguilitys.Add((nextValue, nextWalker));
+                      ambiguilitys.Add($(addAmbiguilityArguments(<[ nextValue ]>, <[ nextWalker ]>)));
                       postfixWalker = nextWalker;
                       ast = FindNextPostfix(ast, ref parser);
                     }
-                    postfixValue = OnPostfixAmbiguity(pos, firstNewPos, ref parser, ambiguilitys);
+                    postfixValue = OnPostfixAmbiguity(..$onPostfixAmbiguityArguments);
                   }
                   prefixValue = postfixValue;
                   pos = newPos;
@@ -196,14 +280,18 @@ namespace N2.Compiler
               }
               else
               {
-                OnPrefixMissed(pos, ref parser);
+                OnPrefixMissed(..$onPrefixMissedArguments);
               }
             }
           }
         ]>);
 
+        _walkerDataTB.Define(<[ decl:
+            public Walkers : array[$(FixedType.Class(_walkerTB, []) : typed)];
+        ]>);
+
         _walkerDataTB.Define(<[decl:
-          public NewWalker(parser : N2.Runtime.ExtensibleRuleParser) : ExtensibleRuleWalker[T]
+          public NewWalker(parser : N2.Runtime.ExtensibleRuleParser) : $(FixedType.Class(_walkerTB, []) : typed)
           {
             $(FixedType.Class(_walkerTB, []) : typed)(this, parser)
           }
