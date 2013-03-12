@@ -22,7 +22,8 @@ namespace N2.Compiler
 
     private mutable _walkerModuleTB     : TypeBuilder;
     private mutable _walkerDescriptorTB : TypeBuilder;
-    private         _ruleWalkerEmitters : List[IRuleWalkerEmitter] = List();
+    private         _extensibleRuleWalkerEmitters : List[ExtensibleRuleWalkerEmitter] = List();
+    private         _otherRuleWalkerEmitters      : List[IRuleWalkerEmitter]          = List();
 
     public this(environment : EmitterEnvironment, syntaxModule : SyntaxModuleSymbol, generator : WalkerGenerator)
     {
@@ -30,28 +31,50 @@ namespace N2.Compiler
       SyntaxModule = syntaxModule;
       Generator    = generator;
 
-      foreach (ruleSymbol in SyntaxModule.Node.GetChildren.[ExtensibleRuleSymbol]())
-        _ruleWalkerEmitters.Add(ExtensibleRuleWalkerEmitter(Environment, Generator, ruleSymbol));
-
       foreach (ruleSymbol in SyntaxModule.Node.GetChildren.[SyntaxRuleSymbol]())
       {
-        | SimpleRuleSymbol(Type = RuleType.Void)    as ruleSymbol when Generator.SupportsVoidRules
-        | SimpleRuleSymbol                          as ruleSymbol => _ruleWalkerEmitters.Add(SimpleRuleWalkerEmitter(Environment, Generator, ruleSymbol));
-        | ExtentionRuleSymbol(Type = RuleType.Void) as ruleSymbol when Generator.SupportsVoidRules
-        | ExtentionRuleSymbol                       as ruleSymbol => _ruleWalkerEmitters.Add(ExtentionRuleWalkerEmitter(Environment, Generator, ruleSymbol));
+        | ExtensibleRuleSymbol(Type = RuleType.Void) as ruleSymbol when Generator.SupportsVoidRules
+        | ExtensibleRuleSymbol                       as ruleSymbol => _extensibleRuleWalkerEmitters.Add(ExtensibleRuleWalkerEmitter(Environment, Generator, ruleSymbol));
+        | SimpleRuleSymbol(Type = RuleType.Void)     as ruleSymbol when Generator.SupportsVoidRules
+        | SimpleRuleSymbol                           as ruleSymbol => _otherRuleWalkerEmitters.Add(SimpleRuleWalkerEmitter(Environment, Generator, ruleSymbol));
+        | ExtentionRuleSymbol(Type = RuleType.Void)  as ruleSymbol when Generator.SupportsVoidRules
+        | ExtentionRuleSymbol                        as ruleSymbol => _otherRuleWalkerEmitters.Add(ExtentionRuleWalkerEmitter(Environment, Generator, ruleSymbol));
         | _ => ()
       }
     }
 
-    public Define() : void
+    public static GetWalkerModuleName(syntaxModule : SyntaxModuleSymbol, generator : WalkerGenerator) : string
+    {
+      syntaxModule.Name + generator.Name + "Walkers"
+    }
+
+    public DefineModule() : void
     {
       assert(_walkerModuleTB == null);
 
-      def name = SyntaxModule.Name + Generator.Name + "Walkers";
-      _walkerModuleTB = Environment.NamespaceOfSymbol(SyntaxModule).Define(<[ decl: public module $(name : usesite) {} ]>);
+      _walkerModuleTB = Environment.NamespaceOfSymbol(SyntaxModule).Define(<[ decl: public module $(GetWalkerModuleName(SyntaxModule, Generator) : usesite) {} ]>);
+    }
 
-      foreach (emitter in _ruleWalkerEmitters)
+    public DefineExtensibleRuleWalkers() : void
+    {
+      assert(_walkerModuleTB != null);
+
+      foreach (emitter in _extensibleRuleWalkerEmitters)
         emitter.Define(_walkerModuleTB);
+    }
+
+    public DefineOtherRuleWalkers() : void
+    {
+      assert(_walkerModuleTB != null);
+
+      foreach (emitter in _otherRuleWalkerEmitters)
+        emitter.Define(_walkerModuleTB);
+    }
+
+    public DefineDescriptor() : void
+    {
+      assert(_walkerModuleTB != null);
+      assert(_walkerDescriptorTB == null);
 
       _walkerDescriptorTB = _walkerModuleTB.DefineNestedType(<[ decl:
         private sealed class $("WalkerDescriptor" : usesite) : N2.Runtime.GrammarWalkerDescriptor
@@ -75,7 +98,7 @@ namespace N2.Compiler
       ]>);
 
       def cases = List();
-      foreach (walkerEmitter when !(walkerEmitter is ExtensibleRuleWalkerEmitter) in _ruleWalkerEmitters)
+      foreach (walkerEmitter in _otherRuleWalkerEmitters)
         cases.Add(<[ case:
           | $(walkerEmitter.Rule.IdInGrammar : int) =>
             $(walkerEmitter.WalkerTb.GetMemType() : typed)(ruleParser :> $(walkerEmitter.RuleParserBaseType))
@@ -94,7 +117,7 @@ namespace N2.Compiler
       ]>);
 
       def cases = List();
-      foreach (walkerEmitter is ExtensibleRuleWalkerEmitter in _ruleWalkerEmitters)
+      foreach (walkerEmitter in _extensibleRuleWalkerEmitters)
         cases.Add(<[ case:
           | $(walkerEmitter.Rule.IdInGrammar : int) =>
             $(walkerEmitter.WalkerDataTb.GetMemType() : typed)(parserData, compositeAstWalker)
@@ -124,7 +147,11 @@ namespace N2.Compiler
     public Emit() : void
     {
       assert(_walkerModuleTB != null);
-      foreach (emitter in _ruleWalkerEmitters)
+      
+      foreach (emitter in _extensibleRuleWalkerEmitters)
+        emitter.Emit();
+
+      foreach (emitter in _otherRuleWalkerEmitters)
         emitter.Emit();
 
       _walkerDescriptorTB.Compile();
