@@ -32,9 +32,14 @@ namespace N2.Compiler
 
   public abstract class WalkerGenerator
   {
-    public abstract Name : string { get; }
-
-    public virtual SupportsVoidRules : bool { get false }
+    public    abstract Name : string { get; }
+    public    virtual SupportsVoidRules : bool { get false }
+    public    abstract GetWalkerTypeDescriptorExpr() : PExpr;
+    public    abstract GetSignature(rule : RuleSymbol) : WalkerSignature;
+    
+    protected abstract GetSyntaxRuleValue(ruleSymbol : SyntaxRuleSymbol, astPointer : void -> AstPointer) : PExpr;
+    protected abstract GetRuleValue(field : RuleStructureField, parentAstPointer : void -> AstPointer) : PExpr;
+    protected abstract CombineValues(ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr;
 
     public Init() : void
     {
@@ -42,11 +47,13 @@ namespace N2.Compiler
     }
 
     private _calledWalkers : Hashtable[SyntaxRuleSymbol * int, string] = Hashtable();
-    public CallWalker(ruleSymbol : SyntaxRuleSymbol, bp : int) : string
+    private GetFieldNameForWalkerCall(ruleSymbol : SyntaxRuleSymbol, bp : int) : string
     {
       def key = (ruleSymbol, bp);
-      if (_calledWalkers.ContainsKey(key))
-        _calledWalkers[key];
+      mutable value;
+      
+      if (_calledWalkers.TryGetValue(key, out value))
+        value
       else
       {
         def name = $"walkerRef$(_calledWalkers.Count)";
@@ -54,29 +61,31 @@ namespace N2.Compiler
         name
       }
     }
+    
+    public CallSyntaxRule(ruleSymbol : SyntaxRuleSymbol, bindingPower : int, params args : array[PExpr]) : PExpr
+    {
+      def allArgs = <[ ref pos ]> ::  <[ ref parser ]> :: args.NToList();
+      <[ this.$(GetFieldNameForWalkerCall(ruleSymbol, bindingPower) : usesite).Walk(..$allArgs); ]>
+    }
 
     public GetCalledWalkers() : IEnumerable[SyntaxRuleSymbol * int * string]
     {
       _calledWalkers.Select(pair => (pair.Key[0], pair.Key[1], pair.Value))
     }
 
-    public abstract GetWalkerTypeDescriptorExpr() : PExpr;
-    public abstract GetSignature(rule : RuleSymbol) : WalkerSignature;
-    public abstract MakeGenerator(ruleStructure : SyntaxRuleSymbol) : WalkerCode;
-    public abstract MakeCodeForField(field : RuleStructureField, parentAstPointer : void -> AstPointer) : PExpr;
-    //public abstract RootAstMaker(ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr;
-    public abstract InternalAstMaker(ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr;
+    public MakeGenerator(ruleStructure : SyntaxRuleSymbol) : WalkerCode
+    {
+      def (astPointer, initPointer) = MakeAstPointer(ruleStructure.Structure, "astPtr");
+      def code = GetSyntaxRuleValue(ruleStructure, astPointer);
+      WalkerCode(<[
+        $(initPointer());
+        $code
+      ]>)
+    }
 
     protected SkipCall(field : RuleStructureField, parentAstPointer : void -> AstPointer) : PExpr
     {
       <[ pos += $(parentAstPointer().Get(field)); ]>
-    }
-
-    public MakeInternalAst(ruleStructure : RuleStructure, name : string) : PExpr
-    {
-      def (getPointer, initPointer) = MakeAstPointer(ruleStructure, name);
-      def ast = MakeAst(ruleStructure, getPointer, InternalAstMaker);
-      <[ $(initPointer()); $ast ]>
     }
 
     public MakeAstPointer(ruleStructure : RuleStructure, name : string) : (void -> AstPointer) * (void -> PExpr)
@@ -108,7 +117,14 @@ namespace N2.Compiler
       (getPointer, initPointer)
     }
 
-    public virtual MakeAst(ruleStructure : RuleStructure, astPointer : void -> AstPointer, maker : RuleStructure * list[PExpr] -> PExpr) : PExpr
+    public GetRuleValue(ruleStructure : RuleStructure, name : string) : PExpr
+    {
+      def (getPointer, initPointer) = MakeAstPointer(ruleStructure, name);
+      def ast = GetSubrulesValues(ruleStructure, getPointer);
+      <[ $(initPointer()); $ast ]>
+    }
+
+    public virtual GetSubrulesValues(ruleStructure : RuleStructure, astPointer : void -> AstPointer) : PExpr
     {
       def statements = List();
       def arguments = List();
@@ -126,24 +142,18 @@ namespace N2.Compiler
         {
           | RuleStructureField.Predicate => ()
           | RuleStructureField.SimpleCall(symbol)        when symbol.Type is RuleType.Void
-          | RuleStructureField.ExtensibleCall(symbol, _) when symbol.Type is RuleType.Void =>
-            statements.Add(<[ pos += $(astPointer().Get(field)) ]>);
-
-          | _                =>
+          | RuleStructureField.ExtensibleCall(symbol, _) when symbol.Type is RuleType.Void => statements.Add(SkipCall(field, astPointer));
+          | _  =>
             def varName = Nemerle.Compiler.Util.tmpname("ast");
-            statements.Add(<[ def $(varName : usesite) = $(MakeCodeForField(field, astPointer)) ]>);
+            statements.Add(<[ def $(varName : usesite) = $(GetRuleValue(field, astPointer)) ]>);
             arguments.Add(<[ $(varName : usesite) ]>);
         }
 
-      statements.Add(maker(ruleStructure, arguments.ToNList()));
+      statements.Add(CombineValues(ruleStructure, arguments.ToNList()));
       <[ { ..$(statements.ToNList()) } ]>
     }
     
-    public MakeToken
-      ( field            : RuleStructureField
-      , parentAstPointer : void -> AstPointer
-      , code             : PExpr
-      ) : PExpr
+    public GetTokenValue(field : RuleStructureField, parentAstPointer : void -> AstPointer, code : PExpr) : PExpr
     {
       <[
         def tokenPos = pos;
@@ -152,22 +162,22 @@ namespace N2.Compiler
       ]>
     }
 
-    public MakeOption
+    public GetOptionValue
       ( field            : RuleStructureField.Option
       , parentAstPointer : void -> AstPointer
-      , someCode         : PExpr
-      , noneCode         : PExpr
+      , hasValue         : PExpr
+      , noValue          : PExpr
       ) : PExpr
     {
       <[
         if ($(parentAstPointer().Get(field)) > 0)
-          $someCode;
+          $hasValue;
         else
-          $noneCode;
+          $noValue;
       ]>
     }
 
-    public MakeForEach
+    public GetListValue
       ( field            : RuleStructureField.List
       , parentAstPointer : void -> AstPointer
       , init             : PExpr
@@ -186,7 +196,7 @@ namespace N2.Compiler
             assert(listEnd == pos);
         }
       ]>;
-      MakeForEachImpl
+      GetListValueImpl
         (field             = field
         , parentAstPointer = parentAstPointer
         , init             = init
@@ -195,7 +205,7 @@ namespace N2.Compiler
         , emptyCode        = emptyCode)
     }
 
-    public MakeForEachWithSeparator
+    public GetListWithSeparatorValue
       ( field            : RuleStructureField.ListWithSeparator
       , parentAstPointer : void -> AstPointer
       , init             : PExpr
@@ -221,7 +231,7 @@ namespace N2.Compiler
             assert(listEnd == pos);
         }
       ]>;
-      MakeForEachImpl
+      GetListValueImpl
         (field             = field
         , parentAstPointer = parentAstPointer
         , init             = init
@@ -230,7 +240,7 @@ namespace N2.Compiler
         , emptyCode        = emptyCode)
     }
 
-    private MakeForEachImpl
+    private GetListValueImpl
       (field            : RuleStructureField
       , parentAstPointer : void -> AstPointer
       , init             : PExpr
