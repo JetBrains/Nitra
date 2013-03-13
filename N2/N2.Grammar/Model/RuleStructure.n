@@ -1,0 +1,134 @@
+﻿using N2.Typing;
+using N2.Model;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Model
+{
+  [Record]
+  public variant RuleStructure
+  {
+                   public         SrcRule          : N2.Model.Rule;
+                   public         Fields           : array[RuleStructureField];
+    [RecordIgnore] public mutable Owner            : RuleStructureField;
+    [RecordIgnore] public mutable Header           : array[RuleStructureHeaderField];
+    [RecordIgnore] public mutable AstId            : string;
+    [RecordIgnore] public mutable Level            : int;
+    [RecordIgnore] public mutable Tag              : object;
+                   public         HasTerminator    : bool  { get { this is Ast(Symbol = ExtentionRuleSymbol) } }
+                   public         TerminatorOffset : int   { get { Fields[Fields.Length - 1].Offset + Fields[Fields.Length - 1].Size } }
+                   public         SizesOffset      : int   { get { Header.Length } }
+                   public         Size             : int   { get { TerminatorOffset + if (HasTerminator) 1 else 0 } }
+                   public         HeaderId         : RuleStructureHeaderField { get { Header[0] } }
+                   public         HeaderNext       : RuleStructureHeaderField { get { Header[1] } }
+                   public         HeaderState      : RuleStructureHeaderField { get { Header[2] } }
+
+    | Ast { Symbol : SyntaxRuleSymbol; [RecordIgnore] mutable InternalRuleStructures : array[RuleStructure] }
+    | Option
+    | List
+    | ListWithSeparatorRule
+    | ListWithSeparatorSeparator
+    | Predicate
+
+    internal static MakeRuleStructure(ruleSymbol : SyntaxRuleSymbol) : RuleStructure.Ast
+    {
+      def internalRuleStructures = SCG.List();
+
+      def conv(rule : Rule) : array[RuleStructureField]
+      {
+        match (rule)
+        {
+          | And                   as rule => array[RuleStructureField.Predicate        (rule, RuleStructure.Predicate(rule.Rule, conv(rule.Rule)), true)]
+          | Not                   as rule => array[RuleStructureField.Predicate        (rule, RuleStructure.Predicate(rule.Rule, conv(rule.Rule)), false)]
+          | Repeat(0, Some(1), _) as rule => array[RuleStructureField.Option           (rule, RuleStructure.Option(rule.Rule, conv(rule.Rule)))]
+          | Repeat                as rule => array[RuleStructureField.List             (rule, RuleStructure.List(rule.Rule, conv(rule.Rule)), rule.MinCount, rule.MaxCount)]
+          | RepeatWithSeparator   as rule => array[RuleStructureField.ListWithSeparator(rule, RuleStructure.ListWithSeparatorRule(rule.Rule, conv(rule.Rule)), RuleStructure.ListWithSeparatorSeparator(rule.Separator, conv(rule.Separator)), rule.MinCount, rule.MaxCount, rule.HangingSeparator)]
+          | String                as rule => array[RuleStructureField.TokenString      (rule, rule.Str)]
+          | Sequence              as rule => rule.Rules.Map(conv(_)).Flatten().NToArray();
+          | Call(RuleRef.Some(ruleSymbol) as ruleRef, bindingPower) =>
+            match (ruleSymbol)
+            {
+              | ExtensibleRuleSymbol                   as rs => array[RuleStructureField.ExtensibleCall(rule, rs, bindingPower)]
+              | SimpleRuleSymbol                       as rs => array[RuleStructureField.SimpleCall(rule, rs)]
+              | RegularRuleSymbol                      as rs => array[RuleStructureField.TokenCall(rule, rs)]
+              | MarkerSymbol                                 => array[]
+              | _                                            => Message.FatalError(ruleRef.NLocation(), $"N2ICE Typing bug: invalid symbol bound. $(ruleSymbol.GetType().Name)");
+            }
+          | Call(RuleRef.None as ruleRef, _) => Message.FatalError(ruleRef.NLocation(), "N2ICE Typing bug: not bound symbol.");
+        }
+      }
+      def rule = match (ruleSymbol)
+      {
+        | ExtentionRuleSymbol(ExtentionType = Postfix(_, rule)) => rule
+        | _ => ruleSymbol.Rule
+      }
+      def ast = RuleStructure.Ast(rule, conv(rule), ruleSymbol);
+      mutable state = 0;
+      def initStructure(structure : RuleStructure, owner : RuleStructureField, level)
+      {
+        structure.Level           = level;
+        structure.Owner           = owner;
+        if (owner == null)
+        {
+          assert(structure is RuleStructure.Ast);
+          structure.Header    = array[RuleStructureHeaderField.Id(structure, 0), RuleStructureHeaderField.Next(structure, 1), RuleStructureHeaderField.State(structure, 2)];
+          structure.AstId     = "RuleId";
+        }
+        else
+        {
+          assert(!(structure is RuleStructure.Ast));
+          structure.Header    = array[RuleStructureHeaderField.Id(structure, 0), RuleStructureHeaderField.Next(structure, 1)];
+          structure.AstId     = $"RuleId$(internalRuleStructures.Count)";
+          internalRuleStructures.Add(structure);
+        }
+
+        def fields = structure.Fields;
+        for (mutable i = 0; i < fields.Length - 1; ++i)
+          fields[i].NextSibling = fields[i + 1];
+
+        for (mutable i = 0; i < fields.Length; ++i)
+          fields[i].Owner = structure;
+
+        for (mutable i = 0; i < fields.Length; ++i)
+          initField(fields[i], level);
+
+        fields[0].Offset = structure.Header.Length;
+        for (mutable i = 1; i < fields.Length; ++i)
+          fields[i].Offset = fields[i - 1].Offset + fields[i - 1].Size;
+
+        match (fields.Find(field => !(field is RuleStructureField.Predicate)))
+        {
+          | Some(field) => field.AllocateAst = true;
+          | None()      => assert(false);
+        }
+      }
+      and initField(field : RuleStructureField, level)
+      {
+        field.Level         = level;
+        field.State         = state; ++state;
+        match (field)
+        {
+          | TokenString                                 => field.Size = 1;
+          | TokenCall                                   => field.Size = 1;
+          | ExtensibleCall                              => field.Size = 1;
+          | SimpleCall                                  => field.Size = 1;
+          | Option           (rule)                     => field.Size = 1; initStructure(rule, field, level + 1);
+          | List             (rule, _, _)               => field.Size = 1; initStructure(rule, field, level + 1);
+          | Predicate        (rule, _)                  => field.Size = 0; initStructure(rule, field, level + 1);
+          | ListWithSeparator(rule, separator, _, _, _) => field.Size = 1; initStructure(rule, field, level + 1); initStructure(separator, field, level + 1);
+        }
+      }
+      initStructure(ast, null, 0);
+      ast.InternalRuleStructures = internalRuleStructures.ToArray();
+      ast
+    }
+  }
+}

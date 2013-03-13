@@ -1,0 +1,270 @@
+﻿using N2.Model;
+using N2.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  [Record]
+  public sealed class WalkerSignature
+  {
+    public Parameters : list[PParameter];
+    public ReturnType : PExpr;
+  }
+
+  public abstract class WalkerGenerator
+  {
+    public    abstract Name : string { get; }
+    public    virtual SupportsVoidRules : bool { get false }
+    public    abstract GetWalkerTypeDescriptorExpr() : PExpr;
+    public    abstract GetSignature(rule : RuleSymbol) : WalkerSignature;
+    
+    protected abstract GetSyntaxRuleValue(ruleSymbol : SyntaxRuleSymbol, astPointer : void -> AstPointer) : PExpr;
+    protected abstract GetRuleValue(field : RuleStructureField, parentAstPointer : void -> AstPointer) : PExpr;
+    protected abstract CombineValues(ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr;
+
+    public Init() : void
+    {
+      _calledWalkers.Clear();
+    }
+
+    private _calledWalkers : Hashtable[SyntaxRuleSymbol * int, string] = Hashtable();
+    private GetFieldNameForWalkerCall(ruleSymbol : SyntaxRuleSymbol, bp : int) : string
+    {
+      def key = (ruleSymbol, bp);
+      mutable value;
+      
+      if (_calledWalkers.TryGetValue(key, out value))
+        value
+      else
+      {
+        def name = $"walkerRef$(_calledWalkers.Count)";
+        _calledWalkers.Add(key, name);
+        name
+      }
+    }
+    
+    protected GetRangeOf(field : RuleStructureField, parentAstPointer : void -> AstPointer) : PExpr
+    {
+      def size = parentAstPointer().GetSize(field);
+      <[ NToken(pos, pos + $size) ]>
+    }
+    
+    public CallSyntaxRule(ruleSymbol : SyntaxRuleSymbol, bindingPower : int, params args : array[PExpr]) : PExpr
+    {
+      def allArgs = <[ ref pos ]> ::  <[ ref parser ]> :: args.NToList();
+      <[ this.$(GetFieldNameForWalkerCall(ruleSymbol, bindingPower) : usesite).Walk(..$allArgs); ]>
+    }
+
+    public GetCalledWalkers() : IEnumerable[SyntaxRuleSymbol * int * string]
+    {
+      _calledWalkers.Select(pair => (pair.Key[0], pair.Key[1], pair.Value))
+    }
+
+    public WalkerCodeForSimpleRule(ruleSymbol : SyntaxRuleSymbol) : PExpr
+    {
+      def (astPointer, initPointer) = MakeAstPointer(ruleSymbol.Structure, "astPtr");
+      def code = GetSyntaxRuleValue(ruleSymbol, astPointer);
+      <[
+        $(initPointer());
+        $code;
+      ]>.FlattenPExpr()
+    }
+
+    public WalkerCodeForExtentionRule(ruleSymbol : SyntaxRuleSymbol) : PExpr
+    {
+      def astPointer = AstPointer.Existing(ruleSymbol.Structure, "astPtr");
+      GetSyntaxRuleValue(ruleSymbol, _ => astPointer).FlattenPExpr()
+    }
+
+    protected SkipCall(field : RuleStructureField, parentAstPointer : void -> AstPointer) : PExpr
+    {
+      <[ pos += $(parentAstPointer().GetSize(field)); ]>
+    }
+
+    public MakeAstPointer(ruleStructure : RuleStructure, name : string) : (void -> AstPointer) * (void -> PExpr)
+    {
+      mutable astPointer = null;
+      def getPointer()
+      {
+        when (astPointer == null)
+          astPointer = AstPointer.New(ruleStructure, name);
+        astPointer
+      }
+      def initPointer()
+      {
+        if (astPointer == null)
+          <[ () ]>
+        else
+          <[
+            def $(astPointer.Name : dyn) = {
+              astPtr:
+              {
+                for (mutable ast = parser.memoize[pos]; ast > 0; ast = parser.ast[ast + 1])
+                  when (parser.ast[ast] == this.RuleParser.$(ruleStructure.AstId : dyn))
+                    astPtr(ast);
+                assert(false);
+              }
+            }
+          ]>
+      }
+      (getPointer, initPointer)
+    }
+
+    public GetRuleValue(ruleStructure : RuleStructure, name : string) : PExpr
+    {
+      def (getPointer, initPointer) = MakeAstPointer(ruleStructure, name);
+      def ast = GetSubrulesValues(ruleStructure, getPointer);
+      <[ $(initPointer()); $ast ]>
+    }
+
+    public virtual GetSubrulesValues(ruleStructure : RuleStructure, astPointer : void -> AstPointer) : PExpr
+    {
+      def statements = List();
+      def arguments = List();
+      when (ruleStructure is RuleStructure.Ast(Symbol = ExtentionRuleSymbol(ExtentionType = Postfix)))
+        arguments.Add(<[ prefix ]>);
+
+      when (!(ruleStructure is RuleStructure.Ast))
+      {
+        statements.Add(<[ def startPos = pos; ]>);
+        statements.Add(<[ _ = startPos; ]>);
+      }
+
+      foreach (field in ruleStructure.Fields)
+        match (field)
+        {
+          | RuleStructureField.Predicate => ()
+          | RuleStructureField.SimpleCall(symbol)        when symbol.Type is RuleType.Void
+          | RuleStructureField.ExtensibleCall(symbol, _) when symbol.Type is RuleType.Void => statements.Add(SkipCall(field, astPointer));
+          | _  =>
+            def varName = Nemerle.Compiler.Util.tmpname("ast");
+            statements.Add(<[ def $(varName : usesite) = $(GetRuleValue(field, astPointer)) ]>);
+            arguments.Add(<[ $(varName : usesite) ]>);
+        }
+
+      statements.Add(CombineValues(ruleStructure, arguments.ToNList()));
+      <[ { ..$(statements.ToNList()) } ]>
+    }
+    
+    public GetTokenValue(field : RuleStructureField, parentAstPointer : void -> AstPointer, code : PExpr) : PExpr
+    {
+      <[
+        def tokenPos = pos;
+        pos += $(parentAstPointer().GetSize(field));
+        $code;
+      ]>
+    }
+
+    public GetOptionValue
+      ( field            : RuleStructureField.Option
+      , parentAstPointer : void -> AstPointer
+      , hasValue         : PExpr
+      , noValue          : PExpr
+      ) : PExpr
+    {
+      <[
+        if ($(parentAstPointer().GetSize(field)) > 0)
+          $hasValue;
+        else
+          $noValue;
+      ]>
+    }
+
+    public GetListValue
+      ( field            : RuleStructureField.List
+      , parentAstPointer : void -> AstPointer
+      , init             : PExpr
+      , item             : PExpr
+      , returnCode       : PExpr
+      , emptyCode        : PExpr
+      ) : PExpr
+    {
+      def loopCode = <[
+        def loop()
+        {
+          $item;
+          if (listEnd > pos)
+            loop();
+          else
+            assert(listEnd == pos);
+        }
+      ]>;
+      GetListValueImpl
+        (field             = field
+        , parentAstPointer = parentAstPointer
+        , init             = init
+        , loopCode         = loopCode
+        , returnCode       = returnCode
+        , emptyCode        = emptyCode)
+    }
+
+    public GetListWithSeparatorValue
+      ( field            : RuleStructureField.ListWithSeparator
+      , parentAstPointer : void -> AstPointer
+      , init             : PExpr
+      , item             : PExpr
+      , separator        : PExpr
+      , returnCode       : PExpr
+      , emptyCode        : PExpr
+      ) : PExpr
+    {
+      def loopCode = <[
+        def loop()
+        {
+          $item;
+          if (listEnd > pos)
+          {
+            $separator;
+            if (listEnd > pos)
+              loop();
+            else
+              assert(listEnd == pos);
+          }
+          else
+            assert(listEnd == pos);
+        }
+      ]>;
+      GetListValueImpl
+        (field             = field
+        , parentAstPointer = parentAstPointer
+        , init             = init
+        , loopCode         = loopCode
+        , returnCode       = returnCode
+        , emptyCode        = emptyCode)
+    }
+
+    private GetListValueImpl
+      (field            : RuleStructureField
+      , parentAstPointer : void -> AstPointer
+      , init             : PExpr
+      , loopCode         : PExpr
+      , returnCode       : PExpr
+      , emptyCode        : PExpr
+      ) : PExpr
+    {
+      def nonemptyCode = List();
+      match(init)
+      {
+        | <[ { ..$exprs } ]> => nonemptyCode.AddRange(exprs)
+        | e                  => nonemptyCode.Add(e)
+      }
+      nonemptyCode.Add(loopCode);
+      nonemptyCode.Add(<[ loop() ]>);
+      nonemptyCode.Add(returnCode);
+      <[
+        def listEnd = pos + $(parentAstPointer().GetSize(field));
+        if (listEnd > pos) { ..$(nonemptyCode.NToList()) }
+        else $emptyCode
+      ]>
+    }
+  }
+}

@@ -1,0 +1,94 @@
+﻿using N2.Model;
+using N2.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  public sealed partial class WalkerEmitter
+  {
+    private interface IRuleWalkerEmitter
+    {
+      Rule               : RuleDefSymbol  { get; }
+      WalkerTb           : TypeBuilder    { get; }
+      RuleParserBaseType : PExpr          { get; }
+      Define(walkersModule : TypeBuilder) : void;
+      Emit() : void;
+    }
+
+    [Record]
+    private abstract class RuleWalkerEmitter[TRuleSymbol] : IRuleWalkerEmitter where TRuleSymbol : RuleDefSymbol
+    {
+      public Environment : EmitterEnvironment { get; }
+      public Generator   : WalkerGenerator    { get; }
+      public Rule        : TRuleSymbol implements IRuleWalkerEmitter.Rule { get; }
+      public abstract WalkerTb : TypeBuilder { get; }
+
+      public abstract RuleParserBaseType : PExpr { get; }
+
+      public abstract Define(walkersModule : TypeBuilder) : void;
+      public abstract Emit() : void;
+
+      protected DefineInitMethod() : void
+      {
+        def initBody = List();
+        initBody.Add(<[ ignore(compositeAstWalker) ]>);
+        foreach ((ruleSymbol, bp, fieldName) in Generator.GetCalledWalkers())
+        {
+          def walkerTypeName = WalkerEmitter.GetRuleWalkerFullName(ruleSymbol, Generator, "_Walker");
+          WalkerTb.DefineConditional(<[decl: private mutable $(fieldName : dyn) : $walkerTypeName; ]>);
+          match (ruleSymbol)
+          {
+            | ExtensibleRuleSymbol =>
+              initBody.Add(<[ this.$(fieldName : usesite) = compositeAstWalker.GetWalker($(ruleSymbol.GetDescriptorClassRef()).StaticDescriptor, $(bp : int)) :> $walkerTypeName ]>);
+
+            | _ =>
+              initBody.Add(<[ this.$(fieldName : usesite) = compositeAstWalker.GetWalker($(ruleSymbol.GetDescriptorClassRef()).StaticDescriptor) :> $walkerTypeName ]>);
+          }
+        }
+
+        WalkerTb.DefineConditional(<[ decl:
+          public override Init(compositeAstWalker : N2.Runtime.CompositeAstWalker) : void
+          {
+            ..$(initBody.NToList())
+          }
+        ]>);
+      }
+
+      protected DefineEntranceMethod(walkersModule : TypeBuilder, signature : WalkerSignature) : void
+      {
+        def methodParameters =
+          <[ parameter: parseResult : N2.ParseResult ]>
+          :: signature.Parameters;
+        def walkArguments =
+          <[ ref pos ]>
+          :: <[ ref parserState ]>
+          :: signature.Parameters.Map(PassParameter);
+        walkersModule.Define(<[ decl:
+          public static $(Environment.MakePublicRuleName(Rule) : usesite)(..$methodParameters) : $(signature.ReturnType)
+          {
+            def host = parseResult.ParserHost.GetWalkerHost($(Generator.GetWalkerTypeDescriptorExpr()));
+            def walker = host.GetRootWalker(parseResult) :> $(WalkerTb.GetMemType() : typed);
+            mutable pos = 0;
+            mutable parserState = parseResult.ParserState;
+            walker.Walk(..$walkArguments)
+          }
+        ]>);
+      }
+
+      protected static PassParameter(p : PParameter) : PExpr
+      {
+        p.ReferencingExpr
+      }
+    }
+  }
+}

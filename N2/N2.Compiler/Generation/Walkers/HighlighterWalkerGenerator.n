@@ -1,0 +1,224 @@
+﻿using N2.Model;
+using N2.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  [Record]
+  public class HighlighterWalkerGenerator : WalkerGenerator
+  {
+    public Environment : EmitterEnvironment { get; }
+
+    public override Name : string { get "Ast" }
+
+    public override GetWalkerTypeDescriptorExpr() : PExpr
+    {
+      <[ N2.Runtime.AstWalkerTypeDescriptor.StaticDescriptor ]>
+    }
+
+    public override GetSignature(rule : RuleSymbol) : WalkerSignature
+    {
+      WalkerSignature([], Environment.PTypeOfRuleSymbol(rule));
+    }
+
+    protected override GetRuleValue(field : RuleStructureField, parentAstPointer : void -> AstPointer) : PExpr
+    {
+      def fieldLocCode = GetRangeOf(field, parentAstPointer);
+      
+      match (field)
+      {
+        | SimpleCall(ruleSymbol) with bp = 0
+        | ExtensibleCall(ruleSymbol, bp) =>
+          <[  if ($fieldLocCode.IntersectsWith(startPos, endPos))
+                $(CallSyntaxRule(ruleSymbol, bp))
+              else
+                $(Skip(field, parentAstPointer)) ]>
+
+        | TokenCall(symbol) =>
+          if (symbol.Options.SetSpanClass != null)
+            <[  def loc = $fieldLocCode;
+                if (loc.IntersectsWith(startPos, endPos))
+                  spans.Add(N2.SpanInfo(loc, 
+                    $(MakeSpanClassFieldName(symbol.Options.SpanClassSymbol))))
+                else
+                  $(Skip(field, parentAstPointer)) ]>
+          else
+            Skip(field, parentAstPointer)
+  //        
+  //      | String(str, None) => ()
+  //      | String(str, Some(spanClass)) =>
+  //        <[  when ($fieldLocCode.IntersectsWith(startPos, endPos))
+  //              spans.Add(N2.SpanInfo($fieldLocCode, 
+  //                $(MakeSpanClassFieldName(spanClass.Name) : usesite))) ]>
+        | TokenCall
+        | TokenString => GetTokenValue(field, parentAstPointer, <[ N2.NToken(tokenPos, pos) ]>)
+  //      | Option(subRuleStruct) as field =>
+  //        MakeOption(field, MakeCodeForStruct(subRuleStruct))
+        | Option as field =>
+          GetOptionValue(
+            field            = field,
+            parentAstPointer = parentAstPointer,
+            hasValue         = <[ Some($(GetRuleValue(field.Rule, "valuePointer"))) ]>,
+            noValue          = <[ None() ]>)
+
+  //      | List(subRuleStruct, _, _) as lst =>
+  //        // если MakeCodeForStruct(subRuleStruct) вернет <[ () ]> 
+  //        // то результатом ForEach будет <[ () ]>
+  //        MakeForEach(lst, MakeCodeForStruct(subRuleStruct))
+        | List as lst=>
+          GetListValue(field            = lst,
+            parentAstPointer = parentAstPointer,
+            init             = <[ def astBuffer = System.Collections.Generic.List(16); ]>,
+            item             = <[ astBuffer.Add($(GetRuleValue(lst.Rule, "itemPointer"))) ]>,
+            returnCode       = <[ Nemerle.Collections.NList.ToList(astBuffer) ]>,
+            emptyCode        = <[ [] ]>);
+
+  //
+  //      | ListWithSeparator(ruleStruct, separatorStruct, _, _) as lst =>
+  //        // если MakeCodeForStruct(subRuleStruct) вернет <[ () ]> 
+  //        // то результатом ForEachWithSeparator будет <[ () ]>
+  //        MakeForEachWithSeparator(lst, 
+  //          makeCodeForField(ruleStruct), makeCodeForField(separatorStruct))
+        | ListWithSeparator as lst=>
+          GetListWithSeparatorValue(
+            field            = lst,
+            parentAstPointer = parentAstPointer,
+            init             = <[ def astBuffer = System.Collections.Generic.List(16); def separatorBuffer = System.Collections.Generic.List(16); ]>,
+            item             = <[ astBuffer.Add($(GetRuleValue(lst.Rule, "itemPointer"))) ]>,
+            separator        = <[ separatorBuffer.Add($(GetRuleValue(lst.Separator, "separatorPointer"))) ]>,
+            returnCode       = <[ (Nemerle.Collections.NList.ToList(astBuffer), Nemerle.Collections.NList.ToList(separatorBuffer)) ]>,
+            emptyCode        = <[ ([], []) ]>);
+            
+        | Predicate => assert(false)
+      }
+    }
+    
+    MakeSpanClassFieldName(spanClassSymbol : SpanClassSymbol) : PExpr
+    {
+      assert(false)
+    }
+
+    protected override CombineValues(_ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr
+    {
+      match (arguments)
+      {
+        | []   => assert(false)
+        | [x]  => x
+        | many => <[ (..$many) ]>
+      }
+    }
+
+    protected override GetSyntaxRuleValue(ruleSymbol : SyntaxRuleSymbol, astPointer : void -> AstPointer) : PExpr
+    {
+      def ruleStruct = ruleSymbol.Structure;
+      def statements = List();
+      def arguments  = List();
+      
+      arguments.Add(<[ N2.Location(parser.Source, startPos, pos) ]>);
+      arguments.Add(<[ [] ]>);
+      when (ruleStruct is RuleStructure.Ast(Symbol = ExtentionRuleSymbol(ExtentionType=Postfix)))
+        arguments.Add(<[ prefix ]>);
+
+      foreach (field in ruleStruct.Fields)
+      {
+        | RuleStructureField.Predicate => ()
+        | RuleStructureField.SimpleCall(symbol)        when symbol.Type is RuleType.Void
+        | RuleStructureField.ExtensibleCall(symbol, _) when symbol.Type is RuleType.Void =>
+          statements.Add(GetRuleValue(field, astPointer));
+
+        | _                =>
+          def varName = Nemerle.Compiler.Util.tmpname("ast");
+          statements.Add(<[ def $(varName : usesite) = $(GetRuleValue(field, astPointer)) ]>);
+          arguments.Add(<[ $(varName : usesite) ]>);
+      }
+
+      <[
+        { ..$(statements.NToList()); }
+        $(Environment.NTypeOfRuleSymbol(ruleSymbol) : typed).Ast(..$(arguments.NToList()))
+      ]>
+    }
+  }
+  
+  //protected override MakeGenerator(ruleStruct : RuleStructure.Ast) : WalkerCode
+  //{
+  //  def makeCodeForField(field : RuleStructureField) : PExpr
+  //  {
+  //    def fieldLocCode = NTokenOf(field);
+  //
+  //    match (field)
+  //    {
+  //      | SimpleCall(ruleSymbol) | ExtensibleCall(ruleSymbol , _) =>
+  //        <[  when ($fieldLocCode.IntersectsWith(startPos, endPos))
+  //              $(MakeVisit(field))(spans, startPos, endPos) ]>
+  //
+  //      | TokenCall(symbol) =>
+  //        if (symbol.Options.SetSpanClass != null)
+  //          <[ 
+  //            def loc = $fieldLocCode;
+  //            when (loc.IntersectsWith(startPos, endPos))
+  //              spans.Add(N2.SpanInfo(loc, 
+  //                $(MakeSpanClassFieldName(symbol.Options.SetSpanClass.Name) : usesite)))
+  //          ]>
+  //        else
+  //          <[ () ]>
+  //        
+  //      | String(str, None) => ()
+  //      | String(str, Some(spanClass)) =>
+  //        <[  when ($fieldLocCode.IntersectsWith(startPos, endPos))
+  //              spans.Add(N2.SpanInfo($fieldLocCode, 
+  //                $(MakeSpanClassFieldName(spanClass.Name) : usesite))) ]>
+  //
+  //      | Option(subRuleStruct) as field =>
+  //        MakeOption(field, MakeCodeForStruct(subRuleStruct))
+  //
+  //      | List(subRuleStruct, _, _) as lst =>
+  //        // если MakeCodeForStruct(subRuleStruct) вернет <[ () ]> 
+  //        // то результатом ForEach будет <[ () ]>
+  //        MakeForEach(lst, MakeCodeForStruct(subRuleStruct))
+  //
+  //      | ListWithSeparator(ruleStruct, separatorStruct, _, _) as lst =>
+  //        // если MakeCodeForStruct(subRuleStruct) вернет <[ () ]> 
+  //        // то результатом ForEachWithSeparator будет <[ () ]>
+  //        MakeForEachWithSeparator(lst, 
+  //          makeCodeForField(ruleStruct), makeCodeForField(separatorStruct))
+  //            
+  //      | Predicate => ()
+  //    }
+  //  }
+  //
+  //  def code = MakeCodeForStruct(ruleStruct);
+  //  def codeForAst =
+  //    if (symbol.Options.SetSpanClass != null)
+  //      <[ 
+  //        { ..$code }
+  //        def loc = $(NTokenOf(ruleStruct));
+  //        when (loc.IntersectsWith(startPos, endPos))
+  //          spans.Add(N2.SpanInfo(loc, 
+  //            $(MakeSpanClassFieldName(symbol.Options.SetSpanClass.Name) : usesite)))
+  //      ]>
+  //    else
+  //      <[ ..$code ]>;
+  //
+  //  WalkerCode(codeForAst, 
+  //        [<[ parameter: spans    : System.Collections.Generic.List[N2.SpanInfo] ]>,
+  //         <[ parameter: startPos : int ]>,
+  //         <[ parameter: endPos   : int ]>
+  //        ], 
+  //        <[ void ]>)
+  //}
+  //
+  //MakeCodeForStruct(ruleStruct : RuleStructure) : PExpr
+  //{
+  //  def code = ruleStruct.Fields.Map(GetRuleValue);
+  //  <[ ..$code ]>
+  //}
+}
