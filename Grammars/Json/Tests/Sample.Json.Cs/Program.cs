@@ -22,9 +22,9 @@ namespace Sample.Json.Cs
 
       if (parseResult.IsSuccess)
       {
-        var ast = parseResult.CreateAst<JsonParser.Start>();
-        Console.WriteLine("Pretty print: " + ast);
-        Console.WriteLine();
+        //var ast = parseResult.CreateAst<JsonParser.Start>();
+        //Console.WriteLine("Pretty print: " + ast);
+        //Console.WriteLine();
       }
       else
       {
