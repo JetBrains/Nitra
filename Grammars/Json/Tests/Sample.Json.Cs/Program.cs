@@ -18,7 +18,7 @@ namespace Sample.Json.Cs
 
       var source = new SourceSnapshot(text);
       var parserHost = new ParserHost();
-      var parseResult = parserHost.DoParsing(source, JsonParser.GrammarImpl.StartRuleDescriptor);
+      var parseResult = JsonParser.Start(source, parserHost);
 
       if (parseResult.IsSuccess)
       {
