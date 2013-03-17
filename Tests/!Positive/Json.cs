@@ -1,4 +1,4 @@
-// REFERENCE: Json.Grammar.dll
+﻿// REFERENCE: Json.Grammar.dll
 
 using N2;
 using N2.Tests;
@@ -45,7 +45,7 @@ namespace Sample.Json.Cs
         'width': 500,
         'height': 500
     },
-    'image': { 
+    'image': {
         'src': 'Images/Sun.png',
         'name': 'sun1',
         'hOffset': 250,
@@ -67,7 +67,7 @@ namespace Sample.Json.Cs
       Test(
 @"
 {'web-app': {
-  'servlet': [   
+  'servlet': [
     {
       'servlet-name': 'cofaxCDS',
       'servlet-class': 'org.cofax.cds.CDSServlet',
@@ -123,7 +123,7 @@ namespace Sample.Json.Cs
     {
       'servlet-name': 'cofaxAdmin',
       'servlet-class': 'org.cofax.cds.AdminServlet'},
- 
+
     {
       'servlet-name': 'fileServlet',
       'servlet-class': 'org.cofax.cds.FileServlet'},
@@ -150,7 +150,7 @@ namespace Sample.Json.Cs
     'cofaxAdmin': '/admin/*',
     'fileServlet': '/static/*',
     'cofaxTools': '/tools/*'},
- 
+
   'taglib': {
     'taglib-uri': 'cofax.tld',
     'taglib-location': '/WEB-INF/tlds/cofax.tld'}}}
@@ -206,7 +206,7 @@ namespace Sample.Json.Cs
       }
     }
 
-    static string text = 
+    static string text =
   @"{
       'glossary': {
           'title': 'example glossary',

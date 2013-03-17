@@ -67,7 +67,7 @@ namespace CSharpToNemerle.Test
   public class Foo<T> where T : new()
   {
     public Foo() : base() {  }
-    
+
     /// this is destructor
     ~Foo() {}
 
@@ -81,7 +81,7 @@ namespace CSharpToNemerle.Test
 
     const string F = "Generic ";
 
-    
+
     public void DoSomething(int x, global::System.String p = "class: ")
     {
       if(x > 0) {
@@ -298,9 +298,9 @@ namespace CSharpToNemerle.Test
 
       Func<int, string> f = delegate { return "OK"; };
       Console.WriteLine(f(42));
-   
+
       Func<string> f2 = delegate { return "OK"; };
-      Console.WriteLine(f2());    
+      Console.WriteLine(f2());
 
       Func<int, string> f3 = x => { return x.ToString(); };
       Console.WriteLine(f3(42));

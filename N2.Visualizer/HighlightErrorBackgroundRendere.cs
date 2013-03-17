@@ -15,7 +15,7 @@ namespace N2.Visualizer
     private TextEditor _editor;
     private int _errorPos = -1;
     public int ErrorPos
-    { 
+    {
       get { return _errorPos; }
       set { _errorPos = value; /*_editor.TextView.Redraw();*/ }
     }
@@ -38,7 +38,7 @@ namespace N2.Visualizer
       textView.EnsureVisualLines();
 
       var segment = new Segment(_errorPos, _editor.Text.Length); //GetLineByOffset(_errorPos);
- 
+
       foreach (var rect in BackgroundGeometryBuilder.GetRectsForSegment(textView, segment))
       {
         drawingContext.DrawRectangle(

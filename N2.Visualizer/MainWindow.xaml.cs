@@ -40,7 +40,7 @@ namespace N2.Visualizer
       InitializeComponent();
       //textBox1.TextArea.TextView.LineTransformers.Add();// Services.AddService(typeof(ITextMarkerService), textMarkerService);
       //textBox1.TextArea.TextView.Services.AddService(typeof(ITextMarkerService), textMarkerService);
-    
+
       _errorHighlighter = new HighlightErrorBackgroundRendere(textBox1);
       textBox1.TextArea.TextView.BackgroundRenderers.Add(_errorHighlighter);
     }
@@ -195,7 +195,7 @@ namespace N2.Visualizer
         if (root.Children.Count != 0)
           treeNode.Items.Add(new TreeViewItem());
         treeView1.Items.Add(treeNode);
-        
+
       }
       catch { }
     }

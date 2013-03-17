@@ -34,7 +34,7 @@ namespace Sample.Json.Cs
       }
     }
 
-    static string text = 
+    static string text =
   @"{
       'glossary': {
           'title': 'example glossary',
