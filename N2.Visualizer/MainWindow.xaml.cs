@@ -30,7 +30,7 @@ namespace N2.Visualizer
   {
     ParserHost      _parserHost;
     ParseResult     _parseResult;
-    RuleDescriptor  _ruleDescriptor = JsonParser.GrammarImpl.StartRuleDescriptor;
+    RuleDescriptor  _ruleDescriptor = null;//JsonParser.GrammarImpl.StartRuleDescriptor;
     bool            _doTreeOperation;
     bool            _doChangeCaretPos;
     HighlightErrorBackgroundRendere _errorHighlighter;
