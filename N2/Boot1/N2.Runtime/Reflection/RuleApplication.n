@@ -1,0 +1,167 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Linq;
+
+namespace N2.Runtime.Reflection
+{
+  public interface IRuleApplication
+  {
+    Position    : int { get; }
+    Size        : int { get; }
+    HasChildren : bool { get; }
+  }
+
+  [Record]
+  public struct RuleApplication : IRuleApplication
+  {
+    private _parseResult : ParseResult;
+    public Position   : int           { get; }
+    public AstPointer : int           { get; }
+
+    private RuleParserReflection : IRuleParserReflection { get { _parseResult.ParserHost.GetRuleParserReflection(_parseResult, AstPointer) } }
+    private Structure            : RuleStructure         { get { RuleParserReflection.Reflection(_parseResult.RawAst[AstPointer] & Internal.ExtensibleRuleParser.PostfixMask.Id) } }
+    public FirstFailedIndex : int
+    {
+      get
+      {
+        ret:
+        {
+          when (Structure is RuleStructure.Ast as str)
+          {
+            def state = _parseResult.RawAst[AstPointer + 2];
+            when (state != -1)
+            {
+              foreach (rule in str.Subrules with i)
+                when (rule.State > state)
+                  ret(i - 1);
+
+              ret(str.Subrules.Count - 1);
+            }
+          }
+          -1
+        }
+      }
+    }
+
+    public HasChildren : bool { get { Structure.Subrules.Count > 0 } }
+    public GetChildren() : ReadOnlyCollection[RuleCall]
+    {
+      def calls = List();
+      mutable pos = Position;
+      foreach (ruleInfo in Structure.Subrules)
+      {
+        def size = _parseResult.RawAst[AstPointer + ruleInfo.Offset];
+        calls.Add(RuleCall(_parseResult, ruleInfo, pos, size));
+        pos += size;
+      }
+      ReadOnlyCollection(calls)
+    }
+
+    public Size : int
+    {
+      get
+      {
+        mutable size = 0;
+        foreach (subrule in Structure.Subrules)
+          size += _parseResult.RawAst[AstPointer + subrule.Offset];
+        size
+      }
+    }
+
+    public override ToString() : string { Structure.ToString() }
+  }
+
+  [Record]
+  public struct RuleCall : IRuleApplication
+  {
+    private _parseResult  : ParseResult;
+    public RuleInfo       : RuleInfo { get; }
+    public Position       : int { get; }
+    public Size           : int { get; }
+
+    public HasChildren : bool
+    {
+      get
+      {
+        if (Size == 0)
+          false
+        else match (RuleInfo)
+        {
+          | TokenCall
+          | TokenString
+          | Predicate
+          | ExtensibleCall => false
+
+          | SimpleCall
+          | Option
+          | List
+          | ListWithSeparator => true
+        }
+      }
+    }
+
+    private static _empty : ReadOnlyCollection[RuleApplication] = ReadOnlyCollection(array(0));
+    public GetChildren() : ReadOnlyCollection[RuleApplication]
+    {
+      def getById(id, pos)
+      {
+        ret:
+        {
+          for (mutable astPtr = _parseResult.RawMemoize[pos]; astPtr > 0; astPtr = _parseResult.RawAst[astPtr + 1])
+            when (_parseResult.RawAst[astPtr] == id)
+              ret(RuleApplication(_parseResult, pos, astPtr));
+          assert(false);
+        }
+      }
+      if (Size == 0)
+        _empty
+      else match (RuleInfo)
+      {
+        | TokenCall
+        | TokenString => _empty;
+
+        | SimpleCall                 (id) => ReadOnlyCollection(array[getById(id, Position)])
+
+        | Option                     (rule) => ReadOnlyCollection(array[getById(rule.Id, Position)]);
+        | List                       (rule) =>
+          def calls = List();
+          mutable pos = Position;
+          mutable endPos = Position + Size;
+          while (pos < endPos)
+          {
+            def call = getById(rule.Id, pos);
+            calls.Add(call);
+            pos += call.Size;
+          }
+          assert(pos == endPos);
+          ReadOnlyCollection(calls);
+
+        | ListWithSeparator          (rule, separator) =>
+          def calls = List();
+          mutable isRule = true;
+          mutable pos = Position;
+          mutable endPos = Position + Size;
+          while (pos < endPos)
+          {
+            def call = getById(if (isRule) rule.Id else separator.Id, pos);
+            isRule = !isRule;
+            calls.Add(call);
+            pos += call.Size;
+          }
+          assert(pos == endPos);
+          ReadOnlyCollection(calls);
+
+        | Predicate                  => _empty
+        | ExtensibleCall             => _empty
+      }
+    }
+
+    public override ToString() : string { RuleInfo.ToString() }
+  }
+}

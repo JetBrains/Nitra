@@ -11,17 +11,42 @@ using N2.Internal;
 
 namespace N2.Runtime
 {
-  public class WalkerHost
+  public sealed class WalkerHost
   {
     public ParserHost         : ParserHost { get; }
-    public Type               : WalkerTypeDescriptor { get; }
+    public Type               : string     { get; }
 
     private _compositeWalkers : Hashtable[CompositeGrammar, CompositeAstWalker] = Hashtable();
 
-    public this(parserHost : ParserHost, type : WalkerTypeDescriptor)
+    public this(parserHost : ParserHost, type : string)
     {
       ParserHost = parserHost;
       Type       = type;
+    }
+
+    [Memoize]
+    internal FindGrammarWalkerDescriptor(grammar : GrammarDescriptor) : GrammarWalkerDescriptor
+    {
+      def walkersModuleName = grammar.FullName + Type + "Walkers";
+
+      mutable candidates = [];
+      foreach(assembly in ParserHost.AssemblyScope())
+        match (assembly.GetType(walkersModuleName, false))
+        {
+          | null => ()
+          | t    => candidates ::= t
+        }
+
+      match (candidates)
+      {
+        | [] => assert(false, $"Walker descriptor of type '$Type' not found for grammar '$(grammar.Name)'.")
+        | [walkersModuleType] =>
+          def descriptorProperty = walkersModuleType.GetProperty("StaticDescriptor");
+          def descriptor = descriptorProperty.GetValue(null, null);
+          descriptor :> GrammarWalkerDescriptor
+
+        | walkerModuleTypes => assert(false, $"Ambiguous walker descriptors of type '$Type' found for grammar '$(grammar.Name)': ..$(walkerModuleTypes; \", \"; t => \"'\" + t.FullName + \"'\").")
+      }
     }
 
     internal AddCompositeGrammar(compositeGrammar : CompositeGrammar) : void
@@ -29,16 +54,14 @@ namespace N2.Runtime
       _compositeWalkers.Add(compositeGrammar, CompositeAstWalker(this, compositeGrammar));
     }
 
-    public Walk[T](result : ParseResult) : T
+    public GetRootWalker(result : ParseResult) : object
     {
-      mutable pos = 0;
-      mutable parser = result.ParserState;
       def walker = _compositeWalkers[result.RuleParser.Grammar];
       match (result.RuleDescriptor)
       {
-        | descriptor is SimpleRuleDescriptor     => walker.GetWalker(descriptor).Walk(ref pos, result.RawAstIndex, ref parser);
-        | descriptor is ExtensibleRuleDescriptor => walker.GetWalker(descriptor, 0).Walk(ref pos, ref parser);
-        | _                                      => assert(false);
+        | descriptor is SimpleRuleDescriptor     => walker.GetWalker(descriptor)
+        | descriptor is ExtensibleRuleDescriptor => walker.GetWalker(descriptor, 0)
+        | _                                      => assert(false)
       }
     }
   }
