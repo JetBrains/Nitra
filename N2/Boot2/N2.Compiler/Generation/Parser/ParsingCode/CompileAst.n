@@ -1,0 +1,98 @@
+﻿using N2.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal abstract partial class RuleParserEmitter
+  {
+    public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
+    {
+      def code = SCG.List();
+      def endLabel = Environment.MakeLabel("EndParse");
+      def checkAstMemoize = if (ruleStructure.Symbol is SimpleRuleSymbol)
+        <[
+          when ($CurTextPos <= text.Length)
+          {
+            for (mutable ast = parser.memoize[$CurTextPos]; ast > 0; ast = parser.ast[ast + 1])
+            {
+              when (parser.ast[ast] == RuleId)
+              {
+                if (parser.ast[ast + 2] == -1)
+                {
+                  resultRef = ast;
+                  mutable i = ast + $(ruleStructure.SizesStart);
+                  mutable end = ast + $(ruleStructure.SizesEnd);
+                  for (; i < end; ++i)
+                    $CurTextPos += parser.ast[i];
+                  $(endLabel.Goto());
+                }
+                else
+                {
+                  $CurTextPos = -1;
+                  $(endLabel.Goto());
+                }
+              }
+            }
+          }
+        ]>
+      else
+        <[ () ]>;
+
+      code.Add(<[ _ = $(ruleStructure.SrcRule.ToString()) ]>);
+      //code.AddRange(_fields.Map(field => <[ _ = $(field.Print()) ]>));
+
+      code.Add(<[ $(ruleStructure.ParserExtention().AstStart) = $CurTextPos; ]>);
+      code.Add(checkAstMemoize);
+      code.Add(<[ $(ruleStructure.Fields[0].ParserExtention().ParseLabel.Goto()); ]>);
+
+      //parse ok
+      code.Add(<[ $(ruleStructure.ParserExtention().OkLabel.Label()); ]>);
+      code.Add(<[ $(ruleStructure.ParserExtention().AstPtr.Set(ruleStructure.HeaderState, <[ -1 ]>)) ]>);// состояние разбора -1 если правило полностью разобрано.
+      code.Add(<[ resultRef = $(ruleStructure.ParserExtention().AstPtr.Var); ]>);
+      code.Add(<[ $(endLabel.Goto()); ]>);
+
+      //parse fail
+      code.Add(<[ $(ruleStructure.ParserExtention().FailLabel.Label()); ]>);
+      code.Add(<[ when (parseState > $(ruleStructure.ParserExtention().AllocateState)) // АСТ создано
+                  {
+                    $(ruleStructure.ParserExtention().AstPtr.Set(ruleStructure.HeaderState, <[ parseState ]>));
+                    resultRef = $(ruleStructure.ParserExtention().AstPtr.Var);
+                  }
+      ]>);
+      code.Add(<[ $CurTextPos = -1; $(endLabel.Goto()); ]>);
+      CompileFields(code, ruleStructure.Fields);
+
+      if (ruleStructure.Symbol.LastLocation is Some(loc) when Owner.Environment.Manager.Options.EmitDebug)
+      {
+        //assert2(false);
+        def debugCode = <[ () ]>;
+        debugCode.Location = loc.NLocation();
+        code.Add(<[ $(endLabel.Label()); $debugCode; $CurTextPos; ]>);
+      }
+      else
+        code.Add(<[ $(endLabel.Label()); $CurTextPos; ]>);
+
+      def variables = SCG.List();
+      variables.Add(<[
+        mutable tmpResult  : int; _ = tmpResult;
+        mutable tmpSize    : int; _ = tmpSize;
+        mutable parseState : int; _ = parseState;
+        mutable newPos     : int; _ = newPos;
+      ]>);
+      variables.AddRange(_names.Filter(_ != "resultRef").Map(name => <[ mutable $(name : dyn) ]>));
+
+      <[ { ..$(variables.NToList()) } { ..$(code.NToList()) } ]>.FlattenPExpr();
+    }
+  }
+}

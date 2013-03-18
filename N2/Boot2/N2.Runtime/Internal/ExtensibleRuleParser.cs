@@ -19,7 +19,7 @@ namespace N2.Internal
 #if !PARSER_DEBUG
   //[DebuggerStepThroughAttribute]
 #endif
-  public sealed class ExtensibleRuleParser : RuleParser
+  public sealed partial class ExtensibleRuleParser : RuleParser
   {
     public static class AstOfs
     {
@@ -168,11 +168,6 @@ prefix_loop:
           }
         }
 
-#if DEBUG || PARSER_DEBUG
-        if (parser.ruleCalls[curEndPos] == null)
-          parser.ruleCalls[curEndPos] = System.Collections.Generic.List();
-        parser.ruleCalls[curEndPos].Add(parser.parserHost.GetRuleDescriptorById(PrefixId));
-#endif
         //нет мемоизации префикса
         prefixAst = parser.Allocate(PrefixOfs.NodeSize, PrefixId);
         parser.ast[prefixAst + PrefixOfs.Next] = parser.memoize[curEndPos];
@@ -214,7 +209,7 @@ prefix_loop:
               else
                 goto prefix_new_better;
             prefix_equal://АСТ равен лучшему. Неоднозначность.
-              parser.ast[bestResult + AstOfs.Next] = newResult;
+              parser.ast[newResult + AstOfs.Next] = bestResult;
               bestResult = newResult;
               assert(bestEndPos == newEndPos);
               continue;
@@ -251,6 +246,25 @@ prefix_loop:
               //ищем лучшее правило
               while (bestResult > 0 && (parser.ast[bestResult] & PostfixMask.Mark) != PostfixMark.Best)
                 bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
+              if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == -1)//Убеждаемся что разбор успешный
+              {
+                bestEndPos = curEndPos;
+                //TODO: убрать цикл
+                //вычисляем длинну разобранного правила
+                j = bestResult + AstOfs.Sizes;
+                while (true)
+                {
+                  var size = parser.ast[j];
+                  if (size >= 0)
+                    bestEndPos += size;
+                  else
+                    break;//нашли терминатор.
+
+                  ++j;
+                }
+              }
+              else
+                bestEndPos = -1;
               goto postfix_parse;//парсим то что не распарсили раньше
             }
             else
@@ -343,7 +357,7 @@ prefix_loop:
           }
         }
 
-        parser.ast[postfixAst + PostfixOfs.AstList] = bestResult;
+        parser.ast[postfixAst + PostfixOfs.AstList] = lastResult;
 
         if (bestEndPos <= curEndPos)
           return curEndPos; // если нам не удалось продвинуться то заканчиваем разбор

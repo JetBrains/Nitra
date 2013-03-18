@@ -1,0 +1,111 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using N2.Model;
+using N2.Typing;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  internal sealed class RuleStructureParserExtention
+  {
+    public this (structure : RuleStructure)
+    {
+      Structure = structure;
+      assert(structure.Tag == null);
+      structure.Tag = this;
+    }
+
+    public         Structure        : RuleStructure;
+    public mutable AllocateState    : int;
+    public mutable OkLabel          : PExprLabel;
+    public mutable FailLabel        : PExprLabel;
+    public mutable VariableEmitter  : IVariableEmitter;
+    public mutable AstPtr           : AstPointer;
+
+    public AstStart : PExpr { get { <[ $(VariableEmitter.CreateVariable($"astStart$(Structure.Level)") : dyn) ]> } }
+
+    public static ParserExtention(this structure : RuleStructure) : RuleStructureParserExtention
+    {
+      structure.Tag :> RuleStructureParserExtention
+    }
+  }
+
+  internal sealed class RuleStructureFieldParserExtention
+  {
+    public this (field : RuleStructureField)
+    {
+      Field = field;
+      assert(field.Tag == null);
+      field.Tag = this;
+    }
+
+    public         Field              : RuleStructureField;
+    public mutable ParseLabel         : PExprLabel;
+    public mutable RecoveryLabel      : PExprLabel;
+    public         ContinueParseLabel : PExprLabel { get { if (Field.NextSibling == null) (Field.Owner.Tag :> RuleStructureParserExtention).OkLabel else (Field.NextSibling.Tag :> RuleStructureFieldParserExtention).ParseLabel } }
+    public         FailParseLabel     : PExprLabel { get { (Field.Owner.Tag :> RuleStructureParserExtention).FailLabel } }
+
+    public static ParserExtention(this field : RuleStructureField) : RuleStructureFieldParserExtention
+    {
+      field.Tag :> RuleStructureFieldParserExtention
+    }
+  }
+
+  internal abstract partial class RuleParserEmitter
+  {
+    private InitRuleStructure(ast : RuleStructure.Ast) : void
+    {
+      def initStructure(structure : RuleStructure, owner : RuleStructureField)
+      {
+        def extraData = RuleStructureParserExtention(structure);
+        extraData.VariableEmitter = this;
+        extraData.AstPtr          = AstPointer.New(structure, "astPtr");
+        if (owner == null)
+        {
+          assert(structure is RuleStructure.Ast);
+          extraData.OkLabel   = Environment.MakeLabel("Ast_Ok");
+          extraData.FailLabel = Environment.MakeLabel("Ast_Fail");
+        }
+        else
+        {
+          assert(!(structure is RuleStructure.Ast));
+          extraData.OkLabel   = Environment.MakeLabel($"$(structure.GetType().Name)_$(owner.State)_Ok");
+          extraData.FailLabel = Environment.MakeLabel($"$(structure.GetType().Name)_$(owner.State)_Fail");
+        }
+
+        def fields = structure.Fields;
+        foreach (field in fields)
+          initField(field);
+
+        match (fields.Find(field => !(field is RuleStructureField.Predicate)))
+        {
+          | Some(field) => extraData.AllocateState = field.State
+          | None()      => assert(false)
+        }
+      }
+      and initField(field : RuleStructureField)
+      {
+        def extraData = RuleStructureFieldParserExtention(field);
+        extraData.ParseLabel    = Environment.MakeLabel($"Parse_$(field.GetType().Name)_$(field.State)");
+        extraData.RecoveryLabel = Environment.MakeLabel($"Recovery_$(field.GetType().Name)_$(field.State)");
+        match (field)
+        {
+          | Option           (rule)                     => initStructure(rule, field);
+          | List             (rule, _, _)               => initStructure(rule, field);
+          | Predicate        (rule, _)                  => initStructure(rule, field);
+          | ListWithSeparator(rule, separator, _, _, _) => initStructure(rule, field); initStructure(separator, field);
+          | _ => ()
+        }
+      }
+      initStructure(ast, null);
+    }
+  }
+}

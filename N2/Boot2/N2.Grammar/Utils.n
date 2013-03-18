@@ -6,8 +6,6 @@ using N2.Typing;
 using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Collections;
-using Nemerle.Compiler;
-using Nemerle.Compiler.Parsetree;
 using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -19,6 +17,7 @@ using System.Linq;
 using System.Text;
 
 using G = N2Syntax;
+using PExpr = Nemerle.Compiler.Parsetree.PExpr;
 
 namespace N2
 {
@@ -63,7 +62,10 @@ namespace N2
     {
       def (startLine, startCol) = loc.StartLineColumn;
       def (endLine, endCol) = loc.EndLineColumn;
-      Location(loc.Source.FileIndex, startLine, startCol, endLine, endCol)
+      if (loc.Source.FileIndex != 0)
+        Compiler.Location(loc.Source.FileIndex, startLine, startCol, endLine, endCol)
+      else
+        Compiler.Location.Default
     }
 
     [DebuggerStepThroughAttribute]
@@ -80,7 +82,10 @@ namespace N2
       def source = loc.Source;
       def (startLine, startCol) = source.PositionToLineColumn(tok.StartPos);
       def (endLine,   endCol)   = source.PositionToLineColumn(tok.EndPos);
-      Location(loc.Source.FileIndex, startLine, startCol, endLine, endCol)
+      if (source.FileIndex != 0)
+        Compiler.Location(source.FileIndex, startLine, startCol, endLine, endCol)
+      else
+        Compiler.Location.Default
     }
 
     public N2Location(this location : Compiler.Location) : N2.Location
@@ -424,47 +429,6 @@ namespace N2
       }
     }
 
-    public GetProject(this context : Context) : N2Project
-    {
-      | c is RootContext => c.Project
-      | null => assert(false)
-      | _ => context.Parent.GetProject()
-    }
-
-    public TryGetContext[T](this context : Context) : T
-      where T: IContext, class
-    {
-      match (context)
-      {
-        | null   => null
-        | c is T => c
-        | c      => TryGetContext.[T](c.Parent)
-      }
-    }
-
-    public TryGetParent[T](this context : Context) : T
-      where T: IContext, class
-    {
-      TryGetContext.[T](context.Parent)
-    }
-
-    public GetContext[T](this context : Context) : T
-      where T: IContext, class
-    {
-      match (context)
-      {
-        | null   => assert2(false); assert(false);
-        | c is T => c
-        | c      => GetContext.[T](c.Parent)
-      }
-    }
-
-    public GetParent[T](this context : Context) : T
-      where T: IContext, class
-    {
-      GetContext(context.Parent)
-    }
-
     internal BindImpl[T](result : BindingResult[T]) : option[T]
     {
       unless (result.Messages.IsEmpty)
@@ -608,78 +572,6 @@ namespace N2
         Location(source, tok)
     }
 
-    ParseNemerleInternal(ast : N2.Ast, context : Context) : PExpr
-    {
-      def env = context.GetNemerleEnvironment();
-      def simpleParse(ast : N2.Ast) : PExpr
-      {
-        def text = ast.Location.GetText();
-        MainParser.ParseExpr(env, text, ast.NLocation())
-      }
-      def parseAndAddIt(ast : N2.Ast) : PExpr
-      {
-        def e = simpleParse(ast);
-
-        def addIt(e)
-        {
-          | <[ value ]> => e
-          | <[ $(n : name) ]> => <[ it.$(n : name)]>
-          | <[ $x = $y ]> => <[ $(addIt(x)) = $(addIt(y)) ]>
-          | _ => e
-        }
-
-        addIt(e)
-      }
-
-      match (ast)
-      {
-        | G.Expression.Ast(ExpressionContents=[G.ExpressionContent_Content1.Ast(Content=G.Content_Fold.Ast as fold)]) =>
-          def collection = simpleParse(fold.Identifier);
-          def expr1 = simpleParse(fold.Expression);
-          def exprs = fold.Expressions[0].Map(parseAndAddIt);
-          //exprs.Fold()
-          <[ $collection.Fold($expr1, fun((it, value)) { ..$exprs }) ]>
-
-        | _ => simpleParse(ast)
-      }
-    }
-
-    public ParseNemerle(this body : G.ExtraFieldBody, context : Context) : PExpr
-    {
-      match (body)
-      {
-        | G.ExtraFieldBody_Block.Ast      as b => ParseNemerleInternal(b.Block, context)
-        | G.ExtraFieldBody_Expression.Ast as b => ParseNemerleInternal(b.Expression, context)
-        | G.ExtraFieldBody_Empty               => <[ () ]>
-        | _                                    => <[ () ]>
-      }
-    }
-
-    public PraseParameter(context : Context, name : N2.Ast, type : N2.Ast) : PParameter
-    {
-      match (ParseNemerleInternal(name, context))
-      {
-        | <[ $(n : name) ]> => <[ parameter: $n : $(ParseNemerleInternal(type, context)) ]>
-        | _ => N2Project.CurrentProject.FatalError(name, "Expected simple name.", -1); assert(false);
-      }
-    }
-
-    public ParseNemerle(this parms : list[G.ExtraFieldsParam], context : Context) : list[PParameter]
-    {
-      def parsed = List();
-      foreach (parm in parms)
-      {
-        | G.ExtraFieldsParam.Ast as p => parsed.Add(PraseParameter(context, p.Name, p.Type))
-        | e => N2Project.CurrentProject.FatalError(e, "Parse error.", -1)
-      }
-      parsed.ToNList()
-    }
-
-    public ParseNemerle(this type : G.Type, context : Context) : PExpr
-    {
-      ParseNemerleInternal(type, context)
-    }
-
     public CallRuleTyping(baseRule : option[ExtensibleRuleSymbol], _precedence : int, _fieldName : option[string], context : Context, options : RuleDefinitionOptions,
       QualifiedName : G.QualifiedIdentifier, BindingPower :  option[NToken * G.Number]) : Rule
     {
@@ -731,10 +623,14 @@ namespace N2
         | Chars => // Whitespace rule is inserted after all 'token' rules
           def moduleContext = context.GetContext.[SyntaxModuleBodyContext]();
           def loc           = callRule.Location.FromEnd();
-          def symbol        = moduleContext.GetSpaceRule(context, "s");
-          def ruleRef       = RuleRef.Create(loc, symbol, true);
-          def s             = Rule.Call(loc, RuleType.Void(), "", ruleRef, 0);
-          Rule.Sequence(callRule.Location, type, newFieldName, [callRule : Rule, s])
+          match (moduleContext.GetSpaceRule(context, "s", loc))
+          {
+            | None          => callRule
+            | Some(sSymbol) =>
+              def ruleRef = RuleRef.Some(loc, true, sSymbol);
+              def s       = Rule.Call(loc, RuleType.Void(), "", ruleRef, 0);
+              Rule.Sequence(callRule.Location, type, newFieldName, [callRule : Rule, s])
+          }
 
         | _ => callRule
       }
@@ -761,10 +657,10 @@ namespace N2
 
     public StringRuleTyping(loc : Location, value : string, fieldName : option[string], context : Context, options : RuleDefinitionOptions) : Rule
     {
-      def keywordContext = context.TryGetParent.[KeywordRegexContext]();
+      def keywordContext = context.TryGetContext.[KeywordRegexContext]();
       def newFieldName   = MakeLiteralName(fieldName, value, context);
       def type           = RuleType.Chars();
-      def str            = Rule.String(loc, type, newFieldName, value);
+      def str            = Rule.String(loc, type, newFieldName, value, context);
       def loc            = loc.FromEnd();
 
       if (options.IsExplicitSpaces)
@@ -777,7 +673,7 @@ namespace N2
           else
           {
             def moduleContext = context.GetContext.[SyntaxModuleBodyContext]();
-            moduleContext.GetSpaceRule(context, "s");
+            moduleContext.GetSpaceRule(context, "s", loc);
           };
         def ruleRef = RuleRef.Create(loc, symbol, true);
         def S = Rule.Call(loc, RuleType.Void(), "", ruleRef, 0);
@@ -785,78 +681,87 @@ namespace N2
       }
     }
 
-    public VisitorTyping
-      ( loc : Location
-      , context : Context
-      , visitorTypeName : G.QualifiedIdentifier
-      , syntaxModuleName : G.QualifiedIdentifier
-      , visitorMembers : list[G.VisitorMember]
-      ) : option[VisitorTypeSymbol * SyntaxModuleSymbol * list[list[RuleSymbol] * PExpr]]
+    public MakeNamespaceSymbol(currentNs : NamespaceSymbol, path : list[N2.Location]) : NamespaceSymbol
     {
-      def visitorTypeSym  = context.Bind.[VisitorTypeSymbol](visitorTypeName);
-      def syntaxModuleSym = context.Bind.[SyntaxModuleSymbol](syntaxModuleName);
-
-      match (visitorTypeSym, syntaxModuleSym)
+      def enter(currentNs : NamespaceSymbol, path : list[Location]) : NamespaceSymbol
       {
-        | (Some(visitorTypeSymbol), Some(syntaxModuleSymbol)) =>
-          def res : list[list[RuleRef] * PExpr] = visitorMembers.Map(m => m.Typing(syntaxModuleSymbol));
-          def convert(rules : list[RuleRef], type : PExpr) : list[RuleSymbol] * PExpr
-          {
-            (rules.Filter(r => r.IsSome).Map(r => r.Value), type)
-          }
-          def typesMapping = res.Map(convert);
-
-          def project = Project.CurrentProject;
-
-          unless (visitorTypeSymbol.DefaultReturnType.IsSome)
-          {
-            def rulesFromModule = syntaxModuleSymbol.Node.GetChildren.[RuleSymbol]().ToDictionary(r => r, _ => 0);
-
-            foreach ((rules, _) in typesMapping)
-              foreach (sym in rules)
-                when (rulesFromModule.ContainsKey(sym))
-                  rulesFromModule[sym]++;
-
-            foreach (x in rulesFromModule)
-              when (x.Value == 0)
-                project.Error(loc, $"'$(visitorTypeSymbol.Name)' visitor for '$(syntaxModuleSymbol.Name)' has no entry for the '$(x.Key)' rule.", -1)
-          }
-
-          def used    = Hashtable();
-
-          foreach ((rules, _) in res)
-            foreach (rule in rules)
-              when (rule is RuleRef.Some(sym))
-                if (used.Contains(sym))
-                  using (root = project.RootError(rule.Location, $"Type mapping for '$(sym.Name)' rule declared more than once.", -1))
-                    root.Warning(used[sym].Location, "previous declaration.", -1);
-                else
-                  used[sym] = rule;
-
-          Some((visitorTypeSymbol, syntaxModuleSymbol, typesMapping))
-
-        | _ => None()
-      }
-    }
-
-    public VisitorMemberTyping(syntaxModuleSymbol : SyntaxModuleSymbol, context : Context, identifiers : list[G.Identifier], type : G.Type) : list[RuleRef] * PExpr
-    {
-      def bind(identifier : G.Identifier)
-      {
-        def loc = identifier.Location;
-        match (syntaxModuleSymbol.Node.BindMany.[RuleSymbol](loc))
+        match (path)
         {
-          | [sym] =>
-            Project.CurrentProject.AddSymbolRef(sym, loc); // это надо делать здесь???
-            RuleRef.Some(loc, false, sym)
+          | name :: tail =>
+            match (currentNs.Node.BindMany.[NamespaceSymbol](name.GetText()))
+            {
+              | ns :: _ =>
+                ns.AddDefinition(name);
+                if (tail.IsEmpty)
+                  ns
+                else
+                  enter(ns, tail)
 
-          | _ => RuleRef.None(loc, false)
+              | [] =>
+                def newNs = NamespaceSymbol(name);
+                _ = currentNs.Node.Add(newNs, name);
+                if (tail.IsEmpty)
+                  newNs
+                else
+                  enter(newNs, tail)
+            }
+
+          | [] => assert2(false); currentNs
         }
       }
 
-      def symbols = identifiers.Map(bind);
-      def t       = ParseNemerle(type, context);
-      (symbols, t)
+      enter(currentNs, path)
+    }
+
+    public GetSpanClassForString(this context : Context, location : Location, str : string) : option[SpanClassSymbol]
+    {
+      def matchSpanClass(spanClass : SpanClassSymbol) : bool
+      {
+        if (spanClass.RegularRule is Some(rr))
+          rr.MakeMatcher()(str)
+        else
+          false
+      }
+
+      def getAllSpanClassSymbolFromImportedModule(context : Context, result : List[SpanClassSymbol]) : void
+      {
+        match (context)
+        {
+          | null => assert2(false);
+          | RootContext => ()
+          | OpenNamespaceOrTypeContext(OpenSymbol = Some(mod is SyntaxModuleSymbol)) =>
+            result.AddRange(mod.Node.GetChildren.[SpanClassSymbol]());
+            getAllSpanClassSymbolFromImportedModule(context.Parent, result);
+
+          | _ => getAllSpanClassSymbolFromImportedModule(context.Parent, result)
+        }
+      }
+      def tryFindInOpenModules() : option[SpanClassSymbol]
+      {
+        def result = List();
+        getAllSpanClassSymbolFromImportedModule(context, result);
+        def suitable = result.Filter(matchSpanClass);
+
+        match (suitable)
+        {
+          | [one] => Some(one)
+          | []    => None()
+          | _ :: _    =>
+            ProjectSystem.N2Project.CurrentProject.Error(location,
+              <#Ambiguity between imported span class matchers for the "$str" literal rule. Define the span class matcher for this rule in the current syntax module. #>, -1);
+            None()
+        }
+      }
+
+      def loop(context : Context) : option[SpanClassSymbol]
+      {
+        | null => None()
+        | SyntaxModuleContext => tryFindInOpenModules()
+        | SpanClassContext(SpanClass = spanClass) when matchSpanClass(spanClass) => Some(spanClass)
+        | _ => loop(context.Parent)
+      }
+
+      loop(context)
     }
   } // module
 } // ns

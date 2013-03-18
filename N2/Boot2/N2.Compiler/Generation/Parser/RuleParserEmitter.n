@@ -14,7 +14,7 @@ using System.Linq;
 
 namespace N2.Compiler
 {
-  internal abstract class RuleParserEmitter : IVariableEmitter
+  internal abstract partial class RuleParserEmitter
   {
     public Owner : SyntaxModuleEmitter { get; }
     public RuleSymbol : RuleDefSymbol { get; }
@@ -23,10 +23,9 @@ namespace N2.Compiler
     {
       Owner          = owner;
       RuleSymbol     = ruleSymbol;
-      EndLabel       = owner.Environment.MakeLabel("EndParse");
     }
 
-    public abstract DefineParser(astSize : out int, rootAstStruct : out option[RootAstStruct2], externalCalls : List[RuleSymbol]) : void;
+    public abstract DefineParser() : void;
 
     public abstract DefineParserMethods() : void;
 
@@ -40,135 +39,80 @@ namespace N2.Compiler
         Owner.GrammarImplTB.Define(member)
     }
 
-    [Memoize]
-    public MakeTokenCall(ruleSymbol : RegularRuleSymbol) : PExpr
+    protected MakeRuleFields(ruleSymbol : SyntaxRuleSymbol) : void
     {
-      def grammarType = PExprUtils.FromQualifiedIdentifier(ruleSymbol.DeclaringModule.Node.FullNameParts);
-      <[ $grammarType.GrammarImpl.$(ruleSymbol.DecorateRuleName() : dyn) ]>
+      unless (Owner.Environment.IsIdeMode)
+        InitRuleStructure(ruleSymbol.Structure);
     }
 
-    private _simpleCalls : List[SimpleRuleSymbol * string] = List();
-
-    [Memoize]
-    public MakeCall(ruleSymbol : SimpleRuleSymbol) : PExpr
-    {
-      def name = $"_parser_s$(_simpleCalls.Count)_$(ruleSymbol.Name)";
-      _simpleCalls.Add((ruleSymbol, name));
-      <[ $(name : dyn).Parse ]>
-    }
-
-    private _extensibleCalls : List[ExtensibleRuleSymbol * int * string] = List();
-
-    [Memoize]
-    public MakeCall(ruleSymbol : ExtensibleRuleSymbol, bindingPower : int) : PExpr
-    {
-      def name = $"_parser_e$(_extensibleCalls.Count)_$(ruleSymbol.Name)";
-      _extensibleCalls.Add((ruleSymbol, bindingPower, name));
-      <[ $(name : dyn).Parse ]>
-    }
-
-    Environment : EmitterEnvironment implements IVariableEmitter.Environment { get { Owner.Environment } }
-
-
-    private _names : Dictionary[string, PExpr] = Dictionary();
-
-    CreateVariable(name : string) : PExpr implements IVariableEmitter.CreateVariable
-    {
-      mutable nameRef;
-      if (_names.TryGetValue(name, out nameRef))
-        nameRef
-      else
-      {
-        nameRef = <[ $(name : dyn) ]>;
-        _names[name] = nameRef;
-        nameRef;
-      }
-    }
-
-    public EndLabel : PExprLabel { get; private set; }
-
-    private mutable _fields : array[RuleField2];
-
-    protected MakeRuleFields(ruleSymbol : RuleDefSymbol, rule : Rule, astSize : out int, rootAstStruct : out option[RootAstStruct2], externalCalls : List[RuleSymbol]) : void
-    {
-      assert(_fields == null);
-      def conv(rule : Rule) : array[RuleField2]
-      {
-        def loc = rule.NLocation();
-        match (rule)
-        {
-          | And                   as rule => array[RuleField2.Predicate  (loc, rule, conv(rule.Rule), true)]
-          | Not                   as rule => array[RuleField2.Predicate  (loc, rule, conv(rule.Rule), false)]
-          | Repeat(0, Some(1), _) as rule => array[RuleField2.Option     (loc, rule, conv(rule.Rule))]
-          | Repeat                as rule => array[RuleField2.List       (loc, rule, conv(rule.Rule),                       rule.MinCount, rule.MaxCount)]
-          | RepeatWithSeparator   as rule => array[RuleField2.List2      (loc, rule, conv(rule.Rule), conv(rule.Separator), rule.MinCount, rule.MaxCount, rule.HangingSeparator)]
-          | String                as rule => array[RuleField2.TokenString(loc, rule, rule.Str)]
-          | Sequence              as rule => rule.Rules.Map(conv(_)).Flatten().NToArray();
-          | Call(RuleRef.Some(MarkerSymbol), _) => array[]
-          | Call(RuleRef.Some(ruleSymbol), bindingPower) =>
-            match (ruleSymbol)
-            {
-              | ExtensibleRuleSymbol                   as rs => array[RuleField2.Extensible(loc, rs, bindingPower)]
-              | SimpleRuleSymbol(Type = RuleType.Void) as rs => array[RuleField2.Void(loc, rs)]
-              | SimpleRuleSymbol                       as rs => array[RuleField2.ExternalAst(loc, rs)]
-              | RegularRuleSymbol                      as rs => array[RuleField2.TokenCall(loc, rs)]
-              | MarkerSymbol                                 => array[]
-              | _                                            => assert(false)
-            }
-
-          | Call(RuleRef.None, _) => array[]
-        }
-      }
-      if (Owner.Environment.IsIdeMode)
-      {
-        _fields = array[];
-        astSize = 0;
-        rootAstStruct = None();
-      }
-      else
-      {
-        def loc = rule.NLocation();
-        def rule = match (ruleSymbol)
-        {
-          | ExtentionRuleSymbol(ExtentionType = Postfix(_, rule)) => rule
-          | _ => rule
-        }
-        def ast = RuleField2.Ast(loc, Owner.Environment.IsDebug, conv(rule), ruleSymbol);
-        def fields = List();
-        ast.Init(this, null, 0, fields);
-        ast.CalculateAstInfo();
-        foreach (field in fields)
-          field.Compile();
-        _fields = fields.NToArray();
-
-        match (ast.astStruct)
-        {
-          | null =>
-            astSize       = 0;
-            rootAstStruct = None();
-
-          | astStruct =>
-            astSize       = astStruct.AstSize;
-            rootAstStruct = Some(astStruct);
-        }
-
-        def grammarNode = ruleSymbol.Node.Parent;
-        foreach ((callSymbol, _) in _simpleCalls)
-          when (callSymbol.Node.Parent : object != grammarNode)
-            externalCalls.Add(callSymbol);
-        foreach ((callSymbol, _, _) in _extensibleCalls)
-          when (callSymbol.Node.Parent : object != grammarNode)
-            externalCalls.Add(callSymbol);
-      }
-    }
-
-    protected DefineInit(tb : TypeBuilder) : void
+    protected DefineInit(tb : TypeBuilder, ruleStructure : RuleStructure.Ast) : void
     {
       def getDescriptor(ruleSymbol : RuleDefSymbol)
       {
         <[ $(ruleSymbol.GetDescriptorClassRef()).StaticDescriptor ]>
       }
       def inits = List();
+
+      def reflectionCases = List();
+      def reflectionFields = List();
+      def structReflect(ruleStructure : RuleStructure) : PExpr
+      {
+        def type = match (ruleStructure)
+        {
+          | RuleStructure.Ast                        => <[ N2.Runtime.Reflection.RuleStructure.Ast                        ]>
+          | RuleStructure.List                       => <[ N2.Runtime.Reflection.RuleStructure.List                       ]>
+          | RuleStructure.Option                     => <[ N2.Runtime.Reflection.RuleStructure.Option                     ]>
+          | RuleStructure.Predicate                  => <[ N2.Runtime.Reflection.RuleStructure.Predicate                  ]>
+          | RuleStructure.ListWithSeparatorRule      => <[ N2.Runtime.Reflection.RuleStructure.ListWithSeparatorRule      ]>
+          | RuleStructure.ListWithSeparatorSeparator => <[ N2.Runtime.Reflection.RuleStructure.ListWithSeparatorSeparator ]>
+        }
+        def subrules = List();
+        foreach (field in ruleStructure.Fields)
+        {
+          def (subruleType, args) = match (field)
+          {
+            | RuleStructureField.List               as x => (<[ N2.Runtime.Reflection.RuleInfo.List              ]>, [structReflect(x.Rule)])
+            | RuleStructureField.ListWithSeparator  as x => (<[ N2.Runtime.Reflection.RuleInfo.ListWithSeparator ]>, [structReflect(x.Rule), structReflect(x.Separator)])
+            | RuleStructureField.Option             as x => (<[ N2.Runtime.Reflection.RuleInfo.Option            ]>, [structReflect(x.Rule)])
+            | RuleStructureField.Predicate          as x => (<[ N2.Runtime.Reflection.RuleInfo.Predicate         ]>, [structReflect(x.Rule)])
+            | RuleStructureField.SimpleCall         as x => (<[ N2.Runtime.Reflection.RuleInfo.SimpleCall        ]>, [<[ ($(MakeParserName(x.Symbol) : dyn) :> N2.Internal.SimpleRuleParser).RuleId ]>])
+            | RuleStructureField.ExtensibleCall          => (<[ N2.Runtime.Reflection.RuleInfo.ExtensibleCall    ]>, [])
+            | RuleStructureField.TokenCall               => (<[ N2.Runtime.Reflection.RuleInfo.TokenCall         ]>, [])
+            | RuleStructureField.TokenString             => (<[ N2.Runtime.Reflection.RuleInfo.TokenString       ]>, [])
+          }
+          def args = [<[ $(field.Offset) ]>, <[ $(field.SrcRule.ToString()) ]>, <[ $(field.State) ]>] + args;
+          subrules.Add(<[ $subruleType(..$args) ]>);
+        }
+        def field = $"reflectionField$(reflectionFields.Count)";
+        reflectionFields.Add((field, type));
+        reflectionCases.Add(<[case: | _ when ruleId == $(ruleStructure.AstId : dyn) => $(field : dyn) ]>);
+        <[
+          $(field : dyn) = $type($(ruleStructure.AstId : dyn), $(ruleStructure.SrcRule.ToString()), System.Collections.ObjectModel.ReadOnlyCollection(array[..$(subrules.NToList())]));
+          $(field : dyn);
+        ]>
+      }
+      def reflection = structReflect(ruleStructure);
+      reflectionCases.Add(<[case: | _ => assert(false) ]>);
+      foreach (structure in ruleStructure.InternalRuleStructures)
+      {
+        tb.DefineConditional(<[decl: public mutable $(structure.AstId : dyn) : int; ]>);
+        inits.Add(<[ $(structure.AstId : dyn) = Grammar.NewRuleId(this); ]>);
+      }
+      foreach ((field, type) in reflectionFields)
+        tb.DefineConditional(<[decl: private mutable $(field : dyn) : $type ]>);
+
+      tb.DefineConditional(<[decl:
+        public override Reflection(ruleId : int) : N2.Runtime.Reflection.RuleStructure
+        {
+          when ($(reflectionFields[reflectionFields.Count - 1][0] : dyn) == null)
+            _ = $(reflection);
+
+          match (ruleId)
+          {
+            ..$(reflectionCases.NToList())
+          }
+        }]>);
+
       foreach ((ruleSymbol, name) in _simpleCalls)
       {
         tb.DefineConditional(<[decl: private mutable $(name : dyn) : N2.Internal.RuleParser; ]>);
@@ -187,40 +131,17 @@ namespace N2.Compiler
       ]>);
     }
 
-    protected DefineParse(tb : TypeBuilder, ruleSymbol : RuleDefSymbol, rule : Rule) : void
+    protected DefineParse(tb : TypeBuilder, ruleStructure : RuleStructure.Ast) : void
     {
-      assert(_fields != null);
-      def code = List();
-      if (Owner.Environment.IsIdeMode)
-        code.Add(<[ _ = curEndPos; _ = text; _ = resultRef; _ = parser; -1 ]>);
+      def code = if (Owner.Environment.IsIdeMode)
+        <[ _ = curTextPos; _ = text; _ = resultRef; _ = parser; -1 ]>;
       else
-      {
-        code.Add(<[ _ = $(rule.ToString()) ]>);
-        code.AddRange(_fields.Map(field => <[ _= $(field.Print()) ]>));
-        code.Add(<[
-          def startEndPos             = curEndPos;
-          _ = startEndPos; // TODO: We have warning: N168. Maybe this is a bug?
-          mutable tmpResult  : int; _ = tmpResult;
-          mutable tmpSize    : int; _ = tmpSize;
-          mutable parseState : int; _ = parseState;
-          mutable newPos     : int; _ = newPos;
-        ]>);
-        code.AddRange(_names.Filter(kv => kv.Key != "resultRef").Map(kv => <[ mutable $(kv.Key : dyn) ]>));
-        code.AddRange(_fields.Map(field => field.ParseCode));
-        if (ruleSymbol.LastLocation is Some(loc) when Owner.Environment.Manager.Options.EmitDebug)
-        {
-          //assert2(false);
-          def debugCode = <[ () ]>;
-          debugCode.Location = loc.NLocation();
-          code.Add(<[ $(EndLabel.Label()); $debugCode; curEndPos; ]>);
-        }
-        else
-          code.Add(<[ $(EndLabel.Label()); curEndPos; ]>);
-      }
+        CompileAst(ruleStructure);
+
       tb.DefineConditional(<[decl:
-        public override Parse(mutable curEndPos : int, text : string, resultRef : ref int, parser : ref N2.Internal.Parser) : int
+        public override Parse(mutable curTextPos : int, text : string, resultRef : ref int, parser : ref N2.Internal.Parser) : int
         {
-          ..$(code.FlattenPExprSequence())
+          $code
         }
       ]>);
     }

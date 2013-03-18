@@ -1,0 +1,109 @@
+﻿using N2.Model;
+using N2.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  [Record]
+  public class AstWalkerGenerator : WalkerGenerator
+  {
+    public Environment : EmitterEnvironment { get; }
+
+    public override Name : string { get "Ast" }
+
+    public override GetSignature(rule : RuleSymbol) : WalkerSignature
+    {
+      WalkerSignature([], Environment.PTypeOfRuleSymbol(rule));
+    }
+
+    protected override GetRuleValue(field : RuleStructureField, parentAstPointer : AstPointerAllocator) : PExpr
+    {
+      match (field)
+      {
+        | SimpleCall(ruleSymbol) with bp = 0
+        | ExtensibleCall(ruleSymbol, bp) =>
+          if (ruleSymbol.Type is RuleType.Void)
+            Skip(field, parentAstPointer)
+          else
+            CallSyntaxRule(ruleSymbol, bp)
+
+        | TokenCall
+        | TokenString => GetTokenValue(field, parentAstPointer, <[ N2.NToken(tokenPos, pos) ]>)
+        | Option as field =>
+          GetOptionValue(
+            field            = field,
+            parentAstPointer = parentAstPointer,
+            hasValue         = <[ Some($(GetRuleValue(field.Rule, "valuePointer"))) ]>,
+            noValue          = <[ None() ]>)
+
+        | List as lst=>
+          GetListValue(field            = lst,
+            parentAstPointer = parentAstPointer,
+            init             = <[ def astBuffer = System.Collections.Generic.List(16); ]>,
+            item             = <[ astBuffer.Add($(GetRuleValue(lst.Rule, "itemPointer"))) ]>,
+            returnCode       = <[ Nemerle.Collections.NList.ToList(astBuffer) ]>,
+            emptyCode        = <[ [] ]>);
+
+        | ListWithSeparator as lst=>
+          GetListWithSeparatorValue(
+            field            = lst,
+            parentAstPointer = parentAstPointer,
+            init             = <[ def astBuffer = System.Collections.Generic.List(16); def separatorBuffer = System.Collections.Generic.List(16); ]>,
+            item             = <[ astBuffer.Add($(GetRuleValue(lst.Rule, "itemPointer"))) ]>,
+            separator        = <[ separatorBuffer.Add($(GetRuleValue(lst.Separator, "separatorPointer"))) ]>,
+            returnCode       = <[ (Nemerle.Collections.NList.ToList(astBuffer), Nemerle.Collections.NList.ToList(separatorBuffer)) ]>,
+            emptyCode        = <[ ([], []) ]>);
+
+        | Predicate => assert(false)
+      }
+    }
+
+    protected override CombineValues(_ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr
+    {
+      match (arguments)
+      {
+        | []   => assert(false)
+        | [x]  => x
+        | many => <[ (..$many) ]>
+      }
+    }
+
+    protected override GetSyntaxRuleValue(ruleSymbol : SyntaxRuleSymbol, astPointer : AstPointerAllocator) : PExpr
+    {
+      def ruleStruct = ruleSymbol.Structure;
+      def statements = List();
+      def arguments  = List();
+
+      arguments.Add(<[ N2.Location(parser.Source, __startPos, pos) ]>);
+      when (ruleStruct is RuleStructure.Ast(Symbol = ExtentionRuleSymbol(ExtentionType=Postfix)))
+        arguments.Add(<[ prefix ]>);
+
+      foreach (field in ruleStruct.Fields)
+      {
+        | RuleStructureField.Predicate => ()
+        | RuleStructureField.SimpleCall(symbol)        when symbol.Type is RuleType.Void
+        | RuleStructureField.ExtensibleCall(symbol, _) when symbol.Type is RuleType.Void =>
+          statements.Add(GetRuleValue(field, astPointer));
+
+        | _                =>
+          def varName = Nemerle.Compiler.Util.tmpname("ast");
+          statements.Add(<[ def $(varName : usesite) = $(GetRuleValue(field, astPointer)) ]>);
+          arguments.Add(<[ $(varName : usesite) ]>);
+      }
+
+      <[
+        { ..$(statements.NToList()); }
+        $(Environment.NTypeOfRuleSymbol(ruleSymbol) : typed).Ast(..$(arguments.NToList()))
+      ]>
+    }
+  }
+}

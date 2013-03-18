@@ -17,6 +17,7 @@ syntax module N2Syntax
 {
   using PrettyPrint;
   using TokenNames;
+  using StandardSpanClasses;
   using Whitespaces;
   using Identifiers;
   using CStyleComments;
@@ -25,15 +26,6 @@ syntax module N2Syntax
   token field DodDot              = "..";
   token field Op                  = ".";
   token field Pipe                = "|";
-
-  span class Comment;
-  span class Char;
-  span class String;
-  span class Number;
-  span class Keyword      = IdentifierStartCharacter IdentifierPartCharacters*;
-  span class Operator     = ['+', '-', '/', '*', '^', '?', ':']+;
-  span class OpenBrace    = "(" | "{" | "[";
-  span class CloseBrace   = ")" | "}" | "]";
 
   braces "(", ")";
   braces "{", "}";
@@ -54,8 +46,8 @@ syntax module N2Syntax
 
   extend syntax IgnoreToken
   {
-    | [SpanClass(Comment)] SingleLineComment;
-    | [SpanClass(Comment)] MultiLineComment;
+    | [SpanClass(Comment), ExplicitSpaces] SingleLineComment;
+    | [SpanClass(Comment), ExplicitSpaces] MultiLineComment;
   }
 
   token HexDigit                  = ['0'..'9', 'a'..'f', 'A'..'F'];
@@ -137,7 +129,14 @@ syntax module N2Syntax
   //
 
   [StartRule, ExplicitSpaces]
-  syntax Start                = s Using*  TopDeclaration* !Any
+  syntax Start                = s NamespaceBody !Any
+  {
+    CollectGlobalSymbols(rootNs : NamespaceSymbol) : void = NamespaceBody.CollectGlobalSymbols(rootNs);
+    [Cached] MakeContext(parent : Context) : Context = NamespaceBody.MakeContext(parent);
+    Typing() : void = NamespaceBody.Typing();
+  }
+
+  syntax NamespaceBody = Using*  TopDeclaration*
   {
     CollectGlobalSymbols(rootNs : NamespaceSymbol) : void { _ = PassThrough(TopDeclarations, rootNs, _.CollectGlobalSymbols(_)); }
     [Cached] MakeContext(parent : Context) : Context
@@ -169,7 +168,26 @@ syntax module N2Syntax
     [Cached] MakeContext(parent : Context) : Context;
     Typing() : void;
 
-    | SyntaxModule = "syntax"sm "module"sm Name nl "{" inl Using* Declaration* d "}" nl
+    | Namespace = "namespace" sm QualifiedName nl "{" inl NamespaceBody d "}" nl
+      {
+        [Cached] private MakeSymbol(ns : NamespaceSymbol) : NamespaceSymbol = MakeNamespaceSymbol(ns, QualifiedName.CalcLocations());
+        override CollectGlobalSymbols
+        {
+          //assert2(false);
+          def currNamespace = MakeSymbol(ns);
+          NamespaceBody.CollectGlobalSymbols(currNamespace);
+          ns
+        }
+        override MakeContext
+        {
+          def nsContext = EnteredNamespaceContext(parent, Symbol);
+          _ = NamespaceBody.MakeContext(nsContext);
+          parent
+        }
+        override Typing = NamespaceBody.Typing();
+      }
+
+    | SyntaxModule = "syntax" sm "module"sm Name nl "{" inl Using* Declaration* d "}" nl
       {
         override CollectGlobalSymbols
         {
@@ -197,74 +215,12 @@ syntax module N2Syntax
             x.Typing();
         }
       }
-
-    | VisitorType = "visitor" sm "type" sm Name nl "{" inl Using* DefaultReturnType? VisitorTypeDefaultParameter* d "}" nl
-      {
-        [Cached] private MakeSymbol() : ParsedVisitorTypeSymbol = ParsedVisitorTypeSymbol(this);
-        override CollectGlobalSymbols
-        {
-          _ = ns.Node.AddAndReport(MakeSymbol(), Name.Location);
-          ns
-        }
-        override MakeContext
-        {
-          def context1 = FoldThrough(Usings, parent, _.MakeContext(_));
-          def context2 = SyntaxModuleBodyContext(context1);
-          DefaultReturnTypeOpt.Iter(x => _ = x.MakeContext(context2));
-          _ =            FoldThrough(VisitorTypeDefaultParameters, context2, _.MakeContext(_));
-          parent
-        }
-        [Cached] private MakeDefaultReturnType() : option[PExpr] = DefaultReturnTypeOpt.Map(_.Typing());
-        [Cached] private MakeDefaultParameters() : list[PParameter] = VisitorTypeDefaultParameters.Map(_.Typing());
-        override Typing
-        {
-          _ = MakeDefaultReturnType();
-          _ = MakeDefaultParameters();
-        }
-      }
-
-    | Visitor = "visitor" sm VisitorTypeName=QualifiedIdentifier sm "for" sm SyntaxModuleName=QualifiedIdentifier nl "{" inl Using* VisitorMember* d "}" nl
-      {
-        [Cached] private MakeSymbol() : ParsedVisitorSymbol = ParsedVisitorSymbol(this);
-        override CollectGlobalSymbols
-        {
-          _ = MakeSymbol();
-          _ = ns.Node.AddAndReport(Symbol, this.Location);
-          ns
-        }
-
-        override MakeContext
-        {
-          def context2 = FoldThrough(Usings, parent, _.MakeContext(_));
-          def context3 = SyntaxModuleBodyContext(context2);
-          _ =            FoldThrough(VisitorMembers, context3, _.MakeContext(_));
-          parent
-        }
-        [Cached] private MakeData() : option[VisitorTypeSymbol * SyntaxModuleSymbol * list[list[RuleSymbol] * PExpr]]
-          = VisitorTyping(this.Location, this.Context, VisitorTypeName, SyntaxModuleName, VisitorMembers);
-        override Typing
-        {
-          _ = MakeData();
-        }
-      }
   }
 
   syntax DefaultReturnType = "default" sm "return" sm "type" Type ";" nl
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    Typing() : PExpr = Type.ParseNemerle(this.Context);
-  }
-
-  syntax VisitorTypeDefaultParameter = "default" sm "parameter" sm Name sm ":" sm Type ";" nl
-  {
-    [Cached] MakeContext(parent : Context) : Context = parent;
-    Typing() : PParameter = PraseParameter(this.Context, Name, Type);
-  }
-
-  syntax VisitorMember = "map" sm (Identifier; "," sm)+ sm ":" sm Type ";" nl
-  {
-    [Cached] MakeContext(parent : Context) : Context = parent;
-    Typing(syntaxModuleSymbol : SyntaxModuleSymbol) : list[RuleRef] * PExpr = VisitorMemberTyping(syntaxModuleSymbol, Context, Identifiers[0], Type);
+    Typing() : PExpr = NemerleParser.Parse(Type, this.Context);
   }
 
   syntax RuleAttribute
@@ -449,9 +405,9 @@ syntax module N2Syntax
       }
     | SpanClass           =                "span"    sm "class"  sm Name MatchTokens=("=" TokenRule)?         ";"nl
       {
-        [Cached] private MakeSymbol() : SpanClassSymbol
+        [Cached] private MakeSymbol(context : Context) : SpanClassSymbol
         {
-          def symbol = ParsedSpanClassSymbol(this);
+          def symbol = ParsedSpanClassSymbol(this, context);
           N2Project.CurrentProject.AddSymbolDef(symbol, Name.Location);
           symbol
         }
@@ -463,7 +419,7 @@ syntax module N2Syntax
         });
         override MakeContext
         {
-          def context = SpanClassContext(parent, MakeSymbol());
+          def context = SpanClassContext(parent, MakeSymbol(parent));
           _ = MatchTokens.Map((_, tokenRule) => tokenRule.MakeContext(context));
           context
         }
@@ -653,8 +609,8 @@ syntax module N2Syntax
           _ = MakeSymbol(ruleSymbol);
           ruleSymbol
         }
-        [Cached] private MakeSignature() : ExtraField.ExtraFieldSignature = ExtraField.ExtraFieldSignature(this.Location, this.ExtraFieldsParams[0].ParseNemerle(Context), this.Type.ParseNemerle(Context));
-        [Cached] private MakeBody()      : ExtraField.ExtraFieldBody      = ExtraField.ExtraFieldBody(this.ExtraFieldBody.BodyLocation(), this.ExtraFieldBody.ParseNemerle(Context));
+        [Cached] private MakeSignature() : ExtraField.ExtraFieldSignature = ExtraField.ExtraFieldSignature(this.Location, NemerleParser.Parse(this.ExtraFieldsParams[0], Context), NemerleParser.Parse(this.Type, Context));
+        [Cached] private MakeBody()      : ExtraField.ExtraFieldBody      = ExtraField.ExtraFieldBody(this.ExtraFieldBody.BodyLocation(), NemerleParser.Parse(this.ExtraFieldBody, Context));
         [Cached] private MakeIsCached()  : bool                           = ExtraFieldAttributes.IsCached();
         override Typing
         {
@@ -705,7 +661,7 @@ syntax module N2Syntax
               SymbolRef.None(Name.Location, false)
           }
         }
-        [Cached] private MakeBody() : ExtraField.ExtraFieldBody = ExtraField.ExtraFieldBody(this.ExtraFieldBody.BodyLocation(), this.ExtraFieldBody.ParseNemerle(Context));
+        [Cached] private MakeBody() : ExtraField.ExtraFieldBody = ExtraField.ExtraFieldBody(this.ExtraFieldBody.BodyLocation(), NemerleParser.Parse(this.ExtraFieldBody, Context));
         override Typing
         {
           _ = MakeBaseExtraField();
@@ -747,7 +703,7 @@ syntax module N2Syntax
               SymbolRef.None(Name.Location, false)
           }
         }
-        [Cached] private MakeBody() : ExtraField.ExtraFieldBody = ExtraField.ExtraFieldBody(this.ExtraFieldBody.BodyLocation(), this.ExtraFieldBody.ParseNemerle(Context));
+        [Cached] private MakeBody() : ExtraField.ExtraFieldBody = ExtraField.ExtraFieldBody(this.ExtraFieldBody.BodyLocation(), NemerleParser.Parse(this.ExtraFieldBody, Context));
         override Typing
         {
           _ = MakeHandlingExtraField();

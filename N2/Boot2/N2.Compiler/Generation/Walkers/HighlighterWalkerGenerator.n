@@ -1,0 +1,136 @@
+﻿using N2.Model;
+using N2.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  [Record]
+  public class HighlighterWalkerGenerator : WalkerGenerator
+  {
+    public Environment : EmitterEnvironment { get; }
+
+    public override Name : string { get "Highlighter" }
+
+    public override SupportsVoidRules : bool { get true }
+
+    public override GetSignature(_rule : RuleSymbol) : WalkerSignature
+    {
+      WalkerSignature(
+        [
+          <[ parameter: _spans    : System.Collections.Generic.List[N2.SpanInfo] ]>,
+          <[ parameter: _startPos : int ]>,
+          <[ parameter: _endPos   : int ]>
+        ],
+        <[ void ]>);
+    }
+
+    protected override GetRuleValue(field : RuleStructureField, parentAstPointer : AstPointerAllocator) : PExpr
+    {
+      def fieldLocCode = GetRangeOf(field, parentAstPointer);
+
+      match (field)
+      {
+        | SimpleCall(ruleSymbol) with bp = 0
+        | ExtensibleCall(ruleSymbol, bp) =>
+          <[
+            if ($fieldLocCode.IntersectsWith(_startPos, _endPos))
+              $(CallSyntaxRule(ruleSymbol, bp, <[ _spans ]>, <[ _startPos ]>, <[ _endPos ]>))
+            else
+              $(Skip(field, parentAstPointer))
+          ]>
+
+        | TokenCall(symbol) =>
+          if (symbol.Options.SpanClassSymbol != null)
+            <[
+              def loc = $fieldLocCode;
+              when (loc.IntersectsWith(_startPos, _endPos))
+                _spans.Add(N2.SpanInfo(loc, $(MakeSpanClassFieldName(symbol.Options.SpanClassSymbol))));
+              $(Skip(field, parentAstPointer))
+            ]>
+          else
+            Skip(field, parentAstPointer)
+
+        | TokenString =>
+          def rule = field.SrcRule :> Rule.String;
+          if (rule.SpanClassOpt is Some(spanClass))
+            <[
+              when ($fieldLocCode.IntersectsWith(_startPos, _endPos))
+                _spans.Add(N2.SpanInfo($fieldLocCode, $(MakeSpanClassFieldName(spanClass))));
+              $(Skip(field, parentAstPointer))
+            ]>
+          else
+            Skip(field, parentAstPointer)
+
+        | Option as field =>
+          GetOptionValue(
+            field            = field,
+            parentAstPointer = parentAstPointer,
+            hasValue         = <[ _ = $(GetRuleValue(field.Rule, "valuePointer")); ]>,
+            noValue          = <[ () ]>)
+
+        | List as lst=>
+          GetListValue(field            = lst,
+            parentAstPointer = parentAstPointer,
+            init             = <[ () ]>,
+            item             = GetRuleValue(lst.Rule, "itemPointer"),
+            returnCode       = <[ () ]>,
+            emptyCode        = <[ () ]>);
+
+        | ListWithSeparator as lst=>
+          GetListWithSeparatorValue(
+            field            = lst,
+            parentAstPointer = parentAstPointer,
+            init             = <[ () ]>,
+            item             = GetRuleValue(lst.Rule, "itemPointer"),
+            separator        = GetRuleValue(lst.Separator, "separatorPointer"),
+            returnCode       = <[ () ]>,
+            emptyCode        = <[ () ]>);
+
+        | Predicate => <[ () ]>
+      }
+    }
+
+    MakeSpanClassFieldName(spanClassSymbol : SpanClassSymbol) : PExpr
+    {
+      assert2(spanClassSymbol != null);
+      def expr = PExprUtils.FromQualifiedIdentifier(spanClassSymbol.DeclaringModule.Node.FullNameParts);
+      <[ $expr.$("SpanClass_" + spanClassSymbol.Name : usesite) ]>
+    }
+
+    protected override CombineValues(_ruleStructure : RuleStructure, _arguments : list[PExpr]) : PExpr
+    {
+      <[ () ]>
+    }
+
+    protected override GetSyntaxRuleValue(ruleSymbol : SyntaxRuleSymbol, astPointer : AstPointerAllocator) : PExpr
+    {
+      def ruleStruct = ruleSymbol.Structure;
+      def statementsList = List();
+
+      foreach (field in ruleStruct.Fields)
+        statementsList.Add(GetRuleValue(field, astPointer));
+
+      def statements = statementsList.NToList();
+
+      if (ruleSymbol.Options.SpanClassSymbol != null)
+        <[
+          { ..$statements }
+          def loc = N2.NToken(__startPos, pos);
+          when (loc.IntersectsWith(_startPos, _endPos))
+            _spans.Add(N2.SpanInfo(loc,
+              $(MakeSpanClassFieldName(ruleSymbol.Options.SpanClassSymbol))))
+        ]>
+      else
+        <[ { ..$statements } ]>
+    }
+  }
+}
