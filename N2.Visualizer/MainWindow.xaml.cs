@@ -361,5 +361,10 @@ namespace N2.Visualizer
         textBox1.Text = File.ReadAllText(dialog.FileName);
       }
     }
+
+    private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)
+    {
+      
+    }
   }
 }
