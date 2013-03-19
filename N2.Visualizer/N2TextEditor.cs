@@ -120,4 +120,30 @@ namespace N2.Visualizer
 
     public IList<HighlightedSection> Sections { get; private set; }
   }
+
+  public sealed class SimpleHighlightingBrush : HighlightingBrush
+  {
+    private readonly SolidColorBrush brush;
+
+    public SimpleHighlightingBrush(SolidColorBrush brush)
+    {
+      brush.Freeze();
+      this.brush = brush;
+    }
+
+    public SimpleHighlightingBrush(Color color)
+      : this(new SolidColorBrush(color))
+    {
+    }
+
+    public override Brush GetBrush(ITextRunConstructionContext context)
+    {
+      return this.brush;
+    }
+
+    public override string ToString()
+    {
+      return this.brush.ToString();
+    }
+  }
 }

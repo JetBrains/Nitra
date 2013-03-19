@@ -10,6 +10,7 @@ using System.Windows.Media;
 using Microsoft.Win32;
 using N2.Runtime.Reflection;
 using N2.Tests;
+using ICSharpCode.AvalonEdit.Highlighting;
 
 namespace N2.Visualizer
 {
@@ -364,7 +365,45 @@ namespace N2.Visualizer
 
     private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)
     {
-      
+      if (_parseResult == null)
+        return;
+
+      var spans = new List<SpanInfo>();
+      _parseResult.GetSpans(e.Line.Offset, e.Line.Offset + e.Line.Length, spans);
+      foreach (var span in spans)
+      {
+        switch (span.SpanClass.Name)
+        {
+          case "Keyword":
+            e.Sections.Add(MakeHighlightedSection(span, Colors.Blue));
+            break;
+
+          case "Number":
+            e.Sections.Add(MakeHighlightedSection(span, Colors.Magenta));
+            break;
+
+          case "Operator":
+            e.Sections.Add(MakeHighlightedSection(span, Colors.Navy));
+            break;
+
+          case "String": 
+            e.Sections.Add(MakeHighlightedSection(span, Colors.Maroon));
+            break;
+        }
+      }
+    }
+
+    private static HighlightedSection MakeHighlightedSection(SpanInfo span, Color color)
+    {
+      return new HighlightedSection
+      {
+        Offset = span.Location.StartPos,
+        Length = span.Location.Length,
+        Color = new HighlightingColor
+        {
+          Foreground = new SimpleHighlightingBrush(color)
+        }
+      };
     }
   }
 }
