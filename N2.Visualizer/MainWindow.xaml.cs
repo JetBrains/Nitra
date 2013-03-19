@@ -378,6 +378,10 @@ namespace N2.Visualizer
             e.Sections.Add(MakeHighlightedSection(span, Colors.Blue));
             break;
 
+          case "Comment":
+            e.Sections.Add(MakeHighlightedSection(span, Colors.Green));
+            break;
+
           case "Number":
             e.Sections.Add(MakeHighlightedSection(span, Colors.Magenta));
             break;
