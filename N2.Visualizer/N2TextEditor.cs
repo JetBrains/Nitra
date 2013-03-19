@@ -50,7 +50,8 @@ namespace N2.Visualizer
         var sections = _textEditor.OnHighlightLine(line);
         if (sections != null)
           foreach (var section in sections)
-            ChangeLinePart(section.Offset, section.Offset + section.Length, element => ApplyColorToElement(element, section.Color));
+            ChangeLinePart(section.Offset, Math.Min(line.Offset + line.Length, section.Offset + section.Length), // TODO: многострочные коменты не пашут! Стас! Разберись!
+              element => ApplyColorToElement(element, section.Color));
       }
 
       private void ApplyColorToElement(VisualLineElement element, HighlightingColor color)
