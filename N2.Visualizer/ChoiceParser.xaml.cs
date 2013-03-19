@@ -1,4 +1,6 @@
-﻿using System;
+﻿using N2;
+
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -10,7 +12,6 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
-using N2;
 using System.Reflection;
 using System.Diagnostics;
 using System.ComponentModel;
@@ -24,15 +25,16 @@ namespace N2.Visualizer
   {
     public RuleDescriptor Result { get; private set; }
 
-    public ChoiceParser(Type[] grammars)
+    public ChoiceParser(IEnumerable<GrammarDescriptor> grammars)
     {
       InitializeComponent();
-      foreach (var grammarType in grammars)
+      foreach (var grammar in grammars)
       {
-        var item = new ListBoxItem();
-        item.Tag = grammarType;
-        var baseType = grammarType.BaseType;
-        item.Content = baseType.Name + (baseType.Namespace == null ? "" : (" (" + baseType.Namespace + ")"));
+        var item = new ListBoxItem
+        {
+          Tag = grammar,
+          Content = MakeDisplayName(grammar),
+        };
         _parsersListBox.Items.Add(item);
       }
 
@@ -45,21 +47,27 @@ namespace N2.Visualizer
       TryClose();
     }
 
-    private void _startRulesListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    private void _ruleListListBox_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
       TryClose();
     }
 
     private void TryClose()
     {
-      if (_startRulesListBox.SelectedItem == null)
-        return;
+      ListBox ruleList;
+      if (tabControl1.SelectedItem == _startRulesTab)
+        ruleList = _startRulesListBox;
+      else if (tabControl1.SelectedItem == _allRulesTab)
+        ruleList = _allRulesListBox;
+      else
+        ruleList = null;
 
-      var prop = (PropertyInfo)((ListBoxItem)(_startRulesListBox.SelectedItem)).Tag;
-      var desc = prop.GetValue(null, null);
-      Result = (N2.RuleDescriptor)desc;
-      DialogResult = true;
-      Close();
+      if (ruleList != null && ruleList.SelectedItem != null)
+      {
+        Result = (RuleDescriptor)((ListBoxItem)ruleList.SelectedItem).Tag;
+        DialogResult = true;
+        Close();
+      }
     }
 
     private void _parsersListBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -67,51 +75,35 @@ namespace N2.Visualizer
       _startRulesListBox.Items.Clear();
       _allRulesListBox.Items.Clear();
 
-      var grammarType = (Type)((ListBoxItem)_parsersListBox.SelectedItem).Tag;
-
-      //var startRuleDescriptor = typeof(IStartRuleDescriptor);
-      //var props = grammarType.GetProperties(BindingFlags.Public | BindingFlags.Static);
-      //
-      //{
-      //  foreach (var p in props)
-      //  {
-      //    if (startRuleDescriptor.IsAssignableFrom(p.PropertyType))
-      //    {
-      //      var item = new ListBoxItem();
-      //      item.Tag = p;
-      //      const string sufix = "RuleDescriptor";
-      //      Trace.Assert(p.Name.EndsWith(sufix));
-      //      item.Content = p.Name.Substring(0, p.Name.Length - sufix.Length);
-      //      _startRulesListBox.Items.Add(item);
-      //    }
-      //  }
-      //
-      //  _startRulesListBox.Items.SortDescriptions.Add(new SortDescription("Content", ListSortDirection.Ascending));
-      //}
-
-      var desc = grammarType.GetProperty("StaticDescriptor", BindingFlags.Public | BindingFlags.Static);
-      var grammarDescriptor = (GrammarDescriptor)desc.GetValue(null, null);
-
+      var grammar = (GrammarDescriptor)((ListBoxItem)_parsersListBox.SelectedItem).Tag;
+      foreach (var rule in grammar.Rules)
       {
-        foreach (var rule in grammarDescriptor.Rules)
+        if (rule is SimpleRuleDescriptor || rule is ExtensibleRuleDescriptor)
         {
-          if (rule is SimpleRuleDescriptor || rule is ExtensibleRuleDescriptor)
-          {
-            var node = new ListBoxItem();
-            node.Content = rule.Name;
-            node.Tag = rule;
-            _allRulesListBox.Items.Add(node);
-          }
+          var node = new ListBoxItem { Content = rule.Name, Tag = rule };
+          _allRulesListBox.Items.Add(node);
         }
-
-        _allRulesListBox.Items.SortDescriptions.Add(new SortDescription("Content", ListSortDirection.Ascending));
+        if (rule.IsStartRule)
+        {
+          var node = new ListBoxItem { Content = rule.Name, Tag = rule };
+          _startRulesListBox.Items.Add(node);
+        }
       }
+
+      _allRulesListBox.Items.SortDescriptions.Add(new SortDescription("Content", ListSortDirection.Ascending));
 
       if (_startRulesListBox.Items.Count > 0)
         _startRulesListBox.SelectedItem = _startRulesListBox.Items[0];
 
       if (_allRulesListBox.Items.Count > 0)
         _allRulesListBox.SelectedItem = _allRulesListBox.Items[0];
+    }
+
+    private static string MakeDisplayName(GrammarDescriptor grammar)
+    {
+      return string.IsNullOrEmpty(grammar.Namespace)
+        ? grammar.Name
+        : grammar.Name + "(" + grammar.Namespace + ")";
     }
   }
 }

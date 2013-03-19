@@ -187,7 +187,7 @@ namespace N2.Visualizer
         if (_parseResult == null || !_parseResult.IsSuccess)
           return;
 
-        var root = _parseResult.Reflection();
+        var root = _parseResult.Reflect();
         var treeNode = new TreeViewItem();
         treeNode.Expanded += new RoutedEventHandler(node_Expanded);
         treeNode.Header = root.Description;
@@ -203,7 +203,7 @@ namespace N2.Visualizer
     void Fill(ItemCollection treeNodes, ReadOnlyCollection<ReflectionStruct> nodes)
     {
       foreach (var node in nodes)
-	    {
+      {
         var treeNode = new TreeViewItem();
         treeNode.Header = node.Description;
         treeNode.Tag = node;
@@ -221,7 +221,7 @@ namespace N2.Visualizer
 
         if (node.Children.Count != 0)
           treeNode.Items.Add(new TreeViewItem());
-	    }
+      }
     }
 
     void node_Expanded(object sender, RoutedEventArgs e)
@@ -338,12 +338,17 @@ namespace N2.Visualizer
       {
         var asm = Assembly.LoadFrom(dialog.FileName);
         var grammarAttrs = asm.GetCustomAttributes(typeof(GrammarsAttribute), false).OfType<GrammarsAttribute>();
-        var grammarTypes = new List<Type>();
+        var grammars = new List<GrammarDescriptor>();
 
         foreach (var attr in grammarAttrs)
-          grammarTypes.AddRange(attr.Grammars);
+          foreach (var grammarType in attr.Grammars)
+          {
+            var descProperty = grammarType.GetProperty("StaticDescriptor", BindingFlags.Public | BindingFlags.Static);
+            var grammarDescriptor = (GrammarDescriptor)descProperty.GetValue(null, null);
+            grammars.Add(grammarDescriptor);
+          }
 
-        var choiceParser = new ChoiceParser(grammarTypes.ToArray());
+        var choiceParser = new ChoiceParser(grammars);
         choiceParser.Owner = this;
         if (choiceParser.ShowDialog() ?? false)
         {
