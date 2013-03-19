@@ -68,25 +68,26 @@ namespace N2.Visualizer
       _allRulesListBox.Items.Clear();
 
       var grammarType = (Type)((ListBoxItem)_parsersListBox.SelectedItem).Tag;
-      var startRuleDescriptor = typeof(IStartRuleDescriptor);
-      var props = grammarType.GetProperties(BindingFlags.Public | BindingFlags.Static);
 
-      {
-        foreach (var p in props)
-        {
-          if (startRuleDescriptor.IsAssignableFrom(p.PropertyType))
-          {
-            var item = new ListBoxItem();
-            item.Tag = p;
-            const string sufix = "RuleDescriptor";
-            Trace.Assert(p.Name.EndsWith(sufix));
-            item.Content = p.Name.Substring(0, p.Name.Length - sufix.Length);
-            _startRulesListBox.Items.Add(item);
-          }
-        }
-
-        _startRulesListBox.Items.SortDescriptions.Add(new SortDescription("Content", ListSortDirection.Ascending));
-      }
+      //var startRuleDescriptor = typeof(IStartRuleDescriptor);
+      //var props = grammarType.GetProperties(BindingFlags.Public | BindingFlags.Static);
+      //
+      //{
+      //  foreach (var p in props)
+      //  {
+      //    if (startRuleDescriptor.IsAssignableFrom(p.PropertyType))
+      //    {
+      //      var item = new ListBoxItem();
+      //      item.Tag = p;
+      //      const string sufix = "RuleDescriptor";
+      //      Trace.Assert(p.Name.EndsWith(sufix));
+      //      item.Content = p.Name.Substring(0, p.Name.Length - sufix.Length);
+      //      _startRulesListBox.Items.Add(item);
+      //    }
+      //  }
+      //
+      //  _startRulesListBox.Items.SortDescriptions.Add(new SortDescription("Content", ListSortDirection.Ascending));
+      //}
 
       var desc = grammarType.GetProperty("StaticDescriptor", BindingFlags.Public | BindingFlags.Static);
       var grammarDescriptor = (GrammarDescriptor)desc.GetValue(null, null);
