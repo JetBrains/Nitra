@@ -1,0 +1,121 @@
+﻿using N2.Runtime;
+using N2.Model;
+using N2.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  [Record]
+  public class ReflectionWalkerGenerator : WalkerGenerator
+  {
+    public Environment : EmitterEnvironment { get; }
+
+    public override Name : string { get StandardWalkerTypes.Reflection }
+
+    public override SupportsVoidRules : bool { get true }
+
+    public override GetSignature(_rule : RuleSymbol) : WalkerSignature
+    {
+      WalkerSignature([], <[ N2.Runtime.Reflection.ReflectionStruct ]>);
+    }
+
+    private MakeReflectionStruct(name : PExpr, location : PExpr, items : PExpr) : PExpr
+    {
+      <[ N2.Runtime.Reflection.ReflectionStruct($name, $location, System.Collections.ObjectModel.ReadOnlyCollection.[N2.Runtime.Reflection.ReflectionStruct]($items)) ]>
+    }
+    
+    private MakeName(ruleField : RuleStructureField) : string
+    {
+      match (ruleField)
+      {
+        | RuleStructureField.List               as x => x.Rule.ToString()
+        | RuleStructureField.ListWithSeparator  as x => x.Rule.ToString()
+        | RuleStructureField.Option             as x => x.Rule.ToString()
+        | RuleStructureField.Predicate          as x => x.Rule.ToString()
+        | RuleStructureField.ExtensibleCall     as x => x.Symbol.Name
+        | RuleStructureField.TokenCall          as x => x.Symbol.Name
+        | RuleStructureField.SimpleCall         as x => x.Symbol.Name
+        | RuleStructureField.TokenString        as x => x.String
+        | _                                 => assert(false);
+      }
+    }
+
+    protected override GetRuleValue(field : RuleStructureField, parentAstPointer : AstPointerAllocator) : PExpr
+    {
+      match (field)
+      {
+        | SimpleCall(ruleSymbol) with bp = 0
+        | ExtensibleCall(ruleSymbol, bp) => CallSyntaxRule(ruleSymbol, bp)
+        | TokenCall   => GetTokenValue(field, parentAstPointer, MakeReflectionStruct(<[ $(MakeName(field)) ]>, <[ N2.NToken(tokenPos, pos) ]>, <[ array(0) ]>))
+        | TokenString => GetTokenValue(field, parentAstPointer, MakeReflectionStruct(<[ $(MakeName(field)) ]>, <[ N2.NToken(tokenPos, pos) ]>, <[ array(0) ]>))
+        | Option as field =>
+          GetOptionValue(
+            field            = field,
+            parentAstPointer = parentAstPointer,
+            hasValue         = <[ def startOprionPos = pos;
+                                  def value = $(GetRuleValue(field.Rule, "valuePointer"));
+                                  $(MakeReflectionStruct(<[ $(MakeName(field)) ]>, <[ N2.NToken(startOprionPos, pos) ]>, <[ array[value] ]>)); ]>,
+            noValue          = MakeReflectionStruct(<[ $(MakeName(field)) ]>, <[ N2.NToken(pos, pos) ]>, <[ array(0) ]>))
+
+        | List as lst=>
+          GetListValue(field            = lst,
+            parentAstPointer = parentAstPointer,
+            init             = <[ def listStartPos = pos; def astBuffer = System.Collections.Generic.List(16); ]>,
+            item             = <[ astBuffer.Add($(GetRuleValue(lst.Rule, "itemPointer"))) ]>,
+            returnCode       = MakeReflectionStruct(<[ $(MakeName(field)) ]>, <[ N2.NToken(listStartPos, pos) ]>, <[ astBuffer ]>),
+            emptyCode        = MakeReflectionStruct(<[ $(MakeName(field)) ]>, <[ N2.NToken(pos, pos) ]>, <[ array(0) ]>));
+
+        | ListWithSeparator as lst=>
+          GetListWithSeparatorValue(
+            field            = lst,
+            parentAstPointer = parentAstPointer,
+            init             = <[ def listStartPos = pos; def astBuffer = System.Collections.Generic.List(16); ]>,
+            item             = <[ astBuffer.Add($(GetRuleValue(lst.Rule, "itemPointer"))) ]>,
+            separator        = <[ astBuffer.Add($(GetRuleValue(lst.Separator, "separatorPointer"))) ]>,
+            returnCode       = MakeReflectionStruct(<[ $(MakeName(field)) ]>, <[ N2.NToken(listStartPos, pos) ]>, <[ astBuffer ]>),
+            emptyCode        = MakeReflectionStruct(<[ $(MakeName(field)) ]>, <[ N2.NToken(pos, pos) ]>, <[ array(0) ]>));
+
+        | Predicate => assert(false)
+      }
+    }
+
+    protected override CombineValues(ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr
+    {
+      MakeReflectionStruct(<[ $(ruleStructure.SrcRule.ToString()) ]>, <[ N2.NToken(1, 1) ]>, <[ array[..$arguments] ]>)
+    }
+
+    protected override GetSyntaxRuleValue(ruleSymbol : SyntaxRuleSymbol, astPointer : AstPointerAllocator) : PExpr
+    {
+      def ruleStruct = ruleSymbol.Structure;
+      def statements = List();
+      def arguments  = List();
+
+      when (ruleStruct is RuleStructure.Ast(Symbol = ExtentionRuleSymbol(ExtentionType=Postfix)))
+        arguments.Add(<[ prefix ]>);
+
+      foreach (field in ruleStruct.Fields)
+      {
+        | RuleStructureField.Predicate => ()
+        | _ =>
+          def varName = Nemerle.Compiler.Util.tmpname("ast");
+          statements.Add(<[ def $(varName : usesite) = $(GetRuleValue(field, astPointer)) ]>);
+          arguments.Add(<[ $(varName : usesite) ]>);
+      }
+
+      def code = MakeReflectionStruct(<[ $(ruleSymbol.Name) ]>, <[ N2.NToken(__startPos, pos) ]>, <[ array[..$(arguments.NToList())] ]>);
+      <[
+        { ..$(statements.NToList()) }
+        $code
+      ]>
+    }
+  }
+}
