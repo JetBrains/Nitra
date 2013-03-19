@@ -1,25 +1,15 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Text;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
-using System.IO;
-using N2;
-using N2.Tests;
-using N2.Runtime.Reflection;
-using System.Collections.ObjectModel;
 using Microsoft.Win32;
-using System.Diagnostics;
-using ICSharpCode.AvalonEdit.Rendering;
+using N2.Runtime.Reflection;
+using N2.Tests;
 
 namespace N2.Visualizer
 {
@@ -30,7 +20,7 @@ namespace N2.Visualizer
   {
     ParserHost      _parserHost;
     ParseResult     _parseResult;
-    RuleDescriptor  _ruleDescriptor = null;//JsonParser.GrammarImpl.StartRuleDescriptor;
+    RuleDescriptor  _ruleDescriptor = JsonParser.StaticDescriptor.Rules.First(r => r.Name == "Start");
     bool            _doTreeOperation;
     bool            _doChangeCaretPos;
     HighlightErrorBackgroundRendere _errorHighlighter;
