@@ -19,7 +19,7 @@ namespace N2.Internal
 #if !PARSER_DEBUG
   //[DebuggerStepThroughAttribute]
 #endif
-  public sealed partial class ExtensibleRuleParser : RuleParser
+  public sealed partial class ExtensibleRuleParser : StartRuleParser
   {
     public static class AstOfs
     {
@@ -97,7 +97,7 @@ namespace N2.Internal
         FirstPostfixRuleId = int.MaxValue;
     }
 
-    public override int Parse(int curEndPos, string text, ref int resultPtr, ref Parser parser)
+    public override int Parse(int curEndPos, string text, ref Parser parser)
     {
       unchecked
       {
@@ -112,42 +112,12 @@ namespace N2.Internal
         int j;
         char c; // временная переменная для отсечения правил по первой букве
 
-        if (resultPtr == -1)
-          goto start_parsing;
-        else
+        if (parser.IsRecoveryMode)
           goto error_recovery;
 
-      start_parsing:
         if (curEndPos >= text.Length) // конец текста
           return -1;
 
-        goto prefix_loop;
-
-      error_recovery:
-        throw System.Exception();
-      //resultPtr = ~resultPtr;
-
-        //int bestAst = parser.ast[astPos + BestAstOfs];
-      //if (bestAst < 0)
-      //  return -1; // ни одно правило не съело ни одного токена // TODO: Сделать восстановление
-
-        //i = parser.ast[bestAst] - PrefixRules[0].RuleId; // восстанавливаем состояние из Id правила которое было разобрано дальше всех.
-      //if (i < PrefixRules.Length)
-      //{ // префикное правило
-      //  RuleParser prefixRule = PrefixRules[i];
-      //  curEndPos = prefixRule.Parse(curEndPos, text, ~astPos, ref parser);
-      //}
-      //else
-      //{ // постфиксное правило
-      //  i -= PrefixRules.Length;
-      //  RuleParser postfixRule = PostfixRules[i];
-      //  curEndPos = curEndPos + parser.ast[parser.ast[astPos + ParsedAstOfs] + 1]; // к стартовой позиции в тексте добавляем размер уже разобранного AST
-      //  curEndPos = postfixRule.Parse(curEndPos, text, ~astPos, ref parser);
-      //}
-      //assert(curEndPos >= 0);
-      //goto postfix_loop;
-
-prefix_loop:
         prefixAst = parser.memoize[curEndPos];
         for (; prefixAst > 0; prefixAst = parser.ast[prefixAst + PrefixOfs.Next])
         {
@@ -364,6 +334,30 @@ prefix_loop:
 
         goto postfix_loop;
       }
+
+      error_recovery:
+        throw System.Exception();
+      //resultPtr = ~resultPtr;
+
+        //int bestAst = parser.ast[astPos + BestAstOfs];
+      //if (bestAst < 0)
+      //  return -1; // ни одно правило не съело ни одного токена // TODO: Сделать восстановление
+
+        //i = parser.ast[bestAst] - PrefixRules[0].RuleId; // восстанавливаем состояние из Id правила которое было разобрано дальше всех.
+      //if (i < PrefixRules.Length)
+      //{ // префикное правило
+      //  RuleParser prefixRule = PrefixRules[i];
+      //  curEndPos = prefixRule.Parse(curEndPos, text, ~astPos, ref parser);
+      //}
+      //else
+      //{ // постфиксное правило
+      //  i -= PrefixRules.Length;
+      //  RuleParser postfixRule = PostfixRules[i];
+      //  curEndPos = curEndPos + parser.ast[parser.ast[astPos + ParsedAstOfs] + 1]; // к стартовой позиции в тексте добавляем размер уже разобранного AST
+      //  curEndPos = postfixRule.Parse(curEndPos, text, ~astPos, ref parser);
+      //}
+      //assert(curEndPos >= 0);
+      //goto postfix_loop;
       assert(false);
       return -1;
     }
