@@ -73,6 +73,8 @@ namespace N2.Internal
     public readonly int FirstPostfixRuleId;
     public readonly ExtentionRuleParser[] PrefixRules;
     public readonly ExtentionRuleParser[] PostfixRules;
+    public readonly int PrefixOffset;
+    public readonly int PostfixOffset;
 
     public ExtensibleRuleParser(ExtensibleRuleParserData parserData, int bindingPower)
       : base(parserData.Grammar, parserData.Descriptor)
@@ -95,6 +97,8 @@ namespace N2.Internal
       }
       else
         FirstPostfixRuleId = int.MaxValue;
+      if (PrefixRules.Length > 0)  PrefixOffset   = PrefixRules[0].RuleId;  else PrefixOffset   = 0;
+      if (PostfixRules.Length > 0) PostfixOffset  = PostfixRules[0].RuleId; else PostfixOffset  = 0;
     }
 
     public override int Parse(int curEndPos, string text, ref Parser parser)
@@ -112,12 +116,6 @@ namespace N2.Internal
         int j;
         char c; // временная переменная для отсечения правил по первой букве
 
-        if (parser.IsRecoveryMode)
-          goto error_recovery;
-
-        if (curEndPos >= text.Length) // конец текста
-          return -1;
-
         prefixAst = parser.memoize[curEndPos];
         for (; prefixAst > 0; prefixAst = parser.ast[prefixAst + PrefixOfs.Next])
         {
@@ -134,14 +132,23 @@ namespace N2.Internal
               goto postfix_loop;
             }
             else
-              return -1; // облом разбора
+            {
+              if (parser.IsRecoveryMode)
+                goto error_recovery;
+              else
+                return -1; // облом разбора
+            }
           }
         }
+
+        assert2(!parser.IsRecoveryMode);
 
         //нет мемоизации префикса
         prefixAst = parser.Allocate(PrefixOfs.NodeSize, PrefixId);
         parser.ast[prefixAst + PrefixOfs.Next] = parser.memoize[curEndPos];
         parser.memoize[curEndPos] = prefixAst;
+        if (curEndPos >= text.Length)
+          return -1;
         i = 0;
         c = text[curEndPos];
         bestResult = 0;
@@ -333,31 +340,25 @@ namespace N2.Internal
           return curEndPos; // если нам не удалось продвинуться то заканчиваем разбор
 
         goto postfix_loop;
-      }
 
       error_recovery:
-        throw System.Exception();
-      //resultPtr = ~resultPtr;
+        if (bestResult == 0)
+        {//0
+          assert2(false);
+          assert(false);
+        }
+        else if (parser.ast[bestResult + AstOfs.Next] == 0)
+        {//1
+          var prefixRule = PrefixRules[parser.ast[bestResult + N2.Internal.ExtensibleRuleParser.AstOfs.Id] - PrefixOffset];
+          return prefixRule.Parse(curEndPos, text, ref bestResult, ref parser);
+        }
+        else
+        {//many
+          assert2(false);
+          assert(false);
+        }
+      }
 
-        //int bestAst = parser.ast[astPos + BestAstOfs];
-      //if (bestAst < 0)
-      //  return -1; // ни одно правило не съело ни одного токена // TODO: Сделать восстановление
-
-        //i = parser.ast[bestAst] - PrefixRules[0].RuleId; // восстанавливаем состояние из Id правила которое было разобрано дальше всех.
-      //if (i < PrefixRules.Length)
-      //{ // префикное правило
-      //  RuleParser prefixRule = PrefixRules[i];
-      //  curEndPos = prefixRule.Parse(curEndPos, text, ~astPos, ref parser);
-      //}
-      //else
-      //{ // постфиксное правило
-      //  i -= PrefixRules.Length;
-      //  RuleParser postfixRule = PostfixRules[i];
-      //  curEndPos = curEndPos + parser.ast[parser.ast[astPos + ParsedAstOfs] + 1]; // к стартовой позиции в тексте добавляем размер уже разобранного AST
-      //  curEndPos = postfixRule.Parse(curEndPos, text, ~astPos, ref parser);
-      //}
-      //assert(curEndPos >= 0);
-      //goto postfix_loop;
       assert(false);
       return -1;
     }
