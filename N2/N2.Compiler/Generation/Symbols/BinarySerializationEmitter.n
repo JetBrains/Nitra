@@ -22,13 +22,21 @@ namespace N2.Compiler
     static _extractNameRx : Regex        = Regex(@"_N_((\w|\d|_)+)_\d+", RegexOptions.Compiled);
     static _internalNs    : list[string] = ["N2", "Internal"];
 
-    _manager        : ManagerClass;
-    _helperName     : PExpr;
-    _messageEmitter : IBinarySerializationMessageEmitter;
-    _extentions     : array[IBinarySerializationEmitterExtention];
+    _manager                   : ManagerClass;
+    _helperName                : PExpr;
+    _messageEmitter            : IBinarySerializationMessageEmitter;
+    _extentions                : array[IBinarySerializationEmitterExtention];
+                               
+    _typesMap                  : Hashtable[FixedType, PExpr * PExpr] = Hashtable();
+    _typesToProcess            : SCG.Queue[FixedType] = SCG.Queue();
 
-    [RecordIgnore] _typesMap       : Hashtable[FixedType, PExpr * PExpr] = Hashtable();
-    [RecordIgnore] _typesToProcess : SCG.Queue[FixedType] = SCG.Queue();
+    _serializationParameters   : List[PParameter] = List();
+    _serializationParams       : list[PParameter];
+    _serializationArgs         : list[PExpr];
+
+    _deserializationParameters : List[PParameter] = List();
+    _deserializationParams     : list[PParameter];
+    _deserializationArgs       : list[PExpr];
 
     public this(manager : ManagerClass, messageEmitter : IBinarySerializationMessageEmitter, extentions : array[IBinarySerializationEmitterExtention])
     {
@@ -48,35 +56,6 @@ namespace N2.Compiler
       _helperName = PExpr.FromQualifiedIdentifier(manager, "N2.Internal.SerializationHelper");
     }
 
-    private GetSerializableMembers(ti : TypeInfo) : list[IMember]
-    {
-      def mappedMemberTi = _manager.LookupTypeInfo("Nemerle.Internal.MappedMemberAttribute", 0);
-      def members        = ti.GetMembers(BindingFlags.Public | BindingFlags.Instance).Filter(m => m is IField || m is IProperty);
-      def memberMap      = members.ToDictionary(m => m.Name);
-      def ctors          = ti.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
-
-      mutable result;
-
-      foreach (ctor in ctors)
-        when (ctor.IsCustomAttributeDefined("Nemerle.Internal.RecordCtorAttribute"))
-          when (result == null || ctor.Header.Parameters.Length > result.Header.Parameters.Length)
-            result = ctor;
-
-      def makeMember(p : TParameter) : IMember
-      {
-        match (p.AttributesAndModifiers.FindAttribute(mappedMemberTi, _manager.CoreEnv))
-        {
-          | Some(<[ $_($(name : string)) ]>) => memberMap[name]
-          | e => assert2(false); _ = e; assert(false);
-        }
-      }
-
-      if (result == null)
-        []
-      else
-        result.Header.Parameters.Map(makeMember)
-    }
-
     public CreateSerializationParameter(desiredName : string, type : PExpr) : string
     {
       def name = Util.tmpname(desiredName);
@@ -84,20 +63,12 @@ namespace N2.Compiler
       name
     }
 
-    private _serializationParameters : List[PParameter] = List();
-    private _serializationParams     : list[PParameter];
-    private _serializationArgs       : list[PExpr];
-
     public CreateDeserializationParameter(desiredName : string, type : PExpr) : string
     {
       def name = Util.tmpname(desiredName);
       _deserializationParameters.Add(<[ parameter: $(name : usesite) : $type ]>);
       name
     }
-
-    private _deserializationParameters : List[PParameter] = List();
-    private _deserializationParams     : list[PParameter];
-    private _deserializationArgs       : list[PExpr];
 
     public MakeMembersSerializationCode(owner : FixedType, members : list[IMember], objAccess : PExpr, args : list[PExpr]) : PExpr
     {
@@ -139,6 +110,35 @@ namespace N2.Compiler
       ]>);
       body.Add(<[ loop(); ]>);
       <[ { ..$(body.ToNList()) } ]>
+    }
+
+    GetSerializableMembers(ti : TypeInfo) : list[IMember]
+    {
+      def mappedMemberTi = _manager.LookupTypeInfo("Nemerle.Internal.MappedMemberAttribute", 0);
+      def members        = ti.GetMembers(BindingFlags.Public | BindingFlags.Instance).Filter(m => m is IField || m is IProperty);
+      def memberMap      = members.ToDictionary(m => m.Name);
+      def ctors          = ti.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+
+      mutable result;
+
+      foreach (ctor in ctors)
+        when (ctor.IsCustomAttributeDefined("Nemerle.Internal.RecordCtorAttribute"))
+          when (result == null || ctor.Header.Parameters.Length > result.Header.Parameters.Length)
+            result = ctor;
+
+      def makeMember(p : TParameter) : IMember
+      {
+        match (p.AttributesAndModifiers.FindAttribute(mappedMemberTi, _manager.CoreEnv))
+        {
+          | Some(<[ $_($(name : string)) ]>) => memberMap[name]
+          | e => assert2(false); _ = e; assert(false);
+        }
+      }
+
+      if (result == null)
+        []
+      else
+        result.Header.Parameters.Map(makeMember)
     }
 
     MakeMemberWriteCode(type : FixedType, member : IMember, objExpr : PExpr) : PExpr
@@ -208,7 +208,7 @@ namespace N2.Compiler
       }
     }
 
-    private MakeUserDefinedTypeWriteCode(type : FixedType, member : IMember, objExpr : PExpr) : PExpr
+    MakeUserDefinedTypeWriteCode(type : FixedType, member : IMember, objExpr : PExpr) : PExpr
     {
       def ti = type.TypeOfMember(member).Fix();
       def name = GetMemberName(member);
@@ -217,7 +217,7 @@ namespace N2.Compiler
       <[ $writer(..$args); ]>
     }
 
-    private MakeMemberReadCode(type : FixedType, member : IMember) : PExpr
+    MakeMemberReadCode(type : FixedType, member : IMember) : PExpr
     {
       def memberType = type.TypeOfMember(member).Fix();
       //def name = GetMemberName(member);
@@ -226,7 +226,7 @@ namespace N2.Compiler
       <[ $reader(..$args) ]>
     }
 
-    private GetVariantOptions(variantType : FixedType) : list[FixedType.Class]
+    GetVariantOptions(variantType : FixedType) : list[FixedType.Class]
     {
       def makeOptionType(o)
       {
@@ -241,7 +241,7 @@ namespace N2.Compiler
       }
     }
 
-    private MakeVariantReaderMethodBody(ty : FixedType) : PExpr
+    MakeVariantReaderMethodBody(ty : FixedType) : PExpr
     {
       def makeCase(optionType : FixedType.Class)
       {
@@ -260,7 +260,7 @@ namespace N2.Compiler
       ]>
     }
 
-    private MakeVariantWriterMethodBody(ty : FixedType) : PExpr
+    MakeVariantWriterMethodBody(ty : FixedType) : PExpr
     {
       def makeCase(optionType : FixedType.Class)
       {
@@ -291,7 +291,7 @@ namespace N2.Compiler
       ]>
     }
 
-    private MakeTypeWriteReadMethods(helperType : TypeBuilder, ty : FixedType, writer : Name, reader : Name) : void
+    MakeTypeWriteReadMethods(helperType : TypeBuilder, ty : FixedType, writer : Name, reader : Name) : void
     {
       def typeCode = GetTypeTag(ty) :> TypeTag;
       mutable readerCode : PExpr;
@@ -390,7 +390,7 @@ namespace N2.Compiler
         } ]>);
     }
 
-    private GetWriteReadMethods(type : FixedType) : PExpr * PExpr
+    GetWriteReadMethods(type : FixedType) : PExpr * PExpr
     {
       mutable value;
 
