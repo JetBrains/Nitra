@@ -11,6 +11,8 @@ using Microsoft.Win32;
 using N2.Runtime.Reflection;
 using N2.Tests;
 using ICSharpCode.AvalonEdit.Highlighting;
+using ICSharpCode.AvalonEdit.Document;
+using System.Windows.Threading;
 
 namespace N2.Visualizer
 {
@@ -121,6 +123,7 @@ namespace N2.Visualizer
       else
         _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
 
+      textBox1.TextArea.TextView.Redraw(DispatcherPriority.Input);
       TryReportError();
       ShowInfo();
     }
@@ -368,45 +371,47 @@ namespace N2.Visualizer
       if (_parseResult == null)
         return;
 
+      var line = e.Line;
       var spans = new List<SpanInfo>();
-      _parseResult.GetSpans(e.Line.Offset, e.Line.Offset + e.Line.Length, spans);
+      _parseResult.GetSpans(line.Offset, line.Offset + line.Length, spans);
       foreach (var span in spans)
       {
         switch (span.SpanClass.Name)
         {
           case "Keyword":
-            e.Sections.Add(MakeHighlightedSection(span, Colors.Blue));
+            e.Sections.Add(MakeHighlightedSection(line, span, Colors.Blue));
             break;
 
           case "Comment":
-            e.Sections.Add(MakeHighlightedSection(span, Colors.Green));
+            e.Sections.Add(MakeHighlightedSection(line, span, Colors.Green));
             break;
 
           case "Number":
-            e.Sections.Add(MakeHighlightedSection(span, Colors.Magenta));
+            e.Sections.Add(MakeHighlightedSection(line, span, Colors.Magenta));
             break;
 
           case "Operator":
-            e.Sections.Add(MakeHighlightedSection(span, Colors.Navy));
+            e.Sections.Add(MakeHighlightedSection(line, span, Colors.Navy));
             break;
 
-          case "String": 
-            e.Sections.Add(MakeHighlightedSection(span, Colors.Maroon));
+          case "String":
+            e.Sections.Add(MakeHighlightedSection(line, span, Colors.Maroon));
             break;
         }
       }
     }
 
-    private static HighlightedSection MakeHighlightedSection(SpanInfo span, Color color)
+    private static HighlightedSection MakeHighlightedSection(DocumentLine line, SpanInfo span, Color color)
     {
+      var desiredOffset = span.Location.StartPos;
+      var desiredLength = span.Location.Length;
+      var offset = Math.Max(line.Offset, desiredOffset);
+      var length = Math.Min(line.Offset + line.Length - offset, desiredLength);
       return new HighlightedSection
       {
-        Offset = span.Location.StartPos,
-        Length = span.Location.Length,
-        Color = new HighlightingColor
-        {
-          Foreground = new SimpleHighlightingBrush(color)
-        }
+        Offset = offset,
+        Length = length,
+        Color = new HighlightingColor { Foreground = new SimpleHighlightingBrush(color) }
       };
     }
   }
