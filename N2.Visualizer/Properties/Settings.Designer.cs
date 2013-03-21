@@ -14,45 +14,18 @@ namespace N2.Visualizer.Properties {
     [global::System.Runtime.CompilerServices.CompilerGeneratedAttribute()]
     [global::System.CodeDom.Compiler.GeneratedCodeAttribute("Microsoft.VisualStudio.Editors.SettingsDesigner.SettingsSingleFileGenerator", "10.0.0.0")]
     internal sealed partial class Settings : global::System.Configuration.ApplicationSettingsBase {
-
+        
         private static Settings defaultInstance = ((Settings)(global::System.Configuration.ApplicationSettingsBase.Synchronized(new Settings())));
-
+        
         public static Settings Default {
             get {
                 return defaultInstance;
             }
         }
-
+        
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute(@"{
-  'glossary': {
-    'title': 'example glossary',
-    'GlossDiv': {
-      'title': 'S',
-      'GlossList': {
-        'GlossEntry': {
-          'ID': 'SGML',
-          'SortAs': 'SGML',
-          'GlossTerm': 'Standard Generalized Markup Language',
-          'Acronym': 'SGML',
-          'Abbrev': 'ISO 8879:1986',
-          'GlossDef': {
-            'para': 'A meta-markup language, used to create markup languages such as DocBook.',
-            'GlossSeeAlso': ['GML', 'XML']
-          },
-          'GlossSee': 'markup',
-          'A': 42,
-          'B': null,
-          'C': nullx,
-          'D': xnull,
-          'E': true,
-          'F': false
-        }
-      }
-    }
-  }
-}")]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
         public string LastTextInput {
             get {
                 return ((string)(this["LastTextInput"]));
@@ -95,6 +68,18 @@ namespace N2.Visualizer.Properties {
             }
             set {
                 this["LastRuleName"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string LastLoadParserDirectory {
+            get {
+                return ((string)(this["LastLoadParserDirectory"]));
+            }
+            set {
+                this["LastLoadParserDirectory"] = value;
             }
         }
     }

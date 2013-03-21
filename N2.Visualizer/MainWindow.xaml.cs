@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
@@ -34,7 +35,7 @@ namespace N2.Visualizer
       InitializeComponent();
       _parseTimer = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
       _parseTimer.Elapsed += new ElapsedEventHandler(_parseTimer_Elapsed);
-      _parserHost = new ParserHost();
+
       _errorHighlighter = new HighlightErrorBackgroundRender(textBox1);
       textBox1.TextArea.Caret.PositionChanged += new EventHandler(Caret_PositionChanged);
     }
@@ -46,6 +47,27 @@ namespace N2.Visualizer
         args.Length > 1
           ? File.ReadAllText(args[1])
           : Settings.Default.LastTextInput;
+      if (!string.IsNullOrEmpty(Settings.Default.LastAssemblyFilePath) && File.Exists(Settings.Default.LastAssemblyFilePath))
+      {
+        var grammars = LoadAssembly(Settings.Default.LastAssemblyFilePath);
+
+        GrammarDescriptor grammar = null;
+        if (!string.IsNullOrEmpty(Settings.Default.LastGrammarName))
+          grammar = grammars.FirstOrDefault(g => g.FullName == Settings.Default.LastGrammarName);
+
+        RuleDescriptor ruleDescriptor = null;
+        if (grammar != null)
+          ruleDescriptor = grammar.Rules.FirstOrDefault(r => r.Name == Settings.Default.LastRuleName);
+
+        if (ruleDescriptor != null)
+          LoadRule(ruleDescriptor);
+        else
+        {
+          var dialog = new RuleSelectionDialog(grammars);
+          if (dialog.ShowDialog() ?? false)
+            LoadRule(dialog.Result);
+        }
+      }
 
       _parseTimer.Start();
     }
@@ -212,13 +234,9 @@ namespace N2.Visualizer
       }
     }
 
-    private static bool isSimpleCall(RuleCall call)
-    {
-      return call.RuleInfo.Visit<bool>(simpleCall: id => true, noMatch: () => false);
-    }
-
     private void textBox1_TextChanged(object sender, EventArgs e)
     {
+      _parseTimer.Stop();
       _parseTimer.Start();
     }
 
@@ -276,31 +294,51 @@ namespace N2.Visualizer
         DefaultExt = ".dll",
         Filter = "Parser module (.dll)|*.dll"
       };
+      if (!string.IsNullOrEmpty(Settings.Default.LastLoadParserDirectory) && Directory.Exists(Settings.Default.LastLoadParserDirectory))
+        dialog.InitialDirectory = Settings.Default.LastLoadParserDirectory;
 
       if (dialog.ShowDialog(this) ?? false)
       {
-        var asm = Assembly.LoadFrom(dialog.FileName);
-        var grammarAttrs = (GrammarsAttribute[])asm.GetCustomAttributes(typeof(GrammarsAttribute), false);
-        var grammars = new List<GrammarDescriptor>();
+        Settings.Default.LastLoadParserDirectory = Path.GetDirectoryName(dialog.FileName);
 
-        foreach (var attr in grammarAttrs)
-          foreach (var grammarType in attr.Grammars)
-          {
-            var descProperty = grammarType.GetProperty("StaticDescriptor", BindingFlags.Public | BindingFlags.Static);
-            var grammarDescriptor = (GrammarDescriptor)descProperty.GetValue(null, null);
-            grammars.Add(grammarDescriptor);
-          }
-
+        var grammars = LoadAssembly(dialog.FileName);
         var ruleSelectionDialog = new RuleSelectionDialog(grammars) { Owner = this };
         if (ruleSelectionDialog.ShowDialog() ?? false)
         {
-          _ruleDescriptor = ruleSelectionDialog.Result;
-          _parserHost = new ParserHost();
-          _parseResult = null;
-
-          treeView1.Items.Clear();
+          LoadRule(ruleSelectionDialog.Result);
         }
       }
+    }
+
+    private List<GrammarDescriptor> LoadAssembly(string assemblyFilePath)
+    {
+      var asm = Assembly.LoadFrom(assemblyFilePath);
+      var grammarAttrs = (GrammarsAttribute[])asm.GetCustomAttributes(typeof(GrammarsAttribute), false);
+      var grammars = new List<GrammarDescriptor>();
+
+      Settings.Default.LastAssemblyFilePath = assemblyFilePath;
+
+      foreach (var attr in grammarAttrs)
+        foreach (var grammarType in attr.Grammars)
+        {
+          var descProperty = grammarType.GetProperty("StaticDescriptor", BindingFlags.Public | BindingFlags.Static);
+          var grammarDescriptor = (GrammarDescriptor)descProperty.GetValue(null, null);
+          grammars.Add(grammarDescriptor);
+        }
+
+      return grammars;
+    }
+
+    private void LoadRule(RuleDescriptor ruleDescriptor)
+    {
+      Settings.Default.LastGrammarName = ruleDescriptor.Grammar.FullName;
+      Settings.Default.LastRuleName = ruleDescriptor.Name;
+
+      _ruleDescriptor = ruleDescriptor;
+      _parserHost = new ParserHost();
+      _parseResult = null;
+
+      treeView1.Items.Clear();
     }
 
     private void FileOpen_Click(object sender, RoutedEventArgs e)
