@@ -2,17 +2,17 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
-using System.Linq;
 using System.Reflection;
+using System.Timers;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
+using ICSharpCode.AvalonEdit.Document;
+using ICSharpCode.AvalonEdit.Highlighting;
 using Microsoft.Win32;
 using N2.Runtime.Reflection;
-using N2.Tests;
-using ICSharpCode.AvalonEdit.Highlighting;
-using ICSharpCode.AvalonEdit.Document;
-using System.Windows.Threading;
+using N2.Visualizer.Properties;
 
 namespace N2.Visualizer
 {
@@ -21,34 +21,38 @@ namespace N2.Visualizer
   /// </summary>
   public partial class MainWindow : Window
   {
-    ParserHost      _parserHost;
-    ParseResult     _parseResult;
-    RuleDescriptor  _ruleDescriptor = JsonParser.StaticDescriptor.Rules.First(r => r.Name == "Start");
-    bool            _doTreeOperation;
-    bool            _doChangeCaretPos;
-    HighlightErrorBackgroundRendere _errorHighlighter;
+    ParserHost _parserHost;
+    ParseResult _parseResult;
+    RuleDescriptor _ruleDescriptor;
+    bool _doTreeOperation;
+    bool _doChangeCaretPos;
+    HighlightErrorBackgroundRender _errorHighlighter;
+    Timer _parseTimer;
 
     public MainWindow()
     {
       InitializeComponent();
-      //textBox1.TextArea.TextView.LineTransformers.Add();// Services.AddService(typeof(ITextMarkerService), textMarkerService);
-      //textBox1.TextArea.TextView.Services.AddService(typeof(ITextMarkerService), textMarkerService);
-
-      _errorHighlighter = new HighlightErrorBackgroundRendere(textBox1);
-      textBox1.TextArea.TextView.BackgroundRenderers.Add(_errorHighlighter);
+      _parseTimer = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
+      _parseTimer.Elapsed += new ElapsedEventHandler(_parseTimer_Elapsed);
+      _parserHost = new ParserHost();
+      _errorHighlighter = new HighlightErrorBackgroundRender(textBox1);
+      textBox1.TextArea.Caret.PositionChanged += new EventHandler(Caret_PositionChanged);
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
       var args = Environment.GetCommandLineArgs();
-      if (args.Length > 1)
-        text = File.ReadAllText(args[1]);
+      textBox1.Text =
+        args.Length > 1
+          ? File.ReadAllText(args[1])
+          : Settings.Default.LastTextInput;
 
-      textBox1.Text = text;
+      _parseTimer.Start();
+    }
 
-      _parserHost = new ParserHost();
-      Parse();
-      textBox1.TextArea.Caret.PositionChanged += new EventHandler(Caret_PositionChanged);
+    private void Window_Closed(object sender, EventArgs e)
+    {
+      Settings.Default.LastTextInput = textBox1.Text;
     }
 
     private void textBox1_GotFocus(object sender, RoutedEventArgs e)
@@ -104,28 +108,6 @@ namespace N2.Visualizer
       }
 
       return null;
-    }
-
-    private void Parse()
-    {
-      if (_doTreeOperation)
-        return;
-
-      if (_parserHost == null)
-        return;
-
-      var source = new SourceSnapshot(textBox1.Text);
-
-      var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
-
-      if (simpleRule != null)
-        _parseResult = _parserHost.DoParsing(source, simpleRule);
-      else
-        _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
-
-      textBox1.TextArea.TextView.Redraw(DispatcherPriority.Input);
-      TryReportError();
-      ShowInfo();
     }
 
     private void TryReportError()
@@ -235,39 +217,9 @@ namespace N2.Visualizer
       return call.RuleInfo.Visit<bool>(simpleCall: id => true, noMatch: () => false);
     }
 
-    static string text =
-  @"{
-      'glossary': {
-          'title': 'example glossary',
-      'GlossDiv': {
-              'title': 'S',
-        'GlossList': {
-                  'GlossEntry': {
-                      'ID': 'SGML',
-            'SortAs': 'SGML',
-            'GlossTerm': 'Standard Generalized Markup Language',
-            'Acronym': 'SGML',
-            'Abbrev': 'ISO 8879:1986',
-            'GlossDef': {
-                          'para': 'A meta-markup language, used to create markup languages such as DocBook.',
-              'GlossSeeAlso': ['GML', 'XML']
-                      },
-            'GlossSee': 'markup',
-            'A': 42,
-            'B': null,
-            'C': nullx,
-            'D': xnull,
-            'E': true,
-            'F': false
-                  }
-              }
-          }
-      }
-}";
-
     private void textBox1_TextChanged(object sender, EventArgs e)
     {
-      Parse();
+      _parseTimer.Start();
     }
 
     private void textBox1_LostFocus(object sender, RoutedEventArgs e)
@@ -275,19 +227,14 @@ namespace N2.Visualizer
       textBox1.TextArea.Caret.Show();
     }
 
-    string MakePath(TreeViewItem item)
+    private static string MakePath(TreeViewItem item)
     {
-      var path = new List<string>();
+      var path = new Stack<string>();
 
-      for (TreeViewItem curr = item; curr != null; curr = curr.Parent as TreeViewItem)
-        path.Add(curr.Header.ToString());
+      for (var curr = item; curr != null; curr = curr.Parent as TreeViewItem)
+        path.Push(curr.Header.ToString());
 
-      path.Reverse();
-
-      if (path.Count == 0)
-          return "";
-
-      return string.Join(@"\", path);
+      return path.Count == 0 ? "" : string.Join(@"\", path);
     }
 
     private void treeView1_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
@@ -324,14 +271,16 @@ namespace N2.Visualizer
 
     private void ParserLoad_Click(object sender, RoutedEventArgs e)
     {
-      var dialog = new OpenFileDialog();
-      dialog.DefaultExt = ".dll";
-      dialog.Filter = "Parser module (.dll)|*.dll";
+      var dialog = new OpenFileDialog
+      {
+        DefaultExt = ".dll",
+        Filter = "Parser module (.dll)|*.dll"
+      };
 
       if (dialog.ShowDialog(this) ?? false)
       {
         var asm = Assembly.LoadFrom(dialog.FileName);
-        var grammarAttrs = asm.GetCustomAttributes(typeof(GrammarsAttribute), false).OfType<GrammarsAttribute>();
+        var grammarAttrs = (GrammarsAttribute[])asm.GetCustomAttributes(typeof(GrammarsAttribute), false);
         var grammars = new List<GrammarDescriptor>();
 
         foreach (var attr in grammarAttrs)
@@ -342,13 +291,12 @@ namespace N2.Visualizer
             grammars.Add(grammarDescriptor);
           }
 
-        var choiceParser = new ChoiceParser(grammars);
-        choiceParser.Owner = this;
-        if (choiceParser.ShowDialog() ?? false)
+        var ruleSelectionDialog = new RuleSelectionDialog(grammars) { Owner = this };
+        if (ruleSelectionDialog.ShowDialog() ?? false)
         {
-          _ruleDescriptor = choiceParser.Result;
-          _parserHost     = new ParserHost();
-          _parseResult    = null;
+          _ruleDescriptor = ruleSelectionDialog.Result;
+          _parserHost = new ParserHost();
+          _parseResult = null;
 
           treeView1.Items.Clear();
         }
@@ -357,13 +305,38 @@ namespace N2.Visualizer
 
     private void FileOpen_Click(object sender, RoutedEventArgs e)
     {
-      var dialog = new OpenFileDialog();
-      dialog.Filter = "C# (.cs)|*.cs|Text (.txt)|*.txt|All|*.*";
-
+      var dialog = new OpenFileDialog { Filter = "C# (.cs)|*.cs|Text (.txt)|*.txt|All|*.*" };
       if (dialog.ShowDialog(this) ?? false)
       {
         textBox1.Text = File.ReadAllText(dialog.FileName);
       }
+    }
+
+    void _parseTimer_Elapsed(object sender, ElapsedEventArgs e)
+    {
+      Dispatcher.Invoke(new Action(DoParse));
+    }
+
+    private void DoParse()
+    {
+      if (_doTreeOperation)
+        return;
+
+      if (_parserHost == null)
+        return;
+
+      var source = new SourceSnapshot(textBox1.Text);
+
+      var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
+
+      if (simpleRule != null)
+        _parseResult = _parserHost.DoParsing(source, simpleRule);
+      else
+        _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
+
+      textBox1.TextArea.TextView.Redraw(DispatcherPriority.Input);
+      TryReportError();
+      ShowInfo();
     }
 
     private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)

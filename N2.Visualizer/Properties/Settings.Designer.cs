@@ -9,8 +9,8 @@
 //------------------------------------------------------------------------------
 
 namespace N2.Visualizer.Properties {
-
-
+    
+    
     [global::System.Runtime.CompilerServices.CompilerGeneratedAttribute()]
     [global::System.CodeDom.Compiler.GeneratedCodeAttribute("Microsoft.VisualStudio.Editors.SettingsDesigner.SettingsSingleFileGenerator", "10.0.0.0")]
     internal sealed partial class Settings : global::System.Configuration.ApplicationSettingsBase {
@@ -20,6 +20,81 @@ namespace N2.Visualizer.Properties {
         public static Settings Default {
             get {
                 return defaultInstance;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute(@"{
+  'glossary': {
+    'title': 'example glossary',
+    'GlossDiv': {
+      'title': 'S',
+      'GlossList': {
+        'GlossEntry': {
+          'ID': 'SGML',
+          'SortAs': 'SGML',
+          'GlossTerm': 'Standard Generalized Markup Language',
+          'Acronym': 'SGML',
+          'Abbrev': 'ISO 8879:1986',
+          'GlossDef': {
+            'para': 'A meta-markup language, used to create markup languages such as DocBook.',
+            'GlossSeeAlso': ['GML', 'XML']
+          },
+          'GlossSee': 'markup',
+          'A': 42,
+          'B': null,
+          'C': nullx,
+          'D': xnull,
+          'E': true,
+          'F': false
+        }
+      }
+    }
+  }
+}")]
+        public string LastTextInput {
+            get {
+                return ((string)(this["LastTextInput"]));
+            }
+            set {
+                this["LastTextInput"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string LastAssemblyFilePath {
+            get {
+                return ((string)(this["LastAssemblyFilePath"]));
+            }
+            set {
+                this["LastAssemblyFilePath"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string LastGrammarName {
+            get {
+                return ((string)(this["LastGrammarName"]));
+            }
+            set {
+                this["LastGrammarName"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string LastRuleName {
+            get {
+                return ((string)(this["LastRuleName"]));
+            }
+            set {
+                this["LastRuleName"] = value;
             }
         }
     }
