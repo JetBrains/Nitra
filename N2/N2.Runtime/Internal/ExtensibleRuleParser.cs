@@ -101,7 +101,7 @@ namespace N2.Internal
       if (PostfixRules.Length > 0) PostfixOffset  = PostfixRules[0].RuleId; else PostfixOffset  = 0;
     }
 
-    public override int Parse(int curEndPos, string text, ref Parser parser)
+    public override int Parse(int curTextPos, string text, ref Parser parser)
     {
       unchecked
       {
@@ -116,7 +116,7 @@ namespace N2.Internal
         int j;
         char c; // временная переменная для отсечения правил по первой букве
 
-        prefixAst = parser.memoize[curEndPos];
+        prefixAst = parser.memoize[curTextPos];
         for (; prefixAst > 0; prefixAst = parser.ast[prefixAst + PrefixOfs.Next])
         {
           if (parser.ast[prefixAst + PrefixOfs.Id] == PrefixId)
@@ -127,8 +127,8 @@ namespace N2.Internal
               //TODO: убрать цикл
               i = bestResult + AstOfs.Sizes;
               for (; parser.ast[i] >= 0; ++i)
-                curEndPos += parser.ast[i];
-              bestEndPos = curEndPos;
+                curTextPos += parser.ast[i];
+              bestEndPos = curTextPos;
               goto postfix_loop;
             }
             else
@@ -145,12 +145,12 @@ namespace N2.Internal
 
         //нет мемоизации префикса
         prefixAst = parser.Allocate(PrefixOfs.NodeSize, PrefixId);
-        parser.ast[prefixAst + PrefixOfs.Next] = parser.memoize[curEndPos];
-        parser.memoize[curEndPos] = prefixAst;
-        if (curEndPos >= text.Length)
+        parser.ast[prefixAst + PrefixOfs.Next] = parser.memoize[curTextPos];
+        parser.memoize[curTextPos] = prefixAst;
+        if (curTextPos >= text.Length)
           return -1;
         i = 0;
-        c = text[curEndPos];
+        c = text[curTextPos];
         bestResult = 0;
         for (; i < PrefixRules.Length; ++i)
         {
@@ -158,7 +158,7 @@ namespace N2.Internal
           if (prefixRule.LowerBound <= c && c <= prefixRule.UpperBound)
           {
             newResult = -1;
-            newEndPos = prefixRule.Parse(curEndPos, text, ref newResult, ref parser);
+            newEndPos = prefixRule.Parse(curTextPos, text, ref newResult, ref parser);
             if (newResult > 0)
             {
               if (bestResult > 0)
@@ -206,11 +206,11 @@ namespace N2.Internal
           return -1;
 
       postfix_loop:
-        curEndPos = bestEndPos;
-        if (curEndPos >= text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
-          return curEndPos;// при достижении конца текста есть нечего
+        curTextPos = bestEndPos;
+        if (curTextPos >= text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
+          return curTextPos;// при достижении конца текста есть нечего
         //ищем запомненое
-        postfixAst = parser.memoize[curEndPos];
+        postfixAst = parser.memoize[curTextPos];
         for (; postfixAst > 0; postfixAst = parser.ast[postfixAst + PostfixOfs.Next])
         {
           if (parser.ast[postfixAst + PostfixOfs.Id] == PostfixId)//нашли
@@ -225,7 +225,7 @@ namespace N2.Internal
                 bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
               if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == -1)//Убеждаемся что разбор успешный
               {
-                bestEndPos = curEndPos;
+                bestEndPos = curTextPos;
                 //TODO: убрать цикл
                 //вычисляем длинну разобранного правила
                 j = bestResult + AstOfs.Sizes;
@@ -254,7 +254,7 @@ namespace N2.Internal
                 bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
               if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == -1)//Убеждаемся что разбор успешный
               {
-                bestEndPos = curEndPos;
+                bestEndPos = curTextPos;
                 //TODO: убрать цикл
                 //вычисляем длинну разобранного правила
                 j = bestResult + AstOfs.Sizes;
@@ -270,27 +270,27 @@ namespace N2.Internal
                 }
               }
               else
-                return curEndPos;//облом. Заканчиваем разбор.
+                return curTextPos;//облом. Заканчиваем разбор.
             }
           }
         }
         //нет мемоизации
         postfixAst = parser.Allocate(PostfixOfs.NodeSize, PostfixId);
-        parser.ast[postfixAst + PostfixOfs.Next] = parser.memoize[curEndPos];
-        parser.memoize[curEndPos] = postfixAst;
+        parser.ast[postfixAst + PostfixOfs.Next] = parser.memoize[curTextPos];
+        parser.memoize[curTextPos] = postfixAst;
         bestResult = 0;
         lastResult = 0;
         i = PostfixRules.Length - 1;
       postfix_parse:
         parser.ast[postfixAst + PostfixOfs.FirstRuleIndex] = FirstPostfixRule;
-        c = text[curEndPos];
+        c = text[curTextPos];
         for (; i >= FirstPostfixRule; --i)
         {
           var postfixRule = PostfixRules[i];
           if (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound)
           {
             newResult = -1;
-            newEndPos = postfixRule.Parse(curEndPos, text, ref newResult, ref parser);
+            newEndPos = postfixRule.Parse(curTextPos, text, ref newResult, ref parser);
             if (newResult > 0)//АСТ создано
             {
               parser.ast[newResult + AstOfs.Next] = lastResult; lastResult = newResult;//добавляем в список
@@ -336,8 +336,8 @@ namespace N2.Internal
 
         parser.ast[postfixAst + PostfixOfs.AstList] = lastResult;
 
-        if (bestEndPos <= curEndPos)
-          return curEndPos; // если нам не удалось продвинуться то заканчиваем разбор
+        if (bestEndPos <= curTextPos)
+          return curTextPos; // если нам не удалось продвинуться то заканчиваем разбор
 
         goto postfix_loop;
 
@@ -350,7 +350,7 @@ namespace N2.Internal
         else if (parser.ast[bestResult + AstOfs.Next] == 0)
         {//1
           var prefixRule = PrefixRules[parser.ast[bestResult + N2.Internal.ExtensibleRuleParser.AstOfs.Id] - PrefixOffset];
-          return prefixRule.Parse(curEndPos, text, ref bestResult, ref parser);
+          return prefixRule.Parse(curTextPos, text, ref bestResult, ref parser);
         }
         else
         {//many
