@@ -21,11 +21,11 @@ namespace N2.Visualizer
   /// <summary>
   /// Interaction logic for ChoiceParser.xaml
   /// </summary>
-  public partial class ChoiceParser : Window
+  public partial class RuleSelectionDialog : Window
   {
     public RuleDescriptor Result { get; private set; }
 
-    public ChoiceParser(IEnumerable<GrammarDescriptor> grammars)
+    public RuleSelectionDialog(IEnumerable<GrammarDescriptor> grammars)
     {
       InitializeComponent();
       foreach (var grammar in grammars)

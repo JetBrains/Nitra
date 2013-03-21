@@ -10,7 +10,7 @@ using ICSharpCode.AvalonEdit.Document;
 
 namespace N2.Visualizer
 {
-  public class HighlightErrorBackgroundRendere : IBackgroundRenderer
+  public class HighlightErrorBackgroundRender : IBackgroundRenderer
   {
     private TextEditor _editor;
     private int _errorPos = -1;
@@ -20,9 +20,10 @@ namespace N2.Visualizer
       set { _errorPos = value; /*_editor.TextView.Redraw();*/ }
     }
 
-    public HighlightErrorBackgroundRendere(TextEditor editor)
+    public HighlightErrorBackgroundRender(TextEditor editor)
     {
       _editor = editor;
+      _editor.TextArea.TextView.BackgroundRenderers.Add(this);
     }
 
     public KnownLayer Layer
