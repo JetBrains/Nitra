@@ -394,16 +394,14 @@ namespace N2.Visualizer
 
       var line = e.Line;
       var spans = new List<SpanInfo>();
-      _parseResult.GetSpans(line.Offset, line.Offset + line.Length, spans);
+      _parseResult.GetSpans(line.Offset, line.EndOffset, spans);
       foreach (var span in spans)
       {
         HighlightingColor color;
         if (_highlightingStyles.TryGetValue(span.SpanClass.Name, out color))
         {
-          var desiredStartOffset = span.Location.StartPos;
-          var desiredEndOffset = desiredStartOffset + span.Location.Length;
-          var startOffset = Math.Max(line.Offset, desiredStartOffset);
-          var endOffset = Math.Min(line.EndOffset, desiredEndOffset);
+          var startOffset = Math.Max(line.Offset, span.Location.StartPos);
+          var endOffset = Math.Min(line.EndOffset, span.Location.EndPos);
           var section = new HighlightedSection
           {
             Offset = startOffset,
