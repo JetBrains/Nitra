@@ -29,6 +29,7 @@ namespace N2.Visualizer
     bool _doChangeCaretPos;
     HighlightErrorBackgroundRender _errorHighlighter;
     Timer _parseTimer;
+    Dictionary<string, HighlightingColor> _highlightingStyles;
 
     public MainWindow()
     {
@@ -38,6 +39,15 @@ namespace N2.Visualizer
 
       _errorHighlighter = new HighlightErrorBackgroundRender(textBox1);
       textBox1.TextArea.Caret.PositionChanged += new EventHandler(Caret_PositionChanged);
+
+      _highlightingStyles = new Dictionary<string, HighlightingColor>
+      {
+        { "Keyword",  new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Blue) } },
+        { "Comment",  new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
+        { "Number",   new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Magenta) } },
+        { "Operator", new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
+        { "String",   new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
+      };
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -387,43 +397,22 @@ namespace N2.Visualizer
       _parseResult.GetSpans(line.Offset, line.Offset + line.Length, spans);
       foreach (var span in spans)
       {
-        switch (span.SpanClass.Name)
+        HighlightingColor color;
+        if (_highlightingStyles.TryGetValue(span.SpanClass.Name, out color))
         {
-          case "Keyword":
-            e.Sections.Add(MakeHighlightedSection(line, span, Colors.Blue));
-            break;
-
-          case "Comment":
-            e.Sections.Add(MakeHighlightedSection(line, span, Colors.Green));
-            break;
-
-          case "Number":
-            e.Sections.Add(MakeHighlightedSection(line, span, Colors.Magenta));
-            break;
-
-          case "Operator":
-            e.Sections.Add(MakeHighlightedSection(line, span, Colors.Navy));
-            break;
-
-          case "String":
-            e.Sections.Add(MakeHighlightedSection(line, span, Colors.Maroon));
-            break;
+          var desiredStartOffset = span.Location.StartPos;
+          var desiredEndOffset = desiredStartOffset + span.Location.Length;
+          var startOffset = Math.Max(line.Offset, desiredStartOffset);
+          var endOffset = Math.Min(line.EndOffset, desiredEndOffset);
+          var section = new HighlightedSection
+          {
+            Offset = startOffset,
+            Length = endOffset - startOffset,
+            Color = color
+          };
+          e.Sections.Add(section);
         }
       }
-    }
-
-    private static HighlightedSection MakeHighlightedSection(DocumentLine line, SpanInfo span, Color color)
-    {
-      var desiredStartOffset = span.Location.StartPos;
-      var desiredEndOffset = desiredStartOffset + span.Location.Length;
-      var startOffset = Math.Max(line.Offset, desiredStartOffset);
-      var endOffset = Math.Min(line.EndOffset, desiredEndOffset);
-      return new HighlightedSection
-      {
-        Offset = startOffset,
-        Length = endOffset - startOffset,
-        Color = new HighlightingColor { Foreground = new SimpleHighlightingBrush(color) }
-      };
     }
   }
 }
