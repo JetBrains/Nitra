@@ -414,14 +414,14 @@ namespace N2.Visualizer
 
     private static HighlightedSection MakeHighlightedSection(DocumentLine line, SpanInfo span, Color color)
     {
-      var desiredOffset = span.Location.StartPos;
-      var desiredLength = span.Location.Length;
-      var offset = Math.Max(line.Offset, desiredOffset);
-      var length = Math.Min(line.Offset + line.Length - offset, desiredLength);
+      var desiredStartOffset = span.Location.StartPos;
+      var desiredEndOffset = desiredStartOffset + span.Location.Length;
+      var startOffset = Math.Max(line.Offset, desiredStartOffset);
+      var endOffset = Math.Min(line.EndOffset, desiredEndOffset);
       return new HighlightedSection
       {
-        Offset = offset,
-        Length = length,
+        Offset = startOffset,
+        Length = endOffset - startOffset,
         Color = new HighlightingColor { Foreground = new SimpleHighlightingBrush(color) }
       };
     }
