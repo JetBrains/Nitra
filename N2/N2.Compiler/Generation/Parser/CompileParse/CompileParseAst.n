@@ -16,10 +16,11 @@ namespace N2.Compiler
 {
   internal abstract partial class RuleParserEmitter
   {
-    public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
+    public CompileParseAst(ruleStructure : RuleStructure.Ast) : PExpr
     {
       def code = SCG.List();
       def endLabel = Environment.MakeLabel("EndParse");
+      def recoveryLabel = Environment.MakeLabel("Recovery");
       def checkAstMemoize = if (ruleStructure.Symbol is SimpleRuleSymbol)
         <[
           when ($CurTextPos <= text.Length)
@@ -28,9 +29,9 @@ namespace N2.Compiler
             {
               when (parser.ast[ast] == RuleId)
               {
-                if (parser.ast[ast + 2] == -1)
+                parseState = parser.ast[ast + 2];
+                if (parseState == -1)
                 {
-                  resultRef = ast;
                   mutable i = ast + $(ruleStructure.SizesStart);
                   mutable end = ast + $(ruleStructure.SizesEnd);
                   for (; i < end; ++i)
@@ -39,6 +40,11 @@ namespace N2.Compiler
                 }
                 else
                 {
+                  when (parser.IsRecoveryMode)
+                  {
+                    $(ruleStructure.ParserExtention().AstPtr.Var) = ast;
+                    $(recoveryLabel.Goto());
+                  }
                   $CurTextPos = -1;
                   $(endLabel.Goto());
                 }
@@ -47,7 +53,19 @@ namespace N2.Compiler
           }
         ]>
       else
-        <[ () ]>;
+        <[
+          when (parser.IsRecoveryMode)
+          {
+            $(ruleStructure.ParserExtention().AstPtr.Var) = resultRef;
+            parseState = parser.ast[resultRef + 2];
+            $(recoveryLabel.Goto());
+          }
+        ]>;
+
+      def setResultRef = if (ruleStructure.Symbol is ExtentionRuleSymbol)
+        <[ resultRef = $(ruleStructure.ParserExtention().AstPtr.Var); ]>
+      else
+        <[ {} ]>;
 
       code.Add(<[ _ = $(ruleStructure.SrcRule.ToString()) ]>);
       //code.AddRange(_fields.Map(field => <[ _ = $(field.Print()) ]>));
@@ -59,7 +77,7 @@ namespace N2.Compiler
       //parse ok
       code.Add(<[ $(ruleStructure.ParserExtention().OkLabel.Label()); ]>);
       code.Add(<[ $(ruleStructure.ParserExtention().AstPtr.Set(ruleStructure.HeaderState, <[ -1 ]>)) ]>);// состояние разбора -1 если правило полностью разобрано.
-      code.Add(<[ resultRef = $(ruleStructure.ParserExtention().AstPtr.Var); ]>);
+      code.Add(setResultRef);
       code.Add(<[ $(endLabel.Goto()); ]>);
 
       //parse fail
@@ -67,11 +85,31 @@ namespace N2.Compiler
       code.Add(<[ when (parseState > $(ruleStructure.ParserExtention().AllocateState)) // АСТ создано
                   {
                     $(ruleStructure.ParserExtention().AstPtr.Set(ruleStructure.HeaderState, <[ parseState ]>));
-                    resultRef = $(ruleStructure.ParserExtention().AstPtr.Var);
+                    $setResultRef;
                   }
       ]>);
       code.Add(<[ $CurTextPos = -1; $(endLabel.Goto()); ]>);
       CompileFields(code, ruleStructure.Fields);
+
+      code.Add(recoveryLabel.Label());
+      //code.Add(<[ assert2(false) ]>);
+      foreach (field in ruleStructure.Fields)
+      {
+        when (field.NextSibling != null)
+        {
+          def skip = if (field is RuleStructureField.Predicate)
+            <[ assert(false) ]>;
+          else
+            <[ $CurTextPos += $(field.Owner.ParserExtention().AstPtr.GetSize(field)) ]>;
+          code.Add(<[
+            if (parseState >= $(field.NextSibling.EndState))
+              $skip;
+            else
+              $(field.ParserExtention().RecoveryLabel.Goto())
+          ]>);
+        }
+      }
+      code.Add(<[ assert2(false); assert(false) ]>);
 
       if (ruleStructure.Symbol.LastLocation is Some(loc) when Owner.Environment.Manager.Options.EmitDebug)
       {
@@ -85,14 +123,13 @@ namespace N2.Compiler
 
       def variables = SCG.List();
       variables.Add(<[
-        mutable tmpResult  : int; _ = tmpResult;
         mutable tmpSize    : int; _ = tmpSize;
         mutable parseState : int; _ = parseState;
         mutable newPos     : int; _ = newPos;
       ]>);
       variables.AddRange(_names.Filter(_ != "resultRef").Map(name => <[ mutable $(name : dyn) ]>));
 
-      <[ { ..$(variables.NToList()) } { ..$(code.NToList()) } ]>.FlattenPExpr();
+      variables.Concat(code).FlattenPExpr();
     }
   }
 }
