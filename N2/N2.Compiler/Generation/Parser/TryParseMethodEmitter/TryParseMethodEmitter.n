@@ -1,0 +1,161 @@
+﻿using N2.Typing;
+using N2.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  internal sealed partial class TryParseMethodEmitter : MethodEmitter
+  {
+    public Owner : RuleParserEmitter { get; }
+    public RuleStructure : RuleStructure.Ast;
+    private _tb : TypeBuilder;
+    public override Environment : EmitterEnvironment { get { Owner.Environment } }
+
+    public this(owner : RuleParserEmitter, tb : TypeBuilder, ruleStructure : RuleStructure.Ast)
+    {
+      Owner         = owner;
+      _tb           = tb;
+      RuleStructure = ruleStructure;
+    }
+
+    public Emit() : void
+    {
+      _tb.DefineConditional(<[decl:
+        public override TryParse(astPtr : int, curTextPos : int, text : string, parser : ref N2.Internal.Parser, startState : int) : int
+        {
+          $(if (Environment.IsIdeMode)
+            <[ _ = curTextPos; _ = text; _ = parser; _ = startState; -1 ]>
+          else
+            CompileAst(RuleStructure))
+        }
+      ]>);
+    }
+
+    public CurTextPos : PExpr { get { <[ curTextPos ]> } }
+
+    public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
+    {
+      def endLabel = Environment.MakeLabel("EndParse");
+
+      def cases = SCG.List();
+      foreach (field in ruleStructure.AllFields)
+        cases.Add(<[ case: | $(field.State) => $(field.ParserExtention().ParseLabel.Goto()) ]>);
+      cases.Add(<[ case: | x => assert(false, $"Unknown parse state '$x'.") ]>);
+
+      def code = SCG.List();
+      code.Add(<[ _ = $(ruleStructure.SrcRule.ToString()) ]>);
+      code.Add(<[ $(ruleStructure.ParserExtention().AstStart) = $CurTextPos; ]>);
+      code.Add(<[ match (startState) { ..$cases } ]>);
+
+      //parse ok
+      code.Add(ruleStructure.ParserExtention().OkLabel.Label());
+      code.Add(endLabel.Goto());
+
+      //parse fail
+      code.Add(ruleStructure.ParserExtention().FailLabel.Label());
+      code.Add(<[ $CurTextPos = -1; ]>);
+      code.Add(endLabel.Goto());
+
+      CompileFields(code, ruleStructure.Fields);
+
+      code.Add(endLabel.Label());
+      code.Add(<[ $CurTextPos; ]>);
+
+      def codeWithVariables = SCG.List();
+      codeWithVariables.AddRange(LocalVariables.Map(name => <[ mutable $(name : dyn) ]>));
+      codeWithVariables.AddRange(code);
+
+      codeWithVariables.FlattenPExpr();
+    }
+
+    public override CompileTokenString(code : SCG.List[PExpr], field : RuleStructureField.TokenString) : void
+    {
+      def makeStringCheckCode(str : string) : PExpr
+      {
+        if (str == "")
+          <[ true ]>
+        else
+        {
+          def len = str.Length;
+          def check = if (len > 1) <[$CurTextPos + $((len - 1) : int)]> else <[ $CurTextPos ]>;
+
+          def makeCharCheckCode(ch : char, i : int) : PExpr
+          {
+            def index = if (i <= 0) <[ $CurTextPos ]> else <[ $CurTextPos + $(i : int) ]>;
+            <[ text[$index] == $(ch : char) ]>
+          }
+          def exprs = str.Select(makeCharCheckCode);
+          def condExpr = exprs.Aggregate((e1, e2) => <[ $e1 && $e2 ]>);
+          <[ $check < text.Length && $condExpr ]>
+        }
+      }
+      def astSize = <[ $(field.String.Length) ]>;
+      def checkCode = makeStringCheckCode(field.String);
+      code.Add(<[
+        $(field.ParserExtention().ParseLabel.Label());
+          _ = $(field.SrcRule.ToString());
+          if ($checkCode)
+          {
+            $CurTextPos += $astSize;
+            $(field.ParserExtention().ContinueParseLabel.Goto());
+          }
+          else
+            $(field.ParserExtention().FailParseLabel.Goto());
+      ]>);
+    }
+
+    public override CompileOption(code : SCG.List[PExpr], field : RuleStructureField.Option) : void
+    {
+      code.Add(<[
+        $(field.ParserExtention().ParseLabel.Label());
+          _ = $(field.SrcRule.ToString());
+          $(field.Rule.ParserExtention().AstStart) = $CurTextPos;
+          $(field.Rule.Fields[0].ParserExtention().ParseLabel.Goto());
+
+        $(field.Rule.ParserExtention().OkLabel.Label());
+          $(field.ParserExtention().ContinueParseLabel.Goto());
+
+        $(field.Rule.ParserExtention().FailLabel.Label());
+          $CurTextPos = $(field.Rule.ParserExtention().AstStart);
+          $(field.ParserExtention().ContinueParseLabel.Goto());
+      ]>);
+      CompileFields(code, field.Rule.Fields);
+    }
+
+    public override CompileList(code : SCG.List[PExpr], field : RuleStructureField.List) : void
+    {
+    }
+
+    public override CompileListWithSeparator(code : SCG.List[PExpr], field : RuleStructureField.ListWithSeparator) : void
+    {
+    }
+
+    public override CompilePredicate(code : SCG.List[PExpr], field : RuleStructureField.Predicate) : void
+    {
+      
+    }
+
+    public override CompileTokenCall(code : SCG.List[PExpr], field : RuleStructureField.TokenCall) : void
+    {
+    }
+
+    public override CompileExtensibleCall(code : SCG.List[PExpr], field : RuleStructureField.ExtensibleCall) : void
+    {
+    }
+
+    public override CompileSimpleCall(code : SCG.List[PExpr], field : RuleStructureField.SimpleCall) : void
+    {
+    }
+  }
+}
