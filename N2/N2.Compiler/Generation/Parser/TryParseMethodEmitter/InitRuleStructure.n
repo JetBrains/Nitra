@@ -16,28 +16,96 @@ namespace N2.Compiler
 {
   internal sealed partial class TryParseMethodEmitter
   {
-    // HACK: подменяем VariableEmitter в экстеншенах RuleStructure! необходимо сделать собственные структуры данных
+    private sealed class RuleStructureData
+    {
+      public this (emitter : TryParseMethodEmitter, structure : RuleStructure)
+      {
+        Emitter   = emitter;
+        Structure = structure;
+        Emitter._ruleStructureData[structure] = this;
+      }
+
+      public         Emitter          : TryParseMethodEmitter;
+      public         Structure        : RuleStructure;
+      public mutable AllocateState    : int;
+      public mutable OkLabel          : PExprLabel;
+      public mutable FailLabel        : PExprLabel;
+
+      public AstStart : PExpr { get { <[ $(Emitter.CreateVariable($"astStart$(Structure.Level)") : dyn) ]> } }
+    }
+
+    private sealed class RuleStructureFieldData
+    {
+      public this (emitter : TryParseMethodEmitter, field : RuleStructureField)
+      {
+        Emitter = emitter;
+        Field   = field;
+        Emitter._ruleStructureFieldData[field] = this;
+      }
+
+      public         Emitter            : TryParseMethodEmitter;
+      public         Field              : RuleStructureField;
+      public mutable ParseLabel         : PExprLabel;
+      public         ContinueParseLabel : PExprLabel { get { if (Field.NextSibling == null) Emitter.Data(Field.Owner).OkLabel else Emitter.Data(Field.NextSibling).ParseLabel } }
+      public         FailParseLabel     : PExprLabel { get { Emitter.Data(Field.Owner).FailLabel } }
+    }
+
     private InitRuleStructure(ast : RuleStructure.Ast) : void
     {
-      def initStructure(structure : RuleStructure)
+      def initStructure(structure : RuleStructure, owner : RuleStructureField)
       {
-        structure.ParserExtention().VariableEmitter = this;
+        def extraData = RuleStructureData(this, structure);
+        if (owner == null)
+        {
+          assert(structure is RuleStructure.Ast);
+          extraData.OkLabel   = Environment.MakeLabel("Ast_Ok");
+          extraData.FailLabel = Environment.MakeLabel("Ast_Fail");
+        }
+        else
+        {
+          assert(!(structure is RuleStructure.Ast));
+          extraData.OkLabel   = Environment.MakeLabel($"$(structure.GetType().Name)_$(owner.State)_Ok");
+          extraData.FailLabel = Environment.MakeLabel($"$(structure.GetType().Name)_$(owner.State)_Fail");
+        }
+
         def fields = structure.Fields;
         foreach (field in fields)
           initField(field);
+
+        match (fields.Find(field => !(field is RuleStructureField.Predicate)))
+        {
+          | Some(field) => extraData.AllocateState = field.State
+          | None()      => assert(false)
+        }
       }
       and initField(field : RuleStructureField)
       {
+        def extraData = RuleStructureFieldData(this, field);
+        extraData.ParseLabel    = Environment.MakeLabel($"Parse_$(field.GetType().Name)_$(field.State)");
         match (field)
         {
-          | Option           (rule)                     => initStructure(rule);
-          | List             (rule, _, _)               => initStructure(rule);
-          | Predicate        (rule, _)                  => initStructure(rule);
-          | ListWithSeparator(rule, separator, _, _, _) => initStructure(rule); initStructure(separator);
+          | Option           (rule)                     => initStructure(rule, field);
+          | List             (rule, _, _)               => initStructure(rule, field);
+          | Predicate        (rule, _)                  => initStructure(rule, field);
+          | ListWithSeparator(rule, separator, _, _, _) => initStructure(rule, field); initStructure(separator, field);
           | _ => ()
         }
       }
-      initStructure(ast);
+      initStructure(ast, null);
+    }
+
+    _ruleStructureData : Hashtable[RuleStructure, RuleStructureData] = Hashtable();
+
+    private Data(ruleStructure : RuleStructure) : RuleStructureData
+    {
+      _ruleStructureData[ruleStructure]
+    }
+
+    _ruleStructureFieldData : Hashtable[RuleStructureField, RuleStructureFieldData] = Hashtable();
+
+    private Data(ruleStructureField : RuleStructureField) : RuleStructureFieldData
+    {
+      _ruleStructureFieldData[ruleStructureField]
     }
   }
 }
