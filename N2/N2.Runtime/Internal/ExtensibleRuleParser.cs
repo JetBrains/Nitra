@@ -122,7 +122,7 @@ namespace N2.Internal
           if (parser.ast[prefixAst + PrefixOfs.Id] == PrefixId)
           {
             bestResult = parser.ast[prefixAst + PrefixOfs.List];
-            if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == -1)
+            if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == ~int.MaxValue)
             {
               //TODO: убрать цикл
               i = bestResult + AstOfs.Sizes;
