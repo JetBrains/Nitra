@@ -1,10 +1,10 @@
-﻿//  class OutliningWalkerGenerator
-using N2.Runtime;
+﻿using N2.Runtime;
 using N2.Model;
 using N2.Typing;
 
 using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -20,58 +20,62 @@ namespace N2.Compiler
   {
     public Environment : EmitterEnvironment { get; }
 
-    public override Name : string { get StandardWalkerTypes.Highlighter }
+    public override Name : string { get StandardWalkerTypes.Outlining }
 
     public override SupportsVoidRules : bool { get true }
 
     public override GetSignature(_rule : RuleSymbol) : WalkerSignature
     {
       WalkerSignature(
-        [
-          <[ parameter: _spans    : System.Collections.Generic.List[N2.OutliningInfo] ]>,
-          <[ parameter: _startPos : int ]>,
-          <[ parameter: _endPos   : int ]>
-        ],
+        [<[ parameter: _spans    : System.Collections.Generic.List[N2.OutliningInfo] ]>],
         <[ void ]>);
+    }
+
+    static IsBeginOutlineMarker(field : RuleStructureField) : bool
+    {
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_impl"
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_begin" => true
+      | _ => false
+    }
+
+    static IsImplementationMarker(field : RuleStructureField) : bool
+    {
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_impl" => true
+      | _ => false
+    }
+
+    static IsEndOutlineMarker(field : RuleStructureField) : bool
+    {
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_end" => true
+      | _ => false
     }
 
     protected override GetRuleValue(field : RuleStructureField, parentAstPointer : AstPointerAllocator) : PExpr
     {
-      def fieldLocCode = GetRangeOf(field, parentAstPointer);
-
       match (field)
       {
         | SimpleCall(ruleSymbol) with bp = 0
         | ExtensibleCall(ruleSymbol, bp) =>
-          <[
-            if ($fieldLocCode.IntersectsWith(_startPos, _endPos))
-              $(CallSyntaxRule(ruleSymbol, bp, <[ _spans ]>, <[ _startPos ]>, <[ _endPos ]>))
-            else
-              $(Skip(field, parentAstPointer))
-          ]>
-
-        | TokenCall(symbol) =>
-          if (symbol.Options.SpanClassSymbol != null)
-            <[
-              def loc = $fieldLocCode;
-              when (loc.IntersectsWith(_startPos, _endPos))
-                _spans.Add(N2.SpanInfo(loc, $(MakeSpanClassFieldName(symbol.Options.SpanClassSymbol))));
-              $(Skip(field, parentAstPointer))
-            ]>
+          def code = CallSyntaxRule(ruleSymbol, bp, <[ _spans ]>);
+          if (ruleSymbol.Type is RuleType.Void && IsBeginOutlineMarker(field.NextSibling))
+            <[ outlineSpanStart = pos;
+               $code ]>
           else
-            Skip(field, parentAstPointer)
-
-        | TokenString =>
-          def rule = field.SrcRule :> Rule.String;
-          if (rule.SpanClassOpt is Some(spanClass))
+            code
+          
+        | Marker => 
+          if (IsBeginOutlineMarker(field))
             <[
-              when ($fieldLocCode.IntersectsWith(_startPos, _endPos))
-                _spans.Add(N2.SpanInfo($fieldLocCode, $(MakeSpanClassFieldName(spanClass))));
-              $(Skip(field, parentAstPointer))
+              when (outlineSpanStart < 0)
+                outlineSpanStart = pos;
             ]>
+          else if (IsEndOutlineMarker(field))
+            <[ _spans.Add(N2.OutliningInfo(N2.NToken(outlineSpanStart, pos), true, isImplementation)); ]>
           else
-            Skip(field, parentAstPointer)
+            <[ () ]>
 
+        
+        | TokenString | TokenCall => Skip(field, parentAstPointer)
         | Option as field =>
           GetOptionValue(
             field            = field,
@@ -97,7 +101,6 @@ namespace N2.Compiler
             returnCode       = <[ () ]>,
             emptyCode        = <[ () ]>);
 
-        | Marker => <[ () ]>
         | Predicate => <[ () ]>
       }
     }
@@ -117,22 +120,23 @@ namespace N2.Compiler
     protected override GetSyntaxRuleValue(ruleSymbol : SyntaxRuleSymbol, astPointer : AstPointerAllocator) : PExpr
     {
       def ruleStruct = ruleSymbol.Structure;
+      def outlineCount = ruleStruct.Fields.Count(IsBeginOutlineMarker);
       def statementsList = List();
 
+      when (outlineCount > 0)
+      {
+        def isImplementation = ruleStruct.Fields.Exists(IsImplementationMarker);
+        statementsList.Add(<[ mutable outlineSpanStart = -1; def isImplementation = $isImplementation; ]>);
+        when (outlineCount > 1)
+          Message.Error(ruleSymbol.FirstLocation.ToNemerleLocation(), "Currently not supported more than one outline region on rule.");
+      }
+        
       foreach (field in ruleStruct.Fields)
         statementsList.Add(GetRuleValue(field, astPointer));
-
+        
       def statements = statementsList.NToList();
-
-      if (ruleSymbol.Options.SpanClassSymbol != null)
-        <[
-          { ..$statements }
-          def loc = N2.NToken(__startPos, pos);
-          when (loc.IntersectsWith(_startPos, _endPos))
-            _spans.Add(N2.SpanInfo(loc, $(MakeSpanClassFieldName(ruleSymbol.Options.SpanClassSymbol))))
-        ]>
-      else
-        <[ { ..$statements } ]>
+      
+      <[ { ..$statements } ]>
     }
 
     public override PrefixAmbiguity(_ruleSymbol : ExtensibleRuleSymbol) : PExpr
