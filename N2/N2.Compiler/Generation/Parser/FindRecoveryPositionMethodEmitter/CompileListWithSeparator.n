@@ -1,0 +1,130 @@
+﻿using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal partial class FindRecoveryPositionMethodEmitter : MethodEmitter
+  {
+    public override CompileListWithSeparator(code : SCG.List[PExpr], field : RuleStructureField.ListWithSeparator) : void
+    {
+      def counter = ListItemCounter(this, field);
+      def listStartPos() { <[ $(CreateVariable($"listStartPos$(field.Level)") : dyn) ]> }
+      def listEndPos  () { <[ $(CreateVariable($"listEndPos$(field.Level)") : dyn) ]> }
+      def ifCounterEqualsToMaxThenContinue()
+      {
+        if (field.MaxCount is Some(max))
+          <[
+            when ($(counter.Ref()) == $max)
+              $(Data(field).ContinueParseLabel.Goto());
+          ]>
+        else
+          <[ {} ]>
+      }
+      def ifCounterLessThanMinThenFail()
+      {
+        if (field.MinCount > 0)
+          <[
+            when ($(counter.Ref()) < $(field.MinCount))
+              $(Data(field).FailParseLabel.Goto());
+          ]>
+        else
+          <[ {} ]>
+      }
+      def hangingSeparatorCode = if (field.HangingSeparator)
+        <[
+          $(listEndPos()) = $CurTextPos;
+          $(Data(field.Owner).AstPtr.Set(field, <[ $(listEndPos()) - $(listStartPos()) ]>));
+        ]>
+      else
+        <[ {} ]>;
+
+      def firstRuleChild = field.Rule.Fields[0];
+      def firstSeparatorChild = field.Separator.Fields[0];
+      code.Add(<[
+        $(Data(field).ParseLabel.Label());
+          _ = $(field.SrcRule.ToString());
+          $(AllocateParentAst(field));
+          $(counter.Init());
+          $(listStartPos()) = $CurTextPos;
+          $(listEndPos()) = $CurTextPos;
+          $(Data(field.Rule).AstStart) = $CurTextPos;
+          $(Data(firstRuleChild).ParseLabel.Goto());
+
+        $(Data(field.Rule).OkLabel.Label());
+          $(counter.Inc());
+          $(listEndPos()) = $CurTextPos;
+          $(Data(field.Owner).AstPtr.Set(field, <[ $(listEndPos()) - $(listStartPos()) ]>));
+          $(ifCounterEqualsToMaxThenContinue());
+          $(Data(field.Separator).AstStart) = $CurTextPos;
+          $(Data(firstSeparatorChild).ParseLabel.Goto());
+
+        $(Data(field.Rule).FailLabel.Label());
+          $(ifCounterLessThanMinThenFail());
+          $CurTextPos = $(listEndPos());
+          $(Data(field.Owner).AstPtr.Set(field, <[ $(listEndPos()) - $(listStartPos()) ]>));
+          $(Data(field).ContinueParseLabel.Goto());
+
+        $(Data(field.Separator).OkLabel.Label());
+          $hangingSeparatorCode;
+          $(Data(field.Rule).AstStart) = $CurTextPos;
+          $(Data(firstRuleChild).ParseLabel.Goto());
+
+        $(Data(field.Separator).FailLabel.Label());
+          $(ifCounterLessThanMinThenFail());
+          $CurTextPos = $(listEndPos());
+          $(Data(field.Owner).AstPtr.Set(field, <[ $(listEndPos()) - $(listStartPos()) ]>));
+          $(Data(field).ContinueParseLabel.Goto());
+
+        $(Data(field).RecoveryLabel.Label());
+          $(counter.Init());
+          $(listStartPos()) = $CurTextPos;
+          $(listEndPos()) = $CurTextPos;
+          $(Data(field.Rule).AstStart) = $CurTextPos;
+          when (true)
+          {
+            def listEndPos = $CurTextPos + $(Data(field.Owner).AstPtr.GetSize(field));
+            when ($CurTextPos == listEndPos)
+              $(Data(firstRuleChild).ParseLabel.Goto());
+            mutable itemEndPos = $CurTextPos;
+            mutable isRule = false;
+            while (itemEndPos != listEndPos)
+            {
+              isRule = !isRule;
+              $CurTextPos = itemEndPos;
+              if (isRule)
+              {
+                $(counter.Inc());
+                $(Data(field.Rule).AstPtr.Var) = parser.GetAst($CurTextPos, $(field.Rule.AstId : dyn));
+                itemEndPos += parser.AstSize($(Data(field.Rule).AstPtr.Var), $(field.Rule.SizesStart), $(field.Rule.SizesEnd));
+              }
+              else
+              {
+                $(Data(field.Separator).AstPtr.Var) = parser.GetAst($CurTextPos, $(field.Separator.AstId : dyn));
+                itemEndPos += parser.AstSize($(Data(field.Separator).AstPtr.Var), $(field.Separator.SizesStart), $(field.Separator.SizesEnd));
+              }
+            }
+            _ = "Мы перед последним элеменом цикла. Начинаем парсить хвост...";
+            if (isRule)
+            {
+              $(counter.Dec());
+              $(Data(firstRuleChild).ParseLabel.Goto());
+            }
+            else
+            {
+              $(Data(firstSeparatorChild).ParseLabel.Goto());
+            }
+          }
+      ]>);
+    }
+  }
+}

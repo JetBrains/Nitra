@@ -1,0 +1,94 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+using N = Nemerle.Compiler;
+
+namespace N2.Compiler
+{
+  internal partial class FindRecoveryPositionMethodEmitter : MethodEmitter
+  {
+    public override CompileTokenString(code : SCG.List[PExpr], field : RuleStructureField.TokenString) : void
+    {
+      def str = field.String;
+      def astSize = <[ $(str.Length) ]>;
+      def checkCode = if (str == "")
+      {
+        <[ true ]>
+      }
+      else
+      {
+        def len = str.Length;
+        def check = if (len > 1) <[$CurTextPos + $((len - 1) : int)]> else <[ $CurTextPos ]>;
+
+        def makeCharCheckCode(ch : char, i : int) : PExpr
+        {
+          def index = if (i <= 0) <[ $CurTextPos ]> else <[ $CurTextPos + $(i : int) ]>;
+          <[ text[$index] == $(ch : char) ]>
+        }
+        def exprs = str.Select(makeCharCheckCode);
+        def condExpr = exprs.Aggregate((e1, e2) => <[ $e1 && $e2 ]>);
+        <[ $check < text.Length && $condExpr ]>
+      }
+
+      def (debugSetStart, debugSetEnd, fail, exit) =
+        if (Owner.Environment.Manager.Options.EmitDebug)
+          (<[ parser.LastParseStart = $CurTextPos; ]>,
+            <[ parser.LastParseEnd = $CurTextPos; ]>,
+            <[ parser.LastParseEnd = -1; ]>,
+            <[ () ]>)
+        else
+          (<[ () ]>, <[ () ]>, <[ () ]>, <[ () ]>);
+
+      def loc = field.SrcRule.Location.NLocation();
+      when (!loc.IsEmpty && loc.IsSourceAvailable)
+      {
+        checkCode.Location = loc;
+        // Make the location directly behind the rule call. This allows you to see the result of the parsing rules.
+        exit.Location = N.Location(loc.FileIndex, loc.EndLine, loc.EndColumn, loc.Line, loc.EndColumn + 1);
+      }
+
+      code.Add(
+      <[
+      $(Data(field).ParseLabel.Label());
+        _ = $(field.SrcRule.ToString());
+        $debugSetStart;
+        if ($checkCode)
+        {
+          $(AllocateParentAst(field));
+          $(Data(field.Owner).AstPtr.Set(field, <[ $astSize ]>));
+          $CurTextPos += $astSize;
+          $debugSetEnd;
+          $exit;
+          $(Data(field).ContinueParseLabel.Goto());
+        }
+        else
+        {
+          $(RecoveryCode());
+          parseState = $(field.State : int);
+          $fail;
+          $exit;
+          $(Data(field).FailParseLabel.Goto());
+        }
+
+      $(Data(field).RecoveryLabel.Label());
+        when (true)
+        {
+          def parseResult = N2.ParseResult(parser, null, parser.Source);
+          def reflection = parser.parserHost.Reflection(parseResult, $CurTextPos);
+          assert2(false);
+          ignore(reflection);
+        }
+        throw System.NotImplementedException("Recovery not implemented.");
+      ]>)
+    }
+  }
+}

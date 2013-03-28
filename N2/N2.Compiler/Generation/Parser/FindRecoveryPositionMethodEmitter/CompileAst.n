@@ -1,0 +1,78 @@
+﻿using N2.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal partial class FindRecoveryPositionMethodEmitter : MethodEmitter
+  {
+    public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
+    {
+      def code = SCG.List();
+      def endLabel = Environment.MakeLabel("EndParse");
+
+      code.Add(<[ _ = $(ruleStructure.SrcRule.ToString()) ]>);
+      if (ruleStructure.Symbol is SimpleRuleSymbol)
+        code.Add(<[
+          $(AstPtr(ruleStructure).Var) = parser.TryGetAst($CurTextPos, RuleId);
+          if ($(AstPtr(ruleStructure).Var) > 0)
+            parseState = parser.ast[$(AstPtr(ruleStructure).Var) + 2];
+          else
+            parseState = 0;
+        ]>)
+      else
+        code.Add(<[
+          $(AstPtr(ruleStructure).Var) = astPtr;
+          parseState = parser.ast[astPtr + 2];
+        ]>);
+
+      foreach (field in ruleStructure.Fields)
+      {
+        when (field.NextSibling != null)
+        {
+          def skip = if (field is RuleStructureField.Predicate)
+            <[ assert(false) ]>;
+          else
+            <[ $CurTextPos += $(AstPtr(field.Owner).GetSize(field)) ]>;
+          code.Add(<[
+            if (parseState >= $(field.NextSibling.EndState))
+              $skip;
+            else
+              $(GotoRecoveryLabel(field))
+          ]>);
+        }
+      }
+      code.Add(<[ assert2(false); assert(false) ]>);
+
+      //parse ok
+      code.Add(<[ $(OkLabel(ruleStructure)); ]>);
+      code.Add(<[ $(endLabel.Goto()); ]>);
+
+      //parse fail
+      code.Add(<[ $(FailLabel(ruleStructure)); ]>);
+      code.Add(<[ $(endLabel.Goto()); ]>);
+      CompileFields(code, ruleStructure.Fields);
+
+      code.Add(<[ $(endLabel.Label()); $CurTextPos; ]>);
+
+      def variables = SCG.List();
+      variables.Add(<[
+        mutable parseState : int; _ = parseState;
+        mutable newPos     : int; _ = newPos;
+      ]>);
+      variables.AddRange(LocalVariables.Filter(_ != "resultRef").Map(name => <[ mutable $(name : dyn) ]>));
+
+      variables.Concat(code).FlattenPExpr();
+    }
+  }
+}
