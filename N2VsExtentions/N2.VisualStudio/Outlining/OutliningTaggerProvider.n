@@ -1,6 +1,7 @@
 ﻿using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Tagging;
+using Microsoft.VisualStudio.Utilities;
 using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Text;
@@ -8,251 +9,31 @@ using Nemerle.Utility;
 
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.Composition;
 using System.Linq;
 
 namespace N2.VisualStudio.Outlining
 {
-    [Export(typeof(ITaggerProvider)), ContentType(PythonCoreConstants.ContentType)]
-    [TagType(typeof(IOutliningRegionTag))]
-    class OutliningTaggerProvider : ITaggerProvider
-    {
-      public CreateTagger[T](buffer : ITextBuffer) : ITagger[T]
-        where T : ITag
-      {
-        (buffer.GetOutliningTagger() ?? OutliningTagger(buffer)) :> ITagger[T];
-      }
-    }
+  [Export(typeof(ITaggerProvider))]
+  [ContentType("text")]
+  [TagType(typeof(IOutliningRegionTag))]
+  class OutliningTaggerProvider : ITaggerProvider
+  {
+    [Import]
+    private N2GlobalConfig : IN2GlobalConfig { get; set; }
     
-    module OutliningTaggerProviderExtensions
+    public CreateTagger[T](buffer : ITextBuffer) : ITagger[T]
+      where T : ITag
     {
-      public GetOutliningTagger(this self : ITextView) : OutliningTagger
+      match (N2GlobalConfig.GetLanguageForTextBuffer(buffer))
       {
-        self.TextBuffer.GetOutliningTagger();
-      }
- 
-      public GetOutliningTagger(this self : ITextBuffer) : OutliningTagger
-      {
-          mutable res;
-          if (self.Properties.TryGetProperty.[OutliningTagger](typeof(OutliningTagger), out res))
-            res
-          else
-            null
-      }
+        | VSome(language) =>
+          def outliningTagger = OutliningTagger(N2GlobalConfig, language, buffer);
+          buffer.Properties[typeof(OutliningTagger)] = outliningTagger;
+          outliningTagger :> ITagger[T]
+          
+        | VNone           => null
+      }      
     }
-    
-    internal class OutliningTagger : ITagger[IOutliningRegionTag]
-    {
-      private _buffer      : ITextBuffer;
-      private _timer       : Timer;
-      private mutable _enabled     : bool;
-      private _eventHooked : bool;
- 
-      public this(buffer : ITextBuffer)
-      {
-        _buffer = buffer;
-        _buffer.Properties[typeof(OutliningTagger)] = this;
-        when (PythonToolsPackage.Instance != null)
-          _enabled = PythonToolsPackage.Instance.AdvancedEditorOptionsPage.EnterOutliningModeOnOpen;
-
-        _timer = Timer(TagUpdate, null, Timeout.Infinite, Timeout.Infinite);                
-      }
- 
-      public Enabled : bool
-      {
-        get { _enabled }
-      }
- 
-      public Enable() : void
-      {
-        _enabled = true;
-        def snapshot = _buffer.CurrentSnapshot;
-        def tagsChanged = TagsChanged;
-        if (tagsChanged != null)
-            tagsChanged(this, SnapshotSpanEventArgs(SnapshotSpan(snapshot, Span(0, snapshot.Length))));
-      }
- 
-      public Disable() : void
-      {
-          _enabled = false;
-          def snapshot = _buffer.CurrentSnapshot;
-          def tagsChanged = TagsChanged;
-          if (tagsChanged != null) {
-              tagsChanged(this, new SnapshotSpanEventArgs(new SnapshotSpan(snapshot, new Span(0, snapshot.Length))));
-          }
-      }
- 
-      public GetTags(spans : NormalizedSnapshotSpanCollection) : Seq[ITagSpan[IOutliningRegionTag]]
-      {
-        array(0)
-      }
- 
-      private void OnNewParseTree(object sender, EventArgs e) {
-          IPythonProjectEntry classifier;
-          if (_buffer.TryGetPythonAnalysis(out classifier)) {                    
-              _timer.Change(300, Timeout.Infinite);
-          }
-      }
- 
-      private void TagUpdate(object unused) {
-          _timer.Change(Timeout.Infinite, Timeout.Infinite);
-          def snapshot = _buffer.CurrentSnapshot;
-          def tagsChanged = TagsChanged;
-          if (tagsChanged != null) {
-              tagsChanged(this, new SnapshotSpanEventArgs(new SnapshotSpan(snapshot, new Span(0, snapshot.Length))));
-          }
-      }
- 
-      private IEnumerable[ITagSpan[IOutliningRegionTag]] ProcessSuite(NormalizedSnapshotSpanCollection spans, PythonAst ast, SuiteStatement suite, ITextSnapshot snapshot, bool isTopLevel) {
-          if (suite != null) {
-              // TODO: Binary search the statements?  The perf of this seems fine for the time being
-              // w/ a 5000+ line file though.                    
-              foreach (def statement in suite.Statements) {
-                  SnapshotSpan? span = ShouldInclude(statement, spans);
-                  if (span == null) {
-                      continue;
-                  }
- 
-                  FunctionDefinition funcDef = statement as FunctionDefinition;
-                  if (funcDef != null) {
-                      TagSpan tagSpan = GetFunctionSpan(ast, snapshot, funcDef);
- 
-                      if (tagSpan != null) {
-                          yield return tagSpan;
-                      }
- 
-                      // recurse into the class definition and outline it's members
-                      foreach (def v in ProcessSuite(spans, ast, funcDef.Body as SuiteStatement, snapshot, false)) {
-                          yield return v;
-                      }
-                  }
- 
-                  ClassDefinition classDef = statement as ClassDefinition;
-                  if (classDef != null) {
-                      TagSpan tagSpan = GetClassSpan(ast, snapshot, classDef);
- 
-                      if (tagSpan != null) {
-                          yield return tagSpan;
-                      }
- 
-                      // recurse into the class definition and outline it's members
-                      foreach (def v in ProcessSuite(spans, ast, classDef.Body as SuiteStatement, snapshot, false)) {
-                          yield return v;
-                      }
-                  }
- 
-                  if (isTopLevel) {
-                      IfStatement ifStmt = statement as IfStatement;
-                      if (ifStmt != null) {
-                          TagSpan tagSpan = GetIfSpan(ast, snapshot, ifStmt);
- 
-                          if (tagSpan != null) {
-                              yield return tagSpan;
-                          }
-                      }
- 
-                      WhileStatement whileStatment = statement as WhileStatement;
-                      if (whileStatment != null) {
-                          TagSpan tagSpan = GetWhileSpan(ast, snapshot, whileStatment);
- 
-                          if (tagSpan != null) {
-                              yield return tagSpan;
-                          }
-                      }
- 
-                      ForStatement forStatement = statement as ForStatement;
-                      if (forStatement != null) {
-                          TagSpan tagSpan = GetForSpan(ast, snapshot, forStatement);
- 
-                          if (tagSpan != null) {
-                              yield return tagSpan;
-                          }
-                      }
-                  }
-              }
-          }
-      }
- 
-      private static TagSpan GetForSpan(PythonAst ast, ITextSnapshot snapshot, ForStatement forStmt) {
-          if (forStmt.List != null) {
-              return GetTagSpan(snapshot, forStmt.StartIndex, forStmt.EndIndex, forStmt.List.EndIndex - forStmt.StartIndex + 1);
-          }
-          return null;
-      }
- 
-      private static TagSpan GetWhileSpan(PythonAst ast, ITextSnapshot snapshot, WhileStatement whileStmt) {
-          return GetTagSpan(
-              snapshot, 
-              whileStmt.StartIndex, 
-              whileStmt.EndIndex, 
-              whileStmt.Test.EndIndex - whileStmt.StartIndex + 1
-          );
-      }
- 
-      private static TagSpan GetIfSpan(PythonAst ast, ITextSnapshot snapshot, IfStatement ifStmt) {
-          return GetTagSpan(snapshot, ifStmt.StartIndex, ifStmt.EndIndex, ifStmt.Tests[0].HeaderIndex - ifStmt.StartIndex + 1);
-      }
- 
-      private static TagSpan GetFunctionSpan(PythonAst ast, ITextSnapshot snapshot, FunctionDefinition funcDef) {
-          return GetTagSpan(snapshot, funcDef.StartIndex, funcDef.EndIndex, funcDef.HeaderIndex - funcDef.StartIndex + 1);
-      }
- 
-      private static TagSpan GetClassSpan(PythonAst ast, ITextSnapshot snapshot, ClassDefinition classDef) {
-          return GetTagSpan(snapshot, classDef.StartIndex, classDef.EndIndex, classDef.HeaderIndex - classDef.StartIndex + 1);
-      }
- 
-      private static TagSpan GetTagSpan(ITextSnapshot snapshot, int start, int end, int testLen) {
-          TagSpan tagSpan = null;
-          try {
-              if (start != -1 && end != -1) {
-                  int length = end - start - testLen;
-                  if (length ] 0) {
-                      def span = GetFinalSpan(snapshot,
-                          start + testLen,
-                          length
-                      );
- 
-                      tagSpan = new TagSpan(
-                          new SnapshotSpan(snapshot, span),
-                          new OutliningTag(snapshot, span, false)
-                      );
-                  }
-              }
-          } catch (ArgumentException) {
-              // sometimes Python's parser gives usbad spans, ignore those and fix the parser
-              Debug.Assert(false, "bad argument when making span/tag");
-          }
- 
-          return tagSpan;
-      }
- 
-      private static Span GetFinalSpan(ITextSnapshot snapshot, int start, int length) {
-          Debug.Assert(start + length [= snapshot.Length);
-          int cnt = 0;
-          def text = snapshot.GetText(start, length);
- 
-          // remove up to 2 \r\n's if we just end with these, this will leave a space between the methods
-          while (length ] 0 && ((Char.IsWhiteSpace(text[length - 1])) || ((text[length - 1] == '\r' || text[length - 1] == '\n') && cnt++ [ 4))) {
-              length--;
-          }
-          return new Span(start, length);
-      }
- 
-      private SnapshotSpan? ShouldInclude(Statement statement, NormalizedSnapshotSpanCollection spans) {
-          if (spans.Count == 1 && spans[0].Length == spans[0].Snapshot.Length) {
-              // we're processing the entire snapshot
-              return spans[0];
-          }
- 
-          for (int i = 0; i [ spans.Count; i++) {
-              if (spans[i].IntersectsWith(Span.FromBounds(statement.StartIndex, statement.EndIndex))) {
-                  return spans[i];
-              }
-          }
-          return null;
-      }
- 
-      public event EventHandler[SnapshotSpanEventArgs] TagsChanged;
- 
-      #endregion
-    }    
+  }
 }
