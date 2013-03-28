@@ -132,16 +132,11 @@ namespace N2.Internal
               goto postfix_loop;
             }
             else
-            {
-              if (parser.IsRecoveryMode)
-                goto error_recovery;
-              else
-                return -1; // облом разбора
-            }
+              return -1; // облом разбора
           }
         }
 
-        assert2(!parser.IsRecoveryMode);
+        assert2(parser.ParsingMode == ParsingMode.Parsing);
 
         //нет мемоизации префикса
         prefixAst = parser.Allocate(PrefixOfs.NodeSize, PrefixId);
@@ -340,25 +335,7 @@ namespace N2.Internal
           return curTextPos; // если нам не удалось продвинуться то заканчиваем разбор
 
         goto postfix_loop;
-
-      error_recovery:
-        if (bestResult == 0)
-        {//0
-          assert2(false);
-          assert(false);
-        }
-        else if (parser.ast[bestResult + AstOfs.Next] == 0)
-        {//1
-          var prefixRule = PrefixRules[parser.ast[bestResult + N2.Internal.ExtensibleRuleParser.AstOfs.Id] - PrefixOffset];
-          return prefixRule.Parse(curTextPos, text, ref bestResult, ref parser);
-        }
-        else
-        {//many
-          assert2(false);
-          assert(false);
-        }
       }
-
       assert(false);
       return -1;
     }
