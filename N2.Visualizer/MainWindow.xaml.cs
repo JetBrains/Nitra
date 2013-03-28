@@ -14,6 +14,7 @@ using ICSharpCode.AvalonEdit.Highlighting;
 using Microsoft.Win32;
 using N2.Runtime.Reflection;
 using N2.Visualizer.Properties;
+using ICSharpCode.AvalonEdit.Folding;
 
 namespace N2.Visualizer
 {
@@ -30,10 +31,13 @@ namespace N2.Visualizer
     HighlightErrorBackgroundRender _errorHighlighter;
     Timer _parseTimer;
     Dictionary<string, HighlightingColor> _highlightingStyles;
+    N2FoldingStrategy _foldingStrategy;
+    FoldingManager _foldingManager;
 
     public MainWindow()
     {
       InitializeComponent();
+      _foldingStrategy = new N2FoldingStrategy();
       _parseTimer = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
       _parseTimer.Elapsed += new ElapsedEventHandler(_parseTimer_Elapsed);
 
@@ -48,6 +52,8 @@ namespace N2.Visualizer
         { "Operator", new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
         { "String",   new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
       };
+
+      _foldingManager = FoldingManager.Install(textBox1.TextArea);
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -383,6 +389,10 @@ namespace N2.Visualizer
         _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
 
       textBox1.TextArea.TextView.Redraw(DispatcherPriority.Input);
+
+      _foldingStrategy.ParseResult = _parseResult;
+      _foldingStrategy.UpdateFoldings(_foldingManager, textBox1.Document);
+
       TryReportError();
       ShowInfo();
     }
