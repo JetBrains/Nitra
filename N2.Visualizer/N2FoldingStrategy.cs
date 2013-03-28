@@ -26,7 +26,7 @@ namespace N2.Visualizer
       {
         var newFolding = new NewFolding
         {
-          DefaultClosed = false,
+          DefaultClosed = o.IsDefaultCollapsed,
           StartOffset = o.Span.StartPos,
           EndOffset = o.Span.EndPos
         };
