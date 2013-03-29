@@ -326,23 +326,11 @@ namespace N2.Visualizer
       }
     }
 
-    private List<GrammarDescriptor> LoadAssembly(string assemblyFilePath)
+    private GrammarDescriptor[] LoadAssembly(string assemblyFilePath)
     {
-      var asm = Assembly.LoadFrom(assemblyFilePath);
-      var grammarAttrs = (GrammarsAttribute[])asm.GetCustomAttributes(typeof(GrammarsAttribute), false);
-      var grammars = new List<GrammarDescriptor>();
-
+      var assembly = Assembly.LoadFrom(assemblyFilePath);
       Settings.Default.LastAssemblyFilePath = assemblyFilePath;
-
-      foreach (var attr in grammarAttrs)
-        foreach (var grammarType in attr.Grammars)
-        {
-          var descProperty = grammarType.GetProperty("StaticDescriptor", BindingFlags.Public | BindingFlags.Static);
-          var grammarDescriptor = (GrammarDescriptor)descProperty.GetValue(null, null);
-          grammars.Add(grammarDescriptor);
-        }
-
-      return grammars;
+      return GrammarDescriptor.GetDescriptors(assembly);
     }
 
     private void LoadRule(RuleDescriptor ruleDescriptor)
