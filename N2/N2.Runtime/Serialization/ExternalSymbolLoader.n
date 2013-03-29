@@ -1,0 +1,81 @@
+﻿using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using N2.Runtime;
+using N2.Typing;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Serialization
+{
+  public class ExternalSymbolLoader : IDisposable
+  {
+    public this()
+    {
+      this(ExternalSymbolConstructorRegistry());
+    }
+
+    public this([NotNull] registry : ExternalSymbolConstructorRegistry)
+    {
+      Registry = registry;
+    }
+
+    public Registry : ExternalSymbolConstructorRegistry { get; }
+
+    private         _initialReaders : List[MetadataReader * Location] = List();
+    private mutable _isDisposed     : bool;
+    private mutable _isLoaded       : bool;
+
+    public AddSource([NotNull] reader : MetadataReader, location : Location) : void
+      requires !_isDisposed otherwise throw ObjectDisposedException("ExternalSymbolLoader")
+      requires !_isLoaded otherwise throw InvalidOperationException("Symbols already loaded")
+    {
+      _initialReaders.Add(reader, location);
+    }
+
+    public Load() : void
+      requires !_isDisposed otherwise throw ObjectDisposedException("ExternalSymbolLoader")
+      requires !_isLoaded otherwise throw InvalidOperationException("Symbols already loaded")
+    {
+      def readerWithCreatedSymbols = List();
+
+      // create symbols from all readers
+      foreach ((reader, location) in _initialReaders)
+        try
+        {
+          reader.CreateSymbols();
+          readerWithCreatedSymbols.Add(reader, location);
+        }
+        catch { | e => ReportSymbolLoadFailure(reader, e, location); }
+
+      // read symbol bodies from readers that succeeded symbol creation
+      foreach ((reader, location) in readerWithCreatedSymbols)
+        try reader.ReadSymbols();
+        catch { | e => ReportSymbolLoadFailure(reader, e, location); }
+
+      _isLoaded = true;
+    }
+
+    public Dispose() : void
+    {
+      unless (_isDisposed)
+      {
+        // dispose all readers
+        foreach ((reader, _) in _initialReaders)
+          reader.Dispose();
+
+        _isDisposed = true;
+      }
+    }
+
+    protected virtual ReportSymbolLoadFailure(reader : MetadataReader, exception : Exception, location : Location) : void
+    {
+      reader.Project.Warning(location, $"Failed to read metadata from referenced assembly: $(exception.Message)", -1);
+    }
+  }
+}
