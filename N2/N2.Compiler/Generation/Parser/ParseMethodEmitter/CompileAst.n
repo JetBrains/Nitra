@@ -31,33 +31,24 @@ namespace N2.Compiler
       }
       def checkAstMemoize = if (ruleStructure.Symbol is SimpleRuleSymbol)
         <[
-          when ($CurTextPos <= text.Length)
+          $(AstPtr(ruleStructure).Var) = parser.TryGetAst($CurTextPos, RuleId);
+          when ($(AstPtr(ruleStructure).Var) > 0)
           {
-            for (mutable ast = parser.memoize[$CurTextPos]; ast > 0; ast = parser.ast[ast + 1])
+            parseState = $(AstPtr(ruleStructure).Get(ruleStructure.HeaderState));
+            if (parseState == N2.Internal.Parser.AstParsedState)
             {
-              when (parser.ast[ast] == RuleId)
-              {
-                parseState = parser.ast[ast + 2];
-                if (parseState == N2.Internal.Parser.AstParsedState)
-                {
-                  mutable i = ast + $(ruleStructure.SizesStart);
-                  mutable end = ast + $(ruleStructure.SizesEnd);
-                  for (; i < end; ++i)
-                    $CurTextPos += parser.ast[i];
-                  $(endLabel.Goto());
-                }
-                else
-                {
-                  when (parseState < 0)
-                  {
-                    parseState = ~parseState;
-                    $(AstPtr(ruleStructure).Var) = ast;
-                    $(recoveryLabel.Goto());
-                  }
-                  $CurTextPos = -1;
-                  $(endLabel.Goto());
-                }
-              }
+              $CurTextPos += parser.AstSize($(AstPtr(ruleStructure).Var), $(ruleStructure.SizesStart), $(ruleStructure.SizesEnd));
+              $(endLabel.Goto());
+            }
+            else if (parseState < 0)
+            {
+              parseState = ~parseState;
+              $(recoveryLabel.Goto());
+            }
+            else
+            {
+              $CurTextPos = -1;
+              $(endLabel.Goto());
             }
           }
         ]>
@@ -104,34 +95,30 @@ namespace N2.Compiler
       CompileFields(code, ruleStructure.Fields);
 
       code.Add(recoveryLabel.Label());
-      //code.Add(<[ assert2(false) ]>);
       foreach (field in ruleStructure.NotMarkerFields)
       {
-        when (field.NextSibling != null)
-        {
-          def skip = if (field is RuleStructureField.Predicate)
-            <[ assert(false) ]>;
+        def skip = if (field is RuleStructureField.Predicate)
+          <[ assert(false) ]>;
+        else
+          <[ $CurTextPos += $(AstPtr(field.Owner).GetSize(field)) ]>;
+        code.Add(<[
+          if (parseState >= $(field.EndState))
+            $skip;
           else
-            <[ $CurTextPos += $(AstPtr(field.Owner).GetSize(field)) ]>;
-          code.Add(<[
-            if (parseState >= $(field.NextSibling.EndState))
-              $skip;
-            else
-              $(GotoRecoveryLabel(field))
-          ]>);
-        }
+            $(GotoRecoveryLabel(field))
+        ]>);
       }
       code.Add(<[ assert2(false); assert(false) ]>);
 
-      if (ruleStructure.Symbol.LastLocation is Some(loc) when Owner.Environment.Manager.Options.EmitDebug)
+      def debugCode = if (ruleStructure.Symbol.LastLocation is Some(loc) when Owner.Environment.Manager.Options.EmitDebug)
       {
-        //assert2(false);
         def debugCode = <[ () ]>;
         debugCode.Location = loc.NLocation();
-        code.Add(<[ $(endLabel.Label()); $debugCode; $loadMaxTextPos; $CurTextPos; ]>);
+        debugCode;
       }
       else
-        code.Add(<[ $(endLabel.Label()); $loadMaxTextPos; $CurTextPos; ]>);
+        <[ {} ]>;
+      code.Add(<[ $(endLabel.Label()); $debugCode; $loadMaxTextPos; $CurTextPos; ]>);
 
       def variables = SCG.List();
       variables.Add(<[
