@@ -19,6 +19,8 @@ namespace N2.Visualizer
       _parseCount = 0;
       _bestResultsCount = 0;
 
+      var allacetionsInfo = new Dictionary<int, int>();
+
       var recoveryStack = parser.RecoveryStack.ToArray();
       var curTextPos    = startTextPos;
       var visited       = new Dictionary<object, int>();
@@ -32,11 +34,12 @@ namespace N2.Visualizer
         {
           var stackFrame = recoveryStack[level];
           var ruleParser = stackFrame.RuleParser;
-          var key        = Tuple.Create(curTextPos, ruleParser);
-          int startState;
-          if (visited.TryGetValue(key, out startState) && startState <= stackFrame.State)
-            continue;
-          visited[key] = stackFrame.State;
+
+          //var key = Tuple.Create(curTextPos, ruleParser);
+          //int startState;
+          //if (visited.TryGetValue(key, out startState) && startState <= stackFrame.State)
+          //  continue;
+          //visited[key] = stackFrame.State;
             
           var lastState = stackFrame.RuleParser.StatesCount - 1;
             
@@ -44,7 +47,17 @@ namespace N2.Visualizer
           {
             parser.MaxTextPos = startTextPos;
             _parseCount++;
+
+            var startAllocated = parser.allocated;
+
             var pos = ruleParser.TryParse(stackFrame.AstPtr, curTextPos, text, ref parser, state);
+
+            var allocated = parser.allocated - startAllocated;
+            int count = 0;
+            allacetionsInfo.TryGetValue(allocated, out count);
+            count++;
+            allacetionsInfo[allocated] = count;
+            
             if (pos > curTextPos || pos == text.Length)
             {
               var pos2 = ContinueParse(level + 1, pos, recoveryStack, ref parser);
@@ -61,7 +74,7 @@ namespace N2.Visualizer
 
         curTextPos++;
       }
-      while (/*res.Count == 0 && */ /*(res.Count == 0 || curTextPos - startTextPos < 10) &&*/ curTextPos <= text.Length);
+      while (/*_bestResult == null && _bestResult == null && (res.Count == 0 || curTextPos - startTextPos < 10) &&*/ curTextPos <= text.Length);
 
       return _bestResult;
     }
@@ -70,8 +83,19 @@ namespace N2.Visualizer
     {
       _bestResultsCount++;
 
-      if (_bestResult == null || endPos > _bestResult.EndPos || startPos < _bestResult.StartPos || stackLevel < _bestResult.StackLevel || startState < _bestResult.StartState)
+      if (_bestResult == null) goto good;
+      if (endPos > _bestResult.EndPos) goto good;
+      if (endPos < _bestResult.EndPos) goto bad;
+      if (startPos < _bestResult.StartPos) goto good;
+      if (startPos > _bestResult.StartPos) goto bad;
+      if (stackLevel < _bestResult.StackLevel) goto good;
+      if (stackLevel > _bestResult.StackLevel) goto bad;
+      if (startState < _bestResult.StartState) goto good;
+      if (startState > _bestResult.StartState) goto bad;
+      goto bad;
+    good:
         _bestResult = new RecoveryResult(startPos, endPos, startState, stackLevel, stackFrame, text, fail);
+    bad:;
     }
 
     int ContinueParse(int level, int startTextPos, RecoveryStackFrame[] recoveryStack, ref Parser parser)
