@@ -340,6 +340,7 @@ namespace N2.Visualizer
 
       _ruleDescriptor = ruleDescriptor;
       _parserHost = new ParserHost();
+      _parserHost.RecoveryStrategy = new Recovery().Strategy;
       _parseResult = null;
 
       treeView1.Items.Clear();

@@ -154,75 +154,105 @@ namespace N2.Internal
     {
       when (!IgnoreRecovery)
       {
-        def res = SCG.List();
-        def recoveryStack = RecoveryStack.ToArray();
-        mutable curTextPos = startTextPos;
+        def recoveryStrategy = this.parserHost.RecoveryStrategy;
+        
+        def bestResult =
+          if (recoveryStrategy != null)
+            recoveryStrategy(startTextPos, this)
+          else
+          {
+            def res = SCG.List();
+            def recoveryStack = RecoveryStack.ToArray();
+            mutable curTextPos = startTextPos;
 
-        this.ParsingMode = ParsingMode.Parsing;
+            this.ParsingMode = ParsingMode.Parsing;
 
-        def continueParse(level : int, startTextPos : int) : int
-        {
-          when (level >= recoveryStack.Length)
-            return startTextPos;
+            def continueParse(level : int, startTextPos : int) : int
+            {
+              when (level >= recoveryStack.Length)
+                return startTextPos;
 
           def stackFrame = recoveryStack[level];
-          def pos3 = 
+              def pos3 = 
             if (stackFrame.State + 1 >= stackFrame.RuleParser.StatesCount)
-              startTextPos
-            else
+                  startTextPos
+                else
               stackFrame.RuleParser.TryParse(stackFrame.AstPtr, startTextPos, Text, ref this, stackFrame.State + 1);
 
-          if (pos3 >= 0)
-            continueParse(level + 1, pos3)
-          else
-            Math.Max(MaxTextPos, startTextPos);
-        }
+              if (pos3 >= 0)
+                continueParse(level + 1, pos3)
+              else
+                Math.Max(MaxTextPos, startTextPos);
+            }
         
-        while (/*res.Count == 0 && */ /**/(res.Count == 0 || curTextPos - startTextPos < 10) &&/**/ curTextPos < Text.Length)
-        {
-          foreach (r in recoveryStack with level)
-          {
-            def lastState = r.RuleParser.StatesCount - 1;
-            
-            for (mutable state = r.State; state <= lastState; state++)
+            def visited = Hashtable();
+            def text = Text;
+            do
             {
-              this.MaxTextPos = startTextPos;
-              def pos = r.RuleParser.TryParse(r.AstPtr, curTextPos, Text, ref this, state);
-              if (pos > curTextPos)
+              foreach (r in recoveryStack with level)
               {
-                def pos2 = continueParse(level + 1, pos);
-                res.Add(RecoveryResult(curTextPos, pos2,        state, level, r));
+                def lastState = r.RuleParser.StatesCount - 1;
+                def ruleParser = r.RuleParser;
+                def key = (curTextPos, ruleParser);
+                mutable startState;
+                when (visited.TryGetValue(key, out startState) && startState <= r.State)
+                  continue;
+                visited[key] = r.State;
+            
+            
+                for (mutable state = r.State + 1; state <= lastState; state++)
+                {
+              
+                  this.MaxTextPos = startTextPos;
+                  def pos = ruleParser.TryParse(r.AstPtr, curTextPos, text, ref this, state);
+                  if (pos > curTextPos || pos == Text.Length)
+                  {
+                    def pos2 = continueParse(level + 1, pos);
+                    res.Add(RecoveryResult(curTextPos, pos2,        state, level, r, text, startTextPos));
+                  }
+                  else if (MaxTextPos > curTextPos)
+                    res.Add(RecoveryResult(curTextPos, MaxTextPos, state, level, r, text, startTextPos));
+                  else
+                  {
+                  }
+                }
               }
-              else if (MaxTextPos > curTextPos)
-                res.Add(RecoveryResult(curTextPos, MaxTextPos, state, level, r));
+
+              curTextPos++;
+            }
+            while (/*res.Count == 0 && */ /*(res.Count == 0 || curTextPos - startTextPos < 10) &&*/ curTextPos <= Text.Length);
+
+            def filterMax(res, func : RecoveryResult -> int) : array[RecoveryResult]
+            {
+              if (res.Length == 0)
+                res
               else
               {
+                def max = res.Max(func);
+                def bestResults = res.Filter(x => func(x) == max);
+                bestResults.ToArray()
               }
             }
-          }
+            def filterMin(res, func : RecoveryResult -> int) : array[RecoveryResult]
+            {
+              if (res.Length == 0)
+                res
+              else
+              {
+                def min = res.Min(func);
+                def bestResults = res.Filter(x => func(x) == min);
+                bestResults.ToArray()
+              }
+            }
 
-          curTextPos++;
-        }
+            def bestResults1 = filterMax(res.ToArray(), x => x.EndPos);
+            def bestResults2 = filterMin(bestResults1,  x => x.StartPos);
+            def bestResults3 = filterMin(bestResults2,  x => x.StackLevel);
+            def bestResults4 = filterMin(bestResults3,  x => x.StartState);
+            assert(bestResults4.Length == 1);
+            bestResults4[0]
+          };
 
-        def filterMax(res, func : RecoveryResult -> int) : array[RecoveryResult]
-        {
-          def max = res.Max(func);
-          def bestResults = res.Filter(x => func(x) == max);
-          bestResults.ToArray()
-        }
-        def filterMin(res, func : RecoveryResult -> int) : array[RecoveryResult]
-        {
-          def min = res.Min(func);
-          def bestResults = res.Filter(x => func(x) == min);
-          bestResults.ToArray()
-        }
-
-        def bestResults1 = filterMax(res.ToArray(), x => x.EndPos);
-        def bestResults2 = filterMin(bestResults1,  x => x.StartPos);
-        def bestResults3 = filterMin(bestResults2,  x => x.StackLevel);
-        def bestResults4 = filterMin(bestResults3,  x => x.StartState);
-        assert(bestResults4.Length == 1);
-        def bestResult = bestResults4[0];
         _ = bestResult;
 
         this.ParsingMode = ParsingMode.EndRecovery;
