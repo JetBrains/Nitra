@@ -122,7 +122,7 @@ namespace N2.Internal
           if (parser.ast[prefixAst + PrefixOfs.Id] == PrefixId)
           {
             bestResult = parser.ast[prefixAst + PrefixOfs.List];
-            if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == ~int.MaxValue)
+            if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == Parser.AstParsedState)
             {
               //TODO: убрать цикл
               i = bestResult + AstOfs.Sizes;
@@ -218,7 +218,7 @@ namespace N2.Internal
               //ищем лучшее правило
               while (bestResult > 0 && (parser.ast[bestResult] & PostfixMask.Mark) != PostfixMark.Best)
                 bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
-              if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == ~int.MaxValue)//Убеждаемся что разбор успешный
+              if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == Parser.AstParsedState)//Убеждаемся что разбор успешный
               {
                 bestEndPos = curTextPos;
                 //TODO: убрать цикл
@@ -247,7 +247,7 @@ namespace N2.Internal
               // ищем лучшее правило среди тех у кого подходящая сила связывания.
               while (bestResult > 0 && (parser.ast[bestResult] & PostfixMask.Mark) != PostfixMark.Best)
                 bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
-              if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == ~int.MaxValue)//Убеждаемся что разбор успешный
+              if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == Parser.AstParsedState)//Убеждаемся что разбор успешный
               {
                 bestEndPos = curTextPos;
                 //TODO: убрать цикл
