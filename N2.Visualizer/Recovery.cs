@@ -103,49 +103,59 @@ namespace N2.Visualizer
           AddResult(curTextPos, parser.MaxTextPos, state, recoveryStack, text, startTextPos);
         else
         {
-          if (subruleLevel > 0)
-            continue;
-          _nestedLevel++;
-          if (_nestedLevel > 20)
+          if (subruleLevel <= 0)
           {
-            
-            continue;
+            if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
+              continue;
+            _nestedLevel++;
+
+            var parsers = ruleParser.GetParsersForState(state);
+            foreach (var subRuleParser in parsers)
+            {
+              var old = recoveryStack;
+              const int startState = 0;
+              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, startState, stackFrame.AstPtr, listDataPos: 0));
+              ProcessStackFrame(startTextPos, ref parser, recoveryStack, curTextPos, text, subruleLevel + 1);
+              recoveryStack = old; // remove top element
+            }
+
+            _nestedLevel--;
           }
-          var parsers = ruleParser.GetParsersForState(state);
-          foreach (var subRuleParser in parsers)
-          {
-            var old = recoveryStack;
-            const int startState = 0;
-            recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, startState, stackFrame.AstPtr, listDataPos: 0));
-            ProcessStackFrame(startTextPos, ref parser, recoveryStack, curTextPos, text, subruleLevel + 1);
-            recoveryStack = old; // remove top element
-          }
-          _nestedLevel--;
         }
       }
     }
 
-    void AddResult(int startPos, int endPos, int startState, RecoveryStack stack, string text, int fail)
+    void AddResult(int startPos, int endPos, int startState, RecoveryStack stack, string text, int failPos)
     {
       _bestResultsCount++;
 
       int stackLength = 0;
 
-      if (_bestResult == null)                 goto good;
-      if (endPos     > _bestResult.EndPos)     goto good;
-      if (endPos     < _bestResult.EndPos)     return;
-      if (startPos   < _bestResult.StartPos)   goto good;
-      if (startPos   > _bestResult.StartPos)   return;
+      if (_bestResult == null)                   goto good;
+      var skipedCount = startPos - failPos;
+
+      if (skipedCount < _bestResult.SkipedCount) goto good;
+      if (skipedCount > _bestResult.SkipedCount) return;
+
+      if (endPos     > _bestResult.EndPos)       goto good;
+      if (endPos     < _bestResult.EndPos)       return;
+
+      if (startPos   < _bestResult.StartPos)     goto good;
+      if (startPos   > _bestResult.StartPos)     return;
 
       stackLength = stack.Length;
       var bestResultStackLevel = this._bestResult.StackLevel;
 
-      if (stackLength > bestResultStackLevel)  goto good;
-      if (stackLength < bestResultStackLevel)  return;
-      if (startState < _bestResult.StartState) goto good;
+      if (stackLength > bestResultStackLevel)    goto good;
+      if (stackLength < bestResultStackLevel)    return;
+      if (startState < _bestResult.StartState)   goto good;
+      if (startState == _bestResult.StartState)  goto good2;
       return;
     good:
-      _bestResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, fail);
+      _bestResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos);
+      return;
+    good2:
+      return;
     }
 
     int ContinueParse(int startTextPos, RecoveryStack recoveryStack, ref Parser parser, string text)
