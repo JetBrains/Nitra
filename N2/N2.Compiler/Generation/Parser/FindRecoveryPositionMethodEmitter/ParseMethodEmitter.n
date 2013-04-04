@@ -65,17 +65,60 @@ namespace N2.Compiler
 
     public RecoveryStackFrameScope(field : RuleStructureField, code : PExpr) : PExpr
     {
-      def pos = CreateVariable("listDataPosition");
+      def lists = SCG.List();
+      def collectLists(field : RuleStructureField)
+      {
+        when (field != null)
+        {
+          match (field)
+          {
+            | List              as field when field.UseCounter => lists.Add(field);
+            | ListWithSeparator as field when field.UseCounter => lists.Add(field);
+            | _ => ()
+          }
+          collectLists(field?.Owner?.Owner);
+        }
+      }
+      collectLists(field);
+      def (save, addData, getPos, removeCounters) = if (lists.Count > 0)
+      {
+        lists.Reverse();
+        def makeAdd(field : RuleStructureField)
+        {
+          def listStateData = match (field)
+          {
+            | List              as field when field.UseCounter => ListStateData(this, field)
+            | ListWithSeparator as field when field.UseCounter => ListStateData(this, field)
+            | _ => assert(false);
+          }
+          <[ parser.ListData.Add(N2.Internal.RecoveryListData($(listStateData.ListStartPos), $(listStateData.ListEndPos), $(listStateData.Counter))) ]>
+        }
+        def pos            = CreateVariable("listDataPosition");
+        def save           = <[ $(pos : dyn) = parser.ListData.Count ]>;
+        def addData        = <[ { ..$(lists.Map(makeAdd)) } ]>;
+        def getPos         = <[ $(pos : dyn) ]>;
+        def removeCounters = <[ parser.ListData.RemoveRange($(pos : dyn), $(lists.Count)) ]>;
+        (save, addData, getPos, removeCounters)
+      }
+      else
+      {
+        def save           = <[ {} ]>;
+        def addData        = <[ {} ]>;
+        def getPos         = <[ parser.ListData.Count ]>;
+        def removeCounters = <[ {} ]>;
+        (save, addData, getPos, removeCounters)
+      }
       <[
-        $(pos : dyn) = parser.ListData.Count;
-        parser.RecoveryStack.Push(N2.Internal.RecoveryStackFrame(this, $(field.State), $(AstPtr(RuleStructure).Var), $(pos : dyn)));
+        $save;
+        $addData;
+        parser.RecoveryStack.Push(N2.Internal.RecoveryStackFrame(this, $(field.State), $(AstPtr(RuleStructure).Var), $getPos));
         $code;
         if (parser.ParsingMode == N2.Internal.ParsingMode.EndRecovery)
           $(EndLabel.Goto());
         else
         {
           _ = parser.RecoveryStack.Pop();
-          parser.ListData.RemoveRange($(pos : dyn), parser.ListData.Count - $(pos : dyn));
+          $removeCounters;
         }
       ]>
     }
