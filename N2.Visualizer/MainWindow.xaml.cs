@@ -17,6 +17,7 @@ using N2.Visualizer.Properties;
 using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.AddIn;
 using ICSharpCode.SharpDevelop.Editor;
+using System.Windows.Input;
 
 namespace N2.Visualizer
 {
@@ -32,14 +33,16 @@ namespace N2.Visualizer
     bool _doChangeCaretPos;
     Timer _parseTimer;
     Dictionary<string, HighlightingColor> _highlightingStyles;
-    TextMarkerService _textMakerService; 
+    TextMarkerService _textMarkerService; 
     N2FoldingStrategy _foldingStrategy;
     FoldingManager _foldingManager;
+    ToolTip _textBox1Tooltip;
 
     public MainWindow()
     {
       InitializeComponent();
       _foldingStrategy = new N2FoldingStrategy();
+      _textBox1Tooltip = new ToolTip() { PlacementTarget = textBox1 };
       _parseTimer = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
       _parseTimer.Elapsed += new ElapsedEventHandler(_parseTimer_Elapsed);
 
@@ -55,9 +58,9 @@ namespace N2.Visualizer
       };
 
       _foldingManager = FoldingManager.Install(textBox1.TextArea);
-      _textMakerService = new TextMarkerService(textBox1.Document);
-      textBox1.TextArea.TextView.BackgroundRenderers.Add(_textMakerService);
-      textBox1.TextArea.TextView.LineTransformers.Add(_textMakerService);
+      _textMarkerService = new TextMarkerService(textBox1.Document);
+      textBox1.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
+      textBox1.TextArea.TextView.LineTransformers.Add(_textMarkerService);
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -154,7 +157,7 @@ namespace N2.Visualizer
 
     private void TryReportError()
     {
-      _textMakerService.RemoveAll(_ => true);
+      _textMarkerService.RemoveAll(_ => true);
 
       if (_parseResult.IsSuccess)
       {
@@ -164,7 +167,7 @@ namespace N2.Visualizer
 
       var errPos = _parseResult.LastSuccessPos;
 
-      var marker = _textMakerService.Create(errPos, 1);
+      var marker = _textMarkerService.Create(errPos, 1);
       marker.MarkerType = TextMarkerType.SquigglyUnderline;
       marker.MarkerColor = Colors.Red;
       marker.ToolTip = "Parse error";
@@ -263,6 +266,7 @@ namespace N2.Visualizer
     private void textBox1_TextChanged(object sender, EventArgs e)
     {
       _parseTimer.Stop();
+      _textBox1Tooltip.IsOpen = false;
       _parseTimer.Start();
     }
 
@@ -420,6 +424,27 @@ namespace N2.Visualizer
           e.Sections.Add(section);
         }
       }
+    }
+
+    private void textBox1_MouseHover(object sender, MouseEventArgs e)
+    {
+      var pos = textBox1.TextArea.TextView.GetPositionFloor(e.GetPosition(textBox1.TextArea.TextView) + textBox1.TextArea.TextView.ScrollOffset);
+      if (pos.HasValue)
+      {
+        var offset = textBox1.Document.GetOffset(new TextLocation(pos.Value.Line, pos.Value.Column));
+        var markersAtOffset = _textMarkerService.GetMarkersAtOffset(offset);
+        var markerWithToolTip = markersAtOffset.FirstOrDefault(marker => marker.ToolTip != null);
+        if (markerWithToolTip != null)
+        {
+          _textBox1Tooltip.Content = markerWithToolTip.ToolTip;
+          _textBox1Tooltip.IsOpen = true;
+        }
+      }
+    }
+
+    private void textBox1_MouseHoverStopped(object sender, MouseEventArgs e)
+    {
+      _textBox1Tooltip.IsOpen = false;
     }
   }
 }
