@@ -368,22 +368,38 @@ namespace N2.Visualizer
       if (_parserHost == null)
         return;
 
-      var source = new SourceSnapshot(textBox1.Text);
+      try
+      {
+        var source = new SourceSnapshot(textBox1.Text);
 
-      var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
+        var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
 
-      if (simpleRule != null)
-        _parseResult = _parserHost.DoParsing(source, simpleRule);
-      else
-        _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
+        if (simpleRule != null)
+          _parseResult = _parserHost.DoParsing(source, simpleRule);
+        else
+          _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
 
-      textBox1.TextArea.TextView.Redraw(DispatcherPriority.Input);
+        textBox1.TextArea.TextView.Redraw(DispatcherPriority.Input);
 
-      _foldingStrategy.ParseResult = _parseResult;
-      _foldingStrategy.UpdateFoldings(_foldingManager, textBox1.Document);
+        _foldingStrategy.ParseResult = _parseResult;
+        _foldingStrategy.UpdateFoldings(_foldingManager, textBox1.Document);
 
-      TryReportError();
-      ShowInfo();
+        TryReportError();
+        ShowInfo();
+      }
+      catch (TypeLoadException ex)
+      {
+        MessageBox.Show(this, ex.Message);
+      }
+      catch (ErrorException ex)
+      {
+        var recovery = ex.Recovery;
+        if (recovery == null)
+          return;
+
+        _errorHighlighter.ErrorPos = recovery.FailPos;
+        _errorHighlighter.ErrorLen = recovery.SkipedCount == 0 ? 1 : recovery.SkipedCount;
+      }
     }
 
     private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)

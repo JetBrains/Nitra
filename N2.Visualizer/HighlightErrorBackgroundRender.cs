@@ -20,6 +20,8 @@ namespace N2.Visualizer
       set { _errorPos = value; /*_editor.TextView.Redraw();*/ }
     }
 
+    public int ErrorLen { get; set; }
+
     public HighlightErrorBackgroundRender(TextEditor editor)
     {
       _editor = editor;
@@ -38,7 +40,7 @@ namespace N2.Visualizer
 
       textView.EnsureVisualLines();
 
-      var segment = new Segment(_errorPos, _editor.Text.Length); //GetLineByOffset(_errorPos);
+      var segment = new Segment(_errorPos, _errorPos + ErrorLen); //GetLineByOffset(_errorPos);
 
       foreach (var rect in BackgroundGeometryBuilder.GetRectsForSegment(textView, segment))
       {

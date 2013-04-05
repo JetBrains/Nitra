@@ -11,11 +11,28 @@ using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
 
 namespace N2.Visualizer
 {
+  class ErrorException : Exception
+  {
+    public ErrorException(RecoveryResult recovery)
+    {
+      Recovery = recovery;
+    }
+    public RecoveryResult Recovery { get; private set; }
+  }
+
   static class Utils
   {
     public static RecoveryStack Push(this RecoveryStack stack, RecoveryStackFrame elem)
     {
       return new RecoveryStack(elem, stack);
+    }
+
+    public static int Inc<T>(this Dictionary<T, int> heshtable, T key)
+    {
+      int value;
+      heshtable.TryGetValue(key, out value);
+      heshtable[key] = value;
+      return value;
     }
   }
 
@@ -23,23 +40,28 @@ namespace N2.Visualizer
   {
     RecoveryResult       _bestResult;
     int                  _parseCount;
+    int                  _recCount;
     int                  _bestResultsCount;
     int                  _nestedLevel;
     Dictionary<int, int> _allacetionsInfo = new Dictionary<int, int>();
+    Dictionary<object, int> _visited = new Dictionary<object, int>();
+    Dictionary<string, int> _parsedRules = new Dictionary<string, int>();
 
     void Reset()
     {
       _bestResult = null;
       _parseCount = 0;
+      _recCount = 0;
       _bestResultsCount = 0;
       _nestedLevel = 0;
       _allacetionsInfo.Clear();
+      _visited = new Dictionary<object, int>();
+      _parsedRules = new Dictionary<string, int>();
     }
 
     public RecoveryResult Strategy(int startTextPos, Parser parser)
     {
       Reset();
-      var visited = new Dictionary<object, int>();
       var timer = System.Diagnostics.Stopwatch.StartNew();
       var recoveryStack = parser.RecoveryStack.NToList();
       var curTextPos    = startTextPos;
@@ -53,11 +75,13 @@ namespace N2.Visualizer
           ProcessStackFrame(startTextPos, ref parser, stack, curTextPos, text, 0);
         curTextPos++;
       }
-      while (/*_bestResult == null && _bestResult == null && (res.Count == 0 || curTextPos - startTextPos < 10) &&*/ curTextPos <= text.Length);
+      while (curTextPos - startTextPos < 800 && /*_bestResult == null && _bestResult == null && (res.Count == 0 || curTextPos - startTextPos < 10) &&*/ curTextPos <= text.Length);
 
       timer.Stop();
+      var ex = new ErrorException(_bestResult);
       Reset();
-      return _bestResult;
+      throw ex;
+      //return _bestResult;
     }
 
     private void ProcessStackFrame(
@@ -70,14 +94,18 @@ namespace N2.Visualizer
     {
       var stackFrame = recoveryStack.Head;
       var ruleParser = stackFrame.RuleParser;
+      var lastState  = stackFrame.RuleParser.StatesCount - 1;
 
-      //var key = Tuple.Create(curTextPos, ruleParser);
-      //int startState;
-      //if (visited.TryGetValue(key, out startState) && startState <= stackFrame.State)
-      //  continue;
-      //visited[key] = stackFrame.State;
+      var key = Tuple.Create(curTextPos, ruleParser);
+      int startState;
+      if (_visited.TryGetValue(key, out startState))
+      {
+        if (startState <= stackFrame.State)
+          return;
 
-      var lastState = stackFrame.RuleParser.StatesCount - 1;
+        lastState = startState;
+      }
+      _visited[key] = stackFrame.State;
 
       for (var state = stackFrame.State; state <= lastState; state++)
       {
@@ -85,6 +113,8 @@ namespace N2.Visualizer
         _parseCount++;
         var startAllocated = parser.allocated;
         int pos;
+
+        var cnt = _parsedRules.Inc(ruleParser.RuleName);
 
         pos = ruleParser.TryParse(stackFrame.AstPtr, curTextPos, text, ref parser, state);
 
@@ -103,7 +133,7 @@ namespace N2.Visualizer
           AddResult(curTextPos, parser.MaxTextPos, state, recoveryStack, text, startTextPos);
         else
         {
-          if (subruleLevel <= 0)
+          if (subruleLevel <= 0 && curTextPos != startTextPos)
           {
             if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
               continue;
@@ -113,8 +143,8 @@ namespace N2.Visualizer
             foreach (var subRuleParser in parsers)
             {
               var old = recoveryStack;
-              const int startState = 0;
-              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, startState, stackFrame.AstPtr, listDataPos: 0));
+              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, stackFrame.AstPtr, listDataPos: 0));
+              _recCount++;
               ProcessStackFrame(startTextPos, ref parser, recoveryStack, curTextPos, text, subruleLevel + 1);
               recoveryStack = old; // remove top element
             }
