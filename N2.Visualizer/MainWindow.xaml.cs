@@ -15,6 +15,8 @@ using Microsoft.Win32;
 using N2.Runtime.Reflection;
 using N2.Visualizer.Properties;
 using ICSharpCode.AvalonEdit.Folding;
+using ICSharpCode.AvalonEdit.AddIn;
+using ICSharpCode.SharpDevelop.Editor;
 
 namespace N2.Visualizer
 {
@@ -28,9 +30,9 @@ namespace N2.Visualizer
     RuleDescriptor _ruleDescriptor;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
-    HighlightErrorBackgroundRender _errorHighlighter;
     Timer _parseTimer;
     Dictionary<string, HighlightingColor> _highlightingStyles;
+    TextMarkerService _textMakerService; 
     N2FoldingStrategy _foldingStrategy;
     FoldingManager _foldingManager;
 
@@ -41,7 +43,6 @@ namespace N2.Visualizer
       _parseTimer = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
       _parseTimer.Elapsed += new ElapsedEventHandler(_parseTimer_Elapsed);
 
-      _errorHighlighter = new HighlightErrorBackgroundRender(textBox1);
       textBox1.TextArea.Caret.PositionChanged += new EventHandler(Caret_PositionChanged);
 
       _highlightingStyles = new Dictionary<string, HighlightingColor>
@@ -54,6 +55,9 @@ namespace N2.Visualizer
       };
 
       _foldingManager = FoldingManager.Install(textBox1.TextArea);
+      _textMakerService = new TextMarkerService(textBox1.Document);
+      textBox1.TextArea.TextView.BackgroundRenderers.Add(_textMakerService);
+      textBox1.TextArea.TextView.LineTransformers.Add(_textMakerService);
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -150,15 +154,21 @@ namespace N2.Visualizer
 
     private void TryReportError()
     {
+      _textMakerService.RemoveAll(_ => true);
+
       if (_parseResult.IsSuccess)
       {
-        _errorHighlighter.ErrorPos = -1;
         _status.Text = "OK";
         return;
       }
 
       var errPos = _parseResult.LastSuccessPos;
-      _errorHighlighter.ErrorPos = errPos;
+
+      var marker = _textMakerService.Create(errPos, 1);
+      marker.MarkerType = TextMarkerType.SquigglyUnderline;
+      marker.MarkerColor = Colors.Red;
+      marker.ToolTip = "Parse error";
+
       var set = new HashSet<string>();
       for (int i = errPos; i >= 0; i--)
       {
