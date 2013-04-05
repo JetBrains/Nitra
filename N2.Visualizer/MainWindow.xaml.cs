@@ -412,9 +412,9 @@ namespace N2.Visualizer
         if (recovery == null)
           return;
 
-        _textMakerService.RemoveAll(_ => true);
+        _textMarkerService.RemoveAll(_ => true);
 
-        var marker = _textMakerService.Create(recovery.FailPos, recovery.SkipedCount);// == 0 ? 1 : recovery.SkipedCount);
+        var marker = _textMarkerService.Create(recovery.FailPos, recovery.SkipedCount);// == 0 ? 1 : recovery.SkipedCount);
         marker.MarkerType = TextMarkerType.SquigglyUnderline;
         marker.MarkerColor = Colors.Red;
         marker.ToolTip = "Parse error: State= " + recovery.StartState + "     " + recovery.Stack.Head;
