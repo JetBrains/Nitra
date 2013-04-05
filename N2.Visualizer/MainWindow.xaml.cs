@@ -403,12 +403,19 @@ namespace N2.Visualizer
       }
       catch (ErrorException ex)
       {
+        _parseResult = null;
         var recovery = ex.Recovery;
         if (recovery == null)
           return;
 
-        _errorHighlighter.ErrorPos = recovery.FailPos;
-        _errorHighlighter.ErrorLen = recovery.SkipedCount == 0 ? 1 : recovery.SkipedCount;
+        _textMakerService.RemoveAll(_ => true);
+
+        var marker = _textMakerService.Create(recovery.FailPos, recovery.SkipedCount);// == 0 ? 1 : recovery.SkipedCount);
+        marker.MarkerType = TextMarkerType.SquigglyUnderline;
+        marker.MarkerColor = Colors.Red;
+        marker.ToolTip = "Parse error: State= " + recovery.StartState + "     " + recovery.Stack.Head;
+        _status.Text = "Parse error: State= " + recovery.StartState + "     " + recovery.Stack.Head;
+        ShowInfo();
       }
     }
 

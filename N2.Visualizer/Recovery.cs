@@ -129,11 +129,16 @@ namespace N2.Visualizer
           var pos2 = ContinueParse(pos, recoveryStack, ref parser, text);
           AddResult(curTextPos,              pos2, state, recoveryStack, text, startTextPos);
         }
+        else if (pos == curTextPos && state == lastState)
+        {
+          var pos2 = ContinueParse(pos, recoveryStack, ref parser, text);
+          AddResult(curTextPos, pos2, state, recoveryStack, text, startTextPos);
+        }
         else if (parser.MaxTextPos > curTextPos)
           AddResult(curTextPos, parser.MaxTextPos, state, recoveryStack, text, startTextPos);
         else
         {
-          if (subruleLevel <= 0 && curTextPos != startTextPos)
+          if (subruleLevel <= 0 && curTextPos == startTextPos)
           {
             if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
               continue;
@@ -143,7 +148,7 @@ namespace N2.Visualizer
             foreach (var subRuleParser in parsers)
             {
               var old = recoveryStack;
-              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, stackFrame.AstPtr, listDataPos: 0));
+              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, stackFrame.AstPtr, 0, false));
               _recCount++;
               ProcessStackFrame(startTextPos, ref parser, recoveryStack, curTextPos, text, subruleLevel + 1);
               recoveryStack = old; // remove top element
@@ -196,10 +201,11 @@ namespace N2.Visualizer
         return startTextPos;
 
       var recoveryInfo = tail.Head;
-      var pos3 = 
-        recoveryInfo.State + 1 >= recoveryInfo.RuleParser.StatesCount
+      var nextState = recoveryInfo.IsList ? recoveryInfo.State : recoveryInfo.State + 1;
+      var pos3 =
+        nextState >= recoveryInfo.RuleParser.StatesCount
           ? startTextPos
-          : recoveryInfo.RuleParser.TryParse(recoveryInfo.AstPtr, startTextPos, text, ref parser, recoveryInfo.State + 1);
+          : recoveryInfo.RuleParser.TryParse(recoveryInfo.AstPtr, startTextPos, text, ref parser, nextState);
 
       if (pos3 >= 0)
         return ContinueParse(pos3, tail, ref parser, text);
