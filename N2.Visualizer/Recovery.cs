@@ -134,7 +134,7 @@ namespace N2.Visualizer
           AddResult(curTextPos, parser.MaxTextPos, state, recoveryStack, text, startTextPos);
         else
         {
-          if (subruleLevel <= 0 && curTextPos == startTextPos)
+          if (subruleLevel <= 0)
           {
             if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
               continue;
@@ -160,19 +160,25 @@ namespace N2.Visualizer
     {
       _bestResultsCount++;
 
-      int stackLength = -1;
-
-      if (_bestResult == null)                   goto good;
+      int stackLength = stack.Length;
       var skipedCount = startPos - failPos;
 
-      if (skipedCount < _bestResult.SkipedCount) goto good;
-      if (skipedCount > _bestResult.SkipedCount) return;
+      var newResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos);
+
+      if (newResult.SkipedCount > 0)
+      {
+      }
+
+      if (_bestResult == null)                   goto good;
 
       if (endPos     > _bestResult.EndPos)       goto good;
       if (endPos     < _bestResult.EndPos)       return;
 
       if (startPos   < _bestResult.StartPos)     goto good;
       if (startPos   > _bestResult.StartPos)     return;
+
+      if (skipedCount < _bestResult.SkipedCount) goto good;
+      if (skipedCount > _bestResult.SkipedCount) return;
 
       stackLength = stack.Length;
       var bestResultStackLength = this._bestResult.StackLength;
@@ -183,8 +189,6 @@ namespace N2.Visualizer
       if (startState == _bestResult.StartState)  goto good2;
       return;
     good:
-      if (stackLength < 0)
-        stackLength = stack.Length;
       _bestResults.Clear();
       _bestResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos);
       _bestResults.Add(_bestResult);
