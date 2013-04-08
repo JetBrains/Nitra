@@ -148,7 +148,7 @@ namespace N2.Visualizer
             foreach (var subRuleParser in parsers)
             {
               var old = recoveryStack;
-              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, stackFrame.AstPtr, 0, false));
+              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, stackFrame.AstPtr, 0, 0));
               _recCount++;
               ProcessStackFrame(startTextPos, ref parser, recoveryStack, curTextPos, text, subruleLevel + 1);
               recoveryStack = old; // remove top element
@@ -164,7 +164,7 @@ namespace N2.Visualizer
     {
       _bestResultsCount++;
 
-      int stackLength = 0;
+      int stackLength = -1;
 
       if (_bestResult == null)                   goto good;
       var skipedCount = startPos - failPos;
@@ -179,14 +179,16 @@ namespace N2.Visualizer
       if (startPos   > _bestResult.StartPos)     return;
 
       stackLength = stack.Length;
-      var bestResultStackLevel = this._bestResult.StackLevel;
+      var bestResultStackLength = this._bestResult.StackLevel;
 
-      if (stackLength > bestResultStackLevel)    goto good;
-      if (stackLength < bestResultStackLevel)    return;
+      if (stackLength > bestResultStackLength)    goto good;
+      if (stackLength < bestResultStackLength)    return;
       if (startState < _bestResult.StartState)   goto good;
       if (startState == _bestResult.StartState)  goto good2;
       return;
     good:
+      if (stackLength < 0)
+        stackLength = stack.Length;
       _bestResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos);
       return;
     good2:
@@ -201,7 +203,7 @@ namespace N2.Visualizer
         return startTextPos;
 
       var recoveryInfo = tail.Head;
-      var nextState = recoveryInfo.IsList ? recoveryInfo.State : recoveryInfo.State + 1;
+      var nextState = recoveryInfo.ContinueState;
       var pos3 =
         nextState >= recoveryInfo.RuleParser.StatesCount
           ? startTextPos
