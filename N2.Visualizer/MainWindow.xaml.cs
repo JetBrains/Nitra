@@ -18,6 +18,7 @@ using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.AddIn;
 using ICSharpCode.SharpDevelop.Editor;
 using System.Windows.Input;
+using N2.Internal;
 
 namespace N2.Visualizer
 {
@@ -27,7 +28,7 @@ namespace N2.Visualizer
   public partial class MainWindow : Window
   {
     ParserHost _parserHost;
-    ParseResult _parseResult;
+    Parser _parseResult;
     RuleDescriptor _ruleDescriptor;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
@@ -181,7 +182,7 @@ namespace N2.Visualizer
           var failed = a.FirstFailedIndex;
           if (failed >= 0)
           {
-            var sate = _parseResult.RawAst[a.AstPointer + 2];
+            var sate = _parseResult.ast[a.AstPointer + 2];
             var calls = a.GetChildren();
             var e = 0;
             var size = 0;
@@ -239,7 +240,7 @@ namespace N2.Visualizer
           treeNode.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
         //if (ruleApplication.FirstFailedIndex > 0)
         //{
-        //  var sate = _parseResult.RawAst[ruleApplication.AstPointer + 2];
+        //  var sate = _parseResult.ast[ruleApplication.AstPointer + 2];
         //  if (sate >= 0)
         //    node.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
         //}
@@ -395,7 +396,7 @@ namespace N2.Visualizer
 
         textBox1.TextArea.TextView.Redraw(DispatcherPriority.Input);
 
-        _foldingStrategy.ParseResult = _parseResult;
+        _foldingStrategy.Parser = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, textBox1.Document);
 
         TryReportError();

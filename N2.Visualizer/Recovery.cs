@@ -82,19 +82,21 @@ namespace N2.Visualizer
       timer.Stop();
 
       //ProcessStackFrame(startTextPos, parser, _bestResult.Stack, _bestResult.StartPos, text, 0);
-      FixAst(_bestResult);
+      FixAst(_bestResult, parser);
       var ex = new ErrorException(_bestResult);
       Reset();
       throw ex;
       //return _bestResult;
     }
 
-    private void FixAst(RecoveryResult result)
+    private void FixAst(RecoveryResult result, Parser parser)
     {
       var frame = result.Stack.Head;
 
       if (result.StartState == frame.State && result.SkipedCount > 0)
       {
+        var refl = parser.ParserHost.Reflection(parser, frame.AstPtr);
+        { }
       }
 
     }
@@ -157,7 +159,7 @@ namespace N2.Visualizer
             foreach (var subRuleParser in parsers)
             {
               var old = recoveryStack;
-              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, stackFrame.AstPtr, 0, 0));
+              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, 0/*stackFrame.AstPtr*/, 0, 0));
               _recCount++;
               ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
               recoveryStack = old; // remove top element
