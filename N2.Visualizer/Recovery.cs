@@ -82,11 +82,21 @@ namespace N2.Visualizer
       timer.Stop();
 
       //ProcessStackFrame(startTextPos, parser, _bestResult.Stack, _bestResult.StartPos, text, 0);
-
+      FixAst(_bestResult);
       var ex = new ErrorException(_bestResult);
       Reset();
       throw ex;
       //return _bestResult;
+    }
+
+    private void FixAst(RecoveryResult result)
+    {
+      var frame = result.Stack.Head;
+
+      if (result.StartState == frame.State && result.SkipedCount > 0)
+      {
+      }
+
     }
 
     private void ProcessStackFrame(
