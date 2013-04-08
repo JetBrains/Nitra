@@ -74,12 +74,15 @@ namespace N2.Visualizer
       do
       {
         for (var stack = recoveryStack as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
-          ProcessStackFrame(startTextPos, ref parser, stack, curTextPos, text, 0);
+          ProcessStackFrame(startTextPos, parser, stack, curTextPos, text, 0);
         curTextPos++;
       }
       while (curTextPos - startTextPos < 800 && /*_bestResult == null && _bestResult == null && (res.Count == 0 || curTextPos - startTextPos < 10) &&*/ curTextPos <= text.Length);
 
       timer.Stop();
+
+      //ProcessStackFrame(startTextPos, parser, _bestResult.Stack, _bestResult.StartPos, text, 0);
+
       var ex = new ErrorException(_bestResult);
       Reset();
       throw ex;
@@ -88,7 +91,7 @@ namespace N2.Visualizer
 
     private void ProcessStackFrame(
       int startTextPos, 
-      ref Parser parser, 
+      Parser parser, 
       RecoveryStack recoveryStack, 
       int curTextPos, 
       string text,
@@ -110,7 +113,7 @@ namespace N2.Visualizer
           if (!_visited.TryGetValue(key, out pos))
           {
             var cnt = _parsedRules.Inc(ruleParser.RuleName);
-            _visited[key] = pos = ruleParser.TryParse(stackFrame.AstPtr, curTextPos, text, ref parser, state);
+            _visited[key] = pos = ruleParser.TryParse(stackFrame.AstPtr, curTextPos, text, parser, state);
           }
         }
 
@@ -122,12 +125,12 @@ namespace N2.Visualizer
 
         if (pos > curTextPos || pos == text.Length)
         {
-          var pos2 = ContinueParse(pos, recoveryStack, ref parser, text);
+          var pos2 = ContinueParse(pos, recoveryStack, parser, text);
           AddResult(curTextPos,              pos2, state, recoveryStack, text, startTextPos);
         }
         else if (pos == curTextPos && state == lastState)
         {
-          var pos2 = ContinueParse(pos, recoveryStack, ref parser, text);
+          var pos2 = ContinueParse(pos, recoveryStack, parser, text);
           AddResult(curTextPos, pos2, state, recoveryStack, text, startTextPos);
         }
         else if (parser.MaxTextPos > curTextPos)
@@ -146,7 +149,7 @@ namespace N2.Visualizer
               var old = recoveryStack;
               recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, stackFrame.AstPtr, 0, 0));
               _recCount++;
-              ProcessStackFrame(startTextPos, ref parser, recoveryStack, curTextPos, text, subruleLevel + 1);
+              ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
               recoveryStack = old; // remove top element
             }
 
@@ -198,7 +201,7 @@ namespace N2.Visualizer
       return;
     }
 
-    int ContinueParse(int startTextPos, RecoveryStack recoveryStack, ref Parser parser, string text)
+    int ContinueParse(int startTextPos, RecoveryStack recoveryStack, Parser parser, string text)
     {
       var tail = recoveryStack.Tail as RecoveryStack;
 
@@ -210,10 +213,10 @@ namespace N2.Visualizer
       var pos3 =
         nextState >= recoveryInfo.RuleParser.StatesCount
           ? startTextPos
-          : recoveryInfo.RuleParser.TryParse(recoveryInfo.AstPtr, startTextPos, text, ref parser, nextState);
+          : recoveryInfo.RuleParser.TryParse(recoveryInfo.AstPtr, startTextPos, text, parser, nextState);
 
       if (pos3 >= 0)
-        return ContinueParse(pos3, tail, ref parser, text);
+        return ContinueParse(pos3, tail, parser, text);
       else
         return Math.Max(parser.MaxTextPos, startTextPos);
     }
