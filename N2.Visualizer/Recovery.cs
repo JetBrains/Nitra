@@ -39,6 +39,7 @@ namespace N2.Visualizer
   class Recovery
   {
     RecoveryResult       _bestResult;
+    List<RecoveryResult> _bestResults = new List<RecoveryResult>();
     int                  _parseCount;
     int                  _recCount;
     int                  _bestResultsCount;
@@ -50,6 +51,7 @@ namespace N2.Visualizer
     void Reset()
     {
       _bestResult = null;
+      _bestResults.Clear();
       _parseCount = 0;
       _recCount = 0;
       _bestResultsCount = 0;
@@ -96,17 +98,6 @@ namespace N2.Visualizer
       var ruleParser = stackFrame.RuleParser;
       var lastState  = stackFrame.RuleParser.StatesCount - 1;
 
-      var key = Tuple.Create(curTextPos, ruleParser);
-      int startState;
-      if (_visited.TryGetValue(key, out startState))
-      {
-        if (startState <= stackFrame.State)
-          return;
-
-        lastState = startState;
-      }
-      _visited[key] = stackFrame.State;
-
       for (var state = stackFrame.State; state <= lastState; state++)
       {
         parser.MaxTextPos = startTextPos;
@@ -114,9 +105,14 @@ namespace N2.Visualizer
         var startAllocated = parser.allocated;
         int pos;
 
-        var cnt = _parsedRules.Inc(ruleParser.RuleName);
-
-        pos = ruleParser.TryParse(stackFrame.AstPtr, curTextPos, text, ref parser, state);
+        {
+          var key = Tuple.Create(curTextPos, ruleParser, state);
+          if (!_visited.TryGetValue(key, out pos))
+          {
+            var cnt = _parsedRules.Inc(ruleParser.RuleName);
+            _visited[key] = pos = ruleParser.TryParse(stackFrame.AstPtr, curTextPos, text, ref parser, state);
+          }
+        }
 
         var allocated = parser.allocated - startAllocated;
         int count = 0;
@@ -179,7 +175,7 @@ namespace N2.Visualizer
       if (startPos   > _bestResult.StartPos)     return;
 
       stackLength = stack.Length;
-      var bestResultStackLength = this._bestResult.StackLevel;
+      var bestResultStackLength = this._bestResult.StackLength;
 
       if (stackLength > bestResultStackLength)    goto good;
       if (stackLength < bestResultStackLength)    return;
@@ -189,9 +185,12 @@ namespace N2.Visualizer
     good:
       if (stackLength < 0)
         stackLength = stack.Length;
+      _bestResults.Clear();
       _bestResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos);
+      _bestResults.Add(_bestResult);
       return;
     good2:
+      _bestResults.Add(new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos));
       return;
     }
 

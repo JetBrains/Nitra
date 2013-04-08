@@ -417,7 +417,7 @@ namespace N2.Visualizer
         var marker = _textMarkerService.Create(recovery.FailPos, recovery.SkipedCount);// == 0 ? 1 : recovery.SkipedCount);
         marker.MarkerType = TextMarkerType.SquigglyUnderline;
         marker.MarkerColor = Colors.Red;
-        marker.ToolTip = "Parse error: State= " + recovery.StartState + "     " + recovery.Stack.Head;
+        marker.ToolTip = "Parse error: State= " + recovery.StartState + "\r\n  " + string.Join("\r\n    ", recovery.Stack.Select(s => s.ToString()));
         _status.Text = "Parse error: State= " + recovery.StartState + "     " + recovery.Stack.Head;
         ShowInfo();
       }
