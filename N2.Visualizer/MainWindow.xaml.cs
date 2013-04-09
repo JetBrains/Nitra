@@ -42,12 +42,13 @@ namespace N2.Visualizer
     public MainWindow()
     {
       InitializeComponent();
+      _findGrid.Visibility = System.Windows.Visibility.Collapsed;
       _foldingStrategy = new N2FoldingStrategy();
-      _textBox1Tooltip = new ToolTip() { PlacementTarget = textBox1 };
+      _textBox1Tooltip = new ToolTip() { PlacementTarget = _text };
       _parseTimer = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
       _parseTimer.Elapsed += new ElapsedEventHandler(_parseTimer_Elapsed);
 
-      textBox1.TextArea.Caret.PositionChanged += new EventHandler(Caret_PositionChanged);
+      _text.TextArea.Caret.PositionChanged += new EventHandler(Caret_PositionChanged);
 
       _highlightingStyles = new Dictionary<string, HighlightingColor>
       {
@@ -58,16 +59,16 @@ namespace N2.Visualizer
         { "String",   new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
       };
 
-      _foldingManager = FoldingManager.Install(textBox1.TextArea);
-      _textMarkerService = new TextMarkerService(textBox1.Document);
-      textBox1.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
-      textBox1.TextArea.TextView.LineTransformers.Add(_textMarkerService);
+      _foldingManager = FoldingManager.Install(_text.TextArea);
+      _textMarkerService = new TextMarkerService(_text.Document);
+      _text.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
+      _text.TextArea.TextView.LineTransformers.Add(_textMarkerService);
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
       var args = Environment.GetCommandLineArgs();
-      textBox1.Text =
+      _text.Text =
         args.Length > 1
           ? File.ReadAllText(args[1])
           : Settings.Default.LastTextInput;
@@ -98,7 +99,7 @@ namespace N2.Visualizer
 
     private void Window_Closed(object sender, EventArgs e)
     {
-      Settings.Default.LastTextInput = textBox1.Text;
+      Settings.Default.LastTextInput = _text.Text;
     }
 
     private void textBox1_GotFocus(object sender, RoutedEventArgs e)
@@ -108,7 +109,7 @@ namespace N2.Visualizer
 
     void Caret_PositionChanged(object sender, EventArgs e)
     {
-      _pos.Text = textBox1.CaretOffset.ToString();
+      _pos.Text = _text.CaretOffset.ToString();
       ShowNodeForCaret();
     }
 
@@ -120,7 +121,7 @@ namespace N2.Visualizer
       _doChangeCaretPos = true;
       try
       {
-        var node = FindNode(treeView1.Items, textBox1.CaretOffset);
+        var node = FindNode(treeView1.Items, _text.CaretOffset);
 
         if (node != null)
         {
@@ -273,7 +274,7 @@ namespace N2.Visualizer
 
     private void textBox1_LostFocus(object sender, RoutedEventArgs e)
     {
-      textBox1.TextArea.Caret.Show();
+      _text.TextArea.Caret.Show();
     }
 
     private static string MakePath(TreeViewItem item)
@@ -304,8 +305,8 @@ namespace N2.Visualizer
       {
         var info = (ReflectionStruct)item.Tag;
 
-        textBox1.TextArea.AllowCaretOutsideSelection();
-        textBox1.Select(info.Location.StartPos, info.Location.Length);
+        _text.TextArea.AllowCaretOutsideSelection();
+        _text.Select(info.Location.StartPos, info.Location.Length);
       }
       finally
       {
@@ -318,12 +319,13 @@ namespace N2.Visualizer
       this.Close();
     }
 
-    private void ParserLoad_Click(object sender, RoutedEventArgs e)
+    private void ParserLoad(object sender, RoutedEventArgs e)
     {
       var dialog = new OpenFileDialog
       {
         DefaultExt = ".dll",
-        Filter = "Parser module (.dll)|*.dll"
+        Filter = "Parser module (.dll)|*.dll",
+        Title = "Load partser"
       };
       if (!string.IsNullOrEmpty(Settings.Default.LastLoadParserDirectory) && Directory.Exists(Settings.Default.LastLoadParserDirectory))
         dialog.InitialDirectory = Settings.Default.LastLoadParserDirectory;
@@ -361,12 +363,12 @@ namespace N2.Visualizer
       treeView1.Items.Clear();
     }
 
-    private void FileOpen_Click(object sender, RoutedEventArgs e)
+    private void FileOpenExecuted(object sender, RoutedEventArgs e)
     {
       var dialog = new OpenFileDialog { Filter = "C# (.cs)|*.cs|Text (.txt)|*.txt|All|*.*" };
       if (dialog.ShowDialog(this) ?? false)
       {
-        textBox1.Text = File.ReadAllText(dialog.FileName);
+        _text.Text = File.ReadAllText(dialog.FileName);
       }
     }
 
@@ -385,7 +387,7 @@ namespace N2.Visualizer
 
       try
       {
-        var source = new SourceSnapshot(textBox1.Text);
+        var source = new SourceSnapshot(_text.Text);
 
         var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
 
@@ -394,10 +396,10 @@ namespace N2.Visualizer
         else
           _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
 
-        textBox1.TextArea.TextView.Redraw(DispatcherPriority.Input);
+        _text.TextArea.TextView.Redraw(DispatcherPriority.Input);
 
         _foldingStrategy.Parser = _parseResult;
-        _foldingStrategy.UpdateFoldings(_foldingManager, textBox1.Document);
+        _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
 
         TryReportError();
         ShowInfo();
@@ -452,10 +454,10 @@ namespace N2.Visualizer
 
     private void textBox1_MouseHover(object sender, MouseEventArgs e)
     {
-      var pos = textBox1.TextArea.TextView.GetPositionFloor(e.GetPosition(textBox1.TextArea.TextView) + textBox1.TextArea.TextView.ScrollOffset);
+      var pos = _text.TextArea.TextView.GetPositionFloor(e.GetPosition(_text.TextArea.TextView) + _text.TextArea.TextView.ScrollOffset);
       if (pos.HasValue)
       {
-        var offset = textBox1.Document.GetOffset(new TextLocation(pos.Value.Line, pos.Value.Column));
+        var offset = _text.Document.GetOffset(new TextLocation(pos.Value.Line, pos.Value.Column));
         var markersAtOffset = _textMarkerService.GetMarkersAtOffset(offset);
         var markerWithToolTip = markersAtOffset.FirstOrDefault(marker => marker.ToolTip != null);
         if (markerWithToolTip != null)
@@ -469,6 +471,114 @@ namespace N2.Visualizer
     private void textBox1_MouseHoverStopped(object sender, MouseEventArgs e)
     {
       _textBox1Tooltip.IsOpen = false;
+    }
+
+    private void FindCanExecute(object sender, CanExecuteRoutedEventArgs e)
+    {
+      e.CanExecute = true;
+      e.Handled = true;
+    }
+
+    private void FindExecuted(object sender, ExecutedRoutedEventArgs e)
+    {
+      _findGrid.Visibility = System.Windows.Visibility.Visible;
+      _findText.Focus();
+      e.Handled = true;
+    }
+
+    private void _findClose_Click(object sender, RoutedEventArgs e)
+    {
+      _findGrid.Visibility = System.Windows.Visibility.Collapsed;
+    }
+
+    private void CommandBinding_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+    {
+      e.CanExecute = true;
+      e.Handled = true;
+    }
+
+    private void FindNext_Executed(object sender, ExecutedRoutedEventArgs e)
+    {
+      FindNext();
+    }
+
+    private void FindPrev_Executed(object sender, ExecutedRoutedEventArgs e)
+    {
+      FindPrev();
+    }
+
+    private bool FindNext()
+    {
+      var option = GetMatchCaseOption();
+      var toFind = _findText.Text;
+      var text = _text.Text;
+      var index = _text.SelectionStart + _text.SelectionLength - 1;
+
+      do
+      {
+        if (index < text.Length)
+          index++;
+        index = text.IndexOf(toFind, index, option);
+      }
+      while (index >= 0 && !IsWholeWord(text, index, toFind.Length));
+
+      var found = index >= 0;
+      if (found)
+        _text.Select(index, toFind.Length);
+      else
+        _status.Text = "Can't find '" + toFind + "'.";
+
+      return found;
+    }
+
+    private bool FindPrev()
+    {
+      var option = GetMatchCaseOption();
+      var toFind = _findText.Text;
+      var text = _text.Text;
+      var index = _text.SelectionStart;
+
+      do
+      {
+        if (index > 0)
+          index--;
+        index = text.LastIndexOf(toFind, index, option);
+      }
+      while (index >= 0 && !IsWholeWord(text, index, toFind.Length));
+
+      var found = index >= 0;
+
+      if (found)
+        _text.Select(index, toFind.Length);
+      else
+        _status.Text = "Can't find '" + toFind + "'.";
+
+      return found;
+    }
+
+    private bool IsWholeWord(string text, int start, int length)
+    {
+      if (!(_findMatchWholeWord.IsChecked ?? false))
+        return true;
+
+      var end = start + length - 1;
+      
+      if (end < text.Length)
+        if (char.IsLetterOrDigit(text[end]) || text[end] == '_')
+          if (char.IsLetterOrDigit(text[end + 1]) || text[end + 1] == '_')
+            return false;
+
+      if (start > 0)
+        if (char.IsLetterOrDigit(text[start]) || text[start] == '_')
+          if (char.IsLetterOrDigit(text[start - 1]) || text[start - 1] == '_')
+            return false;
+
+      return true;
+    }
+
+    private StringComparison GetMatchCaseOption()
+    {
+      return _findMatchCase.IsChecked ?? false ? StringComparison.InvariantCulture : StringComparison.InvariantCultureIgnoreCase;
     }
   }
 }
