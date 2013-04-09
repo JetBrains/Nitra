@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Document;
+using N2.Internal;
 
 namespace N2.Visualizer
 {
@@ -11,7 +12,7 @@ namespace N2.Visualizer
   {
     public override IEnumerable<NewFolding> CreateNewFoldings(TextDocument document, out int firstErrorOffset)
     {
-      var parseResult = ParseResult;
+      var parseResult = Parser;
       if (parseResult == null)
       {
         firstErrorOffset = 0;
@@ -38,6 +39,6 @@ namespace N2.Visualizer
       return result;
     }
 
-    public ParseResult ParseResult { get; set; }
+    public Parser Parser { get; set; }
   }
 }

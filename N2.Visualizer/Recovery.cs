@@ -1,92 +1,234 @@
 ﻿using N2.Internal;
 
+using Nemerle.Collections;
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 
+using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
+
 namespace N2.Visualizer
 {
+  class ErrorException : Exception
+  {
+    public ErrorException(RecoveryResult recovery)
+    {
+      Recovery = recovery;
+    }
+    public RecoveryResult Recovery { get; private set; }
+  }
+
+  static class Utils
+  {
+    public static RecoveryStack Push(this RecoveryStack stack, RecoveryStackFrame elem)
+    {
+      return new RecoveryStack(elem, stack);
+    }
+
+    public static int Inc<T>(this Dictionary<T, int> heshtable, T key)
+    {
+      int value;
+      heshtable.TryGetValue(key, out value);
+      heshtable[key] = value;
+      return value;
+    }
+  }
+
   class Recovery
   {
-    RecoveryResult _bestResult;
-    int            _parseCount;
-    int            _bestResultsCount;
+    RecoveryResult       _bestResult;
+    List<RecoveryResult> _bestResults = new List<RecoveryResult>();
+    int                  _parseCount;
+    int                  _recCount;
+    int                  _bestResultsCount;
+    int                  _nestedLevel;
+    Dictionary<int, int> _allacetionsInfo = new Dictionary<int, int>();
+    Dictionary<object, int> _visited = new Dictionary<object, int>();
+    Dictionary<string, int> _parsedRules = new Dictionary<string, int>();
+
+    void Reset()
+    {
+      _bestResult = null;
+      _bestResults.Clear();
+      _parseCount = 0;
+      _recCount = 0;
+      _bestResultsCount = 0;
+      _nestedLevel = 0;
+      _allacetionsInfo.Clear();
+      _visited = new Dictionary<object, int>();
+      _parsedRules = new Dictionary<string, int>();
+    }
 
     public RecoveryResult Strategy(int startTextPos, Parser parser)
     {
-      _bestResult = null;
-      _parseCount = 0;
-      _bestResultsCount = 0;
-
-      var recoveryStack = parser.RecoveryStack.ToArray();
+      Reset();
+      var timer = System.Diagnostics.Stopwatch.StartNew();
+      var recoveryStack = parser.RecoveryStack.NToList();
       var curTextPos    = startTextPos;
-      var visited       = new Dictionary<object, int>();
       var text          = parser.Text;
 
       parser.ParsingMode = ParsingMode.Parsing;
         
       do
       {
-        for (var level = 0; level < recoveryStack.Length; level++)
-        {
-          var stackFrame = recoveryStack[level];
-          var ruleParser = stackFrame.RuleParser;
-          var key        = Tuple.Create(curTextPos, ruleParser);
-          int startState;
-          if (visited.TryGetValue(key, out startState) && startState <= stackFrame.State)
-            continue;
-          visited[key] = stackFrame.State;
-            
-          var lastState = stackFrame.RuleParser.StatesCount - 1;
-            
-          for (var state = stackFrame.State; state <= lastState; state++)
-          {
-            parser.MaxTextPos = startTextPos;
-            _parseCount++;
-            var pos = ruleParser.TryParse(stackFrame.AstPtr, curTextPos, text, ref parser, state);
-            if (pos > curTextPos || pos == text.Length)
-            {
-              var pos2 = ContinueParse(level + 1, pos, recoveryStack, ref parser);
-              AddResult(curTextPos, pos2,              state, level, stackFrame, text, startTextPos);
-            }
-            else if (parser.MaxTextPos > curTextPos)
-              AddResult(curTextPos, parser.MaxTextPos, state, level, stackFrame, text, startTextPos);
-            else
-            {
-            }
-          }
-          level++;
-        }
-
+        for (var stack = recoveryStack as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
+          ProcessStackFrame(startTextPos, parser, stack, curTextPos, text, 0);
         curTextPos++;
       }
-      while (/*res.Count == 0 && */ /*(res.Count == 0 || curTextPos - startTextPos < 10) &&*/ curTextPos <= text.Length);
+      while (curTextPos - startTextPos < 800 && /*_bestResult == null && _bestResult == null && (res.Count == 0 || curTextPos - startTextPos < 10) &&*/ curTextPos <= text.Length);
 
-      return _bestResult;
+      timer.Stop();
+
+      //ProcessStackFrame(startTextPos, parser, _bestResult.Stack, _bestResult.StartPos, text, 0);
+      FixAst(_bestResult, parser);
+      var ex = new ErrorException(_bestResult);
+      Reset();
+      throw ex;
+      //return _bestResult;
     }
 
-    void AddResult(int startPos, int endPos, int startState, int stackLevel, RecoveryStackFrame stackFrame, string text, int fail)
+    private void FixAst(RecoveryResult result, Parser parser)
+    {
+      var frame = result.Stack.Head;
+
+      if (result.StartState == frame.State && result.SkipedCount > 0)
+      {
+        var refl = parser.ParserHost.Reflection(parser, frame.AstPtr);
+        { }
+      }
+
+    }
+
+    private void ProcessStackFrame(
+      int startTextPos, 
+      Parser parser, 
+      RecoveryStack recoveryStack, 
+      int curTextPos, 
+      string text,
+      int subruleLevel)
+    {
+      var stackFrame = recoveryStack.Head;
+      var ruleParser = stackFrame.RuleParser;
+      var lastState  = stackFrame.RuleParser.StatesCount - 1;
+
+      for (var state = stackFrame.State; state <= lastState; state++)
+      {
+        parser.MaxTextPos = startTextPos;
+        _parseCount++;
+        var startAllocated = parser.allocated;
+        int pos;
+
+        {
+          var key = Tuple.Create(curTextPos, ruleParser, state);
+          if (!_visited.TryGetValue(key, out pos))
+          {
+            var cnt = _parsedRules.Inc(ruleParser.RuleName);
+            _visited[key] = pos = ruleParser.TryParse(stackFrame.AstPtr, curTextPos, text, parser, state);
+          }
+        }
+
+        var allocated = parser.allocated - startAllocated;
+        int count = 0;
+        _allacetionsInfo.TryGetValue(allocated, out count);
+        count++;
+        _allacetionsInfo[allocated] = count;
+
+        if (pos > curTextPos || pos == text.Length)
+        {
+          var pos2 = ContinueParse(pos, recoveryStack, parser, text);
+          AddResult(curTextPos,              pos2, state, recoveryStack, text, startTextPos);
+        }
+        else if (pos == curTextPos && state == lastState)
+        {
+          var pos2 = ContinueParse(pos, recoveryStack, parser, text);
+          AddResult(curTextPos, pos2, state, recoveryStack, text, startTextPos);
+        }
+        else if (parser.MaxTextPos > curTextPos)
+          AddResult(curTextPos, parser.MaxTextPos, state, recoveryStack, text, startTextPos);
+        else
+        {
+          if (subruleLevel <= 0)
+          {
+            if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
+              continue;
+            _nestedLevel++;
+
+            var parsers = ruleParser.GetParsersForState(state);
+            foreach (var subRuleParser in parsers)
+            {
+              var old = recoveryStack;
+              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, 0/*stackFrame.AstPtr*/, 0, 0));
+              _recCount++;
+              ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
+              recoveryStack = old; // remove top element
+            }
+
+            _nestedLevel--;
+          }
+        }
+      }
+    }
+
+    void AddResult(int startPos, int endPos, int startState, RecoveryStack stack, string text, int failPos)
     {
       _bestResultsCount++;
 
-      if (_bestResult == null || endPos > _bestResult.EndPos || startPos < _bestResult.StartPos || stackLevel < _bestResult.StackLevel || startState < _bestResult.StartState)
-        _bestResult = new RecoveryResult(startPos, endPos, startState, stackLevel, stackFrame, text, fail);
+      int stackLength = stack.Length;
+      var skipedCount = startPos - failPos;
+
+      var newResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos);
+
+      if (newResult.SkipedCount > 0)
+      {
+      }
+
+      if (_bestResult == null)                   goto good;
+
+      if (endPos     > _bestResult.EndPos)       goto good;
+      if (endPos     < _bestResult.EndPos)       return;
+
+      if (startPos   < _bestResult.StartPos)     goto good;
+      if (startPos   > _bestResult.StartPos)     return;
+
+      if (skipedCount < _bestResult.SkipedCount) goto good;
+      if (skipedCount > _bestResult.SkipedCount) return;
+
+      stackLength = stack.Length;
+      var bestResultStackLength = this._bestResult.StackLength;
+
+      if (stackLength > bestResultStackLength)    goto good;
+      if (stackLength < bestResultStackLength)    return;
+      if (startState < _bestResult.StartState)   goto good;
+      if (startState == _bestResult.StartState)  goto good2;
+      return;
+    good:
+      _bestResults.Clear();
+      _bestResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos);
+      _bestResults.Add(_bestResult);
+      return;
+    good2:
+      _bestResults.Add(new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos));
+      return;
     }
 
-    int ContinueParse(int level, int startTextPos, RecoveryStackFrame[] recoveryStack, ref Parser parser)
+    int ContinueParse(int startTextPos, RecoveryStack recoveryStack, Parser parser, string text)
     {
-      if (level >= recoveryStack.Length)
+      var tail = recoveryStack.Tail as RecoveryStack;
+
+      if (tail == null)
         return startTextPos;
 
-      var recoveryInfo = recoveryStack[level];
-      var pos3 = 
-        recoveryInfo.State + 1 >= recoveryInfo.RuleParser.StatesCount
+      var recoveryInfo = tail.Head;
+      var nextState = recoveryInfo.ContinueState;
+      var pos3 =
+        nextState >= recoveryInfo.RuleParser.StatesCount
           ? startTextPos
-          : recoveryInfo.RuleParser.TryParse(recoveryInfo.AstPtr, startTextPos, parser.Text, ref parser, recoveryInfo.State + 1);
+          : recoveryInfo.RuleParser.TryParse(recoveryInfo.AstPtr, startTextPos, text, parser, nextState);
 
       if (pos3 >= 0)
-        return ContinueParse(level + 1, pos3, recoveryStack, ref parser);
+        return ContinueParse(pos3, tail, parser, text);
       else
         return Math.Max(parser.MaxTextPos, startTextPos);
     }

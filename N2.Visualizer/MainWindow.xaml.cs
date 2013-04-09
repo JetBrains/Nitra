@@ -18,6 +18,7 @@ using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.AddIn;
 using ICSharpCode.SharpDevelop.Editor;
 using System.Windows.Input;
+using N2.Internal;
 
 namespace N2.Visualizer
 {
@@ -27,7 +28,7 @@ namespace N2.Visualizer
   public partial class MainWindow : Window
   {
     ParserHost _parserHost;
-    ParseResult _parseResult;
+    Parser _parseResult;
     RuleDescriptor _ruleDescriptor;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
@@ -181,7 +182,7 @@ namespace N2.Visualizer
           var failed = a.FirstFailedIndex;
           if (failed >= 0)
           {
-            var sate = _parseResult.RawAst[a.AstPointer + 2];
+            var sate = _parseResult.ast[a.AstPointer + 2];
             var calls = a.GetChildren();
             var e = 0;
             var size = 0;
@@ -239,7 +240,7 @@ namespace N2.Visualizer
           treeNode.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
         //if (ruleApplication.FirstFailedIndex > 0)
         //{
-        //  var sate = _parseResult.RawAst[ruleApplication.AstPointer + 2];
+        //  var sate = _parseResult.ast[ruleApplication.AstPointer + 2];
         //  if (sate >= 0)
         //    node.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
         //}
@@ -382,22 +383,45 @@ namespace N2.Visualizer
       if (_parserHost == null)
         return;
 
-      var source = new SourceSnapshot(textBox1.Text);
+      try
+      {
+        var source = new SourceSnapshot(textBox1.Text);
 
-      var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
+        var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
 
-      if (simpleRule != null)
-        _parseResult = _parserHost.DoParsing(source, simpleRule);
-      else
-        _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
+        if (simpleRule != null)
+          _parseResult = _parserHost.DoParsing(source, simpleRule);
+        else
+          _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
 
-      textBox1.TextArea.TextView.Redraw(DispatcherPriority.Input);
+        textBox1.TextArea.TextView.Redraw(DispatcherPriority.Input);
 
-      _foldingStrategy.ParseResult = _parseResult;
-      _foldingStrategy.UpdateFoldings(_foldingManager, textBox1.Document);
+        _foldingStrategy.Parser = _parseResult;
+        _foldingStrategy.UpdateFoldings(_foldingManager, textBox1.Document);
 
-      TryReportError();
-      ShowInfo();
+        TryReportError();
+        ShowInfo();
+      }
+      catch (TypeLoadException ex)
+      {
+        MessageBox.Show(this, ex.Message);
+      }
+      catch (ErrorException ex)
+      {
+        _parseResult = null;
+        var recovery = ex.Recovery;
+        if (recovery == null)
+          return;
+
+        _textMarkerService.RemoveAll(_ => true);
+
+        var marker = _textMarkerService.Create(recovery.FailPos, recovery.SkipedCount);// == 0 ? 1 : recovery.SkipedCount);
+        marker.MarkerType = TextMarkerType.SquigglyUnderline;
+        marker.MarkerColor = Colors.Red;
+        marker.ToolTip = "Parse error: State= " + recovery.StartState + "\r\n  " + string.Join("\r\n    ", recovery.Stack.Select(s => s.ToString()));
+        _status.Text = "Parse error: State= " + recovery.StartState + "     " + recovery.Stack.Head;
+        ShowInfo();
+      }
     }
 
     private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)

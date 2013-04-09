@@ -101,7 +101,7 @@ namespace N2.Internal
       if (PostfixRules.Length > 0) PostfixOffset  = PostfixRules[0].RuleId; else PostfixOffset  = 0;
     }
 
-    public override int Parse(int curTextPos, string text, ref Parser parser)
+    public override int Parse(int curTextPos, string text, Parser parser)
     {
       unchecked
       {
@@ -153,7 +153,7 @@ namespace N2.Internal
           if (prefixRule.LowerBound <= c && c <= prefixRule.UpperBound)
           {
             newResult = -1;
-            newEndPos = prefixRule.Parse(curTextPos, text, ref newResult, ref parser);
+            newEndPos = prefixRule.Parse(curTextPos, text, ref newResult, parser);
             if (newResult > 0)
             {
               if (bestResult > 0)
@@ -285,7 +285,7 @@ namespace N2.Internal
           if (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound)
           {
             newResult = -1;
-            newEndPos = postfixRule.Parse(curTextPos, text, ref newResult, ref parser);
+            newEndPos = postfixRule.Parse(curTextPos, text, ref newResult, parser);
             if (newResult > 0)//АСТ создано
             {
               parser.ast[newResult + AstOfs.Next] = lastResult; lastResult = newResult;//добавляем в список
