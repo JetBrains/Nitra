@@ -3,6 +3,7 @@ using N2.Typing;
 
 using Nemerle;
 using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -25,11 +26,12 @@ namespace N2.Compiler
 
     private GrammarAstTB           : TypeBuilder; //TODO : переместить в более подходящее место
 
-    private _ruleParserEmitters           : list[RuleParserEmitter];
-    private _ruleDescriptorEmitters       : List[IRuleDescriptorEmitter] = List();
-    private _allAstEmitters               : list[RuleAstEmitter];
-    private _extentionPointAstEmitters    : list[RuleAstEmitter];
-    private _otherAstEmitters             : list[RuleAstEmitter];
+    private _ruleParserEmitters            : list[RuleParserEmitter];
+    private _ruleDescriptorEmitters        : List[IRuleDescriptorEmitter] = List();
+    private _allAstEmitters                : List[IAstEmitter] = List();
+    private _simpleAstEmitters             : List[IAstEmitter] = List();
+    private _extentionAstEmitters          : List[IAstEmitter] = List();
+    private _astEmitterDefineTypeFunctions : Hashtable[IRuleDeclarationSite, ClassMember.TypeDeclaration -> TypeBuilder] = Hashtable();
 
     public this(environment : EmitterEnvironment, syntaxModule : ParsedSyntaxModuleSymbol)
     {
@@ -96,8 +98,33 @@ namespace N2.Compiler
         | _                          => false
       }
 
-      _allAstEmitters = SyntaxModule.Node.GetDescendants.[SyntaxRuleSymbol]().Where(isAst).Map(RuleAstEmitter(Environment, _));
-      (_extentionPointAstEmitters, _otherAstEmitters) = _allAstEmitters.Partition(x => x.RuleSymbol is ExtensibleRuleSymbol);
+      foreach (ruleSymbol when isAst(ruleSymbol) in SyntaxModule.Node.GetDescendants.[SyntaxRuleSymbol]())
+      {
+        def emitter = RuleAstEmitter(Environment, ruleSymbol);
+        if (ruleSymbol is ExtentionRuleSymbol)
+          _extentionAstEmitters.Add(emitter);
+        else
+          _simpleAstEmitters.Add(emitter);
+        _allAstEmitters.Add(emitter);
+      }
+
+      foreach (extendSyntaxSymbol in SyntaxModule.Node.GetDescendants.[ExtendSyntaxSymbol]())
+      {
+        def emitter = ExtendSyntaxAstEmitter(extendSyntaxSymbol);
+        _simpleAstEmitters.Add(emitter);
+        _allAstEmitters.Add(emitter);
+      }
+
+      _astEmitterDefineTypeFunctions[SyntaxModule] = GrammarAstTB.DefineNestedType;
+      foreach (emitter when emitter.Symbol is IRuleDeclarationSite in _allAstEmitters)
+      {
+        _astEmitterDefineTypeFunctions[emitter.Symbol :> IRuleDeclarationSite] =
+          fun (decl)
+          {
+            DefineAstTypes(emitter);
+            emitter.AstTypeBuilder.DefineNestedType(decl)
+          };
+      }
 
       foreach (spanClass in SyntaxModule.Node.GetDescendants.[SpanClassSymbol]())
       {
@@ -108,16 +135,16 @@ namespace N2.Compiler
       }
     }
 
-    public DefineExtentionPointAstTypes() : void
+    public DefineSimpleAstTypes() : void
     {
-      foreach (emitter in _extentionPointAstEmitters)
-        emitter.DefineTypes(GrammarAstTB);
+      foreach (emitter in _simpleAstEmitters)
+        DefineAstTypes(emitter);
     }
 
-    public DefineOtherAstTypes() : void
+    public DefineExtentionAstTypes() : void
     {
-      foreach (emitter in _otherAstEmitters)
-        emitter.DefineTypes(GrammarAstTB);
+      foreach (emitter in _extentionAstEmitters)
+        DefineAstTypes(emitter);
     }
 
     public DefineAstMembers() : void
@@ -158,7 +185,7 @@ namespace N2.Compiler
       GrammarDescriptorImplTB.DefineConditional(<[decl:
         public override Dependencies : array[N2.GrammarDescriptor]
         {
-          get { array[..$(_externalGrammars.Map(moduleSymbol => <[ $(PExprUtils.FromQualifiedIdentifier(moduleSymbol.Node.FullNameParts)).StaticDescriptor ]>))] }
+          get { array[..$(_externalGrammars.Map(_.GetGrammarDescriptorRef()))] }
         }
       ]>);
     }
@@ -176,6 +203,12 @@ namespace N2.Compiler
       GrammarDescriptorImplTB.Compile();
       GrammarImplTB.Compile();
       GrammarTB.Compile();
+    }
+
+    private DefineAstTypes(emitter : IAstEmitter) : void
+    {
+      when (emitter.AstTypeBuilder == null)
+        emitter.DefineTypes(_astEmitterDefineTypeFunctions[emitter.SymbolDeclarationSite]);
     }
   }
 }
