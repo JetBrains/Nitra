@@ -42,7 +42,10 @@ syntax module N2Syntax
   alias SeparatorToken  = TokenRule;
   alias SeparatorRule   = Rule;
 
-  token Keyword = "as" | "syntax" | "token" | "alias" | "in" | "out" | "rule" | "precedence";
+  token PredefinedType = "void" | "int" | "string";
+
+  token Keyword = "as" | "syntax" | "marker" | "token" | "field" | "span" | "alias" 
+                | "in" | "out" | "rule" | "precedence" | "using" | "namespace" | PredefinedType;
 
   extend syntax IgnoreToken
   {
@@ -138,14 +141,14 @@ syntax module N2Syntax
 
   syntax NamespaceBody = Using*  TopDeclaration*
   {
-    CollectGlobalSymbols(rootNs : NamespaceSymbol) : void { _ = PassThrough(TopDeclarations, rootNs, _.CollectGlobalSymbols(_)); }
+    CollectGlobalSymbols(rootNs : NamespaceSymbol) : void = foreach (topDecl in TopDeclarations) topDecl.CollectGlobalSymbols(rootNs);
     [Cached] MakeContext(parent : Context) : Context
     {
       def context1 = FoldThrough(Usings, parent, _.MakeContext(_));
       def context2 = PassThrough(TopDeclarations, context1, _.MakeContext(_));
       context2
     }
-    Typing() : void = foreach (d in TopDeclarations) d.Typing();
+    Typing() : void = foreach (topDecl in TopDeclarations) topDecl.Typing();
   }
 
   syntax Using
@@ -164,20 +167,14 @@ syntax module N2Syntax
 
   syntax TopDeclaration
   {
-    CollectGlobalSymbols(ns : NamespaceSymbol) : NamespaceSymbol;
+    CollectGlobalSymbols(ns : NamespaceSymbol) : void;
     [Cached] MakeContext(parent : Context) : Context;
     Typing() : void;
 
     | Namespace = "namespace" sm QualifiedName nl "{" inl NamespaceBody d "}" nl
       {
         [Cached] private MakeSymbol(ns : NamespaceSymbol) : NamespaceSymbol = MakeNamespaceSymbol(ns, QualifiedName.CalcLocations());
-        override CollectGlobalSymbols
-        {
-          //assert2(false);
-          def currNamespace = MakeSymbol(ns);
-          NamespaceBody.CollectGlobalSymbols(currNamespace);
-          ns
-        }
+        override CollectGlobalSymbols = NamespaceBody.CollectGlobalSymbols(MakeSymbol(ns));
         override MakeContext
         {
           def nsContext = EnteredNamespaceContext(parent, Symbol);
@@ -191,10 +188,10 @@ syntax module N2Syntax
       {
         override CollectGlobalSymbols
         {
-          def sym = ParsedSyntaxModuleSymbol(this);
-          _ = ns.Node.AddAndReport(sym, Name.Location);
-          _ = PassThrough(Declarations, sym, _.CollectGlobalSymbols(_));
-          ns
+          def symbol = ParsedSyntaxModuleSymbol(this);
+          _ = ns.Node.AddAndReport(symbol, Name.Location);
+          foreach (decl in Declarations)
+            decl.CollectGlobalSymbols(symbol);
         }
         [Cached] private MakeInitialContext(contextToSave : SyntaxModuleContext) : SyntaxModuleContext = contextToSave;
         [Cached] private MakeFinalContext(contextToSave : Context) : Context = contextToSave;
@@ -211,16 +208,10 @@ syntax module N2Syntax
         override Typing
         {
           _ = MakeTokenFieldNames();
-          foreach (x in Declarations)
-            x.Typing();
+          foreach (decl in Declarations)
+            decl.Typing();
         }
       }
-  }
-
-  syntax DefaultReturnType = "default" sm "return" sm "type" Type ";" nl
-  {
-    [Cached] MakeContext(parent : Context) : Context = parent;
-    Typing() : PExpr = NemerleParser.Parse(Type, this.Context);
   }
 
   syntax RuleAttribute
@@ -269,96 +260,113 @@ syntax module N2Syntax
   [StartRule]
   syntax Declaration
   {
-    CollectGlobalSymbols(sm : SyntaxModuleSymbol) : SyntaxModuleSymbol = sm;
+    CollectGlobalSymbols(syntaxModule : SyntaxModuleSymbol) : void = _ = syntaxModule;
     [Cached] MakeContext(parent : Context) : Context = parent;
     Typing() : void {}
 
     GetTokenFieldNames(result : Map[string, N2.Model.Identifier]) : Map[string, N2.Model.Identifier] = result;
 
-    | SimpleRule          = RuleAttributes "syntax"  sm             Name  sm "="  sm Rule                     RuleBody
+    | SimpleRule          = RuleAttributes "syntax"  sm             Name  sm "="  sm Rule                     SimpleRuleBody
       {
-        [Cached] private MakeSymbol() : ParsedSimpleRuleSymbol = ParsedSimpleRuleSymbol(this);
         override CollectGlobalSymbols
         {
-          _ = MakeSymbol();
-          _ = sm.Node.AddAndReport(Symbol, Location);
-          _ = RuleBody.CollectGlobalSymbols(Symbol, None());
-          sm
+          def symbol = ParsedSimpleRuleSymbol(this, syntaxModule);
+          _ = syntaxModule.Node.AddAndReport(symbol, Location);
+          SimpleRuleBody.CollectGlobalSymbols(symbol);
         }
-        override MakeContext = MakeContext(parent, RuleAttributes, RuleBody);
-        [Cached] private MakeTypedRule()   : Rule.Sequence    = EnsureSequence(this.Rule.Typing(None(), RuleBody.GetPrecedence(), None(), RuleBody.Context, RuleAttributes.Options(RuleDefinitionOptions.Empty)));
+        override MakeContext
+        {
+          _ = RuleAttributes.MakeContext(parent);
+          _ = SimpleRuleBody.MakeContext(parent);
+          parent
+        }
+        [Cached] private MakeTypedRule()   : Rule.Sequence    = EnsureSequence(this.Rule.Typing(None(), 0, None(), SimpleRuleBody.Context, RuleAttributes.Options(RuleDefinitionOptions.Empty)));
         override Typing
         {
           _ = MakeTypedRule();
-          RuleBody.Typing(ExtensibleRuleRef.None(Location.Default, false));
+          SimpleRuleBody.Typing();
         }
       }
-    | ExtensibleRule = RuleAttributes "syntax"  sm             Name                                      RuleBody
+    | ExtensibleRule = RuleAttributes "syntax"  sm             Name                                      ExtensibleRuleBody
       {
-        [Cached] private MakeSymbol() : ParsedExtensibleRuleSymbol = ParsedExtensibleRuleSymbol(this);
         override CollectGlobalSymbols
         {
-          _ = MakeSymbol();
-          _ = sm.Node.AddAndReport(Symbol, Location);
-          _ = RuleBody.CollectGlobalSymbols(Symbol, Some(Name.GetText()));
-          sm
+          def symbol = ParsedExtensibleRuleSymbol(this, syntaxModule);
+          _ = syntaxModule.Node.AddAndReport(symbol, Location);
+          ExtensibleRuleBody.CollectGlobalSymbols(symbol);
         }
-        override MakeContext = MakeContext(parent, RuleAttributes, RuleBody);
+        override MakeContext
+        {
+          _ = RuleAttributes.MakeContext(parent);
+          _ = ExtensibleRuleBody.MakeContext(parent);
+          parent
+        }
         override Typing
         {
-          _ = RuleBody.Typing(ExtensibleRuleRef.Create(Name, Context.Bind(Name)));
+          _ = ExtensibleRuleBody.Typing(ExtensibleRuleRef.Create(Name, Context.Bind(Name)));
         }
       }
-    | TokenRule           = RuleAttributes "token"   sm             Name  sm "="  sm TokenRule                RuleBody
+    | TokenRule           = RuleAttributes "token"   sm             Name  sm "="  sm TokenRule                ";"nl
       {
-        [Cached] private MakeSymbol() : ParsedRegularRuleSymbol = ParsedRegularRuleSymbol(this);
-        override CollectGlobalSymbols
+        override CollectGlobalSymbols = _ = syntaxModule.Node.AddAndReport(ParsedRegularRuleSymbol(this, syntaxModule), Location);
+        override MakeContext
         {
-          _ = MakeSymbol();
-          _ = sm.Node.AddAndReport(Symbol, Location);
-          _ = RuleBody.CollectGlobalSymbols(Symbol, None());
-          sm
+          _ = RuleAttributes.MakeContext(parent);
+          _ = TokenRule.MakeContext(parent);
+          parent
         }
-        override MakeContext = MakeContext(parent, RuleAttributes, TokenRule, RuleBody);
         [Cached] private MakeRegularRule() : RegularRule      = TokenRule.Typing();
         override Typing
         {
           _ = MakeRegularRule();
-          RuleBody.Typing(ExtensibleRuleRef.None(Location.Default, false));
         }
       }
-    | VoidRule            = RuleAttributes "void"    sm             Name  sm "="  sm Rule                     RuleBody
+    | VoidRule            = RuleAttributes "void"    sm             Name  sm "="  sm Rule                     SimpleRuleBody
       {
-        [Cached] private MakeSymbol() : ParsedVoidRuleSymbol = ParsedVoidRuleSymbol(this);
         override CollectGlobalSymbols
         {
-          _ = MakeSymbol();
-          _ = sm.Node.AddAndReport(Symbol, Location);
-          _ = RuleBody.CollectGlobalSymbols(Symbol, None());
-          sm
+          def symbol = ParsedVoidRuleSymbol(this, syntaxModule);
+          _ = syntaxModule.Node.AddAndReport(symbol, Location);
+          SimpleRuleBody.CollectGlobalSymbols(symbol);
         }
-        override MakeContext = MakeContext(parent, RuleAttributes, RuleBody);
+        override MakeContext
+        {
+          _ = RuleAttributes.MakeContext(parent);
+          _ = SimpleRuleBody.MakeContext(parent);
+          parent
+        }
         [Cached] private MakeType()        : RuleType         = RuleType.Void();
-        [Cached] private MakeTypedRule()   : Rule.Sequence    = EnsureSequence(this.Rule.Typing(None(), RuleBody.GetPrecedence(), None(), RuleBody.Context, RuleAttributes.Options(RuleDefinitionOptions.Empty)));
+        [Cached] private MakeTypedRule()   : Rule.Sequence    = EnsureSequence(this.Rule.Typing(None(), 0, None(), SimpleRuleBody.Context, RuleAttributes.Options(RuleDefinitionOptions.Empty)));
         override Typing
         {
           _ = MakeType();
           _ = MakeTypedRule();
-          RuleBody.Typing(ExtensibleRuleRef.None(Location.Default, false));
+          SimpleRuleBody.Typing();
         }
       }
-    | Marker          =                "marker"  sm             Name                                      ";"nl
+    | Marker              =                "marker"  sm             Name                                      ";"nl
+      {
+        override CollectGlobalSymbols = _ = syntaxModule.Node.AddAndReport(ParsedMarkerSymbol(Name, syntaxModule), Location);
+      }
+    | ExtendSyntax        =                "extend"  sm "syntax" sm (Name sm "=" sm)? BaseName nl "{" inl InlineExtentionRule* d "}"nl
       {
         override CollectGlobalSymbols
         {
-          _ = sm.Node.AddAndReport(MarkerSymbol(Name), Location);
-          sm
+          def name = match (NameOpt)
+          {
+            | Some((name, _)) => name.Location
+            | None            => BaseName.CalcLocations().Last
+          };
+          def symbol = ParsedExtendSyntaxSymbol(name, syntaxModule);
+          _ = syntaxModule.Node.AddAndReport(symbol, name);
+          foreach (rule in InlineExtentionRules)
+            rule.CollectGlobalSymbols(symbol);
         }
-      }
-    | ExtendSyntax        =                "extend"  sm "syntax" sm BaseName nl "{" inl InlineExtentionRule* d "}"nl
-      {
-        override CollectGlobalSymbols = PassThrough(InlineExtentionRules, sm, _.CollectGlobalSymbols(_, Some(BaseName.Parts().LastOrDefault(""))));
-        override MakeContext = FoldThrough(InlineExtentionRules, parent, _.MakeContext(_));
+        override MakeContext
+        {
+          _ = FoldThrough(InlineExtentionRules, parent, _.MakeContext(_));
+          parent
+        }
         override Typing
         {
           def baseRule = ExtensibleRuleRef.Create(BaseName, Context.Bind(BaseName));
@@ -444,36 +452,146 @@ syntax module N2Syntax
     }
   }
 
-  syntax InlineExtentionRule = "|" RuleAttributes (Name "=")? Rule RuleBody?
+  syntax InlineExtentionRule = "|" RuleAttributes (Name "=")? Rule ExtentionRuleBody?
   {
-    [Cached] private MakeSymbol(baseName : string) : ParsedInlineExtentionRule = ParsedInlineExtentionRule(this, baseName);
-    CollectGlobalSymbols(sm : SyntaxModuleSymbol, baseName : option[string]) : SyntaxModuleSymbol
+    CollectGlobalSymbols(declarationSite : IRuleDeclarationSite) : void
     {
-      _ = MakeSymbol(baseName.Value);
-      _ = sm.Node.AddAndReport(Symbol, Location);
-      when (RuleBodyOpt is Some(ruleBody))
-        _ = ruleBody.CollectGlobalSymbols(Symbol, None());
-      sm
+      def symbol = ParsedInlineExtentionRule(this, declarationSite);
+      _ = declarationSite.Node.AddAndReport(symbol, Location);
+      when (ExtentionRuleBodyOpt is Some(ruleBody))
+        ruleBody.CollectGlobalSymbols(symbol);
     }
-    [Cached] MakeContext(parent : Context)                          : Context               = MakeContext(parent, RuleAttributes, RuleBodyOpt);
+    [Cached] MakeContext(parent : Context) : Context
+    {
+      _ = RuleAttributes.MakeContext(parent);
+      when (ExtentionRuleBodyOpt is Some(ruleBody))
+        _ = ruleBody.MakeContext(parent);
+      parent
+    }
     [Cached] private MakeBaseRuleRef(baseRule : ExtensibleRuleRef)  : ExtensibleRuleRef     = baseRule;
     [Cached] private MakeOptions()                                  : RuleDefinitionOptions = RuleAttributes.Options(BaseRuleRef.Map(r => r.Options.InheritedCopy()) ?? RuleDefinitionOptions.Empty);
     [Cached] private MakeType()                                     : RuleType              = BaseRuleRef.Map(_.Type) ?? RuleType.Void();
-    [Cached] private MakeTypedRule()                                : Rule.Sequence         = EnsureSequence(this.Rule.Typing(BaseRuleRef, Precedence(RuleBodyOpt), None(), RuleBodyOpt.Map(_.Context) ?? Context, Options));
+    [Cached] private MakeTypedRule()                                : Rule.Sequence         = EnsureSequence(this.Rule.Typing(BaseRuleRef, ExtentionRuleBodyOpt.Map(b => b.GetPrecedence()) ?? 0, None(), ExtentionRuleBodyOpt.Map(_.Context) ?? Context, Options));
     Typing(baseRule : ExtensibleRuleRef) : void
     {
       _ = MakeBaseRuleRef(baseRule);
       _ = MakeOptions();
       _ = MakeType();
       _ = MakeTypedRule();
-      when (RuleBodyOpt is Some(ruleBody))
+      when (ExtentionRuleBodyOpt is Some(ruleBody))
         ruleBody.Typing(BaseRuleRef);
     }
   }
 
-  syntax RuleBody
+  syntax SimpleRuleBody
   {
-    CollectGlobalSymbols(ruleRef : RuleSymbol, _baseName : option[string]) : RuleSymbol = ruleRef;
+    CollectGlobalSymbols(ruleSymbol : SimpleRuleSymbol) : void = _ = ruleSymbol;
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    GetLastLocation() : N2.Location;
+    Typing() : void { }
+
+    | Empty = ";"nl
+      {
+        override GetLastLocation = MakeLastLocation(this, Semicolon);
+      }
+    | Block = "{"  SimpleRuleBodyMember* "}"nl
+      {
+        override CollectGlobalSymbols = foreach (member in SimpleRuleBodyMembers) member.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext = FoldThrough(SimpleRuleBodyMembers, parent, _.MakeContext(_));
+        override GetLastLocation = MakeLastLocation(this, OpenBrace);
+        override Typing = foreach (x in SimpleRuleBodyMembers) x.Typing();
+      }
+  }
+
+  syntax SimpleRuleBodyMember
+  {
+    CollectGlobalSymbols(ruleSymbol : SimpleRuleSymbol) : void = _ = ruleSymbol;
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    Typing() : void { }
+
+    | RuleAlias
+      {
+        override MakeContext = RuleAlias.MakeContext(parent);
+      }
+    | ExtraField
+      {
+        override CollectGlobalSymbols = ExtraField.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext = ExtraField.MakeContext(parent);
+        override Typing = ExtraField.Typing();
+      }
+    | ExtraFieldOverride
+      {
+        override CollectGlobalSymbols = ExtraFieldOverride.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext = ExtraFieldOverride.MakeContext(parent);
+        override Typing = ExtraFieldOverride.Typing();
+      }
+    | ExtraFieldMissing
+      {
+        override CollectGlobalSymbols = ExtraFieldMissing.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext = ExtraFieldMissing.MakeContext(parent);
+        override Typing = ExtraFieldMissing.Typing();
+      }
+  }
+
+  syntax ExtensibleRuleBody
+  {
+    CollectGlobalSymbols(ruleSymbol : ExtensibleRuleSymbol) : void = _ = ruleSymbol;
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    GetLastLocation() : N2.Location;
+    Typing(_baseRule : ExtensibleRuleRef) : void { }
+
+    | Empty = ";"nl
+      {
+        override GetLastLocation = MakeLastLocation(this, Semicolon);
+      }
+    | Block = "{"  ExtensibleRuleBodyMember* "}"nl
+      {
+        override CollectGlobalSymbols = foreach (member in ExtensibleRuleBodyMembers) member.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext = FoldThrough(ExtensibleRuleBodyMembers, parent, _.MakeContext(_));
+        override GetLastLocation = MakeLastLocation(this, OpenBrace);
+        override Typing = foreach (x in ExtensibleRuleBodyMembers) x.Typing(_baseRule);
+      }
+  }
+
+  syntax ExtensibleRuleBodyMember
+  {
+    CollectGlobalSymbols(ruleSymbol : ExtensibleRuleSymbol) : void = _ = ruleSymbol;
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    Typing(_baseRule : ExtensibleRuleRef) : void { }
+
+    | RuleAlias
+      {
+        override MakeContext = RuleAlias.MakeContext(parent);
+      }
+    | InlineExtentionRule
+      {
+        override CollectGlobalSymbols = InlineExtentionRule.CollectGlobalSymbols(ruleSymbol);
+        override Typing = InlineExtentionRule.Typing(_baseRule);
+        override MakeContext = InlineExtentionRule.MakeContext(parent);
+      }
+    | ExtraField
+      {
+        override CollectGlobalSymbols = ExtraField.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext = ExtraField.MakeContext(parent);
+        override Typing = ExtraField.Typing();
+      }
+    | ExtraFieldOverride
+      {
+        override CollectGlobalSymbols = ExtraFieldOverride.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext = ExtraFieldOverride.MakeContext(parent);
+        override Typing = ExtraFieldOverride.Typing();
+      }
+    | ExtraFieldMissing
+      {
+        override CollectGlobalSymbols = ExtraFieldMissing.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext = ExtraFieldMissing.MakeContext(parent);
+        override Typing = ExtraFieldMissing.Typing();
+      }
+  }
+
+  syntax ExtentionRuleBody
+  {
+    CollectGlobalSymbols(ruleRef : RuleSymbol) : void = _ = ruleRef;
     GetPrecedence() : int = 0;
     [Cached] MakeContext(parent : Context) : Context = parent;
     GetLastLocation() : N2.Location;
@@ -483,12 +601,12 @@ syntax module N2Syntax
       {
         override GetLastLocation = MakeLastLocation(this, Semicolon);
       }
-    | Block = "{"  RuleBodyMember* "}"nl
+    | Block = "{"  ExtentionRuleBodyMember* "}"nl
       {
-        override CollectGlobalSymbols = PassThrough(RuleBodyMembers, ruleRef, _.CollectGlobalSymbols(_, _baseName));
+        override CollectGlobalSymbols = foreach (member in ExtentionRuleBodyMembers) member.CollectGlobalSymbols(ruleRef);
         override GetPrecedence
         {
-          match (RuleBodyMembers.Map(_.GetPrecedence()).Filter(_.IsSome))
+          match (ExtentionRuleBodyMembers.Map(_.GetPrecedence()).Filter(_.IsSome))
           {
             | [VSome((p, _))] => p
             | [] => 0
@@ -500,9 +618,45 @@ syntax module N2Syntax
             | _ => assert2(false); 0
           }
         }
-        override MakeContext = FoldThrough(RuleBodyMembers, parent, _.MakeContext(_));
+        override MakeContext = FoldThrough(ExtentionRuleBodyMembers, parent, _.MakeContext(_));
         override GetLastLocation = MakeLastLocation(this, OpenBrace);
-        override Typing = foreach (x in RuleBodyMembers) x.Typing(_baseRule);
+        override Typing = foreach (x in ExtentionRuleBodyMembers) x.Typing(_baseRule);
+      }
+  }
+
+  syntax ExtentionRuleBodyMember
+  {
+    CollectGlobalSymbols(ruleSymbol : RuleSymbol) : void = _ = ruleSymbol;
+    GetPrecedence() : ValueOption[int * N2.Location] = VNone();
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    Typing(_baseRule : ExtensibleRuleRef) : void { }
+
+    | RuleAlias
+      {
+        override MakeContext = RuleAlias.MakeContext(parent);
+      }
+    | ExtraField
+      {
+        override CollectGlobalSymbols = ExtraField.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext = ExtraField.MakeContext(parent);
+        override Typing = ExtraField.Typing();
+      }
+    | ExtraFieldOverride
+      {
+        override CollectGlobalSymbols = ExtraFieldOverride.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext = ExtraFieldOverride.MakeContext(parent);
+        override Typing = ExtraFieldOverride.Typing();
+      }
+    | ExtraFieldMissing
+      {
+        override CollectGlobalSymbols = ExtraFieldMissing.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext = ExtraFieldMissing.MakeContext(parent);
+        override Typing = ExtraFieldMissing.Typing();
+      }
+    | Precedence
+      {
+        // TODO: make precedence table
+        override GetPrecedence = VSome((Precedence.GetPrecedence(), this.Location));
       }
   }
 
@@ -538,163 +692,130 @@ syntax module N2Syntax
     }
   }
 
-  syntax RuleBodyMember
+  syntax ExtraField = ExtraFieldAttributes ExtraFieldPrivate? Name sm "(" (ExtraFieldsParam; "," sm)* ")" sm ":" sm Type ExtraFieldBody
   {
-    CollectGlobalSymbols(ruleSymbol : RuleSymbol, _baseName : option[string]) : RuleSymbol = ruleSymbol;
-    GetPrecedence() : ValueOption[int * N2.Location] = VNone();
     [Cached] MakeContext(parent : Context) : Context = parent;
-    Typing(_baseRule : ExtensibleRuleRef) : void { }
-
-    | InlineExtentionRule
+    [Cached] private MakeSymbol(ruleSymbol : RuleSymbol) : ExtraField.DefinitionSymbol
+    {
+      if (ExtraFieldPrivateOpt.IsSome)
       {
-        override CollectGlobalSymbols { _ = InlineExtentionRule.CollectGlobalSymbols(ruleSymbol.Node.Parent.Symbol :> SyntaxModuleSymbol, _baseName); ruleSymbol }
-        override Typing = InlineExtentionRule.Typing(_baseRule);
-        override MakeContext = InlineExtentionRule.MakeContext(parent);
+        when (ExtraFieldBody.IsEmpty())
+          Project.CurrentProject.Error(this.Location, "A private extra field must have a body.", -1);
+        unless (ruleSymbol is SimpleRuleSymbol || ruleSymbol is ExtentionRuleSymbol)
+          Project.CurrentProject.Error(this.Location, "A private extra field can be declared only in simple rules and extention rules.", -1);
+        ExtraField.ParsedDefPrivateSymbol(this)
       }
-
-    | ExtraField = ExtraFieldAttributes ExtraFieldPrivate? Name sm "(" (ExtraFieldsParam; "," sm)* ")" sm ":" sm Type ExtraFieldBody
+      else if (ExtraFieldBody.IsEmpty())
       {
-        [Cached] private MakeSymbol(ruleSymbol : RuleSymbol) : ExtraField.ExtraFieldSymbol
-        {
-          def symbol =
-            if (ExtraFieldPrivateOpt.IsSome)
-            {
-              when (ExtraFieldBody.IsEmpty())
-                Project.CurrentProject.Error(this.Location, "A private extra field must have a body.", -1);
-              unless (ruleSymbol is SimpleRuleSymbol || ruleSymbol is ExtentionRuleSymbol)
-                Project.CurrentProject.Error(this.Location, "A private extra field can be declared only in simple rules and extention rules.", -1);
-              ExtraField.ParsedDefPrivateSymbol(this)
-            }
-            else if (ExtraFieldBody.IsEmpty())
-            {
-              unless (ruleSymbol is ExtensibleRuleSymbol)
-                Project.CurrentProject.Error(this.Location, "An abstract extra field must be defined in an extention point rule only.", -1);
-              ExtraField.ParsedAbstractSymbol(this)
-            }
-            else
-            {
-              unless (ruleSymbol is SimpleRuleSymbol || ruleSymbol is ExtensibleRuleSymbol)
-                Project.CurrentProject.Error(this.Location, "A public extra field must be defined in an extention point rule or a simple rule only.", -1);
-              ExtraField.ParsedDefSymbol(this)
-            }
-          _ = ruleSymbol.Node.AddAndReport.[ExtraField.DefinitionSymbol](symbol, this.Location);
-          symbol
-        }
-        override CollectGlobalSymbols
-        {
-          _ = MakeSymbol(ruleSymbol);
-          ruleSymbol
-        }
-        [Cached] private MakeSignature() : ExtraField.ExtraFieldSignature = ExtraField.ExtraFieldSignature(this.Location, NemerleParser.Parse(this.ExtraFieldsParams[0], Context), NemerleParser.Parse(this.Type, Context));
-        [Cached] private MakeBody()      : ExtraField.ExtraFieldBody      = ExtraField.ExtraFieldBody(this.ExtraFieldBody.BodyLocation(), NemerleParser.Parse(this.ExtraFieldBody, Context));
-        [Cached] private MakeIsCached()  : bool                           = ExtraFieldAttributes.IsCached();
-        override Typing
-        {
-          _ = MakeSignature();
-          _ = MakeBody();
-          _ = MakeIsCached();
-        }
+        unless (ruleSymbol is ExtensibleRuleSymbol)
+          Project.CurrentProject.Error(this.Location, "An abstract extra field must be defined in an extention point rule only.", -1);
+        ExtraField.ParsedAbstractSymbol(this)
       }
-    | ExtraFieldOverride = ExtraFieldAttributes "override"     sm  Name ExtraFieldBody
+      else
       {
-        [Cached] private MakeSymbol(ruleSymbol : RuleSymbol) : ExtraField.ExtraFieldSymbol
-        {
-          when (ExtraFieldBody.IsEmpty())
-            Project.CurrentProject.Error(this.Location, "A overriding extra field must have a body.", -1);
-          def symbol = ExtraField.ParsedOverrideSymbol(this);
-          _ = ruleSymbol.Node.AddAndReport.[ExtraField.DefinitionSymbol](symbol, this.Location);
-          symbol
-        }
-        override CollectGlobalSymbols
-        {
-          _ = MakeSymbol(ruleSymbol);
-          ruleSymbol
-        }
-        [Cached] private MakeBaseExtraField() : SymbolRef[ExtraField.ExtraFieldSymbol]
-        {
-          match (this.Symbol.DeclaringRule)
+        unless (ruleSymbol is SimpleRuleSymbol || ruleSymbol is ExtensibleRuleSymbol)
+          Project.CurrentProject.Error(this.Location, "A public extra field must be defined in an extention point rule or a simple rule only.", -1);
+        ExtraField.ParsedDefSymbol(this)
+      }
+    }
+    CollectGlobalSymbols(ruleSymbol : RuleSymbol) : void = _ = ruleSymbol.Node.AddAndReport(MakeSymbol(ruleSymbol), this.Location);
+    [Cached] private MakeSignature() : ExtraField.ExtraFieldSignature = ExtraField.ExtraFieldSignature(this.Location, NemerleParser.Parse(this.ExtraFieldsParams[0], Context), NemerleParser.Parse(this.Type, Context));
+    [Cached] private MakeBody()      : ExtraField.ExtraFieldBody      = ExtraField.ExtraFieldBody(this.ExtraFieldBody.BodyLocation(), NemerleParser.Parse(this.ExtraFieldBody, Context));
+    [Cached] private MakeIsCached()  : bool                           = ExtraFieldAttributes.IsCached();
+    Typing() : void
+    {
+      _ = MakeSignature();
+      _ = MakeBody();
+      _ = MakeIsCached();
+    }
+  }
+
+  syntax ExtraFieldOverride = ExtraFieldAttributes "override"     sm  Name ExtraFieldBody
+  {
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    [Cached] private MakeSymbol() : ExtraField.DefinitionSymbol
+    {
+      when (ExtraFieldBody.IsEmpty())
+        Project.CurrentProject.Error(this.Location, "A overriding extra field must have a body.", -1);
+      ExtraField.ParsedOverrideSymbol(this);
+    }
+    CollectGlobalSymbols(ruleSymbol : RuleSymbol) : void = _ = ruleSymbol.Node.AddAndReport(MakeSymbol(), this.Location);
+    [Cached] private MakeBaseExtraField() : SymbolRef[ExtraField.ExtraFieldSymbol]
+    {
+      match (this.Symbol.DeclaringRule)
+      {
+        | ExtentionRuleSymbol(BaseRule = SymbolRef.Some(baseRuleSymbol)) =>
+          match (baseRuleSymbol.Node.BindMany.[ExtraField.DefinitionSymbol](Name.Location))
           {
-            | ExtentionRuleSymbol(BaseRule = SymbolRef.Some(baseRuleSymbol)) =>
-              match (baseRuleSymbol.Node.BindMany.[ExtraField.DefinitionSymbol](Name.Location))
-              {
-                | [ExtraField.DefSymbol      as baseExtraFieldSymbol]
-                | [ExtraField.AbstractSymbol as baseExtraFieldSymbol] =>
-                  SymbolRef.Some(Name.Location, false, baseExtraFieldSymbol)
+            | [ExtraField.DefSymbol      as baseExtraFieldSymbol]
+            | [ExtraField.AbstractSymbol as baseExtraFieldSymbol] =>
+              SymbolRef.Some(Name.Location, false, baseExtraFieldSymbol)
 
-                | [_] =>
-                  def name = Name.Value();
-                  Project.CurrentProject.Error(this.Location, $"Cannot override '$name' extra field.", -1); //TODO: rewrite error message!
-                  SymbolRef.None(Name.Location, false)
-
-                | _ =>
-                  def name = Name.Value();
-                  Project.CurrentProject.Error(this.Location, $"No '$name' extra field to override.", -1);
-                  SymbolRef.None(Name.Location, false)
-              }
+            | [_] =>
+              def name = Name.Value();
+              Project.CurrentProject.Error(this.Location, $"Cannot override '$name' extra field.", -1); //TODO: rewrite error message!
+              SymbolRef.None(Name.Location, false)
 
             | _ =>
-              Project.CurrentProject.Error(this.Location, "An extra field can be overridden only in extending rules.", -1);
+              def name = Name.Value();
+              Project.CurrentProject.Error(this.Location, $"No '$name' extra field to override.", -1);
               SymbolRef.None(Name.Location, false)
           }
-        }
-        [Cached] private MakeBody() : ExtraField.ExtraFieldBody = ExtraField.ExtraFieldBody(this.ExtraFieldBody.BodyLocation(), NemerleParser.Parse(this.ExtraFieldBody, Context));
-        override Typing
-        {
-          _ = MakeBaseExtraField();
-          _ = MakeBody();
-        }
-      }
-    | ExtraFieldMissing = ExtraFieldAttributes "missing"        sm  Name ExtraFieldBody
-      {
-        [Cached] private MakeSymbol(ruleSymbol : RuleSymbol) : ExtraField.ExtraFieldSymbol
-        {
-          when (ExtraFieldBody.IsEmpty())
-            Project.CurrentProject.Error(this.Location, "An 'missing' handler must have a body.", -1);
-          def symbol = ExtraField.ParsedExtraFieldMissingValueSymbol(this);
-          _ = ruleSymbol.Node.AddAndReport.[ExtraField.ExtraFieldMissingValueSymbol](symbol, this.Location);
-          symbol
-        }
-        override CollectGlobalSymbols
-        {
-          _ = MakeSymbol(ruleSymbol);
-          ruleSymbol
-        }
-        [Cached] private MakeHandlingExtraField() : SymbolRef[ExtraField.ExtraFieldSymbol]
-        {
-          match (this.Symbol.DeclaringRule)
-          {
-            | ExtensibleRuleSymbol as targetRuleSymbol
-            | SimpleRuleSymbol     as targetRuleSymbol =>
-              match (targetRuleSymbol.Node.BindMany.[ExtraField.DefinitionSymbol](Name.Location))
-              {
-                | [extraFieldSymbol] => SymbolRef.Some(Name.Location, false, extraFieldSymbol)
-                | _ =>
-                  def name = Name.Value();
-                  Project.CurrentProject.Error(this.Location, $"No '$name' extra field to handle 'missing'.", -1);
-                  SymbolRef.None(Name.Location, false)
-              }
 
+        | _ =>
+          Project.CurrentProject.Error(this.Location, "An extra field can be overridden only in extending rules.", -1);
+          SymbolRef.None(Name.Location, false)
+      }
+    }
+    [Cached] private MakeBody() : ExtraField.ExtraFieldBody = ExtraField.ExtraFieldBody(this.ExtraFieldBody.BodyLocation(), NemerleParser.Parse(this.ExtraFieldBody, Context));
+    Typing() : void
+    {
+      _ = MakeBaseExtraField();
+      _ = MakeBody();
+    }
+  }
+
+  syntax ExtraFieldMissing = ExtraFieldAttributes "missing"        sm  Name ExtraFieldBody
+  {
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    [Cached] private MakeSymbol() : ExtraField.ExtraFieldMissingValueSymbol
+    {
+      when (ExtraFieldBody.IsEmpty())
+        Project.CurrentProject.Error(this.Location, "An 'missing' handler must have a body.", -1);
+      ExtraField.ParsedExtraFieldMissingValueSymbol(this);
+    }
+    CollectGlobalSymbols(ruleSymbol : RuleSymbol) : void = _ = ruleSymbol.Node.AddAndReport(MakeSymbol(), this.Location);
+    [Cached] private MakeHandlingExtraField() : SymbolRef[ExtraField.ExtraFieldSymbol]
+    {
+      match (this.Symbol.DeclaringRule)
+      {
+        | ExtensibleRuleSymbol as targetRuleSymbol
+        | SimpleRuleSymbol     as targetRuleSymbol =>
+          match (targetRuleSymbol.Node.BindMany.[ExtraField.DefinitionSymbol](Name.Location))
+          {
+            | [extraFieldSymbol] => SymbolRef.Some(Name.Location, false, extraFieldSymbol)
             | _ =>
-              Project.CurrentProject.Error(this.Location, "An 'missing' handler for a extra field can be defined in simple and extensible rules.", -1);
+              def name = Name.Value();
+              Project.CurrentProject.Error(this.Location, $"No '$name' extra field to handle 'missing'.", -1);
               SymbolRef.None(Name.Location, false)
           }
-        }
-        [Cached] private MakeBody() : ExtraField.ExtraFieldBody = ExtraField.ExtraFieldBody(this.ExtraFieldBody.BodyLocation(), NemerleParser.Parse(this.ExtraFieldBody, Context));
-        override Typing
-        {
-          _ = MakeHandlingExtraField();
-          _ = MakeBody();
-        }
+
+        | _ =>
+          Project.CurrentProject.Error(this.Location, "An 'missing' handler for a extra field can be defined in simple and extensible rules.", -1);
+          SymbolRef.None(Name.Location, false)
       }
-    // TODO: Create "Once" attribute which prevent use rule more then one times.
-    | InnerAliasDeclaration  = RuleAlias
-      {
-        override MakeContext = RuleAlias.MakeContext(parent);
-      }
-    | Precedence = "precedence"   sm  Precedence=Number RightAssociative=("right-associative")? ";"
-      {
-        override GetPrecedence = VSome((if (RightAssociative.IsSome) -Precedence.Value() else Precedence.Value(), this.Location));
-      }  // TODO: make precedence table
+    }
+    [Cached] private MakeBody() : ExtraField.ExtraFieldBody = ExtraField.ExtraFieldBody(this.ExtraFieldBody.BodyLocation(), NemerleParser.Parse(this.ExtraFieldBody, Context));
+    Typing() : void
+    {
+      _ = MakeHandlingExtraField();
+      _ = MakeBody();
+    }
+  }
+
+  syntax Precedence = "precedence"   sm  Number RightAssociative=("right-associative")? ";"
+  {
+    GetPrecedence() : int = if (RightAssociative.IsSome) -Number.Value() else Number.Value();
   }
 
   syntax ExtraFieldBody
@@ -724,6 +845,7 @@ syntax module N2Syntax
 
   syntax Type
   {
+    | PredefinedType
     | SimpleName
     | Qualified = Type "." SimpleName { precedence 20; }
     | Pointer   = Type "*" Type       { precedence 10; }

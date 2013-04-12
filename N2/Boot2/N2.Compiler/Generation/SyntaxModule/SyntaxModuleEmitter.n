@@ -3,6 +3,7 @@ using N2.Typing;
 
 using Nemerle;
 using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -25,21 +26,19 @@ namespace N2.Compiler
 
     private GrammarAstTB           : TypeBuilder; //TODO : переместить в более подходящее место
 
-    private _ruleParserEmitters        : list[RuleParserEmitter];
-
-    private _ruleDescriptorEmitters       : list[ParsingRuleDescriptorEmitter];
-
-    private _allAstEmitters               : list[RuleAstEmitter];
-    private _extentionPointAstEmitters    : list[RuleAstEmitter];
-    private _otherAstEmitters             : list[RuleAstEmitter];
-
-    private _spanClassEmitters            : list[SpanClassEmitter];
+    private _ruleParserEmitters            : list[RuleParserEmitter];
+    private _ruleDescriptorEmitters        : List[IRuleDescriptorEmitter] = List();
+    private _allAstEmitters                : List[IAstEmitter] = List();
+    private _simpleAstEmitters             : List[IAstEmitter] = List();
+    private _extentionAstEmitters          : List[IAstEmitter] = List();
+    private _astEmitterDefineTypeFunctions : Hashtable[IRuleDeclarationSite, ClassMember.TypeDeclaration -> TypeBuilder] = Hashtable();
 
     public this(environment : EmitterEnvironment, syntaxModule : ParsedSyntaxModuleSymbol)
     {
       Environment  = environment;
       SyntaxModule = syntaxModule;
       Env          = Environment.NamespaceOfSymbol(syntaxModule);
+      _externalGrammars = HashSet(syntaxModule.ExternalImports);
 
       GrammarTB               = Env.Define(<[ decl: public partial module $(syntaxModule.Name : usesite) { } ]>);
       GrammarImplTB           = GrammarTB.DefineNestedType(<[decl: public module $(AssemblyConstants.GrammarImplName : usesite) { } ]>);
@@ -58,7 +57,7 @@ namespace N2.Compiler
 
       GrammarAstTB            = Env.Define(<[ decl: public partial module $(syntaxModule.Name + "Ast" : usesite) {} ]>);
 
-      _ruleParserEmitters = SyntaxModule.Node.GetChildren.[RuleDefSymbol]().FoldLeft([],
+      _ruleParserEmitters = SyntaxModule.Node.GetDescendants.[RuleDefSymbol]().FoldLeft([],
         fun(rs : RuleDefSymbol, acc)
         {
           match (rs)
@@ -71,7 +70,25 @@ namespace N2.Compiler
           }
         });
 
-      _ruleDescriptorEmitters       = SyntaxModule.Node.GetChildren.[RuleDefSymbol]().Map(ParsingRuleDescriptorEmitter(this, _));
+      mutable extensibleRuleSymbols = [];
+      mutable simpleRuleSymbols     = [];
+      mutable regularRuleSymbols    = [];
+      mutable postfixRuleSymbols    = [];
+      mutable prefixRuleSymbols     = [];
+      foreach (ruleSymbol in SyntaxModule.Node.GetDescendants.[RuleDefSymbol]())
+      {
+        | ExtensibleRuleSymbol                         as ruleSymbol => extensibleRuleSymbols ::= ruleSymbol
+        | SimpleRuleSymbol                             as ruleSymbol => simpleRuleSymbols     ::= ruleSymbol
+        | RegularRuleSymbol                            as ruleSymbol => regularRuleSymbols    ::= ruleSymbol
+        | ExtentionRuleSymbol(ExtentionType = Postfix) as ruleSymbol => postfixRuleSymbols    ::= ruleSymbol
+        | ExtentionRuleSymbol(ExtentionType = Prefix)  as ruleSymbol => prefixRuleSymbols     ::= ruleSymbol
+        | _ => ()
+      }
+      unless (extensibleRuleSymbols.IsEmpty) _ruleDescriptorEmitters.Add(ExtensibleRuleDescriptorEmitter(this, extensibleRuleSymbols));
+      unless (simpleRuleSymbols.IsEmpty)     _ruleDescriptorEmitters.Add(SimpleRuleDescriptorEmitter(this, simpleRuleSymbols));
+      unless (regularRuleSymbols.IsEmpty)    _ruleDescriptorEmitters.Add(RegularRuleDescriptorEmitter(this, regularRuleSymbols));
+      unless (prefixRuleSymbols.IsEmpty)     _ruleDescriptorEmitters.Add(PrefixRuleDescriptorEmitter(this, prefixRuleSymbols));
+      unless (postfixRuleSymbols.IsEmpty)    _ruleDescriptorEmitters.Add(PostfixRuleDescriptorEmitter(this, postfixRuleSymbols));
 
       def isAst(symbol) : bool
       {
@@ -81,22 +98,53 @@ namespace N2.Compiler
         | _                          => false
       }
 
-      _allAstEmitters = SyntaxModule.Node.GetChildren.[SyntaxRuleSymbol]().Where(isAst).Map(RuleAstEmitter(Environment, _));
-      (_extentionPointAstEmitters, _otherAstEmitters) = _allAstEmitters.Partition(x => x.RuleSymbol is ExtensibleRuleSymbol);
+      foreach (ruleSymbol when isAst(ruleSymbol) in SyntaxModule.Node.GetDescendants.[SyntaxRuleSymbol]())
+      {
+        def emitter = RuleAstEmitter(Environment, ruleSymbol);
+        if (ruleSymbol is ExtentionRuleSymbol)
+          _extentionAstEmitters.Add(emitter);
+        else
+          _simpleAstEmitters.Add(emitter);
+        _allAstEmitters.Add(emitter);
+      }
 
-      _spanClassEmitters  = SyntaxModule.Node.GetChildren.[SpanClassSymbol]().Select(SpanClassEmitter(this, _)).NToList();
+      foreach (extendSyntaxSymbol in SyntaxModule.Node.GetDescendants.[ExtendSyntaxSymbol]())
+      {
+        def emitter = ExtendSyntaxAstEmitter(extendSyntaxSymbol);
+        _simpleAstEmitters.Add(emitter);
+        _allAstEmitters.Add(emitter);
+      }
+
+      _astEmitterDefineTypeFunctions[SyntaxModule] = GrammarAstTB.DefineNestedType;
+      foreach (emitter when emitter.Symbol is IRuleDeclarationSite in _allAstEmitters)
+      {
+        _astEmitterDefineTypeFunctions[emitter.Symbol :> IRuleDeclarationSite] =
+          fun (decl)
+          {
+            DefineAstTypes(emitter);
+            emitter.AstTypeBuilder.DefineNestedType(decl)
+          };
+      }
+
+      foreach (spanClass in SyntaxModule.Node.GetDescendants.[SpanClassSymbol]())
+      {
+        GrammarTB.DefineConditional(<[decl:
+          public static $("SpanClass_" + spanClass.Name : usesite) : N2.SpanClass
+            = N2.SpanClass($(spanClass.Name : string), $(GrammarDescriptorImplTB.GetMemType() : typed).StaticDescriptor)
+        ]>)
+      }
     }
 
-    public DefineExtentionPointAstTypes() : void
+    public DefineSimpleAstTypes() : void
     {
-      foreach (emitter in _extentionPointAstEmitters)
-        emitter.DefineTypes(GrammarAstTB);
+      foreach (emitter in _simpleAstEmitters)
+        DefineAstTypes(emitter);
     }
 
-    public DefineOtherAstTypes() : void
+    public DefineExtentionAstTypes() : void
     {
-      foreach (emitter in _otherAstEmitters)
-        emitter.DefineTypes(GrammarAstTB);
+      foreach (emitter in _extentionAstEmitters)
+        DefineAstTypes(emitter);
     }
 
     public DefineAstMembers() : void
@@ -105,7 +153,7 @@ namespace N2.Compiler
         emitter.DefineMembers();
     }
 
-    private _externalGrammars : HashSet[SyntaxModuleSymbol] = HashSet();
+    private _externalGrammars : HashSet[SyntaxModuleSymbol];
 
     public CallRule(callSymbol : RuleSymbol) : void
     {
@@ -130,22 +178,16 @@ namespace N2.Compiler
       GrammarDescriptorImplTB.DefineConditional(<[decl:
         public override Rules : array[N2.RuleDescriptor]
         {
-          get { array[..$(_ruleDescriptorEmitters.Map(emitter => <[ $(emitter.RuleSymbol.GetDescriptorClassRef()).StaticDescriptor ]>))] }
+          get { array[..$(_ruleDescriptorEmitters.SelectMany(_.RuleSymbols).Select(_.GetRuleDescriptorRef())) ] }
         }
       ]>);
 
       GrammarDescriptorImplTB.DefineConditional(<[decl:
         public override Dependencies : array[N2.GrammarDescriptor]
         {
-          get { array[..$(_externalGrammars.Map(moduleSymbol => <[ $(PExprUtils.FromQualifiedIdentifier(moduleSymbol.Node.FullNameParts)).StaticDescriptor ]>))] }
+          get { array[..$(_externalGrammars.Map(_.GetGrammarDescriptorRef()))] }
         }
       ]>);
-    }
-
-    public DefineMetadataMembers() : void
-    {
-      foreach (emitter in _spanClassEmitters)
-        emitter.Emit();
     }
 
     public Emit() : void
@@ -161,6 +203,12 @@ namespace N2.Compiler
       GrammarDescriptorImplTB.Compile();
       GrammarImplTB.Compile();
       GrammarTB.Compile();
+    }
+
+    private DefineAstTypes(emitter : IAstEmitter) : void
+    {
+      when (emitter.AstTypeBuilder == null)
+        emitter.DefineTypes(_astEmitterDefineTypeFunctions[emitter.SymbolDeclarationSite]);
     }
   }
 }

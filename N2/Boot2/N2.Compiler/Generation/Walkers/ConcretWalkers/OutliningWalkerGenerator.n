@@ -1,0 +1,154 @@
+﻿using N2.Runtime;
+using N2.Model;
+using N2.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  [Record]
+  public sealed class OutliningWalkerGenerator : WalkerGenerator
+  {
+    public Environment : EmitterEnvironment { get; }
+
+    public override Name : string { get StandardWalkerTypes.Outlining }
+
+    public override SupportsVoidRules : bool { get true }
+
+    public override GetSignature(_rule : RuleSymbol) : WalkerSignature
+    {
+      WalkerSignature(
+        [<[ parameter: _context : N2.Internal.OutliningWalkerContext ]>],
+        <[ void ]>);
+    }
+
+    static IsBeginOutlineMarker(field : RuleStructureField) : bool
+    {
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_impl"
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_begin" => true
+      | _ => false
+    }
+
+    static IsImplementationMarker(field : RuleStructureField) : bool
+    {
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_impl" => true
+      | _ => false
+    }
+
+    static IsEndOutlineMarker(field : RuleStructureField) : bool
+    {
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_end" => true
+      | _ => false
+    }
+
+    protected override GetRuleValue(field : RuleStructureField, parentAstPointer : AstPointerAllocator) : PExpr
+    {
+      match (field)
+      {
+        | SimpleCall(ruleSymbol) with bp = 0
+        | ExtensibleCall(ruleSymbol, bp) =>
+          def code = CallSyntaxRule(ruleSymbol, bp, <[ _context ]>);
+          if (ruleSymbol.Type is RuleType.Void)
+            <[ def lastSpaceStartPos = pos;
+               $code;
+               _context.LastSpaceStartPos = lastSpaceStartPos; ]>
+          else
+            <[ $code;
+               _context.LastSpaceStartPos = -1;]>
+          
+        | Marker => 
+          if (IsBeginOutlineMarker(field))
+            <[
+              if (_context.LastSpaceStartPos < 0)
+                outlineSpanStart = pos;
+              else
+                outlineSpanStart = _context.LastSpaceStartPos;
+            ]>
+          else if (IsEndOutlineMarker(field))
+            <[ _context.Result.Add(N2.OutliningInfo(N2.NToken(outlineSpanStart, pos), false, isImplementation)); ]>
+          else
+            <[ () ]>
+
+        
+        | TokenString | TokenCall => <[ $(Skip(field, parentAstPointer)); _context.LastSpaceStartPos = -1; ]>
+        | Option as field =>
+          GetOptionValue(
+            field            = field,
+            parentAstPointer = parentAstPointer,
+            hasValue         = <[ _context.LastSpaceStartPos = -1; _ = $(GetRuleValue(field.Rule, "valuePointer")); ]>,
+            noValue          = <[ _context.LastSpaceStartPos = -1; ]>)
+
+        | List as lst=>
+          GetListValue(field            = lst,
+            parentAstPointer = parentAstPointer,
+            init             = <[ () ]>,
+            item             = GetRuleValue(lst.Rule, "itemPointer"),
+            returnCode       = <[ () ]>,
+            emptyCode        = <[ () ]>);
+
+        | ListWithSeparator as lst=>
+          GetListWithSeparatorValue(
+            field            = lst,
+            parentAstPointer = parentAstPointer,
+            init             = <[ () ]>,
+            item             = GetRuleValue(lst.Rule, "itemPointer"),
+            separator        = GetRuleValue(lst.Separator, "separatorPointer"),
+            returnCode       = <[ () ]>,
+            emptyCode        = <[ () ]>);
+
+        | Predicate => <[ () ]>
+      }
+    }
+
+    protected override CombineValues(_ruleStructure : RuleStructure, arguments : list[PExpr]) : PExpr
+    {
+      <[ ignore(..$arguments) ]>
+    }
+
+    protected override GetSyntaxRuleValue(ruleSymbol : SyntaxRuleSymbol, astPointer : AstPointerAllocator) : PExpr
+    {
+      def ruleStruct = ruleSymbol.Structure;
+      def outlineCount = ruleStruct.Fields.Count(IsBeginOutlineMarker);
+      def statementsList = List();
+
+      when (outlineCount > 0)
+      {
+        def isImplementation = ruleStruct.Fields.Exists(IsImplementationMarker);
+        statementsList.Add(<[ mutable outlineSpanStart = -1; def isImplementation = $isImplementation; ]>);
+        when (outlineCount > 1)
+          Message.Error(ruleSymbol.FirstLocation.ToNemerleLocation(), "Currently not supported more than one outline region on rule.");
+      }
+        
+      foreach (field in ruleStruct.Fields)
+        statementsList.Add(GetRuleValue(field, astPointer));
+        
+      def statements = statementsList.NToList();
+      
+      <[ { ..$statements } ]>
+    }
+
+    public override PrefixAmbiguity(_ruleSymbol : ExtensibleRuleSymbol) : PExpr
+    {
+      <[ ignore(parser, endPos, ambiguities); ]>
+    }
+
+    public override PostfixAmbiguity(_ruleSymbol : ExtensibleRuleSymbol) : PExpr
+    {
+      <[ ignore(parser, endPos, ambiguities); ]>
+    }
+
+    public override PrefixMissed(_ruleSymbol : ExtensibleRuleSymbol) : PExpr
+    {
+      <[ ignore(parser, pos); ]>
+    }
+  }
+}

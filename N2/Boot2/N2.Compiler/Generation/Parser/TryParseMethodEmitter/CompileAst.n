@@ -1,0 +1,65 @@
+﻿using N2.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal sealed partial class TryParseMethodEmitter : MethodEmitter
+  {
+    public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
+    {
+      def endLabel = Environment.MakeLabel("EndParse");
+
+      def cases = SCG.List();
+      foreach (field when !(field is RuleStructureField.Marker) in ruleStructure.AllFields)
+      {
+        def comment = field.SrcRule.ToString();
+        
+        if (field.IsPredicateState)
+          cases.Add(<[ case: | $(field.State) => _ = $comment; return -1; ]>);
+        else
+          cases.Add(<[ case: | $(field.State) => _ = $comment; $(GotoParseLabel(field)) ]>);
+      }
+      cases.Add(<[ case: | x => assert(false, $"Unknown parse state '$x'.") ]>);
+
+      def code = SCG.List();
+      code.Add(<[ ignore(astPtr, curTextPos, text, parser, startState); ]>);
+      code.Add(<[ _ = $(ruleStructure.SrcRule.ToString()) ]>);
+      code.Add(<[ $(AstStart(ruleStructure)) = $CurTextPos; ]>);
+      code.Add(<[ match (startState) { ..$cases } ]>);
+
+      //parse ok
+      code.Add(OkLabel(ruleStructure));
+      code.Add(endLabel.Goto());
+
+      //parse fail
+      code.Add(FailLabel(ruleStructure));
+      code.Add(<[ $CurTextPos = -1; ]>);
+      code.Add(endLabel.Goto());
+
+      CompileFields(code, ruleStructure.Fields);
+
+      code.Add(endLabel.Label());
+      code.Add(<[ $CurTextPos; ]>);
+
+      def codeWithVariables = SCG.List();
+      codeWithVariables.Add(<[
+        mutable newPos     : int; _ = newPos;
+      ]>);
+      codeWithVariables.AddRange(LocalVariables.Map(name => <[ mutable $(name : dyn) ]>));
+      codeWithVariables.AddRange(code);
+
+      codeWithVariables.FlattenPExpr();
+    }
+  }
+}

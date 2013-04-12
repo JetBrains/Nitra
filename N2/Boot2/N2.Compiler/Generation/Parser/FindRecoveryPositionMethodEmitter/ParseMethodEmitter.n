@@ -1,0 +1,153 @@
+﻿using N2.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+using Nemerle.Compiler;
+
+namespace N2.Compiler
+{
+  internal partial class FindRecoveryPositionMethodEmitter : MethodEmitter
+  {
+    public Owner : RuleParserEmitter { get; }
+    public RuleStructure : RuleStructure.Ast;
+    private _tb : TypeBuilder;
+    public override Environment : EmitterEnvironment { get { Owner.Environment } }
+    private EndLabel : PExprLabel;
+
+    public this(owner : RuleParserEmitter, tb : TypeBuilder, ruleStructure : RuleStructure.Ast)
+    {
+      Owner                       = owner;
+      _tb                         = tb;
+      RuleStructure               = ruleStructure;
+      _data                       = RuleStructureDataContainer(ruleStructure, this, RuleStructureData, RuleStructureFieldData);
+      EndLabel                    = Environment.MakeLabel("EndParse");
+    }
+
+    public Emit() : void
+    {
+      if (RuleStructure.Symbol is ExtentionRuleSymbol)
+      {
+        _tb.DefineConditional(<[decl:
+          public override FindRecoveryPosition(mutable curTextPos : int, text : string, astPtr : int, parser : N2.Internal.Parser) : int
+          {
+            $(if (Owner.Environment.IsIdeMode)
+              <[ _ = curTextPos; _ = text; _ = astPtr; _ = parser; -1 ]>
+            else
+              CompileAst(RuleStructure))
+          }
+        ]>);
+      }
+      else
+      {
+        _tb.DefineConditional(<[decl:
+          public override FindRecoveryPosition(mutable curTextPos : int, text : string, parser : N2.Internal.Parser) : int
+          {
+            $(if (Owner.Environment.IsIdeMode)
+              <[ _ = curTextPos; _ = text; _ = parser; -1 ]>
+            else
+              CompileAst(RuleStructure))
+          }
+        ]>);
+      }
+    }
+
+    public CurTextPos : PExpr { get { <[ curTextPos ]> } }
+
+    public RecoveryStackFrameScope(field : RuleStructureField, code : PExpr) : PExpr
+    {
+      // Над определять что состояние находится в конце цикла. В этом случае продолжение парсинга должно производиться с состояния цикла.
+      def getContinueState(field : RuleStructureField) : int
+      {
+        def isLast     (field         : RuleStructureField) : bool { field.Owner.NotMarkerFields.Last() : object == field }
+        def nextState  (field         : RuleStructureField) : int { field.State + 1 }
+        def getLoopSate(ruleStructure : RuleStructure)      : int { ruleStructure.Owner.State }
+        match (field.Owner)
+        {
+          | ListWithSeparatorSeparator
+          | List => if (isLast(field)) getLoopSate(field.Owner) else nextState(field)
+          | ListWithSeparatorRule as sep =>
+            if (isLast(field))
+              (sep.Owner :> RuleStructureField.ListWithSeparator).Separator.NotMarkerFields.First().State
+            else
+              nextState(field)
+            
+          | _ => nextState(field)
+        }
+      }
+      def lists = SCG.List();
+      def collectLists(field : RuleStructureField)
+      {
+        when (field != null)
+        {
+          match (field)
+          {
+            | List              as field when field.UseCounter => lists.Add(field);
+            | ListWithSeparator as field when field.UseCounter => lists.Add(field);
+            | _ => ()
+          }
+          collectLists(field?.Owner?.Owner);
+        }
+      }
+      collectLists(field);
+      def (save, addCounters, getPos, removeCounters) = if (lists.Count > 0)
+      {
+        lists.Reverse();
+        def makeAdd(field : RuleStructureField)
+        {
+          def listStateData = match (field)
+          {
+            | List              as field => ListStateData(this, field)
+            | ListWithSeparator as field => ListStateData(this, field)
+            | _ => assert(false);
+          }
+          <[ parser.ListData.Add(N2.Internal.RecoveryListData($(listStateData.ListStartPos), $(listStateData.ListEndPos), $(listStateData.Counter))) ]>
+        }
+        def pos            = CreateVariable("listDataPosition");
+        def save           = <[ $(pos : dyn) = parser.ListData.Count ]>;
+        def addCounters    = <[ { ..$(lists.Map(makeAdd)) } ]>;
+        def getPos         = <[ $(pos : dyn) ]>;
+        def removeCounters = <[ parser.ListData.RemoveRange($(pos : dyn), $(lists.Count)) ]>;
+        (save, addCounters, getPos, removeCounters)
+      }
+      else
+      {
+        def save           = <[ {} ]>;
+        def addCounters    = <[ {} ]>;
+        def getPos         = <[ parser.ListData.Count ]>;
+        def removeCounters = <[ {} ]>;
+        (save, addCounters, getPos, removeCounters)
+      }
+      <[
+        $save;
+        $addCounters;
+        parser.RecoveryStack.Push(N2.Internal.RecoveryStackFrame(this, $(field.State), $(AstPtr(RuleStructure).Var), $getPos, $(getContinueState(field))));
+        $code;
+        if (parser.ParsingMode == N2.Internal.ParsingMode.EndRecovery)
+          $(EndLabel.Goto());
+        else
+        {
+          _ = parser.RecoveryStack.Pop();
+          $removeCounters;
+        }
+      ]>
+    }
+
+    public RecoveryCode(field : RuleStructureField) : PExpr
+    {
+      <[
+        when (parser.MaxTextPos == curTextPos)
+          $(RecoveryStackFrameScope(field, <[ parser.StartRecovery(curTextPos) ]>))
+      ]>
+    }
+  }
+}
