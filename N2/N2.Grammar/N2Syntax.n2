@@ -39,7 +39,7 @@ syntax module N2Syntax
   alias Char            = Any;
   alias GrammarName     = QualifiedIdentifier;
   alias BaseName        = QualifiedIdentifier;
-  alias SeparatorToken  = TokenRule;
+  alias SeparatorToken  = TokenRuleExpression;
   alias SeparatorRule   = Rule;
 
   token PredefinedType = "void" | "int" | "string";
@@ -184,13 +184,13 @@ syntax module N2Syntax
         override Typing = NamespaceBody.Typing();
       }
 
-    | SyntaxModule = "syntax" sm "module"sm Name nl "{" inl Using* Declaration* d "}" nl
+    | SyntaxModule = "syntax" sm "module"sm Name nl "{" inl Using* SyntaxModuleMember* d "}" nl
       {
         override CollectGlobalSymbols
         {
           def symbol = ParsedSyntaxModuleSymbol(this);
           _ = ns.Node.AddAndReport(symbol, Name.Location);
-          foreach (decl in Declarations)
+          foreach (decl in SyntaxModuleMembers)
             decl.CollectGlobalSymbols(symbol);
         }
         [Cached] private MakeInitialContext(contextToSave : SyntaxModuleContext) : SyntaxModuleContext = contextToSave;
@@ -200,15 +200,15 @@ syntax module N2Syntax
           def context1 = MakeInitialContext(SyntaxModuleContext(parent, Name));
           def context2 = FoldThrough(Usings, context1, _.MakeContext(_));
           def context3 = SyntaxModuleBodyContext(context2);
-          def finalContext = MakeFinalContext(FoldThrough(Declarations, context3, _.MakeContext(_)));
+          def finalContext = MakeFinalContext(FoldThrough(SyntaxModuleMembers, context3, _.MakeContext(_)));
           Utils.RegisterGlobalSpanClassSymbols(context1.SyntaxModuleSymbol, finalContext);
           parent
         }
-        [Cached] private MakeTokenFieldNames() : Map[string, N2.Model.Identifier] = FoldThrough(Declarations, Map(), _.GetTokenFieldNames(_));
+        [Cached] private MakeTokenFieldNames() : Map[string, N2.Model.Identifier] = FoldThrough(SyntaxModuleMembers, Map(), _.GetTokenFieldNames(_));
         override Typing
         {
           _ = MakeTokenFieldNames();
-          foreach (decl in Declarations)
+          foreach (decl in SyntaxModuleMembers)
             decl.Typing();
         }
       }
@@ -258,7 +258,7 @@ syntax module N2Syntax
   }
 
   [StartRule]
-  syntax Declaration
+  syntax SyntaxModuleMember
   {
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void = _ = owner;
     [Cached] MakeContext(parent : Context) : Context = parent;
@@ -266,26 +266,23 @@ syntax module N2Syntax
 
     GetTokenFieldNames(result : Map[string, N2.Model.Identifier]) : Map[string, N2.Model.Identifier] = result;
 
-    | SimpleRule          = RuleAttributes "syntax"  sm             Name  sm "="  sm Rule                     SimpleRuleBody
+    | TokenRule
       {
-        override CollectGlobalSymbols
-        {
-          def symbol = ParsedSimpleRuleSymbol(this, owner);
-          _ = owner.Node.AddAndReport(symbol, Location);
-          SimpleRuleBody.CollectGlobalSymbols(symbol);
-        }
-        override MakeContext
-        {
-          _ = RuleAttributes.MakeContext(parent);
-          _ = SimpleRuleBody.MakeContext(parent);
-          parent
-        }
-        [Cached] private MakeTypedRule()   : N2.Model.Rule.Sequence    = EnsureSequence(this.Rule.Typing(None(), 0, None(), SimpleRuleBody.Context, RuleAttributes.Options(RuleDefinitionOptions.Empty)));
-        override Typing
-        {
-          _ = MakeTypedRule();
-          SimpleRuleBody.Typing();
-        }
+        override CollectGlobalSymbols = TokenRule.CollectGlobalSymbols(owner);
+        override MakeContext          = TokenRule.MakeContext(parent);
+        override Typing               = TokenRule.Typing();
+      }
+    | SimpleRule
+      {
+        override CollectGlobalSymbols = SimpleRule.CollectGlobalSymbols(owner);
+        override MakeContext          = SimpleRule.MakeContext(parent);
+        override Typing               = SimpleRule.Typing();
+      }
+    | VoidRule
+      {
+        override CollectGlobalSymbols = VoidRule.CollectGlobalSymbols(owner);
+        override MakeContext          = VoidRule.MakeContext(parent);
+        override Typing               = VoidRule.Typing();
       }
     | ExtensibleRule = RuleAttributes "syntax"  sm             Name                                      ExtensibleRuleBody
       {
@@ -304,44 +301,6 @@ syntax module N2Syntax
         override Typing
         {
           _ = ExtensibleRuleBody.Typing(ExtensibleRuleRef.Create(Name, Context.Bind(Name)));
-        }
-      }
-    | TokenRule           = RuleAttributes "token"   sm             Name  sm "="  sm TokenRule                ";"nl
-      {
-        override CollectGlobalSymbols = _ = owner.Node.AddAndReport(ParsedRegularRuleSymbol(this, owner), Location);
-        override MakeContext
-        {
-          _ = RuleAttributes.MakeContext(parent);
-          _ = TokenRule.MakeContext(parent);
-          parent
-        }
-        [Cached] private MakeRegularRule() : RegularRule      = TokenRule.Typing();
-        override Typing
-        {
-          _ = MakeRegularRule();
-        }
-      }
-    | VoidRule            = RuleAttributes "void"    sm             Name  sm "="  sm Rule                     SimpleRuleBody
-      {
-        override CollectGlobalSymbols
-        {
-          def symbol = ParsedVoidRuleSymbol(this, owner);
-          _ = owner.Node.AddAndReport(symbol, Location);
-          SimpleRuleBody.CollectGlobalSymbols(symbol);
-        }
-        override MakeContext
-        {
-          _ = RuleAttributes.MakeContext(parent);
-          _ = SimpleRuleBody.MakeContext(parent);
-          parent
-        }
-        [Cached] private MakeType()        : RuleType         = RuleType.Void();
-        [Cached] private MakeTypedRule()   : N2.Model.Rule.Sequence    = EnsureSequence(this.Rule.Typing(None(), 0, None(), SimpleRuleBody.Context, RuleAttributes.Options(RuleDefinitionOptions.Empty)));
-        override Typing
-        {
-          _ = MakeType();
-          _ = MakeTypedRule();
-          SimpleRuleBody.Typing();
         }
       }
     | Marker              =                "marker"  sm             Name                                      ";"nl
@@ -369,7 +328,7 @@ syntax module N2Syntax
             m.Typing(baseRule);
         }
       }
-    | Alias               =                RuleAlias
+    | RuleAlias
       {
         override MakeContext = RuleAlias.MakeContext(parent);
       }
@@ -382,7 +341,7 @@ syntax module N2Syntax
         }
         override MakeContext = TokenFieldContext(parent, Name, StringLiterals[0]);
       }
-    | SpanClass           =                "span"    sm "class"  sm Name MatchTokens=("=" TokenRule)?         ";"nl
+    | SpanClass           =                "span"    sm "class"  sm Name MatchTokens=("=" TokenRuleExpression)?         ";"nl
       {
         [Cached] private MakeSymbol(context : Context) : SpanClassSymbol
         {
@@ -407,7 +366,7 @@ syntax module N2Syntax
           _ = MakeRegularRule();
         }
       }
-    | BracePair           =                "braces"  sm Open=TokenRule "," sm Close=TokenRule                 ";"nl
+    | BracePair           =                "braces"  sm Open=TokenRuleExpression "," sm Close=TokenRuleExpression                 ";"nl
       {
         override MakeContext
         {
@@ -422,7 +381,7 @@ syntax module N2Syntax
           Close.Typing().ValidateRegularRule();
         }
       }
-    | KeywordRegex        =                "keyword" sm "regex"  sm MatchTokens=TokenRule sm "rule" sm QualifiedName ";"nl
+    | KeywordRegex        =                "keyword" sm "regex"  sm MatchTokens=TokenRuleExpression sm "rule" sm QualifiedName ";"nl
       {
         override MakeContext
         {
@@ -478,6 +437,116 @@ syntax module N2Syntax
     }
   }
 
+  syntax TokenRule = RuleAttributes "token" sm Name sm "=" sm TokenRuleExpression TokenRuleBody
+  {
+    [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedRegularRuleSymbol = ParsedRegularRuleSymbol(this, owner);
+    CollectGlobalSymbols(owner : IRuleDeclarationSite) : void 
+    {
+      def symbol = MakeSymbol(owner);
+      _ = owner.Node.AddAndReport(symbol, Location);
+      TokenRuleBody.CollectGlobalSymbols(symbol);
+    }
+    MakeContext(parent : Context) : Context
+    {
+      def context = RuleContext(parent, Symbol);
+      _ = RuleAttributes.MakeContext(context);
+      _ = TokenRuleExpression.MakeContext(context);
+      parent
+    }
+    [Cached] private MakeRegularRule() : RegularRule      = TokenRuleExpression.Typing();
+    Typing() : void
+    {
+      _ = MakeRegularRule();
+      TokenRuleBody.Typing();
+    }
+  }
+
+  syntax TokenRuleBody
+  {
+    CollectGlobalSymbols(ruleSymbol : RegularRuleSymbol) : void = _ = ruleSymbol;
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    GetLastLocation() : N2.Location;
+    Typing() : void { }
+
+    | Empty = ";"nl
+      {
+        override GetLastLocation = MakeLastLocation(this, Semicolon);
+      }
+    | Block = "{"  TokenRuleBodyMember* "}"nl
+      {
+        override CollectGlobalSymbols = foreach (member in TokenRuleBodyMembers) member.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext = FoldThrough(TokenRuleBodyMembers, parent, _.MakeContext(_));
+        override GetLastLocation = MakeLastLocation(this, OpenBrace);
+        override Typing = foreach (x in TokenRuleBodyMembers) x.Typing();
+      }
+  }
+
+  syntax TokenRuleBodyMember
+  {
+    CollectGlobalSymbols(ruleSymbol : RegularRuleSymbol) : void = _ = ruleSymbol;
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    Typing() : void { }
+
+    | RuleAlias
+      {
+        override MakeContext = RuleAlias.MakeContext(parent);
+      }
+    | TokenRule
+      {
+        override CollectGlobalSymbols = TokenRule.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext          = TokenRule.MakeContext(parent);
+        override Typing               = TokenRule.Typing();
+      }
+  }
+
+  syntax SimpleRule = RuleAttributes "syntax" sm Name sm "=" sm Rule SimpleRuleBody
+  {
+    [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedSimpleRuleSymbol = ParsedSimpleRuleSymbol(this, owner);
+    CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
+    {
+      def symbol = MakeSymbol(owner);
+      _ = owner.Node.AddAndReport(symbol, Location);
+      SimpleRuleBody.CollectGlobalSymbols(symbol);
+    }
+    MakeContext(parent : Context) : Context
+    {
+      def context = RuleContext(parent, Symbol);
+      _ = RuleAttributes.MakeContext(context);
+      _ = SimpleRuleBody.MakeContext(context);
+      parent
+    }
+    [Cached] private MakeTypedRule() : N2.Model.Rule.Sequence = EnsureSequence(this.Rule.Typing(None(), 0, None(), SimpleRuleBody.Context, RuleAttributes.Options(RuleDefinitionOptions.Empty)));
+    Typing() : void
+    {
+      _ = MakeTypedRule();
+      SimpleRuleBody.Typing();
+    }
+  }
+
+  syntax VoidRule = RuleAttributes "void" sm Name sm "=" sm Rule SimpleRuleBody
+  {
+    [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedVoidRuleSymbol = ParsedVoidRuleSymbol(this, owner);
+    CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
+    {
+      def symbol = MakeSymbol(owner);
+      _ = owner.Node.AddAndReport(symbol, Location);
+      SimpleRuleBody.CollectGlobalSymbols(symbol);
+    }
+    MakeContext(parent : Context) : Context
+    {
+      def context = RuleContext(parent, Symbol);
+      _ = RuleAttributes.MakeContext(context);
+      _ = SimpleRuleBody.MakeContext(context);
+      parent
+    }
+    [Cached] private MakeTypedRule()   : N2.Model.Rule.Sequence    = EnsureSequence(this.Rule.Typing(None(), 0, None(), SimpleRuleBody.Context, RuleAttributes.Options(RuleDefinitionOptions.Empty)));
+    Typing() : void
+    {
+      _ = MakeTypedRule();
+      SimpleRuleBody.Typing();
+    }
+  }
+
   syntax SimpleRuleBody
   {
     CollectGlobalSymbols(ruleSymbol : SimpleRuleSymbol) : void = _ = ruleSymbol;
@@ -507,6 +576,24 @@ syntax module N2Syntax
     | RuleAlias
       {
         override MakeContext = RuleAlias.MakeContext(parent);
+      }
+    | TokenRule
+      {
+        override CollectGlobalSymbols = TokenRule.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext          = TokenRule.MakeContext(parent);
+        override Typing               = TokenRule.Typing();
+      }
+    | VoidRule
+      {
+        override CollectGlobalSymbols = VoidRule.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext          = VoidRule.MakeContext(parent);
+        override Typing               = VoidRule.Typing();
+      }
+    | SimpleRule
+      {
+        override CollectGlobalSymbols = SimpleRule.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext          = SimpleRule.MakeContext(parent);
+        override Typing               = SimpleRule.Typing();
       }
     | ExtraField
       {
@@ -892,12 +979,12 @@ syntax module N2Syntax
       }
   }
 
-  syntax TokenRule
+  syntax TokenRuleExpression
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
     [Cached] Typing() : RegularRule;
 
-    | Choice                  = LeftRule=TokenRule ^ 10 sm RightRules=("|" TokenRule ^ 10)+
+    | Choice                  = LeftRule=TokenRuleExpression ^ 10 sm RightRules=("|" TokenRuleExpression ^ 10)+
       {
         override MakeContext
         {
@@ -907,7 +994,7 @@ syntax module N2Syntax
         }
         override Typing = RegularRule.Choice(Location, LeftRule.Typing() :: RightRules.Map(r => r[1].Typing()));
       }
-    | Sequence                = LeftRule=TokenRule ^ 20 sm RightRules=(TokenRule ^ 20)+
+    | Sequence                = LeftRule=TokenRuleExpression ^ 20 sm RightRules=(TokenRuleExpression ^ 20)+
       {
         override MakeContext
         {
@@ -917,23 +1004,23 @@ syntax module N2Syntax
         }
         override Typing = RegularRule.Sequence(Location, LeftRule.Typing() :: RightRules.Map(_.Typing()));
       }
-    | Optional                = TokenRule "?"
+    | Optional                = TokenRuleExpression "?"
       {
         precedence 30;
-        override MakeContext = TokenRule.MakeContext(parent);
-        override Typing = RegularRule.Repeat(Location, 0, Some(1), this.TokenRule.Typing());
+        override MakeContext = TokenRuleExpression.MakeContext(parent);
+        override Typing = RegularRule.Repeat(Location, 0, Some(1), this.TokenRuleExpression.Typing());
       }
-    | ZeroOrMany              = TokenRule "*"
+    | ZeroOrMany              = TokenRuleExpression "*"
       {
         precedence 30;
-        override MakeContext = TokenRule.MakeContext(parent);
-        override Typing = RegularRule.Repeat(Location, 0, None(), this.TokenRule.Typing());
+        override MakeContext = TokenRuleExpression.MakeContext(parent);
+        override Typing = RegularRule.Repeat(Location, 0, None(), this.TokenRuleExpression.Typing());
       }
-    | OneOrMany               = TokenRule "+"
+    | OneOrMany               = TokenRuleExpression "+"
       {
         precedence 30;
-        override MakeContext = TokenRule.MakeContext(parent);
-        override Typing = RegularRule.Repeat(Location, 1, None(), this.TokenRule.Typing());
+        override MakeContext = TokenRuleExpression.MakeContext(parent);
+        override Typing = RegularRule.Repeat(Location, 1, None(), this.TokenRuleExpression.Typing());
       }
     | Char                    = CharLiteral
       {
@@ -951,24 +1038,24 @@ syntax module N2Syntax
           RegularRule.Call(Location, ruleRef)
         }
       }
-    | Rounds                  = "(" TokenRule ")"
+    | Rounds                  = "(" TokenRuleExpression ")"
       {
-        override MakeContext = TokenRule.MakeContext(parent);
-        override Typing = TokenRule.Typing();
+        override MakeContext = TokenRuleExpression.MakeContext(parent);
+        override Typing = TokenRuleExpression.Typing();
       }
     | Range                   = "[" (Range; ","sm)+ "]"
       {
         override Typing = RegularRule.Chars(Location, [FoldThrough(Ranges[0], RangeSet(), _.RangeSet(_))]);
       }
-    | ZeroOrManyWithSeparator = "(" TokenRule ";"sm SeparatorToken ")" "*"
+    | ZeroOrManyWithSeparator = "(" TokenRuleExpression ";"sm SeparatorToken ")" "*"
       {
-        override MakeContext  = parent |> TokenRule.MakeContext |> SeparatorToken.MakeContext;
-        override Typing = RegularRule.RepeatWithSeparator(Location, 0, None(), TokenRule.Typing(), SeparatorToken.Typing());
+        override MakeContext  = parent |> TokenRuleExpression.MakeContext |> SeparatorToken.MakeContext;
+        override Typing = RegularRule.RepeatWithSeparator(Location, 0, None(), TokenRuleExpression.Typing(), SeparatorToken.Typing());
       }
-    | OneOrManyWithSeparator  = "(" TokenRule ";"sm SeparatorToken ")" "+"
+    | OneOrManyWithSeparator  = "(" TokenRuleExpression ";"sm SeparatorToken ")" "+"
       {
-        override MakeContext = parent |> TokenRule.MakeContext |> SeparatorToken.MakeContext;
-        override Typing = RegularRule.RepeatWithSeparator(Location, 1, None(), TokenRule.Typing(), SeparatorToken.Typing());
+        override MakeContext = parent |> TokenRuleExpression.MakeContext |> SeparatorToken.MakeContext;
+        override Typing = RegularRule.RepeatWithSeparator(Location, 1, None(), TokenRuleExpression.Typing(), SeparatorToken.Typing());
       }
   }
 
