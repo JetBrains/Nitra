@@ -13,11 +13,12 @@ namespace N2.Visualizer
 {
   class ErrorException : Exception
   {
-    public ErrorException(RecoveryResult recovery)
+    public ErrorException(RecoveryResult[] recovery)
     {
       Recovery = recovery;
     }
-    public RecoveryResult Recovery { get; private set; }
+
+    public RecoveryResult[] Recovery { get; private set; }
   }
 
   static class Utils
@@ -82,8 +83,9 @@ namespace N2.Visualizer
       timer.Stop();
 
       //ProcessStackFrame(startTextPos, parser, _bestResult.Stack, _bestResult.StartPos, text, 0);
-      FixAst(_bestResult, parser);
-      var ex = new ErrorException(_bestResult);
+      //FixAst(_bestResult, parser);
+
+      var ex = new ErrorException(_bestResults.ToArray());
       Reset();
       throw ex;
       //return _bestResult;
@@ -200,9 +202,14 @@ namespace N2.Visualizer
 
       if (stackLength > bestResultStackLength)    goto good;
       if (stackLength < bestResultStackLength)    return;
-      if (startState < _bestResult.StartState)   goto good;
-      if (startState == _bestResult.StartState)  goto good2;
-      return;
+
+      if (startState < _bestResult.StartState) goto good;
+      if (startState > _bestResult.StartState) return;
+
+      if (stack.Head.State > _bestResult.Stack.Head.State) goto good;
+      if (stack.Head.State < _bestResult.Stack.Head.State) return;
+
+      goto good2;
     good:
       _bestResults.Clear();
       _bestResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos);
