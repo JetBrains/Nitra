@@ -1,0 +1,89 @@
+﻿using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal partial class ParseMethodEmitter : MethodEmitter
+  {
+    public override CompileList(code : SCG.List[PExpr], field : RuleStructureField.List) : void
+    {
+      def stateData = ListStateData(this, field);
+      def ifCounterEqualsToMaxThenContinue()
+      {
+        if (field.MaxCount is Some(max))
+          <[
+            when ($(stateData.Counter) == $max)
+              $(GotoContinueParseLabel(field));
+          ]>
+        else
+          <[ {} ]>
+      }
+      def ifCounterLessThanMinThenFail()
+      {
+        if (field.MinCount > 0)
+          <[
+            when ($(stateData.Counter) < $(field.MinCount))
+              $(GotoFailParseLabel(field));
+          ]>
+        else
+          <[ {} ]>
+      }
+
+      def firstChild = field.Rule.NotMarkerFields[0];
+      code.Add(<[
+        $(ParseLabel(field));
+          _ = $(field.SrcRule.ToString());
+          $(AllocateParentAst(field));
+          $(stateData.Init());
+          $(stateData.ListStartPos) = $CurTextPos;
+          $(AstStart(field.Rule)) = $CurTextPos;
+          $(GotoParseLabel(firstChild));
+
+        $(OkLabel(field.Rule));
+          $(stateData.Inc());
+          $(AstPtr(field.Owner).Set(field, <[ $CurTextPos - $(stateData.ListStartPos) ]>));
+          $(ifCounterEqualsToMaxThenContinue());
+          $(AstStart(field.Rule)) = $CurTextPos;
+          $(GotoParseLabel(firstChild));
+
+        $(FailLabel(field.Rule));
+          $(ifCounterLessThanMinThenFail());
+          $CurTextPos = $(AstStart(field.Rule));
+          $(AstPtr(field.Owner).Set(field, <[ $CurTextPos - $(stateData.ListStartPos) ]>));
+          $(GotoContinueParseLabel(field));
+
+        $(RecoveryLabel(field));
+          $(stateData.Init());
+          $(stateData.ListStartPos) = $CurTextPos;
+          $(AstStart(field.Rule)) = $CurTextPos;
+          when (true)
+          {
+            def listEndPos = $CurTextPos + $(AstPtr(field.Owner).GetSize(field));
+            when ($CurTextPos == listEndPos)
+              $(GotoParseLabel(firstChild));
+            mutable itemEndPos = $CurTextPos;
+            while (itemEndPos != listEndPos)
+            {
+              $(stateData.Inc());
+              $CurTextPos = itemEndPos;
+              $(AstPtr(field.Rule).Var) = parser.GetAst($CurTextPos, $(field.Rule.AstId : dyn));
+              itemEndPos += parser.AstSize($(AstPtr(field.Rule).Var), $(field.Rule.SizesStart), $(field.Rule.SizesEnd));
+            }
+            $(stateData.Dec());
+            _ = "Мы перед последним элеменом цикла. Начинаем парсить хвост...";
+            $(GotoParseLabel(firstChild));
+          }
+      ]>);
+    }
+  }
+}

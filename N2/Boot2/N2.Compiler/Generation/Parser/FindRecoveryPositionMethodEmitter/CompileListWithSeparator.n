@@ -1,0 +1,123 @@
+﻿using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal partial class FindRecoveryPositionMethodEmitter : MethodEmitter
+  {
+    public override CompileListWithSeparator(code : SCG.List[PExpr], field : RuleStructureField.ListWithSeparator) : void
+    {
+      def stateData = ListStateData(this, field);
+      def ifCounterEqualsToMaxThenContinue()
+      {
+        if (field.MaxCount is Some(max))
+          <[
+            when ($(stateData.Counter) == $max)
+              $(GotoContinueParseLabel(field));
+          ]>
+        else
+          <[ {} ]>
+      }
+      def ifCounterLessThanMinThenFail()
+      {
+        if (field.MinCount > 0)
+          <[
+            when ($(stateData.Counter) < $(field.MinCount))
+              $(GotoFailParseLabel(field));
+          ]>
+        else
+          <[ {} ]>
+      }
+      def hangingSeparatorCode = if (field.HangingSeparator)
+        <[
+          $(stateData.ListEndPos) = $CurTextPos;
+        ]>
+      else
+        <[ {} ]>;
+
+      def firstRuleChild = field.Rule.NotMarkerFields[0];
+      def firstSeparatorChild = field.Separator.NotMarkerFields[0];
+      code.Add(<[
+        $(ParseLabel(field));
+          _ = $(field.SrcRule.ToString());
+          $(stateData.Init());
+          $(stateData.ListStartPos) = $CurTextPos;
+          $(stateData.ListEndPos) = $CurTextPos;
+          $(AstStart(field.Rule)) = $CurTextPos;
+          $(GotoParseLabel(firstRuleChild));
+
+        $(OkLabel(field.Rule));
+          $(stateData.Inc());
+          $(stateData.ListEndPos) = $CurTextPos;
+          $(ifCounterEqualsToMaxThenContinue());
+          $(AstStart(field.Separator)) = $CurTextPos;
+          $(GotoParseLabel(firstSeparatorChild));
+
+        $(FailLabel(field.Rule));
+          $(ifCounterLessThanMinThenFail());
+          $CurTextPos = $(stateData.ListEndPos);
+          $(GotoContinueParseLabel(field));
+
+        $(OkLabel(field.Separator));
+          $hangingSeparatorCode;
+          $(AstStart(field.Rule)) = $CurTextPos;
+          $(GotoParseLabel(firstRuleChild));
+
+        $(FailLabel(field.Separator));
+          $(ifCounterLessThanMinThenFail());
+          $CurTextPos = $(stateData.ListEndPos);
+          $(GotoContinueParseLabel(field));
+
+        $(RecoveryLabel(field));
+          $(stateData.Init());
+          $(stateData.ListStartPos) = $CurTextPos;
+          $(stateData.ListEndPos) = $CurTextPos;
+          $(AstStart(field.Rule)) = $CurTextPos;
+          when (true)
+          {
+            def listEndPos = $CurTextPos + $(AstPtr(field.Owner).GetSize(field));
+            when ($CurTextPos == listEndPos)
+              $(GotoParseLabel(firstRuleChild));
+            mutable itemEndPos = $CurTextPos;
+            mutable isRule = false;
+            while (itemEndPos != listEndPos)
+            {
+              isRule = !isRule;
+              $CurTextPos = itemEndPos;
+              if (isRule)
+              {
+                $(stateData.Inc());
+                $(AstPtr(field.Rule).Var) = parser.GetAst($CurTextPos, $(field.Rule.AstId : dyn));
+                itemEndPos += parser.AstSize($(AstPtr(field.Rule).Var), $(field.Rule.SizesStart), $(field.Rule.SizesEnd));
+              }
+              else
+              {
+                $(AstPtr(field.Separator).Var) = parser.GetAst($CurTextPos, $(field.Separator.AstId : dyn));
+                itemEndPos += parser.AstSize($(AstPtr(field.Separator).Var), $(field.Separator.SizesStart), $(field.Separator.SizesEnd));
+              }
+            }
+            _ = "Мы перед последним элеменом цикла. Начинаем парсить хвост...";
+            if (isRule)
+            {
+              $(stateData.Dec());
+              $(GotoParseLabel(firstRuleChild));
+            }
+            else
+            {
+              $(GotoParseLabel(firstSeparatorChild));
+            }
+          }
+      ]>);
+    }
+  }
+}

@@ -1,0 +1,134 @@
+﻿using N2.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal partial class ParseMethodEmitter : MethodEmitter
+  {
+    public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
+    {
+      def code = SCG.List();
+      def endLabel = Environment.MakeLabel("EndParse");
+      def recoveryLabel = Environment.MakeLabel("Recovery");
+      def (saveMaxTextPos, loadMaxTextPos) = if (ruleStructure.Symbol.Type is RuleType.Void)
+      {
+        (<[ $(CreateVariable("maxTextPos") : dyn) = parser.MaxTextPos ]>, <[ parser.MaxTextPos = $(CreateVariable("maxTextPos") : dyn) ]>)
+      }
+      else
+      {
+        (<[ {} ]>, <[ {} ]>)
+      }
+      def checkAstMemoize = if (ruleStructure.Symbol is SimpleRuleSymbol)
+        <[
+          $(AstPtr(ruleStructure).Var) = parser.TryGetAst($CurTextPos, RuleId);
+          when ($(AstPtr(ruleStructure).Var) > 0)
+          {
+            parseState = $(AstPtr(ruleStructure).Get(ruleStructure.HeaderState));
+            if (parseState == N2.Internal.Parser.AstParsedState)
+            {
+              $CurTextPos += parser.AstSize($(AstPtr(ruleStructure).Var), $(ruleStructure.SizesStart), $(ruleStructure.SizesEnd));
+              $(endLabel.Goto());
+            }
+            else if (parseState < 0)
+            {
+              parseState = ~parseState;
+              $(recoveryLabel.Goto());
+            }
+            else
+            {
+              $CurTextPos = -1;
+              $(endLabel.Goto());
+            }
+          }
+        ]>
+      else
+        <[
+          when (resultRef > 0)
+          {
+            $(AstPtr(ruleStructure).Var) = resultRef;
+            parseState = parser.ast[resultRef + 2];
+            assert(parseState < 0 && parseState != N2.Internal.Parser.AstParsedState);
+            parseState = ~parseState;
+            $(recoveryLabel.Goto());
+          }
+        ]>;
+
+      def setResultRef = if (ruleStructure.Symbol is ExtentionRuleSymbol)
+        <[ resultRef = $(AstPtr(ruleStructure).Var); ]>
+      else
+        <[ {} ]>;
+
+      code.Add(<[ _ = $(ruleStructure.SrcRule.ToString()) ]>);
+      //code.AddRange(_fields.Map(field => <[ _ = $(field.Print()) ]>));
+
+      code.Add(saveMaxTextPos);
+      code.Add(<[ $(AstStart(ruleStructure)) = $CurTextPos; ]>);
+      code.Add(checkAstMemoize);
+      code.Add(<[ $(GotoParseLabel(ruleStructure.NotMarkerFields[0])); ]>);
+
+      //parse ok
+      code.Add(<[ $(OkLabel(ruleStructure)); ]>);
+      code.Add(<[ $(AstPtr(ruleStructure).Set(ruleStructure.HeaderState, <[ N2.Internal.Parser.AstParsedState ]>)) ]>);// правило полностью разобрано.
+      code.Add(setResultRef);
+      code.Add(<[ $(endLabel.Goto()); ]>);
+
+      //parse fail
+      code.Add(<[ $(FailLabel(ruleStructure)); ]>);
+      code.Add(<[ when (parseState > $(ruleStructure.AllocateState)) // АСТ создано
+                  {
+                    $(AstPtr(ruleStructure).Set(ruleStructure.HeaderState, <[ parseState ]>));
+                    $setResultRef;
+                  }
+      ]>);
+      code.Add(<[ $CurTextPos = -1; $(endLabel.Goto()); ]>);
+      CompileFields(code, ruleStructure.Fields);
+
+      code.Add(recoveryLabel.Label());
+      foreach (field in ruleStructure.NotMarkerFields)
+      {
+        def skip = if (field is RuleStructureField.Predicate)
+          <[ assert(false) ]>;
+        else
+          <[ $CurTextPos += $(AstPtr(field.Owner).GetSize(field)) ]>;
+        code.Add(<[
+          if (parseState >= $(field.EndState))
+            $skip;
+          else
+            $(GotoRecoveryLabel(field))
+        ]>);
+      }
+      code.Add(<[ assert2(false); assert(false) ]>);
+
+      def debugCode = if (ruleStructure.Symbol.LastLocation is Some(loc) when Owner.Environment.Manager.Options.EmitDebug)
+      {
+        def debugCode = <[ () ]>;
+        debugCode.Location = loc.NLocation();
+        debugCode;
+      }
+      else
+        <[ {} ]>;
+      code.Add(<[ $(endLabel.Label()); $debugCode; $loadMaxTextPos; $CurTextPos; ]>);
+
+      def variables = SCG.List();
+      variables.Add(<[
+        mutable tmpSize    : int; _ = tmpSize;
+        mutable parseState : int; _ = parseState;
+        mutable newPos     : int; _ = newPos;
+      ]>);
+      variables.AddRange(LocalVariables.Filter(_ != "resultRef").Map(name => <[ mutable $(name : dyn) ]>));
+
+      variables.Concat(code).FlattenPExpr();
+    }
+  }
+}

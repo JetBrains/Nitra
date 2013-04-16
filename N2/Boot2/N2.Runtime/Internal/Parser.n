@@ -1,35 +1,71 @@
-﻿using Nemerle;
+﻿using N2.Runtime;
+using N2.Runtime.Reflection;
+using Nemerle;
+using Nemerle.Imperative;
 using Nemerle.Collections;
+using Nemerle.Late;
 using Nemerle.Text;
 using Nemerle.Utility;
 
 using System;
 using System.Diagnostics;
+using System.Linq;
 
 using SCG = System.Collections.Generic;
 
 namespace N2.Internal
 {
-#if !PARSER_DEBUG
-  [DebuggerStepThroughAttribute]
-#endif
-  public struct Parser
+  public enum ParsingMode
   {
+    | Parsing
+    | Recovery
+    | EndRecovery
+  }
+
+  [Record]
+  public struct Error
+  {
+    public SkipBefore : int;
+    public Size       : int;
+    public SkipAfter  : int;
+    public Skip       : int { get { SkipBefore + Size + SkipAfter } }
+  }
+
+#if !PARSER_DEBUG
+  //[DebuggerStepThroughAttribute]
+#endif
+  public class Parser
+  {
+    public static AstParsedState = ~int.MaxValue;
+
     public static ResultOffset = 0;
-    public static AstOffset    = 1;
 
     public mutable ast            : array[int];
     public mutable memoize        : array[int];
     public mutable allocated      : int;
-    public         parserHost     : ParserHost;
-    public mutable IsRecoveryMode : bool;
+    public         ParserHost     : ParserHost;
+    public mutable ParsingMode    : ParsingMode;
 
     public         Source         : SourceSnapshot;
     public         Text           : string;
+    public         RuleParser     : RuleParser { get }
     public mutable LastParseStart : int;
     public mutable LastParseEnd   : int;
+    public         ListData       : SCG.List[RecoveryListData];
+    public         RecoveryStack  : SCG.Stack[RecoveryStackFrame];
+    public         Errors         : SCG.List[Error];
+    public mutable IgnoreRecovery : bool;
+    public mutable _maxTextPos    : int;
+    public MaxTextPos             : int
+    {
+      get { _maxTextPos }
+      set { _maxTextPos = value; }
+    }
+    
+    public IsSuccess : bool { get { true } }
+    public LastSuccessPos : int { get { 0 } }
 
-    public ParseResult : string
+    public Parser : string
     {
       get
       {
@@ -62,18 +98,23 @@ namespace N2.Internal
       }
     }
 
-    public this(source : SourceSnapshot, initalSize : int, parserHost : ParserHost)
+    public this(source : SourceSnapshot, initalSize : int, parserHost : ParserHost, ruleParser : RuleParser)
     {
+      Errors          = SCG.List();
+      ListData        = SCG.List();
+      RecoveryStack   = SCG.Stack();
       def textSize    = source.Text.Length;
       this.Source     = source;
       this.Text       = source.Text;
       this.ast        = array(if (initalSize < 10) 10 else initalSize);
       this.memoize    = array(textSize + 1);
       this.allocated  = 0;
-      this.parserHost = parserHost;
-      IsRecoveryMode  = false;
+      this.ParserHost = parserHost;
       LastParseStart  = -1;
       LastParseEnd    = -1;
+      MaxTextPos      = 0;
+      ParsingMode     = ParsingMode.Parsing;
+      this.RuleParser = ruleParser;
     }
 
     public Allocate(size : int) : int
@@ -91,6 +132,92 @@ namespace N2.Internal
       def newAst = Allocate(size);
       ast[newAst] = ruleId;
       newAst;
+    }
+
+    public TryGetAst(pos : int, ruleId : int) : int
+    {
+      for (mutable astPtr = memoize[pos]; astPtr > 0; astPtr = ast[astPtr + 1])
+        when (ast[astPtr] == ruleId)
+          return astPtr;
+      0;
+    }
+
+    public GetAst(pos : int, ruleId : int) : int
+    {
+      def astPtr = TryGetAst(pos , ruleId);
+      assert(astPtr > 0);
+      astPtr;
+    }
+
+    public AstSize(astPtr : int, begin : int, end : int) : int
+    {
+      mutable size = 0;
+      def end = astPtr + end;
+      for (mutable i = astPtr + begin; i < end; ++i)
+        size += ast[i];
+      size;
+    }
+
+    public StartRecovery(startTextPos : int) : void
+    {
+      when (!IgnoreRecovery)
+      {
+        def recoveryStrategy = this.ParserHost.RecoveryStrategy;
+        
+        def bestResult =
+          if (recoveryStrategy != null)
+            recoveryStrategy(startTextPos, this)
+          else
+          {
+            assert2(false);
+            throw NotImplementedException();
+          }
+          
+        _ = bestResult;
+
+        this.ParsingMode = ParsingMode.EndRecovery;
+        assert2(false);
+        assert(false);
+      }
+    }
+    
+    
+    public GetSpans(startPos : int, endPos : int, spans : SCG.List[SpanInfo]) : void
+    {
+      def walkerHost = this.ParserHost.GetWalkerHost(StandardWalkerTypes.Highlighter);
+      def start_Walker = walkerHost.GetRootWalker(this);
+      mutable num = 0;
+      _ = late start_Walker.Walk(ref num, this, spans, startPos, endPos);
+    }
+
+    public GetOutlining(outlining : SCG.List[OutliningInfo]) : void
+    {
+      def timer = Stopwatch.StartNew();
+      def context = N2.Internal.OutliningWalkerContext(outlining);
+      def walkerHost = this.ParserHost.GetWalkerHost(StandardWalkerTypes.Outlining);
+      def start_Walker = walkerHost.GetRootWalker(this);
+      mutable num = 0;
+      timer.Stop();
+      Debug.WriteLine($"GetOutlining prepare: $(timer.Elapsed)");
+      timer.Reset();
+      timer.Start();
+      _ = late start_Walker.Walk(ref num, this, context);
+      timer.Stop();
+      Debug.WriteLine($"GetOutlining Walk: $(timer.Elapsed)");
+    }
+
+    public Reflect() : ReflectionStruct
+    {
+      def walkerHost = this.ParserHost.GetWalkerHost(StandardWalkerTypes.Reflection);
+      def start_Walker = walkerHost.GetRootWalker(this);
+      mutable num = 0;
+      def result = late start_Walker.Walk(ref num, this);
+      result :> ReflectionStruct
+    }
+
+    public CollectErrors() : ErrorMessage
+    {
+      default(ErrorMessage)
     }
   }
 }

@@ -1,0 +1,126 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using N2.Model;
+using N2.Typing;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+namespace N2.Compiler
+{
+  internal interface IRuleDescriptorEmitter
+  {
+    RuleSymbols : Seq[RuleDefSymbol] { get; }
+    DefineDescriptor() : void;
+    Emit(): void;
+  }
+
+  [Record]
+  internal abstract class RuleDescriptorEmitter[TRuleSymbol] : IRuleDescriptorEmitter
+    where TRuleSymbol : RuleDefSymbol
+  {
+    public Owner       : SyntaxModuleEmitter { get; }
+    public RuleSymbols : list[TRuleSymbol]   { get; }
+
+    protected abstract BaseType  : PExpr  { get; }
+    protected abstract ClassName : string { get; }
+
+    [RecordIgnore] protected DescriptorTb : TypeBuilder { get; private set; }
+
+    public virtual DefineDescriptor() : void
+    {
+      assert(DescriptorTb == null);
+      DescriptorTb = Owner.GrammarDescriptorImplTB.DefineNestedType(<[decl:
+        private sealed class $(ClassName : usesite) : $BaseType
+        {
+          internal this(idInGrammar : int)
+          {
+            IdInGrammar = idInGrammar;
+          }
+
+          public override IdInGrammar : int { get; }
+          public override Grammar     : N2.GrammarDescriptor { get { $(Owner.GrammarDescriptorImplTB.GetMemType() : typed).StaticDescriptor } }
+        }
+      ]>);
+
+      def nameExpr = MakeRuleSelector(ruleSymbol => <[ $( $<#..$(ruleSymbol.ModuleRelativeName; ".")#> : string) ]>);
+      DescriptorTb.DefineConditional(<[decl: public override Name : string { get { $nameExpr } } ]>);
+
+      foreach (ruleSymbol in RuleSymbols)
+      {
+        Owner.GrammarDescriptorImplTB.DefineConditional(<[ decl:
+          public static $(ruleSymbol.DecorateRuleClassName() + "_Descriptor" : usesite) : $BaseType = $(DescriptorTb.GetMemType() : typed)($(ruleSymbol.IdInGrammar : int));
+        ]>);
+      }
+    }
+
+    public Emit() : void
+    {
+      assert(DescriptorTb != null);
+      DescriptorTb.Compile();
+    }
+
+    protected MakeRuleSelector(maker : TRuleSymbol -> PExpr) : PExpr
+    {
+      def cases = SCG.List();
+      foreach (ruleSymbol in RuleSymbols)
+      {
+        def expr = maker(ruleSymbol);
+        cases.Add(<[ case: | $(ruleSymbol.IdInGrammar : int) => $expr ]>);
+      }
+      cases.Add(<[ case: | id => assert(false, $"Invalid rule id $id.") ]>);
+      <[ match (this.IdInGrammar) { ..$cases } ]>
+    }
+
+    protected MakeRuleSelector[TKey](group : TRuleSymbol -> TKey, maker : TKey -> PExpr) : PExpr
+    {
+      def cases = SCG.List();
+      foreach (pair in RuleSymbols.Grouping(r => (group(r), r)))
+      {
+        def patterns = pair.Value.Map(ruleSymbol => <[ $(ruleSymbol.IdInGrammar : int) ]>);
+        def body     = maker(pair.Key);
+        def case     = MatchCase(patterns, body);
+        cases.Add(case);
+      }
+      cases.Add(<[ case: | id => assert(false, $"Invalid rule id $id.") ]>);
+      <[ match (this.IdInGrammar) { ..$cases } ]>
+    }
+
+    protected DefineNewParserMethod(returnType : PExpr) : void
+    {
+      def parserExpr = MakeRuleSelector(ruleSymbol => <[ $(Owner.GrammarImplTB.GetMemType() : typed).$(ruleSymbol.DecorateRuleClassName() : dyn)(grammar) ]>);
+      DescriptorTb.DefineConditional(<[decl:
+        public override NewParser(grammar : N2.CompositeGrammar) : $returnType
+        {
+          $parserExpr
+        }
+      ]>);
+    }
+
+    protected DefineIsStartRuleProperty() : void
+    {
+      def isStartRuleExpr = MakeRuleSelector(ruleSymbol => ruleSymbol.Options.IsStart, isStart => <[ $(isStart : bool) ]>);
+      DescriptorTb.DefineConditional(<[decl: public override IsStartRule : bool { get { $isStartRuleExpr } } ]>);
+    }
+
+    protected DefineEntranceMethod() : void
+    {
+      foreach (ruleSymbol in RuleSymbols)
+      {
+        def methodName = $<#..$(ruleSymbol.ModuleRelativeName; "_")#>;
+        Owner.GrammarTB.DefineConditional(<[ decl:
+          public static $(methodName : usesite)(source : N2.SourceSnapshot, parserHost : N2.ParserHost) : N2.Internal.Parser
+          {
+            parserHost.DoParsing(source, $(ruleSymbol.GetRuleDescriptorRef()))
+          }
+        ]>);
+      }
+    }
+  }
+}
