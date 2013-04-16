@@ -40,7 +40,7 @@ syntax module N2Syntax
   alias GrammarName     = QualifiedIdentifier;
   alias BaseName        = QualifiedIdentifier;
   alias SeparatorToken  = TokenRuleExpression;
-  alias SeparatorRule   = Rule;
+  alias SeparatorRule   = RuleExpression;
 
   token PredefinedType = "void" | "int" | "string";
 
@@ -392,7 +392,7 @@ syntax module N2Syntax
       }
   }
 
-  syntax RuleAlias = "alias"   sm             Name  sm "="  sm Rule                     ";"nl
+  syntax RuleAlias = "alias" sm Name sm "=" sm RuleExpression ";"nl
   {
     [Cached] private MakeSymbol() : RuleAliasSymbol
     {
@@ -406,7 +406,7 @@ syntax module N2Syntax
     }
   }
 
-  syntax InlineExtentionRule = "|" RuleAttributes (Name "=")? Rule ExtentionRuleBody?
+  syntax InlineExtentionRule = "|" RuleAttributes (Name "=")? RuleExpression ExtentionRuleBody?
   {
     CollectGlobalSymbols(declarationSite : IRuleDeclarationSite) : void
     {
@@ -425,7 +425,7 @@ syntax module N2Syntax
     [Cached] private MakeBaseRuleRef(baseRule : ExtensibleRuleRef)  : ExtensibleRuleRef     = baseRule;
     [Cached] private MakeOptions()                                  : RuleDefinitionOptions = RuleAttributes.Options(BaseRuleRef.Map(r => r.Options.InheritedCopy()) ?? RuleDefinitionOptions.Empty);
     [Cached] private MakeType()                                     : RuleType              = BaseRuleRef.Map(_.Type) ?? RuleType.Void();
-    [Cached] private MakeTypedRule()                                : N2.Model.Rule.Sequence = EnsureSequence(this.Rule.Typing(BaseRuleRef, ExtentionRuleBodyOpt.Map(b => b.GetPrecedence()) ?? 0, None(), ExtentionRuleBodyOpt.Map(_.Context) ?? Context, Options));
+    [Cached] private MakeTypedRule()                                : Rule.Sequence         = EnsureSequence(RuleExpression.Typing(BaseRuleRef, ExtentionRuleBodyOpt.Map(b => b.GetPrecedence()) ?? 0, None(), ExtentionRuleBodyOpt.Map(_.Context) ?? Context, Options));
     Typing(baseRule : ExtensibleRuleRef) : void
     {
       _ = MakeBaseRuleRef(baseRule);
@@ -499,7 +499,7 @@ syntax module N2Syntax
       }
   }
 
-  syntax SimpleRule = RuleAttributes "syntax" sm Name sm "=" sm Rule SimpleRuleBody
+  syntax SimpleRule = RuleAttributes "syntax" sm Name sm "=" sm RuleExpression SimpleRuleBody
   {
     [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedSimpleRuleSymbol = ParsedSimpleRuleSymbol(this, owner);
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
@@ -515,7 +515,7 @@ syntax module N2Syntax
       _ = SimpleRuleBody.MakeContext(context);
       parent
     }
-    [Cached] private MakeTypedRule() : N2.Model.Rule.Sequence = EnsureSequence(this.Rule.Typing(None(), 0, None(), SimpleRuleBody.Context, RuleAttributes.Options(RuleDefinitionOptions.Empty)));
+    [Cached] private MakeTypedRule() : Rule.Sequence = EnsureSequence(RuleExpression.Typing(None(), 0, None(), SimpleRuleBody.Context, RuleAttributes.Options(RuleDefinitionOptions.Empty)));
     Typing() : void
     {
       _ = MakeTypedRule();
@@ -523,7 +523,7 @@ syntax module N2Syntax
     }
   }
 
-  syntax VoidRule = RuleAttributes "void" sm Name sm "=" sm Rule SimpleRuleBody
+  syntax VoidRule = RuleAttributes "void" sm Name sm "=" sm RuleExpression SimpleRuleBody
   {
     [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedVoidRuleSymbol = ParsedVoidRuleSymbol(this, owner);
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
@@ -539,7 +539,7 @@ syntax module N2Syntax
       _ = SimpleRuleBody.MakeContext(context);
       parent
     }
-    [Cached] private MakeTypedRule()   : N2.Model.Rule.Sequence    = EnsureSequence(this.Rule.Typing(None(), 0, None(), SimpleRuleBody.Context, RuleAttributes.Options(RuleDefinitionOptions.Empty)));
+    [Cached] private MakeTypedRule() : Rule.Sequence = EnsureSequence(RuleExpression.Typing(None(), 0, None(), SimpleRuleBody.Context, RuleAttributes.Options(RuleDefinitionOptions.Empty)));
     Typing() : void
     {
       _ = MakeTypedRule();
@@ -644,6 +644,24 @@ syntax module N2Syntax
     | RuleAlias
       {
         override MakeContext = RuleAlias.MakeContext(parent);
+      }
+    | TokenRule
+      {
+        override CollectGlobalSymbols = TokenRule.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext          = TokenRule.MakeContext(parent);
+        override Typing               = TokenRule.Typing();
+      }
+    | VoidRule
+      {
+        override CollectGlobalSymbols = VoidRule.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext          = VoidRule.MakeContext(parent);
+        override Typing               = VoidRule.Typing();
+      }
+    | SimpleRule
+      {
+        override CollectGlobalSymbols = SimpleRule.CollectGlobalSymbols(ruleSymbol);
+        override MakeContext          = SimpleRule.MakeContext(parent);
+        override Typing               = SimpleRule.Typing();
       }
     | InlineExtentionRule
       {
@@ -1059,19 +1077,19 @@ syntax module N2Syntax
       }
   }
 
-  syntax Rule
+  syntax RuleExpression
   {
     Typing(_baseRule : option[ExtensibleRuleSymbol], _precedence : int, _fieldName : option[string], context : Context, options : RuleDefinitionOptions) : N2.Model.Rule;  // precedence < 0 if it is right-associative
     InferName() : string = "";
 
-    | Sequence                        = LeftRule=Rule ^ 10 RightRules=(sm Rule ^ 10)+
+    | Sequence                        = LeftRule=RuleExpression ^ 10 RightRules=(sm RuleExpression ^ 10)+
       {
         override Typing
         {
           def bp1   = if (_precedence < 0) -_precedence + 1 else _precedence;
           def bp2   = if (_precedence < 0) -_precedence     else _precedence;
           def flat = List();
-          def tryExtractSpaceSequence(rule : N2.Model.Rule) : void
+          def tryExtractSpaceSequence(rule : Rule) : void
           {
             // assume that 's' is generated whitespace rule
             match (rule)
@@ -1093,63 +1111,63 @@ syntax module N2Syntax
             tryExtractSpaceSequence(rule.Typing(_baseRule, bp2, None(), context, options));
           def rules =  flat.NToList();
           def type  = MakeType(rules.Map(_.Type));
-          N2.Model.Rule.Sequence(this.Location, type, MakeName(_fieldName, rules, context), rules);
+          Rule.Sequence(this.Location, type, MakeName(_fieldName, rules, context), rules);
         }
         override InferName = LeftRule.InferName();
       }
-    | Not                             = "!" Rule ^ 20
+    | Not                             = "!" RuleExpression ^ 20
       {
         override Typing
         {
-          def rule = this.Rule.Typing(None(), 0, None(), context, options);
+          def rule = this.RuleExpression.Typing(None(), 0, None(), context, options);
           Rule.Not(this.Location, RuleType.Void(), "", rule);
         }
       }
-    | And                             = "&" Rule ^ 20
+    | And                             = "&" RuleExpression ^ 20
       {
-        override Typing = Rule.And(this.Location, RuleType.Void(), "", this.Rule.Typing(None(), 0, None(), context, options));
+        override Typing = Rule.And(this.Location, RuleType.Void(), "", RuleExpression.Typing(None(), 0, None(), context, options));
       }
-    | Optional                        = Rule "?"
+    | Optional                        = RuleExpression "?"
       {
         precedence 30;
         override Typing
         {
-          def rule  = this.Rule.Typing(None(), 0, None(), context, options);
+          def rule  = RuleExpression.Typing(None(), 0, None(), context, options);
           def type  = if (rule.Type is RuleType.Void) RuleType.Void() else RuleType.Option(rule.Type);
           Rule.Repeat(this.Location, type, _fieldName ?? (rule.FieldName + "Opt"), 0, Some(1), rule);
         }
-        override InferName = Rule.InferName() + "Opt";
+        override InferName = RuleExpression.InferName() + "Opt";
       }
-    | ZeroOrMany                      = Rule "*"
+    | ZeroOrMany                      = RuleExpression "*"
       {
         precedence 30;
         override Typing
         {
-          def rule  = this.Rule.Typing(None(), 0, None(), context, options);
+          def rule  = RuleExpression.Typing(None(), 0, None(), context, options);
           def type  = if (rule.Type is RuleType.Void) RuleType.Void() else RuleType.List(rule.Type);
           Rule.Repeat(this.Location, type, MakePlural(_fieldName, rule, context), 0, None(), rule);
         }
-        override InferName = MakePlural(Rule.InferName());
+        override InferName = MakePlural(RuleExpression.InferName());
       }
-    | OneOrMany                       = Rule "+"
+    | OneOrMany                       = RuleExpression "+"
       {
         precedence 30;
         override Typing
         {
-          def rule  = this.Rule.Typing(None(), 0, None(), context, options);
+          def rule  = RuleExpression.Typing(None(), 0, None(), context, options);
           def type  = if (rule.Type is RuleType.Void) RuleType.Void() else RuleType.List(rule.Type);
           Rule.Repeat(this.Location, type, MakePlural(_fieldName, rule, context), 1, None(), rule);
         }
-        override InferName = MakePlural(Rule.InferName());
+        override InferName = MakePlural(RuleExpression.InferName());
       }
-    | FieldName1                      = Rule ^ 12 sm "as" sm Name
+    | FieldName1                      = RuleExpression ^ 12 sm "as" sm Name
       {
-        override Typing = this.Rule.Typing(_baseRule, _precedence, Some(Name.Value()), context, options);
+        override Typing = RuleExpression.Typing(_baseRule, _precedence, Some(Name.Value()), context, options);
         override InferName = Name.GetText();
       }
-    | FieldName2                      = Name sm "=" sm Rule ^ 11
+    | FieldName2                      = Name sm "=" sm RuleExpression ^ 11
       {
-        override Typing = this.Rule.Typing(_baseRule, _precedence, Some(Name.Value()), context, options);
+        override Typing = RuleExpression.Typing(_baseRule, _precedence, Some(Name.Value()), context, options);
         override InferName = Name.GetText();
       }
     | Char                            = CharLiteral
@@ -1162,59 +1180,59 @@ syntax module N2Syntax
         override Typing = StringRuleTyping(StringLiteral.Location, StringLiteral.Value().ToString(), _fieldName, context, options);
         override InferName = StringLiteral.Value().ToString();
       }
-    | Rounds                          = "(" Rule ")"
+    | Rounds                          = "(" RuleExpression ")"
       {
-        override Typing = this.Rule.Typing(_baseRule, _precedence, _fieldName, context, options);
-        override InferName = Rule.InferName();
+        override Typing = RuleExpression.Typing(_baseRule, _precedence, _fieldName, context, options);
+        override InferName = RuleExpression.InferName();
       }
     | Call                            = QualifiedName BindingPower=(sm "^" sm Number)?
       {
         override Typing = CallRuleTyping(_baseRule, _precedence, _fieldName, context, options, QualifiedName, BindingPower);
         override InferName = QualifiedName.Parts().LastOrDefault("");
       }
-    | ZeroOrManyWithSeparator         = "(" Rule ";"sm SeparatorRule ")" "*"
+    | ZeroOrManyWithSeparator         = "(" RuleExpression ";"sm SeparatorRule ")" "*"
       {
         override Typing
         {
-          def rule    = this.Rule.Typing(None(), 0, None(), context, options);
+          def rule    = RuleExpression.Typing(None(), 0, None(), context, options);
           def sepRule = SeparatorRule.Typing(None(), 0, None(), context, options);
           def type    = MakeType(rule, sepRule);
           Rule.RepeatWithSeparator(this.Location, type, MakePlural(_fieldName, rule, sepRule, context), 0, None(), rule, sepRule, false);
         }
-        override InferName = MakePlural(Rule.InferName());
+        override InferName = MakePlural(RuleExpression.InferName());
       }
-    | ZeroOrManyWithHangingSeparator  = "(" Rule ";"sm SeparatorRule ";"sm "?" ")" "*"
+    | ZeroOrManyWithHangingSeparator  = "(" RuleExpression ";"sm SeparatorRule ";"sm "?" ")" "*"
       {
         override Typing
         {
-          def rule    = this.Rule.Typing(None(), 0, None(), context, options);
+          def rule    = RuleExpression.Typing(None(), 0, None(), context, options);
           def sepRule = SeparatorRule.Typing(None(), 0, None(), context, options);
           def type    = MakeType(rule, sepRule);
           Rule.RepeatWithSeparator(this.Location, type, MakePlural(_fieldName, rule, sepRule, context), 0, None(), rule, sepRule, true);
         }
-        override InferName = MakePlural(Rule.InferName());
+        override InferName = MakePlural(RuleExpression.InferName());
       }
-    | OneOrManyWithSeparator          = "(" Rule ";"sm SeparatorRule ")" "+"
+    | OneOrManyWithSeparator          = "(" RuleExpression ";"sm SeparatorRule ")" "+"
       {
         override Typing
         {
-          def rule    = this.Rule.Typing(None(), 0, None(), context, options);
+          def rule    = RuleExpression.Typing(None(), 0, None(), context, options);
           def sepRule = SeparatorRule.Typing(_baseRule, 0, None(), context, options);
           def type    = MakeType(rule, sepRule);
           Rule.RepeatWithSeparator(this.Location, type, MakePlural(_fieldName, rule, sepRule, context), 1, None(), rule, sepRule, false);
         }
-        override InferName = MakePlural(Rule.InferName());
+        override InferName = MakePlural(RuleExpression.InferName());
       }
-    | OneOrManyWithHangingSeparator   = "(" Rule ";"sm SeparatorRule ";"sm "?" ")" "+"
+    | OneOrManyWithHangingSeparator   = "(" RuleExpression ";"sm SeparatorRule ";"sm "?" ")" "+"
       {
         override Typing
         {
-          def rule    = this.Rule.Typing(None(), 0, None(), context, options);
+          def rule    = RuleExpression.Typing(None(), 0, None(), context, options);
           def sepRule = SeparatorRule.Typing(_baseRule, 0, None(), context, options);
           def type    = MakeType(rule, sepRule);
           Rule.RepeatWithSeparator(this.Location, type, MakePlural(_fieldName, rule, sepRule, context), 1, None(), rule, sepRule, true);
         }
-        override InferName = MakePlural(Rule.InferName());
+        override InferName = MakePlural(RuleExpression.InferName());
       }
-  } // extend syntax Rule
+  } // extend syntax RuleExpression
 } // syntax module
