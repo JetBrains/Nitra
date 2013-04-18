@@ -411,37 +411,52 @@ namespace N2.Visualizer
       }
       catch (ErrorException ex)
       {
-        _parseResult = null;
-        var recovery = ex.Recovery[0];
-        if (recovery == null)
-          return;
-
-        _textMarkerService.RemoveAll(_ => true);
-
-        var marker = _textMarkerService.Create(recovery.FailPos, recovery.SkipedCount);// == 0 ? 1 : recovery.SkipedCount);
-        marker.MarkerType = TextMarkerType.SquigglyUnderline;
-        marker.MarkerColor = Colors.Red;
-
-        var expected = new List<string>();
-
-        foreach (var item in ex.Recovery)
-        {
-          var frame = item.Stack.Head;
-          var ruleSeq = new List<string>();
-
-          for (int i = frame.State; i < item.StartState; i++)
-            ruleSeq.Add(frame.RuleParser.CodeForState(frame.State));
-
-          expected.Add(string.Join(" ", ruleSeq.ToArray()));
-        }
-
-        var msg = "Expected: " + string.Join(" or ", expected.ToArray()) + ".";
-
-
-        marker.ToolTip = msg + "\r\n  State= " + recovery.StartState + "\r\n    " + string.Join("\r\n    ", recovery.Stack.Select(s => s.ToString()));
-        _status.Text = msg;
-        ShowInfo();
+        var recoveries = ex.Recovery;
+        MekeErrorMessage(recoveries);
       }
+    }
+
+    private void MekeErrorMessage(RecoveryResult[] recoveries)
+    {
+      var recovery = recoveries[0];
+
+      _parseResult = null;
+
+      ClearMarker();
+
+      var marker = _textMarkerService.Create(recovery.FailPos, recovery.SkipedCount);// == 0 ? 1 : recovery.SkipedCount);
+      marker.MarkerType = TextMarkerType.SquigglyUnderline;
+      marker.MarkerColor = Colors.Red;
+
+      var expected = new List<string>();
+
+      foreach (var item in recoveries)
+      {
+        var frame = item.Stack.Head;
+        var ruleSeq = new List<string>();
+
+        for (int i = frame.AstPtr == 0 ? item.StartState : frame.State; i <= item.StartState; i++)
+          ruleSeq.Add(frame.RuleParser.CodeForState(i));
+
+        expected.Add(string.Join(" ", ruleSeq.ToArray()));
+      }
+
+      var msg = "Expected: " + string.Join(" or ", expected.ToArray()) + ".";
+
+
+      marker.ToolTip = msg + "\r\n  State= " + recovery.StartState + "\r\n    " + MekeStekText(recovery);
+      _status.Text = msg;
+      ShowInfo();
+    }
+
+    private static string MekeStekText(RecoveryResult recovery)
+    {
+      return string.Join("\r\n    ", recovery.Stack.Select(s => s.ToString()));
+    }
+
+    private void ClearMarker()
+    {
+      _textMarkerService.RemoveAll(_ => true);
     }
 
     private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)

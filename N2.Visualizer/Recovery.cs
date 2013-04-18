@@ -131,11 +131,11 @@ namespace N2.Visualizer
           }
         }
 
-        var allocated = parser.allocated - startAllocated;
-        int count = 0;
-        _allacetionsInfo.TryGetValue(allocated, out count);
-        count++;
-        _allacetionsInfo[allocated] = count;
+        //var allocated = parser.allocated - startAllocated;
+        //int count = 0;
+        //_allacetionsInfo.TryGetValue(allocated, out count);
+        //count++;
+        //_allacetionsInfo[allocated] = count;
 
         if (pos > curTextPos || pos == text.Length)
         {
@@ -158,7 +158,7 @@ namespace N2.Visualizer
             _nestedLevel++;
 
             var parsers = ruleParser.GetParsersForState(state);
-            foreach (var subRuleParser in parsers)
+              foreach (var subRuleParser in parsers)
             {
               var old = recoveryStack;
               recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, 0/*stackFrame.AstPtr*/, 0, 0));
@@ -200,7 +200,9 @@ namespace N2.Visualizer
       stackLength = stack.Length;
       var bestResultStackLength = this._bestResult.StackLength;
 
-      if (stackLength > bestResultStackLength)    goto good;
+      if (stack.Head.AstPtr == 0 && _bestResult.Stack.Head.AstPtr != 0) return;
+
+      if (stackLength > bestResultStackLength) goto good;
       if (stackLength < bestResultStackLength)    return;
 
       if (startState < _bestResult.StartState) goto good;
@@ -211,8 +213,8 @@ namespace N2.Visualizer
 
       goto good2;
     good:
-      _bestResults.Clear();
       _bestResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos);
+      _bestResults.Clear();
       _bestResults.Add(_bestResult);
       return;
     good2:
