@@ -5,6 +5,7 @@ if not defined Configuration set Configuration=Debug
 if not defined NemerleBinPathRoot set NemerleBinPathRoot="%ProgramFiles%\Nemerle"
 if not defined Nemerle set Nemerle=%NemerleBinPathRoot%\Net-4.0
 set RuntimeDllPath=%~dp0\..\N2\N2.Runtime\bin\%Configuration%
+set CoreDllPath=%~dp0\..\N2\N2.Core\bin\%Configuration%
 set N2CompilerDllPath=%~dp0\..\N2\N2.Compiler\bin\%Configuration%\Stage1
 rem for %%d in (%N2CompilerDllPath%\*.dll) DO %NGen% install %%d
 
@@ -33,6 +34,6 @@ mkdir %OutDir%
 copy %~dp0\..\Grammars\Bin\%Configuration%\*.* %OutDir% /B /Z 1>nul
 pushd .
 cd %OutDir%
-%Nemerle%\Nemerle.Compiler.Test.exe %Tests%\*.n %Tests%\*.cs %Tests%\*.n2 -output:%OutDir% -ref:System.Core -ref:%RuntimeDllPath%\N2.Runtime.dll -macro:%N2CompilerDllPath%\N2.Compiler.dll %TeamCityArgs%
+%Nemerle%\Nemerle.Compiler.Test.exe %Tests%\*.n %Tests%\*.cs %Tests%\*.n2 -output:%OutDir% -ref:System.Core -ref:%RuntimeDllPath%\N2.Runtime.dll -ref:%CoreDllPath%\N2.Core.dll -macro:%N2CompilerDllPath%\N2.Compiler.dll %TeamCityArgs%
 popd
 goto :eof
