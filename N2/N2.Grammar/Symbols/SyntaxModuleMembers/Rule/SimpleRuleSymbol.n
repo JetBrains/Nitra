@@ -1,7 +1,10 @@
 ﻿using Nemerle;
 
 using N2.Model;
+using N2.Runtime;
 using N2.Typing.ExtraField;
+
+using System;
 
 using G = N2SyntaxAst;
 
@@ -12,8 +15,58 @@ namespace N2.Typing
   {
     public override Description : string { get { if (Type is RuleType.Void) "void rule" else "simple rule" } }
   }
+  
+  [Record]
+  public abstract class ParsedBaseSimpleRuleSymbol : SimpleRuleSymbol
+  {
+    public override CanParseEmpryString : bool { get { CalcCanParseEmpryString() } }
+    
+    [Flags]
+    enum Calc : byte
+    {
+      | InProgress = 0x10;
+      | Done       = 0x20;
+      | ValueMask  = 0x01;
+    }
+    
+    [RecordIgnore] mutable _canParseEmpryStringFlags : Calc;
+    
+    protected CalcCanParseEmpryString() : bool
+    {
+      def canBeEmpty(rule : Rule) : bool
+      {
+        | Repeat(0, _, _) => true
+        | Repeat          => false
+        | RepeatWithSeparator(0, _, _, _, _) => true
+        | RepeatWithSeparator                => false
+        | Sequence(rules)                    => rules.ForAll(canBeEmpty)
+        | Call(Some(ruleRef is RuleDefSymbol), _) => ruleRef.CanParseEmpryString
+        | Call(Some(MarkerSymbol), _)             => true
+        | Call                                    => assert2(false); false
+        | String("")  => true
+        | String      => false
+        | Not   => true
+        | And   => true
+      }
+      
+      if (_canParseEmpryStringFlags %&& Calc.Done)
+        _canParseEmpryStringFlags %&& Calc.ValueMask
+      else if (_canParseEmpryStringFlags %&& Calc.InProgress)
+      {
+        Project.CurrentProject.Error(this.FirstLocation, "Left recurtion detected.", -1);
+        false
+      }
+      else
+      {
+        _canParseEmpryStringFlags = Calc.InProgress;
+        def result = this.Rule.Rules.ForAll(canBeEmpty);
+        _canParseEmpryStringFlags = if (result) (Calc.ValueMask | Calc.Done) else Calc.Done;
+        result
+      }
+    }
+  }
 
-  public sealed class ParsedSimpleRuleSymbol : SimpleRuleSymbol
+  public sealed class ParsedSimpleRuleSymbol : ParsedBaseSimpleRuleSymbol
   {
     public this(ast : G.SimpleRule.Ast, declarationSite : IRuleDeclarationSite)
     {
@@ -24,16 +77,15 @@ namespace N2.Typing
 
     public _ast : G.SimpleRule.Ast;
 
-    public override DeclarationSite  : IRuleDeclarationSite  { get; }
-    public override Type             : RuleType              { [Memoize] get { RuleType.Ref(this) } }
-    public override Options          : RuleDefinitionOptions {           get { _ast.RuleAttributes.Options(RuleDefinitionOptions.Empty) } }
-    public override Rule             : Rule.Sequence         {           get { _ast.TypedRule } }
-    public override LastLocation     : option[Location]      { [Memoize] get { Some(_ast.SimpleRuleBody.GetLastLocation()) } }
-    public override IdInGrammar      : int                   { [Memoize] get { DeclaringModule.GetNewRuleId() } }
-    public override CanParseEmpryString : bool                             { get { false } } // это надо вычислять
+    public override DeclarationSite     : IRuleDeclarationSite  { get; }
+    public override Type                : RuleType              { [Memoize] get { RuleType.Ref(this) } }
+    public override Options             : RuleDefinitionOptions {           get { _ast.RuleAttributes.Options(RuleDefinitionOptions.Empty) } }
+    public override Rule                : Rule.Sequence         {           get { _ast.TypedRule } }
+    public override LastLocation        : option[Location]      { [Memoize] get { Some(_ast.SimpleRuleBody.GetLastLocation()) } }
+    public override IdInGrammar         : int                   { [Memoize] get { DeclaringModule.GetNewRuleId() } }
   }
 
-  public sealed class ParsedVoidRuleSymbol : SimpleRuleSymbol
+  public sealed class ParsedVoidRuleSymbol : ParsedBaseSimpleRuleSymbol
   {
     public this(ast : G.VoidRule.Ast, declarationSite : IRuleDeclarationSite)
     {
@@ -49,6 +101,5 @@ namespace N2.Typing
     public override Options             : RuleDefinitionOptions { get { _ast.RuleAttributes.Options(RuleDefinitionOptions.Empty) } }
     public override Rule                : Rule.Sequence         { get { _ast.TypedRule } }
     public override IdInGrammar         : int                   { [Memoize] get { DeclaringModule.GetNewRuleId() } }
-    public override CanParseEmpryString : bool                  { get { false } } // это надо вычислять
   }
 }
