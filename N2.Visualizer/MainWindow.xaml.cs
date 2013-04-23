@@ -433,19 +433,20 @@ namespace N2.Visualizer
       foreach (var item in recoveries)
       {
         var frame = item.Stack.Head;
-        var ruleSeq = new List<string>();
-
-        for (int i = frame.AstPtr == 0 ? item.StartState : frame.State; i <= item.StartState; i++)
-          ruleSeq.Add(frame.RuleParser.CodeForState(i));
-
-        expected.Add(string.Join(" ", ruleSeq.ToArray()));
+        //var ruleSeq = new List<string>();
+        //
+        //for (int i = frame.AstPtr == 0 ? item.StartState : frame.State; i <= item.StartState; i++)
+        //  ruleSeq.Add(frame.RuleParser.CodeForState(i));
+        //
+        //expected.Add(string.Join(" ", ruleSeq.ToArray()));
+        expected.Add(frame.RuleParser.CodeForState(frame.State));
       }
 
       var msg = "Expected: " + string.Join(" or ", expected.Distinct().ToArray()) + ".";
 
 
       marker.ToolTip = msg + "\r\n  State= " + recovery.StartState + "\r\n    " + MekeStekText(recovery);
-      _status.Text = msg;
+      _status.Text = "Skiped: «" + recovery.Skiped + "». Recovered: «" + recovery.Recovered + "».";
       ShowInfo();
     }
 
