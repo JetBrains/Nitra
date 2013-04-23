@@ -441,7 +441,7 @@ namespace N2.Visualizer
         expected.Add(string.Join(" ", ruleSeq.ToArray()));
       }
 
-      var msg = "Expected: " + string.Join(" or ", expected.ToArray()) + ".";
+      var msg = "Expected: " + string.Join(" or ", expected.Distinct().ToArray()) + ".";
 
 
       marker.ToolTip = msg + "\r\n  State= " + recovery.StartState + "\r\n    " + MekeStekText(recovery);
