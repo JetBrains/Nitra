@@ -418,6 +418,9 @@ namespace N2.Visualizer
 
     private void MekeErrorMessage(RecoveryResult[] recoveries)
     {
+      if (recoveries.Length == 0)
+        return;
+
       var recovery = recoveries[0];
 
       _parseResult = null;
