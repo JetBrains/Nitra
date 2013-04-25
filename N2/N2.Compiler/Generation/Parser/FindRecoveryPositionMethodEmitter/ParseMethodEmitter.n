@@ -65,79 +65,31 @@ namespace N2.Compiler
 
     public RecoveryStackFrameScope(field : RuleStructureField, code : PExpr) : PExpr
     {
-      // Над определять что состояние находится в конце цикла. В этом случае продолжение парсинга должно производиться с состояния цикла.
-      def getContinueState(field : RuleStructureField) : int
+      def frames = SCG.List();
+      def collectFrames(field : RuleStructureField)
       {
-        def isLast     (field         : RuleStructureField) : bool { field.Owner.NotMarkerFields.Last() : object == field }
-        def nextState  (field         : RuleStructureField) : int { field.State + 1 }
-        def getLoopSate(ruleStructure : RuleStructure)      : int { ruleStructure.Owner.State }
-        match (field.Owner)
+        when (field !=  null)
         {
-          | ListWithSeparatorSeparator
-          | List => if (isLast(field)) getLoopSate(field.Owner) else nextState(field)
-          | ListWithSeparatorRule as sep =>
-            if (isLast(field))
-              (sep.Owner :> RuleStructureField.ListWithSeparator).Separator.NotMarkerFields.First().State
-            else
-              nextState(field)
-            
-          | _ => nextState(field)
-        }
-      }
-      def lists = SCG.List();
-      def collectLists(field : RuleStructureField)
-      {
-        when (field != null)
-        {
-          match (field)
+          def counter = match (field.Owner.Owner)
           {
-            | List              as field when field.UseCounter => lists.Add(field);
-            | ListWithSeparator as field when field.UseCounter => lists.Add(field);
-            | _ => ()
+            | List              as field when field.UseCounter => ListStateData(this, field).Counter
+            | ListWithSeparator as field when field.UseCounter => ListStateData(this, field).Counter
+            | _                                                => <[ 0 ]>
           }
-          collectLists(field?.Owner?.Owner);
+          frames.Add(<[ parser.RecoveryStack.Push(N2.Internal.RecoveryStackFrame(this, $(AstPtr(field.Owner).Var), $(AstStart(field.Owner)), $(field.State), $counter)); ]>);
+          collectFrames(field.Owner.Owner)
         }
       }
-      collectLists(field);
-      def (save, addCounters, getPos, removeCounters) = if (lists.Count > 0)
-      {
-        lists.Reverse();
-        def makeAdd(field : RuleStructureField)
-        {
-          def listStateData = match (field)
-          {
-            | List              as field => ListStateData(this, field)
-            | ListWithSeparator as field => ListStateData(this, field)
-            | _ => assert(false);
-          }
-          <[ parser.ListData.Add(N2.Internal.RecoveryListData($(listStateData.ListStartPos), $(listStateData.ListEndPos), $(listStateData.Counter))) ]>
-        }
-        def pos            = CreateVariable("listDataPosition");
-        def save           = <[ $(pos : dyn) = parser.ListData.Count ]>;
-        def addCounters    = <[ { ..$(lists.Map(makeAdd)) } ]>;
-        def getPos         = <[ $(pos : dyn) ]>;
-        def removeCounters = <[ parser.ListData.RemoveRange($(pos : dyn), $(lists.Count)) ]>;
-        (save, addCounters, getPos, removeCounters)
-      }
-      else
-      {
-        def save           = <[ {} ]>;
-        def addCounters    = <[ {} ]>;
-        def getPos         = <[ parser.ListData.Count ]>;
-        def removeCounters = <[ {} ]>;
-        (save, addCounters, getPos, removeCounters)
-      }
+      collectFrames(field);
+      frames.Reverse();
       <[
-        $save;
-        $addCounters;
-        parser.RecoveryStack.Push(N2.Internal.RecoveryStackFrame(this, $(field.State), $(AstPtr(RuleStructure).Var), $getPos, $(getContinueState(field))));
+        ..$frames;
         $code;
         if (parser.ParsingMode == N2.Internal.ParsingMode.EndRecovery)
           $(EndLabel.Goto());
         else
         {
-          _ = parser.RecoveryStack.Pop();
-          $removeCounters;
+          ..$(frames.Map(_ => <[ _ = parser.RecoveryStack.Pop() ]> ));
         }
       ]>
     }

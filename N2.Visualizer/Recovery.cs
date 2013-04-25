@@ -97,7 +97,7 @@ namespace N2.Visualizer
 
       if (result.StartState == frame.State && result.SkipedCount > 0)
       {
-        var refl = parser.ParserHost.Reflection(parser, frame.AstPtr);
+        //var refl = parser.ParserHost.Reflection(parser, frame.AstPtr);
         { }
       }
 
@@ -127,7 +127,7 @@ namespace N2.Visualizer
           if (!_visited.TryGetValue(key, out pos))
           {
             var cnt = _parsedRules.Inc(ruleParser.RuleName);
-            _visited[key] = pos = ruleParser.TryParse(stackFrame.AstPtr, curTextPos, text, parser, state);
+            _visited[key] = pos = ruleParser.TryParse(stackFrame, curTextPos, parser);
           }
         }
 
@@ -230,11 +230,7 @@ namespace N2.Visualizer
         return startTextPos;
 
       var recoveryInfo = tail.Head;
-      var nextState = recoveryInfo.ContinueState;
-      var pos3 =
-        nextState >= recoveryInfo.RuleParser.StatesCount
-          ? startTextPos
-          : recoveryInfo.RuleParser.TryParse(recoveryInfo.AstPtr, startTextPos, text, parser, nextState);
+      var pos3 = recoveryInfo.RuleParser.TryParse(recoveryInfo, startTextPos, parser);
 
       if (pos3 >= 0)
         return ContinueParse(pos3, tail, parser, text);
