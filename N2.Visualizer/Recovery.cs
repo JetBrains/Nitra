@@ -126,16 +126,9 @@ namespace N2.Visualizer
           var key = Tuple.Create(curTextPos, ruleParser, state);
           if (!_visited.TryGetValue(key, out pos))
           {
-            var cnt = _parsedRules.Inc(ruleParser.RuleName);
             _visited[key] = pos = ruleParser.TryParse(stackFrame.AstPtr, curTextPos, text, parser, state);
           }
         }
-
-        //var allocated = parser.allocated - startAllocated;
-        //int count = 0;
-        //_allacetionsInfo.TryGetValue(allocated, out count);
-        //count++;
-        //_allacetionsInfo[allocated] = count;
 
         if (pos > curTextPos || pos == text.Length)
         {
@@ -158,7 +151,12 @@ namespace N2.Visualizer
             _nestedLevel++;
 
             var parsers = ruleParser.GetParsersForState(state);
-              foreach (var subRuleParser in parsers)
+
+            if (!parsers.IsEmpty())
+            {
+            }
+
+            foreach (var subRuleParser in parsers)
             {
               var old = recoveryStack;
               recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, 0/*stackFrame.AstPtr*/, 0, 0));
@@ -191,6 +189,14 @@ namespace N2.Visualizer
       if (endPos     > _bestResult.EndPos)       goto good;
       if (endPos     < _bestResult.EndPos)       return;
 
+      if (stack.Length == _bestResult.Stack.Length) // это халтура :(
+      {
+        if (stack.Head.AstPtr == 0 && _bestResult.Stack.Head.AstPtr != 0)
+          return;
+        if (stack.Head.AstPtr != 0 && _bestResult.Stack.Head.AstPtr == 0)
+          goto good;
+      }
+
       if (startPos   < _bestResult.StartPos)     goto good;
       if (startPos   > _bestResult.StartPos)     return;
 
@@ -200,7 +206,7 @@ namespace N2.Visualizer
       stackLength = stack.Length;
       var bestResultStackLength = this._bestResult.StackLength;
 
-      if (stack.Head.AstPtr == 0 && _bestResult.Stack.Head.AstPtr != 0) return;
+      //if (stack.Head.AstPtr == 0 && _bestResult.Stack.Head.AstPtr != 0) return;
 
       if (stackLength > bestResultStackLength) goto good;
       if (stackLength < bestResultStackLength)    return;

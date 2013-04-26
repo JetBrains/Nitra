@@ -433,7 +433,9 @@ namespace N2.Visualizer
       foreach (var item in recoveries)
       {
         var frame = item.Stack.Head;
-        expected.Add(frame.RuleParser.CodeForState(frame.State));
+        //var state = frame.AstPtr == 0 ? item.StartState : frame.State;
+        var state = frame.State;
+        expected.Add(frame.RuleParser.CodeForState(state));
       }
 
       var msg = "Expected: " + string.Join(", ", expected.Distinct().ToArray()) + ".";
