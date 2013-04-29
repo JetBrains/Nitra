@@ -115,7 +115,7 @@ namespace N2.Visualizer
       var ruleParser = stackFrame.RuleParser;
       var lastState  = stackFrame.RuleParser.StatesCount - 1;
 
-      for (var state = stackFrame.State; state <= lastState; state++)
+      for (var state = stackFrame.State; state >= 0; state = stackFrame.RuleParser.GetNextState(state))
       {
         parser.MaxTextPos = startTextPos;
         _parseCount++;
@@ -126,7 +126,7 @@ namespace N2.Visualizer
           var key = Tuple.Create(curTextPos, ruleParser, state);
           if (!_visited.TryGetValue(key, out pos))
           {
-            _visited[key] = pos = ruleParser.TryParse(stackFrame, curTextPos, parser);
+            _visited[key] = pos = ruleParser.TryParse(stackFrame, state, curTextPos, parser);
           }
         }
 
@@ -235,8 +235,14 @@ namespace N2.Visualizer
       if (tail == null)
         return startTextPos;
 
-      var recoveryInfo = tail.Head;
-      var pos3 = recoveryInfo.RuleParser.TryParse(recoveryInfo, startTextPos, parser);
+      var stackFrame = tail.Head;
+      var state = stackFrame.RuleParser.GetNextState(stackFrame.State);
+
+      int pos3;
+      if (state >= 0)
+        pos3 = stackFrame.RuleParser.TryParse(stackFrame, state, startTextPos, parser);
+      else
+        return ContinueParse(startTextPos, tail, parser, text); // TODO: counter
 
       if (pos3 >= 0)
         return ContinueParse(pos3, tail, parser, text);
