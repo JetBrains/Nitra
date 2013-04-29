@@ -19,6 +19,7 @@ namespace N2.Model
   {
                    public         SrcRule          : N2.Model.Rule;
                    public         Fields           : array[RuleStructureField];
+                   public         TailPredicates   : array[Predicate];
     [RecordIgnore] public mutable Owner            : RuleStructureField;
     [RecordIgnore] public mutable Header           : array[RuleStructureHeaderField];
     [RecordIgnore] public mutable AstId            : string;
@@ -63,7 +64,7 @@ namespace N2.Model
                 
               if (field is RuleStructureField.Marker)
                 collectSignificantStatesStings(k + 1, fields)
-              else if (field.CanParseEmpryString)
+              else if (field.CanParseEmptyString)
                 field.SrcRule.ToString() :: collectSignificantStatesStings(k + 1, fields)
               else
                 [field.SrcRule.ToString()]
@@ -88,7 +89,7 @@ namespace N2.Model
     | List
     | ListWithSeparatorRule
     | ListWithSeparatorSeparator
-    | Predicate
+    | Predicate { IsAnd : bool }
 
     public NotMarkerFields    : array[RuleStructureField] { [Memoize] get { Fields.FilterToArray(f => !(f is RuleStructureField.Marker)) } }
     internal static MakeRuleStructure(ruleSymbol : SyntaxRuleSymbol) : RuleStructure.Ast
@@ -96,24 +97,31 @@ namespace N2.Model
       def internalRuleStructures = SCG.List();
       def allFields = SCG.List();
 
+      def predicates = SCG.List();
+      def takePredicates() : array[RuleStructure.Predicate]
+      {
+        def result = predicates.ToArray();
+        predicates.Clear();
+        result
+      }
       def conv(rule : Rule) : array[RuleStructureField]
       {
         match (rule)
         {
-          | And                   as rule => array[RuleStructureField.Predicate        (rule, RuleStructure.Predicate(rule.Rule, conv(rule.Rule)), true)]
-          | Not                   as rule => array[RuleStructureField.Predicate        (rule, RuleStructure.Predicate(rule.Rule, conv(rule.Rule)), false)]
-          | Repeat(0, Some(1), _) as rule => array[RuleStructureField.Option           (rule, RuleStructure.Option(rule.Rule, conv(rule.Rule)))]
-          | Repeat                as rule => array[RuleStructureField.List             (rule, RuleStructure.List(rule.Rule, conv(rule.Rule)), rule.MinCount, rule.MaxCount)]
-          | RepeatWithSeparator   as rule => array[RuleStructureField.ListWithSeparator(rule, RuleStructure.ListWithSeparatorRule(rule.Rule, conv(rule.Rule)), RuleStructure.ListWithSeparatorSeparator(rule.Separator, conv(rule.Separator)), rule.MinCount, rule.MaxCount, rule.HangingSeparator)]
-          | String                as rule => array[RuleStructureField.TokenString      (rule, rule.Str)]
+          | And                   as rule => predicates.Add(RuleStructure.Predicate(rule.Rule, conv(rule.Rule), takePredicates(), true)); array[]
+          | Not                   as rule => predicates.Add(RuleStructure.Predicate(rule.Rule, conv(rule.Rule), takePredicates(), false)); array[]
+          | Repeat(0, Some(1), _) as rule => array[RuleStructureField.Option           (rule, takePredicates(), RuleStructure.Option(rule.Rule, conv(rule.Rule), takePredicates()))]
+          | Repeat                as rule => array[RuleStructureField.List             (rule, takePredicates(), RuleStructure.List(rule.Rule, conv(rule.Rule), takePredicates()), rule.MinCount, rule.MaxCount)]
+          | RepeatWithSeparator   as rule => array[RuleStructureField.ListWithSeparator(rule, takePredicates(), RuleStructure.ListWithSeparatorRule(rule.Rule, conv(rule.Rule), takePredicates()), RuleStructure.ListWithSeparatorSeparator(rule.Separator, conv(rule.Separator), takePredicates()), rule.MinCount, rule.MaxCount, rule.HangingSeparator)]
+          | String                as rule => array[RuleStructureField.TokenString      (rule, takePredicates(), rule.Str)]
           | Sequence              as rule => rule.Rules.Map(conv(_)).Flatten().NToArray();
           | Call(RuleRef.Some(ruleSymbol) as ruleRef, bindingPower) =>
             match (ruleSymbol)
             {
-              | ExtensibleRuleSymbol as rs => array[RuleStructureField.ExtensibleCall(rule, rs, bindingPower)]
-              | SimpleRuleSymbol     as rs => array[RuleStructureField.SimpleCall(rule, rs)]
-              | RegularRuleSymbol    as rs => array[RuleStructureField.TokenCall(rule, rs)]
-              | MarkerSymbol         as rs => array[RuleStructureField.Marker(rule, rs)]
+              | ExtensibleRuleSymbol as rs => array[RuleStructureField.ExtensibleCall(rule, takePredicates(), rs, bindingPower)]
+              | SimpleRuleSymbol     as rs => array[RuleStructureField.SimpleCall    (rule, takePredicates(), rs)]
+              | RegularRuleSymbol    as rs => array[RuleStructureField.TokenCall     (rule, takePredicates(), rs)]
+              | MarkerSymbol         as rs => array[RuleStructureField.Marker        (rule, takePredicates(), rs)]
               | _                          => Message.FatalError(ruleRef.NLocation(), $"N2ICE Typing bug: invalid symbol bound. $(ruleSymbol.GetType().Name)");
             }
           | Call(RuleRef.None as ruleRef, _) => Message.FatalError(ruleRef.NLocation(), "N2ICE Typing bug: not bound symbol.");
@@ -124,24 +132,30 @@ namespace N2.Model
         | ExtentionRuleSymbol(ExtentionType = Postfix(_, rule)) => rule
         | _ => ruleSymbol.Rule
       }
-      def ast = RuleStructure.Ast(rule, conv(rule), ruleSymbol);
+      def ast = RuleStructure.Ast(rule, conv(rule), takePredicates(), ruleSymbol);
       mutable state = 0;
-      def initStructure(structure : RuleStructure, owner : RuleStructureField, level : int, isPredicateState : bool) : void
+      def initStructure(structure : RuleStructure, owner : RuleStructureField, level : int) : void
       {
         structure.Level           = level;
         structure.Owner           = owner;
-        if (owner == null)
+        match (structure )
         {
-          assert(structure is RuleStructure.Ast);
-          structure.Header    = array[RuleStructureHeaderField.Id(structure, 0), RuleStructureHeaderField.Next(structure, 1), RuleStructureHeaderField.State(structure, 2)];
-          structure.AstId     = "RuleId";
-        }
-        else
-        {
-          assert(!(structure is RuleStructure.Ast));
-          structure.Header    = array[RuleStructureHeaderField.Id(structure, 0), RuleStructureHeaderField.Next(structure, 1)];
-          structure.AstId     = $"RuleId$(internalRuleStructures.Count)";
-          internalRuleStructures.Add(structure);
+          | RuleStructure.Ast =>
+            assert(owner == null);
+            structure.Header    = array[RuleStructureHeaderField.Id(structure, 0), RuleStructureHeaderField.Next(structure, 1), RuleStructureHeaderField.State(structure, 2)];
+            structure.AstId     = "RuleId";
+
+          | RuleStructure.Predicate =>
+            assert(owner == null);
+            structure.Header    = array[RuleStructureHeaderField.Id(structure, 0)];
+            structure.AstId     = $"RuleId$(internalRuleStructures.Count)";
+            internalRuleStructures.Add(structure);
+
+          | _ =>
+            assert(owner != null);
+            structure.Header    = array[RuleStructureHeaderField.Id(structure, 0), RuleStructureHeaderField.Next(structure, 1)];
+            structure.AstId     = $"RuleId$(internalRuleStructures.Count)";
+            internalRuleStructures.Add(structure);
         }
 
         def fields = structure.Fields;
@@ -154,7 +168,7 @@ namespace N2.Model
 
         for (mutable i = 0; i < fields.Length; ++i)
         {
-          initField(fields[i], level, isPredicateState);
+          initField(fields[i], level);
           fields[i].EndState = state;
         }
 
@@ -162,7 +176,7 @@ namespace N2.Model
         for (mutable i = 1; i < fields.Length; ++i)
           fields[i].Offset = fields[i - 1].Offset + fields[i - 1].Size;
 
-        match (fields.Find(field => !(field is RuleStructureField.Predicate || field is RuleStructureField.Marker)))
+        match (fields.Find(field => !(field is RuleStructureField.Marker)))
         {
           | Some(field) =>
             field.AllocateAst = true;
@@ -170,13 +184,17 @@ namespace N2.Model
 
           | None()      => assert(false);
         }
+        foreach (predicate in structure.TailPredicates)
+          initStructure(predicate, null, level + 1);
       }
-      and initField(field : RuleStructureField, level : int, isPredicateState : bool) : void
+      and initField(field : RuleStructureField, level : int) : void
       {
+        foreach (predicate in field.HeadPredicates)
+          initStructure(predicate, null, level + 1);
+
         allFields.Add(field);
 
         field.Level            = level;
-        field.IsPredicateState = isPredicateState;
         
         if (field is RuleStructureField.Marker)
           field.State = int.MaxValue - 1;
@@ -188,19 +206,18 @@ namespace N2.Model
 
         match (field)
         {
-          | TokenString("")                               => field.Size = 1; field.CanParseEmpryString = true;
-          | TokenString                                   => field.Size = 1; field.CanParseEmpryString = false;
-          | TokenCall(sym)                                => field.Size = 1; field.CanParseEmpryString = sym.CanParseEmpryString;
-          | SimpleCall(sym)                               => field.Size = 1; field.CanParseEmpryString = sym.CanParseEmpryString;
-          | ExtensibleCall                                => field.Size = 1; field.CanParseEmpryString = false;
-          | Option           (rule)                       => field.Size = 1; field.CanParseEmpryString = true;     initStructure(rule, field, level + 1, isPredicateState);
-          | List             (rule, min, _)               => field.Size = 1; field.CanParseEmpryString = min == 0; initStructure(rule, field, level + 1, isPredicateState);
-          | ListWithSeparator(rule, separator, min, _, _) => field.Size = 1; field.CanParseEmpryString = min == 0; initStructure(rule, field, level + 1, isPredicateState); initStructure(separator, field, level + 1, isPredicateState);
-          | Predicate        (rule, _)                    => field.Size = 0; field.CanParseEmpryString = true;     initStructure(rule, field, level + 1, isPredicateState = true);
-          | Marker                                        => field.Size = 0; field.CanParseEmpryString = true;
+          | TokenString("")                               => field.Size = 1; field.CanParseEmptyString = true;
+          | TokenString                                   => field.Size = 1; field.CanParseEmptyString = false;
+          | TokenCall(sym)                                => field.Size = 1; field.CanParseEmptyString = sym.CanParseEmptyString;
+          | SimpleCall(sym)                               => field.Size = 1; field.CanParseEmptyString = sym.CanParseEmptyString;
+          | ExtensibleCall                                => field.Size = 1; field.CanParseEmptyString = false;
+          | Option           (rule)                       => field.Size = 1; field.CanParseEmptyString = true;     initStructure(rule, field, level + 1);
+          | List             (rule, min, _)               => field.Size = 1; field.CanParseEmptyString = min == 0; initStructure(rule, field, level + 1);
+          | ListWithSeparator(rule, separator, min, _, _) => field.Size = 1; field.CanParseEmptyString = min == 0; initStructure(rule, field, level + 1); initStructure(separator, field, level + 1);
+          | Marker                                        => field.Size = 0; field.CanParseEmptyString = true;
         }
       }
-      initStructure(ast, null, 0, isPredicateState = false);
+      initStructure(ast, null, 0);
       ast.InternalRuleStructures = internalRuleStructures.ToArray();
       ast.AllFields              = allFields.ToArray();
       ast.StateCount             = state;
