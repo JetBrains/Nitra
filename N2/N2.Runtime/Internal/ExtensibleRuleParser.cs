@@ -103,15 +103,31 @@ namespace N2.Internal
 
     public override int Parse(int curTextPos, string text, Parser parser)
     {
+      int bestPos;
+      curTextPos = ParsePrefix(curTextPos, text, parser);
+      if (curTextPos > 0)
+      {
+        do
+        {
+          bestPos = curTextPos;
+          curTextPos = ParsePostfix(curTextPos, text, parser);
+        }
+        while (curTextPos > bestPos);
+        return bestPos;
+      }
+      else
+        return -1;
+    }
+
+    public int ParsePrefix(int curTextPos, string text, Parser parser)
+    {
       unchecked
       {
-        int postfixAst;
         int prefixAst;
         int newEndPos;
         int newResult;
         int bestEndPos;
         int bestResult;
-        int lastResult;
         int i;
         int j;
         char c; // временная переменная для отсечения правил по первой букве
@@ -129,7 +145,7 @@ namespace N2.Internal
               for (; parser.ast[i] >= 0; ++i)
                 curTextPos += parser.ast[i];
               bestEndPos = curTextPos;
-              goto postfix_loop;
+              return curTextPos;
             }
             else
               return -1; // облом разбора
@@ -199,9 +215,24 @@ namespace N2.Internal
 
         if (bestResult <= 0 || bestEndPos < 0)// не смогли разобрать префикс
           return -1;
+        return bestEndPos;
+      }
+    }
 
-      postfix_loop:
-        curTextPos = bestEndPos;
+    public int ParsePostfix(int curTextPos, string text, Parser parser)
+    {
+      unchecked
+      {
+        int postfixAst;
+        int newEndPos;
+        int newResult;
+        int bestEndPos= curTextPos;
+        int bestResult= 0;
+        int lastResult= 0;
+        int i;
+        int j;
+        char c; // временная переменная для отсечения правил по первой букве
+
         if (curTextPos >= text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
           return curTextPos;// при достижении конца текста есть нечего
         //ищем запомненое
@@ -259,7 +290,7 @@ namespace N2.Internal
                   if (size >= 0)
                     bestEndPos += size;
                   else
-                    goto postfix_loop;//нашли терминатор. Парсим следующее правило.
+                    return bestEndPos;//нашли терминатор. Парсим следующее правило.
 
                   ++j;
                 }
@@ -332,12 +363,10 @@ namespace N2.Internal
         parser.ast[postfixAst + PostfixOfs.AstList] = lastResult;
 
         if (bestEndPos <= curTextPos)
-          return curTextPos; // если нам не удалось продвинуться то заканчиваем разбор
-
-        goto postfix_loop;
+          return curTextPos;
+        else
+          return bestEndPos;
       }
-      assert(false);
-      return -1;
     }
   }
 }
