@@ -113,7 +113,6 @@ namespace N2.Visualizer
     {
       var stackFrame = recoveryStack.Head;
       var ruleParser = stackFrame.RuleParser;
-      var lastState  = stackFrame.RuleParser.StatesCount - 1;
 
       for (var state = stackFrame.State; state >= 0; state = stackFrame.RuleParser.GetNextState(state))
       {
@@ -135,7 +134,7 @@ namespace N2.Visualizer
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
           AddResult(curTextPos,              pos2, state, recoveryStack, text, startTextPos);
         }
-        else if (pos == curTextPos && state == lastState)
+        else if (pos == curTextPos && stackFrame.RuleParser.GetNextState(state) == -1)
         {
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
           AddResult(curTextPos, pos2, state, recoveryStack, text, startTextPos);
@@ -159,7 +158,7 @@ namespace N2.Visualizer
             foreach (var subRuleParser in parsers)
             {
               var old = recoveryStack;
-              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, 0/*stackFrame.AstPtr*/, 0, 0));
+              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, 0/*stackFrame.AstPtr*/, subRuleParser.StartState, 0));
               _recCount++;
               ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
               recoveryStack = old; // remove top element
