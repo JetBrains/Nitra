@@ -48,6 +48,7 @@ namespace N2.Visualizer
     Dictionary<int, int> _allacetionsInfo = new Dictionary<int, int>();
     Dictionary<object, int> _visited = new Dictionary<object, int>();
     Dictionary<string, int> _parsedRules = new Dictionary<string, int>();
+    RecoveryStack        _recoveryStack;
 
     void Reset()
     {
@@ -66,7 +67,7 @@ namespace N2.Visualizer
     {
       Reset();
       var timer = System.Diagnostics.Stopwatch.StartNew();
-      var recoveryStack = parser.RecoveryStack.NToList();
+      _recoveryStack     = parser.RecoveryStack.NToList() as RecoveryStack;
       var curTextPos    = startTextPos;
       var text          = parser.Text;
 
@@ -74,7 +75,7 @@ namespace N2.Visualizer
         
       do
       {
-        for (var stack = recoveryStack as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
+        for (var stack = _recoveryStack as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
           ProcessStackFrame(startTextPos, parser, stack, curTextPos, text, 0);
         curTextPos++;
       }
@@ -143,6 +144,7 @@ namespace N2.Visualizer
           AddResult(curTextPos, parser.MaxTextPos, state, recoveryStack, text, startTextPos);
         else
         {
+          if (object.ReferenceEquals(_recoveryStack, recoveryStack))
           if (subruleLevel <= 0)
           {
             if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
