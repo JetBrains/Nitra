@@ -18,21 +18,80 @@ namespace N2.Compiler
   {
     public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
     {
-      def cases = SCG.List();
-      foreach (field when !(field is RuleStructureField.Marker) in ruleStructure.AllFields)
+      def beginLabel = Environment.MakeLabel("BeginTryParse");
+
+      def makeContinueStateSelector() : PExpr
       {
-        def comment = field.SrcRule.ToString();
-        if (field.IsPredicate)
-          cases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot parse from predicate state: '$comment'.")) ]>);
-        else
-          cases.Add(<[ case: | $(field.State) => _ = $comment; startLevel = $(field.Level); $(GotoParseLabel(field)) ]>);
+        def continueCases = SCG.List();
+        foreach (field in ruleStructure.AllNonMarkerFields)
+        {
+          def getContinueField(field : RuleStructureField) : RuleStructureField
+          {
+            def isLast     (field         : RuleStructureField) : bool { field.Owner.NotMarkerFields.Last() : object == field }
+            def nextField  (field         : RuleStructureField) : RuleStructureField
+            {
+              assert(field != null);
+              if (field.NextSibling != null)
+                field.NextSibling
+              else if (field.Owner is RuleStructure.Ast)
+                null // дошли до последнего филда
+              else
+                nextField(field.Owner.Owner)
+            }
+            def getLoopSate(ruleStructure : RuleStructure)      : RuleStructureField { ruleStructure.Owner }
+            match (field.Owner)
+            {
+              | ListWithSeparatorSeparator
+              | List => if (isLast(field)) getLoopSate(field.Owner) else nextField(field)
+              | ListWithSeparatorRule as sep =>
+                if (isLast(field))
+                  (sep.Owner :> RuleStructureField.ListWithSeparator).Separator.NotMarkerFields[0]
+                else
+                  nextField(field)
+      
+              | _ => nextField(field)
+            }
+          }
+          def sourceStateComment = field.ToString();
+          if (field.IsPredicate)
+            continueCases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot continue parse from predicate state: '$sourceStateComment'.")) ]>);
+          else
+          {
+            def continueField = getContinueField(field);
+            if (continueField != null)
+            {
+              def destStateComment = $"Continue state: $continueField";
+              continueCases.Add(<[ case: | $(field.State) => _ = $sourceStateComment; _ = $destStateComment; startState = $(continueField.State); $(beginLabel.Goto()) ]>);
+            }
+            else
+              continueCases.Add(<[ case: | $(field.State) => _ = $sourceStateComment; $(_endLabel.Goto()) ]>); // продолжения нет
+          }
+        }
+        continueCases.Add(<[ case: | x => assert(false, $"Unknown continue parse state '$x'.") ]>);
+        <[ match (recoveryStack.Head.State) { ..$continueCases } ]>
       }
-      cases.Add(<[ case: | x => assert(false, $"Unknown parse state '$x'.") ]>);
+
+      def makeStartStateSelector() : PExpr
+      {
+        def startCases = SCG.List();
+        startCases.Add(<[ case: | -2 => $(makeContinueStateSelector()) ]>);
+        foreach (field in ruleStructure.AllNonMarkerFields)
+        {
+          def comment = field.ToString();
+          if (field.IsPredicate)
+            startCases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot parse from predicate state: '$comment'.")) ]>);
+          else
+            startCases.Add(<[ case: | $(field.State) => _ = $comment; startLevel = $(field.Level); $(GotoParseLabel(field)) ]>);
+        }
+        startCases.Add(<[ case: | x => assert(false, $"Unknown parse state '$x'.") ]>);
+        <[ match (startState) { ..$startCases } ]>
+      }
 
       def code = SCG.List();
-      code.Add(<[ ignore(stackFrame, curTextPos, parser); ]>);
-      code.Add(<[ _ = $(ruleStructure.SrcRule.ToString()) ]>);
-      code.Add(<[ match (startState) { ..$cases } ]>);
+      code.Add(<[ ignore(curTextPos, parser); ]>);
+      code.Add(<[ _ = $(ruleStructure.ToString()) ]>);
+      code.Add(beginLabel.Label());
+      code.Add(makeStartStateSelector());
 
       def (predicateCode, predicateFailLabel) = CompilePredicate(ruleStructure.TailPredicates);
 
