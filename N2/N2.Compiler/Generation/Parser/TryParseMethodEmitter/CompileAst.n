@@ -18,38 +18,32 @@ namespace N2.Compiler
   {
     public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
     {
-      def beginLabel = Environment.MakeLabel("BeginTryParse");
-
       def makeContinueStateSelector() : PExpr
       {
         def continueCases = SCG.List();
         foreach (field in ruleStructure.AllNonMarkerFields)
         {
-          def getContinueField(field : RuleStructureField) : RuleStructureField
+          def getContinueStateCode(field : RuleStructureField) : PExpr
           {
-            def isLast     (field         : RuleStructureField) : bool { field.Owner.NotMarkerFields.Last() : object == field }
-            def nextField  (field         : RuleStructureField) : RuleStructureField
+            match (field)
             {
-              assert(field != null);
-              if (field.NextSibling != null)
-                field.NextSibling
-              else if (field.Owner is RuleStructure.Ast)
-                null // дошли до последнего филда
-              else
-                nextField(field.Owner.Owner)
-            }
-            def getLoopSate(ruleStructure : RuleStructure)      : RuleStructureField { ruleStructure.Owner }
-            match (field.Owner)
-            {
-              | ListWithSeparatorSeparator
-              | List => if (isLast(field)) getLoopSate(field.Owner) else nextField(field)
-              | ListWithSeparatorRule as sep =>
-                if (isLast(field))
-                  (sep.Owner :> RuleStructureField.ListWithSeparator).Separator.NotMarkerFields[0]
-                else
-                  nextField(field)
-      
-              | _ => nextField(field)
+              | List                       => GotoParseLabel(field)
+              | ListWithSeparator as field =>
+                <[
+                  match (recoveryStack.Head.Info)
+                  {
+                    | LoopBody      => $(GotoParseLabel(field.Separator.NotMarkerFields[0]))
+                    | LoopSeparator => $(GotoParseLabel(field.Rule.NotMarkerFields[0]))
+                    | x             => assert(false, $"Invalid frame info value '$x'")
+                  }
+                ]>
+
+              | _ => 
+                match(field.NextSibling)
+                {
+                  | null  => _endLabel.Goto() // продолжения нет
+                  | field => GotoParseLabel(field)
+                }
             }
           }
           def sourceStateComment = field.ToString();
@@ -57,14 +51,8 @@ namespace N2.Compiler
             continueCases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot continue parse from predicate state: '$sourceStateComment'.")) ]>);
           else
           {
-            def continueField = getContinueField(field);
-            if (continueField != null)
-            {
-              def destStateComment = $"Continue state: $continueField";
-              continueCases.Add(<[ case: | $(field.State) => _ = $sourceStateComment; _ = $destStateComment; startState = $(continueField.State); $(beginLabel.Goto()) ]>);
-            }
-            else
-              continueCases.Add(<[ case: | $(field.State) => _ = $sourceStateComment; $(_endLabel.Goto()) ]>); // продолжения нет
+            def code = getContinueStateCode(field);
+            continueCases.Add(<[ case: | $(field.State) => _ = $sourceStateComment; startLevel = $(field.Level); $code; ]>);
           }
         }
         continueCases.Add(<[ case: | x => assert(false, $"Unknown continue parse state '$x'.") ]>);
@@ -90,7 +78,6 @@ namespace N2.Compiler
       def code = SCG.List();
       code.Add(<[ ignore(curTextPos, parser); ]>);
       code.Add(<[ _ = $(ruleStructure.ToString()) ]>);
-      code.Add(beginLabel.Label());
       code.Add(makeStartStateSelector());
 
       def (predicateCode, predicateFailLabel) = CompilePredicate(ruleStructure.TailPredicates);
