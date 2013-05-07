@@ -8,6 +8,7 @@ using System.Linq;
 using System.Text;
 
 using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
+using System.Diagnostics;
 
 namespace N2.Visualizer
 {
@@ -84,24 +85,29 @@ namespace N2.Visualizer
       timer.Stop();
 
       //ProcessStackFrame(startTextPos, parser, _bestResult.Stack, _bestResult.StartPos, text, 0);
-      //FixAst(_bestResult, parser);
+      FixAst(curTextPos, parser);
 
-      var ex = new ErrorException(_bestResults.ToArray());
+      //var ex = new ErrorException(_bestResults.ToArray());
       Reset();
-      throw ex;
+      //throw ex;
       //return _bestResult;
     }
 
-    private void FixAst(RecoveryResult result, Parser parser)
+    private void FixAst(int startPos, Parser parser)
     {
-      var frame = result.Stack.Head;
+      var frame = _bestResult.Stack.Head;
 
-      if (result.StartState == frame.State && result.SkipedCount > 0)
-      {
-        //var refl = parser.ParserHost.Reflection(parser, frame.AstPtr);
-        { }
-      }
+      Debug.Assert(frame.AstPtr < 0);
 
+      var fieldSize = parser.ast[frame.AstPtr + 3 + frame.State];
+      var error = new Error(fieldSize, new NToken(startPos, startPos + result.SkipedCount), _bestResults);
+      var errorIndex = parser.Errors.Count;
+      parser.Errors.Add(error);
+
+      parser.ast[frame.AstPtr + 3 + frame.State] = ~errorIndex;
+      parser.ast[frame.AstPtr + 2] = ~_bestResult.StartState;
+      for (var state = frame.State + 1; state < _bestResult.StartState; ++state)
+        parser.ast[frame.AstPtr + 3 + state] = int.MinValue;
     }
 
     private void ProcessStackFrame(
@@ -160,7 +166,7 @@ namespace N2.Visualizer
             foreach (var subRuleParser in parsers)
             {
               var old = recoveryStack;
-              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, 0, 0/*stackFrame.AstPtr*/, subRuleParser.StartState, 0, FrameInfo.None));
+              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, -1/*stackFrame.AstPtr*/, subRuleParser.StartState, 0, FrameInfo.None));
               _recCount++;
               ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
               recoveryStack = old; // remove top element
