@@ -90,24 +90,40 @@ namespace N2.Visualizer
       //var ex = new ErrorException(_bestResults.ToArray());
       Reset();
       //throw ex;
-      //return _bestResult;
+      return _bestResult;
     }
 
     private void FixAst(int startPos, Parser parser)
     {
       var frame = _bestResult.Stack.Head;
 
+      var tail = _bestResult.Stack.Tail as RecoveryStack;
+
+      if (tail != null)
+      {
+        var subFrame = tail.Head;
+      }
+
       Debug.Assert(frame.AstPtr < 0);
 
       var fieldSize = parser.ast[frame.AstPtr + 3 + frame.State];
-      var error = new Error(fieldSize, new NToken(startPos, startPos + result.SkipedCount), _bestResults);
+      var error = new Error(fieldSize, new NToken(startPos, startPos + _bestResult.SkipedCount), _bestResults);
       var errorIndex = parser.Errors.Count;
       parser.Errors.Add(error);
 
-      parser.ast[frame.AstPtr + 3 + frame.State] = ~errorIndex;
-      parser.ast[frame.AstPtr + 2] = ~_bestResult.StartState;
+      // АСТ - У нас нет пересчета из состояний в индексы полей.
+      // Нужна информация о том что фрейм принадлежит перавилу, а не подправилу. Т.е. каким подтипом RuleStruct он является (Ast или еще каким-то).
+      // 
+      // 
+      // 
+      // 
+      // 
+
       for (var state = frame.State + 1; state < _bestResult.StartState; ++state)
         parser.ast[frame.AstPtr + 3 + state] = int.MinValue;
+
+      parser.ast[frame.AstPtr + 3 + frame.State] = ~errorIndex;
+      parser.ast[frame.AstPtr + 2] = ~_bestResult.StartState;
     }
 
     private void ProcessStackFrame(
