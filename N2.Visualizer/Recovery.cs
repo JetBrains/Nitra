@@ -104,10 +104,10 @@ namespace N2.Visualizer
         var subFrame = tail.Head;
       }
 
-      Debug.Assert(frame.AstPtr < 0);
+      Debug.Assert(frame.AstPtr >= 0);
 
-      var fieldSize = parser.ast[frame.AstPtr + 3 + frame.State];
-      var error = new Error(fieldSize, new NToken(startPos, startPos + _bestResult.SkipedCount), _bestResults);
+      //var fieldSize = parser.ast[frame.AstPtr + 3 + frame.State];
+      var error = new Error(new NToken(startPos, startPos + _bestResult.SkipedCount), _bestResults);
       var errorIndex = parser.Errors.Count;
       parser.Errors.Add(error);
 
@@ -119,11 +119,7 @@ namespace N2.Visualizer
       // 
       // 
 
-      for (var state = frame.State + 1; state < _bestResult.StartState; ++state)
-        parser.ast[frame.AstPtr + 3 + state] = int.MinValue;
-
-      parser.ast[frame.AstPtr + 3 + frame.State] = ~errorIndex;
-      parser.ast[frame.AstPtr + 2] = ~_bestResult.StartState;
+      frame.RuleParser.PatchAst(_bestResult.FailPos, _bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
     }
 
     private void ProcessStackFrame(
