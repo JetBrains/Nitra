@@ -138,17 +138,26 @@ namespace N2.Internal
           if (parser.ast[prefixAst + PrefixOfs.Id] == PrefixId)
           {
             bestResult = parser.ast[prefixAst + PrefixOfs.List];
-            if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == Parser.AstParsedState)
+            if (bestResult > 0)
             {
-              //TODO: убрать цикл
-              i = bestResult + AstOfs.Sizes;
-              for (; parser.ast[i] >= 0; ++i)
-                curTextPos += parser.ast[i];
-              bestEndPos = curTextPos;
-              return curTextPos;
+              int state = parser.ast[bestResult + AstOfs.State];
+              if (state == Parser.AstParsedState)
+              {
+                //TODO: убрать цикл
+                i = bestResult + AstOfs.Sizes;
+                for (; parser.ast[i] >= 0; ++i)
+                  curTextPos += parser.ast[i];
+                bestEndPos = curTextPos;
+                return curTextPos;
+              }
+              else if (state < 0)
+              {
+                parser.ast[prefixAst + PrefixOfs.Next] = 0;//FIXME. обрпботать неоднозначности.
+                var prefixRule = PrefixRules[parser.ast[prefixAst + PrefixOfs.Id] - PrefixOffset];
+                return prefixRule.Parse(curTextPos, text, ref newResult, parser);
+              }
             }
-            else
-              return -1; // облом разбора
+            return -1; // облом разбора
           }
         }
 
