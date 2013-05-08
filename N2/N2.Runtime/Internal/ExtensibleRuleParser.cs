@@ -138,9 +138,13 @@ namespace N2.Internal
           if (parser.ast[prefixAst + PrefixOfs.Id] == PrefixId)
           {
             bestResult = parser.ast[prefixAst + PrefixOfs.List];
-            
+
             if (bestResult < 0)
-              return curTextPos + parser.Error[~bestResult].Skip.Length;
+            {
+              var error = parser.Error[~bestResult];
+              curTextPos += error.Skip.Length; // грязь
+              bestResult = error.Data; // исходная ссылка на AST
+            }
 
             if (bestResult > 0)
             {
