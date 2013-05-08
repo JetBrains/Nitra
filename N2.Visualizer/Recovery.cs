@@ -120,6 +120,16 @@ namespace N2.Visualizer
       // 
 
       frame.RuleParser.PatchAst(_bestResult.FailPos, _bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
+
+      for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
+      {
+        if (stack.Head.IsRootAst)
+        {
+          var state = parser.ast[stack.Head.AstPtr + 2];
+          Debug.Assert(state >= 0);
+          parser.ast[stack.Head.AstPtr + 2] = ~state;
+        }
+      }
     }
 
     private void ProcessStackFrame(
@@ -178,7 +188,7 @@ namespace N2.Visualizer
             foreach (var subRuleParser in parsers)
             {
               var old = recoveryStack;
-              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, -1/*stackFrame.AstPtr*/, subRuleParser.StartState, 0, FrameInfo.None));
+              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, true, -1/*stackFrame.AstPtr*/, subRuleParser.StartState, 0, FrameInfo.None));
               _recCount++;
               ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
               recoveryStack = old; // remove top element
