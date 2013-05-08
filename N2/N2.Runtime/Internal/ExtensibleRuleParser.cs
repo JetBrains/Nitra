@@ -152,8 +152,9 @@ namespace N2.Internal
               }
               else if (state < 0)
               {
-                parser.ast[prefixAst + PrefixOfs.Next] = 0;//FIXME. обрпботать неоднозначности.
-                var prefixRule = PrefixRules[parser.ast[prefixAst + PrefixOfs.Id] - PrefixOffset];
+                parser.ast[bestResult + PrefixOfs.Next] = 0;//FIXME. обработать неоднозначности.
+                var prefixRule = PrefixRules[parser.ast[bestResult + PrefixOfs.Id] - PrefixOffset];
+                newResult = bestResult;
                 return prefixRule.Parse(curTextPos, text, ref newResult, parser);
               }
             }
