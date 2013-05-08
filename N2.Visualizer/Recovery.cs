@@ -154,7 +154,7 @@ namespace N2.Visualizer
           var key = Tuple.Create(curTextPos, ruleParser, state);
           if (!_visited.TryGetValue(key, out pos))
           {
-            _visited[key] = pos = ruleParser.TryParse(recoveryStack, state, curTextPos, parser);
+            _visited[key] = pos = ruleParser.TryParse(recoveryStack, state, curTextPos, false, parser);
           }
         }
 
@@ -265,7 +265,7 @@ namespace N2.Visualizer
         return startTextPos;
 
       var stackFrame = tail.Head;
-      var pos = stackFrame.RuleParser.TryParse(tail, -2, startTextPos, parser);
+      var pos = stackFrame.RuleParser.TryParse(tail, -2, startTextPos, false, parser);
 
       if (pos >= 0)
         return ContinueParse(pos, tail, parser, text);
