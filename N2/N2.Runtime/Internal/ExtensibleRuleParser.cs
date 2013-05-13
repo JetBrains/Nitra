@@ -132,41 +132,24 @@ namespace N2.Internal
         int j;
         char c; // временная переменная для отсечения правил по первой букве
 
-        prefixAst = parser.memoize[curTextPos];
-        for (; prefixAst > 0; prefixAst = parser.ast[prefixAst + PrefixOfs.Next])
+        prefixAst = parser.TryGetAst(curTextPos, PrefixId);
+        if (prefixAst > 0)
         {
-          if (parser.ast[prefixAst + PrefixOfs.Id] == PrefixId)
+          bestResult = parser.TryGetPrefix(ref curTextPos, prefixAst);
+          if (bestResult > 0)
           {
-            bestResult = parser.ast[prefixAst + PrefixOfs.List];
-
-            if (bestResult < 0)
+            int state = parser.ast[bestResult + AstOfs.State];
+            if (state == Parser.AstParsedState)
+              return curTextPos + GetPrefixSize(bestResult, parser);
+            else if (state < 0)
             {
-              var error = parser.ErrorData[~bestResult];
-              curTextPos += error.Skip.Length; // грязь
-              bestResult = error.Data; // исходная ссылка на AST
+              parser.ast[bestResult + PrefixOfs.Next] = 0;//FIXME. обработать неоднозначности.
+              var prefixRule = PrefixRuleParser(bestResult, parser);
+              newResult = bestResult;
+              return prefixRule.Parse(curTextPos, text, ref newResult, parser);
             }
-
-            if (bestResult > 0)
-            {
-              int state = parser.ast[bestResult + AstOfs.State];
-              if (state == Parser.AstParsedState)
-              {
-                i = bestResult + AstOfs.Sizes;
-                var last = i + PrefixRules[parser.ast[bestResult + PrefixOfs.Id] - PrefixOffset].FieldsCount - 1;
-                for (; i <= last; ++i)
-                  curTextPos += parser.GetSize(i);
-                return curTextPos;
-              }
-              else if (state < 0)
-              {
-                parser.ast[bestResult + PrefixOfs.Next] = 0;//FIXME. обработать неоднозначности.
-                var prefixRule = PrefixRules[parser.ast[bestResult + PrefixOfs.Id] - PrefixOffset];
-                newResult = bestResult;
-                return prefixRule.Parse(curTextPos, text, ref newResult, parser);
-              }
-            }
-            return -1; // облом разбора
           }
+          return -1; // облом разбора
         }
 
         assert2(parser.ParsingMode == ParsingMode.Parsing);
