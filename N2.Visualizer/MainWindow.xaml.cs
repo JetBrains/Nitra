@@ -160,51 +160,24 @@ namespace N2.Visualizer
 
     private void TryReportError()
     {
-      _textMarkerService.RemoveAll(_ => true);
+      ClearMarkers();
 
       if (_parseResult.IsSuccess)
       {
         _status.Text = "OK";
-        return;
       }
-
-      var errPos = _parseResult.LastSuccessPos;
-
-      var marker = _textMarkerService.Create(errPos, 1);
-      marker.MarkerType = TextMarkerType.SquigglyUnderline;
-      marker.MarkerColor = Colors.Red;
-      marker.ToolTip = "Parse error";
-
-      var set = new HashSet<string>();
-      for (int i = errPos; i >= 0; i--)
+      else
       {
-        var applications = _parseResult.ParserHost.Reflection(_parseResult, i);
-        foreach (var a in applications)
+        var errors = _parseResult.GetErrors();
+        foreach (ParseError error in errors)
         {
-          var failed = a.FirstFailedIndex;
-          if (failed >= 0)
-          {
-            var sate = _parseResult.ast[a.AstPointer + 2];
-            var calls = a.GetChildren();
-            var e = 0;
-            var size = 0;
-
-            foreach (var call in calls)
-            {
-              if (failed >= 0 && e >= failed)
-              {
-                if (size > 0)
-                {
-                  _status.Text = "Expected: " + call;
-                  return;
-                }
-              }
-              else
-                size += call.Size;
-              e++;
-            }
-          }
+          var location = error.Location;
+          var marker = _textMarkerService.Create(location.StartPos, location.Length);
+          marker.MarkerType = TextMarkerType.SquigglyUnderline;
+          marker.MarkerColor = Colors.Red;
+          marker.ToolTip = error.Message + "\r\n\r\n" + error.DebugText;
         }
+        _status.Text = "Parsing completed with errors";
       }
     }
 
@@ -407,54 +380,12 @@ namespace N2.Visualizer
       }
       catch (TypeLoadException ex)
       {
+        ClearMarkers();
         MessageBox.Show(this, ex.Message);
       }
-      catch (ErrorException ex)
-      {
-        var recoveries = ex.Recovery;
-        MekeErrorMessage(recoveries);
-      }
     }
 
-    private void MekeErrorMessage(RecoveryResult[] recoveries)
-    {
-      if (recoveries.Length == 0)
-        return;
-
-      var recovery = recoveries[0];
-
-      _parseResult = null;
-
-      ClearMarker();
-
-      var marker = _textMarkerService.Create(recovery.FailPos, recovery.SkipedCount);// == 0 ? 1 : recovery.SkipedCount);
-      marker.MarkerType = TextMarkerType.SquigglyUnderline;
-      marker.MarkerColor = Colors.Red;
-
-      var expected = new List<string>();
-
-      foreach (var item in recoveries)
-      {
-        var frame = item.Stack.Head;
-        //var state = frame.AstPtr == 0 ? item.StartState : frame.State;
-        var state = frame.FailState;
-        expected.Add(frame.RuleParser.CodeForState(state));
-      }
-
-      var msg = "Expected: " + string.Join(", ", expected.Distinct().ToArray()) + ".";
-
-
-      marker.ToolTip = msg + "\r\n  State= " + recovery.StartState + "\r\n    " + MekeStekText(recovery);
-      _status.Text = "Skiped: «" + recovery.Skiped + "». Recovered: «" + recovery.Recovered + "».";
-      ShowInfo();
-    }
-
-    private static string MekeStekText(RecoveryResult recovery)
-    {
-      return string.Join("\r\n    ", recovery.Stack.Select(s => s.ToString()));
-    }
-
-    private void ClearMarker()
+    private void ClearMarkers()
     {
       _textMarkerService.RemoveAll(_ => true);
     }
