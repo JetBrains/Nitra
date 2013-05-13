@@ -187,7 +187,7 @@ namespace N2.Visualizer
       {
         treeView1.Items.Clear();
 
-        if (_parseResult == null || !_parseResult.IsSuccess)
+        if (_parseResult == null)
           return;
 
         var root = _parseResult.Reflect();
