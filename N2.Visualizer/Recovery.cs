@@ -54,7 +54,7 @@ namespace N2.Visualizer
       _parsedRules = new Dictionary<string, int>();
     }
 
-    public RecoveryResult Strategy(int startTextPos, Parser parser)
+    public void Strategy(int startTextPos, Parser parser)
     {
       Reset();
       var timer = System.Diagnostics.Stopwatch.StartNew();
@@ -74,13 +74,9 @@ namespace N2.Visualizer
 
       timer.Stop();
 
-      //ProcessStackFrame(startTextPos, parser, _bestResult.Stack, _bestResult.StartPos, text, 0);
       FixAst(parser);
 
-      //var ex = new ErrorException(_bestResults.ToArray());
       Reset();
-      //throw ex;
-      return _bestResult;
     }
 
     private void FixAst(Parser parser)
