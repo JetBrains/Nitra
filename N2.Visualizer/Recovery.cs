@@ -108,9 +108,9 @@ namespace N2.Visualizer
       Debug.Assert(frame.AstPtr >= 0);
 
       //var fieldSize = parser.ast[frame.AstPtr + 3 + frame.State];
-      var error = new Error(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults);
-      var errorIndex = parser.Errors.Count;
-      parser.Errors.Add(error);
+      var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults);
+      var errorIndex = parser.ErrorData.Count;
+      parser.ErrorData.Add(error);
 
       // АСТ - У нас нет пересчета из состояний в индексы полей.
       // Нужна информация о том что фрейм принадлежит перавилу, а не подправилу. Т.е. каким подтипом RuleStruct он является (Ast или еще каким-то).

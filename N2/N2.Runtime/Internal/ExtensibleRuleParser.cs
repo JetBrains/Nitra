@@ -141,7 +141,7 @@ namespace N2.Internal
 
             if (bestResult < 0)
             {
-              var error = parser.Errors[~bestResult];
+              var error = parser.ErrorData[~bestResult];
               curTextPos += error.Skip.Length; // грязь
               bestResult = error.Data; // исходная ссылка на AST
             }
