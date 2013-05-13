@@ -12,16 +12,6 @@ using System.Diagnostics;
 
 namespace N2.Visualizer
 {
-  class ErrorException : Exception
-  {
-    public ErrorException(RecoveryResult[] recovery)
-    {
-      Recovery = recovery;
-    }
-
-    public RecoveryResult[] Recovery { get; private set; }
-  }
-
   static class Utils
   {
     public static RecoveryStack Push(this RecoveryStack stack, RecoveryStackFrame elem)
