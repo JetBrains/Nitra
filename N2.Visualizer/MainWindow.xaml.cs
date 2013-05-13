@@ -437,7 +437,7 @@ namespace N2.Visualizer
       {
         var frame = item.Stack.Head;
         //var state = frame.AstPtr == 0 ? item.StartState : frame.State;
-        var state = frame.State;
+        var state = frame.FailState;
         expected.Add(frame.RuleParser.CodeForState(state));
       }
 

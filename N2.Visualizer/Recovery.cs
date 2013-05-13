@@ -143,7 +143,7 @@ namespace N2.Visualizer
       var stackFrame = recoveryStack.Head;
       var ruleParser = stackFrame.RuleParser;
 
-      for (var state = stackFrame.State; state >= 0; state = stackFrame.RuleParser.GetNextState(state))
+      for (var state = stackFrame.FailState; state >= 0; state = stackFrame.RuleParser.GetNextState(state))
       {
         parser.MaxTextPos = startTextPos;
         _parseCount++;
@@ -243,8 +243,8 @@ namespace N2.Visualizer
       if (startState < _bestResult.StartState) goto good;
       if (startState > _bestResult.StartState) return;
 
-      if (stack.Head.State > _bestResult.Stack.Head.State) goto good;
-      if (stack.Head.State < _bestResult.Stack.Head.State) return;
+      if (stack.Head.FailState > _bestResult.Stack.Head.FailState) goto good;
+      if (stack.Head.FailState < _bestResult.Stack.Head.FailState) return;
 
       goto good2;
     good:
