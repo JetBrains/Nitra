@@ -136,7 +136,7 @@ namespace N2.Visualizer
 
       for (var state = stackFrame.FailState; state >= 0; state = stackFrame.RuleParser.GetNextState(state))
       {
-        parser.MaxTextPos = startTextPos;
+        parser.MaxFailPos = startTextPos;
         _parseCount++;
         var startAllocated = parser.allocated;
         int pos;
@@ -159,8 +159,8 @@ namespace N2.Visualizer
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
           AddResult(curTextPos, pos2, state, recoveryStack, text, startTextPos);
         }
-        else if (parser.MaxTextPos > curTextPos)
-          AddResult(curTextPos, parser.MaxTextPos, state, recoveryStack, text, startTextPos);
+        else if (parser.MaxFailPos > curTextPos)
+          AddResult(curTextPos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
         else
         {
           if (object.ReferenceEquals(_recoveryStack, recoveryStack))
@@ -261,7 +261,7 @@ namespace N2.Visualizer
       if (pos >= 0)
         return ContinueParse(pos, tail, parser, text);
       else
-        return Math.Max(parser.MaxTextPos, startTextPos);
+        return Math.Max(parser.MaxFailPos, startTextPos);
     }
   }
 }
