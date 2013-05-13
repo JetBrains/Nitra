@@ -75,7 +75,7 @@ namespace N2.Visualizer
       timer.Stop();
 
       //ProcessStackFrame(startTextPos, parser, _bestResult.Stack, _bestResult.StartPos, text, 0);
-      FixAst(curTextPos, parser);
+      FixAst(parser);
 
       //var ex = new ErrorException(_bestResults.ToArray());
       Reset();
@@ -83,10 +83,9 @@ namespace N2.Visualizer
       return _bestResult;
     }
 
-    private void FixAst(int startPos, Parser parser)
+    private void FixAst(Parser parser)
     {
       var frame = _bestResult.Stack.Head;
-      startPos = _bestResult.StartPos;
 
       var tail = _bestResult.Stack.Tail as RecoveryStack;
 
@@ -98,7 +97,7 @@ namespace N2.Visualizer
       Debug.Assert(frame.AstPtr >= 0);
 
       //var fieldSize = parser.ast[frame.AstPtr + 3 + frame.State];
-      var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults);
+      var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
       var errorIndex = parser.ErrorData.Count;
       parser.ErrorData.Add(error);
 
