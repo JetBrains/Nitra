@@ -123,12 +123,13 @@ namespace N2.Visualizer
 
       for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
       {
-        if (stack.Head.IsRootAst)
-        {
-          var state = parser.ast[stack.Head.AstPtr + 2];
-          Debug.Assert(state >= 0);
-          parser.ast[stack.Head.AstPtr + 2] = ~state;
-        }
+        if (stack.Head.RuleParser is ExtensibleRuleParser)
+          continue;
+        var state = stack.Head.FailState;
+        Debug.Assert(state >= 0);
+        while (!stack.Head.IsRootAst)
+          stack = stack.Tail as RecoveryStack;
+        parser.ast[stack.Head.AstPtr + 2] = ~state;
       }
     }
 
