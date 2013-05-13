@@ -96,6 +96,7 @@ namespace N2.Visualizer
     private void FixAst(int startPos, Parser parser)
     {
       var frame = _bestResult.Stack.Head;
+      startPos = _bestResult.StartPos;
 
       var tail = _bestResult.Stack.Tail as RecoveryStack;
 
@@ -107,7 +108,7 @@ namespace N2.Visualizer
       Debug.Assert(frame.AstPtr >= 0);
 
       //var fieldSize = parser.ast[frame.AstPtr + 3 + frame.State];
-      var error = new Error(new NToken(startPos, startPos + _bestResult.SkipedCount), _bestResults);
+      var error = new Error(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults);
       var errorIndex = parser.Errors.Count;
       parser.Errors.Add(error);
 
