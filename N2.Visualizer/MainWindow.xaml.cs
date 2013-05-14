@@ -18,7 +18,7 @@ using ICSharpCode.SharpDevelop.Editor;
 using Microsoft.Win32;
 using N2.Internal;
 using N2.Runtime.Reflection;
-using N2.Strategies;
+using N2.DebugStrategies;
 using N2.Visualizer.Properties;
 
 namespace N2.Visualizer
