@@ -10,9 +10,9 @@ using System.Text;
 using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
 using System.Diagnostics;
 
-namespace N2.Visualizer
+namespace N2.Strategies
 {
-  static class Utils
+  internal static class Utils
   {
     public static RecoveryStack Push(this RecoveryStack stack, RecoveryStackFrame elem)
     {
@@ -28,7 +28,7 @@ namespace N2.Visualizer
     }
   }
 
-  class Recovery
+  public sealed class Recovery
   {
     RecoveryResult       _bestResult;
     List<RecoveryResult> _bestResults = new List<RecoveryResult>();

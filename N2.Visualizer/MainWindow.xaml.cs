@@ -1,25 +1,25 @@
 ﻿using System;
-using System.Linq;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Timers;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using ICSharpCode.AvalonEdit.Document;
-using ICSharpCode.AvalonEdit.Highlighting;
-using Microsoft.Win32;
-using N2.Runtime.Reflection;
-using N2.Visualizer.Properties;
-using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.AddIn;
+using ICSharpCode.AvalonEdit.Document;
+using ICSharpCode.AvalonEdit.Folding;
+using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.SharpDevelop.Editor;
-using System.Windows.Input;
+using Microsoft.Win32;
 using N2.Internal;
-using System.Text;
+using N2.Runtime.Reflection;
+using N2.Strategies;
+using N2.Visualizer.Properties;
 
 namespace N2.Visualizer
 {
