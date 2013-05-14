@@ -10,9 +10,9 @@ using System.Text;
 using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
 using System.Diagnostics;
 
-namespace N2.Visualizer
+namespace N2.Strategies
 {
-  static class Utils
+  internal static class Utils
   {
     public static bool IsRestStatesCanParseEmptyString(this IRecoveryRuleParser ruleParser, int state)
     {
@@ -43,7 +43,7 @@ namespace N2.Visualizer
     }
   }
 
-  class Recovery
+  public sealed class Recovery
   {
     RecoveryResult       _bestResult;
     List<RecoveryResult> _bestResults = new List<RecoveryResult>();
@@ -122,7 +122,7 @@ namespace N2.Visualizer
       // 
       // 
 
-      frame.RuleParser.PatchAst(_bestResult.FailPos, _bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
+      frame.RuleParser.PatchAst(_bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
 
       for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
       {
