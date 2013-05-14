@@ -19,7 +19,7 @@ namespace N2.Internal
 #if !PARSER_DEBUG
   //[DebuggerStepThroughAttribute]
 #endif
-  public sealed partial class ExtensibleRuleParser : StartRuleParser
+  public sealed partial class ExtensibleRuleParser
   {
     public static class AstOfs
     {

@@ -14,6 +14,21 @@ namespace N2.Visualizer
 {
   static class Utils
   {
+    public static bool IsRestStatesCanParseEmptyString(this IRecoveryRuleParser ruleParser, int state)
+    {
+      bool ok = true;
+
+      for (; state >= 0; state = ruleParser.GetNextState(state))
+        ok &= ruleParser.IsRestStatesCanParseEmptyString(state);
+
+      return ok;
+    }
+
+    public static bool IsLastState(this IRecoveryRuleParser ruleParser, int state)
+    {
+      return ruleParser.GetNextState(state) >= 0;
+    }
+
     public static RecoveryStack Push(this RecoveryStack stack, RecoveryStackFrame elem)
     {
       return new RecoveryStack(elem, stack);
@@ -130,14 +145,19 @@ namespace N2.Visualizer
       var stackFrame = recoveryStack.Head;
       var ruleParser = stackFrame.RuleParser;
 
-      for (var state = stackFrame.FailState; state >= 0; state = stackFrame.RuleParser.GetNextState(state))
+      int nextSate;
+      for (var state = stackFrame.FailState; state >= 0; state = nextSate)
       {
         parser.MaxFailPos = startTextPos;
-        _parseCount++;
+        nextSate = ruleParser.GetNextState(state);
+        if (nextSate < 0 && ruleParser.IsVoidState(state))
+          continue;
+
         var startAllocated = parser.allocated;
         int pos;
 
         {
+          _parseCount++;
           var key = Tuple.Create(curTextPos, ruleParser, state);
           if (!_visited.TryGetValue(key, out pos))
           {
@@ -150,7 +170,7 @@ namespace N2.Visualizer
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
           AddResult(curTextPos,              pos2, state, recoveryStack, text, startTextPos);
         }
-        else if (pos == curTextPos && stackFrame.RuleParser.GetNextState(state) == -1)
+        else if (pos == curTextPos && ruleParser.GetNextState(state) == -1)
         {
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
           AddResult(curTextPos, pos2, state, recoveryStack, text, startTextPos);
