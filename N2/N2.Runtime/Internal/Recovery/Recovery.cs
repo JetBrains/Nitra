@@ -28,22 +28,9 @@ namespace N2.DebugStrategies
       return ok;
     }
 
-    public static bool IsLastState(this IRecoveryRuleParser ruleParser, int state)
-    {
-      return ruleParser.GetNextState(state) >= 0;
-    }
-
     public static RecoveryStack Push(this RecoveryStack stack, RecoveryStackFrame elem)
     {
       return new RecoveryStack(elem, stack);
-    }
-
-    public static int Inc<T>(this Dictionary<T, int> heshtable, T key)
-    {
-      int value;
-      heshtable.TryGetValue(key, out value);
-      heshtable[key] = value;
-      return value;
     }
   }
 
@@ -85,7 +72,7 @@ namespace N2.DebugStrategies
         
       do
       {
-        for (var stack = _recoveryStack as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
+        for (var stack = _recoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
           ProcessStackFrame(startTextPos, parser, stack, curTextPos, text, 0);
         curTextPos++;
       }
@@ -104,27 +91,11 @@ namespace N2.DebugStrategies
     {
       var frame = _bestResult.Stack.Head;
 
-      var tail = _bestResult.Stack.Tail as RecoveryStack;
-
-      if (tail != null)
-      {
-        var subFrame = tail.Head;
-      }
-
       Debug.Assert(frame.AstPtr >= 0);
 
-      //var fieldSize = parser.ast[frame.AstPtr + 3 + frame.State];
       var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
       var errorIndex = parser.ErrorData.Count;
       parser.ErrorData.Add(error);
-
-      // АСТ - У нас нет пересчета из состояний в индексы полей.
-      // Нужна информация о том что фрейм принадлежит перавилу, а не подправилу. Т.е. каким подтипом RuleStruct он является (Ast или еще каким-то).
-      // 
-      // 
-      // 
-      // 
-      // 
 
       frame.RuleParser.PatchAst(_bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
 
@@ -159,7 +130,6 @@ namespace N2.DebugStrategies
         if (nextSate < 0 && ruleParser.IsVoidState(state))
           continue;
 
-        var startAllocated = parser.allocated;
         int pos;
 
         {
