@@ -91,6 +91,8 @@ namespace N2.Visualizer
 
       FixAst(parser);
 
+      parser.MaxFailPos = _bestResult.EndPos; // HACK!!!
+
       Reset();
     }
 
@@ -220,10 +222,9 @@ namespace N2.Visualizer
       {
       }
 
-      if (_bestResult == null)                   goto good;
+      if (startPos == endPos) return;
 
-      if (endPos     > _bestResult.EndPos)       goto good;
-      if (endPos     < _bestResult.EndPos)       return;
+      if (_bestResult == null)                   goto good;
 
       if (stack.Length == _bestResult.Stack.Length) // это халтура :(
       {
@@ -252,6 +253,9 @@ namespace N2.Visualizer
 
       if (stack.Head.FailState > _bestResult.Stack.Head.FailState) goto good;
       if (stack.Head.FailState < _bestResult.Stack.Head.FailState) return;
+
+      if (endPos > _bestResult.EndPos) goto good;
+      if (endPos < _bestResult.EndPos) return;
 
       goto good2;
     good:
