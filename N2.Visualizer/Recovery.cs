@@ -105,7 +105,7 @@ namespace N2.Visualizer
       // 
       // 
 
-      frame.RuleParser.PatchAst(_bestResult.FailPos, _bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
+      frame.RuleParser.PatchAst(_bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
 
       for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
       {
