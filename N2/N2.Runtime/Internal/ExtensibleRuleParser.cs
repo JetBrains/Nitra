@@ -148,6 +148,13 @@ namespace N2.Internal
               newResult = bestResult;
               return prefixRule.Parse(curTextPos, text, ref newResult, parser);
             }
+            else
+            {
+              var prefixRule = PrefixRuleParser(bestResult, parser);
+              var maxFailPos = parser.ast[bestResult + AstOfs.Sizes + prefixRule.FieldsCount - 1];
+              if (maxFailPos > parser.MaxFailPos)
+                parser.MaxFailPos = maxFailPos;
+            }
           }
           return -1; // облом разбора
         }
