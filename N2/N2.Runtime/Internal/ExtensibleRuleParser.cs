@@ -170,6 +170,8 @@ namespace N2.Internal
           {
             newResult = -1;
             newEndPos = prefixRule.Parse(curTextPos, text, ref newResult, parser);
+            // выбираем лучшее правило: побеждает то правило, у которого находится поле спарсившее больше текста
+            // если оба правила имеют одинаковое кол-во полей, размеры которых идентичны, ситуация считается неоднозначностью
             if (newResult > 0)
             {
               if (bestResult > 0)
