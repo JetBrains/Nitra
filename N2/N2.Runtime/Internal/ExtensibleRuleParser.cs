@@ -188,7 +188,8 @@ namespace N2.Internal
                 var bestCount = PrefixRuleParser(bestResult, parser).FieldsCount;
                 var newCount  = PrefixRuleParser(newResult, parser).FieldsCount;
                 var end = Math.Min(bestCount, newCount) + AstOfs.Sizes;
-                for (j = AstOfs.Sizes; j < end; ++j)
+                j = AstOfs.Sizes;
+                for (; j < end; ++j)
                 {
                   var newSize  = parser.GetSize(newResult + j);
                   var bestSize = parser.GetSize(bestResult + j);
@@ -337,7 +338,8 @@ namespace N2.Internal
                 var bestCount = PostfixRuleParser(bestResult, parser).FieldsCount;
                 var newCount  = PostfixRuleParser(newResult, parser).FieldsCount;
                 var end = Math.Min(bestCount, newCount) + AstOfs.Sizes;
-                for (j = AstOfs.Sizes; j < end; ++j)
+                j = AstOfs.Sizes;
+                for (; j < end; ++j)
                 {
                   var newSize  = parser.GetSize(newResult + j);
                   var bestSize = parser.GetSize(bestResult + j);
