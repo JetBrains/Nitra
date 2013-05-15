@@ -327,23 +327,23 @@ namespace N2.Internal
               {
                 if (bestEndPos < 0) { if (newEndPos >= 0) goto postfix_new_better; }
                 else                { if (newEndPos < 0)  goto postfix_best_better; }
-                j = AstOfs.Sizes;
-                for (; true; ++j)
+                var bestCount = PostfixRuleParser(bestResult, parser).FieldsCount;
+                var newCount  = PostfixRuleParser(newResult, parser).FieldsCount;
+                var end = Math.Min(bestCount, newCount) + AstOfs.Sizes;
+                for (j = AstOfs.Sizes; j < end; ++j)
                 {
-                  var newSize  = parser.ast[newResult + j];
-                  var bestSize = parser.ast[bestResult + j];
-                  if (newSize < 0)
-                  {
-                    if (bestSize < 0)
-                      goto postfix_equal;
-                    else
-                      goto postfix_best_better;
-                  }
+                  var newSize  = parser.GetSize(newResult + j);
+                  var bestSize = parser.GetSize(bestResult + j);
                   if (bestSize < newSize)
                     goto postfix_new_better;
                   if (bestSize > newSize)
                     goto postfix_best_better;
                 }
+                if (newCount < bestCount)
+                  goto postfix_best_better;
+                if (newCount > bestCount)
+                  goto postfix_new_better;
+                goto postfix_equal;
               }
               else
                 goto postfix_new_better;
