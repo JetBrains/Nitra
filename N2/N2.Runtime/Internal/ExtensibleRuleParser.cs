@@ -176,23 +176,23 @@ namespace N2.Internal
               {
                 if (bestEndPos < 0) { if (newEndPos >= 0) goto prefix_new_better; }
                 else                { if (newEndPos < 0)  goto prefix_best_better; }
-                j = AstOfs.Sizes;
-                for (; true; ++j)
+                var bestCount = PrefixRuleParser(bestResult, parser).FieldsCount;
+                var newCount  = PrefixRuleParser(newResult, parser).FieldsCount;
+                var end = Math.Min(bestCount, newCount) + AstOfs.Sizes;
+                for (j = AstOfs.Sizes; j < end; ++j)
                 {
-                  var newSize  = parser.ast[newResult + j];
-                  var bestSize = parser.ast[bestResult + j];
-                  if (newSize < 0)
-                  {
-                    if (bestSize < 0)
-                      goto prefix_equal;
-                    else
-                      goto prefix_best_better;
-                  }
+                  var newSize  = parser.GetSize(newResult + j);
+                  var bestSize = parser.GetSize(bestResult + j);
                   if (bestSize < newSize)
                     goto prefix_new_better;
                   if (bestSize > newSize)
                     goto prefix_best_better;
                 }
+                if (newCount < bestCount)
+                  goto prefix_best_better;
+                if (newCount > bestCount)
+                  goto prefix_new_better;
+                goto prefix_equal;
               }
               else
                 goto prefix_new_better;
