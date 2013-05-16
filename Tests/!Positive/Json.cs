@@ -200,9 +200,11 @@ namespace Sample.Json.Cs
       }
       else
       {
-        var errors = parseResult.CollectErrors();
-        var pos = source.PositionToLineColumn(errors.Position);
-        Console.WriteLine("Parse error at ({0}, {1}), rules: {2})", pos.Line, pos.Column, string.Join(", ", errors.Messages));
+        foreach (var error in parseResult.GetErrors())
+        {
+          var pos = error.Location.StartLineColumn;
+          Console.WriteLine("{0}:{1}: {2}", pos.Line, pos.Column, error.Message);
+        }
       }
     }
 
