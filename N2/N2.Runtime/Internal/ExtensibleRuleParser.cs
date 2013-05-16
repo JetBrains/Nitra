@@ -148,6 +148,13 @@ namespace N2.Internal
               newResult = bestResult;
               return prefixRule.Parse(curTextPos, text, ref newResult, parser);
             }
+            else
+            {
+              var prefixRule = PrefixRuleParser(bestResult, parser);
+              var maxFailPos = parser.ast[bestResult + AstOfs.Sizes + prefixRule.FieldsCount - 1];
+              if (maxFailPos > parser.MaxFailPos)
+                parser.MaxFailPos = maxFailPos;
+            }
           }
           return -1; // облом разбора
         }
@@ -181,7 +188,8 @@ namespace N2.Internal
                 var bestCount = PrefixRuleParser(bestResult, parser).FieldsCount;
                 var newCount  = PrefixRuleParser(newResult, parser).FieldsCount;
                 var end = Math.Min(bestCount, newCount) + AstOfs.Sizes;
-                for (j = AstOfs.Sizes; j < end; ++j)
+                j = AstOfs.Sizes;
+                for (; j < end; ++j)
                 {
                   var newSize  = parser.GetSize(newResult + j);
                   var bestSize = parser.GetSize(bestResult + j);
@@ -330,7 +338,8 @@ namespace N2.Internal
                 var bestCount = PostfixRuleParser(bestResult, parser).FieldsCount;
                 var newCount  = PostfixRuleParser(newResult, parser).FieldsCount;
                 var end = Math.Min(bestCount, newCount) + AstOfs.Sizes;
-                for (j = AstOfs.Sizes; j < end; ++j)
+                j = AstOfs.Sizes;
+                for (; j < end; ++j)
                 {
                   var newSize  = parser.GetSize(newResult + j);
                   var bestSize = parser.GetSize(bestResult + j);
