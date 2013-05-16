@@ -91,7 +91,10 @@ namespace N2.DebugStrategies
     {
       var frame = _bestResult.Stack.Head;
 
-      Debug.Assert(frame.AstPtr >= 0);
+      if (frame.AstPtr < 0)
+      {
+        Debug.Assert(frame.AstPtr >= 0);
+      }
 
       var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
       var errorIndex = parser.ErrorData.Count;
