@@ -19,7 +19,7 @@ namespace N2.Internal
 #if !PARSER_DEBUG
   //[DebuggerStepThroughAttribute]
 #endif
-  public sealed partial class ExtensibleRuleParser : StartRuleParser
+  public sealed partial class ExtensibleRuleParser
   {
     public static class AstOfs
     {
@@ -103,37 +103,60 @@ namespace N2.Internal
 
     public override int Parse(int curTextPos, string text, Parser parser)
     {
+      int bestPos;
+      curTextPos = ParsePrefix(curTextPos, text, parser);
+      if (curTextPos > 0)
+      {
+        do
+        {
+          bestPos = curTextPos;
+          curTextPos = ParsePostfix(curTextPos, text, parser);
+        }
+        while (curTextPos > bestPos);
+        return bestPos;
+      }
+      else
+        return -1;
+    }
+
+    public int ParsePrefix(int curTextPos, string text, Parser parser)
+    {
       unchecked
       {
-        int postfixAst;
         int prefixAst;
         int newEndPos;
         int newResult;
         int bestEndPos;
         int bestResult;
-        int lastResult;
         int i;
         int j;
         char c; // временная переменная для отсечения правил по первой букве
 
-        prefixAst = parser.memoize[curTextPos];
-        for (; prefixAst > 0; prefixAst = parser.ast[prefixAst + PrefixOfs.Next])
+        prefixAst = parser.TryGetAst(curTextPos, PrefixId);
+        if (prefixAst > 0)
         {
-          if (parser.ast[prefixAst + PrefixOfs.Id] == PrefixId)
+          bestResult = parser.TryGetPrefix(ref curTextPos, prefixAst);
+          if (bestResult > 0)
           {
-            bestResult = parser.ast[prefixAst + PrefixOfs.List];
-            if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == Parser.AstParsedState)
+            int state = parser.ast[bestResult + AstOfs.State];
+            if (state == Parser.AstParsedState)
+              return curTextPos + GetPrefixSize(bestResult, parser);
+            else if (state < 0)
             {
-              //TODO: убрать цикл
-              i = bestResult + AstOfs.Sizes;
-              for (; parser.ast[i] >= 0; ++i)
-                curTextPos += parser.ast[i];
-              bestEndPos = curTextPos;
-              goto postfix_loop;
+              parser.ast[bestResult + PrefixOfs.Next] = 0;//FIXME. обработать неоднозначности.
+              var prefixRule = PrefixRuleParser(bestResult, parser);
+              newResult = bestResult;
+              return prefixRule.Parse(curTextPos, text, ref newResult, parser);
             }
             else
-              return -1; // облом разбора
+            {
+              var prefixRule = PrefixRuleParser(bestResult, parser);
+              var maxFailPos = parser.ast[bestResult + AstOfs.Sizes + prefixRule.FieldsCount - 1];
+              if (maxFailPos > parser.MaxFailPos)
+                parser.MaxFailPos = maxFailPos;
+            }
           }
+          return -1; // облом разбора
         }
 
         assert2(parser.ParsingMode == ParsingMode.Parsing);
@@ -154,29 +177,32 @@ namespace N2.Internal
           {
             newResult = -1;
             newEndPos = prefixRule.Parse(curTextPos, text, ref newResult, parser);
+            // выбираем лучшее правило: побеждает то правило, у которого находится поле спарсившее больше текста
+            // если оба правила имеют одинаковое кол-во полей, размеры которых идентичны, ситуация считается неоднозначностью
             if (newResult > 0)
             {
               if (bestResult > 0)
               {
                 if (bestEndPos < 0) { if (newEndPos >= 0) goto prefix_new_better; }
                 else                { if (newEndPos < 0)  goto prefix_best_better; }
+                var bestCount = PrefixRuleParser(bestResult, parser).FieldsCount;
+                var newCount  = PrefixRuleParser(newResult, parser).FieldsCount;
+                var end = Math.Min(bestCount, newCount) + AstOfs.Sizes;
                 j = AstOfs.Sizes;
-                for (; true; ++j)
+                for (; j < end; ++j)
                 {
-                  var newSize  = parser.ast[newResult + j];
-                  var bestSize = parser.ast[bestResult + j];
-                  if (newSize < 0)
-                  {
-                    if (bestSize < 0)
-                      goto prefix_equal;
-                    else
-                      goto prefix_best_better;
-                  }
+                  var newSize  = parser.GetSize(newResult + j);
+                  var bestSize = parser.GetSize(bestResult + j);
                   if (bestSize < newSize)
                     goto prefix_new_better;
                   if (bestSize > newSize)
                     goto prefix_best_better;
                 }
+                if (newCount < bestCount)
+                  goto prefix_best_better;
+                if (newCount > bestCount)
+                  goto prefix_new_better;
+                goto prefix_equal;
               }
               else
                 goto prefix_new_better;
@@ -199,9 +225,24 @@ namespace N2.Internal
 
         if (bestResult <= 0 || bestEndPos < 0)// не смогли разобрать префикс
           return -1;
+        return bestEndPos;
+      }
+    }
 
-      postfix_loop:
-        curTextPos = bestEndPos;
+    public int ParsePostfix(int curTextPos, string text, Parser parser)
+    {
+      unchecked
+      {
+        int postfixAst;
+        int newEndPos;
+        int newResult;
+        int bestEndPos= curTextPos;
+        int bestResult= 0;
+        int lastResult= 0;
+        int i;
+        int j;
+        char c; // временная переменная для отсечения правил по первой букве
+
         if (curTextPos >= text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
           return curTextPos;// при достижении конца текста есть нечего
         //ищем запомненое
@@ -259,7 +300,7 @@ namespace N2.Internal
                   if (size >= 0)
                     bestEndPos += size;
                   else
-                    goto postfix_loop;//нашли терминатор. Парсим следующее правило.
+                    return bestEndPos;//нашли терминатор. Парсим следующее правило.
 
                   ++j;
                 }
@@ -294,23 +335,24 @@ namespace N2.Internal
               {
                 if (bestEndPos < 0) { if (newEndPos >= 0) goto postfix_new_better; }
                 else                { if (newEndPos < 0)  goto postfix_best_better; }
+                var bestCount = PostfixRuleParser(bestResult, parser).FieldsCount;
+                var newCount  = PostfixRuleParser(newResult, parser).FieldsCount;
+                var end = Math.Min(bestCount, newCount) + AstOfs.Sizes;
                 j = AstOfs.Sizes;
-                for (; true; ++j)
+                for (; j < end; ++j)
                 {
-                  var newSize  = parser.ast[newResult + j];
-                  var bestSize = parser.ast[bestResult + j];
-                  if (newSize < 0)
-                  {
-                    if (bestSize < 0)
-                      goto postfix_equal;
-                    else
-                      goto postfix_best_better;
-                  }
+                  var newSize  = parser.GetSize(newResult + j);
+                  var bestSize = parser.GetSize(bestResult + j);
                   if (bestSize < newSize)
                     goto postfix_new_better;
                   if (bestSize > newSize)
                     goto postfix_best_better;
                 }
+                if (newCount < bestCount)
+                  goto postfix_best_better;
+                if (newCount > bestCount)
+                  goto postfix_new_better;
+                goto postfix_equal;
               }
               else
                 goto postfix_new_better;
@@ -332,12 +374,10 @@ namespace N2.Internal
         parser.ast[postfixAst + PostfixOfs.AstList] = lastResult;
 
         if (bestEndPos <= curTextPos)
-          return curTextPos; // если нам не удалось продвинуться то заканчиваем разбор
-
-        goto postfix_loop;
+          return curTextPos;
+        else
+          return bestEndPos;
       }
-      assert(false);
-      return -1;
     }
   }
 }

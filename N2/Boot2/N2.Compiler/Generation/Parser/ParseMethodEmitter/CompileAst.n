@@ -21,9 +21,10 @@ namespace N2.Compiler
       def code = SCG.List();
       def endLabel = Environment.MakeLabel("EndParse");
       def recoveryLabel = Environment.MakeLabel("Recovery");
-      def (saveMaxTextPos, loadMaxTextPos) = if (ruleStructure.Symbol.Type is RuleType.Void)
+      def (saveMaxFailPos, loadMaxFailPos) = if (ruleStructure.Symbol.Type is RuleType.Void)
       {
-        (<[ $(CreateVariable("maxTextPos") : dyn) = parser.MaxTextPos ]>, <[ parser.MaxTextPos = $(CreateVariable("maxTextPos") : dyn) ]>)
+        def savedMaxFailPos = CreateVariable("savedMaxFailPos");
+        (<[ $(savedMaxFailPos : dyn) = parser.MaxFailPos ]>, <[ parser.MaxFailPos = $(savedMaxFailPos  : dyn) ]>)
       }
       else
       {
@@ -48,6 +49,9 @@ namespace N2.Compiler
             else
             {
               $CurTextPos = -1;
+              def maxFailPos = $(AstPtr(ruleStructure).GetSize(ruleStructure.NotMarkerFields.Last()));
+              when (maxFailPos > parser.MaxFailPos)
+                parser.MaxFailPos = maxFailPos;
               $(endLabel.Goto());
             }
           }
@@ -69,45 +73,44 @@ namespace N2.Compiler
       else
         <[ {} ]>;
 
-      code.Add(<[ _ = $(ruleStructure.SrcRule.ToString()) ]>);
+      code.Add(<[ _ = $(ruleStructure.ToString()) ]>);
       //code.AddRange(_fields.Map(field => <[ _ = $(field.Print()) ]>));
 
-      code.Add(saveMaxTextPos);
+      code.Add(saveMaxFailPos);
       code.Add(<[ $(AstStart(ruleStructure)) = $CurTextPos; ]>);
       code.Add(checkAstMemoize);
-      code.Add(<[ $(GotoParseLabel(ruleStructure.NotMarkerFields[0])); ]>);
+      code.Add(GotoParseLabel(ruleStructure.NotMarkerFields[0]));
+
+      def (predicateCode, predicateFailLabel) = CompilePredicate(ruleStructure.TailPredicates);
 
       //parse ok
-      code.Add(<[ $(OkLabel(ruleStructure)); ]>);
-      code.Add(<[ $(AstPtr(ruleStructure).Set(ruleStructure.HeaderState, <[ N2.Internal.Parser.AstParsedState ]>)) ]>);// правило полностью разобрано.
+      code.Add(OkLabel(ruleStructure));
+      code.Add(predicateCode);
+      code.Add(AstPtr(ruleStructure).Set(ruleStructure.HeaderState, <[ N2.Internal.Parser.AstParsedState ]>));// правило полностью разобрано.
       code.Add(setResultRef);
-      code.Add(<[ $(endLabel.Goto()); ]>);
+      code.Add(endLabel.Goto());
 
       //parse fail
-      code.Add(<[ $(FailLabel(ruleStructure)); ]>);
+      code.Add(FailLabel(ruleStructure));
+      code.Add(predicateFailLabel);
       code.Add(<[ when (parseState > $(ruleStructure.AllocateState)) // АСТ создано
                   {
                     $(AstPtr(ruleStructure).Set(ruleStructure.HeaderState, <[ parseState ]>));
+                    $(AstPtr(ruleStructure).Set(ruleStructure.NotMarkerFields.Last(), <[ parser.MaxFailPos ]>));
                     $setResultRef;
                   }
       ]>);
       code.Add(<[ $CurTextPos = -1; $(endLabel.Goto()); ]>);
-      CompileFields(code, ruleStructure.Fields);
+      CompileFields(code, ruleStructure);
 
       code.Add(recoveryLabel.Label());
       foreach (field in ruleStructure.NotMarkerFields)
-      {
-        def skip = if (field is RuleStructureField.Predicate)
-          <[ assert(false) ]>;
-        else
-          <[ $CurTextPos += $(AstPtr(field.Owner).GetSize(field)) ]>;
         code.Add(<[
           if (parseState >= $(field.EndState))
-            $skip;
+            $CurTextPos += $(AstPtr(field.Owner).GetSize(field)); // skip
           else
             $(GotoRecoveryLabel(field))
         ]>);
-      }
       code.Add(<[ assert2(false); assert(false) ]>);
 
       def debugCode = if (ruleStructure.Symbol.LastLocation is Some(loc) when Owner.Environment.Manager.Options.EmitDebug)
@@ -118,7 +121,7 @@ namespace N2.Compiler
       }
       else
         <[ {} ]>;
-      code.Add(<[ $(endLabel.Label()); $debugCode; $loadMaxTextPos; $CurTextPos; ]>);
+      code.Add(<[ $(endLabel.Label()); $debugCode; $loadMaxFailPos; $CurTextPos; ]>);
 
       def variables = SCG.List();
       variables.Add(<[

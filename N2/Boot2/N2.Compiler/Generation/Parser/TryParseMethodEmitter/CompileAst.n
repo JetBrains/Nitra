@@ -18,43 +18,93 @@ namespace N2.Compiler
   {
     public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
     {
-      def endLabel = Environment.MakeLabel("EndParse");
-
-      def cases = SCG.List();
-      foreach (field when !(field is RuleStructureField.Marker) in ruleStructure.AllFields)
+      def makeContinueStateSelector() : PExpr
       {
-        def comment = field.SrcRule.ToString();
-        
-        if (field.IsPredicateState)
-          cases.Add(<[ case: | $(field.State) => _ = $comment; return -1; ]>);
-        else
-          cases.Add(<[ case: | $(field.State) => _ = $comment; $(GotoParseLabel(field)) ]>);
+        def continueCases = SCG.List();
+        foreach (field in ruleStructure.AllNonMarkerFields)
+        {
+          def getContinueStateCode(field : RuleStructureField) : PExpr
+          {
+            match (field)
+            {
+              | List                       => GotoParseLabel(field)
+              | ListWithSeparator as field =>
+                <[
+                  match (recoveryStack.Head.Info)
+                  {
+                    | LoopBody      => $(GotoParseLabel(field.Separator.NotMarkerFields[0]))
+                    | LoopSeparator => $(GotoParseLabel(field.Rule.NotMarkerFields[0]))
+                    | x             => assert(false, $"Invalid frame info value '$x'")
+                  }
+                ]>
+
+              | _ => 
+                match(field.NextSibling)
+                {
+                  | null  => _endLabel.Goto() // продолжения нет
+                  | field => GotoParseLabel(field)
+                }
+            }
+          }
+          def sourceStateComment = field.ToString();
+          if (field.IsPredicate)
+            continueCases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot continue parse from predicate state: '$sourceStateComment'.")) ]>);
+          else
+          {
+            def code = getContinueStateCode(field);
+            continueCases.Add(<[ case: | $(field.State) => _ = $sourceStateComment; startLevel = $(field.Level); $code; ]>);
+          }
+        }
+        continueCases.Add(<[ case: | x => assert(false, $"Unknown continue parse state '$x'.") ]>);
+        <[ match (recoveryStack.Head.FailState) { ..$continueCases } ]>
       }
-      cases.Add(<[ case: | x => assert(false, $"Unknown parse state '$x'.") ]>);
+
+      def makeStartStateSelector() : PExpr
+      {
+        def startCases = SCG.List();
+        startCases.Add(<[ case: | -2 => $(makeContinueStateSelector()) ]>);
+        foreach (field in ruleStructure.AllNonMarkerFields)
+        {
+          def comment = field.ToString();
+          if (field.IsPredicate)
+            startCases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot parse from predicate state: '$comment'.")) ]>);
+          else
+            startCases.Add(<[ case: | $(field.State) => _ = $comment; startLevel = $(field.Level); $(GotoParseLabel(field)) ]>);
+        }
+        startCases.Add(<[ case: | x => assert(false, $"Unknown parse state '$x'.") ]>);
+        <[ match (startState) { ..$startCases } ]>
+      }
 
       def code = SCG.List();
-      code.Add(<[ ignore(astPtr, curTextPos, text, parser, startState); ]>);
-      code.Add(<[ _ = $(ruleStructure.SrcRule.ToString()) ]>);
-      code.Add(<[ $(AstStart(ruleStructure)) = $CurTextPos; ]>);
-      code.Add(<[ match (startState) { ..$cases } ]>);
+      code.Add(<[ ignore(curTextPos, parser); ]>);
+      code.Add(<[ _ = $(ruleStructure.ToString()) ]>);
+      code.Add(makeStartStateSelector());
+
+      def (predicateCode, predicateFailLabel) = CompilePredicate(ruleStructure.TailPredicates);
 
       //parse ok
       code.Add(OkLabel(ruleStructure));
-      code.Add(endLabel.Goto());
+      code.Add(predicateCode);
+      code.Add(_endLabel.Goto());
 
       //parse fail
       code.Add(FailLabel(ruleStructure));
+      code.Add(predicateFailLabel);
       code.Add(<[ $CurTextPos = -1; ]>);
-      code.Add(endLabel.Goto());
+      code.Add(_endLabel.Goto());
 
-      CompileFields(code, ruleStructure.Fields);
+      CompileFields(code, ruleStructure);
 
-      code.Add(endLabel.Label());
+      code.Add(_endLabel.Label());
       code.Add(<[ $CurTextPos; ]>);
 
       def codeWithVariables = SCG.List();
       codeWithVariables.Add(<[
-        mutable newPos     : int; _ = newPos;
+        def     astPtr      : int = recoveryStack.Head.AstPtr;    _ = astPtr;
+        def     targetState : int = recoveryStack.Head.FailState; _ = targetState;
+        mutable tmpSize     : int; _ = tmpSize;
+        mutable newPos      : int; _ = newPos;
+        
       ]>);
       codeWithVariables.AddRange(LocalVariables.Map(name => <[ mutable $(name : dyn) ]>));
       codeWithVariables.AddRange(code);

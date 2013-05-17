@@ -1,52 +1,108 @@
 ﻿using Nemerle;
 
 using N2.Model;
+using N2.Runtime;
 using N2.Typing.ExtraField;
+
+using System;
 
 using G = N2SyntaxAst;
 
 namespace N2.Typing
 {
   [Record, ExportableSymbol]
-  public abstract class SimpleRuleSymbol : SyntaxRuleSymbol
+  public abstract class SimpleRuleSymbol : SyntaxRuleSymbol, IRuleDeclarationSite
   {
     public override Description : string { get { if (Type is RuleType.Void) "void rule" else "simple rule" } }
   }
-
-  public sealed class ParsedSimpleRuleSymbol : SimpleRuleSymbol
+  
+  [Record]
+  public abstract class ParsedBaseSimpleRuleSymbol : SimpleRuleSymbol
   {
-    public this(ast : G.Declaration_SimpleRule.Ast, declarationSite : IRuleDeclarationSite)
+    public override IdInGrammar         : int        { [Memoize] get { DeclaringModule.GetNewRuleId() } }
+    public override FirstCharLowerBound : char       {           get { FirstCharBounds[0] } }
+    public override FirstCharUpperBound : char       {           get { FirstCharBounds[1] } }
+    private         FirstCharBounds     : CharBounds { [Memoize] get { EvalFirstCharBounds(Rule) } }
+    public override CanParseEmptyString : bool { get { CalcCanParseEmptyString() } }
+
+    [Flags]
+    enum Calc : byte
     {
-      base(ast.Name);
-      _ast = ast;
-      DeclarationSite = declarationSite;
+      | InProgress = 0x10;
+      | Done       = 0x20;
+      | ValueMask  = 0x01;
     }
-
-    public _ast : G.Declaration_SimpleRule.Ast;
-
-    public override DeclarationSite  : IRuleDeclarationSite  { get; }
-    public override Type             : RuleType              { [Memoize] get { RuleType.Ref(this) } }
-    public override Options          : RuleDefinitionOptions {           get { _ast.RuleAttributes.Options(RuleDefinitionOptions.Empty) } }
-    public override Rule             : Rule.Sequence         {           get { _ast.TypedRule } }
-    public override LastLocation     : option[Location]      { [Memoize] get { Some(_ast.SimpleRuleBody.GetLastLocation()) } }
-    public override IdInGrammar      : int                   { [Memoize] get { DeclaringModule.GetNewRuleId() } }
+    
+    [RecordIgnore] mutable _canParseEmpryStringFlags : Calc;
+    
+    protected CalcCanParseEmptyString() : bool
+    {
+      def canBeEmpty(rule : Rule) : bool
+      {
+        | Repeat(0, _, _)                         => true
+        | Repeat                                  => false
+        | RepeatWithSeparator(0, _, _, _, _)      => true
+        | RepeatWithSeparator                     => false
+        | Sequence(rules)                         => rules.ForAll(canBeEmpty)
+        | Call(Some(ruleRef is RuleDefSymbol), _) => ruleRef.CanParseEmptyString
+        | Call(Some(MarkerSymbol), _)             => true
+        | Call(None, _)                           => false // error reporting already done
+        | Call                                    => assert2(false); false
+        | String("")                              => true
+        | String                                  => false
+        | Not                                     => true
+        | And                                     => true
+      }
+      
+      if (_canParseEmpryStringFlags %&& Calc.Done)
+        _canParseEmpryStringFlags %&& Calc.ValueMask
+      else if (_canParseEmpryStringFlags %&& Calc.InProgress)
+      {
+        Project.CurrentProject.Error(this.FirstLocation, "Left recurtion detected.", -1);
+        false
+      }
+      else
+      {
+        _canParseEmpryStringFlags = Calc.InProgress;
+        def result = this.Rule.Rules.ForAll(canBeEmpty);
+        _canParseEmpryStringFlags = if (result) (Calc.ValueMask | Calc.Done) else Calc.Done;
+        result
+      }
+    }
   }
 
-  public sealed class ParsedVoidRuleSymbol : SimpleRuleSymbol
+  public sealed class ParsedSimpleRuleSymbol : ParsedBaseSimpleRuleSymbol
   {
-    public this(ast : G.Declaration_VoidRule.Ast, declarationSite : IRuleDeclarationSite)
+    public this(ast : G.SimpleRule.Ast, declarationSite : IRuleDeclarationSite)
     {
       base(ast.Name);
       _ast = ast;
       DeclarationSite = declarationSite;
     }
 
-    public _ast : G.Declaration_VoidRule.Ast;
+    public _ast : G.SimpleRule.Ast;
 
-    public override DeclarationSite  : IRuleDeclarationSite  { get; }
-    public override Type             : RuleType              { get { RuleType.Void() } }
-    public override Options          : RuleDefinitionOptions { get { _ast.RuleAttributes.Options(RuleDefinitionOptions.Empty) } }
-    public override Rule             : Rule.Sequence         { get { _ast.TypedRule } }
-    public override IdInGrammar      : int                   { [Memoize] get { DeclaringModule.GetNewRuleId() } }
+    public override DeclarationSite     : IRuleDeclarationSite  { get; }
+    public override Type                : RuleType              { [Memoize] get { RuleType.Ref(this) } }
+    public override Options             : RuleDefinitionOptions {           get { _ast.RuleAttributes.Options(RuleDefinitionOptions.Empty) } }
+    public override Rule                : Rule.Sequence         {           get { _ast.TypedRule } }
+    public override LastLocation        : option[Location]      { [Memoize] get { Some(_ast.SimpleRuleBody.GetLastLocation()) } }
+  }
+
+  public sealed class ParsedVoidRuleSymbol : ParsedBaseSimpleRuleSymbol
+  {
+    public this(ast : G.VoidRule.Ast, declarationSite : IRuleDeclarationSite)
+    {
+      base(ast.Name);
+      _ast = ast;
+      DeclarationSite = declarationSite;
+    }
+
+    public _ast : G.VoidRule.Ast;
+
+    public override DeclarationSite     : IRuleDeclarationSite  { get; }
+    public override Type                : RuleType              { get { RuleType.Void() } }
+    public override Options             : RuleDefinitionOptions { get { _ast.RuleAttributes.Options(RuleDefinitionOptions.Empty) } }
+    public override Rule                : Rule.Sequence         { get { _ast.TypedRule } }
   }
 }

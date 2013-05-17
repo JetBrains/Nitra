@@ -1,6 +1,8 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -14,23 +16,70 @@ namespace N2.Compiler
 {
   internal sealed partial class TryParseMethodEmitter : MethodEmitter
   {
-    public override CompilePredicate(code : SCG.List[PExpr], field : RuleStructureField.Predicate) : void
+    public CompilePredicate(predicates : array[RuleStructure.Predicate], failLabelGotoExpr : PExpr) : PExpr
     {
-      def save = <[ _ = $(field.SrcRule.ToString()); $(AstStart(field.Rule)) = $CurTextPos; ]>;
-      def load = <[ $CurTextPos = $(AstStart(field.Rule)); ]>;
-      code.Add(
-        if (field.IsAnd)
-        <[
-          $(ParseLabel(field));     $save; $(GotoParseLabel(field.Rule.NotMarkerFields[0]));
-          $(OkLabel(field.Rule));   $load; $(GotoContinueParseLabel(field));
-          $(FailLabel(field.Rule)); $load; $(GotoFailParseLabel(field));
-        ]>
-        else
-        <[
-          $(ParseLabel(field));     $save; $(GotoParseLabel(field.Rule.NotMarkerFields[0]));
-          $(OkLabel(field.Rule));   $load; $(GotoFailParseLabel(field));
-          $(FailLabel(field.Rule)); $load; $(GotoContinueParseLabel(field));
-        ]>);
+      when (predicates.Length == 0)
+        return <[ {} ]>;
+
+      def code = SCG.List();
+
+      def tailPredicatesStartPos = CreateVariable(Util.tmpname("tailPredicatesStartPos"));
+
+      def predicateOkLabel   = Environment.MakeLabel(Util.tmpname("predicateOk"));
+      def predicateFailLabel = Environment.MakeLabel(Util.tmpname("predicateFail"));
+
+      def continueLabels = array(predicates.Length);
+      def startCode      = array(predicates.Length);
+      for (mutable i = 0; i < predicates.Length - 1; ++i)
+      {
+        def predicateStart = Environment.MakeLabel(Util.tmpname("predicateStart"));
+        continueLabels[i] = predicateStart;
+        startCode[i + 1] = <[ $(predicateStart.Label()); $CurTextPos = $(tailPredicatesStartPos : dyn); ]>;
+      }
+      startCode[0] = <[ {} ]>;
+      continueLabels[continueLabels.Length - 1] = predicateOkLabel;
+
+      code.Add(<[ _ = "Predicate block"; $(tailPredicatesStartPos : dyn) = $CurTextPos; ]>);
+      foreach (predicate in predicates with i)
+      {
+        code.Add(startCode[i]);
+        code.Add(GotoParseLabel(predicate.NotMarkerFields[0]));
+
+        def (subPredicateCode, subPredicateFailLabel) = CompilePredicate(predicate.TailPredicates);
+
+        def expr = 
+          if (predicate.IsAnd)
+          <[
+            $(OkLabel(predicate));   $subPredicateCode;      $(continueLabels[i].Goto());
+            $(FailLabel(predicate)); $subPredicateFailLabel; $(predicateFailLabel.Goto());
+          ]>
+          else
+          <[
+            $(OkLabel(predicate));   $subPredicateFailLabel; $(predicateFailLabel.Goto());
+            $(FailLabel(predicate)); $subPredicateCode;      $(continueLabels[i].Goto());
+          ]>;
+        code.Add(expr);
+
+        CompileFields(code, predicate);
+      }
+
+      code.Add(predicateFailLabel.Label());
+      code.Add(<[ $CurTextPos = $(tailPredicatesStartPos : dyn); ]>);
+      code.Add(failLabelGotoExpr);
+
+      code.Add(predicateOkLabel.Label());
+      code.Add(<[ $CurTextPos = $(tailPredicatesStartPos : dyn); ]>);
+
+      code.FlattenPExpr()
+    }
+
+    public CompilePredicate(predicates : array[RuleStructure.Predicate]) : PExpr * PExpr
+    {
+      when (predicates.Length == 0)
+        return (<[ {} ]>, <[ {} ]>);
+
+      def failLabel = Environment.MakeLabel(Util.tmpname("failLabel"));
+      (CompilePredicate(predicates, failLabel.Goto()), failLabel.Label())
     }
   }
 }

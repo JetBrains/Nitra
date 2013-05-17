@@ -1,0 +1,84 @@
+﻿using N2.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+using Nemerle.Compiler;
+
+namespace N2.Compiler
+{
+  internal sealed partial class PatchAstMethodEmitter : MethodEmitter
+  {
+    public Owner : RuleParserEmitter { get; }
+    public RuleStructure : RuleStructure.Ast;
+    private _tb : TypeBuilder;
+    public override Environment : EmitterEnvironment { get { Owner.Environment } }
+
+    public this(owner : RuleParserEmitter, tb : TypeBuilder, ruleStructure : RuleStructure.Ast)
+    {
+      Owner         = owner;
+      _tb           = tb;
+      RuleStructure = ruleStructure;
+      //_data         = RuleStructureDataContainer(ruleStructure, this, RuleStructureData, RuleStructureFieldData);
+    }
+
+    public Emit() : void
+    {
+      _tb.DefineConditional(<[decl:
+        public PatchAst(startPos : int, mutable startState : int, errorIndex : int, stack : list[N2.Internal.RecoveryStackFrame].Cons, parser : N2.Internal.Parser) : void
+        {
+          $(if (Owner.Environment.IsIdeMode)
+            <[ ignore(startPos, startState, stack, parser); ]>
+          else
+            CompileAst(RuleStructure))
+        }
+      ]>);
+    }
+
+    private MakeCodeForField(field : RuleStructureField) : PExpr
+    {
+      def astPointer = AstPointer.Existing(field.Owner, "astPtr");
+      <[
+        if (failState == $(field.State))
+        {
+          level = $(field.Level);
+          parser.ErrorData[errorIndex].Data = $(astPointer.GetSize(field));
+          $(astPointer.Set(field, <[ ~errorIndex ]>));
+
+          startState = $(GetNewStartState(field));
+        }
+        else when (failState < $(field.State) && $(field.State) < startState)
+          $(astPointer.Set(field, <[ int.MinValue ]>));
+      ]>
+    }
+
+    private GetNewStartState(field : RuleStructureField) : int
+    {
+      match (field.Owner)
+      {
+        | RuleStructure.List as listRule when field.NextSibling == null =>
+          // мы в конце элемента списка: следующее состояние указывает на начало элемента списка
+          listRule.NotMarkerFields[0].State
+
+        | RuleStructure.ListWithSeparatorRule as listRule when field.NextSibling == null =>
+          // мы в конце элемента списка с разделителями: следующее состояние указывает на начало разделителя
+          (listRule.Owner :> RuleStructureField.ListWithSeparator).Separator.NotMarkerFields[0].State
+
+        | RuleStructure.ListWithSeparatorSeparator as separatorRule when field.NextSibling == null =>
+          // мы в конце разделителя элементов списка: следующее состояние указывает на начало элемента списка
+          (separatorRule.Owner :> RuleStructureField.ListWithSeparator).Rule.NotMarkerFields[0].State
+
+        | _ => match (field.NextField) { | Some(field) => field.State | None => -1 }
+      }
+    }
+  }
+}
