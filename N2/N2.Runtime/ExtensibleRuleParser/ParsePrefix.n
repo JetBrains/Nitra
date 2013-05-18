@@ -1,0 +1,120 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+using Nemerle.Imperative.GoTo;
+
+using System;
+using System.Collections.Generic;
+
+namespace N2.Internal
+{
+  public sealed partial class ExtensibleRuleParser
+  {
+    public ParsePrefix(mutable curTextPos : int, text : string, parser : Parser) : int
+    {
+      unchecked
+      {
+        mutable prefixAst;
+        mutable newEndPos;
+        mutable newResult;
+        mutable bestEndPos;
+        mutable bestResult;
+        mutable i;
+        mutable j;
+        mutable c; // временная переменная для отсечения правил по первой букве
+
+        prefixAst = parser.TryGetAst(curTextPos, PrefixId);
+        when (prefixAst > 0)
+        {
+          bestResult = parser.TryGetPrefix(ref curTextPos, prefixAst);
+          when (bestResult > 0)
+          {
+            def state = parser.ast[bestResult + AstOfs.State];
+            if (state == Parser.AstParsedState)
+              return curTextPos + GetPrefixSize(bestResult, parser);
+            else if (state < 0)
+            {
+              parser.ast[bestResult + PrefixOfs.Next] = 0;//FIXME. обработать неоднозначности.
+              def prefixRule = PrefixRuleParser(bestResult, parser);
+              newResult = bestResult;
+              return prefixRule.Parse(curTextPos, text, ref newResult, parser);
+            }
+            else
+            {
+              def prefixRule = PrefixRuleParser(bestResult, parser);
+              def maxFailPos = parser.ast[bestResult + AstOfs.Sizes + prefixRule.FieldsCount - 1];
+              when (maxFailPos > parser.MaxFailPos)
+                parser.MaxFailPos = maxFailPos;
+            }
+          }
+          return -1; // облом разбора
+        }
+
+        assert2(parser.ParsingMode == ParsingMode.Parsing);
+
+        //нет мемоизации префикса
+        prefixAst = parser.Allocate(PrefixOfs.NodeSize, PrefixId);
+        parser.ast[prefixAst + PrefixOfs.Next] = parser.memoize[curTextPos];
+        parser.memoize[curTextPos] = prefixAst;
+        when (curTextPos >= text.Length)
+          return -1;
+        i = 0;
+        c = text[curTextPos];
+        bestResult = 0;
+        for (; i < PrefixRules.Length; ++i)
+        {
+          def prefixRule = PrefixRules[i];
+          when (prefixRule.LowerBound <= c && c <= prefixRule.UpperBound)
+          {
+            newResult = -1;
+            newEndPos = prefixRule.Parse(curTextPos, text, ref newResult, parser);
+            // выбираем лучшее правило: побеждает то правило, у которого находится поле спарсившее больше текста
+            // если оба правила имеют одинаковое кол-во полей, размеры которых идентичны, ситуация считается неоднозначностью
+            when (newResult > 0)
+            {
+              if (bestResult > 0)
+              {
+                if (bestEndPos < 0) when (newEndPos >= 0) goto prefix_new_better;
+                else                when (newEndPos < 0)  goto prefix_best_better;
+                def bestCount = PrefixRuleParser(bestResult, parser).FieldsCount;
+                def newCount  = PrefixRuleParser(newResult, parser).FieldsCount;
+                def end = Math.Min(bestCount, newCount) + AstOfs.Sizes;
+                for (j = AstOfs.Sizes; j < end; ++j)
+                {
+                  def newSize  = parser.GetSize(newResult + j);
+                  def bestSize = parser.GetSize(bestResult + j);
+                  when (bestSize < newSize) goto prefix_new_better;
+                  when (bestSize > newSize) goto prefix_best_better;
+                }
+                when (newCount < bestCount) goto prefix_best_better;
+                when (newCount > bestCount) goto prefix_new_better;
+                goto prefix_equal;
+              }
+              else
+                goto prefix_new_better;
+            label prefix_equal;//АСТ равен лучшему. Неоднозначность.
+              parser.ast[newResult + AstOfs.Next] = bestResult;
+              bestResult = newResult;
+              assert(bestEndPos == newEndPos);
+              continue;
+            label prefix_new_better;//Новый АСТ лучше
+              bestResult = newResult;
+              bestEndPos = newEndPos;
+              continue;
+            label prefix_best_better;
+              continue;
+            }
+          }
+        }
+
+        parser.ast[prefixAst + PrefixOfs.List] = bestResult;
+
+        when (bestResult <= 0 || bestEndPos < 0)// не смогли разобрать префикс
+          return -1;
+        bestEndPos;
+      }
+    }
+  }
+}

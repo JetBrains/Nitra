@@ -1,0 +1,157 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+using Nemerle.Imperative.GoTo;
+
+using System;
+using System.Collections.Generic;
+
+namespace N2.Internal
+{
+  public sealed partial class ExtensibleRuleParser
+  {
+    public ParsePostfix(mutable curTextPos : int, text : string, parser : Parser) : int
+    {
+      unchecked
+      {
+        mutable postfixAst;
+        mutable newEndPos;
+        mutable newResult;
+        mutable bestEndPos= curTextPos;
+        mutable bestResult= 0;
+        mutable lastResult= 0;
+        mutable i;
+        mutable j;
+        mutable c; // временная переменная для отсечения правил по первой букве
+
+        when (curTextPos >= text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
+          return curTextPos;// при достижении конца текста есть нечего
+        //ищем запомненое
+        postfixAst = parser.TryGetAst(curTextPos, PrefixId);
+        when (postfixAst > 0)
+        {
+          lastResult = parser.ast[postfixAst + PostfixOfs.AstList];//список разобраных с этого места правил
+          bestResult = lastResult;
+          i = parser.ast[postfixAst + PostfixOfs.FirstRuleIndex] - 1;//индекс первого не разобранного правила
+          if (i >= FirstPostfixRule)// не всё разобрано
+          {
+            //ищем лучшее правило
+            while (bestResult > 0 && (parser.ast[bestResult] & PostfixMask.Mark) != PostfixMark.Best)
+              bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
+            if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == Parser.AstParsedState)//Убеждаемся что разбор успешный
+            {
+              bestEndPos = curTextPos;
+              //TODO: убрать цикл
+              //вычисляем длинну разобранного правила
+              j = bestResult + AstOfs.Sizes;
+              while (true)
+              {
+                def size = parser.ast[j];
+                if (size >= 0)
+                  bestEndPos += size;
+                else
+                  break;//нашли терминатор.
+
+                ++j;
+              }
+            }
+            else
+              bestEndPos = -1;
+            goto postfix_parse;//парсим то что не распарсили раньше
+          }
+          else
+          {
+            // пропускаем правила с низкой силой связывания.
+            while (bestResult > 0 && (parser.ast[bestResult] & PostfixMask.Id) < FirstPostfixRuleId)
+              bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
+            // ищем лучшее правило среди тех у кого подходящая сила связывания.
+            while (bestResult > 0 && (parser.ast[bestResult] & PostfixMask.Mark) != PostfixMark.Best)
+              bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
+            if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == Parser.AstParsedState)//Убеждаемся что разбор успешный
+            {
+              bestEndPos = curTextPos;
+              //TODO: убрать цикл
+              //вычисляем длинну разобранного правила
+              j = bestResult + AstOfs.Sizes;
+              while (true)
+              {
+                def size = parser.ast[j];
+                if (size >= 0)
+                  bestEndPos += size;
+                else
+                  return bestEndPos;//нашли терминатор. Парсим следующее правило.
+
+                ++j;
+              }
+            }
+            else
+              return curTextPos;//облом. Заканчиваем разбор.
+          }
+        }
+        //нет мемоизации
+        postfixAst = parser.Allocate(PostfixOfs.NodeSize, PostfixId);
+        parser.ast[postfixAst + PostfixOfs.Next] = parser.memoize[curTextPos];
+        parser.memoize[curTextPos] = postfixAst;
+        bestResult = 0;
+        lastResult = 0;
+        i = PostfixRules.Length - 1;
+      label postfix_parse;
+        parser.ast[postfixAst + PostfixOfs.FirstRuleIndex] = FirstPostfixRule;
+        c = text[curTextPos];
+        for (; i >= FirstPostfixRule; --i)
+        {
+          def postfixRule = PostfixRules[i];
+          when (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound)
+          {
+            newResult = -1;
+            newEndPos = postfixRule.Parse(curTextPos, text, ref newResult, parser);
+            when (newResult > 0)//АСТ создано
+            {
+              parser.ast[newResult + AstOfs.Next] = lastResult; lastResult = newResult;//добавляем в список
+              //определяем является ли даный АСТ лучшим из тех что разобрали
+              if (bestResult > 0)
+              {
+                if (bestEndPos < 0) when (newEndPos >= 0) goto postfix_new_better;
+                else                when (newEndPos < 0)  goto postfix_best_better;
+                def bestCount = PostfixRuleParser(bestResult, parser).FieldsCount;
+                def newCount  = PostfixRuleParser(newResult, parser).FieldsCount;
+                def end = Math.Min(bestCount, newCount) + AstOfs.Sizes;
+                for (j = AstOfs.Sizes; j < end; ++j)
+                {
+                  def newSize  = parser.GetSize(newResult + j);
+                  def bestSize = parser.GetSize(bestResult + j);
+                  when (bestSize < newSize) goto postfix_new_better;
+                  when (bestSize > newSize) goto postfix_best_better;
+                }
+                when (newCount < bestCount) goto postfix_best_better;
+                when (newCount > bestCount) goto postfix_new_better;
+                goto postfix_equal;
+              }
+              else
+                goto postfix_new_better;
+            label postfix_equal;//АСТ равен лучшему. Неоднозначность.
+              parser.ast[newResult] = parser.ast[newResult] | PostfixMark.Equal;
+              assert(bestEndPos == newEndPos);
+              continue;
+            label postfix_new_better;//Новый АСТ лучше
+              bestEndPos = newEndPos;
+              bestResult = newResult;
+              parser.ast[newResult] = parser.ast[newResult] | PostfixMark.Best;
+              continue;
+            label postfix_best_better;
+              continue;
+            }
+          }
+        }
+
+        parser.ast[postfixAst + PostfixOfs.AstList] = lastResult;
+
+        when (bestEndPos <= curTextPos)
+          return curTextPos;
+        bestEndPos;
+      }
+    }
+  }
+}
