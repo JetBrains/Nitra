@@ -174,7 +174,7 @@ namespace N2.DebugStrategies
             foreach (var subRuleParser in parsers)
             {
               var old = recoveryStack;
-              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, true, -1/*stackFrame.AstPtr*/, subRuleParser.StartState, 0, FrameInfo.None));
+              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, -1/*stackFrame.AstPtr*/, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
               _recCount++;
               ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
               recoveryStack = old; // remove top element
