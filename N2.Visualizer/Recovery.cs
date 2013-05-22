@@ -63,18 +63,21 @@ namespace N2.DebugStrategies
 
       timer.Stop();
 
-      FixAst(parser);
-
       if (_bestResult != null)
+      {
+        FixAst(parser);
+        parser.ParsingMode = ParsingMode.EndRecovery;
         parser.MaxFailPos = _bestResult.EndPos; // HACK!!!
+      }
+      else
+        parser.ParsingMode = ParsingMode.Recovery;
 
       Reset();
     }
 
     private void FixAst(Parser parser)
     {
-      if (_bestResult == null)
-        return;
+      Debug.Assert(_bestResult != null);
 
       var frame = _bestResult.Stack.Head;
 
@@ -175,7 +178,7 @@ namespace N2.DebugStrategies
             foreach (var subRuleParser in parsers)
             {
               var old = recoveryStack;
-              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, curTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
+              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
               _recCount++;
               ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
               recoveryStack = old; // remove top element
@@ -183,7 +186,7 @@ namespace N2.DebugStrategies
 
             _nestedLevel--;
           }
-      }
+        }
       }
     }
 
