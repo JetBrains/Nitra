@@ -13,6 +13,9 @@ namespace Sample.Json.Cs
     static void Main()
     {
       Test(@"{ : 1}");
+      Test(@"{ a }");
+      Test(@"{ a: }");
+      Test(@"{ a:, }");
     }
 
     static void Test(string text)
@@ -31,6 +34,16 @@ namespace Sample.Json.Cs
 BEGIN-OUTPUT
 Pretty print: {
   ### MISSING ###: 1
+}
+Pretty print: {
+  a: ### MISSING ###
+}
+Pretty print: {
+  a: ### MISSING ###
+}
+Pretty print: {
+  a: ### MISSING ###,
+  ### MISSING ###
 }
 END-OUTPUT
 */
