@@ -16,24 +16,6 @@ namespace N2.Strategies
 namespace N2.DebugStrategies
 #endif
 {
-  internal static class Utils
-  {
-    public static bool IsRestStatesCanParseEmptyString(this IRecoveryRuleParser ruleParser, int state)
-    {
-      bool ok = true;
-
-      for (; state >= 0; state = ruleParser.GetNextState(state))
-        ok &= ruleParser.IsRestStatesCanParseEmptyString(state);
-
-      return ok;
-    }
-
-    public static RecoveryStack Push(this RecoveryStack stack, RecoveryStackFrame elem)
-    {
-      return new RecoveryStack(elem, stack);
-    }
-  }
-
   public sealed class Recovery
   {
     RecoveryResult       _bestResult;
@@ -72,8 +54,9 @@ namespace N2.DebugStrategies
         
       do
       {
-        for (var stack = _recoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
-          ProcessStackFrame(startTextPos, parser, stack, curTextPos, text, 0);
+        //for (var stack = _recoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
+        //  ProcessStackFrame(startTextPos, parser, stack, curTextPos, text, 0);
+        ProcessStackFrame(startTextPos, parser, _recoveryStack, curTextPos, text, 0);
         curTextPos++;
       }
       while (curTextPos - startTextPos < 800 && /*_bestResult == null && _bestResult == null && (res.Count == 0 || curTextPos - startTextPos < 10) &&*/ curTextPos <= text.Length);
@@ -91,7 +74,7 @@ namespace N2.DebugStrategies
     {
       var frame = _bestResult.Stack.Head;
 
-      if (frame.AstPtr < 0)
+      if (frame.AstStartPos < 0)
       {
         Debug.Assert(frame.AstPtr >= 0);
       }
@@ -156,9 +139,23 @@ namespace N2.DebugStrategies
         }
         else if (parser.MaxFailPos > curTextPos)
           AddResult(curTextPos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
+        else if (pos < 0 && nextSate < 0)
+        {
+          // последнее состояние. Надо попытаться допарсить
+          var pos2 = ContinueParse(curTextPos, recoveryStack, parser, text);
+          if (pos2 > curTextPos)
+          {
+            AddResult(curTextPos, pos2, int.MaxValue, recoveryStack, text, startTextPos);
+          }
+        }
         else
         {
-          if (object.ReferenceEquals(_recoveryStack, recoveryStack))
+          if (stackFrame.FailState != state)
+            continue;
+
+          if (!object.ReferenceEquals(_recoveryStack, recoveryStack)) // уже не работает, так как удалили цикл
+            continue;
+
           if (subruleLevel <= 0)
           {
             if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
@@ -174,7 +171,7 @@ namespace N2.DebugStrategies
             foreach (var subRuleParser in parsers)
             {
               var old = recoveryStack;
-              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, -1/*stackFrame.AstPtr*/, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
+              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, curTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
               _recCount++;
               ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
               recoveryStack = old; // remove top element
@@ -182,7 +179,7 @@ namespace N2.DebugStrategies
 
             _nestedLevel--;
           }
-        }
+      }
       }
     }
 
@@ -259,6 +256,24 @@ namespace N2.DebugStrategies
         return ContinueParse(pos, tail, parser, text);
       else
         return Math.Max(parser.MaxFailPos, startTextPos);
+    }
+  }
+
+  internal static class Utils
+  {
+    public static bool IsRestStatesCanParseEmptyString(this IRecoveryRuleParser ruleParser, int state)
+    {
+      bool ok = true;
+
+      for (; state >= 0; state = ruleParser.GetNextState(state))
+        ok &= ruleParser.IsRestStatesCanParseEmptyString(state);
+
+      return ok;
+    }
+
+    public static RecoveryStack Push(this RecoveryStack stack, RecoveryStackFrame elem)
+    {
+      return new RecoveryStack(elem, stack);
     }
   }
 }
