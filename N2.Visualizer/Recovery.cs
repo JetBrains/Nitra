@@ -65,13 +65,17 @@ namespace N2.DebugStrategies
 
       FixAst(parser);
 
-      parser.MaxFailPos = _bestResult.EndPos; // HACK!!!
+      if (_bestResult != null)
+        parser.MaxFailPos = _bestResult.EndPos; // HACK!!!
 
       Reset();
     }
 
     private void FixAst(Parser parser)
     {
+      if (_bestResult == null)
+        return;
+
       var frame = _bestResult.Stack.Head;
 
       if (frame.AstStartPos < 0)
@@ -219,8 +223,8 @@ namespace N2.DebugStrategies
 
       //if (stack.Head.AstPtr == 0 && _bestResult.Stack.Head.AstPtr != 0) return;
 
-      if (stackLength > bestResultStackLength) goto good;
-      if (stackLength < bestResultStackLength)    return;
+      if (stackLength < bestResultStackLength) goto good;
+      if (stackLength > bestResultStackLength)    return;
 
       if (startState < _bestResult.StartState) goto good;
       if (startState > _bestResult.StartState) return;
