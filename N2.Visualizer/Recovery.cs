@@ -200,7 +200,7 @@ namespace N2.DebugStrategies
       {
       }
 
-      if (startPos == endPos) return;
+      if (startPos == endPos && endPos != text.Length) return;
 
       if (_bestResult == null)                   goto good;
 
