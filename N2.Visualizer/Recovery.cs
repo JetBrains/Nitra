@@ -75,35 +75,6 @@ namespace N2.DebugStrategies
       Reset();
     }
 
-    private void FixAst(Parser parser)
-    {
-      Debug.Assert(_bestResult != null);
-
-      var frame = _bestResult.Stack.Head;
-
-      if (frame.AstStartPos < 0)
-      {
-        Debug.Assert(frame.AstPtr >= 0);
-      }
-
-      var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
-      var errorIndex = parser.ErrorData.Count;
-      parser.ErrorData.Add(error);
-
-      frame.RuleParser.PatchAst(_bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
-
-      for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
-      {
-        if (stack.Head.RuleParser is ExtensibleRuleParser)
-          continue;
-        var state = stack.Head.FailState;
-        Debug.Assert(state >= 0);
-        while (!stack.Head.IsRootAst)
-          stack = stack.Tail as RecoveryStack;
-        parser.ast[stack.Head.AstPtr + 2] = ~state;
-      }
-    }
-
     private void ProcessStackFrame(
       int startTextPos, 
       Parser parser, 
@@ -264,6 +235,35 @@ namespace N2.DebugStrategies
         return ContinueParse(pos, tail, parser, text);
       else
         return Math.Max(parser.MaxFailPos, startTextPos);
+    }
+
+    private void FixAst(Parser parser)
+    {
+      Debug.Assert(_bestResult != null);
+
+      var frame = _bestResult.Stack.Head;
+
+      if (frame.AstStartPos < 0)
+      {
+        Debug.Assert(frame.AstPtr >= 0);
+      }
+
+      var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
+      var errorIndex = parser.ErrorData.Count;
+      parser.ErrorData.Add(error);
+
+      frame.RuleParser.PatchAst(_bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
+
+      for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
+      {
+        if (stack.Head.RuleParser is ExtensibleRuleParser)
+          continue;
+        var state = stack.Head.FailState;
+        Debug.Assert(state >= 0);
+        while (!stack.Head.IsRootAst)
+          stack = stack.Tail as RecoveryStack;
+        parser.ast[stack.Head.AstPtr + 2] = ~state;
+      }
     }
   }
 
