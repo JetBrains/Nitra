@@ -80,6 +80,7 @@ namespace N2.DebugStrategies
       var stackFrame = recoveryStack.Head;
       var ruleParser = stackFrame.RuleParser;
       var isPrefixParsed = !ruleParser.IsStartState(stackFrame.FailState);
+      var isSep = ruleParser.IsLoopSeparatorStart(stackFrame.FailState);
 
       int nextSate;
       for (var state = stackFrame.FailState; state >= 0; state = nextSate)
@@ -111,12 +112,19 @@ namespace N2.DebugStrategies
 
         if (pos > curTextPos || pos == text.Length /*&& isPrefixParsed*/)
         {
+          if (isSep)
+          {
+          }
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
+          if (isSep && pos == pos2)
+            continue;
           AddResult(curTextPos,              pos2, state, recoveryStack, text, startTextPos);
         }
         else if (pos == curTextPos && nextSate < 0 /*&& isPrefixParsed*/)
         {
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
+          if (isSep && pos == pos2)
+            continue;
           if (pos2 > curTextPos || isPrefixParsed)
             AddResult(curTextPos, pos2, state, recoveryStack, text, startTextPos);
         }
