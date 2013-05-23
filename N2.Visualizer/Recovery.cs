@@ -120,6 +120,7 @@ namespace N2.DebugStrategies
       {
         parser.MaxFailPos = startTextPos;
         nextSate = ruleParser.GetNextState(state);
+        var needSkip = nextSate < 0 && ruleParser.IsVoidState(state);
         if (nextSate < 0 && ruleParser.IsVoidState(state))
           continue;
 
@@ -139,7 +140,7 @@ namespace N2.DebugStrategies
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
           AddResult(curTextPos,              pos2, state, recoveryStack, text, startTextPos);
         }
-        else if (pos == curTextPos && ruleParser.GetNextState(state) == -1)
+        else if (pos == curTextPos && nextSate == -1)
         {
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
           AddResult(curTextPos, pos2, state, recoveryStack, text, startTextPos);
