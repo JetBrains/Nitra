@@ -199,6 +199,8 @@ namespace N2.Visualizer
           treeNode.Items.Add(new TreeViewItem());
         treeView1.Items.Add(treeNode);
 
+        var ast = _parseResult.CreateAst();
+        prettyPrintTextBox.Text = ast.ToString(ToStringOptions.DebugIndent | ToStringOptions.MissingNodes);
       }
       catch { }
     }
