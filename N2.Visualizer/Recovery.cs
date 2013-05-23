@@ -79,6 +79,7 @@ namespace N2.DebugStrategies
     {
       var stackFrame = recoveryStack.Head;
       var ruleParser = stackFrame.RuleParser;
+      var isPrefixParsed = !ruleParser.IsStartState(stackFrame.FailState);
 
       int nextSate;
       for (var state = stackFrame.FailState; state >= 0; state = nextSate)
@@ -86,8 +87,8 @@ namespace N2.DebugStrategies
         parser.MaxFailPos = startTextPos;
         nextSate = ruleParser.GetNextState(state);
         var needSkip = nextSate < 0 && ruleParser.IsVoidState(state);
-        if (nextSate < 0 && ruleParser.IsVoidState(state))
-          continue;
+        //if (nextSate < 0 && ruleParser.IsVoidState(state))
+        //  continue;
 
         int pos;
 
@@ -99,6 +100,14 @@ namespace N2.DebugStrategies
             _visited[key] = pos = ruleParser.TryParse(recoveryStack, state, curTextPos, false, parser);
           }
         }
+
+        var isParsed = pos > curTextPos;
+
+        if (!isPrefixParsed && isParsed && !ruleParser.IsVoidState(state))
+          isPrefixParsed = isParsed;
+
+        if (!isPrefixParsed)
+          continue;
 
         if (pos > curTextPos || pos == text.Length)
         {
