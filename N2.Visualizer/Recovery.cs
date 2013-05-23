@@ -86,7 +86,7 @@ namespace N2.DebugStrategies
       {
         parser.MaxFailPos = startTextPos;
         nextSate = ruleParser.GetNextState(state);
-        var needSkip = nextSate < 0 && ruleParser.IsVoidState(state);
+        //var needSkip = nextSate < 0 && ruleParser.IsVoidState(state);
         //if (nextSate < 0 && ruleParser.IsVoidState(state))
         //  continue;
 
@@ -106,18 +106,19 @@ namespace N2.DebugStrategies
         if (!isPrefixParsed && isParsed && !ruleParser.IsVoidState(state))
           isPrefixParsed = isParsed;
 
-        if (!isPrefixParsed)
-          continue;
+        //if (!isPrefixParsed)
+        //  continue;
 
-        if (pos > curTextPos || pos == text.Length)
+        if (pos > curTextPos || pos == text.Length /*&& isPrefixParsed*/)
         {
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
           AddResult(curTextPos,              pos2, state, recoveryStack, text, startTextPos);
         }
-        else if (pos == curTextPos && nextSate == -1)
+        else if (pos == curTextPos && nextSate < 0 /*&& isPrefixParsed*/)
         {
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
-          AddResult(curTextPos, pos2, state, recoveryStack, text, startTextPos);
+          if (pos2 > curTextPos || isPrefixParsed)
+            AddResult(curTextPos, pos2, state, recoveryStack, text, startTextPos);
         }
         else if (parser.MaxFailPos > curTextPos)
           AddResult(curTextPos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
@@ -125,44 +126,36 @@ namespace N2.DebugStrategies
         {
           // последнее состояние. Надо попытаться допарсить
           var pos2 = ContinueParse(curTextPos, recoveryStack, parser, text);
-          if (pos2 > curTextPos)
-          {
+          if (pos2 > curTextPos || isPrefixParsed)
             AddResult(curTextPos, pos2, int.MaxValue, recoveryStack, text, startTextPos);
-          }
         }
-        else
-        {
-          if (stackFrame.FailState != state)
-            continue;
-
-          if (!object.ReferenceEquals(_recoveryStack, recoveryStack)) // уже не работает, так как удалили цикл
-            continue;
-
-          if (subruleLevel <= 0)
-          {
-            if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
-              continue;
-            _nestedLevel++;
-
-            var parsers = ruleParser.GetParsersForState(state);
-
-            if (!parsers.IsEmpty())
-            {
-            }
-
-            foreach (var subRuleParser in parsers)
-            {
-              var old = recoveryStack;
-              recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
-              _recCount++;
-              ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
-              recoveryStack = old; // remove top element
-            }
-
-            _nestedLevel--;
-          }
-        }
+        else if (stackFrame.FailState == state && subruleLevel <= 0)
+          TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel);
       }
+    }
+
+    void TryParseSubrules(int startTextPos, Parser parser, RecoveryStack recoveryStack, int curTextPos, string text, int subruleLevel)
+    {
+      if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
+        return;
+      _nestedLevel++;
+      var stackFrame = recoveryStack.hd;
+      var parsers = stackFrame.RuleParser.GetParsersForState(stackFrame.FailState);
+
+      if (!parsers.IsEmpty())
+      {
+      }
+
+      foreach (var subRuleParser in parsers)
+      {
+        var old = recoveryStack;
+        recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
+        _recCount++;
+        ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
+        recoveryStack = old; // remove top element
+      }
+
+      _nestedLevel--;
     }
 
     void AddResult(int startPos, int endPos, int startState, RecoveryStack stack, string text, int failPos)
