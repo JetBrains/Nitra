@@ -18,6 +18,7 @@ namespace N2.DebugStrategies
 {
   public sealed class Recovery
   {
+    List<RecoveryResult> _candidats = new List<RecoveryResult>();
     RecoveryResult       _bestResult;
     List<RecoveryResult> _bestResults = new List<RecoveryResult>();
     int                  _parseCount;
@@ -31,6 +32,7 @@ namespace N2.DebugStrategies
 
     void Reset()
     {
+      _candidats.Clear();
       _bestResult = null;
       _bestResults.Clear();
       _parseCount = 0;
@@ -80,7 +82,7 @@ namespace N2.DebugStrategies
       var stackFrame = recoveryStack.Head;
       var ruleParser = stackFrame.RuleParser;
       var isPrefixParsed = !ruleParser.IsStartState(stackFrame.FailState);
-      var isSep = ruleParser.IsLoopSeparatorStart(stackFrame.FailState);
+      var isOptional = ruleParser.IsLoopSeparatorStart(stackFrame.FailState);
 
       int nextSate;
       for (var state = stackFrame.FailState; state >= 0; state = nextSate)
@@ -112,18 +114,18 @@ namespace N2.DebugStrategies
 
         if (pos > curTextPos || pos == text.Length /*&& isPrefixParsed*/)
         {
-          if (isSep)
+          if (isOptional)
           {
           }
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
-          if (isSep && pos == pos2)
+          if (isOptional && pos == pos2)
             continue;
           AddResult(curTextPos,              pos2, state, recoveryStack, text, startTextPos);
         }
         else if (pos == curTextPos && nextSate < 0 /*&& isPrefixParsed*/)
         {
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
-          if (isSep && pos == pos2)
+          if (isOptional && pos == pos2)
             continue;
           if (pos2 > curTextPos || isPrefixParsed)
             AddResult(curTextPos, pos2, state, recoveryStack, text, startTextPos);
@@ -174,6 +176,7 @@ namespace N2.DebugStrategies
       var skipedCount = startPos - failPos;
 
       var newResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos);
+      _candidats.Add(newResult);
 
       if (newResult.SkipedCount > 0)
       {
@@ -189,6 +192,12 @@ namespace N2.DebugStrategies
           return;
         if (stack.Head.AstPtr != 0 && _bestResult.Stack.Head.AstPtr == 0)
           goto good;
+      }
+
+      if (stack.Tail == _bestResult.Stack.Tail)
+      {
+        if (startState < _bestResult.StartState) goto good;
+        if (startState > _bestResult.StartState) return;
       }
 
       if (startPos   < _bestResult.StartPos)     goto good;
