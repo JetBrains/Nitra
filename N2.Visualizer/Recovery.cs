@@ -75,13 +75,7 @@ namespace N2.DebugStrategies
       Reset();
     }
 
-    private void ProcessStackFrame(
-      int startTextPos, 
-      Parser parser, 
-      RecoveryStack recoveryStack, 
-      int curTextPos, 
-      string text,
-      int subruleLevel)
+    private void ProcessStackFrame(int startTextPos, Parser parser, RecoveryStack recoveryStack, int curTextPos, string text, int subruleLevel)
     {
       var stackFrame = recoveryStack.Head;
       var ruleParser = stackFrame.RuleParser;
