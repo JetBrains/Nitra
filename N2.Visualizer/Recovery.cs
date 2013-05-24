@@ -175,7 +175,7 @@ namespace N2.DebugStrategies
       int stackLength = stack.Length;
       var skipedCount = startPos - failPos;
 
-      var newResult = new RecoveryResult(startPos, ruleEndPos, endPos, startState, stackLength, stack, text, failPos);
+      var newResult = new RecoveryResult(startPos, ruleEndPos < 0 ? startPos : ruleEndPos, endPos, startState, stackLength, stack, text, failPos);
       _candidats.Add(newResult);
 
       if (newResult.SkipedCount > 0)
@@ -185,6 +185,9 @@ namespace N2.DebugStrategies
       if (startPos == endPos && endPos != text.Length) return;
 
       if (_bestResult == null)                   goto good;
+
+      if (ruleEndPos >= 0 && newResult.RecoveredTailCount > _bestResult.RecoveredTailCount) goto good;
+      if (ruleEndPos >= 0 && newResult.RecoveredTailCount < _bestResult.RecoveredTailCount) return;
 
       if (stack.Tail == _bestResult.Stack.Tail)
       {
@@ -199,12 +202,12 @@ namespace N2.DebugStrategies
       //if (ruleEndPos - startPos > _bestResult.RecoveredHeadCount) goto good;
       //if (ruleEndPos - startPos < _bestResult.RecoveredHeadCount) return;
 
-      if (newResult.RecoveredTailCount > _bestResult.RecoveredTailCount) goto good;
-      if (newResult.RecoveredTailCount < _bestResult.RecoveredTailCount) return;
+      if (endPos > _bestResult.EndPos) goto good;
+      if (endPos < _bestResult.EndPos) return;
 
 
-      if (startPos < _bestResult.StartPos) goto good;
-      if (startPos   > _bestResult.StartPos)     return;
+      if (startPos   < _bestResult.StartPos && endPos == _bestResult.EndPos) goto good;
+      if (startPos   > _bestResult.StartPos && endPos == _bestResult.EndPos) return;
 
       if (skipedCount < _bestResult.SkipedCount) goto good;
       if (skipedCount > _bestResult.SkipedCount) return;
