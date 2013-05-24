@@ -16,7 +16,7 @@ namespace Sample.Json.Cs
       Test(@"{ a }");
       Test(@"{ a: }");
       Test(@"{ a:, }");
-      Test(@"{ 'a':, a:1}")
+      Test(@"{ 'a':, a:1}");
     }
 
     static void Test(string text)
@@ -34,20 +34,20 @@ namespace Sample.Json.Cs
 /*
 BEGIN-OUTPUT
 Pretty print: {
-  ### MISSING ###: 1
+  #MISSING#: 1
 }
 Pretty print: {
-  a: ### MISSING ###
+  a: #MISSING#
 }
 Pretty print: {
-  a: ### MISSING ###
+  a: #MISSING#
 }
 Pretty print: {
-  a: ### MISSING ###,
-  ### MISSING ###
+  a: #MISSING#,
+  #MISSING#
 }
 Pretty print: {
-  'a': ### MISSING ###,
+  'a': #MISSING#,
   a: 1
 }
 END-OUTPUT
