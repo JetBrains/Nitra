@@ -85,7 +85,7 @@ namespace N2.DebugStrategies
       var isOptional = ruleParser.IsLoopSeparatorStart(stackFrame.FailState);
 
       int nextSate;
-      for (var state = stackFrame.FailState; state >= 0; state = nextSate)
+      for (var state = subruleLevel > 0 ? ruleParser.GetNextState(stackFrame.FailState) : stackFrame.FailState; state >= 0; state = nextSate)
       {
         parser.MaxFailPos = startTextPos;
         nextSate = ruleParser.GetNextState(state);
@@ -120,7 +120,7 @@ namespace N2.DebugStrategies
           var pos2 = ContinueParse(pos, recoveryStack, parser, text);
           if (isOptional && pos == pos2)
             continue;
-          AddResult(curTextPos,              pos2, state, recoveryStack, text, startTextPos);
+          AddResult(curTextPos,   pos, pos2, state, recoveryStack, text, startTextPos);
         }
         else if (pos == curTextPos && nextSate < 0 /*&& isPrefixParsed*/)
         {
@@ -128,16 +128,16 @@ namespace N2.DebugStrategies
           if (isOptional && pos == pos2)
             continue;
           if (pos2 > curTextPos || isPrefixParsed)
-            AddResult(curTextPos, pos2, state, recoveryStack, text, startTextPos);
+            AddResult(curTextPos, pos, pos2, state, recoveryStack, text, startTextPos);
         }
         else if (parser.MaxFailPos > curTextPos)
-          AddResult(curTextPos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
+          AddResult(curTextPos,   pos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
         else if (pos < 0 && nextSate < 0)
         {
           // последнее состояние. Надо попытаться допарсить
           var pos2 = ContinueParse(curTextPos, recoveryStack, parser, text);
           if (pos2 > curTextPos || isPrefixParsed)
-            AddResult(curTextPos, pos2, int.MaxValue, recoveryStack, text, startTextPos);
+            AddResult(curTextPos, pos, pos2, int.MaxValue, recoveryStack, text, startTextPos);
         }
         else if (stackFrame.FailState == state && subruleLevel <= 0)
           TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel);
@@ -168,14 +168,14 @@ namespace N2.DebugStrategies
       _nestedLevel--;
     }
 
-    void AddResult(int startPos, int endPos, int startState, RecoveryStack stack, string text, int failPos)
+    void AddResult(int startPos, int ruleEndPos, int endPos, int startState, RecoveryStack stack, string text, int failPos)
     {
       _bestResultsCount++;
 
       int stackLength = stack.Length;
       var skipedCount = startPos - failPos;
 
-      var newResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos);
+      var newResult = new RecoveryResult(startPos, ruleEndPos, endPos, startState, stackLength, stack, text, failPos);
       _candidats.Add(newResult);
 
       if (newResult.SkipedCount > 0)
@@ -186,21 +186,24 @@ namespace N2.DebugStrategies
 
       if (_bestResult == null)                   goto good;
 
-      if (stack.Length == _bestResult.Stack.Length) // это халтура :(
-      {
-        if (stack.Head.AstPtr == 0 && _bestResult.Stack.Head.AstPtr != 0)
-          return;
-        if (stack.Head.AstPtr != 0 && _bestResult.Stack.Head.AstPtr == 0)
-          goto good;
-      }
-
       if (stack.Tail == _bestResult.Stack.Tail)
       {
         if (startState < _bestResult.StartState) goto good;
         if (startState > _bestResult.StartState) return;
       }
 
-      if (startPos   < _bestResult.StartPos)     goto good;
+      if (stack == _bestResult.Stack)
+      {
+      }
+
+      //if (ruleEndPos - startPos > _bestResult.RecoveredHeadCount) goto good;
+      //if (ruleEndPos - startPos < _bestResult.RecoveredHeadCount) return;
+
+      if (newResult.RecoveredTailCount > _bestResult.RecoveredTailCount) goto good;
+      if (newResult.RecoveredTailCount < _bestResult.RecoveredTailCount) return;
+
+
+      if (startPos < _bestResult.StartPos) goto good;
       if (startPos   > _bestResult.StartPos)     return;
 
       if (skipedCount < _bestResult.SkipedCount) goto good;
@@ -225,12 +228,12 @@ namespace N2.DebugStrategies
 
       goto good2;
     good:
-      _bestResult = new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos);
+      _bestResult = new RecoveryResult(startPos, ruleEndPos, endPos, startState, stackLength, stack, text, failPos);
       _bestResults.Clear();
       _bestResults.Add(_bestResult);
       return;
     good2:
-      _bestResults.Add(new RecoveryResult(startPos, endPos, startState, stackLength, stack, text, failPos));
+      _bestResults.Add(new RecoveryResult(startPos, ruleEndPos, endPos, startState, stackLength, stack, text, failPos));
       return;
     }
 
