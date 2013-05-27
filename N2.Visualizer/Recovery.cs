@@ -136,6 +136,10 @@ namespace N2.DebugStrategies
         {
           // последнее состояние. Надо попытаться допарсить
           var pos2 = ContinueParse(curTextPos, recoveryStack, parser, text);
+          if (isOptional && !isPrefixParsed) // необязательное правило не спрасившее ни одного не пробельного символа нужно игнорировать
+            continue;
+          if (stackFrame.AstPtr == -1 && !isPrefixParsed) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
+            continue;
           if (pos2 > curTextPos || isPrefixParsed)
             AddResult(curTextPos, pos, pos2, int.MaxValue, recoveryStack, text, startTextPos);
         }
