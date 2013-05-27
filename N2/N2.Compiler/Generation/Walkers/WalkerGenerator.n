@@ -24,8 +24,9 @@ namespace N2.Compiler
   {
     private _calledWalkers : Hashtable[SyntaxRuleSymbol * int, string] = Hashtable();
 
-    public    abstract Name                            : string { get; }
-    public    abstract SupportsVoidRules               : bool { get; }
+    protected          ConstantEmitter                 : IConstantEmitter { get; private set; }
+    public    abstract Name                            : string           { get; }
+    public    abstract SupportsVoidRules               : bool             { get; }
     public    abstract GetSignature(rule : RuleSymbol) : WalkerSignature;
 
     protected abstract GetSyntaxRuleValue(ruleSymbol : SyntaxRuleSymbol, astPointer : AstPointerScope) : PExpr;
@@ -68,8 +69,9 @@ namespace N2.Compiler
       ]>
     }
 
-    public Init() : void
+    public Init(constantEmitter : IConstantEmitter) : void
     {
+      ConstantEmitter = constantEmitter;
       _calledWalkers.Clear();
     }
 
@@ -116,7 +118,7 @@ namespace N2.Compiler
 
     public WalkerCodeForSimpleRule(ruleSymbol : SimpleRuleSymbol) : PExpr
     {
-      def pointerAllocator = AstPointerScope(ruleSymbol.Structure, "astPtr");
+      def pointerAllocator = AstPointerScope(ruleSymbol.Structure, "astPtr", ConstantEmitter);
       def code             = GetSyntaxRuleValue(ruleSymbol, pointerAllocator);
       def astMissingCode   = SimpleMissed(ruleSymbol);
       pointerAllocator.Compile(astMissingCode, code).FlattenPExpr();
@@ -124,7 +126,7 @@ namespace N2.Compiler
 
     public WalkerCodeForExtentionRule(ruleSymbol : ExtentionRuleSymbol) : PExpr
     {
-      def astPointer = AstPointer.Existing(ruleSymbol.Structure, "astPtr");
+      def astPointer = AstPointer.Existing(ruleSymbol.Structure, ConstantEmitter, "astPtr");
       <[
         _ = astPtr;
         $(GetSyntaxRuleValue(ruleSymbol, AstPointerScope(astPointer)));
@@ -138,7 +140,7 @@ namespace N2.Compiler
 
     public GetRuleValue(ruleStructure : RuleStructure, name : string) : PExpr
     {
-      def pointerScope = AstPointerScope(ruleStructure, name);
+      def pointerScope = AstPointerScope(ruleStructure, name, ConstantEmitter);
       def ast = GetSubrulesValues(ruleStructure, pointerScope);
       pointerScope.Compile(ast)
     }
@@ -165,7 +167,7 @@ namespace N2.Compiler
       }
 
       statements.Add(CombineValues(ruleStructure, arguments.ToNList()));
-      <[ { ..$(statements.ToNList()) } ]>
+      <[ { ..$statements } ]>
     }
 
     public GetTokenValue(field : RuleStructureField, parentAstPointer : AstPointerScope, code : PExpr) : PExpr
@@ -207,10 +209,10 @@ namespace N2.Compiler
         def loop()
         {
           $item;
-          if (listEnd > pos)
+          if (pos < listEnd)
             loop();
           else
-            assert(listEnd == pos);
+            assert(pos == listEnd);
         }
       ]>;
       GetListValueImpl
@@ -232,20 +234,27 @@ namespace N2.Compiler
       , emptyCode        : PExpr
       ) : PExpr
     {
+      def continueLoop =
+        if (field.HangingSeparator)
+          <[
+            if (pos < listEnd)
+              loop();
+            else
+              assert(pos == listEnd);
+          ]>
+        else
+          <[ loop(); ]>;
       def loopCode = <[
         def loop()
         {
           $item;
-          if (listEnd > pos)
+          if (pos < listEnd)
           {
             $separator;
-            if (listEnd > pos)
-              loop();
-            else
-              assert(listEnd == pos);
+            $continueLoop;
           }
           else
-            assert(listEnd == pos);
+            assert(pos == listEnd);
         }
       ]>;
       GetListValueImpl
@@ -267,17 +276,16 @@ namespace N2.Compiler
       ) : PExpr
     {
       def nonemptyCode = List();
-      match(init)
-      {
-        | <[ { ..$exprs } ]> => nonemptyCode.AddRange(exprs)
-        | e                  => nonemptyCode.Add(e)
-      }
+      if (init is <[ { ..$exprs } ]>)
+        nonemptyCode.AddRange(exprs);
+      else
+        nonemptyCode.Add(init);
       nonemptyCode.Add(loopCode);
       nonemptyCode.Add(<[ loop() ]>);
       nonemptyCode.Add(returnCode);
       <[
         def listEnd = pos + $(parentAstPointer.Access().GetSize(field));
-        if (listEnd > pos) { ..$(nonemptyCode.NToList()) }
+        if (listEnd > pos) { ..$nonemptyCode }
         else $emptyCode
       ]>
     }
