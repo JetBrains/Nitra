@@ -21,27 +21,53 @@ namespace N2.Compiler
       def code = SCG.List();
       def createAst()
       {
-        if (ruleStructure.Symbol is N2.Typing.ExtentionRuleSymbol)
-          <[
-            def astPtr = parser.Allocate($(ruleStructure.Size), $(ruleStructure.AstId : dyn));
-            frame.AstPtr = astPtr;
-            match (stack)
-            {
-              | (_ :: parent :: _) =>
-                assert2(parser.ast[parent.AstPtr + N2.Internal.ExtensibleRuleParser.PrefixOfs.List] == 0);
-                parser.ast[parent.AstPtr + N2.Internal.ExtensibleRuleParser.PrefixOfs.List] = astPtr;
-              | _ => assert(false)
-            }
-            astPtr
-          ]>
+        def createRootAst()
+        {
+          if (ruleStructure.Symbol is N2.Typing.ExtentionRuleSymbol)
+            <[
+              def astPtr = parser.Allocate($(ruleStructure.Size), $(ruleStructure.AstId : dyn));
+              frame.AstPtr = astPtr;
+              match (stack)
+              {
+                | (_ :: parent :: _) =>
+                  assert2(parser.ast[parent.AstPtr + N2.Internal.ExtensibleRuleParser.PrefixOfs.List] == 0);
+                  parser.ast[parent.AstPtr + N2.Internal.ExtensibleRuleParser.PrefixOfs.List] = astPtr;
+                | _ => assert(false)
+              }
+              astPtr
+            ]>
+          else
+            <[
+              def astPtr = parser.Allocate($(ruleStructure.Size), $(ruleStructure.AstId : dyn));
+              frame.AstPtr = astPtr;
+              parser.ast[astPtr + $(ruleStructure.HeaderNext.Offset)] = parser.memoize[frame.AstStartPos];
+              parser.memoize[frame.AstStartPos] = astPtr;
+              astPtr
+            ]>
+        }
+        def asts = ruleStructure.AllNonMarkerFields.Filter(field => !field.IsPredicate).Grouping(field => (field.Owner, field));
+        if (asts.Count == 1)
+          createRootAst()
         else
-          <[
-            def astPtr = parser.Allocate($(ruleStructure.Size), $(ruleStructure.AstId : dyn));
-            frame.AstPtr = astPtr;
-            parser.ast[astPtr + $(ruleStructure.HeaderNext.Offset)] = parser.memoize[frame.AstStartPos];
-            parser.memoize[frame.AstStartPos] = astPtr;
-            astPtr
-          ]>
+        {
+          def cases = SCG.List();
+          foreach ((ast, fields) in asts.KeyValuePairs)
+          {
+            def body = if (ast is RuleStructure.Ast)
+              createRootAst();
+            else
+            <[
+              def astPtr = parser.Allocate($(ast.Size), $(ast.AstId : dyn));
+              frame.AstPtr = astPtr;
+              parser.ast[astPtr + $(ast.HeaderNext.Offset)] = parser.memoize[frame.AstStartPos];
+              parser.memoize[frame.AstStartPos] = astPtr;
+              astPtr
+            ]>;
+            cases.Add(MatchCase(fields.Map(field => <[ $(field.State) ]>), body));
+          }
+          cases.Add(<[case: | _ => assert(false); ]>);
+          <[ match (failState) { ..$cases }]>
+        }
       }
       code.Add(<[ def frame     = stack.Head; ]>);
       code.Add(<[ def failState = frame.FailState; ]>);
@@ -57,11 +83,9 @@ namespace N2.Compiler
         }
       ]>);
       CompileFields(code, ruleStructure);
-      def rootAstPtr = AstPointer.Existing(ruleStructure, ConstantEmitter, "rootAstPtr");
+      def astPtr = AstPointer.Existing(ruleStructure, ConstantEmitter, "astPtr");
       code.Add(<[
-        def rootFrame = stack.Nth(level);
-        def rootAstPtr =  rootFrame.AstPtr;
-        $(rootAstPtr.Set(ruleStructure.HeaderState, <[ ~startState ]>));
+        $(astPtr.Set(ruleStructure.HeaderState, <[ ~startState ]>));
       ]>);
 
       code.FlattenPExpr();
