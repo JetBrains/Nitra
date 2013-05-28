@@ -59,5 +59,32 @@ namespace N2.Visualizer.Properties {
                 resourceCulture = value;
             }
         }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to &lt;!DOCTYPE html&gt;
+        ///&lt;html&gt;
+        ///&lt;head&gt;
+        ///    &lt;title&gt;Pretty Print&lt;/title&gt;
+        ///    &lt;style type=&quot;text/css&quot;&gt;
+        ///missing
+        ///{
+        ///}
+        ///
+        ///debug
+        ///{
+        ///}
+        ///    &lt;/style&gt;
+        ///&lt;/head&gt;
+        ///&lt;body&gt;
+        ///{0}
+        ///&lt;/body&gt;
+        ///&lt;/html&gt;
+        ///.
+        /// </summary>
+        internal static string PrettyPrintDoughnut {
+            get {
+                return ResourceManager.GetString("PrettyPrintDoughnut", resourceCulture);
+            }
+        }
     }
 }
