@@ -279,8 +279,6 @@ namespace N2.DebugStrategies
           continue;
         var state = stack.Head.FailState;
         Debug.Assert(state >= 0);
-        while (!stack.Head.IsRootAst)
-          stack = stack.Tail as RecoveryStack;
         parser.ast[stack.Head.AstPtr + 2] = ~state;
       }
     }
