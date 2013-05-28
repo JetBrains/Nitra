@@ -18,11 +18,14 @@ namespace Sample.Json.Cs
       Test(@"{ a:, }");
       Test(@"{ 'a':, a:1}");
       Test(@"{a::2,:}");
-      //Test(@"[
-      //        { : 1},
-      //        { a },
-      //        { a: }
-      //      ]"); // падает волкер!
+      Test(@"[
+            { : 1},
+            { a },
+            { a: },
+            { a:, },
+            { 'a':, a:1},
+            {a::2,:}
+          ]");
     }
 
     static void Test(string text)
