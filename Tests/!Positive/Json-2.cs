@@ -17,6 +17,12 @@ namespace Sample.Json.Cs
       Test(@"{ a: }");
       Test(@"{ a:, }");
       Test(@"{ 'a':, a:1}");
+      Test(@"{a::2,:}");
+      //Test(@"[
+      //        { : 1},
+      //        { a },
+      //        { a: }
+      //      ]"); // падает волкер!
     }
 
     static void Test(string text)
@@ -49,6 +55,10 @@ Pretty print: {
 Pretty print: {
   'a': #MISSING#,
   a: 1
+}
+Pretty print: {
+  a: 2,
+  #MISSING#
 }
 END-OUTPUT
 */
