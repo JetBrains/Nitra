@@ -35,7 +35,7 @@ namespace Sample.Json.Cs
       var parseResult = JsonParser.Start(source, parserHost);
 
       var ast = JsonParserAstWalkers.Start(parseResult);
-      Console.WriteLine("Pretty print: " + ast.ToString(ToStringOptions.DebugIndent | ToStringOptions.MissingNodes));
+      Console.WriteLine("Pretty print: " + ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes));
     }
   }
 }
@@ -43,25 +43,41 @@ namespace Sample.Json.Cs
 /*
 BEGIN-OUTPUT
 Pretty print: {
-  #MISSING#: 1
+  <Identifier>: 1
 }
 Pretty print: {
-  a: #MISSING#
+  a<:> <Value>
 }
 Pretty print: {
-  a: #MISSING#
+  a: <Value>
 }
 Pretty print: {
-  a: #MISSING#,
-  #MISSING#
+  a: <Value>,
+  <Property>
 }
 Pretty print: {
-  'a': #MISSING#,
+  'a': <Value>,
   a: 1
 }
 Pretty print: {
   a: 2,
-  #MISSING#
+  <Property>
 }
+Pretty print: [{
+  <Identifier>: 1
+}, {
+  a<:> <Value>
+}, {
+  a: <Value>
+}, {
+  a: <Value>,
+  <Property>
+}, {
+  'a': <Value>,
+  a: 1
+}, {
+  a: 2,
+  <Property>
+}]
 END-OUTPUT
 */
