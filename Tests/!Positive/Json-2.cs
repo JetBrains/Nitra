@@ -61,7 +61,7 @@ Pretty print: {
 }
 Pretty print: {
   a: 2,
-  <Property>
+  <Identifier>: <Value>
 }
 Pretty print: [{
   <Identifier>: 1
@@ -77,7 +77,7 @@ Pretty print: [{
   a: 1
 }, {
   a: 2,
-  <Property>
+  <Identifier>: <Value>
 }]
 END-OUTPUT
 */
