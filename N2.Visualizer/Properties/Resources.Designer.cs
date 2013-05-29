@@ -10,8 +10,8 @@
 
 namespace N2.Visualizer.Properties {
     using System;
-
-
+    
+    
     /// <summary>
     ///   A strongly-typed resource class, for looking up localized strings, etc.
     /// </summary>
@@ -23,15 +23,15 @@ namespace N2.Visualizer.Properties {
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
     [global::System.Runtime.CompilerServices.CompilerGeneratedAttribute()]
     internal class Resources {
-
+        
         private static global::System.Resources.ResourceManager resourceMan;
-
+        
         private static global::System.Globalization.CultureInfo resourceCulture;
-
+        
         [global::System.Diagnostics.CodeAnalysis.SuppressMessageAttribute("Microsoft.Performance", "CA1811:AvoidUncalledPrivateCode")]
         internal Resources() {
         }
-
+        
         /// <summary>
         ///   Returns the cached ResourceManager instance used by this class.
         /// </summary>
@@ -45,7 +45,7 @@ namespace N2.Visualizer.Properties {
                 return resourceMan;
             }
         }
-
+        
         /// <summary>
         ///   Overrides the current thread's CurrentUICulture property for all
         ///   resource lookups using this strongly typed resource class.
@@ -57,6 +57,33 @@ namespace N2.Visualizer.Properties {
             }
             set {
                 resourceCulture = value;
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to &lt;!DOCTYPE html&gt;
+        ///&lt;html&gt;
+        ///&lt;head&gt;
+        ///    &lt;title&gt;Pretty Print&lt;/title&gt;
+        ///    &lt;style type=&quot;text/css&quot;&gt;
+        ///missing
+        ///{
+        ///}
+        ///
+        ///debug
+        ///{
+        ///}
+        ///    &lt;/style&gt;
+        ///&lt;/head&gt;
+        ///&lt;body&gt;
+        ///{0}
+        ///&lt;/body&gt;
+        ///&lt;/html&gt;
+        ///.
+        /// </summary>
+        internal static string PrettyPrintDoughnut {
+            get {
+                return ResourceManager.GetString("PrettyPrintDoughnut", resourceCulture);
             }
         }
     }

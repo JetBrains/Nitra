@@ -200,7 +200,14 @@ namespace N2.Visualizer
         treeView1.Items.Add(treeNode);
 
         var ast = _parseResult.CreateAst();
-        prettyPrintTextBox.Text = ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
+
+        var options = PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes;
+        prettyPrintTextBox.Text = ast.ToString(options);
+
+        var htmlWriter = new HtmlPrettyPrintWriter(options, "missing", "debug");
+        ast.PrettyPrint(htmlWriter);
+        var html = Properties.Resources.PrettyPrintDoughnut.Replace("{prettyprint}", htmlWriter.ToString());
+        prettyPrintViewer.NavigateToString(html);
       }
       catch { }
     }
