@@ -26,7 +26,7 @@ namespace N2.DebugStrategies
     int                  _bestResultsCount;
     int                  _nestedLevel;
     Dictionary<int, int> _allacetionsInfo = new Dictionary<int, int>();
-    Dictionary<object, int> _visited = new Dictionary<object, int>();
+    Dictionary<object, Tuple<int, int>> _visited = new Dictionary<object, Tuple<int, int>>();
     Dictionary<string, int> _parsedRules = new Dictionary<string, int>();
     RecoveryStack        _recoveryStack;
 
@@ -40,7 +40,7 @@ namespace N2.DebugStrategies
       _bestResultsCount = 0;
       _nestedLevel = 0;
       _allacetionsInfo.Clear();
-      _visited = new Dictionary<object, int>();
+      _visited = new Dictionary<object, Tuple<int, int>>();
       _parsedRules = new Dictionary<string, int>();
     }
 
@@ -125,8 +125,8 @@ namespace N2.DebugStrategies
           if (pos2 > curTextPos || isPrefixParsed)
             AddResult(curTextPos, pos, pos2, state, recoveryStack, text, startTextPos);
         }
-        //else if (parser.MaxFailPos > curTextPos)
-        //  AddResult(curTextPos,   pos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
+        else if (parser.MaxFailPos > curTextPos)
+          AddResult(curTextPos,   pos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
         else if (pos < 0 && nextState < 0)
         {
           // последнее состояние. Надо попытаться допарсить
@@ -136,7 +136,7 @@ namespace N2.DebugStrategies
           if (stackFrame.AstPtr == -1 && !isPrefixParsed) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
             continue;
           if (pos2 > curTextPos || isPrefixParsed)
-            AddResult(curTextPos, pos, pos2, int.MaxValue, recoveryStack, text, startTextPos);
+            AddResult(curTextPos, pos, pos2, -1, recoveryStack, text, startTextPos);
         }
         else if (stackFrame.FailState == state && subruleLevel <= 0)
           TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel);
@@ -274,17 +274,24 @@ namespace N2.DebugStrategies
 
     private int TryParse(Parser parser, RecoveryStack recoveryStack, int curTextPos, IRecoveryRuleParser ruleParser, int state)
     {
-      int pos;
       _parseCount++;
-      var key = Tuple.Create(curTextPos, ruleParser, state);
-
       if (state < 0)
         return ruleParser.TryParse(recoveryStack, state, curTextPos, false, parser);
 
-      if (!_visited.TryGetValue(key, out pos))
-        _visited[key] = pos = ruleParser.TryParse(recoveryStack, state, curTextPos, false, parser);
-
-      return pos;
+      Tuple<int, int> data;
+      var key = Tuple.Create(curTextPos, ruleParser, state);
+      if (_visited.TryGetValue(key, out data))
+      {
+        if (parser.MaxFailPos < data.Item2)
+          parser.MaxFailPos = data.Item2;
+        return data.Item1;
+      }
+      else
+      {
+        int pos = ruleParser.TryParse(recoveryStack, state, curTextPos, false, parser);
+        _visited[key] = Tuple.Create(pos, parser.MaxFailPos);
+        return pos;
+      }
     }
 
     private void FixAst(Parser parser)
@@ -310,9 +317,8 @@ namespace N2.DebugStrategies
           continue;
         var state = stack.Head.FailState;
         Debug.Assert(state >= 0);
-        while (!stack.Head.IsRootAst)
-          stack = stack.Tail as RecoveryStack;
-        parser.ast[stack.Head.AstPtr + 2] = ~state;
+        if (stack.Head.AstPtr > 0)
+          parser.ast[stack.Head.AstPtr + 2] = ~state;
       }
     }
   }

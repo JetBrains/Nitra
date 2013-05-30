@@ -136,7 +136,7 @@ namespace N2.DebugStrategies
           if (stackFrame.AstPtr == -1 && !isPrefixParsed) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
             continue;
           if (pos2 > curTextPos || isPrefixParsed)
-            AddResult(curTextPos, pos, pos2, int.MaxValue, recoveryStack, text, startTextPos);
+            AddResult(curTextPos, pos, pos2, -1, recoveryStack, text, startTextPos);
         }
         else if (stackFrame.FailState == state && subruleLevel <= 0)
           TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel);
@@ -317,9 +317,8 @@ namespace N2.DebugStrategies
           continue;
         var state = stack.Head.FailState;
         Debug.Assert(state >= 0);
-        while (!stack.Head.IsRootAst)
-          stack = stack.Tail as RecoveryStack;
-        parser.ast[stack.Head.AstPtr + 2] = ~state;
+        if (stack.Head.AstPtr > 0)
+          parser.ast[stack.Head.AstPtr + 2] = ~state;
       }
     }
   }

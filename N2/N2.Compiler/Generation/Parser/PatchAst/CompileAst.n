@@ -19,75 +19,84 @@ namespace N2.Compiler
     public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
     {
       def code = SCG.List();
-      def createAst()
+      def createAst(structure)
       {
-        def createRootAst()
-        {
-          if (ruleStructure.Symbol is N2.Typing.ExtentionRuleSymbol)
-            <[
-              def astPtr = parser.Allocate($(ruleStructure.Size), $(ruleStructure.AstId : dyn));
-              frame.AstPtr = astPtr;
-              match (stack)
-              {
-                | (_ :: parent :: _) =>
-                  assert2(parser.ast[parent.AstPtr + N2.Internal.ExtensibleRuleParser.PrefixOfs.List] == 0);
-                  parser.ast[parent.AstPtr + N2.Internal.ExtensibleRuleParser.PrefixOfs.List] = astPtr;
-                | _ => assert(false)
-              }
-              astPtr
-            ]>
-          else
-            <[
-              def astPtr = parser.Allocate($(ruleStructure.Size), $(ruleStructure.AstId : dyn));
-              frame.AstPtr = astPtr;
-              parser.ast[astPtr + $(ruleStructure.HeaderNext.Offset)] = parser.memoize[frame.AstStartPos];
-              parser.memoize[frame.AstStartPos] = astPtr;
-              astPtr
-            ]>
-        }
-        def asts = ruleStructure.AllNonMarkerFields.Filter(field => !field.IsPredicate).Grouping(field => (field.Owner, field));
-        if (asts.Count == 1)
-          createRootAst()
+        if (structure is RuleStructure.Ast(Symbol = N2.Typing.ExtentionRuleSymbol))
+          <[
+            def newAstPtr = parser.Allocate($(structure.Size), $(structure.AstId : dyn));
+            frame.AstPtr = newAstPtr;
+            match (stack)
+            {
+              | (_ :: parent :: _) =>
+                assert2(parser.ast[parent.AstPtr + N2.Internal.ExtensibleRuleParser.PrefixOfs.List] == 0);
+                parser.ast[parent.AstPtr + N2.Internal.ExtensibleRuleParser.PrefixOfs.List] = newAstPtr;
+              | _ => assert(false)
+            }
+            newAstPtr
+          ]>
         else
-        {
-          def cases = SCG.List();
-          foreach ((ast, fields) in asts.KeyValuePairs)
-          {
-            def body = if (ast is RuleStructure.Ast)
-              createRootAst();
-            else
-            <[
-              def astPtr = parser.Allocate($(ast.Size), $(ast.AstId : dyn));
-              frame.AstPtr = astPtr;
-              parser.ast[astPtr + $(ast.HeaderNext.Offset)] = parser.memoize[frame.AstStartPos];
-              parser.memoize[frame.AstStartPos] = astPtr;
-              astPtr
-            ]>;
-            cases.Add(MatchCase(fields.Map(field => <[ $(field.State) ]>), body));
-          }
-          cases.Add(<[case: | _ => assert(false); ]>);
-          <[ match (failState) { ..$cases }]>
-        }
+          <[
+            def newAstPtr = parser.Allocate($(structure.Size), $(structure.AstId : dyn));
+            frame.AstPtr = newAstPtr;
+            parser.ast[newAstPtr + $(structure.HeaderNext.Offset)] = parser.memoize[frame.AstStartPos];
+            parser.memoize[frame.AstStartPos] = newAstPtr;
+            newAstPtr
+          ]>
       }
+      code.Add(<[ _ = startPos; ]>);
       code.Add(<[ def frame     = stack.Head; ]>);
       code.Add(<[ def failState = frame.FailState; ]>);
-      code.Add(<[ def astPtr    = if (frame.AstPtr > 0) frame.AstPtr else $(createAst()) ]>);
-      code.Add(<[ mutable level; ]>);
-
-      code.Add(<[
-        when (failState == startState)
+      def asts = ruleStructure.AllNonMarkerFields.Filter(field => !field.IsPredicate).Grouping(field => (field.Owner, field));
+      def cases = SCG.List();
+      foreach ((structure, fields) in asts.KeyValuePairs)
+      {
+        foreach (field in fields)
         {
-          // этим вызовом мы устанавливаем размер для поля соответствующего failState
-          def pos42 = TryParse(stack, startState, startPos, true, parser);
-          startState = GetNextState(startState);
-          _ = pos42;
+          def getSize = match (field)
+          {
+            | TokenString    (str)                       => Some(<[ $(str.Length) ]>)
+            | TokenCall      (ruleSymbol)                => Some(<[ $(PExprUtils.FromQualifiedIdentifier(ruleSymbol.DeclaringModule.Node.FullNameParts)).$(AssemblyConstants.GrammarImplName : usesite).$(ruleSymbol.DecorateRuleName() : dyn)(startPos, parser.Text) ]>)
+            | SimpleCall     (ruleSymbol)                => Some(<[ $(Owner.MakeParserName(ruleSymbol) : dyn).Parse(startPos, parser.Text, parser) ]>)
+            | ExtensibleCall (ruleSymbol, bindingPower)  => Some(<[ $(Owner.MakeParserName(ruleSymbol, bindingPower) : dyn).Parse(startPos, parser.Text, parser) ]>)
+            | Option | List | ListWithSeparator | Marker => None()
+          }
+          def patch = <[
+            when (startState == $(field.State))
+            {
+              $(if (getSize is Some(getSize))
+                <[
+                  parser.ErrorData[errorIndex].Data = $getSize;
+                  assert2(parser.ErrorData[errorIndex].Data >= 0);
+                  startState = GetNextState(startState);
+                ]>
+                else
+                <[
+                  assert2(false);
+                  assert(false);
+                ]>
+              )
+            }
+            parser.PatchAst(this, astPtr, errorIndex, $(field.State), startState, $(field.Offset));
+          ]>;
+          def body = if (field.IsStart)
+            <[
+              def astPtr = if (frame.AstPtr > 0)
+                frame.AstPtr;
+              else
+                $(createAst(structure));
+              $patch;
+            ]>;
+          else
+            <[
+              def astPtr = frame.AstPtr;
+              assert2(astPtr > 0);
+              $patch;
+            ]>;
+          cases.Add(<[ case: | $(field.State) => $body ]>);
         }
-      ]>);
-      CompileFields(code, ruleStructure);
-      def astPtr = AstPointer.Existing(ruleStructure, ConstantEmitter, "astPtr");
-      code.Add(<[
-        $(astPtr.Set(ruleStructure.HeaderState, <[ ~startState ]>));
-      ]>);
+      }
+      cases.Add(<[ case: | _ => assert(false); ]>);
+      code.Add(<[ match (failState) { ..$cases }]>);
 
       code.FlattenPExpr();
     }
