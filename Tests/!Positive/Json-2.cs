@@ -26,6 +26,7 @@ namespace Sample.Json.Cs
             { 'a':, a:1},
             {a::2,:}
           ]");
+      Test(@"{a : 1 44}");
     }
 
     static void Test(string text)
@@ -79,5 +80,8 @@ Pretty print: [{
   a: 2,
   <Identifier>: <Value>
 }]
+Pretty print: {
+  a: 1
+}
 END-OUTPUT
 */

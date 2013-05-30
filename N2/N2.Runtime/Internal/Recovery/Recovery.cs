@@ -47,6 +47,7 @@ namespace N2.DebugStrategies
     public void Strategy(int startTextPos, Parser parser)
     {
       Reset();
+      var maxFailPos = parser.MaxFailPos;
       var timer = System.Diagnostics.Stopwatch.StartNew();
       _recoveryStack     = parser.RecoveryStack.NToList() as RecoveryStack;
       var curTextPos    = startTextPos;
@@ -72,7 +73,10 @@ namespace N2.DebugStrategies
         parser.MaxFailPos = _bestResult.EndPos; // HACK!!!
       }
       else
+      {
         parser.ParsingMode = ParsingMode.Recovery;
+        parser.MaxFailPos = maxFailPos;
+      }
 
       Reset();
     }
@@ -108,7 +112,7 @@ namespace N2.DebugStrategies
           if (isOptional)
           {
           }
-          var pos2 = ContinueParse(pos, recoveryStack, parser, text);
+          var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
           if (isOptional && pos == pos2)
             continue;
           if (stackFrame.AstPtr == -1 && !isPrefixParsed) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
@@ -117,7 +121,7 @@ namespace N2.DebugStrategies
         }
         else if (pos == curTextPos && nextState < 0 /*&& isPrefixParsed*/)
         {
-          var pos2 = ContinueParse(pos, recoveryStack, parser, text);
+          var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
           if (isOptional && pos == pos2)
             continue;
           if (stackFrame.AstPtr == -1 && !isPrefixParsed) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
@@ -130,7 +134,7 @@ namespace N2.DebugStrategies
         else if (pos < 0 && nextState < 0)
         {
           // последнее состояние. Надо попытаться допарсить
-          var pos2 = ContinueParse(curTextPos, recoveryStack, parser, text);
+          var pos2 = ContinueParse(curTextPos, recoveryStack, parser, text, !isOptional);
           if (isOptional && !isPrefixParsed) // необязательное правило не спрасившее ни одного не пробельного символа нужно игнорировать
             continue;
           if (stackFrame.AstPtr == -1 && !isPrefixParsed) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
@@ -243,7 +247,7 @@ namespace N2.DebugStrategies
       return;
     }
 
-    int ContinueParse(int startTextPos, RecoveryStack recoveryStack, Parser parser, string text)
+    int ContinueParse(int startTextPos, RecoveryStack recoveryStack, Parser parser, string text, bool trySkipStates)
     {
       var tail = recoveryStack.Tail as RecoveryStack;
 
@@ -255,17 +259,20 @@ namespace N2.DebugStrategies
       var pos = TryParse(parser, tail, startTextPos, ruleParser, -2); // -2 - предлагаем парсеру вычислить следующее состояние для допарсивания
 
       if (pos >= 0)
-        return ContinueParse(pos, tail, parser, text);
+        return ContinueParse(pos, tail, parser, text, trySkipStates);
       else
       {
-        var pos2 = startTextPos;
-        // Если неудалось продолжить парсинг напрямую пытаемся скипнуть одно или более состояние и продолжить парсинг.
-        // Это позволяет нам продолжить допарсивание даже в условиях когда непосредственно за местом восстановления находится повторная ошибка.
-        for (var state = ruleParser.GetNextState(stackFrame.FailState); state >= 0; state = ruleParser.GetNextState(state))
+        if (trySkipStates)
         {
-          pos2 = TryParse(parser, tail, startTextPos, ruleParser, state);
-          if (pos2 >= 0 && !ruleParser.IsVoidState(state))
-            return ContinueParse(pos2, tail, parser, text);
+          var pos2 = startTextPos;
+          // Если неудалось продолжить парсинг напрямую пытаемся скипнуть одно или более состояние и продолжить парсинг.
+          // Это позволяет нам продолжить допарсивание даже в условиях когда непосредственно за местом восстановления находится повторная ошибка.
+          for (var state = ruleParser.GetNextState(stackFrame.FailState); state >= 0; state = ruleParser.GetNextState(state))
+          {
+            pos2 = TryParse(parser, tail, startTextPos, ruleParser, state);
+            if (pos2 >= 0 && !ruleParser.IsVoidState(state))
+              return ContinueParse(pos2, tail, parser, text, trySkipStates);
+          }
         }
 
         return Math.Max(parser.MaxFailPos, startTextPos);
