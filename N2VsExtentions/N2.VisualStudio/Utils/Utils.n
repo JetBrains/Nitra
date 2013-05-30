@@ -64,7 +64,11 @@ namespace N2.VisualStudio
       _ = VsShellUtilities.ShowMessageBox(serviceProvider, message, Constants.ProductName, icon, buttons, defaultButton);
     }
 
-    public GetLanguageForTextBuffer(this globalConfig : IN2GlobalConfig, buffer : ITextBuffer, errorProviderFactory : IErrorProviderFactory) : ValueOption[Language]
+    public GetLanguageForTextBuffer(
+      this globalConfig : IN2GlobalConfig,
+      buffer : ITextBuffer,
+      errorProvider : IErrorProviderFactory,
+      documentFactory : ITextDocumentFactoryService) : ValueOption[Language]
     {
       def path = buffer.GetFilePath();
       when (string.IsNullOrEmpty(path))
@@ -96,16 +100,16 @@ namespace N2.VisualStudio
           buffer.Changed +=
             fun (_ : object, a : TextContentChangedEventArgs) : void
             {
-              Reparse(language, buffer, getText(a.After), errorProviderFactory);
+              Reparse(language, buffer, getText(a.After), errorProvider, documentFactory);
             };
-          Reparse(language, buffer, getText(buffer.CurrentSnapshot), errorProviderFactory);
+          Reparse(language, buffer, getText(buffer.CurrentSnapshot), errorProvider, documentFactory);
         }
       }
 
       language
     }
 
-    Reparse(language : Language, buffer : ITextBuffer,  code : string, errorProviderFactory : IErrorProviderFactory) : void
+    Reparse(language : Language, buffer : ITextBuffer,  code : string, errorProviderFactory : IErrorProviderFactory, documentFactory : ITextDocumentFactoryService) : void
     {
       def timer = System.Diagnostics.Stopwatch.StartNew();
       def path = buffer.GetFilePath();
@@ -117,6 +121,11 @@ namespace N2.VisualStudio
 
       buffer.Properties[typeof(Parser)] = parseResult;
       
+      UpdateReparseErrors(parseResult, buffer,  errorProviderFactory, documentFactory);
+    }
+
+    UpdateReparseErrors(parseResult : Parser, buffer : ITextBuffer,  errorProviderFactory : IErrorProviderFactory, documentFactory : ITextDocumentFactoryService) : void
+    {
       def errorListHelper =
         if (buffer.Properties.ContainsProperty(typeof(ErrorListHelper)))
           buffer.Properties[typeof(ErrorListHelper)] :> ErrorListHelper
@@ -124,6 +133,17 @@ namespace N2.VisualStudio
         {
           def result = ErrorListHelper();
           buffer.Properties[typeof(ErrorListHelper)] = result;
+          def doc = buffer.Properties[typeof(ITextDocument)] :> ITextDocument;
+          def onTextDocumentDisposed(_ : object, arg : TextDocumentEventArgs)
+          {
+            when (arg.TextDocument : object == doc)
+            {
+              result.GetErrorListProvider().Tasks.Clear();
+              _ = buffer.Properties.RemoveProperty(typeof(ErrorListHelper));
+              documentFactory.TextDocumentDisposed -= onTextDocumentDisposed;
+            }
+          }
+          documentFactory.TextDocumentDisposed += onTextDocumentDisposed;
           result
         };
       def errorListProvider = errorListHelper.GetErrorListProvider();
