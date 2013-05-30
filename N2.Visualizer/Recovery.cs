@@ -47,6 +47,7 @@ namespace N2.DebugStrategies
     public void Strategy(int startTextPos, Parser parser)
     {
       Reset();
+      var maxFailPos = parser.MaxFailPos;
       var timer = System.Diagnostics.Stopwatch.StartNew();
       _recoveryStack     = parser.RecoveryStack.NToList() as RecoveryStack;
       var curTextPos    = startTextPos;
@@ -72,7 +73,10 @@ namespace N2.DebugStrategies
         parser.MaxFailPos = _bestResult.EndPos; // HACK!!!
       }
       else
+      {
         parser.ParsingMode = ParsingMode.Recovery;
+        parser.MaxFailPos = maxFailPos;
+      }
 
       Reset();
     }
