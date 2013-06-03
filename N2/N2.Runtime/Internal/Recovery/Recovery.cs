@@ -281,9 +281,10 @@ namespace N2.DebugStrategies
 
     private int TryParse(Parser parser, RecoveryStack recoveryStack, int curTextPos, IRecoveryRuleParser ruleParser, int state)
     {
+      var parsedStates = new List<ParsedStateInfo>();
       _parseCount++;
       if (state < 0)
-        return ruleParser.TryParse(recoveryStack, state, curTextPos, parser);
+        return ruleParser.TryParse(recoveryStack, state, curTextPos, parsedStates, parser);
 
       Tuple<int, int> data;
       var key = Tuple.Create(curTextPos, ruleParser, state);
@@ -295,7 +296,7 @@ namespace N2.DebugStrategies
       }
       else
       {
-        int pos = ruleParser.TryParse(recoveryStack, state, curTextPos, parser);
+        int pos = ruleParser.TryParse(recoveryStack, state, curTextPos, parsedStates, parser);
         _visited[key] = Tuple.Create(pos, parser.MaxFailPos);
         return pos;
       }
