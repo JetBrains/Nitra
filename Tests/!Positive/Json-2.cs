@@ -19,12 +19,15 @@ namespace Sample.Json.Cs
       Test(@"{ 'a':, a:1}");
       Test(@"{a::2,:}");
       Test(@"[
-            { : 1},
+            { : 1}, 
             { a },
-            { a: },
-            { a:, },
-            { 'a':, a:1},
-            {a::2,:}
+            { b: },
+            { b:, },
+            { 'd':, e:2 },
+            {f::3,:},
+            {g# :4}, 
+            {h# : },
+            {k : 5 6}
           ]");
       Test(@"{a : 1 44}");
     }
@@ -69,16 +72,22 @@ Pretty print: [{
 }, {
   a<:> <Value>
 }, {
-  a: <Value>
+  b: <Value>
 }, {
-  a: <Value>,
+  b: <Value>,
   <Property>
 }, {
-  'a': <Value>,
-  a: 1
+  'd': <Value>,
+  e: 2
 }, {
-  a: 2,
+  f: 3,
   <Identifier>: <Value>
+}, {
+  g: 4
+}, {
+  h: <Value>
+}, {
+  k: 5
 }]
 Pretty print: {
   a: 1
