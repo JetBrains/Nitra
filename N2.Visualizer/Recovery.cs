@@ -92,7 +92,7 @@ namespace N2.DebugStrategies
 
     private void ProcessStackFrame(int startTextPos, Parser parser, RecoveryStack recoveryStack, int curTextPos, string text, int subruleLevel)
     {
-      var stackFrame = recoveryStack.Head;
+      var stackFrame = recoveryStack.hd;
       var ruleParser = stackFrame.RuleParser;
       var isPrefixParsed = !ruleParser.IsStartState(stackFrame.FailState);
       var isOptional = ruleParser.IsLoopSeparatorStart(stackFrame.FailState);
@@ -115,6 +115,39 @@ namespace N2.DebugStrategies
 
         //if (!isPrefixParsed)
         //  continue;
+
+        if (nextState < 0 && !isPrefixParsed)
+        {
+          var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state);
+          if (loopBodyStartStgate >= 0)
+          {
+            // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы 
+            // имеем дело с банальным концом цикла мы должны
+            //var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
+            var elemFrame = new RecoveryStackFrame(stackFrame.RuleParser, stackFrame.AstPtr, stackFrame.AstStartPos, loopBodyStartStgate, stackFrame.Counter, 0, 0, stackFrame.IsRootAst, stackFrame.Info);
+            var loopStack = (RecoveryStack)recoveryStack.Tail;
+            var loopFrame = loopStack.hd;
+            var newLoopFrame = new RecoveryStackFrame(loopFrame.RuleParser, loopFrame.AstPtr, loopFrame.AstStartPos, loopFrame.FailState, loopFrame.Counter, loopFrame.ListStartPos, loopFrame.ListEndPos, loopFrame.IsRootAst, FrameInfo.LoopBody);
+            var newStack = new RecoveryStack(elemFrame, new RecoveryStack(newLoopFrame, loopStack.Tail));
+            var old_bestResult = _bestResult;
+            var old_bestResults = _bestResults;
+            _bestResult = null;
+            _bestResults = new List<RecoveryResult>();
+
+            ProcessStackFrame(startTextPos, parser, newStack, curTextPos, text, subruleLevel);
+
+            if (_bestResult != null && _bestResult.RecoveredCount > 0)
+            {
+              _bestResult = old_bestResult;
+              _bestResults = old_bestResults;
+              AddResult(curTextPos, curTextPos, curTextPos, state, recoveryStack, text, startTextPos, true);
+              return;
+            }
+
+            _bestResult = old_bestResult;
+            _bestResults = old_bestResults;
+          }
+        }
 
         if (pos > curTextPos && HasParsedStaets(ruleParser, parsedStates) || pos == text.Length /*&& isPrefixParsed*/)
         {
@@ -200,7 +233,7 @@ namespace N2.DebugStrategies
       _nestedLevel--;
     }
 
-    void AddResult(int startPos, int ruleEndPos, int endPos, int startState, RecoveryStack stack, string text, int failPos)
+    void AddResult(int startPos, int ruleEndPos, int endPos, int startState, RecoveryStack stack, string text, int failPos, bool allowEmpty = false)
     {
       _bestResultsCount++;
 
@@ -213,7 +246,7 @@ namespace N2.DebugStrategies
       {
       }
 
-      if (startPos == endPos && endPos != text.Length) return;
+      if (!allowEmpty && startPos == endPos && endPos != text.Length) return;
 
       if (_bestResult == null)                   goto good;
 
