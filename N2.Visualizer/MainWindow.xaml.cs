@@ -28,6 +28,7 @@ namespace N2.Visualizer
   /// </summary>
   public partial class MainWindow : Window
   {
+    bool _loading = true;
     ParserHost _parserHost;
     Parser _parseResult;
     RuleDescriptor _ruleDescriptor;
@@ -95,7 +96,10 @@ namespace N2.Visualizer
         }
       }
 
-      _parseTimer.Start();
+      _loading = false;
+
+      if (!(Keyboard.GetKeyStates(Key.LeftShift) == KeyStates.Down || Keyboard.GetKeyStates(Key.RightShift) == KeyStates.Down))
+        _parseTimer.Start();
     }
 
     private void Window_Closed(object sender, EventArgs e)
@@ -250,6 +254,9 @@ namespace N2.Visualizer
 
     private void textBox1_TextChanged(object sender, EventArgs e)
     {
+      if (_loading)
+        return;
+
       _parseTimer.Stop();
       _textBox1Tooltip.IsOpen = false;
       _parseTimer.Start();
