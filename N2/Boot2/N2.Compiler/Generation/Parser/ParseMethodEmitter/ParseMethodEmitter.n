@@ -21,7 +21,8 @@ namespace N2.Compiler
     public Owner : RuleParserEmitter { get; }
     public RuleStructure : RuleStructure.Ast;
     private _tb : TypeBuilder;
-    public override Environment : EmitterEnvironment { get { Owner.Environment } }
+    public override Environment     : EmitterEnvironment { get { Owner.Environment } }
+    public override ConstantEmitter : IConstantEmitter   { get { Owner } }
 
     public this(owner : RuleParserEmitter, tb : TypeBuilder, ruleStructure : RuleStructure.Ast)
     {
@@ -68,19 +69,15 @@ namespace N2.Compiler
       {
         match (structure)
         {
-          | RuleStructure.Predicate =>
-            <[
-              $(AstPtr(structure).Var) = parser.Allocate($(structure.Size), $(structure.AstId : dyn));
-            ]>
-
+          | RuleStructure.Predicate
           | RuleStructure.Ast(Symbol = N2.Typing.ExtentionRuleSymbol) =>
             <[
               $(AstPtr(structure).Var) = parser.Allocate($(structure.Size), $(structure.AstId : dyn));
-              parser.ast[$(AstPtr(structure).Var) + $(structure.TerminatorOffset)] = -1;
             ]>
 
           | _ =>
             <[
+              assert2(parser.TryGetAst($(AstStart(structure)), $(structure.AstId : dyn)) == 0);
               $(AstPtr(structure).Var) = parser.Allocate($(structure.Size), $(structure.AstId : dyn));
               $(AstPtr(structure).Set(structure.HeaderNext, <[ parser.memoize[$(AstStart(structure))] ]>));
               parser.memoize[$(AstStart(structure))] = $(AstPtr(structure).Var);
@@ -97,6 +94,53 @@ namespace N2.Compiler
         when (parser.MaxFailPos < curTextPos)
           parser.MaxFailPos = curTextPos;
       ]>
+    }
+
+    private CheckOwnerMemoize(field : RuleStructureField) : PExpr
+    {
+      if (field.IsStart && !field.IsPredicate && !(field.Owner is RuleStructure.Ast))
+        CheckMemoize(field.Owner, GotoOkLabel(field.Owner), GotoFailLabel(field.Owner));
+      else
+        <[ {} ]>
+    }
+
+    private CheckMemoize(structure : RuleStructure, okCode : PExpr, failCode : PExpr) : PExpr
+    {
+      <[
+        $(AstPtr(structure).Var) = parser.TryGetAst($CurTextPos, $(structure.AstId : dyn));
+        when ($(AstPtr(structure).Var) > 0)
+        {
+          parseState = $(AstPtr(structure).Get(structure.HeaderState));
+          if (parseState == N2.Internal.Parser.AstParsedState)
+          {
+            $CurTextPos += parser.AstSize($(AstPtr(structure).Var), $(structure.SizesStart), $(structure.SizesEnd));
+            $okCode;
+          }
+          else if (parseState < 0)
+          {
+            parseState = ~parseState;
+            $(JumpToRecovery(structure : RuleStructure));
+          }
+          else
+          {
+            $failCode
+          }
+        }
+      ]>
+    }
+
+    private JumpToRecovery(structure : RuleStructure) : PExpr
+    {
+      def code = SCG.List();
+      foreach (field in structure.NotMarkerFields)
+        code.Add(<[
+          if (parseState >= $(field.EndState))
+            $CurTextPos += $(AstPtr(field.Owner).GetSize(field)); // skip
+          else
+            $(GotoRecoveryLabel(field))
+        ]>);
+      code.Add(<[ assert2(false); assert(false) ]>);
+      code.FlattenPExpr();
     }
   }
 }

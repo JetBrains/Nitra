@@ -10,27 +10,12 @@ using Nemerle.Utility;
 using System;
 using System.Diagnostics;
 using System.Linq;
+using System.Collections.ObjectModel;
 
 using SCG = System.Collections.Generic;
 
 namespace N2.Internal
 {
-  public enum ParsingMode
-  {
-    | Parsing
-    | Recovery
-    | EndRecovery
-  }
-
-  [Record]
-  public struct Error
-  {
-    public SkipBefore : int;
-    public Size       : int;
-    public SkipAfter  : int;
-    public Skip       : int { get { SkipBefore + Size + SkipAfter } }
-  }
-
 #if !PARSER_DEBUG
   //[DebuggerStepThroughAttribute]
 #endif
@@ -53,17 +38,11 @@ namespace N2.Internal
     public mutable LastParseEnd   : int;
     public         ListData       : SCG.List[RecoveryListData];
     public         RecoveryStack  : SCG.Stack[RecoveryStackFrame];
-    public         Errors         : SCG.List[Error];
+    public         ErrorData      : SCG.List[ParseErrorData];
     public mutable IgnoreRecovery : bool;
-    public mutable _maxTextPos    : int;
-    public MaxTextPos             : int
-    {
-      get { _maxTextPos }
-      set { _maxTextPos = value; }
-    }
-    
-    public IsSuccess : bool { get { true } }
-    public LastSuccessPos : int { get { 0 } }
+    public mutable MaxFailPos     : int;
+
+    public IsSuccess : bool { get { ErrorData.Count == 0 } }
 
     public Parser : string
     {
@@ -100,7 +79,7 @@ namespace N2.Internal
 
     public this(source : SourceSnapshot, initalSize : int, parserHost : ParserHost, ruleParser : RuleParser)
     {
-      Errors          = SCG.List();
+      ErrorData       = SCG.List();
       ListData        = SCG.List();
       RecoveryStack   = SCG.Stack();
       def textSize    = source.Text.Length;
@@ -112,7 +91,7 @@ namespace N2.Internal
       this.ParserHost = parserHost;
       LastParseStart  = -1;
       LastParseEnd    = -1;
-      MaxTextPos      = 0;
+      MaxFailPos      = 0;
       ParsingMode     = ParsingMode.Parsing;
       this.RuleParser = ruleParser;
     }
@@ -134,6 +113,18 @@ namespace N2.Internal
       newAst;
     }
 
+    public TryGetPrefix(pos : ref int, prefixAst : int) : int
+    {
+      mutable bestResult = ast[prefixAst + ExtensibleRuleParser.PrefixOfs.List];
+      when (bestResult < 0)
+      {
+        def error = ErrorData[~bestResult];
+        pos += error.Skip.Length; // грязь
+        bestResult = ast[GetAst(pos, ast[prefixAst + ExtensibleRuleParser.PrefixOfs.Id]) + ExtensibleRuleParser.PrefixOfs.List]; // исходная ссылка на AST
+      }
+      bestResult;
+    }
+
     public TryGetAst(pos : int, ruleId : int) : int
     {
       for (mutable astPtr = memoize[pos]; astPtr > 0; astPtr = ast[astPtr + 1])
@@ -149,39 +140,52 @@ namespace N2.Internal
       astPtr;
     }
 
+    public GetSize(sizePos : int) : int
+    {
+      def size = ast[sizePos];
+      if (size >= 0)
+        size
+      else if (size == int.MinValue)
+        0
+      else
+      {
+        def error = ErrorData[~size];
+        error.Skip.Length + error.Data
+      }
+    }
+
+    public GetSkipAndSize(sizePos : int) : int * int
+    {
+      def size = ast[sizePos];
+      if (size >= 0)
+        (0, size)
+      else if (size == int.MinValue)
+        (0, 0)
+      else
+      {
+        def error = ErrorData[~size];
+        (error.Skip.Length, error.Data)
+      }
+    }
+
     public AstSize(astPtr : int, begin : int, end : int) : int
     {
       mutable size = 0;
       def end = astPtr + end;
       for (mutable i = astPtr + begin; i < end; ++i)
-        size += ast[i];
+        size += GetSize(i);
       size;
     }
 
     public StartRecovery(startTextPos : int) : void
     {
-      when (!IgnoreRecovery)
+      unless (IgnoreRecovery)
       {
-        def recoveryStrategy = this.ParserHost.RecoveryStrategy;
-        
-        def bestResult =
-          if (recoveryStrategy != null)
-            recoveryStrategy(startTextPos, this)
-          else
-          {
-            assert2(false);
-            throw NotImplementedException();
-          }
-          
-        _ = bestResult;
-
+        this.ParserHost.RecoveryStrategy(startTextPos, this);
         this.ParsingMode = ParsingMode.EndRecovery;
-        assert2(false);
-        assert(false);
       }
     }
-    
-    
+
     public GetSpans(startPos : int, endPos : int, spans : SCG.List[SpanInfo]) : void
     {
       def walkerHost = this.ParserHost.GetWalkerHost(StandardWalkerTypes.Highlighter);
@@ -215,9 +219,15 @@ namespace N2.Internal
       result :> ReflectionStruct
     }
 
-    public CollectErrors() : ErrorMessage
+    public GetErrors() : array[Error]
     {
-      default(ErrorMessage)
+      def result = array(ErrorData.Count);
+      foreach (errorData in ErrorData with index)
+      {
+        def loc = Location(Source, errorData.Skip);
+        result[index] = ParseError(loc, errorData.Result);
+      }
+      result
     }
   }
 }

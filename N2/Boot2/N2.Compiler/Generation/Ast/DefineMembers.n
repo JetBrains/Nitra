@@ -38,10 +38,11 @@ namespace N2.Compiler
         DefineSpliceGetDump();
         DefineSpliceExtraFields();
       }
-      when (_errorTb != null)
+      when (_missingTb != null)
       {
-        DefineErrorGetDump();
-        DefineErrorExtraFields();
+        DefineMissingPrettyPrint();
+        DefineMissingGetDump();
+        DefineMissingExtraFields();
       }
     }
 
@@ -74,7 +75,7 @@ namespace N2.Compiler
 
     private DefineAstPrettyPrint() : void
     {
-      def isNoNeedVar(rule : Rule) { rule.Type is RuleType.Void || rule is Rule.String }
+      def isNoNeedVar(rule : Rule) { rule.Type is RuleType.Void }
       def isVoid(ruleType : RuleType)
       {
         | Void
@@ -89,7 +90,7 @@ namespace N2.Compiler
           def result =
             match (rule)
             {
-              | String(str)                                     => <[ _ = code.Append($str); ]>
+              | String(str)                                     => <[ writer.String($expr, $str); ]>
               | And | Not                                       => <[ () ]>
               | Sequence(rules)                                 =>
                 def members2 = rules.MapI((i, r) => if (isNoNeedVar(r)) (<[ _ ]>, r), else (<[ $($"_item$i" : dyn) ]>, r));
@@ -105,41 +106,13 @@ namespace N2.Compiler
                 }
 
               | Call(SymbolRef.Some(MarkerSymbol as markerSymbol), _bp) =>
-                def Indent() : PExpr.Sequence
-                { <[
-                    Indent(code, currentIndent);
-                    lastIndntEnd = code.Length;
-                  ]>
-                }
-                def newLine() { <[ { ..$(<[ _ = code.AppendLine(); ]> :: <[ lastStartLine = code.Length; ]> :: Indent().body) } ]> }
-                def Unindent() : PExpr
-                { <[  currentIndent--;
-                      if (lastIndntEnd == code.Length)
-                      {
-                        code.Length = lastStartLine;
-                        Indent(code, currentIndent);
-                        lastIndntEnd = code.Length;
-                      }
-                      else if (options %&& N2.ToStringOptions.DebugIndent)
-                        _ = code.Append("!!! no new line before indentation decreasing !!!")
-                      else
-                        $(newLine());
-                  ]>
-                }
                 match (markerSymbol.Node.FullNameParts)
                 {
-                  | ["PrettyPrint",  "nl"] => newLine()
-                  | ["PrettyPrint", "inl"] => <[ currentIndent++; $(newLine()) ]>
-                  | ["PrettyPrint",  "sm"] => <[ _ = code.Append(' '); ]>
-                  | ["PrettyPrint",   "d"] => Unindent()
-                  | ["PrettyPrint",   "i"] =>
-                    <[
-                      currentIndent++;
-                      when (options %&& N2.ToStringOptions.DebugIndent && lastStartLine != code.Length)
-                        _ = code.Append("!!! The indentation increasing not from the beginning of line. !!!");
-                      $(Indent());
-                    ]>
-
+                  | ["PrettyPrint",  "nl"] => <[ writer.NewLine() ]>
+                  | ["PrettyPrint", "inl"] => <[ writer.NewLineAndIndent() ]>
+                  | ["PrettyPrint",  "sm"] => <[ writer.Whitespace() ]>
+                  | ["PrettyPrint",   "d"] => <[ writer.Unindent() ]>
+                  | ["PrettyPrint",   "i"] => <[ writer.Indent() ]>
                   | _ => <[ () ]>
                 }
 
@@ -147,12 +120,12 @@ namespace N2.Compiler
                 match (ruleRef.Value.Name)
                 {
                   | "S" | "s" => <[ () ]> // TODO: add analysis of a space usefulness
-                  | _ => <[ _ = code.Append(' '); ]>
+                  | _ => <[ writer.Whitespace(); ]>
                 }
 
-              | Call when rule.Type is RuleType.Chars           => <[ def tok = $expr; _ = code.Append(this.Location.Source.Text, tok.StartPos, tok.Length); ]>
-              | Call                                            => <[ $expr.PrettyPrint(code, currentIndent, options, ref lastStartLine, ref lastIndntEnd); ]>
-              | Repeat(_, _, rule) when isVoid(rule.Type)       => <[ _ = code.Append(' '); ]>
+              | Call when rule.Type is RuleType.Chars           => <[ writer.Token(this.Location.Source, $expr); ]>
+              | Call                                            => <[ $expr.PrettyPrint(writer); ]>
+              | Repeat(_, _, rule) when isVoid(rule.Type)       => <[ writer.Whitespace(); ]>
               | Repeat(0, Some(1), rule)                        => <[ when ($expr is Some(_x)) $(loop(<[ _x ]>, rule)) ]>
               | Repeat(_, _, rule)                              => <[ foreach (_elem in $expr) $(loop(<[ _elem ]>, rule)); ]>
               | RepeatWithSeparator(_, _, rule, separator, _)   =>
@@ -193,11 +166,20 @@ namespace N2.Compiler
       def code = _astFieldsWithVoid.Map(fieldToString);
       def body = <[ { ..$code } ]>;
       _astTb.DefineConditional(<[ decl:
-        public override PrettyPrint(code : System.Text.StringBuilder, mutable currentIndent : int, options : N2.ToStringOptions,
-          lastStartLine : ref int, lastIndntEnd : ref int) : void
+        public override PrettyPrint(writer : N2.PrettyPrintWriter) : void
         {
-          ignore(currentIndent, options, currentIndent, lastStartLine, lastIndntEnd);
+          _ = writer;
           $body
+        }
+      ]>);
+    }
+
+    private DefineMissingPrettyPrint() : void
+    {
+      _missingTb.DefineConditional(<[ decl:
+        public override PrettyPrint(writer : N2.PrettyPrintWriter) : void
+        {
+          writer.MissingNode($(RuleSymbol.GetRuleDescriptorRef()));
         }
       ]>);
     }
@@ -267,12 +249,12 @@ namespace N2.Compiler
       ]>);
     }
 
-    private DefineErrorGetDump() : void
+    private DefineMissingGetDump() : void
     {
-      _errorTb.DefineConditional(<[decl:
+      _missingTb.DefineConditional(<[decl:
         public override GetDump() : N2.Internal.AstDump
         {
-          N2.Internal.AstDump.Error($(RuleName : string), GetText())
+          N2.Internal.AstDump.Missing($(RuleName : string))
         }
       ]>);
     }
@@ -360,7 +342,7 @@ namespace N2.Compiler
       }
     }
 
-    private DefineErrorExtraFields() : void
+    private DefineMissingExtraFields() : void
     {
       def extraFieldsWithErrorHandler = SCG.HashSet();
       foreach (field is ExtraField.ExtraFieldMissingValueSymbol in RuleSymbol.ExtraFields)
@@ -377,7 +359,7 @@ namespace N2.Compiler
             body.Add(<[ _ = $(p.ReferencingExpr); ]>);
           def msg = $"An attempt to access '$(field.Name)' extra field of '$(RuleSymbol.Name)' rule which contains a parse error. Implement the 'missing' handler for this extra field.";
           body.Add(<[ throw System.NotImplementedException($(msg : string)) ]>);
-          _errorTb.Define(<[ decl:
+          _missingTb.Define(<[ decl:
             public override $(n : name)(..$(signature.Params)) : $(signature.Type)
             {
               ..$(body.ToNList())
@@ -389,7 +371,7 @@ namespace N2.Compiler
           def signature  = handlingField.Value.GetExtraFieldSignature();
           def parameters = signature.Params;
           def type       = signature.Type;
-          _errorTb.Define(<[ decl: public override $(n : name)(..$parameters) : $type $(body.Expr) ]>);
+          _missingTb.Define(<[ decl: public override $(n : name)(..$parameters) : $type $(body.Expr) ]>);
 
         | _ => ()
       }
