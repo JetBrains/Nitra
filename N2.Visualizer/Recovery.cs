@@ -119,7 +119,7 @@ namespace N2.DebugStrategies
         if (nextState < 0 && !isPrefixParsed)
         {
           var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state);
-          if (loopBodyStartStgate >= 0)
+          if (false && loopBodyStartStgate >= 0)
           {
             // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы 
             // имеем дело с банальным концом цикла мы должны
