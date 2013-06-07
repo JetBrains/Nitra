@@ -34,7 +34,21 @@ namespace N2.Compiler
     static IsBeginOutlineMarker(field : RuleStructureField) : bool
     {
       | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_impl"
-      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_begin" => true
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_begin"
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_begin_before" => true
+      | _ => false
+    }
+
+    static IsNeedSkipSpaces(field : RuleStructureField) : bool
+    {
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_begin_before"
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_end_before" => true
+      | _ => false
+    }
+
+    static IsHideByDefault(field : RuleStructureField) : bool
+    {
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_hiden" => true
       | _ => false
     }
 
@@ -46,7 +60,8 @@ namespace N2.Compiler
 
     static IsEndOutlineMarker(field : RuleStructureField) : bool
     {
-      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_end" => true
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_end"
+      | RuleStructureField.Marker as m when m.Symbol.FullName == "Outline.outline_end_before" => true
       | _ => false
     }
 
@@ -59,32 +74,50 @@ namespace N2.Compiler
           if (ruleType is RuleType.Void)
             <[ def lastSpaceStartPos = pos;
                $code;
-               _context.LastSpaceStartPos = lastSpaceStartPos; ]>
+               when (pos > lastSpaceStartPos)
+               {
+                 _context.LastSpaceStartPos = lastSpaceStartPos;
+                 _context.LastSpaceEndPos   = pos;
+               }
+            ]>
           else
-            <[ $code;
-               _context.LastSpaceStartPos = -1;]>
+            code
 
         | Marker => 
           if (IsBeginOutlineMarker(field))
-            <[
-              if (_context.LastSpaceStartPos < 0)
-                outlineSpanStart = pos;
-              else
-                outlineSpanStart = _context.LastSpaceStartPos;
-            ]>
+            if (IsNeedSkipSpaces(field))
+              <[
+                if (_context.LastSpaceEndPos == pos) // пробельное правило было перед текущим
+                  outlineSpanStart = _context.LastSpaceStartPos;
+                else
+                  outlineSpanStart = pos;
+              ]>
+            else
+              <[ outlineSpanStart = pos; ]>
           else if (IsEndOutlineMarker(field))
-            <[ _context.Result.Add(N2.OutliningInfo(N2.NToken(outlineSpanStart, pos), false, isImplementation)); ]>
+            if (IsNeedSkipSpaces(field))
+              <[
+                _context.Result.Add(N2.OutliningInfo(N2.NToken(outlineSpanStart, if (_context.LastSpaceEndPos == pos) _context.LastSpaceStartPos else pos), hideByDefault, isImplementation)); 
+                hideByDefault = false;
+              ]>
+            else
+              <[
+                _context.Result.Add(N2.OutliningInfo(N2.NToken(outlineSpanStart, pos), hideByDefault, isImplementation));
+                hideByDefault = false;
+              ]>
+          else if (IsHideByDefault(field))
+            <[ hideByDefault = true; ]>
           else
             <[ () ]>
 
         
-        | TokenString | TokenCall => <[ $(Skip(field, parentAstPointer)); _context.LastSpaceStartPos = -1; ]>
+        | TokenString | TokenCall => Skip(field, parentAstPointer)
         | Option as field =>
           GetOptionValue(
             field            = field,
             parentAstPointer = parentAstPointer,
-            hasValue         = <[ _context.LastSpaceStartPos = -1; _ = $(GetRuleValue(field.Rule, "valuePointer")); ]>,
-            noValue          = <[ _context.LastSpaceStartPos = -1; ]>)
+            hasValue         = <[ _ = $(GetRuleValue(field.Rule, "valuePointer")); ]>,
+            noValue          = <[ () ]>)
 
         | List as lst=>
           GetListValue(field            = lst,
@@ -121,7 +154,7 @@ namespace N2.Compiler
       when (outlineCount > 0)
       {
         def isImplementation = ruleStruct.Fields.Exists(IsImplementationMarker);
-        statementsList.Add(<[ mutable outlineSpanStart = -1; def isImplementation = $isImplementation; ]>);
+        statementsList.Add(<[ mutable outlineSpanStart = -1; mutable hideByDefault = false; def isImplementation = $isImplementation; ]>);
         when (outlineCount > 1)
           Message.Error(ruleSymbol.FirstLocation.ToNemerleLocation(), "Currently not supported more than one outline region on rule.");
       }
