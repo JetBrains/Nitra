@@ -354,7 +354,7 @@ namespace N2.Visualizer
 
     private void FileOpenExecuted(object sender, RoutedEventArgs e)
     {
-      var dialog = new OpenFileDialog { Filter = "C# (.cs)|*.cs|Text (.txt)|*.txt|All|*.*" };
+      var dialog = new OpenFileDialog { Filter = "C# (.cs)|*.cs|Nitra (.n2)|*.n2|JSON (.json)|*.json|Text (.txt)|*.txt|All|*.*" };
       if (dialog.ShowDialog(this) ?? false)
       {
         _text.Text = File.ReadAllText(dialog.FileName);
