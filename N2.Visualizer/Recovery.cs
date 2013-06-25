@@ -69,6 +69,8 @@ namespace N2.DebugStrategies
         //for (var stack = _recoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
         //  ProcessStackFrame(startTextPos, parser, stack, curTextPos, text, 0);
         ProcessStackFrame(startTextPos, parser, _recoveryStack, curTextPos, text, 0);
+        if (_recoveryStack.hd.RuleParser.IsTokenRule)
+          break;
         curTextPos++;
       }
       while (curTextPos - startTextPos < 800 && /*_bestResult == null && _bestResult == null && (res.Count == 0 || curTextPos - startTextPos < 10) &&*/ curTextPos <= text.Length);
@@ -99,7 +101,7 @@ namespace N2.DebugStrategies
       List<ParsedStateInfo> parsedStates;
 
       int nextState;
-      for (var state = subruleLevel > 0 ? ruleParser.GetNextState(stackFrame.FailState) : stackFrame.FailState; state >= 0; state = nextState)
+      for (var state = stackFrame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? ruleParser.GetNextState(stackFrame.FailState) : 
       {
         parser.MaxFailPos = startTextPos;
         nextState = ruleParser.GetNextState(state);
@@ -161,7 +163,7 @@ namespace N2.DebugStrategies
             continue;
           AddResult(curTextPos, pos, pos2, state, recoveryStack, text, startTextPos);
         }
-        else if (pos == curTextPos && nextState < 0 /*&& isPrefixParsed*/)
+        else if (pos == curTextPos && nextState < 0 /*&& isPrefixParsed*/ && !stackFrame.RuleParser.IsTokenRule)
         {
           var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
           if (isOptional && pos == pos2)
@@ -181,8 +183,6 @@ namespace N2.DebugStrategies
           //AddResult(curTextPos, ruleEndPos, Math.Max(parser.MaxFailPos, pos2), state, recoveryStack, text, startTextPos);
           AddResult(curTextPos, ruleEndPos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
         }
-        else if (parser.MaxFailPos > curTextPos)
-          AddResult(curTextPos, pos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
         else if (pos < 0 && nextState < 0)
         {
           // последнее состояние. Надо попытаться допарсить
@@ -194,8 +194,10 @@ namespace N2.DebugStrategies
           if (pos2 > curTextPos || isPrefixParsed)
             AddResult(curTextPos, pos, pos2, -1, recoveryStack, text, startTextPos);
         }
-        else if (stackFrame.FailState == state && subruleLevel <= 0)
+        else if (stackFrame.FailState == state && subruleLevel <= 1 && !stackFrame.RuleParser.IsTokenRule)
           TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel);
+        if (parser.MaxFailPos > curTextPos)
+          AddResult(curTextPos, pos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
       }
     }
 
@@ -223,6 +225,9 @@ namespace N2.DebugStrategies
 
       foreach (var subRuleParser in parsers)
       {
+        if (subRuleParser.IsTokenRule)
+          continue;
+
         var old = recoveryStack;
         recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
         _recCount++;
@@ -254,9 +259,9 @@ namespace N2.DebugStrategies
       {
         return;
       }
-
-      if (newResult.RuleEndPos   >= 0 && newResult.RecoveredHead == _bestResult.RecoveredHead && newResult.RecoveredTailCount > 0 && _bestResult.RecoveredTailCount <= 0) goto good; // если у newResult есть продолжение, а у _bestResult нет
-      if (_bestResult.RuleEndPos >= 0 && newResult.RecoveredHead == _bestResult.RecoveredHead && newResult.RecoveredTailCount <= 0 && _bestResult.RecoveredTailCount > 0) return;    // если у _bestResult есть продолжение, а у newResult нет
+      
+      if (newResult.RuleEndPos   >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount > 0  && _bestResult.RecoveredTailCount <= 0) goto good; // если у newResult есть продолжение, а у _bestResult нет
+      if (_bestResult.RuleEndPos >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount <= 0 && _bestResult.RecoveredTailCount > 0) return;    // если у _bestResult есть продолжение, а у newResult нет
 
       if (stack.Tail == _bestResult.Stack.Tail)
       {
