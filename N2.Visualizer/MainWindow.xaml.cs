@@ -20,6 +20,7 @@ using N2.Internal;
 using N2.Runtime.Reflection;
 using N2.DebugStrategies;
 using N2.Visualizer.Properties;
+using System.Diagnostics;
 
 namespace N2.Visualizer
 {
@@ -40,6 +41,14 @@ namespace N2.Visualizer
     N2FoldingStrategy _foldingStrategy;
     FoldingManager _foldingManager;
     ToolTip _textBox1Tooltip;
+    bool _needUpdateReflection;
+    bool _needUpdateHtmlPrettyPrint;
+    bool _needUpdateTextPrettyPrint;
+    bool _needUpdatePerformance;
+    Ast _ast;
+    TimeSpan _parseTimeSpan;
+    TimeSpan _astTimeSpan;
+    TimeSpan _highlightingTimeSpan;
 
     public MainWindow()
     {
@@ -123,6 +132,9 @@ namespace N2.Visualizer
       if (_doTreeOperation)
         return;
 
+      if (_tabControl.SelectedItem != _reflectionTabItem)
+        return;
+
       _doChangeCaretPos = true;
       try
       {
@@ -185,35 +197,94 @@ namespace N2.Visualizer
       }
     }
 
+
     void ShowInfo()
+    {
+      _needUpdateReflection      = true;
+      _needUpdateHtmlPrettyPrint = true;
+      _needUpdateTextPrettyPrint = true;
+      _needUpdatePerformance     = true;
+      _ast                       = null;
+
+      UpdateInfo();
+    }
+
+    void UpdateInfo()
     {
       try
       {
-        treeView1.Items.Clear();
-
-        if (_parseResult == null)
-          return;
-
-        var root = _parseResult.Reflect();
-        var treeNode = new TreeViewItem();
-        treeNode.Expanded += new RoutedEventHandler(node_Expanded);
-        treeNode.Header = root.Description;
-        treeNode.Tag = root;
-        if (root.Children.Count != 0)
-          treeNode.Items.Add(new TreeViewItem());
-        treeView1.Items.Add(treeNode);
-
-        var ast = _parseResult.CreateAst();
-
-        var options = PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes;
-        prettyPrintTextBox.Text = ast.ToString(options);
-
-        var htmlWriter = new HtmlPrettyPrintWriter(options, "missing", "debug");
-        ast.PrettyPrint(htmlWriter);
-        var html = Properties.Resources.PrettyPrintDoughnut.Replace("{prettyprint}", htmlWriter.ToString());
-        prettyPrintViewer.NavigateToString(html);
+        if (_needUpdateReflection && _tabControl.SelectedItem == _reflectionTabItem)
+          UpdateReflection();
+        else if (_needUpdateHtmlPrettyPrint && _tabControl.SelectedItem == _htmlPrettyPrintTabItem)
+          UpdateHtmlPrettyPrint();
+        else if (_needUpdateTextPrettyPrint && _tabControl.SelectedItem == _textPrettyPrintTabItem)
+          UpdateTextPrettyPrint();
+        else if (_needUpdatePerformance && _tabControl.SelectedItem == _performanceTabItem)
+          UpdatePerformance();
       }
       catch { }
+    }
+
+    private void UpdatePerformance()
+    {
+      _needUpdatePerformance = false;
+      if (_calcAstTime.IsChecked == true)
+        UpdateAst();
+
+      _totalTime.Text = (_parseTimeSpan + _astTimeSpan + _foldingStrategy.TimeSpan + _highlightingTimeSpan).ToString();
+    }
+
+    private void UpdateAst()
+    {
+      if (_ast == null)
+      {
+        var timer = Stopwatch.StartNew();
+        _ast = _parseResult.CreateAst();
+        _astTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
+      }
+    }
+
+    private void UpdateReflection()
+    {
+      _needUpdateReflection = false;
+
+      treeView1.Items.Clear();
+
+      if (_parseResult == null)
+        return;
+
+      var root = _parseResult.Reflect();
+      var treeNode = new TreeViewItem();
+      treeNode.Expanded += new RoutedEventHandler(node_Expanded);
+      treeNode.Header = root.Description;
+      treeNode.Tag = root;
+      if (root.Children.Count != 0)
+        treeNode.Items.Add(new TreeViewItem());
+      treeView1.Items.Add(treeNode);
+    }
+
+    private void UpdateHtmlPrettyPrint()
+    {
+      _needUpdateHtmlPrettyPrint = false;
+
+      if (_ast == null)
+        _ast = _parseResult.CreateAst();
+
+      var htmlWriter = new HtmlPrettyPrintWriter(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes, "missing", "debug");
+      _ast.PrettyPrint(htmlWriter);
+      var html = Properties.Resources.PrettyPrintDoughnut.Replace("{prettyprint}", htmlWriter.ToString());
+      prettyPrintViewer.NavigateToString(html);
+    }
+
+    private void UpdateTextPrettyPrint()
+    {
+      _needUpdateTextPrettyPrint = false;
+
+      if (_ast == null)
+        _ast = _parseResult.CreateAst();
+
+      var options = PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes;
+      prettyPrintTextBox.Text = _ast.ToString(options);
     }
 
     void Fill(ItemCollection treeNodes, ReadOnlyCollection<ReflectionStruct> nodes)
@@ -380,15 +451,21 @@ namespace N2.Visualizer
 
         var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
 
+        var timer = Stopwatch.StartNew();
+
         if (simpleRule != null)
           _parseResult = _parserHost.DoParsing(source, simpleRule);
         else
           _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
 
+        _astTimeSpan = timer.Elapsed;
+        _parseTime.Text = _astTimeSpan.ToString();
+
         _text.TextArea.TextView.Redraw(DispatcherPriority.Input);
 
         _foldingStrategy.Parser = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
+        _outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
 
         TryReportError();
         ShowInfo();
@@ -412,7 +489,11 @@ namespace N2.Visualizer
 
       var line = e.Line;
       var spans = new List<SpanInfo>();
+      var timer = Stopwatch.StartNew();
       _parseResult.GetSpans(line.Offset, line.EndOffset, spans);
+      _highlightingTimeSpan = timer.Elapsed;
+      _highlightingTime.Text = _highlightingTimeSpan.ToString();
+
       foreach (var span in spans)
       {
         HighlightingColor color;
@@ -558,6 +639,12 @@ namespace N2.Visualizer
     private StringComparison GetMatchCaseOption()
     {
       return _findMatchCase.IsChecked ?? false ? StringComparison.InvariantCulture : StringComparison.InvariantCultureIgnoreCase;
+    }
+
+    private void _tabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+      UpdateInfo();
+      ShowNodeForCaret();
     }
   }
 }
