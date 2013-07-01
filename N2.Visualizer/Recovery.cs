@@ -86,7 +86,7 @@ namespace N2.DebugStrategies
         // Но при этом _bestResult не должен содержать вариантов где в _bestResult.Recovered находятся только пробелы (void-правила).
         curTextPos++;
       }
-      while (curTextPos <= text.Length); // curTextPos - startTextPos < 800 && 
+      while (curTextPos - startTextPos < 400 && curTextPos <= text.Length); 
 
       timer.Stop();
 
