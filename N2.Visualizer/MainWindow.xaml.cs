@@ -240,7 +240,7 @@ namespace N2.Visualizer
       {
         var timer = Stopwatch.StartNew();
         _ast = _parseResult.CreateAst();
-        _astTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
+        _astTime.Text = (_astTimeSpan = timer.Elapsed).ToString();
       }
     }
 
@@ -458,8 +458,7 @@ namespace N2.Visualizer
         else
           _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
 
-        _astTimeSpan = timer.Elapsed;
-        _parseTime.Text = _astTimeSpan.ToString();
+        _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
 
         _text.TextArea.TextView.Redraw(DispatcherPriority.Input);
 
