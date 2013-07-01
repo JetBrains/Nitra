@@ -646,5 +646,17 @@ namespace N2.Visualizer
       UpdateInfo();
       ShowNodeForCaret();
     }
+
+    private void _copyButton_Click(object sender, RoutedEventArgs e)
+    {
+      var text =string.Format(@"              Parse took: {0}
+AST materialisation took: {1}
+          Outlining took: {2}
+       Highlighting took: {3}
+                   Total: {4}", _parseTimeSpan, _astTimeSpan, _foldingStrategy.TimeSpan, _highlightingTimeSpan,
+                              _parseTimeSpan + _astTimeSpan + _foldingStrategy.TimeSpan + _highlightingTimeSpan);
+      Clipboard.SetData(DataFormats.Text, text);
+      Clipboard.SetData(DataFormats.UnicodeText, text);
+    }
   }
 }
