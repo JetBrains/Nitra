@@ -53,6 +53,7 @@ namespace N2.Visualizer
     public MainWindow()
     {
       InitializeComponent();
+      _tabControl.SelectedItem = _performanceTabItem;
       _findGrid.Visibility = System.Windows.Visibility.Collapsed;
       _foldingStrategy = new N2FoldingStrategy();
       _textBox1Tooltip = new ToolTip() { PlacementTarget = _text };
@@ -451,6 +452,7 @@ namespace N2.Visualizer
 
         var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
 
+        Recovery.Init();
         var timer = Stopwatch.StartNew();
 
         if (simpleRule != null)
@@ -464,7 +466,23 @@ namespace N2.Visualizer
 
         _foldingStrategy.Parser = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
-        _outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
+
+        _outliningTime.Text         = _foldingStrategy.TimeSpan.ToString();
+
+        _recoveryTime.Text          = Recovery.Timer.Elapsed.ToString();
+        _recoveryCount.Text         = Recovery.Count.ToString();
+
+        _continueParseTime.Text     = Recovery.ContinueParseTime.ToString();
+        _continueParseCount.Text    = Recovery.ContinueParseCount.ToString();
+
+        _tryParseSubrulesTime.Text  = Recovery.TryParseSubrulesTime.ToString();
+        _tryParseSubrulesCount.Text = Recovery.TryParseSubrulesCount.ToString();
+
+        _tryParseTime.Text          = Recovery.TryParseTime.ToString();
+        _tryParseCount.Text         = Recovery.TryParseCount.ToString();
+
+        _tryParseNoCacheTime.Text   = Recovery.TryParseNoCacheTime.ToString();
+        _tryParseNoCacheCount.Text  = Recovery.TryParseNoCacheCount.ToString();
 
         TryReportError();
         ShowInfo();
@@ -648,14 +666,37 @@ namespace N2.Visualizer
 
     private void _copyButton_Click(object sender, RoutedEventArgs e)
     {
-      var text =string.Format(@"              Parse took: {0}
+      var labels = new List<string>();
+      var values = new List<string>();
+
+      foreach (var item in _performanceGrid.Children)
+      {
+        var label = item as Label;
+        if (label != null)
+          labels.Add(label.Content.ToString());
+
+        if (item is Button)
+          continue;
+
+        var text = item as TextBlock;
+        if (text != null)
+          values.Add(text.Text);
+
+        var checkBox = item as CheckBox;
+        if (checkBox != null)
+          values.Add(checkBox.IsChecked.ToString());
+      }
+
+
+
+      var result =string.Format(@"              Parse took: {0}
 AST materialisation took: {1}
           Outlining took: {2}
        Highlighting took: {3}
                    Total: {4}", _parseTimeSpan, _astTimeSpan, _foldingStrategy.TimeSpan, _highlightingTimeSpan,
                               _parseTimeSpan + _astTimeSpan + _foldingStrategy.TimeSpan + _highlightingTimeSpan);
-      Clipboard.SetData(DataFormats.Text, text);
-      Clipboard.SetData(DataFormats.UnicodeText, text);
+      Clipboard.SetData(DataFormats.Text, result);
+      Clipboard.SetData(DataFormats.UnicodeText, result);
     }
   }
 }
