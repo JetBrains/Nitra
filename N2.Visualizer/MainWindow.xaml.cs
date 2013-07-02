@@ -260,6 +260,7 @@ namespace N2.Visualizer
       treeNode.Expanded += new RoutedEventHandler(node_Expanded);
       treeNode.Header = root.Description;
       treeNode.Tag = root;
+      treeNode.ContextMenu = (ContextMenu)Resources["TreeContextMenu"];
       if (root.Children.Count != 0)
         treeNode.Items.Add(new TreeViewItem());
       treeView1.Items.Add(treeNode);
@@ -764,6 +765,18 @@ namespace N2.Visualizer
 
       Clipboard.SetData(DataFormats.Text, result);
       Clipboard.SetData(DataFormats.UnicodeText, result);
+    }
+
+    private void CopyNodeText(object sender, ExecutedRoutedEventArgs e)
+    {
+      var value = treeView1.SelectedValue as TreeViewItem;
+
+      if (value != null)
+      {
+        var result = value.Header.ToString();
+        Clipboard.SetData(DataFormats.Text, result);
+        Clipboard.SetData(DataFormats.UnicodeText, result);
+      }
     }
   }
 }
