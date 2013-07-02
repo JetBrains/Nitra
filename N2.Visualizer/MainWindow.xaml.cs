@@ -21,6 +21,7 @@ using N2.Runtime.Reflection;
 using N2.DebugStrategies;
 using N2.Visualizer.Properties;
 using System.Diagnostics;
+using System.Text;
 
 namespace N2.Visualizer
 {
@@ -664,37 +665,99 @@ namespace N2.Visualizer
       ShowNodeForCaret();
     }
 
-    private void _copyButton_Click(object sender, RoutedEventArgs e)
+    public Tuple<string, string>[] GetRowsForColumn(int colIndex)
     {
-      var labels = new List<string>();
-      var values = new List<string>();
+      var result = new List<Tuple<string, string>>();
 
-      foreach (var item in _performanceGrid.Children)
+      foreach (var g in _performanceGrid.Children.OfType<UIElement>().GroupBy(x => Grid.GetRow(x)).OrderBy(x => x.Key))
       {
-        var label = item as Label;
-        if (label != null)
-          labels.Add(label.Content.ToString());
+        string label = null;
+        string value = null;
 
-        if (item is Button)
+        foreach (var uiElem in g)
+        {
+          int col = Grid.GetColumn(uiElem);
+
+          if (col == colIndex)
+          {
+            var labelElem = uiElem as Label;
+            if (labelElem != null)
+              label = labelElem.Content.ToString();
+
+            var checkBox = uiElem as CheckBox;
+            if (checkBox != null)
+              label = checkBox.Content.ToString();
+          }
+
+          if (col == colIndex + 1)
+          {
+            var text = uiElem as TextBlock;
+            if (text != null)
+              value = text.Text;
+          }
+
+        }
+
+        if (label == null && value == null)
           continue;
 
-        var text = item as TextBlock;
-        if (text != null)
-          values.Add(text.Text);
-
-        var checkBox = item as CheckBox;
-        if (checkBox != null)
-          values.Add(checkBox.IsChecked.ToString());
+        Debug.Assert(label != null);
+        Debug.Assert(value != null);
+        result.Add(Tuple.Create(label, value));
       }
 
+      return result.ToArray();
+    }
 
+    private static string MakeStr(string str, int maxLen)
+    {
+      var padding = maxLen - str.Length + 1;
+      return new string(' ', padding) + str;
+    }
 
-      var result =string.Format(@"              Parse took: {0}
-AST materialisation took: {1}
-          Outlining took: {2}
-       Highlighting took: {3}
-                   Total: {4}", _parseTimeSpan, _astTimeSpan, _foldingStrategy.TimeSpan, _highlightingTimeSpan,
-                              _parseTimeSpan + _astTimeSpan + _foldingStrategy.TimeSpan + _highlightingTimeSpan);
+    private string[][] MakePerfData()
+    {
+      var len = _performanceGrid.ColumnDefinitions.Count / 2;
+      var cols = new Tuple<string, string>[len][];
+      var maxLabelLen = new int[len];
+      var maxValueLen = new int[len];
+
+      for (int col = 0; col < len; col++)
+      {
+        var colData = GetRowsForColumn(col * 2);
+        cols[col] = colData.ToArray();
+        maxLabelLen[col] = colData.Max(x => x.Item1.Length);
+        maxValueLen[col] = colData.Max(x => x.Item2.Length);
+      }
+
+      string[][] strings = new string[len][];
+
+      for (int col = 0; col < len; col++)
+      {
+        strings[col] = new string[cols[col].Length];
+        for (int row = 0; row < strings[col].Length; row++)
+          strings[col][row] = MakeStr(cols[col][row].Item1, maxLabelLen[col]) + MakeStr(cols[col][row].Item2, maxValueLen[col]);
+      }
+
+      return strings;
+    }
+
+    private void _copyButton_Click(object sender, RoutedEventArgs e)
+    {
+      var rows = _performanceGrid.RowDefinitions.Count - 1;
+      var data = MakePerfData();
+      var cols = data.Length;
+      var sb = new StringBuilder();
+
+      for (int row = 0; row < rows; row++)
+      {
+        for (int col = 0; col < cols; col++)
+          sb.Append(data[col][row]);
+        sb.AppendLine();
+      }
+
+      var result = sb.ToString();
+
       Clipboard.SetData(DataFormats.Text, result);
       Clipboard.SetData(DataFormats.UnicodeText, result);
     }
