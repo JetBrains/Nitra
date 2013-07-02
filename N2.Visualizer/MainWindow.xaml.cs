@@ -752,7 +752,11 @@ namespace N2.Visualizer
       for (int row = 0; row < rows; row++)
       {
         for (int col = 0; col < cols; col++)
+        {
           sb.Append(data[col][row]);
+          if (col != cols)
+            sb.Append(" │");
+        }
         sb.AppendLine();
       }
 
