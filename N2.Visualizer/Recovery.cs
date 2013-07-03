@@ -101,19 +101,17 @@ namespace N2.DebugStrategies
         {
           _recoveryStack = stack as RecoveryStack;
 
-          var before = parser.Text.Substring(0, startTextPos); // DEBUG
-          if (before == "[\r\n  { : 1},\r\n  { a },\r\n  { a: },\r\n  { a:, },\r\n  { \r\n  'a':, \r\n  a:1\r\n  },\r\n  {a::2,:},\r\n  {a# :1}, \r\n  {a") // DEBUG
-          {
-            Debug.Assert(true);
-          }
+          //var before = parser.Text.Substring(0, startTextPos); // DEBUG
+          //if (before == "[\r\n  { : 1},\r\n  { a },\r\n  { a: },\r\n  { a:, },\r\n  { \r\n  'a':, \r\n  a:1\r\n  },\r\n  {a::2,:},\r\n  {a# :1}, \r\n  {a") // DEBUG
+          //{
+          //  Debug.Assert(true);
+          //}
 
           ProcessStackFrame(startTextPos, parser, _recoveryStack, curTextPos, text, 0);
         }
-        // Здес нужно прерывать цикл, если _bestResult != null. 
-        // Но при этом _bestResult не должен содержать вариантов где в _bestResult.Recovered находятся только пробелы (void-правила).
         curTextPos++;
       }
-      while (curTextPos - startTextPos < 400 && curTextPos <= text.Length);
+      while (_bestResult == null && curTextPos <= text.Length); // && curTextPos - startTextPos < 400 
 
       timer.Stop();
 
