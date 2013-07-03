@@ -20,6 +20,8 @@ using N2.Internal;
 using N2.Runtime.Reflection;
 using N2.DebugStrategies;
 using N2.Visualizer.Properties;
+using System.Diagnostics;
+using System.Text;
 
 namespace N2.Visualizer
 {
@@ -40,10 +42,19 @@ namespace N2.Visualizer
     N2FoldingStrategy _foldingStrategy;
     FoldingManager _foldingManager;
     ToolTip _textBox1Tooltip;
+    bool _needUpdateReflection;
+    bool _needUpdateHtmlPrettyPrint;
+    bool _needUpdateTextPrettyPrint;
+    bool _needUpdatePerformance;
+    Ast _ast;
+    TimeSpan _parseTimeSpan;
+    TimeSpan _astTimeSpan;
+    TimeSpan _highlightingTimeSpan;
 
     public MainWindow()
     {
       InitializeComponent();
+      _tabControl.SelectedItem = _performanceTabItem;
       _findGrid.Visibility = System.Windows.Visibility.Collapsed;
       _foldingStrategy = new N2FoldingStrategy();
       _textBox1Tooltip = new ToolTip() { PlacementTarget = _text };
@@ -123,6 +134,9 @@ namespace N2.Visualizer
       if (_doTreeOperation)
         return;
 
+      if (_tabControl.SelectedItem != _reflectionTabItem)
+        return;
+
       _doChangeCaretPos = true;
       try
       {
@@ -185,35 +199,95 @@ namespace N2.Visualizer
       }
     }
 
+
     void ShowInfo()
+    {
+      _needUpdateReflection      = true;
+      _needUpdateHtmlPrettyPrint = true;
+      _needUpdateTextPrettyPrint = true;
+      _needUpdatePerformance     = true;
+      _ast                       = null;
+
+      UpdateInfo();
+    }
+
+    void UpdateInfo()
     {
       try
       {
-        treeView1.Items.Clear();
-
-        if (_parseResult == null)
-          return;
-
-        var root = _parseResult.Reflect();
-        var treeNode = new TreeViewItem();
-        treeNode.Expanded += new RoutedEventHandler(node_Expanded);
-        treeNode.Header = root.Description;
-        treeNode.Tag = root;
-        if (root.Children.Count != 0)
-          treeNode.Items.Add(new TreeViewItem());
-        treeView1.Items.Add(treeNode);
-
-        var ast = _parseResult.CreateAst();
-
-        var options = PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes;
-        prettyPrintTextBox.Text = ast.ToString(options);
-
-        var htmlWriter = new HtmlPrettyPrintWriter(options, "missing", "debug");
-        ast.PrettyPrint(htmlWriter);
-        var html = Properties.Resources.PrettyPrintDoughnut.Replace("{prettyprint}", htmlWriter.ToString());
-        prettyPrintViewer.NavigateToString(html);
+        if (_needUpdateReflection && _tabControl.SelectedItem == _reflectionTabItem)
+          UpdateReflection();
+        else if (_needUpdateHtmlPrettyPrint && _tabControl.SelectedItem == _htmlPrettyPrintTabItem)
+          UpdateHtmlPrettyPrint();
+        else if (_needUpdateTextPrettyPrint && _tabControl.SelectedItem == _textPrettyPrintTabItem)
+          UpdateTextPrettyPrint();
+        else if (_needUpdatePerformance && _tabControl.SelectedItem == _performanceTabItem)
+          UpdatePerformance();
       }
       catch { }
+    }
+
+    private void UpdatePerformance()
+    {
+      _needUpdatePerformance = false;
+      if (_calcAstTime.IsChecked == true)
+        UpdateAst();
+
+      _totalTime.Text = (_parseTimeSpan + _astTimeSpan + _foldingStrategy.TimeSpan + _highlightingTimeSpan).ToString();
+    }
+
+    private void UpdateAst()
+    {
+      if (_ast == null)
+      {
+        var timer = Stopwatch.StartNew();
+        _ast = _parseResult.CreateAst();
+        _astTime.Text = (_astTimeSpan = timer.Elapsed).ToString();
+      }
+    }
+
+    private void UpdateReflection()
+    {
+      _needUpdateReflection = false;
+
+      treeView1.Items.Clear();
+
+      if (_parseResult == null)
+        return;
+
+      var root = _parseResult.Reflect();
+      var treeNode = new TreeViewItem();
+      treeNode.Expanded += new RoutedEventHandler(node_Expanded);
+      treeNode.Header = root.Description;
+      treeNode.Tag = root;
+      treeNode.ContextMenu = (ContextMenu)Resources["TreeContextMenu"];
+      if (root.Children.Count != 0)
+        treeNode.Items.Add(new TreeViewItem());
+      treeView1.Items.Add(treeNode);
+    }
+
+    private void UpdateHtmlPrettyPrint()
+    {
+      _needUpdateHtmlPrettyPrint = false;
+
+      if (_ast == null)
+        _ast = _parseResult.CreateAst();
+
+      var htmlWriter = new HtmlPrettyPrintWriter(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes, "missing", "debug");
+      _ast.PrettyPrint(htmlWriter);
+      var html = Properties.Resources.PrettyPrintDoughnut.Replace("{prettyprint}", htmlWriter.ToString());
+      prettyPrintViewer.NavigateToString(html);
+    }
+
+    private void UpdateTextPrettyPrint()
+    {
+      _needUpdateTextPrettyPrint = false;
+
+      if (_ast == null)
+        _ast = _parseResult.CreateAst();
+
+      var options = PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes;
+      prettyPrintTextBox.Text = _ast.ToString(options);
     }
 
     void Fill(ItemCollection treeNodes, ReadOnlyCollection<ReflectionStruct> nodes)
@@ -380,15 +454,37 @@ namespace N2.Visualizer
 
         var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
 
+        Recovery.Init();
+        var timer = Stopwatch.StartNew();
+
         if (simpleRule != null)
           _parseResult = _parserHost.DoParsing(source, simpleRule);
         else
           _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
 
+        _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
+
         _text.TextArea.TextView.Redraw(DispatcherPriority.Input);
 
         _foldingStrategy.Parser = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
+
+        _outliningTime.Text         = _foldingStrategy.TimeSpan.ToString();
+
+        _recoveryTime.Text          = Recovery.Timer.Elapsed.ToString();
+        _recoveryCount.Text         = Recovery.Count.ToString();
+
+        _continueParseTime.Text     = Recovery.ContinueParseTime.ToString();
+        _continueParseCount.Text    = Recovery.ContinueParseCount.ToString();
+
+        _tryParseSubrulesTime.Text  = Recovery.TryParseSubrulesTime.ToString();
+        _tryParseSubrulesCount.Text = Recovery.TryParseSubrulesCount.ToString();
+
+        _tryParseTime.Text          = Recovery.TryParseTime.ToString();
+        _tryParseCount.Text         = Recovery.TryParseCount.ToString();
+
+        _tryParseNoCacheTime.Text   = Recovery.TryParseNoCacheTime.ToString();
+        _tryParseNoCacheCount.Text  = Recovery.TryParseNoCacheCount.ToString();
 
         TryReportError();
         ShowInfo();
@@ -412,7 +508,11 @@ namespace N2.Visualizer
 
       var line = e.Line;
       var spans = new List<SpanInfo>();
+      var timer = Stopwatch.StartNew();
       _parseResult.GetSpans(line.Offset, line.EndOffset, spans);
+      _highlightingTimeSpan = timer.Elapsed;
+      _highlightingTime.Text = _highlightingTimeSpan.ToString();
+
       foreach (var span in spans)
       {
         HighlightingColor color;
@@ -558,6 +658,125 @@ namespace N2.Visualizer
     private StringComparison GetMatchCaseOption()
     {
       return _findMatchCase.IsChecked ?? false ? StringComparison.InvariantCulture : StringComparison.InvariantCultureIgnoreCase;
+    }
+
+    private void _tabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+      UpdateInfo();
+      ShowNodeForCaret();
+    }
+
+    public Tuple<string, string>[] GetRowsForColumn(int colIndex)
+    {
+      var result = new List<Tuple<string, string>>();
+
+      foreach (var g in _performanceGrid.Children.OfType<UIElement>().GroupBy(x => Grid.GetRow(x)).OrderBy(x => x.Key))
+      {
+        string label = null;
+        string value = null;
+
+        foreach (var uiElem in g)
+        {
+          int col = Grid.GetColumn(uiElem);
+
+          if (col == colIndex)
+          {
+            var labelElem = uiElem as Label;
+            if (labelElem != null)
+              label = labelElem.Content.ToString();
+
+            var checkBox = uiElem as CheckBox;
+            if (checkBox != null)
+              label = checkBox.Content.ToString();
+          }
+
+          if (col == colIndex + 1)
+          {
+            var text = uiElem as TextBlock;
+            if (text != null)
+              value = text.Text;
+          }
+
+        }
+
+        if (label == null && value == null)
+          continue;
+
+        Debug.Assert(label != null);
+        Debug.Assert(value != null);
+        result.Add(Tuple.Create(label, value));
+      }
+
+      return result.ToArray();
+    }
+
+    private static string MakeStr(string str, int maxLen)
+    {
+      var padding = maxLen - str.Length + 1;
+      return new string(' ', padding) + str;
+    }
+
+    private string[][] MakePerfData()
+    {
+      var len = _performanceGrid.ColumnDefinitions.Count / 2;
+      var cols = new Tuple<string, string>[len][];
+      var maxLabelLen = new int[len];
+      var maxValueLen = new int[len];
+
+      for (int col = 0; col < len; col++)
+      {
+        var colData = GetRowsForColumn(col * 2);
+        cols[col] = colData.ToArray();
+        maxLabelLen[col] = colData.Max(x => x.Item1.Length);
+        maxValueLen[col] = colData.Max(x => x.Item2.Length);
+      }
+
+      string[][] strings = new string[len][];
+
+      for (int col = 0; col < len; col++)
+      {
+        strings[col] = new string[cols[col].Length];
+        for (int row = 0; row < strings[col].Length; row++)
+          strings[col][row] = MakeStr(cols[col][row].Item1, maxLabelLen[col]) + MakeStr(cols[col][row].Item2, maxValueLen[col]);
+      }
+
+      return strings;
+    }
+
+    private void _copyButton_Click(object sender, RoutedEventArgs e)
+    {
+      var rows = _performanceGrid.RowDefinitions.Count - 1;
+      var data = MakePerfData();
+      var cols = data.Length;
+      var sb = new StringBuilder();
+
+      for (int row = 0; row < rows; row++)
+      {
+        for (int col = 0; col < cols; col++)
+        {
+          sb.Append(data[col][row]);
+          if (col != cols - 1)
+            sb.Append(" │");
+        }
+        sb.AppendLine();
+      }
+
+      var result = sb.ToString();
+
+      Clipboard.SetData(DataFormats.Text, result);
+      Clipboard.SetData(DataFormats.UnicodeText, result);
+    }
+
+    private void CopyNodeText(object sender, ExecutedRoutedEventArgs e)
+    {
+      var value = treeView1.SelectedValue as TreeViewItem;
+
+      if (value != null)
+      {
+        var result = value.Header.ToString();
+        Clipboard.SetData(DataFormats.Text, result);
+        Clipboard.SetData(DataFormats.UnicodeText, result);
+      }
     }
   }
 }

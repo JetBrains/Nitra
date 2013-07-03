@@ -1,11 +1,8 @@
 ﻿using N2;
+using N2.Tests;
 
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.IO;
-
-using N2.Tests;
 
 namespace Sample.Json.Cs
 {
@@ -16,9 +13,7 @@ namespace Sample.Json.Cs
       if (args.Length > 0)
         text = File.ReadAllText(args[0]);
 
-      var source = new SourceSnapshot(text);
-      var parserHost = new ParserHost();
-      var parseResult = JsonParser.Start(source, parserHost);
+      var parseResult = JsonParser.Start(new SourceSnapshot(text), new ParserHost());
 
       if (parseResult.IsSuccess)
       {

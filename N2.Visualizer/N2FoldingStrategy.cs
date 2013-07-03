@@ -5,11 +5,14 @@ using System.Text;
 using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Document;
 using N2.Internal;
+using System.Diagnostics;
 
 namespace N2.Visualizer
 {
   public sealed class N2FoldingStrategy : AbstractFoldingStrategy
   {
+    public TimeSpan TimeSpan { get; private set; }
+
     public override IEnumerable<NewFolding> CreateNewFoldings(TextDocument document, out int firstErrorOffset)
     {
       var parseResult = Parser;
@@ -19,8 +22,10 @@ namespace N2.Visualizer
         return Enumerable.Empty<NewFolding>();
       }
 
+      var timer = Stopwatch.StartNew();
       var outlining = new List<OutliningInfo>();
       parseResult.GetOutlining(outlining);
+      TimeSpan = timer.Elapsed;
 
       var result = new List<NewFolding>();
       foreach (var o in outlining)
