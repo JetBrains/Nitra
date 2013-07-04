@@ -80,6 +80,7 @@ namespace N2.DebugStrategies
       var timer = System.Diagnostics.Stopwatch.StartNew();
       var curTextPos = startTextPos;
       var text = parser.Text;
+      Debug.Assert(parser.RecoveryStacks.Count > 0);
       var stacks = PrepareStacks(parser);
 
       //var infos = parser.ParserHost.Reflection(parser, startTextPos);
@@ -278,8 +279,8 @@ namespace N2.DebugStrategies
         }
         else if (stackFrame.FailState == state && subruleLevel <= 1 && !stackFrame.RuleParser.IsTokenRule)
           TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel);
-        if (parser.MaxFailPos > curTextPos)
-          AddResult(curTextPos, pos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
+        //if (parser.MaxFailPos > curTextPos)
+        //  AddResult(curTextPos, pos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
       }
     }
 
@@ -379,16 +380,19 @@ namespace N2.DebugStrategies
       stackLength = stack.Length;
       var bestResultStackLength = this._bestResult.StackLength;
 
-      //if (stack.Head.AstPtr == 0 && _bestResult.Stack.Head.AstPtr != 0) return;
+      var result = CompareStack(stack, _bestResult.Stack);
+      if (result > 0)  goto good;
+      if (result < 0) return;
 
-      if (stackLength < bestResultStackLength) goto good;
-      if (stackLength > bestResultStackLength)    return;
+      // Это все чушь. Стеки можно сравнивать только от корня.
+      //if (stackLength < bestResultStackLength) goto good;
+      //if (stackLength > bestResultStackLength)    return;
 
-      if (startState < _bestResult.StartState) goto good;
-      if (startState > _bestResult.StartState) return;
+      //if (startState < _bestResult.StartState) goto good;
+      //if (startState > _bestResult.StartState) return;
 
-      if (stack.Head.FailState > _bestResult.Stack.Head.FailState) goto good;
-      if (stack.Head.FailState < _bestResult.Stack.Head.FailState) return;
+      //if (stack.Head.FailState > _bestResult.Stack.Head.FailState) goto good;
+      //if (stack.Head.FailState < _bestResult.Stack.Head.FailState) return;
 
       if (endPos > _bestResult.EndPos) goto good;
       if (endPos < _bestResult.EndPos) return;
@@ -402,6 +406,57 @@ namespace N2.DebugStrategies
     good2:
       _bestResults.Add(new RecoveryResult(startPos, ruleEndPos, endPos, startState, stackLength, stack, text, failPos));
       return;
+    }
+
+    /// <returns>0 - стеки равны или несравнимы, 1 - первый стек лучше второго, -1 второй стек лучше.</returns>
+    public static int CompareStack(RecoveryStack stack1, RecoveryStack stack2)
+    {
+      var len1 = stack1.Length;
+      var len2 = stack2.Length;
+      var len = Math.Min(len1, len2);
+
+      if (len1 != len2) // отбрасываем "лишние" элементы самого длинного цикла.
+        if (len1 == len)
+          stack2 = SkipN(stack2, len2 - len1);
+        else
+          stack1 = SkipN(stack1, len1 - len2);
+
+      var result = CompareStackImpl(stack1, stack2);
+
+      if (result == 0)
+        return len2 - len1; // если корни стеков равны, то лучше более короткий стек, так как более длинный является спекулятивным (более корткие постеки выкидываются вначале обработки)
+
+      return result;
+    }
+
+    private static int CompareStackImpl(RecoveryStack stack1, RecoveryStack stack2)
+    {
+      if (stack1.tl.IsEmpty)
+        return 0;
+      else
+      {
+        var result = CompareStackImpl((RecoveryStack)stack1.tl, (RecoveryStack)stack2.tl);
+
+        if (result == 0)
+        {
+          var x = stack1.hd;
+          var y = stack2.hd;
+
+          if (x.RuleParser != y.RuleParser)
+            return 0; // стеки несравнимы
+
+          return y.FailState - x.FailState; // лучше фрэйм с меньшим значением FailState
+        }
+        else
+          return result;
+      }
+    }
+
+    private static RecoveryStack SkipN(RecoveryStack stack, int n)
+    {
+      for (int i = 0; i < n; i++)
+        stack = (RecoveryStack)stack.tl;
+      return stack;
     }
 
     int ContinueParse(int startTextPos, RecoveryStack recoveryStack, Parser parser, string text, bool trySkipStates)
