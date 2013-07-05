@@ -180,6 +180,8 @@ namespace N2.Visualizer
     {
       ClearMarkers();
 
+      _errorsTreeView.Items.Clear();
+
       if (_parseResult.IsSuccess)
       {
         _status.Text = "OK";
@@ -187,6 +189,8 @@ namespace N2.Visualizer
       else
       {
         var errors = _parseResult.GetErrors();
+        var errorNodes = _errorsTreeView.Items;
+
         foreach (ParseError error in errors)
         {
           var location = error.Location;
@@ -194,9 +198,32 @@ namespace N2.Visualizer
           marker.MarkerType = TextMarkerType.SquigglyUnderline;
           marker.MarkerColor = Colors.Red;
           marker.ToolTip = error.Message + "\r\n\r\n" + error.DebugText;
+
+          var errorNode = new TreeViewItem();
+          errorNode.Header = "(" + error.Location.EndLineColumn + "): " + error.Message;
+          errorNode.Tag = error;
+          errorNode.MouseDoubleClick += new MouseButtonEventHandler(errorNode_MouseDoubleClick);
+
+          var subNode = new TreeViewItem();
+          subNode.FontSize = 12;
+          subNode.Header = error.DebugText;
+          errorNode.Items.Add(subNode);
+
+          errorNodes.Add(errorNode);
         }
-        _status.Text = "Parsing completed with errors";
+
+        _status.Text = "Parsing completed with " + errors.Length + "error[s]";
       }
+    }
+
+    void errorNode_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+      var node = (TreeViewItem)sender;
+      var error = (ParseError)node.Tag;
+      _text.CaretOffset = error.Location.StartPos;
+      _text.Select(error.Location.StartPos, error.Location.Length);
+      e.Handled = true;
+      _text.Focus();
     }
 
 
