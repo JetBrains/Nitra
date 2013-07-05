@@ -224,7 +224,7 @@ namespace N2.DebugStrategies
         //if (!isPrefixParsed)
         //  continue;
 
-        if (nextState < 0 && !isPrefixParsed)
+        if (!isPrefixParsed) //nextState < 0 && 
         {
           var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state);
           if (loopBodyStartStgate >= 0)
