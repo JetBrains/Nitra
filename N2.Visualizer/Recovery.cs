@@ -116,17 +116,18 @@ namespace N2.DebugStrategies
 
       timer.Stop();
 
+      parser.MaxFailPos = maxFailPos;
+
       if (_bestResult != null)
       {
         FixAst(parser);
         parser.ParsingMode = ParsingMode.EndRecovery;
-        parser.MaxFailPos = _bestResult.EndPos;
+        //parser.MaxFailPos = _bestResult.EndPos;
       }
       else
       {
         // Этого вхождения быть не должно. Если мы не вычислили продолжение, значит нужно записывать весь хвост в грязь.
         parser.ParsingMode = ParsingMode.Recovery;
-        parser.MaxFailPos = maxFailPos;
       }
 
       Reset();
@@ -192,6 +193,9 @@ namespace N2.DebugStrategies
         //if (nextState < 0 && ruleParser.IsVoidState(state))
         //  continue;
         int pos = TryParse(parser, recoveryStack, curTextPos, ruleParser, state, out parsedStates);
+
+        if (curTextPos > 0)
+          Debug.Assert(pos != 0);
 
         var isParsed = pos > curTextPos;
 
