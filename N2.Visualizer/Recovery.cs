@@ -225,7 +225,7 @@ namespace N2.DebugStrategies
         //if (!isPrefixParsed)
         //  continue;
 
-        if (!isPrefixParsed) //nextState < 0 && 
+        if (nextState < 0 && !isPrefixParsed) // 
         {
           var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state);
           if (loopBodyStartStgate >= 0)
@@ -249,7 +249,7 @@ namespace N2.DebugStrategies
             {
               _bestResult = old_bestResult;
               _bestResults = old_bestResults;
-              AddResult(curTextPos, curTextPos, curTextPos, state, recoveryStack, text, startTextPos, true);
+              AddResult(curTextPos, curTextPos, curTextPos, -1, recoveryStack, text, startTextPos, true);
               return;
             }
 
