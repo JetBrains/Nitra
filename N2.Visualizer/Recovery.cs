@@ -192,6 +192,7 @@ namespace N2.DebugStrategies
       {
         parser.MaxFailPos = startTextPos;
         nextState = ruleParser.GetNextState(state);
+        var curr_bestResult = _bestResult;
 
         int pos = TryParse(parser, recoveryStack, curTextPos, ruleParser, state, out parsedStates);
 
@@ -228,7 +229,7 @@ namespace N2.DebugStrategies
         {
           var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state);
           if (loopBodyStartStgate >= 0)
-          {
+            {
             // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы 
             // имеем дело с банальным концом цикла мы должны
             //var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
@@ -263,20 +264,16 @@ namespace N2.DebugStrategies
           {
           }
           var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
-          if (isOptional && pos == pos2)
-            continue;
-          if (stackFrame.AstPtr == -1 && !isPrefixParsed) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
-            continue;
+          if (!(isOptional && pos == pos2))
+          if (!(stackFrame.AstPtr == -1 && !isPrefixParsed)) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
           AddResult(curTextPos, pos, pos2, state, recoveryStack, text, startTextPos);
           //break;
         }
         else if (pos == curTextPos && nextState < 0 && !stackFrame.RuleParser.IsTokenRule)
         {
           var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
-          if (isOptional && pos == pos2)
-            continue;
-          if (stackFrame.AstPtr == -1 && !isPrefixParsed) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
-            continue;
+          if (!(isOptional && pos == pos2))
+          if (!(stackFrame.AstPtr == -1 && !isPrefixParsed)) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
           if (pos2 > curTextPos || isPrefixParsed)
           {
             AddResult(curTextPos, pos, pos2, state, recoveryStack, text, startTextPos);
@@ -298,17 +295,18 @@ namespace N2.DebugStrategies
         {
           // последнее состояние. Надо попытаться допарсить
           var pos2 = ContinueParse(curTextPos, recoveryStack, parser, text, !isOptional);
-          if (isOptional && !isPrefixParsed) // необязательное правило не спрасившее ни одного не пробельного символа нужно игнорировать
-            continue;
-          if (stackFrame.AstPtr == -1 && !isPrefixParsed) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
-            continue;
+          if (!(isOptional && !isPrefixParsed)) // необязательное правило не спрасившее ни одного не пробельного символа нужно игнорировать
+          if (!(stackFrame.AstPtr == -1 && !isPrefixParsed)) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
           if (pos2 > curTextPos || isPrefixParsed)
           {
             AddResult(curTextPos, pos, pos2, -1, recoveryStack, text, startTextPos);
             //break;
           }
         }
-        else if (stackFrame.FailState == state && subruleLevel <= 1 && !stackFrame.RuleParser.IsTokenRule) // 
+
+
+
+        if (curr_bestResult == _bestResult && stackFrame.FailState == state && subruleLevel <= 1 && !stackFrame.RuleParser.IsTokenRule) // 
           TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel, state);
         //if (parser.MaxFailPos > curTextPos)
         //  AddResult(curTextPos, pos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
