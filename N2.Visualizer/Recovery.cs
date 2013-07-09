@@ -590,10 +590,8 @@ namespace N2.DebugStrategies
       {
         if (stack.Head.RuleParser is ExtensibleRuleParser)
           continue;
-        var state = stack.Head.FailState;
-        Debug.Assert(state >= 0);
-        if (stack.Head.AstPtr > 0)
-          parser.ast[stack.Head.AstPtr + 2] = ~state;
+        Debug.Assert(stack.Head.FailState >= 0);
+        stack.Head.RuleParser.PatchAst(stack.Head.AstStartPos, -2, -1, stack, parser);
       }
     }
   }
