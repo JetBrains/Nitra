@@ -199,7 +199,7 @@ namespace N2.DebugStrategies
 
         var lastPos = Math.Max(pos, parser.MaxFailPos);
 
-        if (parser.MaxFailPos > curTextPos && parser.MaxFailPos - curTextPos > ParsedSpacesLen(ruleParser, parsedStates))
+        if (parser.MaxFailPos > curTextPos && parser.MaxFailPos - curTextPos > ParsedSpacesLen(ruleParser, parsedStates)) // что-то пропарсили и это что-то не пробелы
         {
           var stack = recoveryStack;
           if (IsBetterStack(stack))
@@ -208,9 +208,10 @@ namespace N2.DebugStrategies
             var startPos = curTextPos;
             var failPos = parser.MaxFailPos;
             var skipedCount = startPos - failPos;
-            var newResult = new RecoveryResult(startPos, failPos, failPos, state, stackLength, stack, text, startTextPos);
+            var pos2 = pos == lastPos ? ContinueParse(pos, recoveryStack, parser, text, !isOptional) : lastPos;
+            var newResult = new RecoveryResult(startPos, failPos, pos2, state, stackLength, stack, text, startTextPos);
             _candidats2.Add(newResult);
-            AddResult(curTextPos, lastPos, lastPos, state, recoveryStack, text, startTextPos);
+            AddResult(curTextPos, lastPos, pos2, state, recoveryStack, text, startTextPos);
             break;
           }
         }
@@ -263,7 +264,7 @@ namespace N2.DebugStrategies
           }
           var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
           if (!(isOptional && pos == pos2))
-          if (!(stackFrame.AstPtr == -1 && !isPrefixParsed)) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
+          //if (!(stackFrame.AstPtr == -1 && !isPrefixParsed)) // Спекулятивный фрэйм стека не спарсивший ничего полезного (HasParsedStaets уже говорит, что что-то спарсили). Игнорируем его.
           AddResult(curTextPos, pos, pos2, state, recoveryStack, text, startTextPos);
           //break;
         }
