@@ -382,6 +382,10 @@ namespace N2.DebugStrategies
       {
       }
 
+      if (stack.hd.AstPtr == 18)
+      {
+      }
+
       if (!allowEmpty && startPos == endPos && endPos != text.Length) return;
 
       if (_bestResult == null)                   goto good;
@@ -419,7 +423,10 @@ namespace N2.DebugStrategies
       stackLength = stack.Length;
       var bestResultStackLength = this._bestResult.StackLength;
 
-      var result = CompareStack(stack, _bestResult.Stack);
+      // Если при восстановлении ничего не было пропарсено, то побеждать должен фрейм с большим FialState, так как 
+      // иначе будут возникать фантомные значени. Если же что-то спарсилось, то побеждать должен фрейм с меньшим FialState.
+      var winLastState = _bestResult.RecoveredCount == 0 && newResult.RecoveredCount == 0;
+      var result = CompareStack(stack, _bestResult.Stack, winLastState);
       if (result > 0)  goto good;
       if (result < 0) return;
 
@@ -437,8 +444,9 @@ namespace N2.DebugStrategies
       return;
     }
 
+    /// <param name="winLastState">Если true - будет побеждать фрейм с большим FailState и наоборот.</param>
     /// <returns>0 - стеки равны или несравнимы, 1 - первый стек лучше второго, -1 второй стек лучше.</returns>
-    public static int CompareStack(RecoveryStack stack1, RecoveryStack stack2)
+    public static int CompareStack(RecoveryStack stack1, RecoveryStack stack2, bool winLastState)
     {
       var len1 = stack1.Length;
       var len2 = stack2.Length;
@@ -450,7 +458,7 @@ namespace N2.DebugStrategies
         else
           stack1 = SkipN(stack1, len1 - len2);
 
-      var result = CompareStackImpl(stack1, stack2);
+      var result = CompareStackImpl(stack1, stack2, winLastState);
 
       if (result == 0)
         return len2 - len1; // если корни стеков равны, то лучше более короткий стек, так как более длинный является спекулятивным (более корткие постеки выкидываются вначале обработки)
@@ -458,13 +466,13 @@ namespace N2.DebugStrategies
       return result;
     }
 
-    private static int CompareStackImpl(RecoveryStack stack1, RecoveryStack stack2)
+    private static int CompareStackImpl(RecoveryStack stack1, RecoveryStack stack2, bool winLastState)
     {
       if (stack1.tl.IsEmpty)
         return 0;
       else
       {
-        var result = CompareStackImpl((RecoveryStack)stack1.tl, (RecoveryStack)stack2.tl);
+        var result = CompareStackImpl((RecoveryStack)stack1.tl, (RecoveryStack)stack2.tl, winLastState);
 
         if (result == 0)
         {
@@ -474,7 +482,10 @@ namespace N2.DebugStrategies
           if (x.RuleParser != y.RuleParser)
             return 0; // стеки несравнимы
 
-          return y.FailState - x.FailState; // лучше фрэйм с меньшим значением FailState
+          if (winLastState)
+            return x.FailState - y.FailState; // лучше фрэйм с большим значением FailState
+          else
+            return y.FailState - x.FailState; // лучше фрэйм с меньшим значением FailState
         }
         else
           return result;
