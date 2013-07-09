@@ -4,6 +4,9 @@ using Nemerle.IO;
 using Nemerle.Compiler;
 
 using System;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.IO;
 using System.Diagnostics;
 using System.Reflection;
@@ -11,7 +14,7 @@ using SCG = System.Collections.Generic;
 
 namespace Nemerle.CommandlineCompiler
 {
-  module MainClass
+  module Program
   {
     mutable stack_kilos : int = 0;
     mutable Manager : ManagerClass;
@@ -53,24 +56,31 @@ namespace Nemerle.CommandlineCompiler
           else
               Path.GetFileNameWithoutExtension(Options.ProjectPath) + makeExt(Options);
 
-      def n2CompilerDll = Path.Combine(path, "N2.Compiler.dll");
-      def n2RuntimeDll  = Path.Combine(path, "N2.Runtime.dll");
-      def n2CoreDll     = Path.Combine(path, "N2.Core.dll");
-      def target        = if (Options.TargetIsSet) "" else "-target:library";
-      def cmdLineAdds   = $<#-m:"$n2CompilerDll" -r:"$n2RuntimeDll" -r:"$n2CoreDll" -no-color -out:$(Options.OutputFileName) $target#>;
-      //Console.WriteLine($"cmdLineAdds='$cmdLineAdds'");
+      def n2CompilerDll  = Path.Combine(path, "N2.Compiler.dll");
+      def n2RuntimeDll   = Path.Combine(path, "N2.Runtime.dll");
+      def n2CoreDll      = Path.Combine(path, "N2.Core.dll");
+      def target         = if (Options.TargetIsSet) "" else "-target:library";
+      def additionalArgs = $<# -m:"$n2CompilerDll" -r:"$n2RuntimeDll" -r:"$n2CoreDll" -no-color -out:"$(Options.OutputFileName)" $target#>;
 
       def runInAppropriateProcess(processName : string) : void
       {
-        def dir = IO.Path.GetDirectoryName(Uri(typeof(list[_]).Assembly.CodeBase).LocalPath);
-        def path = IO.Path.Combine(dir, processName);
-        def argsList = Environment.GetCommandLineArgs().NToList();
-        def args = $<#..$(argsList.Tail; " ") $cmdLineAdds#>;
+        mutable binPathRoot = Environment.GetEnvironmentVariable("NemerleBinPathRoot");
+        when (string.IsNullOrEmpty(binPathRoot))
+          binPathRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Nemerle");
+
+        def executablePath = Path.Combine(binPathRoot, "Net-4.0", processName);
+        unless (File.Exists(executablePath))
+        {
+          Console.Error.Write($"Nemerle command line compiler '$executablePath' not found.");
+          Environment.Exit(-1);
+        }
+
+        def args = JoinArguments(Environment.GetCommandLineArgs().Skip(1)) + additionalArgs;
         def process = Process();
         process.StartInfo.UseShellExecute = false;
-        process.StartInfo.CreateNoWindow = false;
-        process.StartInfo.FileName = path;
-        process.StartInfo.Arguments = args;
+        process.StartInfo.CreateNoWindow  = false;
+        process.StartInfo.FileName        = executablePath;
+        process.StartInfo.Arguments       = args;
         if (process.Start())
         {
           process.WaitForExit();
@@ -155,5 +165,40 @@ namespace Nemerle.CommandlineCompiler
       else
         Getopt.Error("need at least one file to compile\n" + Getopt.Usage(opts))
     }
+
+    JoinArguments(arguments : Seq[string]) : string
+    {
+      def result = StringBuilder();
+      foreach (argument in arguments with index)
+      {
+        unless(index == 0) _ = result.Append(' ');
+        if (string.IsNullOrEmpty(argument))
+          _ = result.Append('"').Append('"');
+        else if (_needQuotes.IsMatch(argument))
+        {
+          _ = result.Append('"');
+          mutable pos = 0;
+          foreach(m is Match when m.Success in _escapeQuotes.Matches(argument))
+          {
+            def backslashGroup = m.Groups[1];
+            def tailGroup = m.Groups[2];
+            _ = result.Append(argument, pos, m.Index - pos)
+              .Append(argument, backslashGroup.Index, backslashGroup.Length)
+              .Append(argument, backslashGroup.Index, backslashGroup.Length);
+            when (tailGroup.Value == "\"")
+              _ = result.Append("\\\"");
+            pos = m.Index + m.Length;
+          }
+          _ = result.Append(argument, pos, argument.Length - pos)
+            .Append('"');
+        }
+        else
+          _ = result.Append(argument);
+      }
+      result.ToString()
+    }
+
+    private static _needQuotes   : Regex = Regex(<#\s|"#>, RegexOptions.Compiled);
+    private static _escapeQuotes : Regex = Regex(<#(\\*)("|$)#>, RegexOptions.Compiled);
   }
 }
