@@ -221,9 +221,6 @@ namespace N2.DebugStrategies
         if (!isPrefixParsed && isParsed && !ruleParser.IsVoidState(state))
           isPrefixParsed = isParsed;
 
-        //if (!isPrefixParsed)
-        //  continue;
-
         if (nextState < 0 && !isPrefixParsed) // 
         {
           var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state);
@@ -231,7 +228,6 @@ namespace N2.DebugStrategies
             {
             // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы 
             // имеем дело с банальным концом цикла мы должны
-            //var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
             var elemFrame = new RecoveryStackFrame(stackFrame.RuleParser, stackFrame.AstPtr, stackFrame.AstStartPos, loopBodyStartStgate, stackFrame.Counter, 0, 0, stackFrame.IsRootAst, stackFrame.Info);
             var loopStack = (RecoveryStack)recoveryStack.Tail;
             var loopFrame = loopStack.hd;
@@ -264,9 +260,7 @@ namespace N2.DebugStrategies
           }
           var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
           if (!(isOptional && pos == pos2))
-          //if (!(stackFrame.AstPtr == -1 && !isPrefixParsed)) // Спекулятивный фрэйм стека не спарсивший ничего полезного (HasParsedStaets уже говорит, что что-то спарсили). Игнорируем его.
           AddResult(curTextPos, pos, pos2, state, recoveryStack, text, startTextPos);
-          //break;
         }
         else if (pos == curTextPos && nextState < 0 && !stackFrame.RuleParser.IsTokenRule)
         {
@@ -276,7 +270,6 @@ namespace N2.DebugStrategies
           if (pos2 > curTextPos || isPrefixParsed)
           {
             AddResult(curTextPos, pos, pos2, state, recoveryStack, text, startTextPos);
-            //break;
           }
         }
         else if (parsedStates.Count > 0 && HasParsedStaets(ruleParser, parsedStates))
@@ -299,22 +292,12 @@ namespace N2.DebugStrategies
           if (pos2 > curTextPos || isPrefixParsed)
           {
             AddResult(curTextPos, pos, pos2, -1, recoveryStack, text, startTextPos);
-            //break;
           }
         }
 
-
-
         if (curr_bestResult == _bestResult && stackFrame.FailState == state && subruleLevel <= 1 && !stackFrame.RuleParser.IsTokenRule) // 
           TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel, state);
-        //if (parser.MaxFailPos > curTextPos)
-        //  AddResult(curTextPos, pos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
       }
-
-      //if (isPrefixParsed && hasCandidats)
-      //{
-      //  AddResult(curTextPos, pos, pos2, -1, recoveryStack, text, startTextPos);
-      //}
     }
 
     private bool IsBetterStack(RecoveryStack stack)
@@ -416,9 +399,6 @@ namespace N2.DebugStrategies
       {
       }
 
-      //if (ruleEndPos - startPos > _bestResult.RecoveredHeadCount) goto good;
-      //if (ruleEndPos - startPos < _bestResult.RecoveredHeadCount) return;
-
       if (newResult.RuleEndPos >= 0 && _bestResult.RuleEndPos <  0) goto good; // 
       if (newResult.RuleEndPos <  0 && _bestResult.RuleEndPos >= 0) return;
 
@@ -437,16 +417,6 @@ namespace N2.DebugStrategies
       var result = CompareStack(stack, _bestResult.Stack);
       if (result > 0)  goto good;
       if (result < 0) return;
-
-      // Это все чушь. Стеки можно сравнивать только от корня.
-      //if (stackLength < bestResultStackLength) goto good;
-      //if (stackLength > bestResultStackLength)    return;
-
-      //if (startState < _bestResult.StartState) goto good;
-      //if (startState > _bestResult.StartState) return;
-
-      //if (stack.Head.FailState > _bestResult.Stack.Head.FailState) goto good;
-      //if (stack.Head.FailState < _bestResult.Stack.Head.FailState) return;
 
       if (endPos > _bestResult.EndPos) goto good;
       if (endPos < _bestResult.EndPos) return;
