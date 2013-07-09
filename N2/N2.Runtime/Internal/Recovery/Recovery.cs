@@ -66,7 +66,6 @@ namespace N2.DebugStrategies
       //  }
       //  Debug.WriteLine(info.ToString());
       //}
-      parser.ParsingMode = ParsingMode.Parsing;
 
       do
       {
@@ -93,13 +92,11 @@ namespace N2.DebugStrategies
       if (_bestResult != null)
       {
         FixAst(parser);
-        parser.ParsingMode = ParsingMode.EndRecovery;
         parser.MaxFailPos = _bestResult.EndPos;
       }
       else
       {
         // Этого вхождения быть не должно. Если мы не вычислили продолжение, значит нужно записывать весь хвост в грязь.
-        parser.ParsingMode = ParsingMode.Recovery;
         parser.MaxFailPos = maxFailPos;
       }
 
