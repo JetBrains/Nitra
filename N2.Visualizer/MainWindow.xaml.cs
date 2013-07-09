@@ -121,7 +121,6 @@ namespace N2.Visualizer
 
     private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats)
     {
-      bestResults.Remove(bestResult);
       _recoveryResults.Add(Tuple.Create(bestResult, bestResults.ToArray(), candidats.ToArray()));
     }
 
