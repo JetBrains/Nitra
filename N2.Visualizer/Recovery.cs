@@ -21,18 +21,20 @@ namespace N2.DebugStrategies
   public sealed class Recovery
   {
 #if !N2RUNTIME
-    public static Stopwatch Timer = new Stopwatch();
-    public static int       Count;
-    public static TimeSpan  ContinueParseTime;
-    public static int       ContinueParseCount;
-    public static TimeSpan  TryParseSubrulesTime;
-    public static int       TryParseSubrulesCount;
-    public static TimeSpan  TryParseTime;
-    public static int       TryParseCount;
-    public static TimeSpan  TryParseNoCacheTime;
-    public static int       TryParseNoCacheCount;
+    public Stopwatch Timer = new Stopwatch();
+    public int       Count;
+    public TimeSpan  ContinueParseTime;
+    public int       ContinueParseCount;
+    public TimeSpan  TryParseSubrulesTime;
+    public int       TryParseSubrulesCount;
+    public TimeSpan  TryParseTime;
+    public int       TryParseCount;
+    public TimeSpan  TryParseNoCacheTime;
+    public int       TryParseNoCacheCount;
 
-    public static void Init()
+    public Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>> ReportResult;
+
+    public void Init()
     {
       ContinueParseTime     = TimeSpan.Zero;
       ContinueParseCount    = 0;
@@ -48,7 +50,7 @@ namespace N2.DebugStrategies
 #endif
 
     List<RecoveryResult> _candidats = new List<RecoveryResult>();
-    List<RecoveryResult> _candidats2 = new List<RecoveryResult>();
+    //List<RecoveryResult> _candidats2 = new List<RecoveryResult>();
     RecoveryResult       _bestResult;
     List<RecoveryResult> _bestResults = new List<RecoveryResult>();
     int                  _recCount;
@@ -62,7 +64,7 @@ namespace N2.DebugStrategies
     void Reset()
     {
       _candidats.Clear();
-      _candidats2.Clear();
+      //_candidats2.Clear();
       _bestResult = null;
       _bestResults.Clear();
       _recCount = 0;
@@ -119,6 +121,9 @@ namespace N2.DebugStrategies
       timer.Stop();
 
       parser.MaxFailPos = maxFailPos;
+
+      if (ReportResult != null)
+        ReportResult(_bestResult, _bestResults, _candidats);
 
       if (_bestResult != null)
       {
@@ -202,15 +207,15 @@ namespace N2.DebugStrategies
         if (parser.MaxFailPos > curTextPos && parser.MaxFailPos - curTextPos > ParsedSpacesLen(ruleParser, parsedStates)) // что-то пропарсили и это что-то не пробелы
         {
           var stack = recoveryStack;
-          if (IsBetterStack(stack))
+          //if (IsBetterStack(stack))
           {
             int stackLength = stack.Length;
             var startPos = curTextPos;
             var failPos = parser.MaxFailPos;
             var skipedCount = startPos - failPos;
             var pos2 = pos == lastPos ? ContinueParse(pos, recoveryStack, parser, text, !isOptional) : lastPos;
-            var newResult = new RecoveryResult(startPos, failPos, pos2, state, stackLength, stack, text, startTextPos);
-            _candidats2.Add(newResult);
+            //var newResult = new RecoveryResult(startPos, failPos, pos2, state, stackLength, stack, text, startTextPos);
+            //_candidats2.Add(newResult);
             AddResult(curTextPos, lastPos, pos2, state, recoveryStack, text, startTextPos);
             break;
           }
@@ -300,10 +305,10 @@ namespace N2.DebugStrategies
       }
     }
 
-    private bool IsBetterStack(RecoveryStack stack)
-    {
-      return !_candidats2.Any(e => CompareStack(e.Stack, stack) > 0);
-    }
+    //private bool IsBetterStack(RecoveryStack stack)
+    //{
+    //  return !_candidats2.Any(e => CompareStack(e.Stack, stack) > 0);
+    //}
 
     private bool IsAllSaces(string text, int curTextPos, int max)
     {

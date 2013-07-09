@@ -25,6 +25,8 @@ using System.Text;
 
 namespace N2.Visualizer
 {
+  using RecoveryInfo = Tuple<RecoveryResult, RecoveryResult[], RecoveryResult[]>;
+
   /// <summary>
   /// Interaction logic for MainWindow.xaml
   /// </summary>
@@ -50,6 +52,8 @@ namespace N2.Visualizer
     TimeSpan _parseTimeSpan;
     TimeSpan _astTimeSpan;
     TimeSpan _highlightingTimeSpan;
+    Recovery _recovery;
+    List<RecoveryInfo> _recoveryResults = new List<RecoveryInfo>();
 
     public MainWindow()
     {
@@ -58,6 +62,8 @@ namespace N2.Visualizer
       _findGrid.Visibility = System.Windows.Visibility.Collapsed;
       _foldingStrategy = new N2FoldingStrategy();
       _textBox1Tooltip = new ToolTip() { PlacementTarget = _text };
+      _recovery = new Recovery();
+      _recovery.ReportResult = ReportRecoveryResult;
       _parseTimer = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
       _parseTimer.Elapsed += new ElapsedEventHandler(_parseTimer_Elapsed);
 
@@ -111,6 +117,11 @@ namespace N2.Visualizer
 
       if (!(Keyboard.GetKeyStates(Key.LeftShift) == KeyStates.Down || Keyboard.GetKeyStates(Key.RightShift) == KeyStates.Down))
         _parseTimer.Start();
+    }
+
+    private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats)
+    {
+      _recoveryResults.Add(Tuple.Create(bestResult, bestResults.ToArray(), candidats.ToArray()));
     }
 
     private void Window_Closed(object sender, EventArgs e)
@@ -447,7 +458,7 @@ namespace N2.Visualizer
       Settings.Default.LastRuleName = ruleDescriptor.Name;
 
       _ruleDescriptor = ruleDescriptor;
-      _parserHost = new ParserHost(new Recovery().Strategy);
+      _parserHost = new ParserHost(_recovery.Strategy);
       _parseResult = null;
 
       treeView1.Items.Clear();
@@ -481,7 +492,10 @@ namespace N2.Visualizer
 
         var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
 
-        Recovery.Init();
+        _recovery.Init();
+        _recoveryResults.Clear();
+        _recoveryTreeView.Items.Clear();
+        _errorsTreeView.Items.Clear();
         var timer = Stopwatch.StartNew();
 
         if (simpleRule != null)
@@ -498,20 +512,22 @@ namespace N2.Visualizer
 
         _outliningTime.Text         = _foldingStrategy.TimeSpan.ToString();
 
-        _recoveryTime.Text          = Recovery.Timer.Elapsed.ToString();
-        _recoveryCount.Text         = Recovery.Count.ToString();
+        _recoveryTime.Text          = _recovery.Timer.Elapsed.ToString();
+        _recoveryCount.Text         = _recovery.Count.ToString();
 
-        _continueParseTime.Text     = Recovery.ContinueParseTime.ToString();
-        _continueParseCount.Text    = Recovery.ContinueParseCount.ToString();
+        _continueParseTime.Text     = _recovery.ContinueParseTime.ToString();
+        _continueParseCount.Text    = _recovery.ContinueParseCount.ToString();
 
-        _tryParseSubrulesTime.Text  = Recovery.TryParseSubrulesTime.ToString();
-        _tryParseSubrulesCount.Text = Recovery.TryParseSubrulesCount.ToString();
+        _tryParseSubrulesTime.Text  = _recovery.TryParseSubrulesTime.ToString();
+        _tryParseSubrulesCount.Text = _recovery.TryParseSubrulesCount.ToString();
 
-        _tryParseTime.Text          = Recovery.TryParseTime.ToString();
-        _tryParseCount.Text         = Recovery.TryParseCount.ToString();
+        _tryParseTime.Text          = _recovery.TryParseTime.ToString();
+        _tryParseCount.Text         = _recovery.TryParseCount.ToString();
 
-        _tryParseNoCacheTime.Text   = Recovery.TryParseNoCacheTime.ToString();
-        _tryParseNoCacheCount.Text  = Recovery.TryParseNoCacheCount.ToString();
+        _tryParseNoCacheTime.Text   = _recovery.TryParseNoCacheTime.ToString();
+        _tryParseNoCacheCount.Text  = _recovery.TryParseNoCacheCount.ToString();
+
+        ShowRecoveryResults();
 
         TryReportError();
         ShowInfo();
@@ -520,6 +536,49 @@ namespace N2.Visualizer
       {
         ClearMarkers();
         MessageBox.Show(this, ex.Message);
+      }
+    }
+
+    private void ShowRecoveryResults()
+    {
+      foreach (var recoveryResult in _recoveryResults)
+      {
+        var node = new TreeViewItem();
+        node.Header = recoveryResult.Item1;
+        node.Tag = recoveryResult;
+
+        var bestResultsNode = new TreeViewItem();
+        bestResultsNode.Header = "Other best results...";
+        bestResultsNode.Tag = recoveryResult.Item2;
+        bestResultsNode.Expanded += RecoveryNode_Expanded;
+        bestResultsNode.Items.Add(new TreeViewItem());
+        node.Items.Add(bestResultsNode);
+
+        var candidatsNode = new TreeViewItem();
+        candidatsNode.Header = "All candidats...";
+        candidatsNode.Tag = recoveryResult.Item3;
+        candidatsNode.Expanded += RecoveryNode_Expanded;
+        candidatsNode.Items.Add(new TreeViewItem());
+        node.Items.Add(candidatsNode);
+
+        _recoveryTreeView.Items.Add(node);
+      }
+    }
+
+    void RecoveryNode_Expanded(object sender, RoutedEventArgs e)
+    {
+      var treeNode = (TreeViewItem)e.Source;
+      if (treeNode.Items.Count == 1 && ((TreeViewItem)treeNode.Items[0]).Header == null)
+      {
+        treeNode.Items.Clear();
+        var recoveryResults = (RecoveryResult[])treeNode.Tag;
+
+        foreach (var recoveryResult in recoveryResults)
+        {
+          var node = new TreeViewItem();
+          node.Header = recoveryResult;
+          treeNode.Items.Add(node);
+        }
       }
     }
 
