@@ -121,6 +121,7 @@ namespace N2.Visualizer
 
     private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats)
     {
+      bestResults.Remove(bestResult);
       _recoveryResults.Add(Tuple.Create(bestResult, bestResults.ToArray(), candidats.ToArray()));
     }
 
@@ -546,6 +547,7 @@ namespace N2.Visualizer
         var node = new TreeViewItem();
         node.Header = recoveryResult.Item1;
         node.Tag = recoveryResult;
+        node.MouseDoubleClick += new MouseButtonEventHandler(RecoveryNode_MouseDoubleClick);
 
         var bestResultsNode = new TreeViewItem();
         bestResultsNode.Header = "Other best results...";
@@ -563,6 +565,14 @@ namespace N2.Visualizer
 
         _recoveryTreeView.Items.Add(node);
       }
+    }
+
+    void RecoveryNode_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+      var recovery = ((RecoveryInfo)((TreeViewItem)e.Source).Tag).Item1;
+      _text.Select(recovery.FailPos, recovery.SkipedCount);
+      e.Handled = true;
+      _text.Focus();
     }
 
     void RecoveryNode_Expanded(object sender, RoutedEventArgs e)
