@@ -943,5 +943,10 @@ namespace N2.Visualizer
       SavePresets();
       Settings.Default.Save();
     }
+
+    private void MenuItem_KeyDown(object sender, KeyEventArgs e)
+    {
+
+    }
   }
 }
