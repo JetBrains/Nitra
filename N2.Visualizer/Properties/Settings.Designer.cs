@@ -82,5 +82,16 @@ namespace N2.Visualizer.Properties {
                 this["LastLoadParserDirectory"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        public global::System.Collections.Specialized.StringCollection Presets {
+            get {
+                return ((global::System.Collections.Specialized.StringCollection)(this["Presets"]));
+            }
+            set {
+                this["Presets"] = value;
+            }
+        }
     }
 }

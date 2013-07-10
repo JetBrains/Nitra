@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -32,6 +33,8 @@ namespace N2.Visualizer
   /// </summary>
   public partial class MainWindow : Window
   {
+    const int MaxPresetCount = 50;
+
     bool _loading = true;
     ParserHost _parserHost;
     Parser _parseResult;
@@ -54,6 +57,7 @@ namespace N2.Visualizer
     TimeSpan _highlightingTimeSpan;
     Recovery _recovery;
     List<RecoveryInfo> _recoveryResults = new List<RecoveryInfo>();
+    ObservableCollection<Preset> _presets = new ObservableCollection<Preset>();
 
     public MainWindow()
     {
@@ -82,26 +86,65 @@ namespace N2.Visualizer
       _textMarkerService = new TextMarkerService(_text.Document);
       _text.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
       _text.TextArea.TextView.LineTransformers.Add(_textMarkerService);
+
+      _presetsMenuItem.ItemsSource = _presets;
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
       var args = Environment.GetCommandLineArgs();
-      _text.Text =
+      var code =
         args.Length > 1
           ? File.ReadAllText(args[1])
           : Settings.Default.LastTextInput;
-      if (!string.IsNullOrEmpty(Settings.Default.LastAssemblyFilePath) && File.Exists(Settings.Default.LastAssemblyFilePath))
+
+      LoadPresets();
+      Load(Settings.Default.LastAssemblyFilePath, Settings.Default.LastGrammarName, Settings.Default.LastRuleName, code);
+    }
+
+    private void Window_Closed(object sender, EventArgs e)
+    {
+      Settings.Default.LastTextInput = _text.Text;
+      SavePresets();
+    }
+
+    private void SavePresets()
+    {
+      var presets = new StringCollection();
+      foreach (var preset in _presets)
+        presets.Add(preset.Save());
+      Settings.Default.Presets = presets;
+    }
+
+    private void LoadPresets()
+    {
+      if (Settings.Default.Presets != null)
+        foreach (var presetData in Settings.Default.Presets)
+          _presets.Add(new Preset(_presets, presetData));
+    }
+
+    void Load(Preset preset)
+    {
+      Load(preset.AssemblyFilePath, preset.SynatxModuleName, preset.StartRuleName, preset.Code);
+    }
+
+    void Load(string assemblyFilePath, string syntaxModuleFullName, string startRuleName, string code)
+    {
+      _loading = true;
+
+      _text.Text = code;
+
+      if (!string.IsNullOrEmpty(assemblyFilePath) && File.Exists(assemblyFilePath))
       {
-        var grammars = LoadAssembly(Settings.Default.LastAssemblyFilePath);
+        var grammars = LoadAssembly(assemblyFilePath);
 
         GrammarDescriptor grammar = null;
-        if (!string.IsNullOrEmpty(Settings.Default.LastGrammarName))
-          grammar = grammars.FirstOrDefault(g => g.FullName == Settings.Default.LastGrammarName);
+        if (!string.IsNullOrEmpty(syntaxModuleFullName))
+          grammar = grammars.FirstOrDefault(g => g.FullName == syntaxModuleFullName);
 
         RuleDescriptor ruleDescriptor = null;
         if (grammar != null)
-          ruleDescriptor = grammar.Rules.FirstOrDefault(r => r.Name == Settings.Default.LastRuleName);
+          ruleDescriptor = grammar.Rules.FirstOrDefault(r => r.Name == startRuleName);
 
         if (ruleDescriptor != null)
           LoadRule(ruleDescriptor);
@@ -122,11 +165,6 @@ namespace N2.Visualizer
     private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats)
     {
       _recoveryResults.Add(Tuple.Create(bestResult, bestResults.ToArray(), candidats.ToArray()));
-    }
-
-    private void Window_Closed(object sender, EventArgs e)
-    {
-      Settings.Default.LastTextInput = _text.Text;
     }
 
     private void textBox1_GotFocus(object sender, RoutedEventArgs e)
@@ -862,7 +900,7 @@ namespace N2.Visualizer
       Clipboard.SetData(DataFormats.UnicodeText, result);
     }
 
-    private void CopyNodeText(object sender, ExecutedRoutedEventArgs e)
+    private void CopyReflectionNodeText(object sender, ExecutedRoutedEventArgs e)
     {
       var value = treeView1.SelectedValue as TreeViewItem;
 
@@ -872,6 +910,38 @@ namespace N2.Visualizer
         Clipboard.SetData(DataFormats.Text, result);
         Clipboard.SetData(DataFormats.UnicodeText, result);
       }
+    }
+
+    private void SavePreset(object sender, ExecutedRoutedEventArgs e)
+    {
+      var text = _text.Text;
+      var moduleName = Settings.Default.LastGrammarName;
+      var grammarName = moduleName.Split('.').Last();
+      var dialog = new AddPreset(grammarName, text);
+      dialog.Owner = this;
+      if (dialog.ShowDialog() ?? false)
+      {
+        // remove element with same name
+        var preset = _presets.FirstOrDefault(p => p.Name == dialog.PresetName);
+        if (preset != null)
+          _presets.Remove(preset);
+
+        _presets.Insert(0, new Preset(_presets, dialog.PresetName, Settings.Default.LastAssemblyFilePath, moduleName, Settings.Default.LastRuleName, text));
+
+        if (_presets.Count > MaxPresetCount)
+          _presets.RemoveAt(MaxPresetCount);
+      }
+    }
+
+    private void PresetMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+      Load((Preset)((MenuItem)e.Source).DataContext);
+    }
+
+    private void PersistPresets(object sender, ExecutedRoutedEventArgs e)
+    {
+      SavePresets();
+      Settings.Default.Save();
     }
   }
 }

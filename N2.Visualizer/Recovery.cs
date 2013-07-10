@@ -49,22 +49,20 @@ namespace N2.DebugStrategies
     }
 #endif
 
-    List<RecoveryResult> _candidats = new List<RecoveryResult>();
-    //List<RecoveryResult> _candidats2 = new List<RecoveryResult>();
-    RecoveryResult       _bestResult;
-    List<RecoveryResult> _bestResults = new List<RecoveryResult>();
-    int                  _recCount;
-    int                  _bestResultsCount;
-    int                  _nestedLevel;
-    Dictionary<int, int> _allacetionsInfo = new Dictionary<int, int>();
+    List<RecoveryResult>         _candidats = new List<RecoveryResult>();
+    RecoveryResult               _bestResult;
+    List<RecoveryResult>         _bestResults = new List<RecoveryResult>();
+    int                          _recCount;
+    int                          _bestResultsCount;
+    int                          _nestedLevel;
+    Dictionary<int, int>         _allacetionsInfo = new Dictionary<int, int>();
     Dictionary<object, PrseData> _visited = new Dictionary<object, PrseData>();
-    Dictionary<string, int> _parsedRules = new Dictionary<string, int>();
-    RecoveryStack        _recoveryStack;
+    Dictionary<string, int>      _parsedRules = new Dictionary<string, int>();
+    RecoveryStack                _recoveryStack;
 
     void Reset()
     {
       _candidats.Clear();
-      //_candidats2.Clear();
       _bestResult = null;
       _bestResults.Clear();
       _recCount = 0;
