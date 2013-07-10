@@ -103,7 +103,7 @@ namespace N2.Visualizer
     {
       return string.IsNullOrEmpty(grammar.Namespace)
         ? grammar.Name
-        : grammar.Name + "(" + grammar.Namespace + ")";
+        : grammar.Name + " (" + grammar.Namespace + ")";
     }
   }
 }
