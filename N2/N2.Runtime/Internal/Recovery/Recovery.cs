@@ -71,7 +71,7 @@ namespace N2.DebugStrategies
       {
         foreach (var stack in stacks)
         {
-          _recoveryStack = stack as RecoveryStack;
+          _recoveryStack = stack;
 
           var before = parser.Text.Substring(0, startTextPos); // DEBUG
           if (before == "[\r\n  { : 1},\r\n  { a },\r\n  { a: },\r\n  { a:, },\r\n  { \r\n  'a':, \r\n  a:1\r\n  },\r\n  {a::2,:},\r\n  {a# :1}, \r\n  {a") // DEBUG
