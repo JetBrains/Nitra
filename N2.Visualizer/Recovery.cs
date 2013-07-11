@@ -228,7 +228,7 @@ namespace N2.DebugStrategies
         {
           var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state);
           if (loopBodyStartStgate >= 0)
-            {
+          {
             // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы 
             // имеем дело с банальным концом цикла мы должны
             var elemFrame = new RecoveryStackFrame(stackFrame.RuleParser, stackFrame.AstPtr, stackFrame.AstStartPos, loopBodyStartStgate, stackFrame.Counter, 0, 0, stackFrame.IsRootAst, stackFrame.Info);
@@ -250,9 +250,11 @@ namespace N2.DebugStrategies
 
             if (_bestResult != null && _bestResult.RecoveredCount > 0)
             {
+              var endPos = Math.Max(_bestResult.EndPos, curTextPos);
+              var ruleEndPos = Math.Max(_bestResult.RuleEndPos, curTextPos);
               _bestResult  = old_bestResult;
 
-              AddResult(curTextPos, curTextPos, curTextPos, -1, recoveryStack, text, startTextPos, true);
+              AddResult(curTextPos, ruleEndPos, endPos, -1, recoveryStack, text, startTextPos, true);
               return;
             }
 
