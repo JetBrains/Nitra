@@ -165,5 +165,17 @@ namespace N2.Visualizer.Properties {
                 this["WindowLWidth"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("3")]
+        public int ActiveTabIndex {
+            get {
+                return ((int)(this["ActiveTabIndex"]));
+            }
+            set {
+                this["ActiveTabIndex"] = value;
+            }
+        }
     }
 }

@@ -73,9 +73,10 @@ namespace N2.Visualizer
       this.Height      = _settings.WindowHeight;
       this.Width       = _settings.WindowLWidth;
       this.WindowState = (WindowState)_settings.WindowState;
+      _mainRow.Height  = new GridLength(_settings.TabControlHeight);
 
-      _mainRow.Height = new GridLength(_settings.TabControlHeight);
-      _tabControl.SelectedItem = _performanceTabItem;
+      _tabControl.SelectedIndex = _settings.ActiveTabIndex;
+
       _findGrid.Visibility = System.Windows.Visibility.Collapsed;
       _foldingStrategy = new N2FoldingStrategy();
       _textBox1Tooltip = new ToolTip() { PlacementTarget = _text };
@@ -118,12 +119,13 @@ namespace N2.Visualizer
     private void Window_Closed(object sender, EventArgs e)
     {
       _settings.TabControlHeight = _mainRow.Height.Value;
-      _settings.LastTextInput = _text.Text;
-      _settings.WindowState   = (int)this.WindowState;
-      _settings.WindowTop     = this.Top;
-      _settings.WindowLeft    = this.Left;
-      _settings.WindowHeight  = this.Height;
-      _settings.WindowLWidth  = this.Width;
+      _settings.LastTextInput    = _text.Text;
+      _settings.WindowState      = (int)this.WindowState;
+      _settings.WindowTop        = this.Top;
+      _settings.WindowLeft       = this.Left;
+      _settings.WindowHeight     = this.Height;
+      _settings.WindowLWidth     = this.Width;
+      _settings.ActiveTabIndex   = _tabControl.SelectedIndex;
       SavePresets();
     }
 
