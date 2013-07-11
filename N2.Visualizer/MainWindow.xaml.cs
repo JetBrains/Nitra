@@ -60,11 +60,21 @@ namespace N2.Visualizer
     Recovery _recovery;
     List<RecoveryInfo> _recoveryResults = new List<RecoveryInfo>();
     ObservableCollection<Preset> _presets = new ObservableCollection<Preset>();
+    Settings _settings; 
 
     public MainWindow()
     {
+      _settings = Settings.Default;
+
       InitializeComponent();
-      _mainRow.Height = new GridLength(Settings.Default.TabControlHeight);
+
+      this.Top         = _settings.WindowTop;
+      this.Left        = _settings.WindowLeft;
+      this.Height      = _settings.WindowHeight;
+      this.Width       = _settings.WindowLWidth;
+      this.WindowState = (WindowState)_settings.WindowState;
+
+      _mainRow.Height = new GridLength(_settings.TabControlHeight);
       _tabControl.SelectedItem = _performanceTabItem;
       _findGrid.Visibility = System.Windows.Visibility.Collapsed;
       _foldingStrategy = new N2FoldingStrategy();
@@ -99,16 +109,21 @@ namespace N2.Visualizer
       var code =
         args.Length > 1
           ? File.ReadAllText(args[1])
-          : Settings.Default.LastTextInput;
+          : _settings.LastTextInput;
 
       LoadPresets();
-      Load(Settings.Default.LastAssemblyFilePath, Settings.Default.LastGrammarName, Settings.Default.LastRuleName, code);
+      Load(_settings.LastAssemblyFilePath, _settings.LastGrammarName, _settings.LastRuleName, code);
     }
 
     private void Window_Closed(object sender, EventArgs e)
     {
-      Settings.Default.TabControlHeight = _mainRow.Height.Value;
-      Settings.Default.LastTextInput = _text.Text;
+      _settings.TabControlHeight = _mainRow.Height.Value;
+      _settings.LastTextInput = _text.Text;
+      _settings.WindowState   = (int)this.WindowState;
+      _settings.WindowTop     = this.Top;
+      _settings.WindowLeft    = this.Left;
+      _settings.WindowHeight  = this.Height;
+      _settings.WindowLWidth  = this.Width;
       SavePresets();
     }
 
@@ -117,13 +132,13 @@ namespace N2.Visualizer
       var presets = new StringCollection();
       foreach (var preset in _presets)
         presets.Add(preset.Save());
-      Settings.Default.Presets = presets;
+      _settings.Presets = presets;
     }
 
     private void LoadPresets()
     {
-      if (Settings.Default.Presets != null)
-        foreach (var presetData in Settings.Default.Presets)
+      if (_settings.Presets != null)
+        foreach (var presetData in _settings.Presets)
           _presets.Add(new Preset(_presets, presetData));
     }
 
@@ -471,12 +486,12 @@ namespace N2.Visualizer
         Filter = "Parser module (.dll)|*.dll",
         Title = "Load partser"
       };
-      if (!string.IsNullOrEmpty(Settings.Default.LastLoadParserDirectory) && Directory.Exists(Settings.Default.LastLoadParserDirectory))
-        dialog.InitialDirectory = Settings.Default.LastLoadParserDirectory;
+      if (!string.IsNullOrEmpty(_settings.LastLoadParserDirectory) && Directory.Exists(_settings.LastLoadParserDirectory))
+        dialog.InitialDirectory = _settings.LastLoadParserDirectory;
 
       if (dialog.ShowDialog(this) ?? false)
       {
-        Settings.Default.LastLoadParserDirectory = Path.GetDirectoryName(dialog.FileName);
+        _settings.LastLoadParserDirectory = Path.GetDirectoryName(dialog.FileName);
 
         var grammars = LoadAssembly(dialog.FileName);
         var ruleSelectionDialog = new RuleSelectionDialog(grammars) { Owner = this };
@@ -490,14 +505,14 @@ namespace N2.Visualizer
     private GrammarDescriptor[] LoadAssembly(string assemblyFilePath)
     {
       var assembly = Assembly.LoadFrom(assemblyFilePath);
-      Settings.Default.LastAssemblyFilePath = assemblyFilePath;
+      _settings.LastAssemblyFilePath = assemblyFilePath;
       return GrammarDescriptor.GetDescriptors(assembly);
     }
 
     private void LoadRule(RuleDescriptor ruleDescriptor)
     {
-      Settings.Default.LastGrammarName = ruleDescriptor.Grammar.FullName;
-      Settings.Default.LastRuleName = ruleDescriptor.Name;
+      _settings.LastGrammarName = ruleDescriptor.Grammar.FullName;
+      _settings.LastRuleName = ruleDescriptor.Name;
 
       _ruleDescriptor = ruleDescriptor;
       _parserHost = new ParserHost(_recovery.Strategy);
@@ -957,7 +972,7 @@ namespace N2.Visualizer
     private void SavePreset(object sender, ExecutedRoutedEventArgs e)
     {
       var text = _text.Text;
-      var moduleName = Settings.Default.LastGrammarName;
+      var moduleName = _settings.LastGrammarName;
       var grammarName = moduleName.Split('.').Last();
       var dialog = new AddPreset(grammarName, text);
       dialog.Owner = this;
@@ -968,7 +983,7 @@ namespace N2.Visualizer
         if (preset != null)
           _presets.Remove(preset);
 
-        _presets.Insert(0, new Preset(_presets, dialog.PresetName, Settings.Default.LastAssemblyFilePath, moduleName, Settings.Default.LastRuleName, text));
+        _presets.Insert(0, new Preset(_presets, dialog.PresetName, _settings.LastAssemblyFilePath, moduleName, _settings.LastRuleName, text));
 
         if (_presets.Count > MaxPresetCount)
           _presets.RemoveAt(MaxPresetCount);
@@ -983,7 +998,7 @@ namespace N2.Visualizer
     private void PersistPresets(object sender, ExecutedRoutedEventArgs e)
     {
       SavePresets();
-      Settings.Default.Save();
+      _settings.Save();
     }
   }
 }
