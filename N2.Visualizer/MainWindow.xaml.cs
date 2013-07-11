@@ -24,9 +24,11 @@ using N2.Visualizer.Properties;
 using System.Diagnostics;
 using System.Text;
 
+using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
+
 namespace N2.Visualizer
 {
-  using RecoveryInfo = Tuple<RecoveryResult, RecoveryResult[], RecoveryResult[]>;
+  using RecoveryInfo = Tuple<RecoveryResult, RecoveryResult[], RecoveryResult[], RecoveryStack[]>;
 
   /// <summary>
   /// Interaction logic for MainWindow.xaml
@@ -62,6 +64,7 @@ namespace N2.Visualizer
     public MainWindow()
     {
       InitializeComponent();
+      _mainRow.Height = new GridLength(Settings.Default.TabControlHeight);
       _tabControl.SelectedItem = _performanceTabItem;
       _findGrid.Visibility = System.Windows.Visibility.Collapsed;
       _foldingStrategy = new N2FoldingStrategy();
@@ -104,6 +107,7 @@ namespace N2.Visualizer
 
     private void Window_Closed(object sender, EventArgs e)
     {
+      Settings.Default.TabControlHeight = _mainRow.Height.Value;
       Settings.Default.LastTextInput = _text.Text;
       SavePresets();
     }
@@ -162,9 +166,9 @@ namespace N2.Visualizer
         _parseTimer.Start();
     }
 
-    private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats)
+    private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats, List<RecoveryStack> stacks)
     {
-      _recoveryResults.Add(Tuple.Create(bestResult, bestResults.ToArray(), candidats.ToArray()));
+      _recoveryResults.Add(Tuple.Create(bestResult, bestResults.ToArray(), candidats.ToArray(), stacks.ToArray()));
     }
 
     private void textBox1_GotFocus(object sender, RoutedEventArgs e)
@@ -586,6 +590,13 @@ namespace N2.Visualizer
         node.Tag = recoveryResult;
         node.MouseDoubleClick += new MouseButtonEventHandler(RecoveryNode_MouseDoubleClick);
 
+        var stackNode = new TreeViewItem();
+        stackNode.Header = "Stacks...";
+        stackNode.Tag = recoveryResult.Item4;
+        stackNode.Expanded += RecoveryNode_Expanded;
+        stackNode.Items.Add(new TreeViewItem());
+        node.Items.Add(stackNode);
+
         var bestResultsNode = new TreeViewItem();
         bestResultsNode.Header = "Other best results...";
         bestResultsNode.Tag = recoveryResult.Item2;
@@ -618,13 +629,44 @@ namespace N2.Visualizer
       if (treeNode.Items.Count == 1 && ((TreeViewItem)treeNode.Items[0]).Header == null)
       {
         treeNode.Items.Clear();
-        var recoveryResults = (RecoveryResult[])treeNode.Tag;
+        var recoveryResults = treeNode.Tag as RecoveryResult[];
 
-        foreach (var recoveryResult in recoveryResults)
+        if (recoveryResults != null)
         {
-          var node = new TreeViewItem();
-          node.Header = recoveryResult;
-          treeNode.Items.Add(node);
+          foreach (var recoveryResult in recoveryResults)
+          {
+            var node = new TreeViewItem();
+            node.Header = recoveryResult;
+
+            foreach (var frame in recoveryResult.Stack)
+            {
+              var frameNode = new TreeViewItem();
+              frameNode.Header = frame;
+              node.Items.Add(frameNode);
+            }
+
+            treeNode.Items.Add(node);
+          }
+        }
+
+        var stacks = treeNode.Tag as RecoveryStack[];
+
+        if (stacks != null)
+        {
+          foreach (var stack in stacks)
+          {
+            var node = new TreeViewItem();
+            node.Header = stack.hd;
+
+            foreach (var frame in stack)
+            {
+              var frameNode = new TreeViewItem();
+              frameNode.Header = frame;
+              node.Items.Add(frameNode);
+            }
+
+            treeNode.Items.Add(node);
+          }
         }
       }
     }
