@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 
@@ -42,7 +42,7 @@ namespace JetBrains.Util
 
       if (singular.EndsWith("s") || singular.EndsWith("x") || singular.EndsWith("sh")|| singular.EndsWith("ch"))
         return singular + "es";
-      
+
       if (singular.EndsWith("y"))
         return singular.Substring(0, singular.Length - 1) + "ies";
 
@@ -58,7 +58,7 @@ namespace JetBrains.Util
 
       if (!plural.EndsWith("s") || plural.EndsWith("ss") || plural.EndsWith("xs") || plural.EndsWith("shs"))
         return plural;
-      
+
       if (plural.EndsWith("ies"))
         return plural.Substring(0, plural.Length - 3) + "y";
 
@@ -77,7 +77,7 @@ namespace JetBrains.Util
 
     public static string GetCountString(int argumentIndex)
     {
-      string suffix = "th"; 
+      string suffix = "th";
       switch (argumentIndex + 1)
       {
         case 1:

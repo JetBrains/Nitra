@@ -63,7 +63,7 @@ namespace N2.DebugStrategies
       {
         Debug.Assert(true);
       }
-        
+
       do
       {
         //for (var stack = _recoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
@@ -121,7 +121,7 @@ namespace N2.DebugStrategies
           var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state);
           if (false && loopBodyStartStgate >= 0)
           {
-            // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы 
+            // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы
             // имеем дело с банальным концом цикла мы должны
             //var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
             var elemFrame = new RecoveryStackFrame(stackFrame.RuleParser, stackFrame.AstPtr, stackFrame.AstStartPos, loopBodyStartStgate, stackFrame.Counter, 0, 0, stackFrame.IsRootAst, stackFrame.Info);
@@ -271,7 +271,7 @@ namespace N2.DebugStrategies
       //if (ruleEndPos - startPos > _bestResult.RecoveredHeadCount) goto good;
       //if (ruleEndPos - startPos < _bestResult.RecoveredHeadCount) return;
 
-      if (newResult.RuleEndPos >= 0 && _bestResult.RuleEndPos <  0) goto good; // 
+      if (newResult.RuleEndPos >= 0 && _bestResult.RuleEndPos <  0) goto good; //
       if (newResult.RuleEndPos <  0 && _bestResult.RuleEndPos >= 0) return;
 
       if (startPos < _bestResult.StartPos && endPos == _bestResult.EndPos) goto good;

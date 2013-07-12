@@ -49,7 +49,7 @@ namespace N2.Visualizer
     {
       if (_presetName.Text.Contains('|'))
       {
-        MessageBox.Show(this, "The symbol '|' unacceptable in preset name.", "Nitra Visualizer", 
+        MessageBox.Show(this, "The symbol '|' unacceptable in preset name.", "Nitra Visualizer",
           MessageBoxButton.OK, MessageBoxImage.Error, MessageBoxResult.Cancel);
         return;
       }

@@ -45,7 +45,7 @@ namespace N2.Visualizer
     bool _doChangeCaretPos;
     Timer _parseTimer;
     Dictionary<string, HighlightingColor> _highlightingStyles;
-    TextMarkerService _textMarkerService; 
+    TextMarkerService _textMarkerService;
     N2FoldingStrategy _foldingStrategy;
     FoldingManager _foldingManager;
     ToolTip _textBox1Tooltip;
@@ -60,7 +60,7 @@ namespace N2.Visualizer
     Recovery _recovery;
     List<RecoveryInfo> _recoveryResults = new List<RecoveryInfo>();
     ObservableCollection<Preset> _presets = new ObservableCollection<Preset>();
-    Settings _settings; 
+    Settings _settings;
 
     public MainWindow()
     {
@@ -833,7 +833,7 @@ namespace N2.Visualizer
         return true;
 
       var end = start + length - 1;
-      
+
       if (end < text.Length)
         if (char.IsLetterOrDigit(text[end]) || text[end] == '_')
           if (char.IsLetterOrDigit(text[end + 1]) || text[end + 1] == '_')

@@ -81,7 +81,7 @@ namespace N2.DebugStrategies
 
           ProcessStackFrame(startTextPos, parser, _recoveryStack, curTextPos, text, 0);
         }
-        // Здес нужно прерывать цикл, если _bestResult != null. 
+        // Здес нужно прерывать цикл, если _bestResult != null.
         // Но при этом _bestResult не должен содержать вариантов где в _bestResult.Recovered находятся только пробелы (void-правила).
         curTextPos++;
       }
@@ -154,7 +154,7 @@ namespace N2.DebugStrategies
       List<ParsedStateInfo> parsedStates;
 
       int nextState;
-      for (var state = stackFrame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? ruleParser.GetNextState(stackFrame.FailState) : 
+      for (var state = stackFrame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? ruleParser.GetNextState(stackFrame.FailState) :
       {
         parser.MaxFailPos = startTextPos;
         nextState = ruleParser.GetNextState(state);
@@ -178,7 +178,7 @@ namespace N2.DebugStrategies
           var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state, out itemRuleParser, out itemId);
           if (false && loopBodyStartStgate >= 0)
           {
-            // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы 
+            // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы
             // имеем дело с банальным концом цикла мы должны
             //var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
             var elemFrame = new RecoveryStackFrame(itemRuleParser, itemId,  stackFrame.AstPtr, stackFrame.AstStartPos, loopBodyStartStgate, stackFrame.Counter, 0, 0, stackFrame.IsRootAst, stackFrame.Info);
@@ -314,7 +314,7 @@ namespace N2.DebugStrategies
       {
         return;
       }
-      
+
       if (newResult.RuleEndPos   >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount > 0  && _bestResult.RecoveredTailCount <= 0) goto good; // если у newResult есть продолжение, а у _bestResult нет
       if (_bestResult.RuleEndPos >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount <= 0 && _bestResult.RecoveredTailCount > 0) return;    // если у _bestResult есть продолжение, а у newResult нет
 
@@ -331,7 +331,7 @@ namespace N2.DebugStrategies
       //if (ruleEndPos - startPos > _bestResult.RecoveredHeadCount) goto good;
       //if (ruleEndPos - startPos < _bestResult.RecoveredHeadCount) return;
 
-      if (newResult.RuleEndPos >= 0 && _bestResult.RuleEndPos <  0) goto good; // 
+      if (newResult.RuleEndPos >= 0 && _bestResult.RuleEndPos <  0) goto good; //
       if (newResult.RuleEndPos <  0 && _bestResult.RuleEndPos >= 0) return;
 
       if (startPos < _bestResult.StartPos && endPos == _bestResult.EndPos) goto good;

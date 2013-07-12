@@ -114,7 +114,7 @@ namespace N2.DebugStrategies
         }
         curTextPos++;
       }
-      while (curTextPos <= text.Length && _bestResult == null);// || _bestResult == null); // && curTextPos - startTextPos < 400 
+      while (curTextPos <= text.Length && _bestResult == null);// || _bestResult == null); // && curTextPos - startTextPos < 400
 
       timer.Stop();
 
@@ -187,9 +187,9 @@ namespace N2.DebugStrategies
       var isPrefixParsed = !ruleParser.IsStartState(stackFrame.FailState);
       var isOptional = ruleParser.IsLoopSeparatorStart(stackFrame.FailState);
       List<ParsedStateInfo> parsedStates;
-      
+
       int nextState;
-      for (var state = stackFrame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? ruleParser.GetNextState(stackFrame.FailState) : 
+      for (var state = stackFrame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? ruleParser.GetNextState(stackFrame.FailState) :
       {
         parser.MaxFailPos = startTextPos;
         nextState = ruleParser.GetNextState(state);
@@ -218,20 +218,20 @@ namespace N2.DebugStrategies
             break;
           }
         }
-        
+
         var isParsed = pos > curTextPos;
 
         if (!isPrefixParsed && isParsed && !ruleParser.IsVoidState(state))
           isPrefixParsed = isParsed;
 
-        if (nextState < 0 && !isPrefixParsed) // 
+        if (nextState < 0 && !isPrefixParsed) //
         {
           int itemId;
           IRecoveryRuleParser itemRuleParser;
           var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state, out itemRuleParser, out itemId);
           if (loopBodyStartStgate >= 0)
           {
-            // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы 
+            // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы
             // имеем дело с банальным концом цикла мы должны
             var elemFrame = new RecoveryStackFrame(itemRuleParser, itemId, stackFrame.AstPtr, stackFrame.AstStartPos, loopBodyStartStgate, stackFrame.Counter, 0, 0, stackFrame.IsRootAst, stackFrame.Info);
             var loopStack = (RecoveryStack)recoveryStack.Tail;
@@ -306,7 +306,7 @@ namespace N2.DebugStrategies
           }
         }
 
-        if (curr_bestResult == _bestResult && stackFrame.FailState == state && subruleLevel <= 1 && !stackFrame.RuleParser.IsTokenRule) // 
+        if (curr_bestResult == _bestResult && stackFrame.FailState == state && subruleLevel <= 1 && !stackFrame.RuleParser.IsTokenRule) //
           TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel, state);
       }
     }
@@ -405,7 +405,7 @@ namespace N2.DebugStrategies
       {
         return;
       }
-      
+
       if (newResult.RuleEndPos   >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount > 0  && _bestResult.RecoveredTailCount <= 0) goto good; // если у newResult есть продолжение, а у _bestResult нет
       if (_bestResult.RuleEndPos >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount <= 0 && _bestResult.RecoveredTailCount > 0) return;    // если у _bestResult есть продолжение, а у newResult нет
 
@@ -419,7 +419,7 @@ namespace N2.DebugStrategies
       {
       }
 
-      if (newResult.RuleEndPos >= 0 && _bestResult.RuleEndPos <  0) goto good; // 
+      if (newResult.RuleEndPos >= 0 && _bestResult.RuleEndPos <  0) goto good; //
       if (newResult.RuleEndPos <  0 && _bestResult.RuleEndPos >= 0) return;
 
       if (startPos < _bestResult.StartPos && endPos == _bestResult.EndPos) goto good;
@@ -434,7 +434,7 @@ namespace N2.DebugStrategies
       stackLength = stack.Length;
       var bestResultStackLength = this._bestResult.StackLength;
 
-      // Если при восстановлении ничего не было пропарсено, то побеждать должен фрейм с большим FialState, так как 
+      // Если при восстановлении ничего не было пропарсено, то побеждать должен фрейм с большим FialState, так как
       // иначе будут возникать фантомные значени. Если же что-то спарсилось, то побеждать должен фрейм с меньшим FialState.
       var winLastState = _bestResult.RecoveredCount == 0 && newResult.RecoveredCount == 0;
       var result = CompareStack(stack, _bestResult.Stack, winLastState);
