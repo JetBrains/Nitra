@@ -226,15 +226,17 @@ namespace N2.DebugStrategies
 
         if (nextState < 0 && !isPrefixParsed) // 
         {
-          var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state);
+          int itemId;
+          IRecoveryRuleParser itemRuleParser;
+          var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state, out itemRuleParser, out itemId);
           if (loopBodyStartStgate >= 0)
           {
             // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы 
             // имеем дело с банальным концом цикла мы должны
-            var elemFrame = new RecoveryStackFrame(stackFrame.RuleParser, stackFrame.AstPtr, stackFrame.AstStartPos, loopBodyStartStgate, stackFrame.Counter, 0, 0, stackFrame.IsRootAst, stackFrame.Info);
+            var elemFrame = new RecoveryStackFrame(itemRuleParser, itemId, stackFrame.AstPtr, stackFrame.AstStartPos, loopBodyStartStgate, stackFrame.Counter, 0, 0, stackFrame.IsRootAst, stackFrame.Info);
             var loopStack = (RecoveryStack)recoveryStack.Tail;
             var loopFrame = loopStack.hd;
-            var newLoopFrame = new RecoveryStackFrame(loopFrame.RuleParser, loopFrame.AstPtr, loopFrame.AstStartPos, loopFrame.FailState, loopFrame.Counter, loopFrame.ListStartPos, loopFrame.ListEndPos, loopFrame.IsRootAst, FrameInfo.LoopBody);
+            var newLoopFrame = new RecoveryStackFrame(loopFrame.RuleParser, loopFrame.RuleId, loopFrame.AstPtr, loopFrame.AstStartPos, loopFrame.FailState, loopFrame.Counter, loopFrame.ListStartPos, loopFrame.ListEndPos, loopFrame.IsRootAst, FrameInfo.LoopBody);
             var newStack = new RecoveryStack(elemFrame, new RecoveryStack(newLoopFrame, loopStack.Tail));
             var old_bestResult = _bestResult;
             var old_bestResults = _bestResults;
@@ -361,8 +363,13 @@ namespace N2.DebugStrategies
         if (subRuleParser.IsTokenRule)
           continue;
 
+        int subRuleParserId = -1;
+        if (subRuleParser is StartRuleParser) subRuleParserId = ((StartRuleParser)subRuleParser).StartRuleId;
+        if (subRuleParser is ExtentionRuleParser) subRuleParserId = ((ExtentionRuleParser)subRuleParser).RuleId;
+        Debug.Assert(subRuleParserId != -1);
+
         var old = recoveryStack;
-        recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
+        recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, subRuleParserId, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
         _recCount++;
         ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
         recoveryStack = old; // remove top element

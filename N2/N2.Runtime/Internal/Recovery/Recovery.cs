@@ -173,16 +173,18 @@ namespace N2.DebugStrategies
 
         if (nextState < 0 && !isPrefixParsed)
         {
-          var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state);
+          var itemId;
+          var itemRuleParser;
+          var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state, out itemRuleParser, out itemId);
           if (false && loopBodyStartStgate >= 0)
           {
             // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы 
             // имеем дело с банальным концом цикла мы должны
             //var pos2 = ContinueParse(pos, recoveryStack, parser, text, !isOptional);
-            var elemFrame = new RecoveryStackFrame(stackFrame.RuleParser, stackFrame.AstPtr, stackFrame.AstStartPos, loopBodyStartStgate, stackFrame.Counter, 0, 0, stackFrame.IsRootAst, stackFrame.Info);
+            var elemFrame = new RecoveryStackFrame(itemRuleParser, itemId,  stackFrame.AstPtr, stackFrame.AstStartPos, loopBodyStartStgate, stackFrame.Counter, 0, 0, stackFrame.IsRootAst, stackFrame.Info);
             var loopStack = (RecoveryStack)recoveryStack.Tail;
             var loopFrame = loopStack.hd;
-            var newLoopFrame = new RecoveryStackFrame(loopFrame.RuleParser, loopFrame.AstPtr, loopFrame.AstStartPos, loopFrame.FailState, loopFrame.Counter, loopFrame.ListStartPos, loopFrame.ListEndPos, loopFrame.IsRootAst, FrameInfo.LoopBody);
+            var newLoopFrame = new RecoveryStackFrame(loopFrame.RuleParser, loopFrame.RuleId, loopFrame.AstPtr, loopFrame.AstStartPos, loopFrame.FailState, loopFrame.Counter, loopFrame.ListStartPos, loopFrame.ListEndPos, loopFrame.IsRootAst, FrameInfo.LoopBody);
             var newStack = new RecoveryStack(elemFrame, new RecoveryStack(newLoopFrame, loopStack.Tail));
             var old_bestResult = _bestResult;
             var old_bestResults = _bestResults;
@@ -266,29 +268,29 @@ namespace N2.DebugStrategies
 
     void TryParseSubrules(int startTextPos, Parser parser, RecoveryStack recoveryStack, int curTextPos, string text, int subruleLevel)
     {
-      if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
-        return;
-      _nestedLevel++;
-      var stackFrame = recoveryStack.hd;
-      var parsers = stackFrame.RuleParser.GetParsersForState(stackFrame.FailState);
+      //if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
+      //  return;
+      //_nestedLevel++;
+      //var stackFrame = recoveryStack.hd;
+      //var parsers = stackFrame.RuleParser.GetParsersForState(stackFrame.FailState);
 
-      if (!parsers.IsEmpty())
-      {
-      }
+      //if (!parsers.IsEmpty())
+      //{
+      //}
 
-      foreach (var subRuleParser in parsers)
-      {
-        if (subRuleParser.IsTokenRule)
-          continue;
+      //foreach (var subRuleParser in parsers)
+      //{
+      //  if (subRuleParser.IsTokenRule)
+      //    continue;
 
-        var old = recoveryStack;
-        recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
-        _recCount++;
-        ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
-        recoveryStack = old; // remove top element
-      }
+      //  var old = recoveryStack;
+      //  recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, -1, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
+      //  _recCount++;
+      //  ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
+      //  recoveryStack = old; // remove top element
+      //}
 
-      _nestedLevel--;
+      //_nestedLevel--;
     }
 
     void AddResult(int startPos, int ruleEndPos, int endPos, int startState, RecoveryStack stack, string text, int failPos, bool allowEmpty = false)
