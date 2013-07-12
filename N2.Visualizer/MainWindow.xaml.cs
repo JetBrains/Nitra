@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -23,15 +24,19 @@ using N2.Visualizer.Properties;
 using System.Diagnostics;
 using System.Text;
 
+using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
+
 namespace N2.Visualizer
 {
-  using RecoveryInfo = Tuple<RecoveryResult, RecoveryResult[], RecoveryResult[]>;
+  using RecoveryInfo = Tuple<RecoveryResult, RecoveryResult[], RecoveryResult[], RecoveryStack[]>;
 
   /// <summary>
   /// Interaction logic for MainWindow.xaml
   /// </summary>
   public partial class MainWindow : Window
   {
+    const int MaxPresetCount = 50;
+
     bool _loading = true;
     ParserHost _parserHost;
     Parser _parseResult;
@@ -54,11 +59,24 @@ namespace N2.Visualizer
     TimeSpan _highlightingTimeSpan;
     Recovery _recovery;
     List<RecoveryInfo> _recoveryResults = new List<RecoveryInfo>();
+    ObservableCollection<Preset> _presets = new ObservableCollection<Preset>();
+    Settings _settings; 
 
     public MainWindow()
     {
+      _settings = Settings.Default;
+
       InitializeComponent();
-      _tabControl.SelectedItem = _performanceTabItem;
+
+      this.Top         = _settings.WindowTop;
+      this.Left        = _settings.WindowLeft;
+      this.Height      = _settings.WindowHeight;
+      this.Width       = _settings.WindowLWidth;
+      this.WindowState = (WindowState)_settings.WindowState;
+      _mainRow.Height  = new GridLength(_settings.TabControlHeight);
+
+      _tabControl.SelectedIndex = _settings.ActiveTabIndex;
+
       _findGrid.Visibility = System.Windows.Visibility.Collapsed;
       _foldingStrategy = new N2FoldingStrategy();
       _textBox1Tooltip = new ToolTip() { PlacementTarget = _text };
@@ -82,26 +100,72 @@ namespace N2.Visualizer
       _textMarkerService = new TextMarkerService(_text.Document);
       _text.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
       _text.TextArea.TextView.LineTransformers.Add(_textMarkerService);
+
+      _presetsMenuItem.ItemsSource = _presets;
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
       var args = Environment.GetCommandLineArgs();
-      _text.Text =
+      var code =
         args.Length > 1
           ? File.ReadAllText(args[1])
-          : Settings.Default.LastTextInput;
-      if (!string.IsNullOrEmpty(Settings.Default.LastAssemblyFilePath) && File.Exists(Settings.Default.LastAssemblyFilePath))
+          : _settings.LastTextInput;
+
+      LoadPresets();
+      Load(_settings.LastAssemblyFilePath, _settings.LastGrammarName, _settings.LastRuleName, code);
+    }
+
+    private void Window_Closed(object sender, EventArgs e)
+    {
+      _settings.TabControlHeight = _mainRow.Height.Value;
+      _settings.LastTextInput    = _text.Text;
+      _settings.WindowState      = (int)this.WindowState;
+      _settings.WindowTop        = this.Top;
+      _settings.WindowLeft       = this.Left;
+      _settings.WindowHeight     = this.Height;
+      _settings.WindowLWidth     = this.Width;
+      _settings.ActiveTabIndex   = _tabControl.SelectedIndex;
+      SavePresets();
+    }
+
+    private void SavePresets()
+    {
+      var presets = new StringCollection();
+      foreach (var preset in _presets)
+        presets.Add(preset.Save());
+      _settings.Presets = presets;
+    }
+
+    private void LoadPresets()
+    {
+      if (_settings.Presets != null)
+        foreach (var presetData in _settings.Presets)
+          _presets.Add(new Preset(_presets, presetData));
+    }
+
+    void Load(Preset preset)
+    {
+      Load(preset.AssemblyFilePath, preset.SynatxModuleName, preset.StartRuleName, preset.Code);
+    }
+
+    void Load(string assemblyFilePath, string syntaxModuleFullName, string startRuleName, string code)
+    {
+      _loading = true;
+
+      _text.Text = code;
+
+      if (!string.IsNullOrEmpty(assemblyFilePath) && File.Exists(assemblyFilePath))
       {
-        var grammars = LoadAssembly(Settings.Default.LastAssemblyFilePath);
+        var grammars = LoadAssembly(assemblyFilePath);
 
         GrammarDescriptor grammar = null;
-        if (!string.IsNullOrEmpty(Settings.Default.LastGrammarName))
-          grammar = grammars.FirstOrDefault(g => g.FullName == Settings.Default.LastGrammarName);
+        if (!string.IsNullOrEmpty(syntaxModuleFullName))
+          grammar = grammars.FirstOrDefault(g => g.FullName == syntaxModuleFullName);
 
         RuleDescriptor ruleDescriptor = null;
         if (grammar != null)
-          ruleDescriptor = grammar.Rules.FirstOrDefault(r => r.Name == Settings.Default.LastRuleName);
+          ruleDescriptor = grammar.Rules.FirstOrDefault(r => r.Name == startRuleName);
 
         if (ruleDescriptor != null)
           LoadRule(ruleDescriptor);
@@ -119,14 +183,9 @@ namespace N2.Visualizer
         _parseTimer.Start();
     }
 
-    private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats)
+    private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats, List<RecoveryStack> stacks)
     {
-      _recoveryResults.Add(Tuple.Create(bestResult, bestResults.ToArray(), candidats.ToArray()));
-    }
-
-    private void Window_Closed(object sender, EventArgs e)
-    {
-      Settings.Default.LastTextInput = _text.Text;
+      _recoveryResults.Add(Tuple.Create(bestResult, bestResults.ToArray(), candidats.ToArray(), stacks.ToArray()));
     }
 
     private void textBox1_GotFocus(object sender, RoutedEventArgs e)
@@ -429,12 +488,12 @@ namespace N2.Visualizer
         Filter = "Parser module (.dll)|*.dll",
         Title = "Load partser"
       };
-      if (!string.IsNullOrEmpty(Settings.Default.LastLoadParserDirectory) && Directory.Exists(Settings.Default.LastLoadParserDirectory))
-        dialog.InitialDirectory = Settings.Default.LastLoadParserDirectory;
+      if (!string.IsNullOrEmpty(_settings.LastLoadParserDirectory) && Directory.Exists(_settings.LastLoadParserDirectory))
+        dialog.InitialDirectory = _settings.LastLoadParserDirectory;
 
       if (dialog.ShowDialog(this) ?? false)
       {
-        Settings.Default.LastLoadParserDirectory = Path.GetDirectoryName(dialog.FileName);
+        _settings.LastLoadParserDirectory = Path.GetDirectoryName(dialog.FileName);
 
         var grammars = LoadAssembly(dialog.FileName);
         var ruleSelectionDialog = new RuleSelectionDialog(grammars) { Owner = this };
@@ -448,14 +507,14 @@ namespace N2.Visualizer
     private GrammarDescriptor[] LoadAssembly(string assemblyFilePath)
     {
       var assembly = Assembly.LoadFrom(assemblyFilePath);
-      Settings.Default.LastAssemblyFilePath = assemblyFilePath;
+      _settings.LastAssemblyFilePath = assemblyFilePath;
       return GrammarDescriptor.GetDescriptors(assembly);
     }
 
     private void LoadRule(RuleDescriptor ruleDescriptor)
     {
-      Settings.Default.LastGrammarName = ruleDescriptor.Grammar.FullName;
-      Settings.Default.LastRuleName = ruleDescriptor.Name;
+      _settings.LastGrammarName = ruleDescriptor.Grammar.FullName;
+      _settings.LastRuleName = ruleDescriptor.Name;
 
       _ruleDescriptor = ruleDescriptor;
       _parserHost = new ParserHost(_recovery.Strategy);
@@ -548,6 +607,13 @@ namespace N2.Visualizer
         node.Tag = recoveryResult;
         node.MouseDoubleClick += new MouseButtonEventHandler(RecoveryNode_MouseDoubleClick);
 
+        var stackNode = new TreeViewItem();
+        stackNode.Header = "Stacks...";
+        stackNode.Tag = recoveryResult.Item4;
+        stackNode.Expanded += RecoveryNode_Expanded;
+        stackNode.Items.Add(new TreeViewItem());
+        node.Items.Add(stackNode);
+
         var bestResultsNode = new TreeViewItem();
         bestResultsNode.Header = "Other best results...";
         bestResultsNode.Tag = recoveryResult.Item2;
@@ -580,13 +646,44 @@ namespace N2.Visualizer
       if (treeNode.Items.Count == 1 && ((TreeViewItem)treeNode.Items[0]).Header == null)
       {
         treeNode.Items.Clear();
-        var recoveryResults = (RecoveryResult[])treeNode.Tag;
+        var recoveryResults = treeNode.Tag as RecoveryResult[];
 
-        foreach (var recoveryResult in recoveryResults)
+        if (recoveryResults != null)
         {
-          var node = new TreeViewItem();
-          node.Header = recoveryResult;
-          treeNode.Items.Add(node);
+          foreach (var recoveryResult in recoveryResults)
+          {
+            var node = new TreeViewItem();
+            node.Header = recoveryResult;
+
+            foreach (var frame in recoveryResult.Stack)
+            {
+              var frameNode = new TreeViewItem();
+              frameNode.Header = frame;
+              node.Items.Add(frameNode);
+            }
+
+            treeNode.Items.Add(node);
+          }
+        }
+
+        var stacks = treeNode.Tag as RecoveryStack[];
+
+        if (stacks != null)
+        {
+          foreach (var stack in stacks)
+          {
+            var node = new TreeViewItem();
+            node.Header = stack.hd;
+
+            foreach (var frame in stack)
+            {
+              var frameNode = new TreeViewItem();
+              frameNode.Header = frame;
+              node.Items.Add(frameNode);
+            }
+
+            treeNode.Items.Add(node);
+          }
         }
       }
     }
@@ -862,7 +959,7 @@ namespace N2.Visualizer
       Clipboard.SetData(DataFormats.UnicodeText, result);
     }
 
-    private void CopyNodeText(object sender, ExecutedRoutedEventArgs e)
+    private void CopyReflectionNodeText(object sender, ExecutedRoutedEventArgs e)
     {
       var value = treeView1.SelectedValue as TreeViewItem;
 
@@ -872,6 +969,38 @@ namespace N2.Visualizer
         Clipboard.SetData(DataFormats.Text, result);
         Clipboard.SetData(DataFormats.UnicodeText, result);
       }
+    }
+
+    private void SavePreset(object sender, ExecutedRoutedEventArgs e)
+    {
+      var text = _text.Text;
+      var moduleName = _settings.LastGrammarName;
+      var grammarName = moduleName.Split('.').Last();
+      var dialog = new AddPreset(grammarName, text);
+      dialog.Owner = this;
+      if (dialog.ShowDialog() ?? false)
+      {
+        // remove element with same name
+        var preset = _presets.FirstOrDefault(p => p.Name == dialog.PresetName);
+        if (preset != null)
+          _presets.Remove(preset);
+
+        _presets.Insert(0, new Preset(_presets, dialog.PresetName, _settings.LastAssemblyFilePath, moduleName, _settings.LastRuleName, text));
+
+        if (_presets.Count > MaxPresetCount)
+          _presets.RemoveAt(MaxPresetCount);
+      }
+    }
+
+    private void PresetMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+      Load((Preset)((MenuItem)e.Source).DataContext);
+    }
+
+    private void PersistPresets(object sender, ExecutedRoutedEventArgs e)
+    {
+      SavePresets();
+      _settings.Save();
     }
   }
 }

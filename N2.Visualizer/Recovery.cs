@@ -32,7 +32,7 @@ namespace N2.DebugStrategies
     public TimeSpan  TryParseNoCacheTime;
     public int       TryParseNoCacheCount;
 
-    public Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>> ReportResult;
+    public Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStack>> ReportResult;
 
     public void Init()
     {
@@ -49,22 +49,20 @@ namespace N2.DebugStrategies
     }
 #endif
 
-    List<RecoveryResult> _candidats = new List<RecoveryResult>();
-    //List<RecoveryResult> _candidats2 = new List<RecoveryResult>();
-    RecoveryResult       _bestResult;
-    List<RecoveryResult> _bestResults = new List<RecoveryResult>();
-    int                  _recCount;
-    int                  _bestResultsCount;
-    int                  _nestedLevel;
-    Dictionary<int, int> _allacetionsInfo = new Dictionary<int, int>();
+    List<RecoveryResult>         _candidats = new List<RecoveryResult>();
+    RecoveryResult               _bestResult;
+    List<RecoveryResult>         _bestResults = new List<RecoveryResult>();
+    int                          _recCount;
+    int                          _bestResultsCount;
+    int                          _nestedLevel;
+    Dictionary<int, int>         _allacetionsInfo = new Dictionary<int, int>();
     Dictionary<object, PrseData> _visited = new Dictionary<object, PrseData>();
-    Dictionary<string, int> _parsedRules = new Dictionary<string, int>();
-    RecoveryStack        _recoveryStack;
+    Dictionary<string, int>      _parsedRules = new Dictionary<string, int>();
+    RecoveryStack                _recoveryStack;
 
     void Reset()
     {
       _candidats.Clear();
-      //_candidats2.Clear();
       _bestResult = null;
       _bestResults.Clear();
       _recCount = 0;
@@ -123,7 +121,7 @@ namespace N2.DebugStrategies
       parser.MaxFailPos = maxFailPos;
 
       if (ReportResult != null)
-        ReportResult(_bestResult, _bestResults, _candidats);
+        ReportResult(_bestResult, _bestResults, _candidats, stacks);
 
       if (_bestResult != null)
       {
@@ -230,7 +228,7 @@ namespace N2.DebugStrategies
         {
           var loopBodyStartStgate = ruleParser.GetBodyStartStateForSeparator(state);
           if (loopBodyStartStgate >= 0)
-            {
+          {
             // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы 
             // имеем дело с банальным концом цикла мы должны
             var elemFrame = new RecoveryStackFrame(stackFrame.RuleParser, stackFrame.AstPtr, stackFrame.AstStartPos, loopBodyStartStgate, stackFrame.Counter, 0, 0, stackFrame.IsRootAst, stackFrame.Info);
@@ -240,21 +238,27 @@ namespace N2.DebugStrategies
             var newStack = new RecoveryStack(elemFrame, new RecoveryStack(newLoopFrame, loopStack.Tail));
             var old_bestResult = _bestResult;
             var old_bestResults = _bestResults;
-            _bestResult = null;
+            var old__candidats = _candidats;
+            _bestResult  = null;
             _bestResults = new List<RecoveryResult>();
+            _candidats   = new List<RecoveryResult>();
 
             ProcessStackFrame(startTextPos, parser, newStack, curTextPos, text, subruleLevel);
 
+            _bestResults = old_bestResults;
+            _candidats   = old__candidats;
+
             if (_bestResult != null && _bestResult.RecoveredCount > 0)
             {
-              _bestResult = old_bestResult;
-              _bestResults = old_bestResults;
-              AddResult(curTextPos, curTextPos, curTextPos, -1, recoveryStack, text, startTextPos, true);
+              var endPos = Math.Max(_bestResult.EndPos, curTextPos);
+              var ruleEndPos = Math.Max(_bestResult.RuleEndPos, curTextPos);
+              _bestResult  = old_bestResult;
+
+              AddResult(curTextPos, ruleEndPos, endPos, -1, recoveryStack, text, startTextPos, true);
               return;
             }
 
             _bestResult = old_bestResult;
-            _bestResults = old_bestResults;
           }
         }
 
