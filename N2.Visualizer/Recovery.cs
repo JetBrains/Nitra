@@ -83,6 +83,7 @@ namespace N2.DebugStrategies
       var curTextPos = startTextPos;
       var text = parser.Text;
       Debug.Assert(parser.RecoveryStacks.Count > 0);
+      var lastStack = parser.RecoveryStacks.Last() as RecoveryStack;
       var stacks = PrepareStacks(parser);
 
       //var infos = parser.ParserHost.Reflection(parser, startTextPos);
@@ -123,16 +124,10 @@ namespace N2.DebugStrategies
       if (ReportResult != null)
         ReportResult(_bestResult, _bestResults, _candidats, stacks);
 
-      if (_bestResult != null)
-      {
-        FixAst(parser);
-        //parser.MaxFailPos = _bestResult.EndPos;
-      }
-      else
-      {
-        // Этого вхождения быть не должно. Если мы не вычислили продолжение, значит нужно записывать весь хвост в грязь.
-        Debug.Assert(false);
-      }
+      if (_bestResult == null)
+        AddResult(text.Length, text.Length, text.Length, -1, lastStack, text, startTextPos);
+
+      FixAst(parser);
 
       Reset();
       Timer.Stop();
