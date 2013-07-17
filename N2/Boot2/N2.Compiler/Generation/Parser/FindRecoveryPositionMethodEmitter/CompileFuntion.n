@@ -1,0 +1,101 @@
+﻿using N2.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal partial class FindRecoveryPositionMethodEmitter : MethodEmitter
+  {
+    public CompileFuntion(structure : RuleStructure) : void
+    {
+      def function = if (structure is RuleStructure.Ast as astStructure)
+        if (astStructure.Symbol is ExtentionRuleSymbol)
+          <[decl:
+            public override FindRecoveryPosition(mutable curTextPos : int, astPtr : int, stack : list[N2.Internal.RecoveryStackFrame], parser : N2.Internal.Parser) : void
+            {
+              $(if (Owner.Environment.IsIdeMode)
+                <[ _ = curTextPos; _ = text; _ = astPtr; _ = parser; -1 ]>
+              else
+                CompileFuntionBody(astStructure))
+            }
+          ]>
+        else
+          <[decl:
+            public override FindRecoveryPosition(mutable curTextPos : int, stack : list[N2.Internal.RecoveryStackFrame], parser : N2.Internal.Parser) : void
+            {
+              $(if (Owner.Environment.IsIdeMode)
+                <[ _ = curTextPos; _ = text; _ = parser; -1 ]>
+              else
+                CompileFuntionBody(astStructure))
+            }
+          ]>
+      else
+        <[decl:
+          private $(FunctionName(structure) : global)(mutable curTextPos : int, stack : list[N2.Internal.RecoveryStackFrame], parser : N2.Internal.Parser) : void
+          {
+            $(CompileFuntionBody(structure))
+          }
+        ]>;
+      _tb.DefineConditional(function);
+    }
+
+    public CompileFuntionBody(structure : RuleStructure) : PExpr
+    {
+      def setAstPtr = if (structure is RuleStructure.Ast(Symbol = ExtentionRuleSymbol))
+          <[ def $(AstPtr(structure).Var) = astPtr ]>;
+        else
+          <[ def $(AstPtr(structure).Var) = parser.TryGetAst(astStart, $(structure.AstId : global)); ]>;
+
+      def fieldsCode = SCG.List();
+      CompileFieldsNoneRecursive(fieldsCode, structure);
+      def failFields = structure.NotMarkerFields.Skip(1).NToList();
+      def endSelect = Environment.MakeLabel("EndSelect");
+      def selectFailFieldMatch =
+        [<[case: | $(structure.NotMarkerFields.First().State) => startState = $(structure.NotMarkerFields.First().State); $(endSelect.Goto());]>] +
+        failFields.Map(field => <[case: | $(field.State) => $(GotoSelectStartStateLabel(field.PrevSibling))]>) +
+        [<[case: | _ => assert3(false) ]>];
+      def selectFailField = failFields.Reverse().Map(_.PrevSibling).Map(field => <[ $(SelectStartStateLabel(field)); startState = $(field.State); when ($(AstPtr(structure).GetRaw(field)) != 0) $(endSelect.Goto()); ]>);
+      <[
+        _ = $(structure.ToString());
+        def astStart = $CurTextPos;
+        $setAstPtr;
+
+        mutable startState;
+        mutable parseState;
+        if ($(AstPtr(structure).Var) > 0)
+        {
+          parseState = $(AstPtr(structure).Get(structure.HeaderState))
+        }
+        else
+        {
+          parseState = $(structure.NotMarkerFields.First().State);
+          startState = $(structure.NotMarkerFields.First().State);
+          $(endSelect.Goto());
+        }
+
+        when (parseState == N2.Internal.Parser.AstParsedState)
+          parseState = $(structure.NotMarkerFields.Last().State);
+        assert3(parseState >= 0);
+
+        match (parseState)
+        {
+          ..$selectFailFieldMatch
+        }
+        ..$selectFailField;
+        $(endSelect.Label());
+
+        ret: { $(fieldsCode.FlattenPExpr()) }
+      ]>.FlattenPExpr();
+    }
+  }
+}

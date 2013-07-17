@@ -23,6 +23,7 @@ namespace N2.Compiler
     private _tb : TypeBuilder;
     public override Environment     : EmitterEnvironment { get { Owner.Environment } }
     public override ConstantEmitter : IConstantEmitter   { get { Owner } }
+    private _endLabel : PExprLabel;
 
     public this(owner : RuleParserEmitter, tb : TypeBuilder, ruleStructure : RuleStructure.Ast)
     {
@@ -30,6 +31,7 @@ namespace N2.Compiler
       _tb           = tb;
       RuleStructure = ruleStructure;
       _data         = RuleStructureDataContainer(ruleStructure, this, RuleStructureData, RuleStructureFieldData);
+      _endLabel     = Environment.MakeLabel("EndParse");
     }
 
     public Emit() : void
@@ -72,15 +74,18 @@ namespace N2.Compiler
           | RuleStructure.Predicate
           | RuleStructure.Ast(Symbol = N2.Typing.ExtentionRuleSymbol) =>
             <[
-              $(AstPtr(structure).Var) = parser.Allocate($(structure.Size), $(structure.AstId : dyn));
+              when ($(AstPtr(structure).Var) == 0)
+                $(AstPtr(structure).Var) = parser.Allocate($(structure.Size), $(structure.AstId : global));
             ]>
 
           | _ =>
             <[
-              assert2(parser.TryGetAst($(AstStart(structure)), $(structure.AstId : dyn)) == 0);
-              $(AstPtr(structure).Var) = parser.Allocate($(structure.Size), $(structure.AstId : dyn));
-              $(AstPtr(structure).Set(structure.HeaderNext, <[ parser.memoize[$(AstStart(structure))] ]>));
-              parser.memoize[$(AstStart(structure))] = $(AstPtr(structure).Var);
+              when ($(AstPtr(structure).Var) == 0)
+              {
+                $(AstPtr(structure).Var) = parser.Allocate($(structure.Size), $(structure.AstId : global));
+                $(AstPtr(structure).Set(structure.HeaderNext, <[ parser.memoize[$(AstStart(structure))] ]>));
+                parser.memoize[$(AstStart(structure))] = $(AstPtr(structure).Var);
+              }
             ]>
         }
       }
@@ -98,49 +103,81 @@ namespace N2.Compiler
 
     private CheckOwnerMemoize(field : RuleStructureField) : PExpr
     {
-      if (field.IsStart && !field.IsPredicate && !(field.Owner is RuleStructure.Ast))
-        CheckMemoize(field.Owner, GotoOkLabel(field.Owner), GotoFailLabel(field.Owner));
-      else
-        <[ {} ]>
-    }
-
-    private CheckMemoize(structure : RuleStructure, okCode : PExpr, failCode : PExpr) : PExpr
-    {
-      <[
-        $(AstPtr(structure).Var) = parser.TryGetAst($CurTextPos, $(structure.AstId : dyn));
-        when ($(AstPtr(structure).Var) > 0)
-        {
-          parseState = $(AstPtr(structure).Get(structure.HeaderState));
-          if (parseState == N2.Internal.Parser.AstParsedState)
-          {
-            $CurTextPos += parser.AstSize($(AstPtr(structure).Var), $(structure.SizesStart), $(structure.SizesEnd));
-            $okCode;
-          }
-          else if (parseState < 0)
-          {
-            parseState = ~parseState;
-            $(JumpToRecovery(structure : RuleStructure));
-          }
-          else
-          {
-            $failCode
-          }
-        }
-      ]>
-    }
-
-    private JumpToRecovery(structure : RuleStructure) : PExpr
-    {
-      def code = SCG.List();
-      foreach (field in structure.NotMarkerFields)
+      def jumpToRecovery(structure : RuleStructure) : PExpr
+      {
+        def code = SCG.List();
+        def field = structure.NotMarkerFields.First();
         code.Add(<[
           if (parseState >= $(field.EndState))
             $CurTextPos += $(AstPtr(field.Owner).GetSize(field)); // skip
           else
-            $(GotoRecoveryLabel(field))
+            continueParse();
         ]>);
-      code.Add(<[ assert2(false); assert(false) ]>);
-      code.FlattenPExpr();
+        foreach (field in structure.NotMarkerFields.Skip(1))
+          code.Add(<[
+            if (parseState >= $(field.EndState))
+              $CurTextPos += $(AstPtr(field.Owner).GetSize(field)); // skip
+            else
+              $(GotoRecoveryLabel(field))
+          ]>);
+        code.Add(<[ assert3(false) ]>);
+        <[ { continueParse: { ..$code } } ]>.FlattenPExpr();
+      }
+      def checkMemoize(structure : RuleStructure, okCode : PExpr, failCode : PExpr) : PExpr
+      {
+        <[
+          $(AstPtr(structure).Var) = parser.TryGetAst($CurTextPos, $(structure.AstId : global));
+          when ($(AstPtr(structure).Var) > 0)
+          {
+            parseState = $(AstPtr(structure).Get(structure.HeaderState));
+            if (parseState == N2.Internal.Parser.AstParsedState)
+            {
+              $CurTextPos += parser.AstSize($(AstPtr(structure).Var), $(structure.SizesStart), $(structure.SizesEnd));
+              $okCode;
+            }
+            else if (parseState < 0)
+            {
+              parseState = ~parseState;
+              $(jumpToRecovery(structure : RuleStructure));
+            }
+            else
+            {
+              $failCode
+            }
+          }
+        ]>
+      }
+      if (field.AllocateAst && !field.IsPredicate)
+      {
+        if (field.Owner is RuleStructure.Ast as ruleStructure)
+        {
+          if (ruleStructure.Symbol is SimpleRuleSymbol)
+            checkMemoize(ruleStructure, _endLabel.Goto(),
+            <[
+              $CurTextPos = -1;
+              def maxFailPos = $(AstPtr(ruleStructure).GetSize(ruleStructure.NotMarkerFields.Last()));
+              when (maxFailPos > parser.MaxFailPos)
+                parser.MaxFailPos = maxFailPos;
+              $(_endLabel.Goto());
+            ]>)
+          else
+            <[
+              $(AstPtr(ruleStructure).Var) = 0;
+              when (resultRef > 0)
+              {
+                $(AstPtr(ruleStructure).Var) = resultRef;
+                parseState = parser.ast[resultRef + 2];
+                assert(parseState < 0 && parseState != N2.Internal.Parser.AstParsedState);
+                parseState = ~parseState;
+                $(jumpToRecovery(ruleStructure));
+              }
+            ]>;
+        }
+        else
+          checkMemoize(field.Owner, GotoOkLabel(field.Owner), GotoFailLabel(field.Owner));
+      }
+      else
+        <[ {} ]>
     }
   }
 }

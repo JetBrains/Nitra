@@ -19,38 +19,6 @@ namespace N2.Compiler
     public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
     {
       def code = SCG.List();
-      def endLabel = Environment.MakeLabel("EndParse");
-      def recoveryLabel = Environment.MakeLabel("Recovery");
-      def (saveMaxFailPos, loadMaxFailPos) = if (ruleStructure.Symbol.Type is RuleType.Void)
-      {
-        def savedMaxFailPos = CreateVariable("savedMaxFailPos");
-        (<[ $(savedMaxFailPos : dyn) = parser.MaxFailPos ]>, <[ parser.MaxFailPos = $(savedMaxFailPos  : dyn) ]>)
-      }
-      else
-      {
-        (<[ {} ]>, <[ {} ]>)
-      }
-      def checkAstMemoize = if (ruleStructure.Symbol is SimpleRuleSymbol)
-        CheckMemoize(ruleStructure, endLabel.Goto(),
-        <[
-          $CurTextPos = -1;
-          def maxFailPos = $(AstPtr(ruleStructure).GetSize(ruleStructure.NotMarkerFields.Last()));
-          when (maxFailPos > parser.MaxFailPos)
-            parser.MaxFailPos = maxFailPos;
-          $(endLabel.Goto());
-        ]>)
-      else
-        <[
-          when (resultRef > 0)
-          {
-            $(AstPtr(ruleStructure).Var) = resultRef;
-            parseState = parser.ast[resultRef + 2];
-            assert(parseState < 0 && parseState != N2.Internal.Parser.AstParsedState);
-            parseState = ~parseState;
-            $(recoveryLabel.Goto());
-          }
-        ]>;
-
       def setResultRef = if (ruleStructure.Symbol is ExtentionRuleSymbol)
         <[ resultRef = $(AstPtr(ruleStructure).Var); ]>
       else
@@ -59,35 +27,26 @@ namespace N2.Compiler
       code.Add(<[ _ = $(ruleStructure.ToString()) ]>);
       //code.AddRange(_fields.Map(field => <[ _ = $(field.Print()) ]>));
 
-      code.Add(saveMaxFailPos);
       code.Add(<[ $(AstStart(ruleStructure)) = $CurTextPos; ]>);
-      code.Add(checkAstMemoize);
       code.Add(GotoParseLabel(ruleStructure.NotMarkerFields[0]));
-
-      def (predicateCode, predicateFailLabel) = CompilePredicate(ruleStructure.TailPredicates);
 
       //parse ok
       code.Add(OkLabel(ruleStructure));
-      code.Add(predicateCode);
       code.Add(AstPtr(ruleStructure).Set(ruleStructure.HeaderState, <[ N2.Internal.Parser.AstParsedState ]>));// правило полностью разобрано.
       code.Add(setResultRef);
-      code.Add(endLabel.Goto());
+      code.Add(_endLabel.Goto());
 
       //parse fail
       code.Add(FailLabel(ruleStructure));
-      code.Add(predicateFailLabel);
-      code.Add(<[ when (parseState > $(ruleStructure.AllocateState)) // АСТ создано
+      code.Add(<[ when ($(AstPtr(ruleStructure).Var) > 0) // АСТ создано
                   {
                     $(AstPtr(ruleStructure).Set(ruleStructure.HeaderState, <[ parseState ]>));
                     $(AstPtr(ruleStructure).Set(ruleStructure.NotMarkerFields.Last(), <[ parser.MaxFailPos ]>));
                     $setResultRef;
                   }
       ]>);
-      code.Add(<[ $CurTextPos = -1; $(endLabel.Goto()); ]>);
+      code.Add(<[ $CurTextPos = -1; $(_endLabel.Goto()); ]>);
       CompileFields(code, ruleStructure);
-
-      code.Add(recoveryLabel.Label());
-      code.Add(JumpToRecovery(ruleStructure));
 
       def debugCode = if (ruleStructure.Symbol.LastLocation is Some(loc) when Owner.Environment.Manager.Options.EmitDebug)
       {
@@ -97,7 +56,7 @@ namespace N2.Compiler
       }
       else
         <[ {} ]>;
-      code.Add(<[ $(endLabel.Label()); $debugCode; $loadMaxFailPos; $CurTextPos; ]>);
+      code.Add(<[ $(_endLabel.Label()); $debugCode; $CurTextPos; ]>);
 
       def variables = SCG.List();
       variables.Add(<[
@@ -105,7 +64,7 @@ namespace N2.Compiler
         mutable parseState : int; _ = parseState;
         mutable newPos     : int; _ = newPos;
       ]>);
-      variables.AddRange(LocalVariables.Filter(_ != "resultRef").Map(name => <[ mutable $(name : dyn) ]>));
+      variables.AddRange(LocalVariables.Filter(_ != "resultRef").Map(name => <[ mutable $(name : global) ]>));
 
       variables.Concat(code).FlattenPExpr();
     }

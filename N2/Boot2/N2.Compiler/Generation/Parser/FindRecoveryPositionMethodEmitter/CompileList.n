@@ -17,89 +17,44 @@ namespace N2.Compiler
   {
     public override CompileList(code : SCG.List[PExpr], field : RuleStructureField.List) : void
     {
-      def stateData = ListStateData(this, field);
-      def ifCounterEqualsToMaxThenContinue()
-      {
-        if (field.MaxCount is Some(max))
-          <[
-            when ($(stateData.Counter) == $max)
-              $(GotoContinueParseLabel(field));
-          ]>
-        else
-          <[ {} ]>
-      }
-      def ifCounterLessThanMinThenFail()
-      {
-        if (field.MinCount > 0)
-          <[
-            when ($(stateData.Counter) < $(field.MinCount))
-              $(GotoFailParseLabel(field));
-          ]>
-        else
-          <[ {} ]>
-      }
-
-      def firstChild = field.Rule.NotMarkerFields[0];
-      code.Add(<[
-        $(ParseLabel(field));
-          _ = $(field.ToString());
-          $(stateData.Init());
-          $(stateData.ListEndPos) = $CurTextPos;
-          $(AstStart(field.Rule)) = $CurTextPos;
-          $(AstPtr(field.Rule).Var) = parser.TryGetAst($CurTextPos, $(field.Rule.AstId : dyn));
-          $(GotoParseLabel(firstChild));
-
-        $(OkLabel(field.Rule));
-          when ($(stateData.ListEndPos) == $CurTextPos)
-            $(GotoFailLabel(field.Rule));
-          $(stateData.ListEndPos) = $CurTextPos;
+      CompileFuntion(field.Rule);
+      def localVariableEmitter = LocalVariableEmitter();
+      def stateData = ListStateData(localVariableEmitter, field);
+      def itemPtr = AstPointer.New(field.Rule, ConstantEmitter, this, "itemPtr");
+      def body = <[
+        $(stateData.Init());
+        $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopBody;
+        $(stateData.ListStartPos) = $CurTextPos;
+        mutable lastItemStart = -1;
+        mutable itemEndPos = $CurTextPos;
+        while (lastItemStart < itemEndPos)
+        {
           $(stateData.Inc());
-          $(ifCounterEqualsToMaxThenContinue());
-          $(AstStart(field.Rule)) = $CurTextPos;
-          $(AstPtr(field.Rule).Var) = parser.TryGetAst($CurTextPos, $(field.Rule.AstId : dyn));
-          $(GotoParseLabel(firstChild));
-
-        $(FailLabel(field.Rule));
-          $(ifCounterLessThanMinThenFail());
-          $(GotoContinueParseLabel(field));
-
-        $(RecoveryLabel(field));
-          $(stateData.Init());
-          $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopBody;
-          when (true)
+          def $(itemPtr.Var) = parser.TryGetAst(itemEndPos, $(field.Rule.AstId : global));
+          if ($(itemPtr.Var) > 0 && $(itemPtr.Get(itemPtr.Structure.HeaderState)) == N2.Internal.Parser.AstParsedState)
           {
-            def listEndPos = $CurTextPos + $(AstPtr(field.Owner).GetSize(field));
-            when ($CurTextPos == listEndPos)
-            {
-              $(AstStart(field.Rule)) = $CurTextPos;
-              $(AstPtr(field.Rule).Var) = parser.TryGetAst($CurTextPos, $(field.Rule.AstId : dyn));
-              $(GotoParseLabel(firstChild));
-            }
-            mutable itemEndPos = $CurTextPos;
-            while (itemEndPos != listEndPos)
-            {
-              $(stateData.Inc());
-              $CurTextPos = itemEndPos;
-              $(AstPtr(field.Rule).Var) = parser.GetAst($CurTextPos, $(field.Rule.AstId : dyn));
-              itemEndPos += parser.AstSize($(AstPtr(field.Rule).Var), $(field.Rule.SizesStart), $(field.Rule.SizesEnd));
-            }
-            def tailAst = parser.TryGetAst(itemEndPos, $(field.Rule.AstId : dyn));
-            if (tailAst > 0 && parser.MaxFailPos >= itemEndPos)
-            {
-              $(AstStart(field.Rule)) = itemEndPos;
-              $(AstPtr(field.Rule).Var) = tailAst;
-              $CurTextPos = itemEndPos;
-              $(stateData.ListEndPos) = $CurTextPos;
-            }
-            else
+            lastItemStart = itemEndPos;
+            itemEndPos += parser.AstSize($(itemPtr.Var), $(field.Rule.SizesStart), $(field.Rule.SizesEnd));
+          }
+          else
+          {
+            when (lastItemStart >= 0)
             {
               $(stateData.Dec());
-              $(AstStart(field.Rule)) = $CurTextPos;
-              $(stateData.ListEndPos) = $CurTextPos;
+              $(stateData.ListEndPos) = lastItemStart;
+              $(FunctionName(field.Rule) : global)(lastItemStart, $(MakeRecoveryStackFrame(field)) :: stack, parser);
+              $(stateData.Inc());
             }
-            $(GotoParseLabel(firstChild));
+            $(stateData.ListEndPos) = itemEndPos;
+            $(FunctionName(field.Rule) : global)(itemEndPos, $(MakeRecoveryStackFrame(field)) :: stack, parser);
+            break;
           }
-      ]>);
+        }
+      ]>;
+      code.Add(CheckState(field, <[
+        ..$(localVariableEmitter.Define());
+        $body;
+      ]>))
     }
   }
 }

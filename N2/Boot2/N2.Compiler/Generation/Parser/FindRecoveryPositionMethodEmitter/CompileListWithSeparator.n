@@ -17,150 +17,69 @@ namespace N2.Compiler
   {
     public override CompileListWithSeparator(code : SCG.List[PExpr], field : RuleStructureField.ListWithSeparator) : void
     {
-      def stateData = ListStateData(this, field);
-      def ifCounterEqualsToMaxThenContinue()
-      {
-        if (field.MaxCount is Some(max))
-          <[
-            when ($(stateData.Counter) == $max)
-              $(GotoContinueParseLabel(field));
-          ]>
-        else
-          <[ {} ]>
-      }
-      def ifCounterLessThanMinThenFail()
-      {
-        if (field.MinCount > 0)
-          <[
-            when ($(stateData.Counter) < $(field.MinCount))
-              $(GotoFailParseLabel(field));
-          ]>
-        else
-          <[ {} ]>
-      }
-      def hangingSeparatorCode = if (field.HangingSeparator)
-        <[
-          $(stateData.ListEndPos) = $CurTextPos;
-        ]>
-      else
-        <[ {} ]>;
-
-      def firstRuleChild = field.Rule.NotMarkerFields[0];
-      def firstSeparatorChild = field.Separator.NotMarkerFields[0];
-      code.Add(<[
-        $(ParseLabel(field));
-          _ = $(field.ToString());
-          $(stateData.Init());
-          $(stateData.ListStartPos) = $CurTextPos;
-          $(stateData.ListEndPos) = $CurTextPos;
-          $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopBody;
-          $(AstStart(field.Rule)) = $CurTextPos;
-          $(AstPtr(field.Rule).Var) = parser.TryGetAst($CurTextPos, $(field.Rule.AstId : dyn));
-          $(GotoParseLabel(firstRuleChild));
-
-        $(OkLabel(field.Rule));
-          $(stateData.Inc());
-          $(stateData.ListEndPos) = $CurTextPos;
-          $(ifCounterEqualsToMaxThenContinue());
-          $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopSeparator;
-          $(AstStart(field.Separator)) = $CurTextPos;
-          $(AstPtr(field.Separator).Var) = parser.TryGetAst($CurTextPos, $(field.Separator.AstId : dyn));
-          $(GotoParseLabel(firstSeparatorChild));
-
-        $(FailLabel(field.Rule));
-          $(ifCounterLessThanMinThenFail());
-          $CurTextPos = $(stateData.ListEndPos);
-          $(GotoContinueParseLabel(field));
-
-        $(OkLabel(field.Separator));
-          $hangingSeparatorCode;
-          $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopBody;
-          $(AstStart(field.Rule)) = $CurTextPos;
-          $(AstPtr(field.Rule).Var) = parser.TryGetAst($CurTextPos, $(field.Rule.AstId : dyn));
-          $(GotoParseLabel(firstRuleChild));
-
-        $(FailLabel(field.Separator));
-          $(ifCounterLessThanMinThenFail());
-          $CurTextPos = $(stateData.ListEndPos);
-          $(GotoContinueParseLabel(field));
-
-        $(RecoveryLabel(field));
-          $(stateData.Init());
-          $(stateData.ListStartPos) = $CurTextPos;
-          $(stateData.ListEndPos) = $CurTextPos;
-          $(AstStart(field.Rule)) = $CurTextPos;
-          when (true)
+      CompileFuntion(field.Rule);
+      CompileFuntion(field.Separator);
+      def localVariableEmitter = LocalVariableEmitter();
+      def stateData = ListStateData(localVariableEmitter, field);
+      def itemPtr = AstPointer.New(field.Rule, ConstantEmitter, this, "itemPtr");
+      def separatorPtr = AstPointer.New(field.Separator, ConstantEmitter, this, "separatorPtr");
+      def body = <[
+        $(stateData.Init());
+        $(stateData.ListStartPos) = $CurTextPos;
+        mutable lastItemStart = -1;
+        mutable itemEndPos = $CurTextPos;
+        mutable itemNotEmpty = true;
+        mutable separatorNotEmpty = true;
+        while (itemNotEmpty || separatorNotEmpty)
+        {
+          def $(itemPtr.Var) = parser.TryGetAst(itemEndPos, $(field.Rule.AstId : global));
+          if ($(itemPtr.Var) > 0 && $(itemPtr.Get(itemPtr.Structure.HeaderState)) == N2.Internal.Parser.AstParsedState)
           {
-            def listEndPos = $CurTextPos + $(AstPtr(field.Owner).GetSize(field));
-            when ($CurTextPos == listEndPos)
-            {
-              $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopBody;
-              $(AstStart(field.Rule)) = $CurTextPos;
-              $(AstPtr(field.Rule).Var) = parser.TryGetAst($CurTextPos, $(field.Rule.AstId : dyn));
-              $(GotoParseLabel(firstRuleChild));
-            }
-            mutable itemEndPos = $CurTextPos;
-            mutable isRule = false;
-            while (itemEndPos != listEndPos)
-            {
-              isRule = !isRule;
-              $CurTextPos = itemEndPos;
-              if (isRule)
-              {
-                $(stateData.Inc());
-                $(AstPtr(field.Separator).Var) = 0;
-                $(AstPtr(field.Rule).Var) = parser.GetAst($CurTextPos, $(field.Rule.AstId : dyn));
-                itemEndPos += parser.AstSize($(AstPtr(field.Rule).Var), $(field.Rule.SizesStart), $(field.Rule.SizesEnd));
-              }
-              else
-              {
-                $(AstPtr(field.Rule).Var) = 0;
-                $(AstPtr(field.Separator).Var) = parser.GetAst($CurTextPos, $(field.Separator.AstId : dyn));
-                itemEndPos += parser.AstSize($(AstPtr(field.Separator).Var), $(field.Separator.SizesStart), $(field.Separator.SizesEnd));
-              }
-            }
-            _ = "Мы перед последним элеменом цикла. Начинаем парсить хвост...";
-            if (isRule)
-            {
-              def tailAst = parser.TryGetAst(itemEndPos, $(field.Separator.AstId : dyn));
-              if (tailAst > 0 && parser.MaxFailPos >= itemEndPos)
-              {
-                $(AstStart(field.Separator)) = itemEndPos;
-                $(AstPtr(field.Rule).Var) = 0;
-                $(AstPtr(field.Separator).Var) = tailAst;
-                $CurTextPos = itemEndPos;
-                $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopSeparator;
-                $(GotoParseLabel(firstSeparatorChild));
-              }
-              else
-              {
-                $(stateData.Dec());
-                $(AstStart(field.Rule)) = $CurTextPos;
-                $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopBody;
-                $(GotoParseLabel(firstRuleChild));
-              }
-            }
-            else
-            {
-              def tailAst = parser.TryGetAst(itemEndPos, $(field.Rule.AstId : dyn));
-              if (tailAst > 0 && parser.MaxFailPos >= itemEndPos)
-              {
-                $(AstStart(field.Rule)) = itemEndPos;
-                $(AstPtr(field.Separator).Var) = 0;
-                $(AstPtr(field.Rule).Var) = tailAst;
-                $CurTextPos = itemEndPos;
-                $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopBody;
-                $(GotoParseLabel(firstRuleChild));
-              }
-              else
-              {
-                $(AstStart(field.Separator)) = $CurTextPos;
-                $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopSeparator;
-                $(GotoParseLabel(firstSeparatorChild));
-              }
-            }
+            $(stateData.Inc());
+            lastItemStart = itemEndPos;
+            itemEndPos += parser.AstSize($(itemPtr.Var), $(field.Rule.SizesStart), $(field.Rule.SizesEnd));
+            itemNotEmpty = lastItemStart < itemEndPos;
           }
-      ]>);
+          else
+          {
+            when (lastItemStart >= 0 && lastItemStart < itemEndPos)
+            {
+              $(stateData.ListEndPos) = lastItemStart;
+              $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopSeparator;
+              $(FunctionName(field.Separator) : global)(lastItemStart, $(MakeRecoveryStackFrame(field)) :: stack, parser);
+            }
+            $(stateData.Inc());
+            $(stateData.ListEndPos) = itemEndPos;
+            $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopBody;
+            $(FunctionName(field.Rule) : global)(itemEndPos, $(MakeRecoveryStackFrame(field)) :: stack, parser);
+            break;
+          }
+          def $(separatorPtr.Var) = parser.TryGetAst(itemEndPos, $(field.Separator.AstId : global));
+          if ($(separatorPtr.Var) > 0 && $(separatorPtr.Get(separatorPtr.Structure.HeaderState)) == N2.Internal.Parser.AstParsedState)
+          {
+            lastItemStart = itemEndPos;
+            itemEndPos += parser.AstSize($(separatorPtr.Var), $(field.Separator.SizesStart), $(field.Separator.SizesEnd));
+            separatorNotEmpty = lastItemStart < itemEndPos;
+          }
+          else
+          {
+            when (lastItemStart >= 0 && lastItemStart < itemEndPos)
+            {
+              $(stateData.ListEndPos) = lastItemStart;
+              $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopBody;
+              $(FunctionName(field.Rule) : global)(lastItemStart, $(MakeRecoveryStackFrame(field)) :: stack, parser);
+            }
+            $(stateData.ListEndPos) = itemEndPos;
+            $(stateData.FrameInfo) = N2.Internal.FrameInfo.LoopSeparator;
+            $(FunctionName(field.Separator) : global)(itemEndPos, $(MakeRecoveryStackFrame(field)) :: stack, parser);
+            break;
+          }
+        }
+      ]>;
+      code.Add(CheckState(field, <[
+        ..$(localVariableEmitter.Define());
+        $body;
+      ]>))
     }
   }
 }

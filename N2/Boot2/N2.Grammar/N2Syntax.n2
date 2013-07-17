@@ -145,16 +145,16 @@ syntax module N2Syntax
     MakeContext(parent : Context) : Context = FoldThrough(Usings, parent, _.MakeContext(_));
   }
 
-  syntax NamespaceBody = Usings TopDeclaration*
+  syntax NamespaceBody = Usings NamespaceMember*
   {
-    CollectGlobalSymbols(rootNs : NamespaceSymbol) : void = foreach (topDecl in TopDeclarations) topDecl.CollectGlobalSymbols(rootNs);
+    CollectGlobalSymbols(rootNs : NamespaceSymbol) : void = foreach (topDecl in NamespaceMembers) topDecl.CollectGlobalSymbols(rootNs);
     [Cached] MakeContext(parent : Context) : Context
     {
       def context1 = Usings.MakeContext(parent);
-      def context2 = PassThrough(TopDeclarations, context1, _.MakeContext(_));
+      def context2 = PassThrough(NamespaceMembers, context1, _.MakeContext(_));
       context2
     }
-    Typing() : void = foreach (topDecl in TopDeclarations) topDecl.Typing();
+    Typing() : void = foreach (topDecl in NamespaceMembers) topDecl.Typing();
   }
 
   syntax Using
@@ -171,7 +171,7 @@ syntax module N2Syntax
       }
   }
 
-  syntax TopDeclaration
+  syntax NamespaceMember
   {
     CollectGlobalSymbols(ns : NamespaceSymbol) : void;
     [Cached] MakeContext(parent : Context) : Context;
@@ -251,7 +251,7 @@ syntax module N2Syntax
       }
   }
 
-  syntax RuleAttributeList = "[" (RuleAttribute; ","sm)+ "]"
+  syntax RuleAttributeList = "[" (RuleAttribute; ","sm)+ "]" sm
   {
     Options(inOptions : RuleDefinitionOptions) : RuleDefinitionOptions = FoldThrough(RuleAttributes[0], inOptions, _.Options(_));
     MakeContext(parent : Context) : Context = FoldThrough(RuleAttributes[0], parent, _.MakeContext(_));
@@ -437,7 +437,7 @@ syntax module N2Syntax
       {
         override GetLastLocation = MakeLastLocation(this, Semicolon);
       }
-    | Block = "{"  TokenRuleBodyMember* "}"nl
+    | Block = outline_begin_before nl "{" inl TokenRuleBodyMember* d "}" outline_end_before nl
       {
         override CollectGlobalSymbols = foreach (member in TokenRuleBodyMembers) member.CollectGlobalSymbols(ruleSymbol);
         override MakeContext = FoldThrough(TokenRuleBodyMembers, parent, _.MakeContext(_));
@@ -523,7 +523,7 @@ syntax module N2Syntax
       {
         override GetLastLocation = MakeLastLocation(this, Semicolon);
       }
-    | Block = outline_begin_before "{"  SimpleRuleBodyMember* "}" outline_end_before nl
+    | Block = outline_begin_before nl "{" inl SimpleRuleBodyMember* d "}" outline_end_before nl
       {
         override CollectGlobalSymbols = foreach (member in SimpleRuleBodyMembers) member.CollectGlobalSymbols(ruleSymbol);
         override MakeContext = FoldThrough(SimpleRuleBodyMembers, parent, _.MakeContext(_));
@@ -619,7 +619,7 @@ syntax module N2Syntax
       {
         override GetLastLocation = MakeLastLocation(this, Semicolon);
       }
-    | Block = outline_begin_before "{"  ExtensibleRuleBodyMember* "}" outline_end_before nl
+    | Block = outline_begin_before nl "{" inl ExtensibleRuleBodyMember* d "}" outline_end_before nl
       {
         override CollectGlobalSymbols = foreach (member in ExtensibleRuleBodyMembers) member.CollectGlobalSymbols(ruleSymbol);
         override MakeContext = FoldThrough(ExtensibleRuleBodyMembers, parent, _.MakeContext(_));
@@ -688,7 +688,7 @@ syntax module N2Syntax
       }
   }
 
-  syntax InlineExtentionRule = "|" RuleAttributes (Name "=")? RuleExpression ExtentionRuleBody?
+  syntax InlineExtentionRule = "|" sm RuleAttributes (Name "=")? RuleExpression Precedence? ExtentionRuleBody?
   {
     [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedInlineExtentionRule = ParsedInlineExtentionRule(this, owner);
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
@@ -709,7 +709,7 @@ syntax module N2Syntax
     [Cached] private MakeBaseRuleRef(baseRule : ExtensibleRuleRef)  : ExtensibleRuleRef     = baseRule;
     [Cached] private MakeOptions()                                  : RuleDefinitionOptions = RuleAttributes.Options(BaseRuleRef.Map(r => r.Options.InheritedCopy()) ?? RuleDefinitionOptions.Empty);
     [Cached] private MakeType()                                     : RuleType              = BaseRuleRef.Map(_.Type) ?? RuleType.Void();
-    [Cached] private MakeTypedRule()                                : Rule.Sequence         = EnsureSequence(RuleExpression.Typing(BaseRuleRef, ExtentionRuleBodyOpt.Map(b => b.GetPrecedence()) ?? 0, None(), ExtentionRuleBodyOpt.Map(_.Context) ?? Context, Options));
+    [Cached] private MakeTypedRule()                                : Rule.Sequence         = EnsureSequence(RuleExpression.Typing(BaseRuleRef, PrecedenceOpt.Map(b => b.Value()) ?? 0, None(), ExtentionRuleBodyOpt.Map(_.Context) ?? Context, Options));
     Typing(baseRule : ExtensibleRuleRef) : void
     {
       _ = MakeBaseRuleRef(baseRule);
@@ -724,7 +724,6 @@ syntax module N2Syntax
   syntax ExtentionRuleBody
   {
     CollectGlobalSymbols(ruleSymbol : ExtentionRuleSymbol) : void = _ = ruleSymbol;
-    GetPrecedence() : int = 0;
     [Cached] MakeContext(parent : Context) : Context = parent;
     GetLastLocation() : N2.Location;
     Typing(_baseRule : ExtensibleRuleRef) : void { }
@@ -733,24 +732,9 @@ syntax module N2Syntax
       {
         override GetLastLocation = MakeLastLocation(this, Semicolon);
       }
-    | Block = outline_hiden outline_begin_before "{"  ExtentionRuleBodyMember* "}" outline_end_before nl
+    | Block = outline_hiden outline_begin_before inl "{" inl ExtentionRuleBodyMember* d "}" outline_end_before nl  d
       {
         override CollectGlobalSymbols = foreach (member in ExtentionRuleBodyMembers) member.CollectGlobalSymbols(ruleSymbol);
-        [Cached] private EvalPrecedence() : int
-        {
-          match (ExtentionRuleBodyMembers.Map(_.GetPrecedence()).Filter(_.IsSome))
-          {
-            | [VSome((p, _))] => p
-            | [] => 0
-            | VSome((p, loc)) :: tail =>
-              using (rootMsg = Project.CurrentProject.RootError(loc, "Too many 'precedence' directives. You can define only one a 'precedence' directive.", -1))
-                foreach (other in tail)
-                  rootMsg.Hint(other.Value[1], "   other definition.");
-              p
-            | _ => assert2(false); 0
-          }
-        }
-        override GetPrecedence = EvalPrecedence();
         override MakeContext = FoldThrough(ExtentionRuleBodyMembers, parent, _.MakeContext(_));
         override GetLastLocation = MakeLastLocation(this, OpenBrace);
         override Typing = foreach (x in ExtentionRuleBodyMembers) x.Typing(_baseRule);
@@ -760,7 +744,6 @@ syntax module N2Syntax
   syntax ExtentionRuleBodyMember
   {
     CollectGlobalSymbols(ruleSymbol : ExtentionRuleSymbol) : void = _ = ruleSymbol;
-    GetPrecedence() : ValueOption[int * N2.Location] = VNone();
     [Cached] MakeContext(parent : Context) : Context = parent;
     Typing(_baseRule : ExtensibleRuleRef) : void { }
 
@@ -810,11 +793,6 @@ syntax module N2Syntax
         override MakeContext          = ExtraFieldMissing.MakeContext(parent);
         override Typing               = ExtraFieldMissing.Typing();
       }
-    | Precedence
-      {
-        // TODO: make precedence table
-        override GetPrecedence = VSome((Precedence.GetPrecedence(), this.Location));
-      }
   }
 
   syntax ExtraFieldsParam = Name sm ":" sm Type;
@@ -830,7 +808,7 @@ syntax module N2Syntax
         override IsCached = true;
       }
   }
-  syntax ExtraFieldAttributeList = "[" (ExtraFieldAttribute; ",")+ "]"
+  syntax ExtraFieldAttributeList = "[" (ExtraFieldAttribute; ",")+ "]" nl
   {
     IsCached() : bool
     {
@@ -970,9 +948,9 @@ syntax module N2Syntax
     }
   }
 
-  syntax Precedence = "precedence"   sm  Number RightAssociative=("right-associative")? ";"
+  syntax Precedence = "precedence" sm Number RightAssociative=("right-associative")?
   {
-    GetPrecedence() : int = if (RightAssociative.IsSome) -Number.Value() else Number.Value();
+    Value() : int = if (RightAssociative.IsSome) -Number.Value() else Number.Value();
   }
 
   syntax ExtraFieldBody
@@ -1008,7 +986,7 @@ syntax module N2Syntax
     | Pointer   = Type "*" Type       { precedence 10; }
   }
 
-  syntax Block = outline_hiden outline_begin_before nl "{" inl (Expression; ";" nl)* ";"* d "}" outline_end_before nl;
+  syntax Block = outline_hiden outline_begin_before nl "{" inl (Expression; ";" nl)* ";"* nl d "}" outline_end_before nl;
   syntax Parentheses = "(" Expression? ")";
 
   syntax Content
