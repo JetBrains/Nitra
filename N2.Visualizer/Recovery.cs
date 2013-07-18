@@ -20,6 +20,12 @@ namespace N2.DebugStrategies
 
   public sealed class Recovery
   {
+    List<RecoveryResult>         _candidats = new List<RecoveryResult>();
+    RecoveryResult               _bestResult;
+    List<RecoveryResult>         _bestResults = new List<RecoveryResult>();
+    Dictionary<object, PrseData> _visited = new Dictionary<object, PrseData>();
+    RecoveryStack                _recoveryStack;
+    int                          _nestedLevel;
 #if !N2RUNTIME
     public Stopwatch Timer = new Stopwatch();
     public int       Count;
@@ -49,133 +55,96 @@ namespace N2.DebugStrategies
     }
 #endif
 
-    List<RecoveryResult>         _candidats = new List<RecoveryResult>();
-    RecoveryResult               _bestResult;
-    List<RecoveryResult>         _bestResults = new List<RecoveryResult>();
-    int                          _recCount;
-    int                          _bestResultsCount;
-    int                          _nestedLevel;
-    Dictionary<int, int>         _allacetionsInfo = new Dictionary<int, int>();
-    Dictionary<object, PrseData> _visited = new Dictionary<object, PrseData>();
-    Dictionary<string, int>      _parsedRules = new Dictionary<string, int>();
-    RecoveryStack                _recoveryStack;
-
     void Reset()
     {
       _candidats.Clear();
       _bestResult = null;
       _bestResults.Clear();
-      _recCount = 0;
-      _bestResultsCount = 0;
       _nestedLevel = 0;
-      _allacetionsInfo.Clear();
       _visited = new Dictionary<object, PrseData>();
-      _parsedRules = new Dictionary<string, int>();
     }
 
     public void Strategy(int startTextPos, Parser parser)
     {
       Reset();
+#if !N2RUNTIME
       Timer.Start();
       Count++;
+      var before = parser.Text.Substring(0, startTextPos); // DEBUG
+#endif
       var maxFailPos = parser.MaxFailPos;
-      var timer = System.Diagnostics.Stopwatch.StartNew();
       var curTextPos = startTextPos;
       var text = parser.Text;
       Debug.Assert(parser.RecoveryStacks.Count > 0);
-      var lastStack = parser.RecoveryStacks.Last() as RecoveryStack;
+      var lastStack = (RecoveryStack)parser.RecoveryStacks.Last();
       var stacks = PrepareStacks(parser);
-
-      //var infos = parser.ParserHost.Reflection(parser, startTextPos);
-      //foreach (var info in infos)
-      //{
-      //  if (info.AstPointer > 0)
-      //  {
-      //    var state = parser.ast[info.AstPointer + 2];
-      //    var size1 = parser.ast[info.AstPointer + 3];
-      //    var size2 = parser.ast[info.AstPointer + 4];
-      //  }
-      //  Debug.WriteLine(info.ToString());
-      //}
-      var before = parser.Text.Substring(0, startTextPos); // DEBUG
 
       do
       {
         foreach (var stack in stacks)
         {
-          _recoveryStack = stack as RecoveryStack;
-
-          //var before = parser.Text.Substring(0, startTextPos); // DEBUG
-          //if (before == "[\r\n  { : 1},\r\n  { a },\r\n  { a: },\r\n  { a:, },\r\n  { \r\n  'a':, \r\n  a:1\r\n  },\r\n  {a::2,:},\r\n  {a# :1}, \r\n  {a") // DEBUG
-          //{
-          //  Debug.Assert(true);
-          //}
-
-          ProcessStackFrame(startTextPos, parser, _recoveryStack, curTextPos, text, 0);
+          _recoveryStack = stack;
+          ProcessStackFrameImpl(startTextPos, parser, _recoveryStack, curTextPos, text, 0);
         }
+
+        if (_bestResult != null)
+          break;
+
+        foreach (var stack in stacks)
+        {
+          _recoveryStack = stack;
+          ProcessStackFrameSpeculative(startTextPos, parser, _recoveryStack, curTextPos, text, 0);
+          if (_bestResult != null)
+            break;
+        }
+
         curTextPos++;
       }
-      while (curTextPos <= text.Length && _bestResult == null);// || _bestResult == null); // && curTextPos - startTextPos < 400
-
-      timer.Stop();
+      while (curTextPos <= text.Length && _bestResult == null);// && curTextPos - startTextPos < 400
 
       parser.MaxFailPos = maxFailPos;
-
-      if (ReportResult != null)
-        ReportResult(_bestResult, _bestResults, _candidats, stacks);
 
       if (_bestResult == null)
         AddResult(text.Length, text.Length, text.Length, -1, lastStack, text, startTextPos);
 
+#if !N2RUNTIME
+      ReportResult(_bestResult, _bestResults, _candidats, stacks);
+#endif
       FixAst(parser);
-
       Reset();
+#if !N2RUNTIME
       Timer.Stop();
-    }
-
-    private static List<RecoveryStack> PrepareStacks(Parser parser)
-    {
-      var stacks = new List<RecoveryStack>();
-
-      foreach (var stack in parser.RecoveryStacks)
-        UpdateStacks(stacks, stack as RecoveryStack);
-
-      return stacks;
-    }
-
-    private static void UpdateStacks(List<RecoveryStack> stacks, RecoveryStack stack)
-    {
-      var index = stacks.FindIndex(s => IsSubStack(stack, s)); // is nStack SubStack of s
-      if (index >= 0)
-        stacks[index] = stack;
-      else if (stacks.FindIndex(s => IsSubStack(s, stack)) < 0) // is new stack?
-        stacks.Add(stack);
-      // else -> better stack in list
-    }
-
-    private static bool IsSubStack(RecoveryStack stack1, RecoveryStack stack2)
-    {
-      if (stack2.Length > stack1.Length)
-        return false;
-
-      var ary1 = stack1.ToArray();
-      var ary2 = stack2.ToArray();
-
-      Array.Reverse(ary1);
-      Array.Reverse(ary2);
-
-      for (int i = 0; i < ary2.Length; i++)
-      {
-        var head1 = ary1[i];
-        var head2 = ary2[i];
-        if (head1.RuleParser != head2.RuleParser || head1.FailState != head2.FailState)
-          return false;
-      }
-
-      return true;
+#endif
     }
 
     private void ProcessStackFrame(int startTextPos, Parser parser, RecoveryStack recoveryStack, int curTextPos, string text, int subruleLevel)
+    {
+      ProcessStackFrameImpl(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel);
+      if (_bestResult == null)
+        ProcessStackFrameSpeculative(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel);
+    }
+
+    private void ProcessStackFrameSpeculative(int startTextPos, Parser parser, RecoveryStack recoveryStack, int curTextPos, string text, int subruleLevel)
+    {
+      var stackFrame = recoveryStack.hd;
+      var ruleParser = stackFrame.RuleParser;
+
+      int nextState;
+      for (var state = stackFrame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? ruleParser.GetNextState(stackFrame.FailState) :
+      {
+        nextState = ruleParser.GetNextState(state);
+        if (_bestResult != null)
+          return;
+
+        if (!stackFrame.RuleParser.IsTokenRule /*&& stackFrame.FailState == state*/)
+          TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel, state);
+        else
+        {
+        }
+      }
+    }
+
+    private void ProcessStackFrameImpl(int startTextPos, Parser parser, RecoveryStack recoveryStack, int curTextPos, string text, int subruleLevel)
     {
       var stackFrame = recoveryStack.hd;
       var ruleParser = stackFrame.RuleParser;
@@ -199,16 +168,10 @@ namespace N2.DebugStrategies
 
         if (parser.MaxFailPos > curTextPos && parser.MaxFailPos - curTextPos > ParsedSpacesLen(ruleParser, parsedStates)) // что-то пропарсили и это что-то не пробелы
         {
-          var stack = recoveryStack;
+          //var stack = recoveryStack;
           //if (IsBetterStack(stack))
           {
-            int stackLength = stack.Length;
-            var startPos = curTextPos;
-            var failPos = parser.MaxFailPos;
-            var skipedCount = startPos - failPos;
             var pos2 = pos == lastPos ? ContinueParse(pos, recoveryStack, parser, text, !isOptional) : lastPos;
-            //var newResult = new RecoveryResult(startPos, failPos, pos2, state, stackLength, stack, text, startTextPos);
-            //_candidats2.Add(newResult);
             AddResult(curTextPos, lastPos, pos2, state, recoveryStack, text, startTextPos);
             break;
           }
@@ -300,26 +263,7 @@ namespace N2.DebugStrategies
             AddResult(curTextPos, pos, pos2, -1, recoveryStack, text, startTextPos);
           }
         }
-
-        if (curr_bestResult == _bestResult && stackFrame.FailState == state && subruleLevel <= 1 && !stackFrame.RuleParser.IsTokenRule) //
-          TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel, state);
       }
-    }
-
-    //private bool IsBetterStack(RecoveryStack stack)
-    //{
-    //  return !_candidats2.Any(e => CompareStack(e.Stack, stack) > 0);
-    //}
-
-    private bool IsAllSaces(string text, int curTextPos, int max)
-    {
-      for (int i = curTextPos; i < max; i++)
-      {
-        if (!char.IsWhiteSpace(text[i]))
-          return false;
-      }
-
-      return true;
     }
 
     private static int Sum(List<ParsedStateInfo> parsedStates)
@@ -342,16 +286,23 @@ namespace N2.DebugStrategies
       if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
         return;
 
+#if !N2RUNTIME
       TryParseSubrulesCount++;
       var time = Timer.Elapsed;
+#endif
+
+      if (recoveryStack.tl.Contains(recoveryStack.hd))
+        return;
 
       _nestedLevel++;
       var stackFrame = recoveryStack.hd;
       var parsers = stackFrame.RuleParser.GetParsersForState(state);
 
+#if !N2RUNTIME
       if (!parsers.IsEmpty())
       {
       }
+#endif
 
       foreach (var subRuleParser in parsers)
       {
@@ -365,20 +316,20 @@ namespace N2.DebugStrategies
 
         var old = recoveryStack;
         recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, subRuleParserId, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
-        _recCount++;
         ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
         recoveryStack = old; // remove top element
       }
 
       _nestedLevel--;
 
-      TryParseSubrulesTime += Timer.Elapsed - time;
+#if !N2RUNTIME
+      if (_nestedLevel == 0)
+        TryParseSubrulesTime += Timer.Elapsed - time;
+#endif
     }
 
     void AddResult(int startPos, int ruleEndPos, int endPos, int startState, RecoveryStack stack, string text, int failPos, bool allowEmpty = false)
     {
-      _bestResultsCount++;
-
       int stackLength = stack.Length;
       var skipedCount = startPos - failPos;
       var newResult = new RecoveryResult(startPos, ruleEndPos, endPos, startState, stackLength, stack, text, failPos);
@@ -427,7 +378,6 @@ namespace N2.DebugStrategies
       if (endPos < _bestResult.EndPos) return;
 
       stackLength = stack.Length;
-      var bestResultStackLength = this._bestResult.StackLength;
 
       // Если при восстановлении ничего не было пропарсено, то побеждать должен фрейм с большим FialState, так как
       // иначе будут возникать фантомные значени. Если же что-то спарсилось, то побеждать должен фрейм с меньшим FialState.
@@ -485,7 +435,7 @@ namespace N2.DebugStrategies
           var x = stack1.hd;
           var y = stack2.hd;
 
-          if (x.RuleParser != y.RuleParser)
+          if (!object.ReferenceEquals(x.RuleParser, y.RuleParser))
             return 0; // стеки несравнимы
 
           if (winLastState)
@@ -507,10 +457,14 @@ namespace N2.DebugStrategies
 
     int ContinueParse(int startTextPos, RecoveryStack recoveryStack, Parser parser, string text, bool trySkipStates)
     {
+#if !N2RUNTIME
       var stratTime = Timer.Elapsed;
       ContinueParseCount++;
+#endif
       var result = ContinueParseImpl(startTextPos, recoveryStack, parser, text, trySkipStates);
+#if !N2RUNTIME
       ContinueParseTime += Timer.Elapsed - stratTime;
+#endif
       return result;
     }
 
@@ -550,43 +504,55 @@ namespace N2.DebugStrategies
 
     private int TryParse(Parser parser, RecoveryStack recoveryStack, int curTextPos, IRecoveryRuleParser ruleParser, int state, out List<ParsedStateInfo> parsedStates)
     {
+#if !N2RUNTIME
       TryParseCount++;
       var timer = Timer.Elapsed;
+#endif
 
       int result;
 
       if (state < 0)
       {
+#if !N2RUNTIME
         TryParseNoCacheCount++;
         var timer2 = Timer.Elapsed;
+#endif
         parsedStates = new List<ParsedStateInfo>();
         result = ruleParser.TryParse(recoveryStack, state, curTextPos, parsedStates, parser);
+#if !N2RUNTIME
         TryParseNoCacheTime += Timer.Elapsed - timer2;
+#endif
       }
       else
       {
         var key = Tuple.Create(curTextPos, ruleParser, state);
-        //PrseData data;
-        //if (_visited.TryGetValue(key, out data))
-        //{
-        //  if (parser.MaxFailPos < data.Item2)
-        //    parser.MaxFailPos = data.Item2;
-        //  parsedStates = data.Item3;
-        //  result = data.Item1;
-        //}
-        //else
+        PrseData data;
+        if (_visited.TryGetValue(key, out data))
         {
+          if (parser.MaxFailPos < data.Item2)
+            parser.MaxFailPos = data.Item2;
+          parsedStates = data.Item3;
+          result = data.Item1;
+        }
+        else
+        {
+#if !N2RUNTIME
           TryParseNoCacheCount++;
           var timer2 = Timer.Elapsed;
+#endif
           parsedStates = new List<ParsedStateInfo>();
           int pos = ruleParser.TryParse(recoveryStack, state, curTextPos, parsedStates, parser);
+#if !N2RUNTIME
           TryParseNoCacheTime += Timer.Elapsed - timer2;
+#endif
           _visited[key] = Tuple.Create(pos, parser.MaxFailPos, parsedStates);
           result = pos;
         }
       }
 
+#if !N2RUNTIME
       TryParseTime += Timer.Elapsed - timer;
+#endif
 
       return result;
     }
@@ -598,9 +564,7 @@ namespace N2.DebugStrategies
       var frame = _bestResult.Stack.Head;
 
       if (frame.AstStartPos < 0)
-      {
         Debug.Assert(frame.AstPtr >= 0);
-      }
 
       var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
       var errorIndex = parser.ErrorData.Count;
@@ -615,6 +579,48 @@ namespace N2.DebugStrategies
         Debug.Assert(stack.Head.FailState >= 0);
         stack.Head.RuleParser.PatchAst(stack.Head.AstStartPos, -2, -1, stack, parser);
       }
+    }
+
+    private static List<RecoveryStack> PrepareStacks(Parser parser)
+    {
+      var stacks = new List<RecoveryStack>();
+
+      foreach (var stack in parser.RecoveryStacks)
+        UpdateStacks(stacks, stack as RecoveryStack);
+
+      return stacks;
+    }
+
+    private static void UpdateStacks(List<RecoveryStack> stacks, RecoveryStack stack)
+    {
+      var index = stacks.FindIndex(s => IsSubStack(stack, s)); // is nStack SubStack of s
+      if (index >= 0)
+        stacks[index] = stack;
+      else if (stacks.FindIndex(s => IsSubStack(s, stack)) < 0) // is new stack?
+        stacks.Add(stack);
+      // else -> better stack in list
+    }
+
+    private static bool IsSubStack(RecoveryStack stack1, RecoveryStack stack2)
+    {
+      if (stack2.Length > stack1.Length)
+        return false;
+
+      var ary1 = stack1.ToArray();
+      var ary2 = stack2.ToArray();
+
+      Array.Reverse(ary1);
+      Array.Reverse(ary2);
+
+      for (int i = 0; i < ary2.Length; i++)
+      {
+        var head1 = ary1[i];
+        var head2 = ary2[i];
+        if (!object.ReferenceEquals(head1.RuleParser, head2.RuleParser) || head1.FailState != head2.FailState)
+          return false;
+      }
+
+      return true;
     }
   }
 
