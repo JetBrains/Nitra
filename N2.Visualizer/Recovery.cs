@@ -1,4 +1,5 @@
-﻿using N2.Internal;
+﻿//#define DebugOutput
+using N2.Internal;
 
 using Nemerle.Collections;
 
@@ -26,6 +27,7 @@ namespace N2.DebugStrategies
     Dictionary<object, PrseData> _visited = new Dictionary<object, PrseData>();
     RecoveryStack                _recoveryStack;
     int                          _nestedLevel;
+    HashSet<RecoveryStackFrame>  _visitedFrame = new HashSet<RecoveryStackFrame>();
 #if !N2RUNTIME
     public Stopwatch Timer = new Stopwatch();
     public int       Count;
@@ -98,7 +100,11 @@ namespace N2.DebugStrategies
             break;
         }
 
+#if !N2RUNTIME && DebugOutput
+        Debug.WriteLine((curTextPos - startTextPos) + "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%");
+#endif
         curTextPos++;
+        _visitedFrame.Clear();
       }
       while (curTextPos <= text.Length && _bestResult == null);// && curTextPos - startTextPos < 400
 
@@ -129,6 +135,13 @@ namespace N2.DebugStrategies
       var stackFrame = recoveryStack.hd;
       var ruleParser = stackFrame.RuleParser;
 
+#if !N2RUNTIME && DebugOutput
+      var indent = subruleLevel;
+      Debug.WriteLine(new string(' ', subruleLevel * 2) + "Begin frame --------------------------- subruleLevel=" + subruleLevel);
+      foreach (var frame in recoveryStack.Reverse())
+        Debug.WriteLine(string.Format("{0}{1}{2}", new string(' ', indent++ * 2), frame.AstPtr < 0 ? "$$ " : "", ToString(frame)));
+#endif
+
       int nextState;
       for (var state = stackFrame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? ruleParser.GetNextState(stackFrame.FailState) :
       {
@@ -142,6 +155,9 @@ namespace N2.DebugStrategies
         {
         }
       }
+#if !N2RUNTIME && DebugOutput
+      Debug.WriteLine(new string(' ', subruleLevel * 2) + "End frame --------------------------- subruleLevel=" + subruleLevel);
+#endif
     }
 
     private void ProcessStackFrameImpl(int startTextPos, Parser parser, RecoveryStack recoveryStack, int curTextPos, string text, int subruleLevel)
@@ -196,17 +212,22 @@ namespace N2.DebugStrategies
             var loopFrame = loopStack.hd;
             var newLoopFrame = new RecoveryStackFrame(loopFrame.RuleParser, loopFrame.RuleId, loopFrame.AstPtr, loopFrame.AstStartPos, loopFrame.FailState, loopFrame.Counter, loopFrame.ListStartPos, loopFrame.ListEndPos, loopFrame.IsRootAst, FrameInfo.LoopBody);
             var newStack = new RecoveryStack(elemFrame, new RecoveryStack(newLoopFrame, loopStack.Tail));
-            var old_bestResult = _bestResult;
-            var old_bestResults = _bestResults;
-            var old__candidats = _candidats;
-            _bestResult  = null;
-            _bestResults = new List<RecoveryResult>();
-            _candidats   = new List<RecoveryResult>();
+
+            var old_bestResult    = _bestResult;
+            var old_bestResults   = _bestResults;
+            var old__candidats    = _candidats;
+            var old__visitedFrame = _visitedFrame;
+
+            _bestResult   = null;
+            _bestResults  = new List<RecoveryResult>();
+            _candidats    = new List<RecoveryResult>();
+            _visitedFrame = new HashSet<RecoveryStackFrame>();
 
             ProcessStackFrame(startTextPos, parser, newStack, curTextPos, text, subruleLevel);
 
-            _bestResults = old_bestResults;
-            _candidats   = old__candidats;
+            _bestResults  = old_bestResults;
+            _candidats    = old__candidats;
+            _visitedFrame = old__visitedFrame;
 
             if (_bestResult != null && _bestResult.RecoveredCount > 0)
             {
@@ -315,7 +336,17 @@ namespace N2.DebugStrategies
         Debug.Assert(subRuleParserId != -1);
 
         var old = recoveryStack;
-        recoveryStack = recoveryStack.Push(new RecoveryStackFrame(subRuleParser, subRuleParserId, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None));
+        var newFrame = new RecoveryStackFrame(subRuleParser, subRuleParserId, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None);
+
+        if (!_visitedFrame.Add(newFrame))
+          continue;
+
+        recoveryStack = recoveryStack.Push(newFrame);
+
+#if !N2RUNTIME && DebugOutput
+        Debug.WriteLine(string.Format("{0}## {1}", new string(' ', (_nestedLevel + recoveryStack.Length) * 2), ToString(newFrame)));
+#endif
+
         ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
         recoveryStack = old; // remove top element
       }
@@ -326,6 +357,11 @@ namespace N2.DebugStrategies
       if (_nestedLevel == 0)
         TryParseSubrulesTime += Timer.Elapsed - time;
 #endif
+    }
+
+    static string ToString(RecoveryStackFrame frame)
+    {
+      return frame + "  RuleId=" + frame.RuleId + " AstStartPos=" + frame.AstStartPos + " RuleParser=" + frame.RuleParser.GetHashCode();
     }
 
     void AddResult(int startPos, int ruleEndPos, int endPos, int startState, RecoveryStack stack, string text, int failPos, bool allowEmpty = false)
@@ -392,6 +428,9 @@ namespace N2.DebugStrategies
       goto good2;
     good:
       _bestResult = new RecoveryResult(startPos, ruleEndPos, endPos, startState, stackLength, stack, text, failPos);
+#if !N2RUNTIME && DebugOutput
+    Debug.WriteLine(string.Format("{0}  << {1} >>", new string(' ', (_nestedLevel + _bestResult.Stack.Length) * 2), _bestResult));
+#endif
       _bestResults.Clear();
       _bestResults.Add(_bestResult);
       return;
