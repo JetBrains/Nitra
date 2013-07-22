@@ -1,10 +1,12 @@
 ﻿using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
+using Nemerle.Imperative;
 using N2.Model;
 
 using System;
 using System.Console;
+using System.Linq;
 using SCG = System.Collections.Generic;
 
 namespace N2.Model
@@ -43,6 +45,16 @@ namespace N2.Model
       fsm.SetTransitions(transitions);
     }
 
+    public Xor(fsm1 : FSM, fsm2 : FSM) : FSM
+    {
+      def fn(_)
+      {
+        | [ok1, ok2] => set => set.Contains(ok1) ^ set.Contains(ok2)
+        | _          => assert(false)
+      }
+      Product([fsm1, fsm2], fn)
+    }
+
     public Sub(fsm1 : FSM, fsm2 : FSM) : FSM
     {
       def fn(_)
@@ -51,6 +63,11 @@ namespace N2.Model
         | _          => assert(false)
       }
       Product([fsm1, fsm2], fn)
+    }
+
+    public Invert(fsm : FSM) : FSM
+    {
+      Sub(FSMBuilder.RepeatMin(0, FSMBuilder.Symbol(RangeSet().AddRange(char.MinValue, char.MaxValue))), fsm)
     }
 
     public Product(fsms : list[FSM], makeIsOkState : list[int] -> (Set[int] -> bool)) : FSM
@@ -188,89 +205,170 @@ namespace N2.Model
 
     public Minimize(fsm : FSM) : FSM
     {
+      when (fsm.OkStates.Count == 0)
+        return FSM();
       def fsm = Normalize(fsm);
-
+      def (fsm, failState) = fsm.NewState();
+      def transitions = array(fsm.StateCount);
+      foreach ((state, stateTransitions) in fsm.Transitions.Cast.[Transition.Symbol]().Grouping(t => (t.From, t)).KeyValuePairs)
+      {
+        def ranges = SCG.List();
+        foreach (transition in stateTransitions)
+          foreach (range in transition.Chars.Ranges)
+            ranges.Add((range.from : int, range.to : int + 1, transition.To));
+        ranges.Sort((l, r) => l[0].CompareTo(r[0]));
+        def result = SCG.List();
+        mutable last = 0;
+        foreach ((start, end, stateTo) in ranges)
+        {
+          when (start != last)
+            result.Add((last, failState));
+          result.Add((start, stateTo));
+          last = end;
+        }
+        when (char.MaxValue : int + 1 != last)
+          result.Add((last, failState));
+        assert3(transitions[state] == null);
+        transitions[state] = result.ToArray();
+      }
+      for (mutable i = 0; i < transitions.Length; ++i)
+        when (transitions[i] == null)
+          transitions[i] = array[(0, failState)];
+      def stateGroups = SCG.List();
       def stateMap = array(fsm.StateCount);
-      def stateSets = SCG.List();
-      def addStateSet(set)
+      stateGroups.Add(SCG.List());
+      foreach (state in fsm.OkStates)
       {
-        foreach (state in set)
-          stateMap[state] = stateSets.Count;
-        stateSets.Add(set);
+        stateMap[state] = 0;
+        stateGroups[0].Add(state);
       }
-
-      def stateTransitions = array(fsm.StateCount);
-      for (mutable i = 0; i < fsm.StateCount; ++i)
-        stateTransitions[i] = [];
-      foreach (transition in fsm.Transitions)
-        stateTransitions[transition.From] = (transition :> Transition.Symbol) :: stateTransitions[transition.From];
-
-      def stateChars = stateTransitions.MapToArray(t => t.Fold(RangeSet(), (t, r) => r.Sum(t.Chars)));
-
-      def initalSplit(states)
+      stateGroups.Add(SCG.List());
+      foreach (state in fsm.FailStates)
       {
-        def sets = Hashtable();
-        foreach (state in states)
-          _ = sets.Update(stateChars[state], [], state :: _);
-        foreach (kv in sets)
-          addStateSet(kv.Value)
+        stateMap[state] = 1;
+        stateGroups[1].Add(state);
       }
-      initalSplit(fsm.FailStates);
-      initalSplit(fsm.OkStates);
-
-      def transitionMap = array(64 * 1024);
+      def mapTransitions(stateMap, transitions, state, map)
+      {
+        map.Clear();
+        mutable last = -1;
+        mutable lastState = stateMap[failState];
+        foreach ((signal, to) in transitions[state])
+        {
+          def to = stateMap[to];
+          when (lastState != to)
+          {
+            map.Add((last, lastState));
+            last = signal;
+            lastState = to;
+          }
+        }
+        map.Add((last, lastState));
+      }
+      def listEqueals(l, r)
+      {
+        if (l.Count == r.Count)
+        {
+          res:
+          {
+            for (mutable i = 0; i < l.Count; ++i)
+              when (!l[i].Equals(r[i]))
+                res(false);
+            true
+          }
+        }
+        else
+          false
+      }
       mutable updated = true;
+      def pattern = SCG.List();
+      def cur = SCG.List();
+      mutable newGroup = SCG.List();
       while (updated)
       {
         updated = false;
-        for (mutable i = 0; i < stateSets.Count; ++i)
+        for (mutable stateGroup = 0; stateGroup < stateGroups.Count;)
         {
-          def states = stateSets[i];
-          when (states.Length > 1)
+          assert3(newGroup.Count == 0);
+          def group = stateGroups[stateGroup];
+          when (group.Count == 1)
           {
-            def state = states.Head;
-            foreach (transition in stateTransitions[state])
-              foreach (chars in transition.Chars.Ranges)
-                foreach (ch in $[(chars.from : int)..(chars.to : int)])
-                  transitionMap[ch] = stateMap[transition.To];
-            def isMatch(state)
+            ++stateGroup;
+            continue;
+          }
+          mapTransitions(stateMap, transitions, group[0], pattern);
+          mutable i = 1;
+          mutable j = 1;
+          for (; i < group.Count; ++i)
+          {
+            mapTransitions(stateMap, transitions, group[i], cur);
+            if (listEqueals(pattern, cur))
             {
-              res:
-              {
-                foreach (transition in stateTransitions[state])
-                  foreach (chars in transition.Chars.Ranges)
-                    foreach (ch in $[(chars.from : int)..(chars.to : int)])
-                      when (transitionMap[ch] != stateMap[transition.To])
-                        res(false);
-                true;
-              }
+              group[j] = group[i];
+              ++j;
             }
-            def (matchStates, notMatchStates) = states.Partition(isMatch);
-            when (!notMatchStates.IsEmpty())
+            else
             {
-              stateSets[i] = matchStates;
-              addStateSet(notMatchStates);
-              updated = true;
-              --i;
+              newGroup.Add(group[i]);
             }
           }
+          if (i != j)
+          {
+            updated = true;
+            group.RemoveRange(j, i - j);
+            foreach (state in newGroup)
+              stateMap[state] = stateGroups.Count;
+            stateGroups.Add(newGroup);
+            newGroup = SCG.List();
+          }
+          else
+            ++stateGroup;
         }
       }
-
-      mutable result = FSM();
-      result = result.NewState(stateSets.Count - 1);
-      result = result.SetStartState(stateMap[fsm.StartState]);
-      foreach (transition in fsm.Transitions)
+      def failGroup = stateMap[failState];
+      def startGroup = stateMap[fsm.StartState];
+      mutable newFsm = FSM(0, stateGroups.Count - 1);
+      mutable addedGroups = 1;
+      def groupMap = array(stateGroups.Count);
+      for (mutable i = 0; i < groupMap.Length; ++i)
+        groupMap[i] = -1;
+      def groupsToProcess = SCG.Queue();
+      groupsToProcess.Enqueue(startGroup);
+      groupMap[startGroup] = 0;
+      mutable okStates = Set();
+      while (groupsToProcess.Count > 0)
       {
-        def transition = transition :> Transition.Symbol;
-        def from = stateMap[transition.From];
-        def to   = stateMap[transition.To];
-        result = result.AddTransition(Transition.Symbol(from, to, transition.Chars));
+        def groupIndex = groupsToProcess.Dequeue();
+        def group = stateGroups[groupIndex];
+        def from = groupMap[groupIndex];
+        mapTransitions(stateMap, transitions, group[0], cur);
+        when (fsm.OkStates.Contains(group[0]))
+          okStates = okStates.Replace(from);
+        mutable last = -1;
+        mutable lastGroup = failGroup;
+        def getNewState()
+        {
+          if (groupMap[lastGroup] == -1)
+          {
+            groupsToProcess.Enqueue(lastGroup);
+            groupMap[lastGroup] = addedGroups;
+            ++addedGroups;
+            groupMap[lastGroup];
+          }
+          else
+            groupMap[lastGroup];
+        }
+        foreach ((signal, to) in cur)
+        {
+          when (lastGroup != failGroup)
+            newFsm = newFsm.AddTransition(Transition.Symbol(from, getNewState(), RangeSet().AddRange(last :> char, (signal - 1) :> char)));
+          last = signal;
+          lastGroup = to;
+        }
+        when (lastGroup != failGroup)
+          newFsm = newFsm.AddTransition(Transition.Symbol(from, getNewState(), RangeSet().AddRange(last :> char, char.MaxValue)));
       }
-      foreach (state in fsm.OkStates)
-        result = result.AddOkState(stateMap[state]);
-
-      Normalize(result);
+      FSMTransform.Normalize(newFsm.SetOkStates(okStates));
     }
   }
 }
