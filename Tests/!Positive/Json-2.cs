@@ -47,50 +47,52 @@ namespace Sample.Json.Cs
 /*
 BEGIN-OUTPUT
 Pretty print: {
-  <Identifier>: 1
+  <Identifier> : 1
 }
 Pretty print: {
-  a<:> <Value>
+  a <:> <Value>
 }
 Pretty print: {
-  a: <Value>
+  a : <Value>
 }
 Pretty print: {
-  a: <Value>,
+  a : <Value>,
   <Property>
 }
 Pretty print: {
-  'a': <Value>,
-  a: 1
+  'a' : <Value>,
+  a : 1
 }
 Pretty print: {
-  a: 2,
-  <Identifier>: <Value>
+  a : 2,
+  <Identifier> : <Value>
 }
 Pretty print: [{
-  <Identifier>: 1
+  <Identifier> : 1
 }, {
-  a<:> <Value>
+  a <:> <Value>
 }, {
-  b: <Value>
+  b : <Value>
 }, {
-  b: <Value>,
+  b : <Value>,
   <Property>
 }, {
-  'd': <Value>,
-  e: 2
+  'd' : <Value>,
+  e : 2
 }, {
-  f: 3,
-  <Identifier>: <Value>
+  f : 3,
+  <Identifier> : <Value>
 }, {
-  g: 4
+  g : 4
 }, {
-  h: <Value>
+  h : <Value>
 }, {
-  k: 5
+  k : 5<,>
+  <Identifier> <:> 6
 }]
 Pretty print: {
-  a: 1
+  a : 1<,>
+  <Identifier> <:> 44
 }
 END-OUTPUT
 */
