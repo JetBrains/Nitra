@@ -994,7 +994,10 @@ namespace N2.Visualizer
 
     private void PresetMenuItem_Click(object sender, RoutedEventArgs e)
     {
-      Load((Preset)((MenuItem)e.Source).DataContext);
+      var preset = (Preset)((MenuItem)e.Source).DataContext;
+      Load(preset);
+      _presets.Remove(preset);
+      _presets.Insert(0, preset);
     }
 
     private void PersistPresets(object sender, ExecutedRoutedEventArgs e)
