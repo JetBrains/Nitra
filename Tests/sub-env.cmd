@@ -1,7 +1,7 @@
 set NGen="%SystemRoot%\Microsoft.NET\Framework\v4.0.30319\ngen.exe"
 
 if not defined Configuration set Configuration=Debug
-if not defined NemerleBinPathRoot set NemerleBinPathRoot="%ProgramFiles%\Nemerle"
+if not defined NemerleBinPathRoot set NemerleBinPathRoot=%ProgramFiles%\Nemerle
 if not defined Nemerle set Nemerle=%NemerleBinPathRoot%\Net-4.0
 set RuntimeDllPath=%~dp0\..\N2\N2.Runtime\bin\%Configuration%
 set CoreDllPath=%~dp0\..\N2\N2.Core\bin\%Configuration%

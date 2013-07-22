@@ -1,4 +1,4 @@
-@echo on
+@echo off
 if exist %OutDir% rmdir %OutDir% /S /Q
 mkdir %OutDir%
 copy %~dp0\..\Grammars\Bin\%Configuration%\*.* %OutDir% /B /Z 1>nul
