@@ -177,5 +177,17 @@ namespace N2.Visualizer.Properties {
                 this["ActiveTabIndex"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("..\\..\\..\\Tests\\Visualizer")]
+        public string TestsLocationRoot {
+            get {
+                return ((string)(this["TestsLocationRoot"]));
+            }
+            set {
+                this["TestsLocationRoot"] = value;
+            }
+        }
     }
 }

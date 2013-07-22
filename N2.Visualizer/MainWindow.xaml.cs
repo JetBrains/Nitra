@@ -1005,5 +1005,57 @@ namespace N2.Visualizer
       SavePresets();
       _settings.Save();
     }
+
+    private void MenuItem_Click_TestsSettings(object sender, RoutedEventArgs e)
+    {
+      ShowTestsSettingsDialog();
+    }
+
+    bool CheckTestFolder()
+    {
+      if (Directory.Exists(_settings.TestsLocationRoot ?? ""))
+        return true;
+
+      return ShowTestsSettingsDialog();
+    }
+
+    private bool ShowTestsSettingsDialog()
+    {
+      var dialog = new TestsSettingsWindow();
+      dialog.Owner = this;
+      if (dialog.ShowDialog() ?? false)
+      {
+        _settings.TestsLocationRoot = dialog.TestsLocationRoot;
+        return true;
+      }
+
+      return false;
+    }
+
+    private void OnAddTest(object sender, ExecutedRoutedEventArgs e)
+    {
+      if (CheckTestFolder())
+        AddTest();
+      else
+        MessageBox.Show(this, "Can't add test.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
+    private void AddTest()
+    {
+      MessageBox.Show(this, "AddTest()", "Go!", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void OnRunTests(object sender, ExecutedRoutedEventArgs e)
+    {
+      if (CheckTestFolder())
+        RunTests();
+      else
+        MessageBox.Show(this, "Can't run tests.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
+
+    private void RunTests()
+    {
+      MessageBox.Show(this, "RunTests()", "Go!", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
   }
 }
