@@ -47,27 +47,17 @@ namespace N2.Model
 
     public Xor(fsm1 : FSM, fsm2 : FSM) : FSM
     {
-      def fn(_)
-      {
-        | [ok1, ok2] => set => set.Contains(ok1) ^ set.Contains(ok2)
-        | _          => assert(false)
-      }
-      Product([fsm1, fsm2], fn)
+      Product([fsm1, fsm2], fun(([ok1, ok2])) { set => set.Contains(ok1) ^ set.Contains(ok2) })
     }
 
     public Sub(fsm1 : FSM, fsm2 : FSM) : FSM
     {
-      def fn(_)
-      {
-        | [ok, fail] => set => set.Contains(ok) && !set.Contains(fail)
-        | _          => assert(false)
-      }
-      Product([fsm1, fsm2], fn)
+      Product([fsm1, fsm2], fun(([ok, fail])) { set => set.Contains(ok) && !set.Contains(fail) })
     }
 
     public Invert(fsm : FSM) : FSM
     {
-      Sub(FSMBuilder.RepeatMin(0, FSMBuilder.Symbol(RangeSet().AddRange(char.MinValue, char.MaxValue))), fsm)
+      Sub(FSMBuilder.AllStrings, fsm)
     }
 
     public Product(fsms : list[FSM], makeIsOkState : list[int] -> (Set[int] -> bool)) : FSM
@@ -89,17 +79,29 @@ namespace N2.Model
       MakeDeterministic(fsm, set => set.Exists(s => fsm.OkStates.Contains(s)))
     }
 
+    private EmptySymbolList : SCG.List[Transition.Symbol] = SCG.List();
+    private EmptyEpsilonList : SCG.List[Transition.Epsilon] = SCG.List();
     private MakeDeterministic(fsm : FSM, isOkState : Set[int] -> bool) : FSM
     {
       def fsm = Normalize(fsm);
+      def symbolTransitionsMap = fsm.Transitions.OfType.[Transition.Symbol]().Grouping(t => (t.From, t));
       def symbolTransitions(state)
       {
-        fsm.Transitions.MapFiltered(t => t.From == state && t is Transition.Symbol, _ :> Transition.Symbol)
+        mutable transitions;
+        if (symbolTransitionsMap.TryGetValue(state, out transitions))
+          transitions
+        else
+          EmptySymbolList
       }
 
+      def epsilonTransitionsMap = fsm.Transitions.OfType.[Transition.Epsilon]().Grouping(t => (t.From, t));
       def epsilonTransitions(state)
       {
-        fsm.Transitions.MapFiltered(t => t.From == state && t is Transition.Epsilon, _ :> Transition.Epsilon)
+        mutable transitions;
+        if (epsilonTransitionsMap.TryGetValue(state, out transitions))
+          transitions
+        else
+          EmptyEpsilonList
       }
 
       def epsilonMove(set : Set[int])
@@ -121,37 +123,33 @@ namespace N2.Model
         def stateSet = epsilonMove(stateSet);
         match (stateMap.Get(stateSet))
         {
-        | Some(resultState) => resultState;
-        | None =>
-          def resultState = stateMap.Count;
-          stateMap.Add(stateSet, resultState);
-          states.Push((stateSet, resultState));
-          ////Console.WriteLine($"\t\t\t\t\t\tnew state set $resultState $stateSet");
-          result = result.NewState(resultState);
-          resultState;
-        }
+          | Some(resultState) => resultState;
+          | None =>
+            def resultState = stateMap.Count;
+            stateMap.Add(stateSet, resultState);
+            states.Push((stateSet, resultState));
+            result = result.NewState(resultState);
+            resultState;
+          }
       }
       _ = addStateSet(Set().Add(fsm.StartState));
+      mutable toStateCounters = array(fsm.StateCount);
       while (states.Count > 0)
       {
         def (stateSet, fromState) = states.Pop();
         def addSymbolTransition(fromCh, toCh, toState)
         {
-          def transition = Transition.Symbol(fromState, toState, RangeSet().AddRange(fromCh :> char, toCh :> char));
+          def transition = Transition.Symbol(fromState, toState, RangeSet().AddRange(fromCh :> char, (toCh - 1) :> char));
           result = result.AddTransition(transition);
-          //Console.Write($"\t\t$transition");
         }
-
-        //Console.WriteLine($"############# stateSet $stateSet fromState $fromState ###############");
 
         def allChars = Hashtable();
         foreach (state in stateSet)
           foreach (transition in symbolTransitions(state))
             foreach (range in transition.Chars.Ranges)
             {
-              //Console.WriteLine($"$range");
               _ = allChars.Update((range.from : int, true), [], states => transition.To :: states);
-              _ = allChars.Update((range.to : int, false), [], states => transition.To :: states);
+              _ = allChars.Update((range.to : int + 1, false), [], states => transition.To :: states);
             }
 
         def allChars = allChars.MapToArray(pair => (pair.Key[0], pair.Key[1], pair.Value));
@@ -164,38 +162,30 @@ namespace N2.Model
               res
           });
 
-        mutable lastCh;
+        mutable lastCh = 0;
         mutable toStateSet = Set();
-        //Console.WriteLine($"..$allChars");
         foreach ((ch, isStart, states) in allChars)
         {
-          //Console.Write($"@@@ $((ch, ch :> char, isStart, states))\t$toStateSet");
-          if (toStateSet.Count != 0)
+          when (lastCh != ch && toStateSet.Count > 0)
+            addSymbolTransition(lastCh, ch, addStateSet(toStateSet));
+          lastCh = ch;
+          foreach (state in states)
           {
             if (isStart)
             {
-              when (ch > lastCh)
-              {
-                addSymbolTransition(lastCh, ch - 1, addStateSet(toStateSet));
-                lastCh = ch;
-              }
+              ++toStateCounters[state];
+              when (toStateCounters[state] == 1)
+                toStateSet = toStateSet.Add(state);
             }
             else
             {
-              addSymbolTransition(lastCh, ch, addStateSet(toStateSet));
-              lastCh = ch + 1;
+              --toStateCounters[state];
+              when (toStateCounters[state] == 0)
+                toStateSet = toStateSet.Remove(state);
             }
           }
-          else
-          {
-            lastCh = ch;
-          }
-          if (isStart)
-            toStateSet = toStateSet.AddList(states);
-          else
-            toStateSet = toStateSet.RemoveList(states);
-          //Console.WriteLine();
         }
+        assert3(toStateSet.Count == 0);
       }
       foreach (kv in stateMap)
         when (isOkState(kv.Key))
