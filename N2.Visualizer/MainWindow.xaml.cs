@@ -513,9 +513,9 @@ namespace N2.Visualizer
 
     private GrammarDescriptor[] LoadAssembly(string assemblyFilePath)
     {
-      var assembly = Assembly.LoadFrom(assemblyFilePath);
+      var result = Utils.LoadAssembly(assemblyFilePath);
       _settings.LastAssemblyFilePath = assemblyFilePath;
-      return GrammarDescriptor.GetDescriptors(assembly);
+      return result;
     }
 
     private void LoadRule(RuleDescriptor ruleDescriptor)
@@ -1075,15 +1075,25 @@ namespace N2.Visualizer
     private void RunTest(string path, string testName, RuleDescriptor ruleDescriptor)
     {
       var filePath = Path.Combine(path, testName);
-      var source = File.ReadAllText();
+      var source = File.ReadAllText(filePath);
+      var sourceSnapshot = new SourceSnapshot(source);
       var simpleRule = ruleDescriptor as SimpleRuleDescriptor;
-      if (simpleRule != null)
-        _parseResult = _parserHost.DoParsing(source, simpleRule);
-      else
-        _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor); var errors = _parseResult.GetErrors();
-      _ast = _parseResult.CreateAst();
+      var parseResult = simpleRule != null 
+        ? _parserHost.DoParsing(sourceSnapshot, simpleRule)
+        : _parserHost.DoParsing(sourceSnapshot, (ExtensibleRuleDescriptor)ruleDescriptor);
+      //var errors = parseResult.GetErrors();
+      var ast = parseResult.CreateAst();
       var options = PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes;
-      _prettyPrintTextBox.Text = _ast.ToString(options);
+      var prettyPrintResult = ast.ToString(options);
+    }
+
+    private void OnAddTestSuit(object sender, ExecutedRoutedEventArgs e)
+    {
+      var dialog = new TestSuit();
+      dialog.Owner = this;
+      if (dialog.ShowDialog() ?? false)
+      {
+      }
     }
   }
 }
