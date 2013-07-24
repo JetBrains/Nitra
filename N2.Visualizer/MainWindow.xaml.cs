@@ -29,6 +29,7 @@ using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
 namespace N2.Visualizer
 {
   using RecoveryInfo = Tuple<RecoveryResult, RecoveryResult[], RecoveryResult[], RecoveryStack[]>;
+  using System.Windows.Documents;
 
   /// <summary>
   /// Interaction logic for MainWindow.xaml
@@ -106,6 +107,12 @@ namespace N2.Visualizer
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
+      _para.Inlines.Clear();
+      var span = new Run(" Тест!         ");
+      span.Background = new SolidColorBrush(Colors.Red);
+      _para.Inlines.AddRange(new Inline[] { new Run("Тест тест тест!"), span, new LineBreak() });
+
+
       var args = Environment.GetCommandLineArgs();
       var code =
         args.Length > 1
@@ -384,7 +391,7 @@ namespace N2.Visualizer
         _ast = _parseResult.CreateAst();
 
       var options = PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes;
-      prettyPrintTextBox.Text = _ast.ToString(options);
+      _prettyPrintTextBox.Text = _ast.ToString(options);
     }
 
     void Fill(ItemCollection treeNodes, ReadOnlyCollection<ReflectionStruct> nodes)
@@ -1042,7 +1049,14 @@ namespace N2.Visualizer
 
     private void AddTest()
     {
-      MessageBox.Show(this, "AddTest()", "Go!", MessageBoxButton.OK, MessageBoxImage.Information);
+      var testFileName = Path.Combine(_settings.LastGrammarName, "-", _settings.LastRuleName);
+      if (_needUpdateTextPrettyPrint)
+        UpdateTextPrettyPrint();
+      var dialog = new AddTest(_text.Text, _prettyPrintTextBox.Text);
+      dialog.Owner = this;
+      if (dialog.ShowDialog() ?? false)
+      {
+      }
     }
 
     private void OnRunTests(object sender, ExecutedRoutedEventArgs e)
@@ -1056,6 +1070,20 @@ namespace N2.Visualizer
     private void RunTests()
     {
       MessageBox.Show(this, "RunTests()", "Go!", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void RunTest(string path, string testName, RuleDescriptor ruleDescriptor)
+    {
+      var filePath = Path.Combine(path, testName);
+      var source = File.ReadAllText();
+      var simpleRule = ruleDescriptor as SimpleRuleDescriptor;
+      if (simpleRule != null)
+        _parseResult = _parserHost.DoParsing(source, simpleRule);
+      else
+        _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor); var errors = _parseResult.GetErrors();
+      _ast = _parseResult.CreateAst();
+      var options = PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes;
+      _prettyPrintTextBox.Text = _ast.ToString(options);
     }
   }
 }
