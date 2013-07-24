@@ -371,7 +371,7 @@ namespace N2.Visualizer
         _ast = _parseResult.CreateAst();
 
       var htmlWriter = new HtmlPrettyPrintWriter(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes, "missing", "debug");
-      _ast.PrettyPrint(htmlWriter);
+      _ast.PrettyPrint(htmlWriter, 0);
       var html = Properties.Resources.PrettyPrintDoughnut.Replace("{prettyprint}", htmlWriter.ToString());
       prettyPrintViewer.NavigateToString(html);
     }

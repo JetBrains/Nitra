@@ -30,6 +30,14 @@ namespace N2.Compiler
         | Option(type) when isVoid(type)         => true
         | _                                      => false
       }
+      def isRecursiveCallFromPostfixRule(calleeRef)
+      {
+        match (RuleSymbol, calleeRef)
+        {
+          | (ExtentionRuleSymbol(BaseRule = SymbolRef.Some(baseRule), ExtentionType = Postfix), SymbolRef.Some(callee)) => baseRule.Equals(callee)
+          | _ => false
+        }
+      }
       def fieldToString(rule : Rule) : PExpr
       {
         def loop(expr : PExpr, rule : Rule) : PExpr
@@ -70,12 +78,13 @@ namespace N2.Compiler
                   | _ => <[ writer.Whitespace(); ]>
                 }
 
-              | Call when rule.Type is RuleType.Chars           => <[ writer.Token(this.Location.Source, $expr); ]>
-              | Call                                            => <[ $expr.PrettyPrint(writer); ]>
-              | Repeat(_, _, rule) when isVoid(rule.Type)       => <[ writer.Whitespace(); ]>
-              | Repeat(0, Some(1), rule)                        => <[ when ($expr is Some(_x)) $(loop(<[ _x ]>, rule)) ]>
-              | Repeat(_, _, rule)                              => <[ foreach (_elem in $expr) $(loop(<[ _elem ]>, rule)); ]>
-              | RepeatWithSeparator(_, _, rule, separator, _)   =>
+              | Call when rule.Type is RuleType.Chars                          => <[ writer.Token(this.Location.Source, $expr); ]>
+              | Call(ruleRef, bp) when isRecursiveCallFromPostfixRule(ruleRef) => <[ $expr.PrettyPrint(writer, $bp); ]>
+              | Call                                                           => <[ $expr.PrettyPrint(writer, 0); ]>
+              | Repeat(_, _, rule) when isVoid(rule.Type)                      => <[ writer.Whitespace(); ]>
+              | Repeat(0, Some(1), rule)                                       => <[ when ($expr is Some(_x)) $(loop(<[ _x ]>, rule)) ]>
+              | Repeat(_, _, rule)                                             => <[ foreach (_elem in $expr) $(loop(<[ _elem ]>, rule)); ]>
+              | RepeatWithSeparator(_, _, rule, separator, _) =>
                 if (isNoNeedVar(separator) || separator.SubRules.ForAll(isNoNeedVar))
                   <[  def (elems, separators) = $expr;
                       assert2(elems.IsEmpty || elems.Length >= separators.Length);
@@ -112,19 +121,34 @@ namespace N2.Compiler
 
       def code = _astFieldsWithVoid.Map(fieldToString);
       def body = <[ { ..$code } ]>;
-      _astTb.DefineConditional(<[ decl:
-        public override PrettyPrint(writer : N2.PrettyPrintWriter) : void
-        {
-          _ = writer;
-          $body
-        }
-      ]>);
+      def decl =
+      if (RuleSymbol is ExtentionRuleSymbol(ExtentionType = Postfix(bindingPower, _)))
+        <[ decl:
+          public override PrettyPrint(writer : N2.PrettyPrintWriter, callerBindingPower : int) : void
+          {
+            //TODO: determine correct braces from grammar
+            when (callerBindingPower > $bindingPower)
+              writer.String(N2.NToken(0, 1), "(");
+            $body;
+            when (callerBindingPower > $bindingPower)
+              writer.String(N2.NToken(0, 1), ")");
+          }
+        ]>
+      else
+        <[ decl:
+          public override PrettyPrint(writer : N2.PrettyPrintWriter, callerBindingPower : int) : void
+          {
+            ignore(writer, callerBindingPower);
+            $body;
+          }
+        ]>;
+      _astTb.DefineConditional(decl);
     }
 
     private DefineMissingPrettyPrint() : void
     {
       _missingTb.DefineConditional(<[ decl:
-        public override PrettyPrint(writer : N2.PrettyPrintWriter) : void
+        public override PrettyPrint(writer : N2.PrettyPrintWriter, _callerBindingPower : int) : void
         {
           writer.MissingNode($(RuleSymbol.GetRuleDescriptorRef()));
         }
