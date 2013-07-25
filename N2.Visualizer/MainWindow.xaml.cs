@@ -109,7 +109,7 @@ namespace N2.Visualizer
     {
       _para.Inlines.Clear();
       var span = new Run(" Тест!         ");
-      span.Background = new SolidColorBrush(Colors.Red);
+      span.Background = Brushes.Red;
       _para.Inlines.AddRange(new Inline[] { new Run("Тест тест тест!"), span, new LineBreak() });
 
 
@@ -1089,7 +1089,7 @@ namespace N2.Visualizer
 
     private void OnAddTestSuit(object sender, ExecutedRoutedEventArgs e)
     {
-      var dialog = new TestSuit();
+      var dialog = new TestSuit(true);
       dialog.Owner = this;
       if (dialog.ShowDialog() ?? false)
       {
