@@ -1,0 +1,196 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+
+using N2.Internal;
+using N2.Model;
+using N2.Typing;
+
+using System;
+using System.Diagnostics;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace N2.Compiler
+{
+  internal partial class RuleAstEmitter
+  {
+    private DefineBaseAstExtraFields() : void
+    {
+      foreach (field in RuleSymbol.ExtraFields)
+      {
+        | ExtraField.AbstractSymbol  (Signature = signature, IsCached = isCached)
+        | ExtraField.DefPrivateSymbol(Signature = signature, IsCached = isCached) =>
+          def n     = <[ $(field.Name : usesite) ]>.name;
+          def attrs = <[ N2.Runtime.ExtraFieldAttribute($(isCached : bool)) ]>;
+          when (isCached)
+            _baseTb.Define(<[ decl: public virtual $(cachingPropertyName(n) : name) : $(signature.Type) { get { throw System.NotImplementedException(); } } ]>);
+          _baseTb.Define(<[ decl: [$attrs] public abstract $(n : name)(..$(signature.Params)) : $(signature.Type); ]>);
+
+        | ExtraField.DefSymbol (Signature = signature, IsCached = isCached, Body = body) =>
+          def n     = <[ $(field.Name : usesite) ]>.name;
+          def attrs = <[ N2.Runtime.ExtraFieldAttribute($(isCached : bool)) ]>;
+          if (RuleSymbol is SimpleRuleSymbol)
+          {
+            when (isCached)
+              _baseTb.Define(<[ decl: public virtual $(cachingPropertyName(n) : name) : $(signature.Type) { get { throw System.NotImplementedException(); } } ]>);
+            _baseTb.Define(<[ decl: [$attrs] public abstract $(n : name)(..$(signature.Params)) : $(signature.Type); ]>);
+          }
+          else
+          {
+            def body2 = if (isCached) addCaching(_baseTb, n, signature.Type, body.Expr, NemerleModifiers.Virtual) else body.Expr;
+            def body3 = addRecursionCheck(_baseTb, body2);
+            _baseTb.Define(<[ decl: [$attrs] public virtual  $(n : name)(..$(signature.Params)) : $(signature.Type) $body3 ]>);
+          }
+
+        | _ => ()
+      }
+    }
+
+    private DefineAstExtraFields() : void
+    {
+      foreach (field in RuleSymbol.ExtraFields)
+      {
+        | ExtraField.DefPrivateSymbol (Signature = signature, IsCached = isCached, Body = body)
+        | ExtraField.DefSymbol        (Signature = signature, IsCached = isCached, Body = body) =>
+          def n     = <[ $(field.Name : usesite) ]>.name;
+          def flags = if (_baseTb != null) NemerleModifiers.Public %| NemerleModifiers.Override else NemerleModifiers.Public;
+          def mods  = AttributesAndModifiers(flags, [<[ N2.Runtime.ExtraFieldAttribute($(isCached : bool)) ]>]);
+          def body2 = if (isCached) addCaching(_astTb, n, signature.Type, body.Expr, flags) else body.Expr;
+          def body3 = addRecursionCheck(_astTb, body2);
+          _astTb.Define(<[  decl: ..$mods $(n : name)(..$(signature.Params)) : $(signature.Type) $body3 ]>);
+
+        | ExtraField.OverrideSymbol(BaseExtraField = baseExtraFieldSymbol, Body = body) =>
+          def n          = <[ $(field.Name : usesite) ]>.name;
+          def signature  = baseExtraFieldSymbol.Value.GetExtraFieldSignature();
+          def isCached   = baseExtraFieldSymbol.Value.GetExtraFieldIsCached();
+          def parameters = signature.Params;
+          def type       = signature.Type;
+          def attrs      = <[ N2.Runtime.ExtraFieldAttribute($(isCached : bool)) ]>;
+          def body2      = if (isCached) addCaching(_astTb, n, type, body.Expr, NemerleModifiers.Override) else body.Expr;
+          def body3      = addRecursionCheck(_astTb, body2);
+          _astTb.Define(<[ decl: [$attrs] public override $(n : name)(..$parameters) : $type $body3 ]>);
+
+        | _ => ()
+      }
+    }
+
+    private DefineSpliceExtraFields() : void
+    {
+      foreach (field in RuleSymbol.ExtraFields)
+      {
+        | ExtraField.AbstractSymbol  (Signature = signature)
+        | ExtraField.DefPrivateSymbol(Signature = signature)
+        | ExtraField.DefSymbol       (Signature = signature) =>
+          def n    = <[ $(field.Name : usesite) ]>.name;
+          def body = SCG.List();
+          foreach (p in signature.Params)
+            body.Add(<[ _ = $(p.ReferencingExpr); ]>);
+          body.Add(<[ throw System.InvalidOperationException("This method should not be invoked.") ]>);
+          _spliceTb.Define(<[ decl:
+            public override $(n : name)(..$(signature.Params)) : $(signature.Type)
+            {
+              ..$(body.ToNList())
+            }
+          ]>);
+
+        | _ => ()
+      }
+    }
+
+    private DefineMissingExtraFields() : void
+    {
+      def extraFieldsWithErrorHandler = SCG.HashSet();
+      foreach (field is ExtraField.ExtraFieldMissingValueSymbol in RuleSymbol.ExtraFields)
+        _ = extraFieldsWithErrorHandler.Add(field.HandlingExtraField.Value);
+
+      foreach (field in RuleSymbol.ExtraFields)
+      {
+        | ExtraField.AbstractSymbol  (Signature = signature) when !extraFieldsWithErrorHandler.Contains(field)
+        | ExtraField.DefPrivateSymbol(Signature = signature) when !extraFieldsWithErrorHandler.Contains(field)
+        | ExtraField.DefSymbol       (Signature = signature) when !extraFieldsWithErrorHandler.Contains(field) =>
+          def n    = <[ $(field.Name : usesite) ]>.name;
+          def body = SCG.List();
+          foreach (p in signature.Params)
+            body.Add(<[ _ = $(p.ReferencingExpr); ]>);
+          def msg = $"An attempt to access '$(field.Name)' extra field of '$(RuleSymbol.Name)' rule which contains a parse error. Implement the 'missing' handler for this extra field.";
+          body.Add(<[ throw System.NotImplementedException($(msg : string)) ]>);
+          _missingTb.Define(<[ decl:
+            public override $(n : name)(..$(signature.Params)) : $(signature.Type)
+            {
+              ..$(body.ToNList())
+            }
+          ]>);
+
+        | ExtraField.ExtraFieldMissingValueSymbol(Body = body, HandlingExtraField = handlingField) =>
+          def n          = <[ $(field.Name : usesite) ]>.name;
+          def signature  = handlingField.Value.GetExtraFieldSignature();
+          def parameters = signature.Params;
+          def type       = signature.Type;
+          _missingTb.Define(<[ decl: public override $(n : name)(..$parameters) : $type $(body.Expr) ]>);
+
+        | _ => ()
+      }
+    }
+
+    private static cachingPropertyName(extraFieldName : Name) : Name
+    {
+      regexp match (extraFieldName.Id)
+      {
+        | "(Get|Compute|Calculate|Calc|Create|Make|Evaluate|Eval)(?<baseName>.*)" => <[ $(baseName : usesite) ]>.name
+        | _ =>  <[ $("Computed" + extraFieldName.Id : usesite) ]>.name
+      }
+    }
+
+    private static addRecursionCheck(tb : TypeBuilder, body : PExpr) : PExpr.Sequence
+    {
+      def bitField = tb.GetBitFieldManager().Allocate();
+      <[
+        when ($(bitField.Read()))
+          throw System.InvalidOperationException("Recursion detected (see stack trace for details).");
+        $(bitField.Set());
+        try $body
+        finally $(bitField.Clear());
+      ]>
+    }
+
+    private static addCaching(tb : TypeBuilder, name : Name, type : PExpr, body : PExpr, additonalFlags : NemerleModifiers) : PExpr
+    {
+      def bitField = tb.GetBitFieldManager().Allocate();
+      def fieldName = <[ $(Util.tmpname(name.Id + "_cache") : usesite) ]>.name;
+      tb.Define(<[ decl: private mutable $(fieldName : name) : $type ]>);
+      def mods = Modifiers(NemerleModifiers.Public %| additonalFlags, []);
+      tb.Define(<[ decl:
+        ..$mods $(cachingPropertyName(name) : name) : $type
+        {
+          get
+          {
+            unless ($(bitField.Read()))
+            {
+              //FIXME: fix compiler bug!!
+              //assert2(false, "Extra field value not computed yet.");
+              throw System.InvalidOperationException("Extra field value not computed yet.");
+            }
+            $(fieldName : name);
+          }
+        }
+      ]>);
+
+      <[
+        if ($(bitField.Read()))
+          $(fieldName : name);
+        else
+        {
+          $(fieldName : name) = $body;
+          $(bitField.Set());
+          $(fieldName : name);
+        }
+      ]>
+    }
+  }
+}
