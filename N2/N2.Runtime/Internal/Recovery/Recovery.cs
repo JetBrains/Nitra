@@ -173,7 +173,6 @@ namespace N2.DebugStrategies
       {
         parser.MaxFailPos = startTextPos;
         nextState = ruleParser.GetNextState(state);
-        var curr_bestResult = _bestResult;
 
         int pos = TryParse(parser, recoveryStack, curTextPos, ruleParser, state, out parsedStates);
 
@@ -359,10 +358,12 @@ namespace N2.DebugStrategies
 #endif
     }
 
+#if !N2RUNTIME
     static string ToString(RecoveryStackFrame frame)
     {
       return frame + "  RuleId=" + frame.RuleId + " AstStartPos=" + frame.AstStartPos + " RuleParser=" + frame.RuleParser.GetHashCode();
     }
+#endif
 
     void AddResult(int startPos, int ruleEndPos, int endPos, int startState, RecoveryStack stack, string text, int failPos, bool allowEmpty = false)
     {

@@ -20,7 +20,8 @@ namespace N2.Visualizer
   /// </summary>
   public partial class TestSuit : Window
   {
-    const string _showAllRules = "<Show all rules>";
+    const string _showAllRules       = "<Show all rules>";
+    const string _showOnlyStratRules = "<Show only strat rules>";
     Settings _settings;
 
     public TestSuit()
@@ -93,7 +94,10 @@ namespace N2.Visualizer
             _startRuleComboBox.SelectedItem = rules[0];
         }
 
-        rules.Insert(0, _showAllRules);
+        if (showOnlyStratRules)
+          rules.Insert(0, _showAllRules);
+        else
+          rules.Insert(0, _showOnlyStratRules);
       }
 
       if (name != null)
@@ -140,9 +144,9 @@ namespace N2.Visualizer
     private void _startRuleComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
       if (_startRuleComboBox.SelectedItem == (object)_showAllRules)
-      {
         UpdateStartRules(false);
-      }
+      else if (_startRuleComboBox.SelectedItem == (object)_showOnlyStratRules)
+        UpdateStartRules(true);
     }
   }
 }
