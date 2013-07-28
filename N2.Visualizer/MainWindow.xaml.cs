@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Timers;
@@ -61,6 +62,7 @@ namespace N2.Visualizer
     readonly List<RecoveryInfo> _recoveryResults = new List<RecoveryInfo>();
     readonly ObservableCollection<Preset> _presets = new ObservableCollection<Preset>();
     readonly Settings _settings;
+    private TestSuitVm _currentTestSuit;
 
     public MainWindow()
     {
@@ -411,7 +413,7 @@ namespace N2.Visualizer
         var treeNode = new TreeViewItem();
         treeNode.Header = node.Description;
         treeNode.Tag = node;
-        treeNode.Expanded += new RoutedEventHandler(node_Expanded);
+        treeNode.Expanded += node_Expanded;
         if (node.Location.Length == 0)
           treeNode.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
         //if (ruleApplication.FirstFailedIndex > 0)
@@ -436,7 +438,7 @@ namespace N2.Visualizer
         treeNode.Items.Clear();
         var node = (ReflectionStruct)treeNode.Tag;
         Fill(treeNode.Items, node.Children);
-        treeNode.Expanded -= new RoutedEventHandler(node_Expanded);
+        treeNode.Expanded -= node_Expanded;
       }
     }
 
@@ -562,11 +564,15 @@ namespace N2.Visualizer
       if (_parserHost == null)
         return;
 
+      if (_currentTestSuit == null)
+        return;
+
       try
       {
         var source = new SourceSnapshot(_text.Text);
 
-        var simpleRule = _ruleDescriptor as SimpleRuleDescriptor;
+        var ruleDescriptor = _currentTestSuit.StartRule;
+        var simpleRule = ruleDescriptor as SimpleRuleDescriptor;
 
         _recovery.Init();
         _recoveryResults.Clear();
@@ -577,7 +583,7 @@ namespace N2.Visualizer
         if (simpleRule != null)
           _parseResult = _parserHost.DoParsing(source, simpleRule);
         else
-          _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)_ruleDescriptor);
+          _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)ruleDescriptor);
 
         _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
 
@@ -589,7 +595,7 @@ namespace N2.Visualizer
         _outliningTime.Text         = _foldingStrategy.TimeSpan.ToString();
 
         _recoveryTime.Text          = _recovery.Timer.Elapsed.ToString();
-        _recoveryCount.Text         = _recovery.Count.ToString();
+        _recoveryCount.Text         = _recovery.Count.ToString(CultureInfo.InvariantCulture);
 
         _continueParseTime.Text     = _recovery.ContinueParseTime.ToString();
         _continueParseCount.Text    = _recovery.ContinueParseCount.ToString();
@@ -1038,8 +1044,7 @@ namespace N2.Visualizer
 
     private bool ShowTestsSettingsDialog()
     {
-      var dialog = new TestsSettingsWindow();
-      dialog.Owner = this;
+      var dialog = new TestsSettingsWindow { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
         _settings.TestsLocationRoot = dialog.TestsLocationRoot;
@@ -1062,8 +1067,7 @@ namespace N2.Visualizer
       var testFileName = Path.Combine(_settings.LastGrammarName, "-", _settings.LastRuleName);
       if (_needUpdateTextPrettyPrint)
         UpdateTextPrettyPrint();
-      var dialog = new AddTest(_text.Text, _prettyPrintTextBox.Text);
-      dialog.Owner = this;
+      var dialog = new AddTest(_text.Text, _prettyPrintTextBox.Text) { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
       }
@@ -1099,10 +1103,28 @@ namespace N2.Visualizer
 
     private void OnAddTestSuit(object sender, ExecutedRoutedEventArgs e)
     {
-      var dialog = new TestSuit(true);
-      dialog.Owner = this;
+      if (!CheckTestFolder())
+        return;
+
+      var dialog = new TestSuit(true) { Owner = this };
       if (dialog.ShowDialog() ?? false)
+        LoadTests();
+    }
+
+    private void _testsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+      var test = e.NewValue as TestVm;
+      if (test != null)
       {
+        _text.Text = test.Code;
+        _currentTestSuit = test.TestSuit;
+      }
+
+      var testSuit = e.NewValue as TestSuitVm;
+      if (testSuit != null)
+      {
+        _text.Text = "";
+        _currentTestSuit = testSuit;
       }
     }
   }

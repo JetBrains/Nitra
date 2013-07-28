@@ -4,13 +4,27 @@ namespace N2.Visualizer.ViewModels
 {
   class TestVm
   {
-    public string TestPath  { get; private set; }
+    public string TestPath { get; private set; }
+    public TestSuitVm TestSuit { get; private set; }
 
     public string Name      { get { return Path.GetFileNameWithoutExtension(TestPath); } }
 
-    public TestVm(string path)
+    public string Code
     {
-      TestPath = path;
+      get { return File.ReadAllText(TestPath); }
+      set { File.WriteAllText(TestPath, value); }
+    }
+
+    public string Gold
+    {
+      get { return File.ReadAllText(Path.ChangeExtension(TestPath, ".gold")); }
+      set { File.WriteAllText(Path.ChangeExtension(TestPath, ".gold"), value); }
+    }
+
+    public TestVm(string testPath, TestSuitVm testSuit)
+    {
+      TestPath = testPath;
+      TestSuit = testSuit;
     }
   }
 }

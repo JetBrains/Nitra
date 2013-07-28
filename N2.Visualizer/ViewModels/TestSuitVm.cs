@@ -14,6 +14,8 @@ namespace N2.Visualizer.ViewModels
     public RuleDescriptor                           StartRule     { get; private set; }
     public ObservableCollection<TestVm>             Tests         { get; private set; }
 
+    public CompositeGrammar                         _grammar;
+
     public TestSuitVm(string rootPath, string testSuitPath)
     {
       var gonfigPath = Path.GetFullPath(Path.Combine(testSuitPath, "config.xml"));
@@ -31,16 +33,13 @@ namespace N2.Visualizer.ViewModels
 
       SynatxModule  = new ObservableCollection<GrammarDescriptor>();
 
-      foreach (var lib in result)
+      foreach (var x in result.SelectMany(lib => lib))
       {
-        foreach (var x in lib)
+        SynatxModule.Add(x.Module);
+        if (x.StartRule != null)
         {
-          SynatxModule.Add(x.Module);
-          if (x.StartRule != null)
-          {
-            Debug.Assert(StartRule == null);
-            StartRule = x.StartRule;
-          }
+          Debug.Assert(StartRule == null);
+          StartRule = x.StartRule;
         }
       }
 
@@ -48,8 +47,8 @@ namespace N2.Visualizer.ViewModels
 
       var tests = new ObservableCollection<TestVm>();
 
-      foreach (var testPath in Directory.GetFiles(testSuitPath, "*.test"))
-        tests.Add(new TestVm(testPath));
+      foreach (var testPath in Directory.GetFiles(testSuitPath, "*.test").OrderBy(f => f))
+        tests.Add(new TestVm(testPath, this));
 
       Tests = tests;
     }
