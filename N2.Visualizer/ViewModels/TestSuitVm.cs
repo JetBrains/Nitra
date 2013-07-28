@@ -14,8 +14,6 @@ namespace N2.Visualizer.ViewModels
     public RuleDescriptor                           StartRule     { get; private set; }
     public ObservableCollection<TestVm>             Tests         { get; private set; }
 
-    public CompositeGrammar                         _grammar;
-
     public TestSuitVm(string rootPath, string testSuitPath)
     {
       var gonfigPath = Path.GetFullPath(Path.Combine(testSuitPath, "config.xml"));

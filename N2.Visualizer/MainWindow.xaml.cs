@@ -580,10 +580,12 @@ namespace N2.Visualizer
         _errorsTreeView.Items.Clear();
         var timer = Stopwatch.StartNew();
 
+        var compositeGrammar = _parserHost.MakeCompositeGrammar(_currentTestSuit.SynatxModule);
+
         if (simpleRule != null)
-          _parseResult = _parserHost.DoParsing(source, simpleRule);
+          _parseResult = _parserHost.DoParsing(source, compositeGrammar, simpleRule);
         else
-          _parseResult = _parserHost.DoParsing(source, (ExtensibleRuleDescriptor)ruleDescriptor);
+          _parseResult = _parserHost.DoParsing(source, compositeGrammar, (ExtensibleRuleDescriptor)ruleDescriptor);
 
         _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
 
