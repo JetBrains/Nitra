@@ -16,6 +16,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.Xml.Linq;
+using N2.Visualizer.ViewModels;
 
 namespace N2.Visualizer
 {
@@ -92,7 +93,7 @@ namespace N2.Visualizer
       UpdateStartRules(true);
     }
 
-    private static IEnumerable<SyntaxModuleVm> SortSyntaxModules(List<SyntaxModuleVm> syntaxModules)
+    private static IEnumerable<SyntaxModuleVm> SortSyntaxModules(IEnumerable<SyntaxModuleVm> syntaxModules)
     {
       return syntaxModules.OrderBy(m => m.Name);
     }

@@ -1,9 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+﻿using System.Linq;
 
-namespace N2.Visualizer
+namespace N2.Visualizer.ViewModels
 {
   class SyntaxModuleVm
   {

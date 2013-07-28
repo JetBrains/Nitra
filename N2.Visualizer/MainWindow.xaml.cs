@@ -4,7 +4,6 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Timers;
 using System.Windows;
 using System.Windows.Controls;
@@ -23,7 +22,7 @@ using N2.DebugStrategies;
 using N2.Visualizer.Properties;
 using System.Diagnostics;
 using System.Text;
-
+using N2.Visualizer.ViewModels;
 using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
 
 namespace N2.Visualizer
@@ -44,12 +43,12 @@ namespace N2.Visualizer
     RuleDescriptor _ruleDescriptor;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
-    Timer _parseTimer;
+    readonly Timer _parseTimer;
     Dictionary<string, HighlightingColor> _highlightingStyles;
-    TextMarkerService _textMarkerService;
-    N2FoldingStrategy _foldingStrategy;
-    FoldingManager _foldingManager;
-    ToolTip _textBox1Tooltip;
+    readonly TextMarkerService _textMarkerService;
+    readonly N2FoldingStrategy _foldingStrategy;
+    readonly FoldingManager _foldingManager;
+    readonly ToolTip _textBox1Tooltip;
     bool _needUpdateReflection;
     bool _needUpdateHtmlPrettyPrint;
     bool _needUpdateTextPrettyPrint;
@@ -58,10 +57,10 @@ namespace N2.Visualizer
     TimeSpan _parseTimeSpan;
     TimeSpan _astTimeSpan;
     TimeSpan _highlightingTimeSpan;
-    Recovery _recovery;
-    List<RecoveryInfo> _recoveryResults = new List<RecoveryInfo>();
-    ObservableCollection<Preset> _presets = new ObservableCollection<Preset>();
-    Settings _settings;
+    readonly Recovery _recovery;
+    readonly List<RecoveryInfo> _recoveryResults = new List<RecoveryInfo>();
+    readonly ObservableCollection<Preset> _presets = new ObservableCollection<Preset>();
+    readonly Settings _settings;
 
     public MainWindow()
     {
@@ -103,13 +102,24 @@ namespace N2.Visualizer
       _text.TextArea.TextView.LineTransformers.Add(_textMarkerService);
 
       _presetsMenuItem.ItemsSource = _presets;
+
+      LoadTests();
+    }
+
+    private void LoadTests()
+    {
+      var testSuits = new ObservableCollection<TestSuitVm>();
+
+      foreach (var dir in Directory.GetDirectories(_settings.TestsLocationRoot))
+        testSuits.Add(new TestSuitVm(_settings.TestsLocationRoot, dir));
+
+      _testsTreeView.ItemsSource = testSuits;
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
       _para.Inlines.Clear();
-      var span = new Run(" Тест!         ");
-      span.Background = Brushes.Red;
+      var span = new Run(" Тест!         ") { Background = Brushes.Red };
       _para.Inlines.AddRange(new Inline[] { new Run("Тест тест тест!"), span, new LineBreak() });
 
 
