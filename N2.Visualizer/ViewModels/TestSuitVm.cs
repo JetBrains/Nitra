@@ -9,7 +9,7 @@ namespace N2.Visualizer.ViewModels
   class TestSuitVm
   {
     public string                                   Name          { get; private set; }
-    public ObservableCollection<GrammarDescriptor>  SynatxModule  { get; private set; }
+    public ObservableCollection<GrammarDescriptor>  SynatxModules { get; private set; }
     public RuleDescriptor                           StartRule     { get; private set; }
     public ObservableCollection<TestVm>             Tests         { get; private set; }
 
@@ -28,11 +28,11 @@ namespace N2.Visualizer.ViewModels
             (m, info) => new { Module = m, StartRule = GetStratRule(info.Attribute("StartRule"), m) }));
 
 
-      SynatxModule  = new ObservableCollection<GrammarDescriptor>();
+      SynatxModules  = new ObservableCollection<GrammarDescriptor>();
 
       foreach (var x in result.SelectMany(lib => lib))
       {
-        SynatxModule.Add(x.Module);
+        SynatxModules.Add(x.Module);
         if (x.StartRule != null)
         {
           Debug.Assert(StartRule == null);
