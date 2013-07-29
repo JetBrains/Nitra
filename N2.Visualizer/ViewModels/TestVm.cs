@@ -2,7 +2,7 @@
 
 namespace N2.Visualizer.ViewModels
 {
-  class TestVm
+  class TestVm : FullPathVm
   {
     public string     TestPath { get; private set; }
     public TestSuitVm TestSuit { get; private set; }
@@ -21,6 +21,7 @@ namespace N2.Visualizer.ViewModels
     }
 
     public TestVm(string testPath, TestSuitVm testSuit)
+      :base(testPath)
     {
       TestPath = testPath;
       TestSuit = testSuit;

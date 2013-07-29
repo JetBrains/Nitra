@@ -3,18 +3,22 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
+using N2.Visualizer.Properties;
 
 namespace N2.Visualizer.ViewModels
 {
-  class TestSuitVm
+  class TestSuitVm : FullPathVm
   {
     public string                                   Name          { get; private set; }
     public ObservableCollection<GrammarDescriptor>  SynatxModules { get; private set; }
     public RuleDescriptor                           StartRule     { get; private set; }
     public ObservableCollection<TestVm>             Tests         { get; private set; }
+    public string                                   TestSuitPath  { get; set; }
 
     public TestSuitVm(string rootPath, string testSuitPath)
+      : base(testSuitPath)
     {
+      TestSuitPath = testSuitPath;
       var gonfigPath = Path.GetFullPath(Path.Combine(testSuitPath, "config.xml"));
       var root = XElement.Load(gonfigPath);
 

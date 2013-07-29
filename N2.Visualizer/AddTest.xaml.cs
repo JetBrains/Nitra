@@ -11,13 +11,13 @@ namespace N2.Visualizer
   /// </summary>
   public partial class AddTest
   {
-    readonly Settings _settings;
+    readonly string _testSuitPath;
     readonly string _code;
     readonly string _gold;
 
-    public AddTest(string code, string gold)
+    public AddTest(string testSuitPath, string code, string gold)
     {
-      _settings = Settings.Default;
+      _testSuitPath = testSuitPath;
       _code = code;
       _gold = gold;
 
@@ -27,7 +27,7 @@ namespace N2.Visualizer
 
     private string MakeDefaultName()
     {
-      var path = Path.Combine(_settings.TestsLocationRoot, _settings.LastGrammarName, _settings.LastRuleName);
+      var path = _testSuitPath;
 
       if (!Directory.Exists(path))
         Directory.CreateDirectory(path);
@@ -37,14 +37,14 @@ namespace N2.Visualizer
       if (found == null)
         return "test-" + (Directory.EnumerateFiles(path, "*.test").Count() + 1).ToString("0000") + ".test";
 
-      return Path.GetFileName(found);
+      return Path.GetFileNameWithoutExtension(found);
     }
 
     public string TestName { get; private set; }
 
     private void _okButton_Click(object sender, RoutedEventArgs e)
     {
-      var path = Path.Combine(_settings.TestsLocationRoot, _settings.LastGrammarName, _settings.LastRuleName);
+      var path = _testSuitPath;
       var filePath = Path.Combine(path, _testName.Text);
 
       try 

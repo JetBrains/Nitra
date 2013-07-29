@@ -103,16 +103,30 @@ namespace N2.Visualizer
       _text.TextArea.TextView.LineTransformers.Add(_textMarkerService);
 
       _presetsMenuItem.ItemsSource = _presets;
+      _testsTreeView.SelectedValuePath = "FullPath";
 
       LoadTests();
     }
 
     private void LoadTests()
     {
+      var selected = _testsTreeView.SelectedItem as FullPathVm;
+      var path     = selected == null ? null : selected.FullPath;
       var testSuits = new ObservableCollection<TestSuitVm>();
 
       foreach (var dir in Directory.GetDirectories(_settings.TestsLocationRoot))
-        testSuits.Add(new TestSuitVm(_settings.TestsLocationRoot, dir));
+      {
+        var testSuit = new TestSuitVm(_settings.TestsLocationRoot, dir);
+        if (path != null)
+        {
+          if (testSuit.FullPath == path)
+            testSuit.IsSelected = true; // Прикольно что по другому фокус не изменить!
+          else foreach (var test in testSuit.Tests)
+            if (test.FullPath == path)
+              test.IsSelected = true;
+        }
+        testSuits.Add(testSuit);
+      }
 
       _testsTreeView.ItemsSource = testSuits;
     }
@@ -1062,13 +1076,24 @@ namespace N2.Visualizer
 
     private void AddTest()
     {
-      var testFileName = Path.Combine(_settings.LastGrammarName, "-", _settings.LastRuleName);
+      if (_currentTestSuit == null)
+      {
+        MessageBox.Show(this, "Select  test suit first.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        return;
+      }
+
       if (_needUpdateTextPrettyPrint)
         UpdateTextPrettyPrint();
-      var dialog = new AddTest(_text.Text, _prettyPrintTextBox.Text) { Owner = this };
+      var dialog = new AddTest(TestFullPath(_currentTestSuit.TestSuitPath), _text.Text, _prettyPrintTextBox.Text) { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
+        LoadTests();
       }
+    }
+
+    private string TestFullPath(string path)
+    {
+      return Path.GetFullPath(path);
     }
 
     private void OnRunTests(object sender, ExecutedRoutedEventArgs e)
