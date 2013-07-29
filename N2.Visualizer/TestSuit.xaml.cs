@@ -4,23 +4,18 @@ using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Diagnostics;
 using System.Linq;
-using System.Text;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.Xml.Linq;
 using N2.Visualizer.ViewModels;
 
 namespace N2.Visualizer
 {
-  public partial class TestSuit : Window
+  public partial class TestSuit
   {
     const string _showAllRules       = "<Show all rules>";
     const string _showOnlyStratRules = "<Show only strat rules>";
@@ -31,12 +26,12 @@ namespace N2.Visualizer
     public GrammarDescriptor[] SyntaxModules   { get; private set; }
     public RuleDescriptor      StartRule       { get; private set; }
 
-    Settings _settings;
+    readonly Settings _settings;
     bool _nameUpdate;
     bool _nameChangedByUser;
-    bool _create;
+    readonly bool _create;
 
-    DispatcherTimer _timer = new DispatcherTimer();
+    readonly DispatcherTimer _timer = new DispatcherTimer();
 
     public TestSuit(bool create)
     {
@@ -55,7 +50,7 @@ namespace N2.Visualizer
 
       _timer.Interval = TimeSpan.FromSeconds(1.3);
       _timer.Stop();
-      _timer.Tick += new EventHandler(_assembliesEdit_timer_Tick);
+      _timer.Tick += _assembliesEdit_timer_Tick;
     }
 
     private void UpdateSyntaxModules(string relativeAssemblyPaths, string testsLocationRootFullPath)
@@ -199,10 +194,12 @@ namespace N2.Visualizer
 
     private void _startRuleComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+// ReSharper disable RedundantCast
       if (_startRuleComboBox.SelectedItem == (object)_showAllRules)
         UpdateStartRules(false);
       else if (_startRuleComboBox.SelectedItem == (object)_showOnlyStratRules)
         UpdateStartRules(true);
+// ReSharper restore RedundantCast
 
       if (string.IsNullOrWhiteSpace(_testSuitName.Text) || !_nameChangedByUser)
         UpdateName();

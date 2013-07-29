@@ -4,10 +4,9 @@ namespace N2.Visualizer.ViewModels
 {
   class TestVm
   {
-    public string TestPath { get; private set; }
+    public string     TestPath { get; private set; }
     public TestSuitVm TestSuit { get; private set; }
-
-    public string Name      { get { return Path.GetFileNameWithoutExtension(TestPath); } }
+    public string     Name     { get { return Path.GetFileNameWithoutExtension(TestPath); } }
 
     public string Code
     {

@@ -1,15 +1,7 @@
 ﻿using System;
 using System.IO;
-using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using N2.Visualizer.Properties;
 
 namespace N2.Visualizer
@@ -17,11 +9,11 @@ namespace N2.Visualizer
   /// <summary>
   /// Interaction logic for Test.xaml
   /// </summary>
-  public partial class AddTest : Window
+  public partial class AddTest
   {
-    Settings _settings;
-    string _code;
-    string _gold;
+    readonly Settings _settings;
+    readonly string _code;
+    readonly string _gold;
 
     public AddTest(string code, string gold)
     {

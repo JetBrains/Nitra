@@ -34,18 +34,17 @@ namespace N2.Visualizer
   /// <summary>
   /// Interaction logic for MainWindow.xaml
   /// </summary>
-  public partial class MainWindow : Window
+  public partial class MainWindow
   {
     const int MaxPresetCount = 50;
 
     bool _loading = true;
     ParserHost _parserHost;
     Parser _parseResult;
-    RuleDescriptor _ruleDescriptor;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
     readonly Timer _parseTimer;
-    Dictionary<string, HighlightingColor> _highlightingStyles;
+    readonly Dictionary<string, HighlightingColor> _highlightingStyles;
     readonly TextMarkerService _textMarkerService;
     readonly N2FoldingStrategy _foldingStrategy;
     readonly FoldingManager _foldingManager;
@@ -81,13 +80,13 @@ namespace N2.Visualizer
 
       _findGrid.Visibility = System.Windows.Visibility.Collapsed;
       _foldingStrategy = new N2FoldingStrategy();
-      _textBox1Tooltip = new ToolTip() { PlacementTarget = _text };
+      _textBox1Tooltip = new ToolTip { PlacementTarget = _text };
       _recovery = new Recovery();
       _recovery.ReportResult = ReportRecoveryResult;
       _parseTimer = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
-      _parseTimer.Elapsed += new ElapsedEventHandler(_parseTimer_Elapsed);
+      _parseTimer.Elapsed += _parseTimer_Elapsed;
 
-      _text.TextArea.Caret.PositionChanged += new EventHandler(Caret_PositionChanged);
+      _text.TextArea.Caret.PositionChanged += Caret_PositionChanged;
 
       _highlightingStyles = new Dictionary<string, HighlightingColor>
       {
@@ -214,7 +213,7 @@ namespace N2.Visualizer
 
     void Caret_PositionChanged(object sender, EventArgs e)
     {
-      _pos.Text = _text.CaretOffset.ToString();
+      _pos.Text = _text.CaretOffset.ToString(CultureInfo.InvariantCulture);
       ShowNodeForCaret();
     }
 
@@ -223,7 +222,7 @@ namespace N2.Visualizer
       if (_doTreeOperation)
         return;
 
-      if (_tabControl.SelectedItem != _reflectionTabItem)
+      if (!object.ReferenceEquals(_tabControl.SelectedItem, _reflectionTabItem))
         return;
 
       _doChangeCaretPos = true;
@@ -291,7 +290,7 @@ namespace N2.Visualizer
           var errorNode = new TreeViewItem();
           errorNode.Header = "(" + error.Location.EndLineColumn + "): " + error.Message;
           errorNode.Tag = error;
-          errorNode.MouseDoubleClick += new MouseButtonEventHandler(errorNode_MouseDoubleClick);
+          errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
 
           var subNode = new TreeViewItem();
           subNode.FontSize = 12;
@@ -331,16 +330,18 @@ namespace N2.Visualizer
     {
       try
       {
-        if (_needUpdateReflection && _tabControl.SelectedItem == _reflectionTabItem)
+        if (_needUpdateReflection           && object.ReferenceEquals(_tabControl.SelectedItem, _reflectionTabItem))
           UpdateReflection();
-        else if (_needUpdateHtmlPrettyPrint && _tabControl.SelectedItem == _htmlPrettyPrintTabItem)
+        else if (_needUpdateHtmlPrettyPrint && object.ReferenceEquals(_tabControl.SelectedItem, _htmlPrettyPrintTabItem))
           UpdateHtmlPrettyPrint();
-        else if (_needUpdateTextPrettyPrint && _tabControl.SelectedItem == _textPrettyPrintTabItem)
+        else if (_needUpdateTextPrettyPrint && object.ReferenceEquals(_tabControl.SelectedItem, _textPrettyPrintTabItem))
           UpdateTextPrettyPrint();
-        else if (_needUpdatePerformance && _tabControl.SelectedItem == _performanceTabItem)
+        else if (_needUpdatePerformance     && object.ReferenceEquals(_tabControl.SelectedItem, _performanceTabItem))
           UpdatePerformance();
       }
+// ReSharper disable EmptyGeneralCatchClause
       catch { }
+// ReSharper restore EmptyGeneralCatchClause
     }
 
     private void UpdatePerformance()
@@ -373,7 +374,7 @@ namespace N2.Visualizer
 
       var root = _parseResult.Reflect();
       var treeNode = new TreeViewItem();
-      treeNode.Expanded += new RoutedEventHandler(node_Expanded);
+      treeNode.Expanded += node_Expanded;
       treeNode.Header = root.Description;
       treeNode.Tag = root;
       treeNode.ContextMenu = (ContextMenu)Resources["TreeContextMenu"];
@@ -535,7 +536,6 @@ namespace N2.Visualizer
       _settings.LastGrammarName = ruleDescriptor.Grammar.FullName;
       _settings.LastRuleName = ruleDescriptor.Name;
 
-      _ruleDescriptor = ruleDescriptor;
       _parserHost = new ParserHost(_recovery.Strategy);
       _parseResult = null;
 
@@ -600,16 +600,16 @@ namespace N2.Visualizer
         _recoveryCount.Text         = _recovery.Count.ToString(CultureInfo.InvariantCulture);
 
         _continueParseTime.Text     = _recovery.ContinueParseTime.ToString();
-        _continueParseCount.Text    = _recovery.ContinueParseCount.ToString();
+        _continueParseCount.Text    = _recovery.ContinueParseCount.ToString(CultureInfo.InvariantCulture);
 
         _tryParseSubrulesTime.Text  = _recovery.TryParseSubrulesTime.ToString();
-        _tryParseSubrulesCount.Text = _recovery.TryParseSubrulesCount.ToString();
+        _tryParseSubrulesCount.Text = _recovery.TryParseSubrulesCount.ToString(CultureInfo.InvariantCulture);
 
         _tryParseTime.Text          = _recovery.TryParseTime.ToString();
-        _tryParseCount.Text         = _recovery.TryParseCount.ToString();
+        _tryParseCount.Text         = _recovery.TryParseCount.ToString(CultureInfo.InvariantCulture);
 
         _tryParseNoCacheTime.Text   = _recovery.TryParseNoCacheTime.ToString();
-        _tryParseNoCacheCount.Text  = _recovery.TryParseNoCacheCount.ToString();
+        _tryParseNoCacheCount.Text  = _recovery.TryParseNoCacheCount.ToString(CultureInfo.InvariantCulture);
 
         ShowRecoveryResults();
 
@@ -630,7 +630,7 @@ namespace N2.Visualizer
         var node = new TreeViewItem();
         node.Header = recoveryResult.Item1;
         node.Tag = recoveryResult;
-        node.MouseDoubleClick += new MouseButtonEventHandler(RecoveryNode_MouseDoubleClick);
+        node.MouseDoubleClick += RecoveryNode_MouseDoubleClick;
 
         var stackNode = new TreeViewItem();
         stackNode.Header = "Stacks...";
@@ -803,7 +803,7 @@ namespace N2.Visualizer
       FindPrev();
     }
 
-    private bool FindNext()
+    private void FindNext()
     {
       var option = GetMatchCaseOption();
       var toFind = _findText.Text;
@@ -823,11 +823,9 @@ namespace N2.Visualizer
         _text.Select(index, toFind.Length);
       else
         _status.Text = "Can't find '" + toFind + "'.";
-
-      return found;
     }
 
-    private bool FindPrev()
+    private void FindPrev()
     {
       var option = GetMatchCaseOption();
       var toFind = _findText.Text;
@@ -848,8 +846,6 @@ namespace N2.Visualizer
         _text.Select(index, toFind.Length);
       else
         _status.Text = "Can't find '" + toFind + "'.";
-
-      return found;
     }
 
     private bool IsWholeWord(string text, int start, int length)
@@ -1099,8 +1095,7 @@ namespace N2.Visualizer
         : _parserHost.DoParsing(sourceSnapshot, (ExtensibleRuleDescriptor)ruleDescriptor);
       //var errors = parseResult.GetErrors();
       var ast = parseResult.CreateAst();
-      var options = PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes;
-      var prettyPrintResult = ast.ToString(options);
+      var prettyPrintResult = ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
     }
 
     private void OnAddTestSuit(object sender, ExecutedRoutedEventArgs e)
