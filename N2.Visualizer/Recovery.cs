@@ -79,9 +79,10 @@ namespace N2.DebugStrategies
       var text = parser.Text;
       Debug.Assert(parser.RecoveryStacks.Count > 0);
       var lastStack = (RecoveryStack)parser.RecoveryStacks.Last();
+
       var stacks = PrepareStacks(parser);
 
-      do
+      while (curTextPos < text.Length && _bestResult == null)// && curTextPos - startTextPos < 400
       {
         foreach (var stack in stacks)
         {
@@ -106,7 +107,6 @@ namespace N2.DebugStrategies
         curTextPos++;
         _visitedFrame.Clear();
       }
-      while (curTextPos <= text.Length && _bestResult == null);// && curTextPos - startTextPos < 400
 
       parser.MaxFailPos = maxFailPos;
 
