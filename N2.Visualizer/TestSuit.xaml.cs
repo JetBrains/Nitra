@@ -15,16 +15,11 @@ using N2.Visualizer.ViewModels;
 
 namespace N2.Visualizer
 {
-  public partial class TestSuit
+  internal partial class TestSuit
   {
     const string _showAllRules       = "<Show all rules>";
     const string _showOnlyStratRules = "<Show only strat rules>";
     const string _assembiesToolTip   = "Enter paths to assemblies (one assembly per line)";
-
-    public string              TestSuitName    { get; private set; }
-    public string[]            ParserLibraries { get; private set; }
-    public GrammarDescriptor[] SyntaxModules   { get; private set; }
-    public RuleDescriptor      StartRule       { get; private set; }
 
     readonly Settings _settings;
     bool _nameUpdate;
@@ -33,7 +28,7 @@ namespace N2.Visualizer
 
     readonly DispatcherTimer _timer = new DispatcherTimer();
 
-    public TestSuit(bool create)
+    public TestSuit(bool create, TestSuitVm baseTestSuit)
     {
       _settings = Settings.Default;
       _create   = create;
@@ -42,11 +37,14 @@ namespace N2.Visualizer
 
       this.Title = create ? "New test suit" : "Edit test suit";
 
-      var testsLocationRootFullPath = Path.GetFullPath(_settings.TestsLocationRoot);
-      _testsRootTextBlock.Text = testsLocationRootFullPath;
-      var relativeAssemblyPath = Utils.MakeRelativePath(testsLocationRootFullPath, _settings.LastAssemblyFilePath);
-      _assemblies.Text = relativeAssemblyPath;
-      UpdateSyntaxModules(relativeAssemblyPath, testsLocationRootFullPath);
+      var root = Path.GetFullPath(_settings.TestsLocationRoot);
+      _testsRootTextBlock.Text = root;
+      var paths = baseTestSuit == null 
+        ? ""
+        : string.Join(Environment.NewLine, 
+            baseTestSuit.SynatxModules.Select(m => Utils.MakeRelativePath(root, m.GetType().Assembly.Location)).Distinct());
+      _assemblies.Text = paths;
+      UpdateSyntaxModules(paths, root);
 
       _timer.Interval = TimeSpan.FromSeconds(1.3);
       _timer.Stop();
@@ -135,16 +133,10 @@ namespace N2.Visualizer
         else
         {
           var index = rules.IndexOf(oldSelected);
-          if (index >= 0)
-            _startRuleComboBox.SelectedItem = rules[index];
-          else
-            _startRuleComboBox.SelectedItem = rules[0];
+          _startRuleComboBox.SelectedItem = index >= 0 ? rules[index] : rules[0];
         }
 
-        if (showOnlyStratRules)
-          rules.Insert(0, _showAllRules);
-        else
-          rules.Insert(0, _showOnlyStratRules);
+        rules.Insert(0, showOnlyStratRules ? _showAllRules : _showOnlyStratRules);
       }
       else if (showOnlyStratRules)
         rules.Insert(0, _showAllRules);
@@ -297,7 +289,6 @@ namespace N2.Visualizer
 
       MakeAllPathsRelative();
 
-      TestSuitName = testSuitName;
       var assemblyPaths = Utils.GetAssemblyPaths(_assemblies.Text);
 
       if (assemblyPaths.Length == 0)
@@ -307,8 +298,6 @@ namespace N2.Visualizer
         return;
       }
 
-      ParserLibraries = assemblyPaths;
-
       var syntaxModules = GetSelectedGrammarDescriptor();
 
       if (syntaxModules.Length == 0)
@@ -317,8 +306,6 @@ namespace N2.Visualizer
         _syntaxModules.Focus();
         return;
       }
-
-      SyntaxModules = syntaxModules;
 
       var startRule = _startRuleComboBox.SelectedItem as RuleDescriptor;
 
@@ -332,7 +319,7 @@ namespace N2.Visualizer
       try
       {
         Directory.CreateDirectory(path);
-        var xml = MakeXml(root, syntaxModules, startRule);
+        var xml = Utils.MakeXml(root, syntaxModules, startRule);
         var configPath = Path.Combine(path, "config.xml");
         xml.Save(configPath);
 
@@ -345,25 +332,6 @@ namespace N2.Visualizer
 
       this.DialogResult = true;
       Close();
-    }
-
-    private static XElement MakeXml(string root, GrammarDescriptor[] syntaxModules, RuleDescriptor startRule)
-    {
-      //  <Config>
-      //    <Lib Path="../sss/Json.Grammar.dll"><SyntaxModule Name="JasonParser" /></Lib>
-      //    <Lib Path="../sss/JsonEx.dll"><SyntaxModule Name="JsonEx" StartRule="Start" /></Lib>
-      //  </Config>
-      var libs = syntaxModules.GroupBy(m => Utils.MakeRelativePath(root, m.GetType().Assembly.Location))
-        .Select(asm =>
-          new XElement("Lib", 
-              new XAttribute("Path", asm.Key),
-              asm.Select(mod => 
-                new XElement("SyntaxModule", 
-                  new XAttribute("Name", mod.FullName), 
-                  mod.Rules.Contains(startRule) ? new XAttribute("StartRule", startRule.Name) : null))
-          ));
-
-      return new XElement("Config", libs);
     }
   }
 }

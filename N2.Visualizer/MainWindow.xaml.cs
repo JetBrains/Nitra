@@ -1074,6 +1074,13 @@ namespace N2.Visualizer
         MessageBox.Show(this, "Can't add test.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
+
+    private void CommandBinding_CanAddTest(object sender, CanExecuteRoutedEventArgs e)
+    {
+      e.CanExecute = _currentTestSuit != null;
+      e.Handled = true;
+    }
+
     private void AddTest()
     {
       if (_currentTestSuit == null)
@@ -1084,11 +1091,25 @@ namespace N2.Visualizer
 
       if (_needUpdateTextPrettyPrint)
         UpdateTextPrettyPrint();
-      var dialog = new AddTest(TestFullPath(_currentTestSuit.TestSuitPath), _text.Text, _prettyPrintTextBox.Text) { Owner = this };
+      var testSuitPath = _currentTestSuit.TestSuitPath;
+      var dialog = new AddTest(TestFullPath(testSuitPath), _text.Text, _prettyPrintTextBox.Text) { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
+        var testName = dialog.TestName;
         LoadTests();
+        SelectTest(testSuitPath, testName);
       }
+    }
+
+    private void SelectTest(string testSuitPath, string testName)
+    {
+      var testSuits = (ObservableCollection<TestSuitVm>) _testsTreeView.ItemsSource;
+      var result = testSuits.FirstOrDefault(ts => ts.FullPath == testSuitPath);
+      if (result == null)
+        return;
+      var test = result.Tests.FirstOrDefault(t => t.Name == testName);
+      if (test != null)
+        test.IsSelected = true;
     }
 
     private string TestFullPath(string path)
@@ -1128,9 +1149,34 @@ namespace N2.Visualizer
       if (!CheckTestFolder())
         return;
 
-      var dialog = new TestSuit(true) { Owner = this };
+      var dialog = new TestSuit(true, _currentTestSuit) { Owner = this };
       if (dialog.ShowDialog() ?? false)
         LoadTests();
+    }
+
+    private void OnRemoveTest(object sender, ExecutedRoutedEventArgs e)
+    {
+      var test = _testsTreeView.SelectedItem as TestVm;
+      if (test == null)
+        return;
+      if (MessageBox.Show(this, "Do you want to delete the '" + test.Name + "' test?", "Visualizer!", MessageBoxButton.YesNo, 
+        MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
+        return;
+
+      var fullPath = TestFullPath(test.TestPath);
+      File.Delete(fullPath);
+      var goldFullPath = Path.ChangeExtension(fullPath, ".gold");
+      if (File.Exists(goldFullPath))
+        File.Delete(goldFullPath);
+      LoadTests();
+    }
+
+    private void CommandBinding_CanRemoveTest(object sender, CanExecuteRoutedEventArgs e)
+    {
+      if (_testsTreeView == null)
+        return;
+      e.CanExecute = _testsTreeView.SelectedItem is TestVm;
+      e.Handled = true;
     }
 
     private void _testsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
@@ -1148,6 +1194,25 @@ namespace N2.Visualizer
         _text.Text = "";
         _currentTestSuit = testSuit;
       }
+    }
+
+    private void OnRemoveTestSuit(object sender, ExecutedRoutedEventArgs e)
+    {
+      if (_currentTestSuit == null)
+        return;
+
+      if (MessageBox.Show(this, "Do you want to delete the '" + _currentTestSuit.Name + "' test suit?\r\nAll test will be deleted!", "Visualizer!", MessageBoxButton.YesNo,
+        MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
+        return;
+
+      Directory.Delete(TestFullPath(_currentTestSuit.TestSuitPath), true);
+      LoadTests();
+    }
+
+    private void CommandBinding_CanRemoveTestSuit(object sender, CanExecuteRoutedEventArgs e)
+    {
+      e.CanExecute = _currentTestSuit != null;
+      e.Handled = true;
     }
   }
 }

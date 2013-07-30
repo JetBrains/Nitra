@@ -35,7 +35,7 @@ namespace N2.Visualizer
       var found = Directory.EnumerateFiles(path, "*.test").FirstOrDefault(file => File.ReadAllText(file).Equals(_code, StringComparison.Ordinal));
       
       if (found == null)
-        return "test-" + (Directory.EnumerateFiles(path, "*.test").Count() + 1).ToString("0000") + ".test";
+        return "test-" + (Directory.EnumerateFiles(path, "*.test").Count() + 1).ToString("0000");
 
       return Path.GetFileNameWithoutExtension(found);
     }
@@ -45,7 +45,7 @@ namespace N2.Visualizer
     private void _okButton_Click(object sender, RoutedEventArgs e)
     {
       var path = _testSuitPath;
-      var filePath = Path.Combine(path, _testName.Text);
+      var filePath = Path.Combine(path, _testName.Text) + ".test";
 
       try 
 	    {	        

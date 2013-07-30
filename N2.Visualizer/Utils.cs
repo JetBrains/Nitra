@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text;
 using System.Reflection;
 using System.IO;
+using System.Xml.Linq;
+using N2.Visualizer.Annotations;
 
 namespace N2.Visualizer
 {
@@ -35,7 +37,26 @@ namespace N2.Visualizer
     public static bool IsInvalidDirName(string testSuitName)
     {
       var invalidChars = Path.GetInvalidFileNameChars();
-      return testSuitName.Any(ch => invalidChars.Contains(ch));
+      return testSuitName.Any(invalidChars.Contains);
+    }
+
+    public static XElement MakeXml([NotNull] string root, [NotNull] IEnumerable<GrammarDescriptor> syntaxModules, [NotNull] RuleDescriptor startRule)
+    {
+      //  <Config>
+      //    <Lib Path="../sss/Json.Grammar.dll"><SyntaxModule Name="JasonParser" /></Lib>
+      //    <Lib Path="../sss/JsonEx.dll"><SyntaxModule Name="JsonEx" StartRule="Start" /></Lib>
+      //  </Config>
+      var libs = syntaxModules.GroupBy(m => MakeRelativePath(root, m.GetType().Assembly.Location))
+        .Select(asm =>
+          new XElement("Lib", 
+            new XAttribute("Path", asm.Key),
+            asm.Select(mod => 
+              new XElement("SyntaxModule", 
+                new XAttribute("Name", mod.FullName), 
+                mod.Rules.Contains(startRule) ? new XAttribute("StartRule", startRule.Name) : null))
+            ));
+
+      return new XElement("Config", libs);
     }
   }
 }

@@ -15,9 +15,14 @@ namespace N2.Visualizer.ViewModels
     public ObservableCollection<TestVm>             Tests         { get; private set; }
     public string                                   TestSuitPath  { get; set; }
 
+    private readonly string _rootPath;
+    public XElement Xml { get { return Utils.MakeXml(_rootPath, SynatxModules, StartRule); } }
+
+
     public TestSuitVm(string rootPath, string testSuitPath)
       : base(testSuitPath)
     {
+      _rootPath = rootPath;
       TestSuitPath = testSuitPath;
       var gonfigPath = Path.GetFullPath(Path.Combine(testSuitPath, "config.xml"));
       var root = XElement.Load(gonfigPath);
@@ -54,7 +59,8 @@ namespace N2.Visualizer.ViewModels
       Tests = tests;
     }
 
-    private RuleDescriptor GetStratRule(XAttribute startRule, GrammarDescriptor m)
+
+    private static RuleDescriptor GetStratRule(XAttribute startRule, GrammarDescriptor m)
     {
       return startRule == null ? null : m.Rules.First(r => r.Name == startRule.Value);
     }
