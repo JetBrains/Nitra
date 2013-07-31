@@ -1112,7 +1112,7 @@ namespace N2.Visualizer
         test.IsSelected = true;
     }
 
-    private string TestFullPath(string path)
+    private static string TestFullPath(string path)
     {
       return Path.GetFullPath(path);
     }

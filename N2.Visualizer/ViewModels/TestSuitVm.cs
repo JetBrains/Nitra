@@ -57,6 +57,8 @@ namespace N2.Visualizer.ViewModels
         tests.Add(new TestVm(testPath, this));
 
       Tests = tests;
+
+      TestState = TestState.Success;
     }
 
 
