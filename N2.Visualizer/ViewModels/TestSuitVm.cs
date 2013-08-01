@@ -75,6 +75,30 @@ namespace N2.Visualizer.ViewModels
       return startRule == null ? null : m.Rules.First(r => r.Name == startRule.Value);
     }
 
+
+    internal void TestStateChanged()
+    {
+      var hasNotRunnedTests = false;
+
+      foreach (var test in Tests)
+      {
+
+        if (test.TestState == TestState.Failure)
+        {
+          this.TestState = TestState.Failure;
+          return;
+        }
+
+        if (!hasNotRunnedTests && test.TestState != TestState.Success)
+          hasNotRunnedTests = true;
+      }
+
+      if (!hasNotRunnedTests)
+        this.TestState = TestState.Success;
+      else
+        this.TestState = TestState.Skipped;
+    }
+
     [NotNull]
     public Parser Run([NotNull] string code, [CanBeNull] string gold)
     {

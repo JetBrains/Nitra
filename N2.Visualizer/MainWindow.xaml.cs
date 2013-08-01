@@ -1107,8 +1107,12 @@ namespace N2.Visualizer
       var testSuits = (ObservableCollection<TestSuitVm>)_testsTreeView.ItemsSource;
 
       foreach (var testSuit in testSuits)
+      {
         foreach (var test in testSuit.Tests)
           test.Run();
+
+        testSuit.TestStateChanged();
+      }
     }
 
     private void OnAddTestSuit(object sender, ExecutedRoutedEventArgs e)
@@ -1192,12 +1196,18 @@ namespace N2.Visualizer
       {
         var test = _testsTreeView.SelectedItem as TestVm;
         if (test != null)
+        {
           test.Run();
+          test.TestSuit.TestStateChanged();
+        }
       }
       var testSuit = _testsTreeView.SelectedItem as TestSuitVm;
       if (testSuit != null)
+      {
         foreach (var test in testSuit.Tests)
           test.Run();
+        testSuit.TestStateChanged();
+      }
     }
 
     private void CommandBinding_CanRunTest(object sender, CanExecuteRoutedEventArgs e)
