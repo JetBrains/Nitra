@@ -114,7 +114,8 @@ namespace N2.DebugStrategies
         AddResult(text.Length, text.Length, text.Length, -1, lastStack, text, startTextPos);
 
 #if !N2RUNTIME
-      ReportResult(_bestResult, _bestResults, _candidats, stacks);
+      if (ReportResult != null)
+        ReportResult(_bestResult, _bestResults, _candidats, stacks);
 #endif
       FixAst(parser);
       Reset();

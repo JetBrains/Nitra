@@ -1,9 +1,12 @@
-﻿using System.Collections.ObjectModel;
+﻿using N2.DebugStrategies;
+using N2.Internal;
+using N2.Visualizer.Annotations;
+
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
-using N2.Visualizer.Properties;
 
 namespace N2.Visualizer.ViewModels
 {
@@ -15,7 +18,12 @@ namespace N2.Visualizer.ViewModels
     public ObservableCollection<TestVm>             Tests         { get; private set; }
     public string                                   TestSuitPath  { get; set; }
 
-    private readonly string _rootPath;
+    public readonly Recovery Recovery = new Recovery();
+
+    readonly string _rootPath;
+    ParserHost _parserHost;
+    private CompositeGrammar _compositeGrammar;
+
     public XElement Xml { get { return Utils.MakeXml(_rootPath, SynatxModules, StartRule); } }
 
 
@@ -58,13 +66,32 @@ namespace N2.Visualizer.ViewModels
 
       Tests = tests;
 
-      TestState = TestState.Success;
+      //TestState = TestState.Success;
     }
 
 
     private static RuleDescriptor GetStratRule(XAttribute startRule, GrammarDescriptor m)
     {
       return startRule == null ? null : m.Rules.First(r => r.Name == startRule.Value);
+    }
+
+    [NotNull]
+    public Parser Run([NotNull] string code, [CanBeNull] string gold)
+    {
+      if (_parserHost == null)
+      {
+        _parserHost = new ParserHost(this.Recovery.Strategy);
+        _compositeGrammar = _parserHost.MakeCompositeGrammar(SynatxModules);
+      }
+      var source      = new SourceSnapshot(code);
+      var simpleRule  = StartRule as SimpleRuleDescriptor;
+
+      this.Recovery.Init();
+
+      if (simpleRule != null)
+        return _parserHost.DoParsing(source, _compositeGrammar, simpleRule);
+      else
+        return _parserHost.DoParsing(source, _compositeGrammar, (ExtensibleRuleDescriptor)StartRule);
     }
   }
 }
