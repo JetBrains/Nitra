@@ -39,7 +39,6 @@ namespace N2.Visualizer
     const int MaxPresetCount = 50;
 
     bool _loading = true;
-    ParserHost _parserHost;
     Parser _parseResult;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
@@ -57,7 +56,6 @@ namespace N2.Visualizer
     TimeSpan _parseTimeSpan;
     TimeSpan _astTimeSpan;
     TimeSpan _highlightingTimeSpan;
-    readonly Recovery _recovery;
     readonly List<RecoveryInfo> _recoveryResults = new List<RecoveryInfo>();
     readonly ObservableCollection<Preset> _presets = new ObservableCollection<Preset>();
     readonly Settings _settings;
@@ -81,8 +79,6 @@ namespace N2.Visualizer
       _findGrid.Visibility = System.Windows.Visibility.Collapsed;
       _foldingStrategy = new N2FoldingStrategy();
       _textBox1Tooltip = new ToolTip { PlacementTarget = _text };
-      _recovery = new Recovery();
-      _recovery.ReportResult = ReportRecoveryResult;
       _parseTimer = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
       _parseTimer.Elapsed += _parseTimer_Elapsed;
 
@@ -417,8 +413,7 @@ namespace N2.Visualizer
       if (_ast == null)
         _ast = _parseResult.CreateAst();
 
-      var options = PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes;
-      _prettyPrintTextBox.Text = _ast.ToString(options);
+      _prettyPrintTextBox.Text = _ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
     }
 
     void Fill(ItemCollection treeNodes, ReadOnlyCollection<ReflectionStruct> nodes)
@@ -431,12 +426,6 @@ namespace N2.Visualizer
         treeNode.Expanded += node_Expanded;
         if (node.Location.Length == 0)
           treeNode.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
-        //if (ruleApplication.FirstFailedIndex > 0)
-        //{
-        //  var sate = _parseResult.ast[ruleApplication.AstPointer + 2];
-        //  if (sate >= 0)
-        //    node.Background = new SolidColorBrush(Color.FromRgb(255, 200, 200));
-        //}
 
         treeNodes.Add(treeNode);
 
@@ -550,9 +539,6 @@ namespace N2.Visualizer
       _settings.LastGrammarName = ruleDescriptor.Grammar.FullName;
       _settings.LastRuleName = ruleDescriptor.Name;
 
-      _parserHost = new ParserHost(_recovery.Strategy);
-      _parseResult = null;
-
       treeView1.Items.Clear();
     }
 
@@ -575,31 +561,19 @@ namespace N2.Visualizer
       if (_doTreeOperation)
         return;
 
-      if (_parserHost == null)
-        return;
-
       if (_currentTestSuit == null)
         return;
 
       try
       {
-        var source = new SourceSnapshot(_text.Text);
-
-        var ruleDescriptor = _currentTestSuit.StartRule;
-        var simpleRule = ruleDescriptor as SimpleRuleDescriptor;
-
-        _recovery.Init();
+        var recovery = _currentTestSuit.Recovery;
+        recovery.ReportResult = ReportRecoveryResult;
         _recoveryResults.Clear();
         _recoveryTreeView.Items.Clear();
         _errorsTreeView.Items.Clear();
         var timer = Stopwatch.StartNew();
 
-        var compositeGrammar = _parserHost.MakeCompositeGrammar(_currentTestSuit.SynatxModules);
-
-        if (simpleRule != null)
-          _parseResult = _parserHost.DoParsing(source, compositeGrammar, simpleRule);
-        else
-          _parseResult = _parserHost.DoParsing(source, compositeGrammar, (ExtensibleRuleDescriptor)ruleDescriptor);
+        _parseResult = _currentTestSuit.Run(_text.Text, null);
 
         _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
 
@@ -610,25 +584,25 @@ namespace N2.Visualizer
 
         _outliningTime.Text         = _foldingStrategy.TimeSpan.ToString();
 
-        _recoveryTime.Text          = _recovery.Timer.Elapsed.ToString();
-        _recoveryCount.Text         = _recovery.Count.ToString(CultureInfo.InvariantCulture);
+        _recoveryTime.Text          = recovery.Timer.Elapsed.ToString();
+        _recoveryCount.Text         = recovery.Count.ToString(CultureInfo.InvariantCulture);
 
-        _continueParseTime.Text     = _recovery.ContinueParseTime.ToString();
-        _continueParseCount.Text    = _recovery.ContinueParseCount.ToString(CultureInfo.InvariantCulture);
+        _continueParseTime.Text     = recovery.ContinueParseTime.ToString();
+        _continueParseCount.Text    = recovery.ContinueParseCount.ToString(CultureInfo.InvariantCulture);
 
-        _tryParseSubrulesTime.Text  = _recovery.TryParseSubrulesTime.ToString();
-        _tryParseSubrulesCount.Text = _recovery.TryParseSubrulesCount.ToString(CultureInfo.InvariantCulture);
+        _tryParseSubrulesTime.Text  = recovery.TryParseSubrulesTime.ToString();
+        _tryParseSubrulesCount.Text = recovery.TryParseSubrulesCount.ToString(CultureInfo.InvariantCulture);
 
-        _tryParseTime.Text          = _recovery.TryParseTime.ToString();
-        _tryParseCount.Text         = _recovery.TryParseCount.ToString(CultureInfo.InvariantCulture);
+        _tryParseTime.Text          = recovery.TryParseTime.ToString();
+        _tryParseCount.Text         = recovery.TryParseCount.ToString(CultureInfo.InvariantCulture);
 
-        _tryParseNoCacheTime.Text   = _recovery.TryParseNoCacheTime.ToString();
-        _tryParseNoCacheCount.Text  = _recovery.TryParseNoCacheCount.ToString(CultureInfo.InvariantCulture);
+        _tryParseNoCacheTime.Text   = recovery.TryParseNoCacheTime.ToString();
+        _tryParseNoCacheCount.Text  = recovery.TryParseNoCacheCount.ToString(CultureInfo.InvariantCulture);
 
         ShowRecoveryResults();
-
         TryReportError();
         ShowInfo();
+        recovery.ReportResult = null;
       }
       catch (TypeLoadException ex)
       {
@@ -1127,21 +1101,18 @@ namespace N2.Visualizer
 
     private void RunTests()
     {
-      MessageBox.Show(this, "RunTests()", "Go!", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
+      if (_testsTreeView.ItemsSource == null)
+        return;
 
-    private void RunTest(string path, string testName, RuleDescriptor ruleDescriptor)
-    {
-      var filePath = Path.Combine(path, testName);
-      var source = File.ReadAllText(filePath);
-      var sourceSnapshot = new SourceSnapshot(source);
-      var simpleRule = ruleDescriptor as SimpleRuleDescriptor;
-      var parseResult = simpleRule != null 
-        ? _parserHost.DoParsing(sourceSnapshot, simpleRule)
-        : _parserHost.DoParsing(sourceSnapshot, (ExtensibleRuleDescriptor)ruleDescriptor);
-      //var errors = parseResult.GetErrors();
-      var ast = parseResult.CreateAst();
-      var prettyPrintResult = ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
+      var testSuits = (ObservableCollection<TestSuitVm>)_testsTreeView.ItemsSource;
+
+      foreach (var testSuit in testSuits)
+      {
+        foreach (var test in testSuit.Tests)
+          test.Run();
+
+        testSuit.TestStateChanged();
+      }
     }
 
     private void OnAddTestSuit(object sender, ExecutedRoutedEventArgs e)
@@ -1213,6 +1184,52 @@ namespace N2.Visualizer
     {
       e.CanExecute = _currentTestSuit != null;
       e.Handled = true;
+    }
+
+    private void OnRunTest(object sender, ExecutedRoutedEventArgs e)
+    {
+      RunTest();
+    }
+
+    private void RunTest()
+    {
+      {
+        var test = _testsTreeView.SelectedItem as TestVm;
+        if (test != null)
+        {
+          test.Run();
+          test.TestSuit.TestStateChanged();
+        }
+      }
+      var testSuit = _testsTreeView.SelectedItem as TestSuitVm;
+      if (testSuit != null)
+      {
+        foreach (var test in testSuit.Tests)
+          test.Run();
+        testSuit.TestStateChanged();
+      }
+    }
+
+    private void CommandBinding_CanRunTest(object sender, CanExecuteRoutedEventArgs e)
+    {
+      if (_testsTreeView == null)
+        return;
+
+      if (_testsTreeView.SelectedItem is TestVm)
+      {
+        e.CanExecute = true;
+        e.Handled = true;
+      }
+      else if (_testsTreeView.SelectedItem is TestSuitVm)
+      {
+        e.CanExecute = true;
+        e.Handled = true;
+      }
+    }
+
+    private void _testsTreeView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+      RunTest();
     }
   }
 }
