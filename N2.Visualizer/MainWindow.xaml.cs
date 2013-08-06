@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -19,7 +18,6 @@ using ICSharpCode.SharpDevelop.Editor;
 using Microsoft.Win32;
 using N2.Internal;
 using N2.Runtime.Reflection;
-using N2.DebugStrategies;
 using N2.Visualizer.Properties;
 using System.Diagnostics;
 using System.Text;
@@ -57,7 +55,6 @@ namespace N2.Visualizer
     TimeSpan _astTimeSpan;
     TimeSpan _highlightingTimeSpan;
     readonly List<RecoveryInfo> _recoveryResults = new List<RecoveryInfo>();
-    readonly ObservableCollection<Preset> _presets = new ObservableCollection<Preset>();
     readonly Settings _settings;
     private TestSuitVm _currentTestSuit;
 
@@ -98,7 +95,6 @@ namespace N2.Visualizer
       _text.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
       _text.TextArea.TextView.LineTransformers.Add(_textMarkerService);
 
-      _presetsMenuItem.ItemsSource = _presets;
       _testsTreeView.SelectedValuePath = "FullPath";
 
       LoadTests();
@@ -132,16 +128,7 @@ namespace N2.Visualizer
       _para.Inlines.Clear();
       var span = new Run(" Тест!         ") { Background = Brushes.Red };
       _para.Inlines.AddRange(new Inline[] { new Run("Тест тест тест!"), span, new LineBreak() });
-
-
-      var args = Environment.GetCommandLineArgs();
-      var code =
-        args.Length > 1
-          ? File.ReadAllText(args[1])
-          : _settings.LastTextInput;
-
-      LoadPresets();
-      Load(_settings.LastAssemblyFilePath, _settings.LastGrammarName, _settings.LastRuleName, code);
+      _loading = false;
     }
 
     private void Window_Closed(object sender, EventArgs e)
@@ -154,61 +141,6 @@ namespace N2.Visualizer
       _settings.WindowHeight     = this.Height;
       _settings.WindowLWidth     = this.Width;
       _settings.ActiveTabIndex   = _tabControl.SelectedIndex;
-      SavePresets();
-    }
-
-    private void SavePresets()
-    {
-      var presets = new StringCollection();
-      foreach (var preset in _presets)
-        presets.Add(preset.Save());
-      _settings.Presets = presets;
-    }
-
-    private void LoadPresets()
-    {
-      if (_settings.Presets != null)
-        foreach (var presetData in _settings.Presets)
-          _presets.Add(new Preset(_presets, presetData));
-    }
-
-    void Load(Preset preset)
-    {
-      Load(preset.AssemblyFilePath, preset.SynatxModuleName, preset.StartRuleName, preset.Code);
-    }
-
-    void Load(string assemblyFilePath, string syntaxModuleFullName, string startRuleName, string code)
-    {
-      _loading = true;
-
-      _text.Text = code;
-
-      if (!string.IsNullOrEmpty(assemblyFilePath) && File.Exists(assemblyFilePath))
-      {
-        var grammars = LoadAssembly(assemblyFilePath);
-
-        GrammarDescriptor grammar = null;
-        if (!string.IsNullOrEmpty(syntaxModuleFullName))
-          grammar = grammars.FirstOrDefault(g => g.FullName == syntaxModuleFullName);
-
-        RuleDescriptor ruleDescriptor = null;
-        if (grammar != null)
-          ruleDescriptor = grammar.Rules.FirstOrDefault(r => r.Name == startRuleName);
-
-        if (ruleDescriptor != null)
-          LoadRule(ruleDescriptor);
-        else
-        {
-          var dialog = new RuleSelectionDialog(grammars);
-          if (dialog.ShowDialog() ?? false)
-            LoadRule(dialog.Result);
-        }
-      }
-
-      _loading = false;
-
-      if (!(Keyboard.GetKeyStates(Key.LeftShift) == KeyStates.Down || Keyboard.GetKeyStates(Key.RightShift) == KeyStates.Down))
-        _parseTimer.Start();
     }
 
     private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats, List<RecoveryStack> stacks)
@@ -502,46 +434,7 @@ namespace N2.Visualizer
     {
       this.Close();
     }
-
-    private void ParserLoad(object sender, RoutedEventArgs e)
-    {
-      var dialog = new OpenFileDialog
-      {
-        DefaultExt = ".dll",
-        Filter = "Parser module (.dll)|*.dll",
-        Title = "Load partser"
-      };
-      if (!string.IsNullOrEmpty(_settings.LastLoadParserDirectory) && Directory.Exists(_settings.LastLoadParserDirectory))
-        dialog.InitialDirectory = _settings.LastLoadParserDirectory;
-
-      if (dialog.ShowDialog(this) ?? false)
-      {
-        _settings.LastLoadParserDirectory = Path.GetDirectoryName(dialog.FileName);
-
-        var grammars = LoadAssembly(dialog.FileName);
-        var ruleSelectionDialog = new RuleSelectionDialog(grammars) { Owner = this };
-        if (ruleSelectionDialog.ShowDialog() ?? false)
-        {
-          LoadRule(ruleSelectionDialog.Result);
-        }
-      }
-    }
-
-    private GrammarDescriptor[] LoadAssembly(string assemblyFilePath)
-    {
-      var result = Utils.LoadAssembly(assemblyFilePath);
-      _settings.LastAssemblyFilePath = assemblyFilePath;
-      return result;
-    }
-
-    private void LoadRule(RuleDescriptor ruleDescriptor)
-    {
-      _settings.LastGrammarName = ruleDescriptor.Grammar.FullName;
-      _settings.LastRuleName = ruleDescriptor.Name;
-
-      treeView1.Items.Clear();
-    }
-
+    
     private void FileOpenExecuted(object sender, RoutedEventArgs e)
     {
       var dialog = new OpenFileDialog { Filter = "C# (.cs)|*.cs|Nitra (.n2)|*.n2|JSON (.json)|*.json|Text (.txt)|*.txt|All|*.*" };
@@ -980,41 +873,6 @@ namespace N2.Visualizer
       }
     }
 
-    private void SavePreset(object sender, ExecutedRoutedEventArgs e)
-    {
-      var text = _text.Text;
-      var moduleName = _settings.LastGrammarName;
-      var grammarName = moduleName.Split('.').Last();
-      var dialog = new AddPreset(grammarName, text);
-      dialog.Owner = this;
-      if (dialog.ShowDialog() ?? false)
-      {
-        // remove element with same name
-        var preset = _presets.FirstOrDefault(p => p.Name == dialog.PresetName);
-        if (preset != null)
-          _presets.Remove(preset);
-
-        _presets.Insert(0, new Preset(_presets, dialog.PresetName, _settings.LastAssemblyFilePath, moduleName, _settings.LastRuleName, text));
-
-        if (_presets.Count > MaxPresetCount)
-          _presets.RemoveAt(MaxPresetCount);
-      }
-    }
-
-    private void PresetMenuItem_Click(object sender, RoutedEventArgs e)
-    {
-      var preset = (Preset)((MenuItem)e.Source).DataContext;
-      Load(preset);
-      _presets.Remove(preset);
-      _presets.Insert(0, preset);
-    }
-
-    private void PersistPresets(object sender, ExecutedRoutedEventArgs e)
-    {
-      SavePresets();
-      _settings.Save();
-    }
-
     private void MenuItem_Click_TestsSettings(object sender, RoutedEventArgs e)
     {
       ShowTestsSettingsDialog();
@@ -1230,6 +1088,7 @@ namespace N2.Visualizer
     private void _testsTreeView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
       RunTest();
+      e.Handled = true;
     }
   }
 }
