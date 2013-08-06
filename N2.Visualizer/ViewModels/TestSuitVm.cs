@@ -1,4 +1,5 @@
-﻿using N2.DebugStrategies;
+﻿using System;
+using N2.DebugStrategies;
 using N2.Internal;
 using N2.Visualizer.Annotations;
 
@@ -18,6 +19,9 @@ namespace N2.Visualizer.ViewModels
     public ObservableCollection<TestVm>             Tests         { get; private set; }
     public string                                   TestSuitPath  { get; set; }
 
+    public string _hint;
+    public override string Hint { get { return _hint; } }
+
     public readonly Recovery Recovery = new Recovery();
 
     readonly string _rootPath;
@@ -35,26 +39,40 @@ namespace N2.Visualizer.ViewModels
       var gonfigPath = Path.GetFullPath(Path.Combine(testSuitPath, "config.xml"));
       var root = XElement.Load(gonfigPath);
 
-      var libs = root.Elements("Lib");
+      SynatxModules = new ObservableCollection<GrammarDescriptor>();
 
-      var result =
-        libs.Select(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib.Attribute("Path").Value)))
-          .Join(lib.Elements("SyntaxModule"),
-            m => m.FullName,
-            m => m.Attribute("Name").Value,
-            (m, info) => new { Module = m, StartRule = GetStratRule(info.Attribute("StartRule"), m) }));
-
-
-      SynatxModules  = new ObservableCollection<GrammarDescriptor>();
-
-      foreach (var x in result.SelectMany(lib => lib))
+      try
       {
-        SynatxModules.Add(x.Module);
-        if (x.StartRule != null)
+        var libs = root.Elements("Lib").ToList();
+        var result =
+          libs.Select(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib.Attribute("Path").Value)))
+            .Join(lib.Elements("SyntaxModule"),
+              m => m.FullName,
+              m => m.Attribute("Name").Value,
+              (m, info) => new { Module = m, StartRule = GetStratRule(info.Attribute("StartRule"), m) }));
+
+
+
+        foreach (var x in result.SelectMany(lib => lib))
         {
-          Debug.Assert(StartRule == null);
-          StartRule = x.StartRule;
+          SynatxModules.Add(x.Module);
+          if (x.StartRule != null)
+          {
+            Debug.Assert(StartRule == null);
+            StartRule = x.StartRule;
+          }
         }
+        var indent = Environment.NewLine + "  ";
+        var para = Environment.NewLine + Environment.NewLine;
+
+        _hint = "Libraries:" + indent + string.Join(indent, libs.Select(lib => lib.Attribute("Path").Value)) + para
+               + "Syntax modules:" + indent + string.Join(indent, SynatxModules.Select(m => m.FullName)) + para
+               + "Start rule:" + indent + StartRule.Name;
+      }
+      catch (Exception ex)
+      {
+        TestState = TestState.Ignored;
+        _hint = "Failed to load test suite:" + Environment.NewLine + ex.Message;
       }
 
       Name = Path.GetFileName(testSuitPath);

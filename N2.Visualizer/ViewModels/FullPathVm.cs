@@ -4,7 +4,7 @@ using N2.Visualizer.Annotations;
 
 namespace N2.Visualizer.ViewModels
 {
-  class FullPathVm : INotifyPropertyChanged
+  abstract class FullPathVm : INotifyPropertyChanged
   {
     private bool      _isSelected;
     private TestState _testState;
@@ -13,6 +13,8 @@ namespace N2.Visualizer.ViewModels
     {
       FullPath = fullPath;
     }
+
+    public abstract string Hint { get; }
 
     public string FullPath { get; private set; }
 

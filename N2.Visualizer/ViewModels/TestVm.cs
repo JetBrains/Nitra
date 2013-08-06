@@ -11,6 +11,8 @@ namespace N2.Visualizer.ViewModels
     public Parser     Result            { get; private set; }
     public string     PrettyPrintResult { get; private set; }
 
+    public override string Hint { get { return Code; } }
+
     public string Code
     {
       get { return File.ReadAllText(TestPath); }

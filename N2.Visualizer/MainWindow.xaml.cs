@@ -62,6 +62,10 @@ namespace N2.Visualizer
     {
       _settings = Settings.Default;
 
+      ToolTipService.ShowDurationProperty.OverrideMetadata(
+        typeof(DependencyObject), 
+        new FrameworkPropertyMetadata(Int32.MaxValue));
+
       InitializeComponent();
 
       this.Top         = _settings.WindowTop;
@@ -72,12 +76,11 @@ namespace N2.Visualizer
       _mainRow.Height  = new GridLength(_settings.TabControlHeight);
 
       _tabControl.SelectedIndex = _settings.ActiveTabIndex;
-
-      _findGrid.Visibility = System.Windows.Visibility.Collapsed;
-      _foldingStrategy = new N2FoldingStrategy();
-      _textBox1Tooltip = new ToolTip { PlacementTarget = _text };
-      _parseTimer = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
-      _parseTimer.Elapsed += _parseTimer_Elapsed;
+      _findGrid.Visibility      = System.Windows.Visibility.Collapsed;
+      _foldingStrategy          = new N2FoldingStrategy();
+      _textBox1Tooltip          = new ToolTip { PlacementTarget = _text };
+      _parseTimer               = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
+      _parseTimer.Elapsed      += _parseTimer_Elapsed;
 
       _text.TextArea.Caret.PositionChanged += Caret_PositionChanged;
 
@@ -90,8 +93,9 @@ namespace N2.Visualizer
         { "String",   new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
       };
 
-      _foldingManager = FoldingManager.Install(_text.TextArea);
+      _foldingManager    = FoldingManager.Install(_text.TextArea);
       _textMarkerService = new TextMarkerService(_text.Document);
+
       _text.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
       _text.TextArea.TextView.LineTransformers.Add(_textMarkerService);
 
