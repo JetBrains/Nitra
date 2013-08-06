@@ -37,65 +37,6 @@ namespace N2.Visualizer.Properties {
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("")]
-        public string LastAssemblyFilePath {
-            get {
-                return ((string)(this["LastAssemblyFilePath"]));
-            }
-            set {
-                this["LastAssemblyFilePath"] = value;
-            }
-        }
-        
-        [global::System.Configuration.UserScopedSettingAttribute()]
-        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("")]
-        public string LastGrammarName {
-            get {
-                return ((string)(this["LastGrammarName"]));
-            }
-            set {
-                this["LastGrammarName"] = value;
-            }
-        }
-        
-        [global::System.Configuration.UserScopedSettingAttribute()]
-        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("")]
-        public string LastRuleName {
-            get {
-                return ((string)(this["LastRuleName"]));
-            }
-            set {
-                this["LastRuleName"] = value;
-            }
-        }
-        
-        [global::System.Configuration.UserScopedSettingAttribute()]
-        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("")]
-        public string LastLoadParserDirectory {
-            get {
-                return ((string)(this["LastLoadParserDirectory"]));
-            }
-            set {
-                this["LastLoadParserDirectory"] = value;
-            }
-        }
-        
-        [global::System.Configuration.UserScopedSettingAttribute()]
-        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        public global::System.Collections.Specialized.StringCollection Presets {
-            get {
-                return ((global::System.Collections.Specialized.StringCollection)(this["Presets"]));
-            }
-            set {
-                this["Presets"] = value;
-            }
-        }
-        
-        [global::System.Configuration.UserScopedSettingAttribute()]
-        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
         [global::System.Configuration.DefaultSettingValueAttribute("220")]
         public double TabControlHeight {
             get {
@@ -187,6 +128,30 @@ namespace N2.Visualizer.Properties {
             }
             set {
                 this["TestsLocationRoot"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string SelectedTest {
+            get {
+                return ((string)(this["SelectedTest"]));
+            }
+            set {
+                this["SelectedTest"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string SelectedTestSuit {
+            get {
+                return ((string)(this["SelectedTestSuit"]));
+            }
+            set {
+                this["SelectedTestSuit"] = value;
             }
         }
     }

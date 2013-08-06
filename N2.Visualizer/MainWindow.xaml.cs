@@ -125,9 +125,12 @@ namespace N2.Visualizer
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
+      SelectTest(_settings.SelectedTestSuit, _settings.SelectedTest);
+
       _para.Inlines.Clear();
       var span = new Run(" Тест!         ") { Background = Brushes.Red };
       _para.Inlines.AddRange(new Inline[] { new Run("Тест тест тест!"), span, new LineBreak() });
+
       _loading = false;
     }
 
@@ -141,6 +144,20 @@ namespace N2.Visualizer
       _settings.WindowHeight     = this.Height;
       _settings.WindowLWidth     = this.Width;
       _settings.ActiveTabIndex   = _tabControl.SelectedIndex;
+
+      if (_currentTestSuit != null)
+      {
+        _settings.SelectedTestSuit = _currentTestSuit.TestSuitPath;
+        var test = _testsTreeView.SelectedItem as TestVm;
+        _settings.SelectedTest = test == null ? null : test.Name;
+      }
+      else
+      {
+        var text = _settings.LastTextInput;
+
+        if (text != null)
+          _text.Text = text;
+      }
     }
 
     private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats, List<RecoveryStack> stacks)
@@ -942,6 +959,8 @@ namespace N2.Visualizer
       var test = result.Tests.FirstOrDefault(t => t.Name == testName);
       if (test != null)
         test.IsSelected = true;
+      else
+        result.IsSelected = true;
     }
 
     private static string TestFullPath(string path)

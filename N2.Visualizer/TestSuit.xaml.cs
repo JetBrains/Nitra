@@ -343,13 +343,10 @@ namespace N2.Visualizer
         Filter = "Parser module (.dll)|*.dll",
         Title = "Load partser"
       };
-      if (!string.IsNullOrEmpty(_settings.LastLoadParserDirectory) && Directory.Exists(_settings.LastLoadParserDirectory))
-        dialog.InitialDirectory = _settings.LastLoadParserDirectory;
-
       if (dialog.ShowDialog(this) ?? false)
       {
-        _settings.LastLoadParserDirectory = Path.GetDirectoryName(dialog.FileName);
         _assemblies.Text += Environment.NewLine + dialog.FileName;
+        _assemblies.Focus();
       }
     }
   }
