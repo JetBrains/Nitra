@@ -1,4 +1,5 @@
-﻿using System.IO;
+﻿using System;
+using System.IO;
 using N2.Internal;
 
 namespace N2.Visualizer.ViewModels
@@ -30,12 +31,19 @@ namespace N2.Visualizer.ViewModels
     {
       TestPath = testPath;
       TestSuit = testSuit;
+      if (TestSuit.TestState == TestState.Ignored)
+        TestState = TestState.Ignored;
     }
 
     public Parser Run()
     {
+      if (TestSuit.TestState == TestState.Ignored)
+        return null;
+
       var result = TestSuit.Run(Code, Gold);
-      
+      if (result == null)
+        throw new ArgumentNullException("result");
+
       var gold = Gold;
       var ast = result.CreateAst();
       var prettyPrintResult = ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);

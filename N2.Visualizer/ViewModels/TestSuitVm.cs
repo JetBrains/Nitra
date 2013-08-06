@@ -96,6 +96,9 @@ namespace N2.Visualizer.ViewModels
 
     internal void TestStateChanged()
     {
+      if (this.TestState == TestState.Ignored)
+        return;
+
       var hasNotRunnedTests = false;
 
       foreach (var test in Tests)
@@ -111,13 +114,10 @@ namespace N2.Visualizer.ViewModels
           hasNotRunnedTests = true;
       }
 
-      if (!hasNotRunnedTests)
-        this.TestState = TestState.Success;
-      else
-        this.TestState = TestState.Skipped;
+      this.TestState = hasNotRunnedTests ? TestState.Skipped : TestState.Success;
     }
 
-    [NotNull]
+    [CanBeNull]
     public Parser Run([NotNull] string code, [CanBeNull] string gold)
     {
       if (_parserHost == null)
@@ -125,8 +125,12 @@ namespace N2.Visualizer.ViewModels
         _parserHost = new ParserHost(this.Recovery.Strategy);
         _compositeGrammar = _parserHost.MakeCompositeGrammar(SynatxModules);
       }
-      var source      = new SourceSnapshot(code);
-      var simpleRule  = StartRule as SimpleRuleDescriptor;
+      var source = new SourceSnapshot(code);
+
+      if (StartRule == null)
+        return null;
+
+      var simpleRule = StartRule as SimpleRuleDescriptor;
 
       this.Recovery.Init();
 

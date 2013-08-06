@@ -233,7 +233,9 @@ namespace N2.Visualizer
 
       _errorsTreeView.Items.Clear();
 
-      if (_parseResult.IsSuccess)
+      if (_parseResult == null)
+        _status.Text = "Not parsed!";
+      else if (_parseResult.IsSuccess)
       {
         _status.Text = "OK";
       }
@@ -362,6 +364,11 @@ namespace N2.Visualizer
     private void UpdateTextPrettyPrint()
     {
       _needUpdateTextPrettyPrint = false;
+
+      if (_parseResult == null)
+      {
+        return;
+      }
 
       if (_ast == null)
         _ast = _parseResult.CreateAst();
@@ -496,26 +503,27 @@ namespace N2.Visualizer
         _foldingStrategy.Parser = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
 
-        _outliningTime.Text         = _foldingStrategy.TimeSpan.ToString();
+        _outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
 
-        _recoveryTime.Text          = recovery.Timer.Elapsed.ToString();
-        _recoveryCount.Text         = recovery.Count.ToString(CultureInfo.InvariantCulture);
+        _recoveryTime.Text = recovery.Timer.Elapsed.ToString();
+        _recoveryCount.Text = recovery.Count.ToString(CultureInfo.InvariantCulture);
 
-        _continueParseTime.Text     = recovery.ContinueParseTime.ToString();
-        _continueParseCount.Text    = recovery.ContinueParseCount.ToString(CultureInfo.InvariantCulture);
+        _continueParseTime.Text = recovery.ContinueParseTime.ToString();
+        _continueParseCount.Text = recovery.ContinueParseCount.ToString(CultureInfo.InvariantCulture);
 
-        _tryParseSubrulesTime.Text  = recovery.TryParseSubrulesTime.ToString();
+        _tryParseSubrulesTime.Text = recovery.TryParseSubrulesTime.ToString();
         _tryParseSubrulesCount.Text = recovery.TryParseSubrulesCount.ToString(CultureInfo.InvariantCulture);
 
-        _tryParseTime.Text          = recovery.TryParseTime.ToString();
-        _tryParseCount.Text         = recovery.TryParseCount.ToString(CultureInfo.InvariantCulture);
+        _tryParseTime.Text = recovery.TryParseTime.ToString();
+        _tryParseCount.Text = recovery.TryParseCount.ToString(CultureInfo.InvariantCulture);
 
-        _tryParseNoCacheTime.Text   = recovery.TryParseNoCacheTime.ToString();
-        _tryParseNoCacheCount.Text  = recovery.TryParseNoCacheCount.ToString(CultureInfo.InvariantCulture);
+        _tryParseNoCacheTime.Text = recovery.TryParseNoCacheTime.ToString();
+        _tryParseNoCacheCount.Text = recovery.TryParseNoCacheCount.ToString(CultureInfo.InvariantCulture);
 
         ShowRecoveryResults();
         TryReportError();
         ShowInfo();
+        
         recovery.ReportResult = null;
       }
       catch (TypeLoadException ex)
@@ -938,7 +946,7 @@ namespace N2.Visualizer
     {
       if (_currentTestSuit == null)
       {
-        MessageBox.Show(this, "Select  test suit first.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        MessageBox.Show(this, "Select a test suit first.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
         return;
       }
 
