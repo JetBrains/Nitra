@@ -1,6 +1,8 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using N2.Internal;
+using Nemerle.Diff;
 
 namespace N2.Visualizer.ViewModels
 {
@@ -47,11 +49,8 @@ namespace N2.Visualizer.ViewModels
       var gold = Gold;
       var ast = result.CreateAst();
       var prettyPrintResult = ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
-
-      TestState = gold == prettyPrintResult ? TestState.Success : TestState.Failure;
       PrettyPrintResult = prettyPrintResult;
-      // TODO: Сделать отображение расхождений в влучае, если TestState.Failure
-
+      TestState = gold == prettyPrintResult ? TestState.Success : TestState.Failure;
       Result = result;
       return result;
     }

@@ -22,6 +22,7 @@ using N2.Visualizer.Properties;
 using System.Diagnostics;
 using System.Text;
 using N2.Visualizer.ViewModels;
+using Nemerle.Diff;
 using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
 
 namespace N2.Visualizer
@@ -130,11 +131,6 @@ namespace N2.Visualizer
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
       SelectTest(_settings.SelectedTestSuit, _settings.SelectedTest);
-
-      _para.Inlines.Clear();
-      var span = new Run(" Тест!         ") { Background = Brushes.Red };
-      _para.Inlines.AddRange(new Inline[] { new Run("Тест тест тест!"), span, new LineBreak() });
-
       _loading = false;
     }
 
@@ -998,10 +994,104 @@ namespace N2.Visualizer
       foreach (var testSuit in testSuits)
       {
         foreach (var test in testSuit.Tests)
-          test.Run();
+          RunTest(test);
 
         testSuit.TestStateChanged();
       }
+    }
+
+    private void RunTest(TestVm test)
+    {
+      test.Run();
+
+      ShowDiff(test);
+    }
+
+    private void ShowDiff(TestVm test)
+    {
+      _para.Inlines.Clear();
+
+      if (test.PrettyPrintResult == null)
+      {
+        _para.Inlines.AddRange(new Inline[] { new Run("The test was never started.") { Foreground = Brushes.Gray } });
+        return;
+      }
+
+      if (test.TestState == TestState.Failure)
+      {
+        var lines = Diff(Split(test.Gold), Split(test.PrettyPrintResult));
+        lines.RemoveAt(0);
+        lines.RemoveAt(lines.Count - 1);
+
+        foreach (var line in lines)
+          _para.Inlines.AddRange(line);
+      }
+      else if (test.TestState == TestState.Success)
+        _para.Inlines.AddRange(new Inline[] { new Run("Output of the test and the 'gold' are identical.") { Foreground = Brushes.LightGreen } });
+    }
+
+    private static string[] Split(string gold)
+    {
+      return gold.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
+    }
+
+    private static List<Inline[]> Diff(string[] textA, string[] textB, int rangeToShow = 3)
+    {
+      var font = new FontFamily("Consolas");
+      var indexA = 0;
+      var output = new List<Inline[]> { MakeLine("BEGIN-DIFF", Brushes.LightGray) };
+
+      foreach (var diffItem in textA.Diff(textB))
+      {
+        // определяем нужно ли выводить разделитель
+        var nextIndexA = Math.Max(indexA, diffItem.Index - rangeToShow);
+        if (nextIndexA > indexA + 1)
+          output.Add(MakeLine("..."));
+
+        // показваем не боле rangeToShow предыдущих строк
+        indexA = nextIndexA;
+        while (indexA < diffItem.Index)
+        {
+          output.Add(MakeLine(textA[indexA]));
+          ++indexA;
+        }
+
+        // показываем удаленные строки
+        for (var i = 0; i < diffItem.Deleted; ++i)
+        {
+          output.Add(MakeLine(textA[indexA], Brushes.LightPink));
+          ++indexA;
+        }
+
+        // показываем добавленные строки
+        foreach (var insertedItem in diffItem.Inserted)
+          output.Add(MakeLine(insertedItem, Brushes.LightGreen));
+
+        // показываем не более rangeToShow последующих строк
+        var tailLinesToShow = Math.Min(rangeToShow, textA.Length - indexA);
+
+        for (var i = 0; i < tailLinesToShow; ++i)
+        {
+          output.Add(MakeLine(textA[indexA]));
+          ++indexA;
+        }
+      }
+
+      if (indexA < textA.Length)
+        output.Add(MakeLine("..."));
+
+      output.Add(MakeLine("END-DIFF", Brushes.LightGray));
+
+      return output;
+    }
+
+    private static Inline[] MakeLine(string text, Brush brush = null)
+    {
+      return new Inline[]
+      {
+        brush == null ? new Run(text) : new Run(text) { Background = brush },
+        new LineBreak()
+      };
     }
 
     private void OnAddTestSuit(object sender, ExecutedRoutedEventArgs e)
@@ -1046,6 +1136,7 @@ namespace N2.Visualizer
       {
         _text.Text = test.Code;
         _currentTestSuit = test.TestSuit;
+        ShowDiff(test);
       }
 
       var testSuit = e.NewValue as TestSuitVm;
@@ -1053,6 +1144,7 @@ namespace N2.Visualizer
       {
         _text.Text = "";
         _currentTestSuit = testSuit;
+        _para.Inlines.Clear();
       }
     }
 
@@ -1086,7 +1178,7 @@ namespace N2.Visualizer
         var test = _testsTreeView.SelectedItem as TestVm;
         if (test != null)
         {
-          test.Run();
+          RunTest(test);
           test.TestSuit.TestStateChanged();
         }
       }
@@ -1094,7 +1186,7 @@ namespace N2.Visualizer
       if (testSuit != null)
       {
         foreach (var test in testSuit.Tests)
-          test.Run();
+          RunTest(test);
         testSuit.TestStateChanged();
       }
     }
