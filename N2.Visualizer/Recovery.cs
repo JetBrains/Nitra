@@ -163,7 +163,7 @@ namespace N2.DebugStrategies
       var stackFrame = recoveryStack.hd;
       var ruleParser = stackFrame.RuleParser;
       var isPrefixParsed = !ruleParser.IsStartState(stackFrame.FailState);
-      var isOptional = ruleParser.IsLoopSeparatorStart(stackFrame.FailState);
+      var isNotOptional = !ruleParser.IsLoopSeparatorStart(stackFrame.FailState);
 
       int nextState;
       for (var state = stackFrame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? ruleParser.GetNextState(stackFrame.FailState) :
@@ -184,7 +184,7 @@ namespace N2.DebugStrategies
           //var stack = recoveryStack;
           //if (IsBetterStack(stack))
           {
-            var pos2 = pos == lastPos ? ContinueParse(pos, recoveryStack, parser, !isOptional) : lastPos;
+            var pos2 = pos == lastPos ? ContinueParse(pos, recoveryStack, parser, isNotOptional) : lastPos;
             AddResult(curTextPos, lastPos, pos2, state, recoveryStack, text, startTextPos);
             break;
           }
@@ -242,17 +242,17 @@ namespace N2.DebugStrategies
 
         if (pos > curTextPos && HasParsedStaets(ruleParser, parsedStates) || pos == text.Length)
         {
-          if (isOptional)
+          if (!isNotOptional)
           {
           }
-          var pos2 = ContinueParse(pos, recoveryStack, parser, !isOptional);
-          if (!(isOptional && pos == pos2))
+          var pos2 = ContinueParse(pos, recoveryStack, parser, isNotOptional);
+          if (!(!isNotOptional && pos == pos2))
             AddResult(curTextPos, pos, pos2, state, recoveryStack, text, startTextPos);
         }
         else if (pos == curTextPos && nextState < 0 && !stackFrame.RuleParser.IsTokenRule)
         {
-          var pos2 = ContinueParse(pos, recoveryStack, parser, !isOptional);
-          if (!(isOptional && pos == pos2))
+          var pos2 = ContinueParse(pos, recoveryStack, parser, isNotOptional);
+          if (!(!isNotOptional && pos == pos2))
             if (!(stackFrame.AstPtr == -1 && !isPrefixParsed)) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
               if (pos2 > curTextPos || isPrefixParsed)
                 AddResult(curTextPos, pos, pos2, state, recoveryStack, text, startTextPos);
@@ -268,8 +268,8 @@ namespace N2.DebugStrategies
         else if (pos < 0 && nextState < 0 && !(stackFrame.AstPtr == -1 && !isPrefixParsed))
         {
           // последнее состояние. Надо попытаться допарсить
-          var pos2 = ContinueParse(curTextPos, recoveryStack, parser, !isOptional);
-          if (!(isOptional && !isPrefixParsed)) // необязательное правило не спрасившее ни одного не пробельного символа нужно игнорировать
+          var pos2 = ContinueParse(curTextPos, recoveryStack, parser, isNotOptional);
+          if (!(!isNotOptional && !isPrefixParsed)) // необязательное правило не спрасившее ни одного не пробельного символа нужно игнорировать
             if (!(stackFrame.AstPtr == -1 && !isPrefixParsed)) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
               if (pos2 > curTextPos || isPrefixParsed)
                 AddResult(curTextPos, pos, pos2, -1, recoveryStack, text, startTextPos);

@@ -62,12 +62,20 @@ namespace N2.Visualizer.ViewModels
             StartRule = x.StartRule;
           }
         }
+        var name = StartRule == null ? "" : StartRule.Name;
+
         var indent = Environment.NewLine + "  ";
         var para = Environment.NewLine + Environment.NewLine;
 
-        _hint = "Libraries:" + indent + string.Join(indent, libs.Select(lib => lib.Attribute("Path").Value)) + para
+        _hint = "Libraries:" + indent + string.Join(indent, libs.Select(lib => Utils.UpdatePathForConfig(lib.Attribute("Path").Value))) + para
                + "Syntax modules:" + indent + string.Join(indent, SynatxModules.Select(m => m.FullName)) + para
-               + "Start rule:" + indent + StartRule.Name;
+               + "Start rule:" + indent + name;
+      }
+      catch (FileNotFoundException ex)
+      {
+        TestState = TestState.Ignored;
+        _hint = "Failed to load test suite:" + Environment.NewLine + ex.Message
+          + (ex.Message.Contains("'N2.Runtime,") ? Environment.NewLine + Environment.NewLine + "Try to recompile the parser." : "");
       }
       catch (Exception ex)
       {

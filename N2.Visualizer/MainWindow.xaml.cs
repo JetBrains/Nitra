@@ -35,8 +35,6 @@ namespace N2.Visualizer
   /// </summary>
   public partial class MainWindow
   {
-    const int MaxPresetCount = 50;
-
     bool _loading = true;
     Parser _parseResult;
     bool _doTreeOperation;
@@ -75,6 +73,11 @@ namespace N2.Visualizer
       this.Width       = _settings.WindowLWidth;
       this.WindowState = (WindowState)_settings.WindowState;
       _mainRow.Height  = new GridLength(_settings.TabControlHeight);
+
+      var config = _settings.Config;
+
+      _configComboBox.ItemsSource = new[] {"Debug", "Release"};
+      _configComboBox.SelectedItem = config == "Release" ? "Release" : "Debug";
 
       _tabControl.SelectedIndex = _settings.ActiveTabIndex;
       _findGrid.Visibility      = System.Windows.Visibility.Collapsed;
@@ -136,6 +139,7 @@ namespace N2.Visualizer
 
     private void Window_Closed(object sender, EventArgs e)
     {
+      _settings.Config           = (string)_configComboBox.SelectedValue;
       _settings.TabControlHeight = _mainRow.Height.Value;
       _settings.LastTextInput    = _text.Text;
       _settings.WindowState      = (int)this.WindowState;
@@ -462,6 +466,7 @@ namespace N2.Visualizer
     private void FileOpenExecuted(object sender, RoutedEventArgs e)
     {
       var dialog = new OpenFileDialog { Filter = "C# (.cs)|*.cs|Nitra (.n2)|*.n2|JSON (.json)|*.json|Text (.txt)|*.txt|All|*.*" };
+// ReSharper disable once ConstantNullCoalescingCondition
       if (dialog.ShowDialog(this) ?? false)
       {
         _text.Text = File.ReadAllText(dialog.FileName);
@@ -1037,7 +1042,6 @@ namespace N2.Visualizer
 
     private static List<Inline[]> Diff(string[] textA, string[] textB, int rangeToShow = 3)
     {
-      var font = new FontFamily("Consolas");
       var indexA = 0;
       var output = new List<Inline[]> { MakeLine("BEGIN-DIFF", Brushes.LightGray) };
 
@@ -1212,6 +1216,13 @@ namespace N2.Visualizer
     {
       RunTest();
       e.Handled = true;
+    }
+
+    private void _configComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+      var config = (string)_configComboBox.SelectedItem;
+      _settings.Config = config;
+      LoadTests();
     }
   }
 }

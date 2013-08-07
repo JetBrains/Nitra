@@ -4,17 +4,39 @@ using System.Linq;
 using System.Text;
 using System.Reflection;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using N2.Visualizer.Annotations;
+using N2.Visualizer.Properties;
 
 namespace N2.Visualizer
 {
   static class Utils
   {
+    static readonly Regex _configRx = new Regex(@"[\\/](Release|Debug)[\\/]", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     public static GrammarDescriptor[] LoadAssembly(string assemblyFilePath)
     {
+      assemblyFilePath = UpdatePathForConfig(assemblyFilePath);
+
       var assembly = Assembly.LoadFrom(assemblyFilePath);
+      var runtime = typeof(N2.Internal.Parser).Assembly.GetName();
+      foreach (var reference in assembly.GetReferencedAssemblies())
+      {
+        if (reference.Name == runtime.Name)
+        {
+          if (reference.Version == runtime.Version)
+            break;
+          throw new ApplicationException("Assembly '" + assemblyFilePath + "' use incompatible runtime (N2.Runtime.dll) version " + reference.Version
+            + ". The current runtime has version " + runtime.Version + ".");
+        }
+      }
       return GrammarDescriptor.GetDescriptors(assembly);
+    }
+
+    public static string UpdatePathForConfig(string assemblyFilePath)
+    {
+      return _configRx.Replace(assemblyFilePath, @"\" + Settings.Default.Config + @"\");
     }
 
     public static string MakeRelativePath(string baseDir, string filePath)

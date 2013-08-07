@@ -44,7 +44,7 @@ namespace N2.Visualizer.ViewModels
 
       var result = TestSuit.Run(Code, Gold);
       if (result == null)
-        throw new ArgumentNullException("result");
+        return null;
 
       var gold = Gold;
       var ast = result.CreateAst();
