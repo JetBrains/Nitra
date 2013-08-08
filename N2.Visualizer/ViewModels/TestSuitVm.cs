@@ -36,13 +36,13 @@ namespace N2.Visualizer.ViewModels
     {
       _rootPath = rootPath;
       TestSuitPath = testSuitPath;
-      var gonfigPath = Path.GetFullPath(Path.Combine(testSuitPath, "config.xml"));
-      var root = XElement.Load(gonfigPath);
-
       SynatxModules = new ObservableCollection<GrammarDescriptor>();
+
+      var gonfigPath = Path.GetFullPath(Path.Combine(testSuitPath, "config.xml"));
 
       try
       {
+        var root = XElement.Load(gonfigPath);
         var libs = root.Elements("Lib").ToList();
         var result =
           libs.Select(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib.Attribute("Path").Value)))
@@ -74,8 +74,18 @@ namespace N2.Visualizer.ViewModels
       catch (FileNotFoundException ex)
       {
         TestState = TestState.Ignored;
-        _hint = "Failed to load test suite:" + Environment.NewLine + ex.Message
-          + (ex.Message.Contains("'N2.Runtime,") ? Environment.NewLine + Environment.NewLine + "Try to recompile the parser." : "");
+        
+        string additionMsg = null;
+
+        if (ex.FileName.EndsWith("config.xml", StringComparison.OrdinalIgnoreCase))
+          additionMsg = @"The configuration file (config.xml) not exists in the test suit folder.";
+        else if (ex.FileName.EndsWith("N2.Runtime.dll", StringComparison.OrdinalIgnoreCase))
+          additionMsg = @"Try to recompile the parser.";
+
+        if (additionMsg != null)
+          additionMsg = Environment.NewLine + Environment.NewLine + additionMsg;
+
+        _hint = "Failed to load test suite:" + Environment.NewLine + ex.Message + additionMsg;
       }
       catch (Exception ex)
       {
