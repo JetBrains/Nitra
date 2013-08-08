@@ -74,9 +74,9 @@ namespace N2.Visualizer
       this.WindowState = (WindowState)_settings.WindowState;
       _mainRow.Height  = new GridLength(_settings.TabControlHeight);
 
-      var config = _settings.Config;
 
       _configComboBox.ItemsSource = new[] {"Debug", "Release"};
+      var config = _settings.Config;
       _configComboBox.SelectedItem = config == "Release" ? "Release" : "Debug";
 
       _tabControl.SelectedIndex = _settings.ActiveTabIndex;
@@ -108,6 +108,32 @@ namespace N2.Visualizer
       LoadTests();
     }
 
+    private void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+      _loading = false;
+      SelectTest(_settings.SelectedTestSuit, _settings.SelectedTest);
+    }
+
+    private void Window_Closed(object sender, EventArgs e)
+    {
+      _settings.Config           = (string)_configComboBox.SelectedValue;
+      _settings.TabControlHeight = _mainRow.Height.Value;
+      _settings.LastTextInput    = _text.Text;
+      _settings.WindowState      = (int)this.WindowState;
+      _settings.WindowTop        = this.Top;
+      _settings.WindowLeft       = this.Left;
+      _settings.WindowHeight     = this.Height;
+      _settings.WindowLWidth     = this.Width;
+      _settings.ActiveTabIndex   = _tabControl.SelectedIndex;
+
+      if (_currentTestSuit != null)
+      {
+        _settings.SelectedTestSuit = _currentTestSuit.TestSuitPath;
+        var test = _testsTreeView.SelectedItem as TestVm;
+        _settings.SelectedTest = test == null ? null : test.Name;
+      }
+    }
+
     private void LoadTests()
     {
       var selected = _testsTreeView.SelectedItem as FullPathVm;
@@ -129,39 +155,6 @@ namespace N2.Visualizer
       }
 
       _testsTreeView.ItemsSource = testSuits;
-    }
-
-    private void Window_Loaded(object sender, RoutedEventArgs e)
-    {
-      SelectTest(_settings.SelectedTestSuit, _settings.SelectedTest);
-      _loading = false;
-    }
-
-    private void Window_Closed(object sender, EventArgs e)
-    {
-      _settings.Config           = (string)_configComboBox.SelectedValue;
-      _settings.TabControlHeight = _mainRow.Height.Value;
-      _settings.LastTextInput    = _text.Text;
-      _settings.WindowState      = (int)this.WindowState;
-      _settings.WindowTop        = this.Top;
-      _settings.WindowLeft       = this.Left;
-      _settings.WindowHeight     = this.Height;
-      _settings.WindowLWidth     = this.Width;
-      _settings.ActiveTabIndex   = _tabControl.SelectedIndex;
-
-      if (_currentTestSuit != null)
-      {
-        _settings.SelectedTestSuit = _currentTestSuit.TestSuitPath;
-        var test = _testsTreeView.SelectedItem as TestVm;
-        _settings.SelectedTest = test == null ? null : test.Name;
-      }
-      else
-      {
-        var text = _settings.LastTextInput;
-
-        if (text != null)
-          _text.Text = text;
-      }
     }
 
     private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats, List<RecoveryStack> stacks)
@@ -1223,6 +1216,9 @@ namespace N2.Visualizer
 
     private void _configComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+      if (_loading)
+        return;
+
       var config = (string)_configComboBox.SelectedItem;
       _settings.Config = config;
       LoadTests();
@@ -1245,6 +1241,11 @@ namespace N2.Visualizer
             MessageBoxImage.Error);
         }
       }
+    }
+
+    private void OnRepars(object sender, ExecutedRoutedEventArgs e)
+    {
+      Dispatcher.Invoke(new Action(DoParse));
     }
   }
 }
