@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using N2.Internal;
+using N2.Visualizer.Annotations;
 using Nemerle.Diff;
 
 namespace N2.Visualizer.ViewModels
@@ -53,6 +54,12 @@ namespace N2.Visualizer.ViewModels
       TestState = gold == prettyPrintResult ? TestState.Success : TestState.Failure;
       Result = result;
       return result;
+    }
+
+    public void Update([NotNull] string code, [NotNull] string gold)
+    {
+      File.WriteAllText(TestPath, code);
+      File.WriteAllText(Path.ChangeExtension(TestPath, ".gold"), gold);
     }
   }
 }

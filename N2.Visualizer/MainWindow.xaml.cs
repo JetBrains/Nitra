@@ -1184,6 +1184,9 @@ namespace N2.Visualizer
         {
           RunTest(test);
           test.TestSuit.TestStateChanged();
+
+          if (test.TestState == TestState.Failure)
+            _testResultDiffTabItem.IsSelected = true;
         }
       }
       var testSuit = _testsTreeView.SelectedItem as TestSuitVm;
@@ -1223,6 +1226,25 @@ namespace N2.Visualizer
       var config = (string)_configComboBox.SelectedItem;
       _settings.Config = config;
       LoadTests();
+    }
+
+    private void OnUpdateTest(object sender, ExecutedRoutedEventArgs e)
+    {
+      var test = _testsTreeView.SelectedItem as TestVm;
+      if (test != null)
+      {
+        try
+        {
+          test.Update(_text.Text, _prettyPrintTextBox.Text);
+          test.TestSuit.TestStateChanged();
+        }
+        catch (Exception ex)
+        {
+          MessageBox.Show(this, "Fail to update the test '" + test.Name + "'." + Environment.NewLine + ex.Message, "Visualizer!", 
+            MessageBoxButton.YesNo, 
+            MessageBoxImage.Error);
+        }
+      }
     }
   }
 }
