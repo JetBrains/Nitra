@@ -19,7 +19,7 @@ namespace N2.Visualizer
     {
       assemblyFilePath = UpdatePathForConfig(assemblyFilePath);
 
-      var assembly = Assembly.LoadFrom(assemblyFilePath);
+      var assembly = Assembly.ReflectionOnlyLoadFrom(assemblyFilePath);
       var runtime = typeof(N2.Internal.Parser).Assembly.GetName();
       foreach (var reference in assembly.GetReferencedAssemblies())
       {
@@ -31,6 +31,7 @@ namespace N2.Visualizer
             + ". The current runtime has version " + runtime.Version + ".");
         }
       }
+      assembly = Assembly.LoadFrom(assemblyFilePath);
       return GrammarDescriptor.GetDescriptors(assembly);
     }
 
