@@ -389,7 +389,7 @@ namespace N2.DebugStrategies
 
       if (_bestResult == null)                   goto good;
 
-      if (stack.AstPtr == -1 && _bestResult.Stack.hd.AstPtr != -1) // спекулятивный фрейм стека
+      if (stack.AstPtr == -1 && _bestResult.Stack.AstPtr != -1) // спекулятивный фрейм стека
       {
         return;
       }
@@ -397,7 +397,7 @@ namespace N2.DebugStrategies
       if (newResult.RuleEndPos   >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount > 0  && _bestResult.RecoveredTailCount <= 0) goto good; // если у newResult есть продолжение, а у _bestResult нет
       if (_bestResult.RuleEndPos >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount <= 0 && _bestResult.RecoveredTailCount > 0) return;    // если у _bestResult есть продолжение, а у newResult нет
 
-      if (stack.Tail == _bestResult.Stack.Tail)
+      if (stack.Parents == _bestResult.Stack.Parents)
       {
         if (startState < _bestResult.StartState && newResult.SkipedCount <= _bestResult.SkipedCount) goto good;
         if (startState > _bestResult.StartState && newResult.SkipedCount >  _bestResult.SkipedCount) return;
