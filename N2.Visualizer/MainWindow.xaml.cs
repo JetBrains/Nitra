@@ -23,11 +23,10 @@ using System.Diagnostics;
 using System.Text;
 using N2.Visualizer.ViewModels;
 using Nemerle.Diff;
-using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
 
 namespace N2.Visualizer
 {
-  using RecoveryInfo = Tuple<RecoveryResult, RecoveryResult[], RecoveryResult[], RecoveryStack[]>;
+  using RecoveryInfo = Tuple<RecoveryResult, RecoveryResult[], RecoveryResult[], RecoveryStackFrame[]>;
   using System.Windows.Documents;
 
   /// <summary>
@@ -157,7 +156,7 @@ namespace N2.Visualizer
       _testsTreeView.ItemsSource = testSuits;
     }
 
-    private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats, List<RecoveryStack> stacks)
+    private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats, List<RecoveryStackFrame> stacks)
     {
       _recoveryResults.Add(Tuple.Create(bestResult, bestResults.ToArray(), candidats.ToArray(), stacks.ToArray()));
     }
@@ -584,32 +583,32 @@ namespace N2.Visualizer
             var node = new TreeViewItem();
             node.Header = recoveryResult;
 
-            foreach (var frame in recoveryResult.Stack)
-            {
-              var frameNode = new TreeViewItem();
-              frameNode.Header = frame;
-              node.Items.Add(frameNode);
-            }
+            //foreach (var frame in recoveryResult.Stack)
+            //{
+            //  var frameNode = new TreeViewItem();
+            //  frameNode.Header = frame;
+            //  node.Items.Add(frameNode);
+            //}
 
             treeNode.Items.Add(node);
           }
         }
 
-        var stacks = treeNode.Tag as RecoveryStack[];
+        var stacks = treeNode.Tag as RecoveryStackFrame[];
 
         if (stacks != null)
         {
           foreach (var stack in stacks)
           {
             var node = new TreeViewItem();
-            node.Header = stack.hd;
+            node.Header = stack;
 
-            foreach (var frame in stack)
-            {
-              var frameNode = new TreeViewItem();
-              frameNode.Header = frame;
-              node.Items.Add(frameNode);
-            }
+            //foreach (var frame in stack)
+            //{
+            //  var frameNode = new TreeViewItem();
+            //  frameNode.Header = frame;
+            //  node.Items.Add(frameNode);
+            //}
 
             treeNode.Items.Add(node);
           }

@@ -6,7 +6,6 @@ using Nemerle.Collections;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
 using System.Diagnostics;
 
 #if N2RUNTIME
@@ -24,7 +23,6 @@ namespace N2.DebugStrategies
     RecoveryResult               _bestResult;
     List<RecoveryResult>         _bestResults = new List<RecoveryResult>();
     Dictionary<object, PrseData> _visited = new Dictionary<object, PrseData>();
-    RecoveryStack                _recoveryStack;
     int                          _nestedLevel;
     HashSet<RecoveryStackFrame>  _visitedFrame = new HashSet<RecoveryStackFrame>();
 #if !N2RUNTIME
@@ -39,7 +37,7 @@ namespace N2.DebugStrategies
     public TimeSpan  TryParseNoCacheTime;
     public int       TryParseNoCacheCount;
 
-    public Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStack>> ReportResult;
+    public Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>> ReportResult;
 
     public void Init()
     {
@@ -68,6 +66,7 @@ namespace N2.DebugStrategies
     public void Strategy(int startTextPos, Parser parser)
     {
       Reset();
+    /*
 #if !N2RUNTIME
       Timer.Start();
       Count++;
@@ -122,8 +121,9 @@ namespace N2.DebugStrategies
 #if !N2RUNTIME
       Timer.Stop();
 #endif
+*/
     }
-
+#if false
     private void ProcessStackFrame(int startTextPos, Parser parser, RecoveryStack recoveryStack, int curTextPos, string text, int subruleLevel)
     {
       ProcessStackFrameImpl(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel);
@@ -661,9 +661,10 @@ namespace N2.DebugStrategies
 
       return true;
     }
+#endif
   }
 
-  internal static class Utils
+/*  internal static class Utils
   {
     public static bool IsRestStatesCanParseEmptyString(this IRecoveryRuleParser ruleParser, int state)
     {
@@ -679,5 +680,5 @@ namespace N2.DebugStrategies
     {
       return new RecoveryStack(elem, stack);
     }
-  }
+  }*/
 }
