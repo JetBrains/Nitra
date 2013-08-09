@@ -1,5 +1,9 @@
-﻿using System.IO;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
 using N2.Internal;
+using N2.Visualizer.Annotations;
+using Nemerle.Diff;
 
 namespace N2.Visualizer.ViewModels
 {
@@ -10,6 +14,8 @@ namespace N2.Visualizer.ViewModels
     public string     Name              { get { return Path.GetFileNameWithoutExtension(TestPath); } }
     public Parser     Result            { get; private set; }
     public string     PrettyPrintResult { get; private set; }
+
+    public override string Hint { get { return Code; } }
 
     public string Code
     {
@@ -28,22 +34,32 @@ namespace N2.Visualizer.ViewModels
     {
       TestPath = testPath;
       TestSuit = testSuit;
+      if (TestSuit.TestState == TestState.Ignored)
+        TestState = TestState.Ignored;
     }
 
     public Parser Run()
     {
+      if (TestSuit.TestState == TestState.Ignored)
+        return null;
+
       var result = TestSuit.Run(Code, Gold);
-      
+      if (result == null)
+        return null;
+
       var gold = Gold;
       var ast = result.CreateAst();
       var prettyPrintResult = ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
-
-      TestState = gold == prettyPrintResult ? TestState.Success : TestState.Failure;
       PrettyPrintResult = prettyPrintResult;
-      // TODO: Сделать отображение расхождений в влучае, если TestState.Failure
-
+      TestState = gold == prettyPrintResult ? TestState.Success : TestState.Failure;
       Result = result;
       return result;
+    }
+
+    public void Update([NotNull] string code, [NotNull] string gold)
+    {
+      File.WriteAllText(TestPath, code);
+      File.WriteAllText(Path.ChangeExtension(TestPath, ".gold"), gold);
     }
   }
 }

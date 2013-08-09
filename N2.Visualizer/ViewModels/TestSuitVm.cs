@@ -1,4 +1,5 @@
-﻿using N2.DebugStrategies;
+﻿using System;
+using N2.DebugStrategies;
 using N2.Internal;
 using N2.Visualizer.Annotations;
 
@@ -18,6 +19,9 @@ namespace N2.Visualizer.ViewModels
     public ObservableCollection<TestVm>             Tests         { get; private set; }
     public string                                   TestSuitPath  { get; set; }
 
+    public string _hint;
+    public override string Hint { get { return _hint; } }
+
     public readonly Recovery Recovery = new Recovery();
 
     readonly string _rootPath;
@@ -32,29 +36,61 @@ namespace N2.Visualizer.ViewModels
     {
       _rootPath = rootPath;
       TestSuitPath = testSuitPath;
+      SynatxModules = new ObservableCollection<GrammarDescriptor>();
+
       var gonfigPath = Path.GetFullPath(Path.Combine(testSuitPath, "config.xml"));
-      var root = XElement.Load(gonfigPath);
 
-      var libs = root.Elements("Lib");
-
-      var result =
-        libs.Select(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib.Attribute("Path").Value)))
-          .Join(lib.Elements("SyntaxModule"),
-            m => m.FullName,
-            m => m.Attribute("Name").Value,
-            (m, info) => new { Module = m, StartRule = GetStratRule(info.Attribute("StartRule"), m) }));
-
-
-      SynatxModules  = new ObservableCollection<GrammarDescriptor>();
-
-      foreach (var x in result.SelectMany(lib => lib))
+      try
       {
-        SynatxModules.Add(x.Module);
-        if (x.StartRule != null)
+        var root = XElement.Load(gonfigPath);
+        var libs = root.Elements("Lib").ToList();
+        var result =
+          libs.Select(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib.Attribute("Path").Value)))
+            .Join(lib.Elements("SyntaxModule"),
+              m => m.FullName,
+              m => m.Attribute("Name").Value,
+              (m, info) => new { Module = m, StartRule = GetStratRule(info.Attribute("StartRule"), m) }));
+
+
+
+        foreach (var x in result.SelectMany(lib => lib))
         {
-          Debug.Assert(StartRule == null);
-          StartRule = x.StartRule;
+          SynatxModules.Add(x.Module);
+          if (x.StartRule != null)
+          {
+            Debug.Assert(StartRule == null);
+            StartRule = x.StartRule;
+          }
         }
+        var name = StartRule == null ? "" : StartRule.Name;
+
+        var indent = Environment.NewLine + "  ";
+        var para = Environment.NewLine + Environment.NewLine;
+
+        _hint = "Libraries:" + indent + string.Join(indent, libs.Select(lib => Utils.UpdatePathForConfig(lib.Attribute("Path").Value))) + para
+               + "Syntax modules:" + indent + string.Join(indent, SynatxModules.Select(m => m.FullName)) + para
+               + "Start rule:" + indent + name;
+      }
+      catch (FileNotFoundException ex)
+      {
+        TestState = TestState.Ignored;
+        
+        string additionMsg = null;
+
+        if (ex.FileName.EndsWith("config.xml", StringComparison.OrdinalIgnoreCase))
+          additionMsg = @"The configuration file (config.xml) not exists in the test suit folder.";
+        else if (ex.FileName.EndsWith("N2.Runtime.dll", StringComparison.OrdinalIgnoreCase))
+          additionMsg = @"Try to recompile the parser.";
+
+        if (additionMsg != null)
+          additionMsg = Environment.NewLine + Environment.NewLine + additionMsg;
+
+        _hint = "Failed to load test suite:" + Environment.NewLine + ex.Message + additionMsg;
+      }
+      catch (Exception ex)
+      {
+        TestState = TestState.Ignored;
+        _hint = "Failed to load test suite:" + Environment.NewLine + ex.Message;
       }
 
       Name = Path.GetFileName(testSuitPath);
@@ -78,6 +114,9 @@ namespace N2.Visualizer.ViewModels
 
     internal void TestStateChanged()
     {
+      if (this.TestState == TestState.Ignored)
+        return;
+
       var hasNotRunnedTests = false;
 
       foreach (var test in Tests)
@@ -93,13 +132,10 @@ namespace N2.Visualizer.ViewModels
           hasNotRunnedTests = true;
       }
 
-      if (!hasNotRunnedTests)
-        this.TestState = TestState.Success;
-      else
-        this.TestState = TestState.Skipped;
+      this.TestState = hasNotRunnedTests ? TestState.Skipped : TestState.Success;
     }
 
-    [NotNull]
+    [CanBeNull]
     public Parser Run([NotNull] string code, [CanBeNull] string gold)
     {
       if (_parserHost == null)
@@ -107,8 +143,12 @@ namespace N2.Visualizer.ViewModels
         _parserHost = new ParserHost(this.Recovery.Strategy);
         _compositeGrammar = _parserHost.MakeCompositeGrammar(SynatxModules);
       }
-      var source      = new SourceSnapshot(code);
-      var simpleRule  = StartRule as SimpleRuleDescriptor;
+      var source = new SourceSnapshot(code);
+
+      if (StartRule == null)
+        return null;
+
+      var simpleRule = StartRule as SimpleRuleDescriptor;
 
       this.Recovery.Init();
 

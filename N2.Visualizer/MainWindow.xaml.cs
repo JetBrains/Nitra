@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -19,11 +18,11 @@ using ICSharpCode.SharpDevelop.Editor;
 using Microsoft.Win32;
 using N2.Internal;
 using N2.Runtime.Reflection;
-using N2.DebugStrategies;
 using N2.Visualizer.Properties;
 using System.Diagnostics;
 using System.Text;
 using N2.Visualizer.ViewModels;
+using Nemerle.Diff;
 using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
 
 namespace N2.Visualizer
@@ -36,8 +35,6 @@ namespace N2.Visualizer
   /// </summary>
   public partial class MainWindow
   {
-    const int MaxPresetCount = 50;
-
     bool _loading = true;
     Parser _parseResult;
     bool _doTreeOperation;
@@ -57,13 +54,16 @@ namespace N2.Visualizer
     TimeSpan _astTimeSpan;
     TimeSpan _highlightingTimeSpan;
     readonly List<RecoveryInfo> _recoveryResults = new List<RecoveryInfo>();
-    readonly ObservableCollection<Preset> _presets = new ObservableCollection<Preset>();
     readonly Settings _settings;
     private TestSuitVm _currentTestSuit;
 
     public MainWindow()
     {
       _settings = Settings.Default;
+
+      ToolTipService.ShowDurationProperty.OverrideMetadata(
+        typeof(DependencyObject), 
+        new FrameworkPropertyMetadata(Int32.MaxValue));
 
       InitializeComponent();
 
@@ -74,13 +74,17 @@ namespace N2.Visualizer
       this.WindowState = (WindowState)_settings.WindowState;
       _mainRow.Height  = new GridLength(_settings.TabControlHeight);
 
-      _tabControl.SelectedIndex = _settings.ActiveTabIndex;
 
-      _findGrid.Visibility = System.Windows.Visibility.Collapsed;
-      _foldingStrategy = new N2FoldingStrategy();
-      _textBox1Tooltip = new ToolTip { PlacementTarget = _text };
-      _parseTimer = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
-      _parseTimer.Elapsed += _parseTimer_Elapsed;
+      _configComboBox.ItemsSource = new[] {"Debug", "Release"};
+      var config = _settings.Config;
+      _configComboBox.SelectedItem = config == "Release" ? "Release" : "Debug";
+
+      _tabControl.SelectedIndex = _settings.ActiveTabIndex;
+      _findGrid.Visibility      = System.Windows.Visibility.Collapsed;
+      _foldingStrategy          = new N2FoldingStrategy();
+      _textBox1Tooltip          = new ToolTip { PlacementTarget = _text };
+      _parseTimer               = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
+      _parseTimer.Elapsed      += _parseTimer_Elapsed;
 
       _text.TextArea.Caret.PositionChanged += Caret_PositionChanged;
 
@@ -93,15 +97,41 @@ namespace N2.Visualizer
         { "String",   new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
       };
 
-      _foldingManager = FoldingManager.Install(_text.TextArea);
+      _foldingManager    = FoldingManager.Install(_text.TextArea);
       _textMarkerService = new TextMarkerService(_text.Document);
+
       _text.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
       _text.TextArea.TextView.LineTransformers.Add(_textMarkerService);
 
-      _presetsMenuItem.ItemsSource = _presets;
       _testsTreeView.SelectedValuePath = "FullPath";
 
       LoadTests();
+    }
+
+    private void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+      _loading = false;
+      SelectTest(_settings.SelectedTestSuit, _settings.SelectedTest);
+    }
+
+    private void Window_Closed(object sender, EventArgs e)
+    {
+      _settings.Config           = (string)_configComboBox.SelectedValue;
+      _settings.TabControlHeight = _mainRow.Height.Value;
+      _settings.LastTextInput    = _text.Text;
+      _settings.WindowState      = (int)this.WindowState;
+      _settings.WindowTop        = this.Top;
+      _settings.WindowLeft       = this.Left;
+      _settings.WindowHeight     = this.Height;
+      _settings.WindowLWidth     = this.Width;
+      _settings.ActiveTabIndex   = _tabControl.SelectedIndex;
+
+      if (_currentTestSuit != null)
+      {
+        _settings.SelectedTestSuit = _currentTestSuit.TestSuitPath;
+        var test = _testsTreeView.SelectedItem as TestVm;
+        _settings.SelectedTest = test == null ? null : test.Name;
+      }
     }
 
     private void LoadTests()
@@ -125,90 +155,6 @@ namespace N2.Visualizer
       }
 
       _testsTreeView.ItemsSource = testSuits;
-    }
-
-    private void Window_Loaded(object sender, RoutedEventArgs e)
-    {
-      _para.Inlines.Clear();
-      var span = new Run(" Тест!         ") { Background = Brushes.Red };
-      _para.Inlines.AddRange(new Inline[] { new Run("Тест тест тест!"), span, new LineBreak() });
-
-
-      var args = Environment.GetCommandLineArgs();
-      var code =
-        args.Length > 1
-          ? File.ReadAllText(args[1])
-          : _settings.LastTextInput;
-
-      LoadPresets();
-      Load(_settings.LastAssemblyFilePath, _settings.LastGrammarName, _settings.LastRuleName, code);
-    }
-
-    private void Window_Closed(object sender, EventArgs e)
-    {
-      _settings.TabControlHeight = _mainRow.Height.Value;
-      _settings.LastTextInput    = _text.Text;
-      _settings.WindowState      = (int)this.WindowState;
-      _settings.WindowTop        = this.Top;
-      _settings.WindowLeft       = this.Left;
-      _settings.WindowHeight     = this.Height;
-      _settings.WindowLWidth     = this.Width;
-      _settings.ActiveTabIndex   = _tabControl.SelectedIndex;
-      SavePresets();
-    }
-
-    private void SavePresets()
-    {
-      var presets = new StringCollection();
-      foreach (var preset in _presets)
-        presets.Add(preset.Save());
-      _settings.Presets = presets;
-    }
-
-    private void LoadPresets()
-    {
-      if (_settings.Presets != null)
-        foreach (var presetData in _settings.Presets)
-          _presets.Add(new Preset(_presets, presetData));
-    }
-
-    void Load(Preset preset)
-    {
-      Load(preset.AssemblyFilePath, preset.SynatxModuleName, preset.StartRuleName, preset.Code);
-    }
-
-    void Load(string assemblyFilePath, string syntaxModuleFullName, string startRuleName, string code)
-    {
-      _loading = true;
-
-      _text.Text = code;
-
-      if (!string.IsNullOrEmpty(assemblyFilePath) && File.Exists(assemblyFilePath))
-      {
-        var grammars = LoadAssembly(assemblyFilePath);
-
-        GrammarDescriptor grammar = null;
-        if (!string.IsNullOrEmpty(syntaxModuleFullName))
-          grammar = grammars.FirstOrDefault(g => g.FullName == syntaxModuleFullName);
-
-        RuleDescriptor ruleDescriptor = null;
-        if (grammar != null)
-          ruleDescriptor = grammar.Rules.FirstOrDefault(r => r.Name == startRuleName);
-
-        if (ruleDescriptor != null)
-          LoadRule(ruleDescriptor);
-        else
-        {
-          var dialog = new RuleSelectionDialog(grammars);
-          if (dialog.ShowDialog() ?? false)
-            LoadRule(dialog.Result);
-        }
-      }
-
-      _loading = false;
-
-      if (!(Keyboard.GetKeyStates(Key.LeftShift) == KeyStates.Down || Keyboard.GetKeyStates(Key.RightShift) == KeyStates.Down))
-        _parseTimer.Start();
     }
 
     private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats, List<RecoveryStack> stacks)
@@ -280,7 +226,9 @@ namespace N2.Visualizer
 
       _errorsTreeView.Items.Clear();
 
-      if (_parseResult.IsSuccess)
+      if (_parseResult == null)
+        _status.Text = "Not parsed!";
+      else if (_parseResult.IsSuccess)
       {
         _status.Text = "OK";
       }
@@ -410,6 +358,11 @@ namespace N2.Visualizer
     {
       _needUpdateTextPrettyPrint = false;
 
+      if (_parseResult == null)
+      {
+        return;
+      }
+
       if (_ast == null)
         _ast = _parseResult.CreateAst();
 
@@ -502,49 +455,11 @@ namespace N2.Visualizer
     {
       this.Close();
     }
-
-    private void ParserLoad(object sender, RoutedEventArgs e)
-    {
-      var dialog = new OpenFileDialog
-      {
-        DefaultExt = ".dll",
-        Filter = "Parser module (.dll)|*.dll",
-        Title = "Load partser"
-      };
-      if (!string.IsNullOrEmpty(_settings.LastLoadParserDirectory) && Directory.Exists(_settings.LastLoadParserDirectory))
-        dialog.InitialDirectory = _settings.LastLoadParserDirectory;
-
-      if (dialog.ShowDialog(this) ?? false)
-      {
-        _settings.LastLoadParserDirectory = Path.GetDirectoryName(dialog.FileName);
-
-        var grammars = LoadAssembly(dialog.FileName);
-        var ruleSelectionDialog = new RuleSelectionDialog(grammars) { Owner = this };
-        if (ruleSelectionDialog.ShowDialog() ?? false)
-        {
-          LoadRule(ruleSelectionDialog.Result);
-        }
-      }
-    }
-
-    private GrammarDescriptor[] LoadAssembly(string assemblyFilePath)
-    {
-      var result = Utils.LoadAssembly(assemblyFilePath);
-      _settings.LastAssemblyFilePath = assemblyFilePath;
-      return result;
-    }
-
-    private void LoadRule(RuleDescriptor ruleDescriptor)
-    {
-      _settings.LastGrammarName = ruleDescriptor.Grammar.FullName;
-      _settings.LastRuleName = ruleDescriptor.Name;
-
-      treeView1.Items.Clear();
-    }
-
+    
     private void FileOpenExecuted(object sender, RoutedEventArgs e)
     {
       var dialog = new OpenFileDialog { Filter = "C# (.cs)|*.cs|Nitra (.n2)|*.n2|JSON (.json)|*.json|Text (.txt)|*.txt|All|*.*" };
+// ReSharper disable once ConstantNullCoalescingCondition
       if (dialog.ShowDialog(this) ?? false)
       {
         _text.Text = File.ReadAllText(dialog.FileName);
@@ -582,26 +497,27 @@ namespace N2.Visualizer
         _foldingStrategy.Parser = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
 
-        _outliningTime.Text         = _foldingStrategy.TimeSpan.ToString();
+        _outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
 
-        _recoveryTime.Text          = recovery.Timer.Elapsed.ToString();
-        _recoveryCount.Text         = recovery.Count.ToString(CultureInfo.InvariantCulture);
+        _recoveryTime.Text = recovery.Timer.Elapsed.ToString();
+        _recoveryCount.Text = recovery.Count.ToString(CultureInfo.InvariantCulture);
 
-        _continueParseTime.Text     = recovery.ContinueParseTime.ToString();
-        _continueParseCount.Text    = recovery.ContinueParseCount.ToString(CultureInfo.InvariantCulture);
+        _continueParseTime.Text = recovery.ContinueParseTime.ToString();
+        _continueParseCount.Text = recovery.ContinueParseCount.ToString(CultureInfo.InvariantCulture);
 
-        _tryParseSubrulesTime.Text  = recovery.TryParseSubrulesTime.ToString();
+        _tryParseSubrulesTime.Text = recovery.TryParseSubrulesTime.ToString();
         _tryParseSubrulesCount.Text = recovery.TryParseSubrulesCount.ToString(CultureInfo.InvariantCulture);
 
-        _tryParseTime.Text          = recovery.TryParseTime.ToString();
-        _tryParseCount.Text         = recovery.TryParseCount.ToString(CultureInfo.InvariantCulture);
+        _tryParseTime.Text = recovery.TryParseTime.ToString();
+        _tryParseCount.Text = recovery.TryParseCount.ToString(CultureInfo.InvariantCulture);
 
-        _tryParseNoCacheTime.Text   = recovery.TryParseNoCacheTime.ToString();
-        _tryParseNoCacheCount.Text  = recovery.TryParseNoCacheCount.ToString(CultureInfo.InvariantCulture);
+        _tryParseNoCacheTime.Text = recovery.TryParseNoCacheTime.ToString();
+        _tryParseNoCacheCount.Text = recovery.TryParseNoCacheCount.ToString(CultureInfo.InvariantCulture);
 
         ShowRecoveryResults();
         TryReportError();
         ShowInfo();
+        
         recovery.ReportResult = null;
       }
       catch (TypeLoadException ex)
@@ -980,41 +896,6 @@ namespace N2.Visualizer
       }
     }
 
-    private void SavePreset(object sender, ExecutedRoutedEventArgs e)
-    {
-      var text = _text.Text;
-      var moduleName = _settings.LastGrammarName;
-      var grammarName = moduleName.Split('.').Last();
-      var dialog = new AddPreset(grammarName, text);
-      dialog.Owner = this;
-      if (dialog.ShowDialog() ?? false)
-      {
-        // remove element with same name
-        var preset = _presets.FirstOrDefault(p => p.Name == dialog.PresetName);
-        if (preset != null)
-          _presets.Remove(preset);
-
-        _presets.Insert(0, new Preset(_presets, dialog.PresetName, _settings.LastAssemblyFilePath, moduleName, _settings.LastRuleName, text));
-
-        if (_presets.Count > MaxPresetCount)
-          _presets.RemoveAt(MaxPresetCount);
-      }
-    }
-
-    private void PresetMenuItem_Click(object sender, RoutedEventArgs e)
-    {
-      var preset = (Preset)((MenuItem)e.Source).DataContext;
-      Load(preset);
-      _presets.Remove(preset);
-      _presets.Insert(0, preset);
-    }
-
-    private void PersistPresets(object sender, ExecutedRoutedEventArgs e)
-    {
-      SavePresets();
-      _settings.Save();
-    }
-
     private void MenuItem_Click_TestsSettings(object sender, RoutedEventArgs e)
     {
       ShowTestsSettingsDialog();
@@ -1059,7 +940,7 @@ namespace N2.Visualizer
     {
       if (_currentTestSuit == null)
       {
-        MessageBox.Show(this, "Select  test suit first.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        MessageBox.Show(this, "Select a test suit first.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
         return;
       }
 
@@ -1084,6 +965,8 @@ namespace N2.Visualizer
       var test = result.Tests.FirstOrDefault(t => t.Name == testName);
       if (test != null)
         test.IsSelected = true;
+      else
+        result.IsSelected = true;
     }
 
     private static string TestFullPath(string path)
@@ -1109,10 +992,103 @@ namespace N2.Visualizer
       foreach (var testSuit in testSuits)
       {
         foreach (var test in testSuit.Tests)
-          test.Run();
+          RunTest(test);
 
         testSuit.TestStateChanged();
       }
+    }
+
+    private void RunTest(TestVm test)
+    {
+      test.Run();
+
+      ShowDiff(test);
+    }
+
+    private void ShowDiff(TestVm test)
+    {
+      _para.Inlines.Clear();
+
+      if (test.PrettyPrintResult == null)
+      {
+        _para.Inlines.AddRange(new Inline[] { new Run("The test was never started.") { Foreground = Brushes.Gray } });
+        return;
+      }
+
+      if (test.TestState == TestState.Failure)
+      {
+        var lines = Diff(Split(test.Gold), Split(test.PrettyPrintResult));
+        lines.RemoveAt(0);
+        lines.RemoveAt(lines.Count - 1);
+
+        foreach (var line in lines)
+          _para.Inlines.AddRange(line);
+      }
+      else if (test.TestState == TestState.Success)
+        _para.Inlines.AddRange(new Inline[] { new Run("Output of the test and the 'gold' are identical.") { Foreground = Brushes.LightGreen } });
+    }
+
+    private static string[] Split(string gold)
+    {
+      return gold.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
+    }
+
+    private static List<Inline[]> Diff(string[] textA, string[] textB, int rangeToShow = 3)
+    {
+      var indexA = 0;
+      var output = new List<Inline[]> { MakeLine("BEGIN-DIFF", Brushes.LightGray) };
+
+      foreach (var diffItem in textA.Diff(textB))
+      {
+        // определяем нужно ли выводить разделитель
+        var nextIndexA = Math.Max(indexA, diffItem.Index - rangeToShow);
+        if (nextIndexA > indexA + 1)
+          output.Add(MakeLine("..."));
+
+        // показваем не боле rangeToShow предыдущих строк
+        indexA = nextIndexA;
+        while (indexA < diffItem.Index)
+        {
+          output.Add(MakeLine(textA[indexA]));
+          ++indexA;
+        }
+
+        // показываем удаленные строки
+        for (var i = 0; i < diffItem.Deleted; ++i)
+        {
+          output.Add(MakeLine(textA[indexA], Brushes.LightPink));
+          ++indexA;
+        }
+
+        // показываем добавленные строки
+        foreach (var insertedItem in diffItem.Inserted)
+          output.Add(MakeLine(insertedItem, Brushes.LightGreen));
+
+        // показываем не более rangeToShow последующих строк
+        var tailLinesToShow = Math.Min(rangeToShow, textA.Length - indexA);
+
+        for (var i = 0; i < tailLinesToShow; ++i)
+        {
+          output.Add(MakeLine(textA[indexA]));
+          ++indexA;
+        }
+      }
+
+      if (indexA < textA.Length)
+        output.Add(MakeLine("..."));
+
+      output.Add(MakeLine("END-DIFF", Brushes.LightGray));
+
+      return output;
+    }
+
+    private static Inline[] MakeLine(string text, Brush brush = null)
+    {
+      return new Inline[]
+      {
+        brush == null ? new Run(text) : new Run(text) { Background = brush },
+        new LineBreak()
+      };
     }
 
     private void OnAddTestSuit(object sender, ExecutedRoutedEventArgs e)
@@ -1157,6 +1133,7 @@ namespace N2.Visualizer
       {
         _text.Text = test.Code;
         _currentTestSuit = test.TestSuit;
+        ShowDiff(test);
       }
 
       var testSuit = e.NewValue as TestSuitVm;
@@ -1164,6 +1141,7 @@ namespace N2.Visualizer
       {
         _text.Text = "";
         _currentTestSuit = testSuit;
+        _para.Inlines.Clear();
       }
     }
 
@@ -1197,15 +1175,18 @@ namespace N2.Visualizer
         var test = _testsTreeView.SelectedItem as TestVm;
         if (test != null)
         {
-          test.Run();
+          RunTest(test);
           test.TestSuit.TestStateChanged();
+
+          if (test.TestState == TestState.Failure)
+            _testResultDiffTabItem.IsSelected = true;
         }
       }
       var testSuit = _testsTreeView.SelectedItem as TestSuitVm;
       if (testSuit != null)
       {
         foreach (var test in testSuit.Tests)
-          test.Run();
+          RunTest(test);
         testSuit.TestStateChanged();
       }
     }
@@ -1230,6 +1211,41 @@ namespace N2.Visualizer
     private void _testsTreeView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
       RunTest();
+      e.Handled = true;
+    }
+
+    private void _configComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+      if (_loading)
+        return;
+
+      var config = (string)_configComboBox.SelectedItem;
+      _settings.Config = config;
+      LoadTests();
+    }
+
+    private void OnUpdateTest(object sender, ExecutedRoutedEventArgs e)
+    {
+      var test = _testsTreeView.SelectedItem as TestVm;
+      if (test != null)
+      {
+        try
+        {
+          test.Update(_text.Text, _prettyPrintTextBox.Text);
+          test.TestSuit.TestStateChanged();
+        }
+        catch (Exception ex)
+        {
+          MessageBox.Show(this, "Fail to update the test '" + test.Name + "'." + Environment.NewLine + ex.Message, "Visualizer!", 
+            MessageBoxButton.YesNo, 
+            MessageBoxImage.Error);
+        }
+      }
+    }
+
+    private void OnRepars(object sender, ExecutedRoutedEventArgs e)
+    {
+      Dispatcher.Invoke(new Action(DoParse));
     }
   }
 }

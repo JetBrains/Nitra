@@ -12,6 +12,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using System.Xml.Linq;
 using N2.Visualizer.ViewModels;
+using Microsoft.Win32;
 
 namespace N2.Visualizer
 {
@@ -332,6 +333,21 @@ namespace N2.Visualizer
 
       this.DialogResult = true;
       Close();
+    }
+
+    private void _addLibButton_Click(object sender, RoutedEventArgs e)
+    {
+      var dialog = new OpenFileDialog
+      {
+        DefaultExt = ".dll",
+        Filter = "Parser module (.dll)|*.dll",
+        Title = "Load partser"
+      };
+      if (dialog.ShowDialog(this) ?? false)
+      {
+        _assemblies.Text += Environment.NewLine + dialog.FileName;
+        _assemblies.Focus();
+      }
     }
   }
 }
