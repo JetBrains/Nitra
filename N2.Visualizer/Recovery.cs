@@ -345,21 +345,21 @@ namespace N2.DebugStrategies
           subRuleParserId = extentionRuleParser.RuleId;
         Debug.Assert(subRuleParserId != -1);
 
-        var old = recoveryStack;
-        var astHandler = new AstHandle.Subrule(-1, curTextPos);
-        var newFrame = new RecoveryStackFrame(subRuleParser, subRuleParserId, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None);
+        //var old = recoveryStack;
+        //var astHandler = new AstHandle.Subrule(-1, curTextPos);
+        //var newFrame = new RecoveryStackFrame(subRuleParser, subRuleParserId, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None);
 
-        if (!_visitedFrame.Add(newFrame))
-          continue;
+        //if (!_visitedFrame.Add(newFrame))
+        //  continue;
 
-        recoveryStack = recoveryStack.Push(newFrame);
+        //recoveryStack = recoveryStack.Push(newFrame);
 
 #if !N2RUNTIME && DebugOutput
         Debug.WriteLine(string.Format("{0}## {1}", new string(' ', (_nestedLevel + recoveryStack.Length) * 2), ToString(newFrame)));
 #endif
 
         ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
-        recoveryStack = old; // remove top element
+        //recoveryStack = old; // remove top element
       }
 
       _nestedLevel--;
@@ -381,7 +381,7 @@ namespace N2.DebugStrategies
       {
       }
 
-      if (stack.hd.AstPtr == 18)
+      if (stack.AstHandle.AstPtr == 18)
       {
       }
 
@@ -389,7 +389,7 @@ namespace N2.DebugStrategies
 
       if (_bestResult == null)                   goto good;
 
-      if (stack.hd.AstPtr == -1 && _bestResult.Stack.hd.AstPtr != -1) // спекулятивный фрейм стека
+      if (stack.AstPtr == -1 && _bestResult.Stack.hd.AstPtr != -1) // спекулятивный фрейм стека
       {
         return;
       }
