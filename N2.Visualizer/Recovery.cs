@@ -192,21 +192,13 @@ namespace N2.DebugStrategies
 
         if (nextState < 0 && !isPrefixParsed) // пытаемся восстановить пропущенный разделитель списка
         {
-          int itemId;
-          IRecoveryRuleParser itemRuleParser;
-          var loopBodyStartState = ruleParser.GetBodyStartStateForSeparator(state, out itemRuleParser, out itemId);
-          if (loopBodyStartState >= 0)
+          var frame = ruleParser.GetLoopBodyFrameForSeparatorState(state, parser);
+
+          if (frame != null)
           {
             // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы
             // имеем дело с банальным концом цикла мы должны
             Debug.Assert(recoveryStack.Parents.Count == 1);
-            var loopFrame = recoveryStack.Parents.First();
-            var newParent = new RecoveryStackFrame(loopFrame.AstHandle, loopFrame.FailState, loopFrame.Counter + 1, loopFrame.ListStartPos, 
-                                                   loopFrame.ListEndPos, FrameInfo.LoopBody);
-            newParent.Parents.UnionWith(loopFrame.Parents);
-            var astHandle = new AstHandle.Subrule(-1, curTextPos, itemRuleParser, itemId);
-            var newStack = new RecoveryStackFrame(astHandle, loopBodyStartState, 0, 0, 0, FrameInfo.None);  // TODO: Значение для FrameInfo должна возвращать GetBodyStartStateForSeparator
-            newStack.Parents.Add(newParent);
 
             var old_bestResult    = _bestResult;
             var old_bestResults   = _bestResults;
@@ -218,7 +210,7 @@ namespace N2.DebugStrategies
             _candidats    = new List<RecoveryResult>();
             _visitedFrame = new HashSet<RecoveryStackFrame>();
 
-            ProcessStackFrame(startTextPos, parser, newStack, curTextPos, text, subruleLevel);
+            ProcessStackFrame(startTextPos, parser, frame, curTextPos, text, subruleLevel);
 
             _bestResults  = old_bestResults;
             _candidats    = old__candidats;
@@ -321,45 +313,38 @@ namespace N2.DebugStrategies
       //  return;
 
       _nestedLevel++;
-      var stackFrame = recoveryStack;
-      var parsers = stackFrame.RuleParser.GetParsersForState(state);
+      var frames = recoveryStack.RuleParser.GetFramesForState(state, parser);
 
 #if !N2RUNTIME
-      if (parsers.Length != 0)
+      if (frames.Length != 0)
       {
       }
 #endif
 
-      foreach (var subRuleParser in parsers)
+      foreach (var farame in frames)
       {
-        if (subRuleParser.IsTokenRule)
+        var ruleParser = farame.RuleParser;
+        if (ruleParser.IsTokenRule)
           continue;
 
-        int subRuleParserId = -1;
-        var ruleParser = subRuleParser as StartRuleParser;
-        if (ruleParser != null)
-          subRuleParserId = ruleParser.StartRuleId;
+        var subRuleParserId = -1;
+        var startRuleParser = ruleParser as StartRuleParser;
+        if (startRuleParser != null)
+          subRuleParserId = startRuleParser.StartRuleId;
 // ReSharper disable once SuspiciousTypeConversion.Global
-        var extentionRuleParser = subRuleParser as ExtentionRuleParser;
+        var extentionRuleParser = ruleParser as ExtentionRuleParser;
         if (extentionRuleParser != null)
           subRuleParserId = extentionRuleParser.RuleId;
         Debug.Assert(subRuleParserId != -1);
 
-        //var old = recoveryStack;
-        //var astHandler = new AstHandle.Subrule(-1, curTextPos);
-        //var newFrame = new RecoveryStackFrame(subRuleParser, subRuleParserId, -1, startTextPos, subRuleParser.StartState, 0, 0, 0, true, FrameInfo.None);
-
-        //if (!_visitedFrame.Add(newFrame))
-        //  continue;
-
-        //recoveryStack = recoveryStack.Push(newFrame);
+        if (!_visitedFrame.Add(farame))
+          continue;
 
 #if !N2RUNTIME && DebugOutput
-        Debug.WriteLine(string.Format("{0}## {1}", new string(' ', (_nestedLevel + recoveryStack.Length) * 2), ToString(newFrame)));
+        Debug.WriteLine(string.Format("{0}## {1}", new string(' ', (_nestedLevel + recoveryStack.Length) * 2), ToString(farame)));
 #endif
 
         ProcessStackFrame(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel + 1);
-        //recoveryStack = old; // remove top element
       }
 
       _nestedLevel--;
