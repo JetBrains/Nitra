@@ -153,9 +153,8 @@ namespace N2.DebugStrategies
 #endif
     }
 
-    private void ProcessStackFrameImpl(int startTextPos, Parser parser, RecoveryStackFrame recoveryStack, int curTextPos, string text, int subruleLevel)
+    private void ProcessStackFrameImpl(int startTextPos, Parser parser, RecoveryStackFrame stackFrame, int curTextPos, string text, int subruleLevel)
     {
-      var stackFrame = recoveryStack;
       var ruleParser = stackFrame.RuleParser;
       var isPrefixParsed = !ruleParser.IsStartState(stackFrame.FailState);
       var isNotOptional = !ruleParser.IsLoopSeparatorStart(stackFrame.FailState);
@@ -167,7 +166,7 @@ namespace N2.DebugStrategies
         nextState = ruleParser.GetNextState(state);
 
         List<ParsedStateInfo> parsedStates;
-        int pos = TryParse(parser, recoveryStack, curTextPos, ruleParser, state, out parsedStates);
+        int pos = TryParse(parser, stackFrame, curTextPos, ruleParser, state, out parsedStates);
 
         if (curTextPos > 0)
           Debug.Assert(pos != 0);
@@ -176,11 +175,11 @@ namespace N2.DebugStrategies
 
         if (parser.MaxFailPos > curTextPos && parser.MaxFailPos - curTextPos > ParsedSpacesLen(ruleParser, parsedStates)) // что-то пропарсили и это что-то не пробелы
         {
-          //var stack = recoveryStack;
+          //var stack = stackFrame;
           //if (IsBetterStack(stack))
           {
-            var pos2 = pos == lastPos ? ContinueParse(pos, recoveryStack, parser, isNotOptional) : lastPos;
-            AddResult(curTextPos, lastPos, pos2, state, recoveryStack, text, startTextPos);
+            var pos2 = pos == lastPos ? ContinueParse(pos, stackFrame, parser, isNotOptional) : lastPos;
+            AddResult(curTextPos, lastPos, pos2, state, stackFrame, text, startTextPos);
             break;
           }
         }
@@ -192,13 +191,13 @@ namespace N2.DebugStrategies
 
         if (nextState < 0 && !isPrefixParsed) // пытаемся восстановить пропущенный разделитель списка
         {
-          var frame = ruleParser.GetLoopBodyFrameForSeparatorState(state, parser);
+          var frame = ruleParser.GetLoopBodyFrameForSeparatorState(state, parser, stackFrame, curTextPos);
 
           if (frame != null)
           {
             // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы
             // имеем дело с банальным концом цикла мы должны
-            Debug.Assert(recoveryStack.Parents.Count == 1);
+            Debug.Assert(stackFrame.Parents.Count == 1);
 
             var old_bestResult    = _bestResult;
             var old_bestResults   = _bestResults;
@@ -222,7 +221,7 @@ namespace N2.DebugStrategies
               var ruleEndPos = Math.Max(_bestResult.RuleEndPos, curTextPos);
               _bestResult  = old_bestResult;
 
-              AddResult(curTextPos, ruleEndPos, endPos, -1, recoveryStack, text, startTextPos, true);
+              AddResult(curTextPos, ruleEndPos, endPos, -1, stackFrame, text, startTextPos, true);
               return;
             }
 
@@ -235,17 +234,17 @@ namespace N2.DebugStrategies
           if (!isNotOptional)
           {
           }
-          var pos2 = ContinueParse(pos, recoveryStack, parser, isNotOptional);
+          var pos2 = ContinueParse(pos, stackFrame, parser, isNotOptional);
           if (!(!isNotOptional && pos == pos2))
-            AddResult(curTextPos, pos, pos2, state, recoveryStack, text, startTextPos);
+            AddResult(curTextPos, pos, pos2, state, stackFrame, text, startTextPos);
         }
         else if (pos == curTextPos && nextState < 0 && !stackFrame.RuleParser.IsTokenRule)
         {
-          var pos2 = ContinueParse(pos, recoveryStack, parser, isNotOptional);
+          var pos2 = ContinueParse(pos, stackFrame, parser, isNotOptional);
           if (!(!isNotOptional && pos == pos2))
             if (!(stackFrame.AstHandle.AstPtr == -1 && !isPrefixParsed)) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
               if (pos2 > curTextPos || isPrefixParsed)
-                AddResult(curTextPos, pos, pos2, state, recoveryStack, text, startTextPos);
+                AddResult(curTextPos, pos, pos2, state, stackFrame, text, startTextPos);
         }
         else if (parsedStates.Count > 0 && HasParsedStaets(ruleParser, parsedStates))
         {
@@ -253,16 +252,16 @@ namespace N2.DebugStrategies
           // Мы сфайлили но прпарсили часть правил. Надо восстанавливаться на первом сбойнувшем правиле.
           var successParseLen = Sum(parsedStates);
           var ruleEndPos = curTextPos + successParseLen;
-          AddResult(curTextPos, ruleEndPos, parser.MaxFailPos, state, recoveryStack, text, startTextPos);
+          AddResult(curTextPos, ruleEndPos, parser.MaxFailPos, state, stackFrame, text, startTextPos);
         }
         else if (pos < 0 && nextState < 0 && !(stackFrame.AstHandle.AstPtr == -1 && !isPrefixParsed))
         {
           // последнее состояние. Надо попытаться допарсить
-          var pos2 = ContinueParse(curTextPos, recoveryStack, parser, isNotOptional);
+          var pos2 = ContinueParse(curTextPos, stackFrame, parser, isNotOptional);
           if (!(!isNotOptional && !isPrefixParsed)) // необязательное правило не спрасившее ни одного не пробельного символа нужно игнорировать
             if (!(stackFrame.AstHandle.AstPtr == -1 && !isPrefixParsed)) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
               if (pos2 > curTextPos || isPrefixParsed)
-                AddResult(curTextPos, pos, pos2, -1, recoveryStack, text, startTextPos);
+                AddResult(curTextPos, pos, pos2, -1, stackFrame, text, startTextPos);
         }
       }
     }
@@ -313,7 +312,7 @@ namespace N2.DebugStrategies
       //  return;
 
       _nestedLevel++;
-      var frames = recoveryStack.RuleParser.GetFramesForState(state, parser);
+      var frames = recoveryStack.RuleParser.GetFramesForState(state, parser, recoveryStack, curTextPos);
 
 #if !N2RUNTIME
       if (frames.Length != 0)
