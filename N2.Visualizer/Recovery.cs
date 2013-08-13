@@ -574,27 +574,27 @@ namespace N2.DebugStrategies
 
     private void FixAst(Parser parser)
     {
-      // TODO: Надо переписать. Пока закоментил.
-      Debug.Assert(_bestResult != null);
+    //  // TODO: Надо переписать. Пока закоментил.
+    //  Debug.Assert(_bestResult != null);
 
-      var frame = _bestResult.Stack.Head;
+    //  var frame = _bestResult.Stack.Head;
 
-      if (frame.AstStartPos < 0)
-        Debug.Assert(frame.AstPtr >= 0);
+    //  if (frame.AstStartPos < 0)
+    //    Debug.Assert(frame.AstPtr >= 0);
 
-      var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
-      var errorIndex = parser.ErrorData.Count;
-      parser.ErrorData.Add(error);
+    //  var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
+    //  var errorIndex = parser.ErrorData.Count;
+    //  parser.ErrorData.Add(error);
 
-      frame.RuleParser.PatchAst(_bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
+    //  frame.RuleParser.PatchAst(_bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
 
-      for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
-      {
-        if (stack.Head.RuleParser is ExtensibleRuleParser)
-          continue;
-        Debug.Assert(stack.Head.FailState >= 0);
-        stack.Head.RuleParser.PatchAst(stack.Head.AstStartPos, -2, -1, stack, parser);
-      }
+    //  for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
+    //  {
+    //    if (stack.Head.RuleParser is ExtensibleRuleParser)
+    //      continue;
+    //    Debug.Assert(stack.Head.FailState >= 0);
+    //    stack.Head.RuleParser.PatchAst(stack.Head.AstStartPos, -2, -1, stack, parser);
+    //  }
     }
 
     private static List<RecoveryStackFrame> PrepareStacks(Parser parser)
