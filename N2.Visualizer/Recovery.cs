@@ -20,7 +20,6 @@ namespace N2.DebugStrategies
     List<RecoveryResult>         _candidats = new List<RecoveryResult>();
     RecoveryResult               _bestResult;
     List<RecoveryResult>         _bestResults = new List<RecoveryResult>();
-    Dictionary<object, PrseData> _visited = new Dictionary<object, PrseData>();
     int                          _nestedLevel;
     HashSet<RecoveryStackFrame>  _visitedFrame = new HashSet<RecoveryStackFrame>();
 #if !N2RUNTIME
@@ -58,7 +57,6 @@ namespace N2.DebugStrategies
       _bestResult = null;
       _bestResults.Clear();
       _nestedLevel = 0;
-      _visited = new Dictionary<object, PrseData>();
     }
 
     public void Strategy(int startTextPos, Parser parser)
@@ -129,8 +127,6 @@ namespace N2.DebugStrategies
     private void ProcessStackFrameSpeculative(int startTextPos, Parser parser, RecoveryStackFrame recoveryStack, int curTextPos, string text, int subruleLevel)
     {
       var stackFrame = recoveryStack;
-      var ruleParser = stackFrame.RuleParser;
-
 #if !N2RUNTIME && DebugOutput
       var indent = subruleLevel;
       Debug.WriteLine(new string(' ', subruleLevel * 2) + "Begin frame --------------------------- subruleLevel=" + subruleLevel);
@@ -139,13 +135,13 @@ namespace N2.DebugStrategies
 #endif
 
       int nextState;
-      for (var state = stackFrame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? ruleParser.GetNextState(stackFrame.FailState) :
+      for (var state = stackFrame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? stackFrame.GetNextState(stackFrame.FailState) :
       {
-        nextState = ruleParser.GetNextState(state);
+        nextState = stackFrame.GetNextState(state);
         if (_bestResult != null)
           return;
 
-        if (!stackFrame.RuleParser.IsTokenRule) //&& stackFrame.FailState == state
+        if (!stackFrame.IsTokenRule) //&& stackFrame.FailState == state
           TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel, state);
       }
 #if !N2RUNTIME && DebugOutput
@@ -159,7 +155,7 @@ namespace N2.DebugStrategies
       var isNotOptional = frame.IsLoopSeparatorStart;
 
       int nextState;
-      for (var state = frame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? ruleParser.GetNextState(stackFrame.FailState) :
+      for (var state = frame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? stackFrame.GetNextState(stackFrame.FailState) :
       {
         parser.MaxFailPos = startTextPos;
         nextState = frame.GetNextState(state);
@@ -253,14 +249,13 @@ namespace N2.DebugStrategies
           var ruleEndPos = curTextPos + successParseLen;
           AddResult(curTextPos, ruleEndPos, parser.MaxFailPos, state, frame, text, startTextPos);
         }
-        else if (pos < 0 && nextState < 0 && !(frame.IsSpeculative && !isPrefixParsed))
+        else if (pos < 0 && nextState < 0 && !(frame.IsSpeculative && !isPrefixParsed))// Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
         {
           // последнее состояние. Надо попытаться допарсить
           var pos2 = ContinueParse(curTextPos, frame, parser, isNotOptional);
           if (!(!isNotOptional && !isPrefixParsed)) // необязательное правило не спрасившее ни одного не пробельного символа нужно игнорировать
-            if (!(frame.IsSpeculative && !isPrefixParsed)) // Спекулятивный фрэйм стека не спарсивший ничего полезного. Игнорируем его.
-              if (pos2 > curTextPos || isPrefixParsed)
-                AddResult(curTextPos, pos, pos2, -1, frame, text, startTextPos);
+            if (pos2 > curTextPos || isPrefixParsed)
+              AddResult(curTextPos, pos, pos2, -1, frame, text, startTextPos);
         }
       }
     }
@@ -311,7 +306,7 @@ namespace N2.DebugStrategies
       //  return;
 
       _nestedLevel++;
-      var frames = frame.GetFramesForState(curTextPos, parser, state);
+      var frames = frame.GetSpeculativeFramesForState(curTextPos, parser, state);
 
 #if !N2RUNTIME
       if (frames.Length != 0)
@@ -319,30 +314,19 @@ namespace N2.DebugStrategies
       }
 #endif
 
-      foreach (var farame in frames)
+      foreach (var subFrame in frames)
       {
-        var ruleParser = farame.RuleParser;
-        if (ruleParser.IsTokenRule)
+        if (subFrame.IsTokenRule)
           continue;
 
-        var subRuleParserId = -1;
-        var startRuleParser = ruleParser as StartRuleParser;
-        if (startRuleParser != null)
-          subRuleParserId = startRuleParser.StartRuleId;
-// ReSharper disable once SuspiciousTypeConversion.Global
-        var extentionRuleParser = ruleParser as ExtentionRuleParser;
-        if (extentionRuleParser != null)
-          subRuleParserId = extentionRuleParser.RuleId;
-        Debug.Assert(subRuleParserId != -1);
-
-        if (!_visitedFrame.Add(farame))
+        if (!_visitedFrame.Add(subFrame))
           continue;
 
 #if !N2RUNTIME && DebugOutput
         Debug.WriteLine(string.Format("{0}## {1}", new string(' ', (_nestedLevel + recoveryStack.Length) * 2), ToString(farame)));
 #endif
 
-        ProcessStackFrame(startTextPos, parser, frame, curTextPos, text, subruleLevel + 1);
+        ProcessStackFrame(startTextPos, parser, subFrame, curTextPos, text, subruleLevel + 1);
       }
 
       _nestedLevel--;
@@ -364,17 +348,14 @@ namespace N2.DebugStrategies
       {
       }
 
-      if (stack.AstHandle.AstPtr == 18)
-      {
-      }
-
       if (!allowEmpty && startPos == endPos && endPos != text.Length) return;
 
       if (_bestResult == null)                   goto good;
 
-      if (stack.AstPtr == -1 && _bestResult.Stack.AstPtr != -1) // спекулятивный фрейм стека
+      if (stack.IsSpeculative && _bestResult.Stack.IsSpeculative) // спекулятивный фрейм стека
       {
         Debug.Assert(false, "Этого не должно произойки, так как спекулятивный парсинг должен происходить в методе ProcessStackFrameSpeculative() который вызывается только если ProcessStackFrame() не нашел результат.");
+// ReSharper disable once HeuristicUnreachableCode
         return;
       }
 
@@ -503,8 +484,7 @@ namespace N2.DebugStrategies
       var bestPos = -1;
       foreach (var stackFrame in parents)
       {
-        var ruleParser = stackFrame.RuleParser;
-        var pos = TryParse(parser, stackFrame, startTextPos, ruleParser, -2, out parsedStates); // -2 - предлагаем парсеру вычислить следующее состояние для допарсивания
+        var pos = TryParse(parser, stackFrame, startTextPos, -2, out parsedStates); // -2 - предлагаем парсеру вычислить следующее состояние для допарсивания
         if (pos < 0)
           continue;
 
@@ -518,6 +498,7 @@ namespace N2.DebugStrategies
           results.Add(Tuple.Create(pos, stackFrame, parsedStates));
       }
 
+// ReSharper disable once LoopCanBeConvertedToQuery
       foreach (var result in results)
       {
         var pos = ContinueParseImpl(result.Item1, result.Item2, parser, trySkipStates);
@@ -532,14 +513,13 @@ namespace N2.DebugStrategies
       {
         foreach (var stackFrame in parents)
         {
-          var ruleParser = stackFrame.RuleParser;
           // Если неудалось продолжить парсинг напрямую пытаемся скипнуть одно или более состояние и продолжить парсинг.
           // Это позволяет нам продолжить допарсивание даже в условиях когда непосредственно за местом восстановления находится повторная ошибка.
           // TODO: Но по уму нужно тупо использовать обычный парсинг, выявлять место следующей ошибки и пытаться восстановить ее рекурсивно! 
-          for (var state = ruleParser.GetNextState(stackFrame.FailState); state >= 0; state = ruleParser.GetNextState(state))
+          for (var state = stackFrame.GetNextState(stackFrame.FailState); state >= 0; state = stackFrame.GetNextState(state))
           {
-            var pos = TryParse(parser, stackFrame, startTextPos, ruleParser, state, out parsedStates);
-            if (pos > bestPos && !ruleParser.IsVoidState(state))
+            var pos = TryParse(parser, stackFrame, startTextPos, state, out parsedStates);
+            if (pos > bestPos && !stackFrame.IsVoidState(state))
               bestPos = pos;
           }
 
@@ -567,68 +547,54 @@ namespace N2.DebugStrategies
         var timer2 = Timer.Elapsed;
 #endif
         parsedStates = new List<ParsedStateInfo>();
-        result = ruleParser.TryParse(recoveryStack, state, curTextPos, parsedStates, parser);
+        result = recoveryStack.TryParse(state, curTextPos, parsedStates, parser);
 #if !N2RUNTIME
         TryParseNoCacheTime += Timer.Elapsed - timer2;
 #endif
       }
       else
       {
-        var key = Tuple.Create(curTextPos, ruleParser, state);
-        PrseData data;
-        if (_visited.TryGetValue(key, out data))
-        {
-          if (parser.MaxFailPos < data.Item2)
-            parser.MaxFailPos = data.Item2;
-          parsedStates = data.Item3;
-          result = data.Item1;
-        }
-        else
-        {
 #if !N2RUNTIME
-          TryParseNoCacheCount++;
-          var timer2 = Timer.Elapsed;
+        TryParseNoCacheCount++;
+        var timer2 = Timer.Elapsed;
 #endif
-          parsedStates = new List<ParsedStateInfo>();
-          int pos = ruleParser.TryParse(recoveryStack, state, curTextPos, parsedStates, parser);
+        parsedStates = new List<ParsedStateInfo>();
+        int pos = recoveryStack.TryParse(state, curTextPos, parsedStates, parser);
 #if !N2RUNTIME
-          TryParseNoCacheTime += Timer.Elapsed - timer2;
+        TryParseNoCacheTime += Timer.Elapsed - timer2;
 #endif
-          _visited[key] = Tuple.Create(pos, parser.MaxFailPos, parsedStates);
-          result = pos;
-        }
+        result = pos;
       }
 
 #if !N2RUNTIME
       TryParseTime += Timer.Elapsed - timer;
 #endif
-
       return result;
     }
 
     private void FixAst(Parser parser)
     {
-      //// TODO: Надо переписать. Пока закоментил.
-      //Debug.Assert(_bestResult != null);
+      // TODO: Надо переписать. Пока закоментил.
+      Debug.Assert(_bestResult != null);
 
-      //var frame = _bestResult.Stack.Head;
+      var frame = _bestResult.Stack.Head;
 
-      //if (frame.AstStartPos < 0)
-      //  Debug.Assert(frame.AstPtr >= 0);
+      if (frame.AstStartPos < 0)
+        Debug.Assert(frame.AstPtr >= 0);
 
-      //var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
-      //var errorIndex = parser.ErrorData.Count;
-      //parser.ErrorData.Add(error);
+      var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
+      var errorIndex = parser.ErrorData.Count;
+      parser.ErrorData.Add(error);
 
-      //frame.RuleParser.PatchAst(_bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
+      frame.RuleParser.PatchAst(_bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
 
-      //for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
-      //{
-      //  if (stack.Head.RuleParser is ExtensibleRuleParser)
-      //    continue;
-      //  Debug.Assert(stack.Head.FailState >= 0);
-      //  stack.Head.RuleParser.PatchAst(stack.Head.AstStartPos, -2, -1, stack, parser);
-      //}
+      for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
+      {
+        if (stack.Head.RuleParser is ExtensibleRuleParser)
+          continue;
+        Debug.Assert(stack.Head.FailState >= 0);
+        stack.Head.RuleParser.PatchAst(stack.Head.AstStartPos, -2, -1, stack, parser);
+      }
     }
 
     private static List<RecoveryStackFrame> PrepareStacks(Parser parser)
