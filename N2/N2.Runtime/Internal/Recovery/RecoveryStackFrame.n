@@ -1,5 +1,6 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 using Nemerle.Extensions;
@@ -14,9 +15,6 @@ namespace N2.Internal
   [StructuralEquality]
   public variant RecoveryStackFrame
   {
-    public abstract GetNextState(state : int) : int;
-    public abstract GetSpeculativeBodyFrame(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator;
-
     [RecordIgnore]
     [EqualsIgnore]
     public Parents      : SCG.HashSet[RecoveryStackFrame] = SCG.HashSet();
@@ -27,7 +25,7 @@ namespace N2.Internal
         TextPos      : int;
         State        : int;
         public override GetNextState(state : int) : int { | 0 => 1 | _ => -1 }
-        public override GetSpeculativeBodyFrame(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator { IgnoreParams(); null }
+        public override GetLoopBodyFrameForSeparatorState(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator { IgnoreParams(); null }
         //public override GetFramesForState(startState : int, parser : Parser, parent : RecoveryStackFrame, textPos : int) : array[RecoveryStackFrame]
         //{
         //  match (startState)
@@ -43,14 +41,14 @@ namespace N2.Internal
       {
         AstHandle    : AstHandle.ExtensiblePrefix;
         public override GetNextState(state : int) : int { _ = state; -1 }
-        public override GetSpeculativeBodyFrame(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator { IgnoreParams(); null }
+        public override GetLoopBodyFrameForSeparatorState(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator { IgnoreParams(); null }
       }
 
     | ExtensiblePostfix
       {
         AstHandle    : AstHandle.ExtensiblePostfix;
         public override GetNextState(state : int) : int { _ = state; -1 }
-        public override GetSpeculativeBodyFrame(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator { IgnoreParams(); null }
+        public override GetLoopBodyFrameForSeparatorState(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator { IgnoreParams(); null }
       }
 
     | Rule
@@ -58,7 +56,7 @@ namespace N2.Internal
         AstHandle    : AstHandle;
         State        : int;
         public override GetNextState(state : int) : int { AstHandle.GetRuleParser().GetNextState(state) }
-        public override GetSpeculativeBodyFrame(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator { IgnoreParams(); null }
+        public override GetLoopBodyFrameForSeparatorState(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator { IgnoreParams(); null }
       }
 
     | ListBody
@@ -67,7 +65,7 @@ namespace N2.Internal
         State        : int;
         Counter      : int;
         public override GetNextState(state : int) : int { AstHandle.GetRuleParser().GetNextState(state) }
-        public override GetSpeculativeBodyFrame(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator { IgnoreParams(); null }
+        public override GetLoopBodyFrameForSeparatorState(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator { IgnoreParams(); null }
       }
 
     | ListSeparator
@@ -76,7 +74,7 @@ namespace N2.Internal
         State        : int;
         Counter      : int;
         public override GetNextState(state : int) : int { AstHandle.GetRuleParser().GetNextState(state) }
-        public override GetSpeculativeBodyFrame(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator
+        public override GetLoopBodyFrameForSeparatorState(textPos : int, parser : Parser) : RecoveryStackFrame.ListSeparator
         {
           mutable bodyId;
           mutable firstState;
@@ -93,6 +91,101 @@ namespace N2.Internal
         }
       }
 
+    public IsPrefixParsed : bool
+    {
+      get
+      {
+        match (this)
+        {
+          | ListBody     (handle, state, _) 
+          | ListSeparator(handle, state, _)
+          | Rule         (handle, state) =>
+            def parser = handle.GetRuleParser();
+            for (mutable i = parser.GetStartState(state); i < state; i = parser.GetNextState(i))
+              unless (parser.IsVoidState(i))
+                return true;
+            false
+            
+          | Extensible        as frame => frame.State != 0
+          | ExtensiblePrefix           => false
+          | ExtensiblePostfix          => false
+        }
+      }
+    }
+    
+    public IsLoopSeparatorStart : bool { get { this is ListSeparator } }
+    
+    public FailState : int
+    {
+      get
+      {
+        match (this)
+        {
+          | ListBody     (_, state, _) 
+          | ListSeparator(_, state, _)
+          | Extensible(_, _, state)
+          | Rule         (_, state) => state
+          | ExtensiblePrefix
+          | ExtensiblePostfix => 0
+        }
+      }
+    }
+    
+    public IsVoidState(state : int) : bool
+    {
+      match (this)
+      {
+        | ListBody     (handle, _, _) 
+        | ListSeparator(handle, _, _)
+        | Rule         (handle, _) => handle.GetRuleParser().IsVoidState(state)
+        | Extensible
+        | ExtensiblePrefix
+        | ExtensiblePostfix        => false
+      }
+    }
+    
+    public abstract GetNextState(state : int) : int;
+    public abstract GetLoopBodyFrameForSeparatorState(textPos : int, parser : Parser)              : RecoveryStackFrame.ListSeparator;
+    public abstract GetFramesForState                (textPos : int, parser : Parser, state : int) : array[RecoveryStackFrame];
+    
+    public IsTokenRule : bool
+    {
+      get
+      {
+        match (this)
+        {
+          | ListBody      
+          | ListSeparator => false
+          | Extensible as frame => frame.RulePraser.IsTokenRule
+          | ExtensiblePrefix
+          | ExtensiblePostfix => false
+          | Rule(handle, _) => 
+            match (handle)
+            {
+              | Simple
+              | Extention => handle.GetRuleParser().IsTokenRule // ???
+              | _ => false
+            }
+        }
+      }
+    }
+
+    public IsSpeculative : bool
+    {
+      get
+      {
+        match (this)
+        {
+          | ExtensiblePrefix(handle)
+          | ExtensiblePostfix(handle)
+          | ListBody     (handle, _, _) 
+          | ListSeparator(handle, _, _)
+          | Rule         (handle, _) => assert2(false); handle.AstPtr < 0
+          | Extensible               => assert3(false)
+        }
+      }
+    }
+    
     //public RuleParser : IRecoveryRuleParser { get { this.AstHandle.GetRuleParser() } }
     //public AstPtr     : int                 { get { this.AstHandle.AstPtr } }
 
