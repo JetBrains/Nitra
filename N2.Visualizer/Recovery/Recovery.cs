@@ -291,7 +291,7 @@ namespace N2.DebugStrategies
       if (newResult.RuleEndPos   >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount > 0  && _bestResult.RecoveredTailCount <= 0) goto good; // если у newResult есть продолжение, а у _bestResult нет
       if (_bestResult.RuleEndPos >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount <= 0 && _bestResult.RecoveredTailCount > 0) return;    // если у _bestResult есть продолжение, а у newResult нет
 
-      if (stack.Parents == _bestResult.Stack.Parents)
+      if (stack.Parents.SetEquals(_bestResult.Stack.Parents))
       {
         if (startState < _bestResult.StartState && newResult.SkipedCount <= _bestResult.SkipedCount) goto good;
         if (startState > _bestResult.StartState && newResult.SkipedCount >  _bestResult.SkipedCount) return;
