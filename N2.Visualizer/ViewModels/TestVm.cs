@@ -38,12 +38,12 @@ namespace N2.Visualizer.ViewModels
         TestState = TestState.Ignored;
     }
 
-    public Parser Run()
+    public Parser Run(RecoveryStrategy recoveryStrategy)
     {
       if (TestSuit.TestState == TestState.Ignored)
         return null;
 
-      var result = TestSuit.Run(Code, Gold);
+      var result = TestSuit.Run(Code, Gold, recoveryStrategy);
       if (result == null)
         return null;
 
