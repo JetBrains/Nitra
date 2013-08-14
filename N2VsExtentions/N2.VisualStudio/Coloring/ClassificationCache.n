@@ -3,6 +3,7 @@ using N2.Internal;
 using N2.Runtime;
 
 using Nemerle;
+using Nemerle.Imperative;
 using Nemerle.Assertions;
 using Nemerle.Collections;
 using Nemerle.Text;
@@ -19,23 +20,103 @@ namespace N2.VisualStudio.Coloring
 {
   internal sealed class ClassificationCache
   {
-    public Update([NotNull] eventArgs : TextSnapshotChangedEventArgs, [NotNull] parseResult : Parser) : void
+    private         _linesToCache   : int;
+    private mutable _cacheWindow    : NToken;
+    private         _spanCacheIndex : array[int * int]; // array of tuple (StartPos, Index in _spanCache)
+    private         _spanCache      : List[SpanInfo];
+
+    public this(linesToCache : int)
+      requires linesToCache > 0
     {
-      
+      _linesToCache   = linesToCache;
+      _cacheWindow    = NToken();
+      _spanCacheIndex = array(10);
+      _spanCache      = List(linesToCache * 4);
+    }
+
+    public Update([NotNull] eventArgs : TextContentChangedEventArgs, [NotNull] parseResult : Parser) : void
+    {
+      _cacheWindow = NToken();
     }
 
     public GetSpans(span : SnapshotSpan, [NotNull] parseResult : Parser) : List[SpanInfo]
     {
-      def spanInfos = List(span.Length / 10);
+      unless (IsCacheContainsSpan(span))
+        FillCache(span, parseResult);
+      GetSpansFromCache(span)
+    }
 
-      def timer = System.Diagnostics.Stopwatch.StartNew();
+    private IsCacheContainsSpan(span : SnapshotSpan) : bool
+    {
+      _cacheWindow.StartPos <= span.Start.Position && span.End.Position <= _cacheWindow.EndPos
+    }
 
-      parseResult.GetSpans(span.Start, span.End, spanInfos);
+    private GetSpansFromCache(span : SnapshotSpan) : List[SpanInfo]
+    {
+      def startPos = span.Start.Position;
+      def endPos   = span.End.Position;
 
-      timer.Stop();
-      //Trace.WriteLineIf(timer.ElapsedMilliseconds > 0, $"ast.GetSpans(spanInfos=$(spanInfos.Count) span.Length=$(span.Length) took: " + timer.Elapsed);
+      def result = List();
+      mutable index = FindSpanCacheIndex(span);
+      while (index < _spanCache.Count && _spanCache[index].Location.EndPos < startPos)
+        ++index;
+      while (index < _spanCache.Count && _spanCache[index].Location.StartPos < endPos)
+      {
+        result.Add(_spanCache[index]);
+        ++index;
+      }
+      result
+    }
 
-      spanInfos
+    private FindSpanCacheIndex(span : SnapshotSpan) : int
+    {
+      mutable index = _spanCacheIndex[0][1];
+      for(mutable i = 1; i < _spanCacheIndex.Length; ++i)
+      {
+        def (startPos, nextIndex) = _spanCacheIndex[i];
+        when (span.Start.Position < startPos)
+          return index;
+        index = nextIndex;
+      }
+      index
+    }
+
+    private FillCache(span : SnapshotSpan, parseResult : Parser) : void
+    {
+      _spanCache.Clear();
+      _cacheWindow = GetCacheWindow(span);
+      parseResult.GetSpans(_cacheWindow.StartPos, _cacheWindow.EndPos, _spanCache);
+      _spanCache.Sort(
+        fun (a : SpanInfo, b : SpanInfo)
+        {
+          def startPos1 = a.Location.StartPos;
+          def startPos2 = b.Location.StartPos;
+          if (startPos1 < startPos2) -1
+          else if (startPos1 > startPos2) +1
+          else
+          {
+            def endPos1 = a.Location.EndPos;
+            def endPos2 = b.Location.EndPos;
+            if (endPos1 < endPos2) -1
+            else if (endPos1 > endPos2) +1
+            else 0
+          }
+        });
+
+      for(mutable i = 0; i < _spanCacheIndex.Length; ++i)
+      {
+        def index = _spanCache.Count * i / _spanCacheIndex.Length;
+        _spanCacheIndex[i] = (_spanCache[index].Location.StartPos, index);
+      }
+    }
+
+    private GetCacheWindow(span : SnapshotSpan) : NToken
+    {
+      def (startLineNumber, _) = span.Start.GetLineAndColumn();
+      def endLineNumber        = Math.Min(startLineNumber + _linesToCache, span.Snapshot.LineCount) - 1;
+      def startLine            = span.Snapshot.GetLineFromLineNumber(startLineNumber);
+      def endLine              = span.Snapshot.GetLineFromLineNumber(endLineNumber);
+      NToken(startLine.Start.Position, endLine.End.Position)
     }
   }
 }
