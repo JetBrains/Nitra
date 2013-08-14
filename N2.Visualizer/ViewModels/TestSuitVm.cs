@@ -15,14 +15,14 @@ namespace N2.Visualizer.ViewModels
   {
     public string                                   Name          { get; private set; }
     public ObservableCollection<GrammarDescriptor>  SynatxModules { get; private set; }
-    public RuleDescriptor                           StartRule     { get; private set; }
+    public StartRuleDescriptor                      StartRule     { get; private set; }
     public ObservableCollection<TestVm>             Tests         { get; private set; }
     public string                                   TestSuitPath  { get; set; }
 
     public string _hint;
     public override string Hint { get { return _hint; } }
 
-    public readonly Recovery Recovery = new Recovery();
+    public readonly Recovery Recovery = new Recovery(null);
 
     readonly string _rootPath;
     ParserHost _parserHost;
@@ -106,9 +106,9 @@ namespace N2.Visualizer.ViewModels
     }
 
 
-    private static RuleDescriptor GetStratRule(XAttribute startRule, GrammarDescriptor m)
+    private static StartRuleDescriptor GetStratRule(XAttribute startRule, GrammarDescriptor m)
     {
-      return startRule == null ? null : m.Rules.First(r => r.Name == startRule.Value);
+      return startRule == null ? null : m.Rules.OfType<StartRuleDescriptor>().First(r => r.Name == startRule.Value);
     }
 
 
@@ -136,26 +136,16 @@ namespace N2.Visualizer.ViewModels
     }
 
     [CanBeNull]
-    public Parser Run([NotNull] string code, [CanBeNull] string gold)
+    public Parser Run([NotNull] string code, [CanBeNull] string gold, RecoveryStrategy recoveryStrategy)
     {
       if (_parserHost == null)
       {
-        _parserHost = new ParserHost(this.Recovery.Strategy);
+        _parserHost = new ParserHost();
         _compositeGrammar = _parserHost.MakeCompositeGrammar(SynatxModules);
       }
       var source = new SourceSnapshot(code);
 
-      if (StartRule == null)
-        return null;
-
-      var simpleRule = StartRule as SimpleRuleDescriptor;
-
-      this.Recovery.Init();
-
-      if (simpleRule != null)
-        return _parserHost.DoParsing(source, _compositeGrammar, simpleRule);
-      else
-        return _parserHost.DoParsing(source, _compositeGrammar, (ExtensibleRuleDescriptor)StartRule);
+      return _parserHost.DoParsing(source, _compositeGrammar, StartRule, recoveryStrategy);
     }
   }
 }
