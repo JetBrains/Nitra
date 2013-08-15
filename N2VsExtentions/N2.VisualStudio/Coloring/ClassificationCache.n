@@ -23,7 +23,7 @@ namespace N2.VisualStudio.Coloring
     private         _linesToCache : int;
     private mutable _cachedSpan   : NToken;
     private         _cacheIndex   : array[int * int]; // array of tuple (StartPos, Index in _spanCache)
-    private         _cache        : List[SpanInfo];
+    private mutable _cache        : List[SpanInfo];
 
     public this(linesToCache : int)
       requires linesToCache > 0
@@ -34,47 +34,95 @@ namespace N2.VisualStudio.Coloring
       _cache        = List(linesToCache * 4);
     }
 
-    public Predict([NotNull] eventArgs : TextContentChangedEventArgs) : void
+    public Predict([NotNull] changes : INormalizedTextChangeCollection) : void
     {
-      _cachedSpan = NToken();
+      def predictedCache = List(_cache.Count);
+      def copySpan(span, delta)
+      {
+        def newStartPos = span.Location.StartPos + delta;
+        def newEndPos   = span.Location.EndPos + delta;
+        SpanInfo(NToken(newStartPos, newEndPos), span.SpanClass)
+      }
+      def loopOverChanges(changeIndex, spanIndex, currentDelta, spanPos) : void
+      {
+        if (changeIndex < changes.Count)
+        {
+          def change = changes[changeIndex];
+          if (change.OldEnd <= spanPos)
+            loopOverChanges(changeIndex + 1, spanIndex, currentDelta + change.Delta, spanPos);
+          else
+            loopOverCache(changeIndex, spanIndex, currentDelta, change);
+        }
+        else
+          loopOverCacheTail(spanIndex, currentDelta);
+      }
+      and loopOverCache(changeIndex, spanIndex, currentDelta, change) : void
+      {
+        when (spanIndex < _cache.Count)
+        {
+          def span = _cache[spanIndex];
+          if (span.Location.EndPos <= change.OldPosition)
+          {
+            predictedCache.Add(copySpan(span, currentDelta));
+            loopOverCache(changeIndex, spanIndex + 1, currentDelta, change);
+          }
+          else if (span.Location.StartPos < change.OldEnd)
+            loopOverCache(changeIndex, spanIndex + 1, currentDelta, change);
+          else
+            loopOverChanges(changeIndex + 1, spanIndex, currentDelta + change.Delta, span.Location.StartPos);
+        }
+      }
+      and loopOverCacheTail(spanIndex, currentDelta)
+      {
+        when (spanIndex < _cache.Count)
+        {
+          predictedCache.Add(copySpan(_cache[spanIndex], currentDelta));
+          loopOverCacheTail(spanIndex + 1, currentDelta);
+        }
+      }
+      when (_cache.Count > 0)
+        loopOverChanges(0, 0, 0, _cache[0].Location.StartPos);
+      _cache = predictedCache;
+      _cachedSpan = if (predictedCache.Count > 0) NToken(predictedCache[0].Location.StartPos, predictedCache[predictedCache.Count - 1].Location.EndPos) else NToken();
     }
 
-    public GetSpans(span : SnapshotSpan, [NotNull] parseResult : Parser) : List[SpanInfo]
-    {
-      unless (IsCacheContainsSpan(span))
-        FillCache(span, parseResult);
-      GetSpansFromCache(span)
-    }
-
-    private IsCacheContainsSpan(span : SnapshotSpan) : bool
-    {
-      _cachedSpan.StartPos <= span.Start.Position && span.End.Position <= _cachedSpan.EndPos
-    }
-
-    private GetSpansFromCache(span : SnapshotSpan) : List[SpanInfo]
+    public GetSpans(span : SnapshotSpan, [NotNull] parseResult : Parser) : array[SpanInfo]
     {
       def startPos = span.Start.Position;
       def endPos   = span.End.Position;
 
-      def result = List();
-      mutable index = FindSpanCacheIndex(span);
-      while (index < _cache.Count && _cache[index].Location.EndPos < startPos)
-        ++index;
-      while (index < _cache.Count && _cache[index].Location.StartPos < endPos)
-      {
-        result.Add(_cache[index]);
-        ++index;
-      }
+      unless (IsCacheContainsSpan(startPos, endPos))
+        FillCache(span, parseResult);
+      def (index, count) = GetSpansFromCache(startPos, endPos);
+      def result = array(count);
+      when (count > 0)
+        _cache.CopyTo(index, result, 0, count);
       result
     }
 
-    private FindSpanCacheIndex(span : SnapshotSpan) : int
+    private IsCacheContainsSpan(startPos : int, endPos : int) : bool
+    {
+      _cachedSpan.StartPos <= startPos && endPos <= _cachedSpan.EndPos
+    }
+
+    private GetSpansFromCache(startPos : int, endPos : int) : int * int
+    {
+      mutable index = FindSpanCacheIndex(startPos);
+      while (index < _cache.Count && _cache[index].Location.EndPos < startPos)
+        ++index;
+      def startIndex = index;
+      while (index < _cache.Count && _cache[index].Location.StartPos < endPos)
+        ++index;
+      (startIndex, index - startIndex)
+    }
+
+    private FindSpanCacheIndex(pos : int) : int
     {
       mutable index = _cacheIndex[0][1];
       for(mutable i = 1; i < _cacheIndex.Length; ++i)
       {
         def (startPos, nextIndex) = _cacheIndex[i];
-        when (span.Start.Position < startPos)
+        when (pos < startPos)
           return index;
         index = nextIndex;
       }
