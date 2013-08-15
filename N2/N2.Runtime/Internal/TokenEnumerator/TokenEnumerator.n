@@ -45,8 +45,6 @@ namespace N2.Internal
     {
       _fieldIndex++;
       def rules = _ruleStructure.Subrules;
-      def state = _parser.ast[_astPtr + ExtensibleRuleParser.AstOfs.State];
-      def invalidState = state >= 0 && _ruleStructure.Subrules[_fieldIndex].State >= state;
       if (_fieldIndex >= rules.Count)
       {
         if (_stack.Count > 0)
@@ -59,18 +57,25 @@ namespace N2.Internal
       }
       else
       {
+        def state = _parser.ast[_astPtr + ExtensibleRuleParser.AstOfs.State];
+        def invalidState = state >= 0 && _ruleStructure.Subrules[_fieldIndex].State >= state;
         def ruleInfo = rules[_fieldIndex];
-        def sizePtr = _astPtr + ruleInfo.Offset;
-        def size     = _parser.GetSkipAndSize2(sizePtr);
         mutable fullSize;
-        mutable skip = 0;
-        
-        if (size >= 0)
-          fullSize = size;
-        else
+        mutable skip;
+        when (!invalidState)
         {
-          fullSize = ~size;
-          skip = fullSize - _parser.GetSkip(sizePtr);
+          def sizePtr = _astPtr + ruleInfo.Offset;
+          def size = _parser.GetSkipAndSize2(sizePtr);
+          if (size >= 0)
+          {
+            fullSize = size;
+            skip = 0;
+          }
+          else
+          {
+            fullSize = ~size;
+            skip = fullSize - _parser.GetSkip(sizePtr);
+          }
         }
 
         match (ruleInfo)
@@ -95,7 +100,7 @@ namespace N2.Internal
               _curTextPos += fullSize;
               fullSize - skip
             }
-            
+
           | SimpleCall        (id, _) =>
             if (invalidState)
             {
@@ -123,8 +128,33 @@ namespace N2.Internal
             }
 
           | ExtensibleCall(prefixId, postfixId, _)    =>
-            if (fullSize - skip == 0 && !invalidState)
+            if (invalidState)
+            {
+              _listEndPos     = -1;
+              mutable prefixAst = _parser.TryGetAst(_curTextPos, prefixId);
+              if (prefixAst > 0)
+              {
+                def astPtr      = _parser.TryGetPrefix(ref _curTextPos, ref prefixAst);
+                if (astPtr > 0)
+                {
+                  _stack.Push(ParseFrame(_ruleStructure, _astPtr, int.MaxValue - 1, _curTextPos, _listEndPos, _listSep));
+                  _astPtr         = astPtr;
+                  _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, astPtr);
+                  _fieldIndex     = -1;
+                  _listEndPos     = -1;
+                  NextTokenSize()
+                }
+                else
+                  -1;
+              }
+              else
+                -1;
+            }
+            else if (fullSize - skip == 0)
+            {
               _curTextPos += skip;
+              NextTokenSize()
+            }
             else if (_listEndPos == -1)
             {
               _listEndPos     = _curTextPos + fullSize;
@@ -138,6 +168,8 @@ namespace N2.Internal
               _astPtr         = astPtr;
               _ruleStructure  = rule;
               _fieldIndex     = -1;
+              _listEndPos     = -1;
+              NextTokenSize()
             }
             else if (_curTextPos < _listEndPos)
             {
@@ -150,17 +182,21 @@ namespace N2.Internal
               _astPtr         = bestResult;
               _ruleStructure  = rule;
               _fieldIndex     = -1;
+              _listEndPos     = -1;
+              NextTokenSize()
             }
             else
             {
               assert3(_curTextPos == _listEndPos);
-              _fieldIndex = int.MaxValue - 1;
+              NextTokenSize()
             }
 
-            NextTokenSize()
-
           | Option            (rule) =>
-            if (fullSize - skip == 0)
+            if (invalidState)
+            {
+              assert3(false);
+            }
+            else if (fullSize - skip == 0)
             {
               _curTextPos += skip;
               NextTokenSize()
@@ -177,7 +213,11 @@ namespace N2.Internal
             }
 
           | List              (rule) =>
-            if (fullSize - skip == 0)
+            if (invalidState)
+            {
+              assert3(false);
+            }
+            else if (fullSize - skip == 0)
               _curTextPos += skip;
             else if (_listEndPos == -1)
             {
@@ -188,6 +228,7 @@ namespace N2.Internal
               _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex - 1, _curTextPos + astSize, _listEndPos, _listSep));
               _astPtr         = astPtr;
               _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+              _listEndPos     = -1;
               _fieldIndex     = -1;
             }
             else if (_curTextPos < _listEndPos)
@@ -197,49 +238,53 @@ namespace N2.Internal
               _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex - 1, _curTextPos + astSize, _listEndPos, _listSep));
               _astPtr         = astPtr;
               _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+              _listEndPos     = -1;
               _fieldIndex     = -1;
             }
             else
             {
               assert3(_curTextPos == _listEndPos);
-              _fieldIndex = int.MaxValue - 1;
             }
 
             NextTokenSize()
 
           | ListWithSeparator (rule, separator) =>
-            def curRule = if (_listSep) separator else rule;
-            
-            if (fullSize - skip == 0)
+            if (invalidState)
+            {
+              assert3(false);
+            }
+            else if (fullSize - skip == 0)
               _curTextPos += skip;
             else if (_listEndPos == -1)
             {
               _listEndPos     = _curTextPos + fullSize;
               _curTextPos    += skip;
-              def astPtr      = _parser.GetAst(_curTextPos, curRule.Id);
-              def astSize     = curRule.GetSize(astPtr, _parser);
-              _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex - 1, _curTextPos + astSize, _listEndPos, false));
+              def astPtr      = _parser.GetAst(_curTextPos, rule.Id);
+              def astSize     = rule.GetSize(astPtr, _parser);
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex - 1, _curTextPos + astSize, _listEndPos, true));
               _astPtr         = astPtr;
               _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+              _listEndPos     = -1;
               _fieldIndex     = -1;
             }
             else if (_curTextPos < _listEndPos)
             {
+              def curRule = if (_listSep) separator else rule;
               def astPtr      = _parser.GetAst(_curTextPos, curRule.Id);
               def astSize     = curRule.GetSize(astPtr, _parser);
               _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex - 1, _curTextPos + astSize, _listEndPos, !_listSep));
               _astPtr         = astPtr;
               _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+              _listEndPos     = -1;
               _fieldIndex     = -1;
             }
             else
             {
               assert3(_curTextPos == _listEndPos);
-              _fieldIndex = int.MaxValue - 1;
             }
-          
+
             NextTokenSize()
-              
+
           | Predicate                => assert3(false); //NextTokenSize()
           | Marker                   => assert3(false); //NextTokenSize()
         }
