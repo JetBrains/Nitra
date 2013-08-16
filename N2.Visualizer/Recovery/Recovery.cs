@@ -452,7 +452,7 @@ namespace N2.DebugStrategies
     protected virtual int TryParse(Parser parser, RecoveryStackFrame recoveryStack, int curTextPos, int state, out List<ParsedStateInfo> parsedStates)
     {
       parsedStates = new List<ParsedStateInfo>();
-      return recoveryStack.TryParse(state, curTextPos, parsedStates, parser);
+      return recoveryStack.TryParse(state, curTextPos, false, parsedStates, parser);
     }
 
     private void FixAst(Parser parser)

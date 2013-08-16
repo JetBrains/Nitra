@@ -25,69 +25,49 @@ namespace N2.Compiler
         {
           def getContinueStateCode(field : RuleStructureField) : PExpr
           {
-            match (field)
+            match (field.Owner)
             {
-              //| RuleStructureField(Owner=RuleStructure(Owner=RuleStructureField.List as lst)) when lst.IsSkipAnyPattern // если это Any из SkipAnyPattern
-              | List as lst when lst.IsSkipAnyPattern => <[ assert3(false); ]>
-              | List =>
-                <[
-                  $(ListStartPos(field)) = frame.TextPos;
-                  $(ListEndPos(field))   = $CurTextPos;
-                  $(GotoParseLabel(field));
-                ]>
-
-              | ListWithSeparator as field =>
-                <[
-                  $(ListStartPos(field)) = frame.TextPos;
-                  assert3(false);
-                  /*match (frame.Info)
-                  {
-                    | LoopBody      =>
-                      $(ListEndPos(field)) = $CurTextPos;
-                      $(GotoParseLabel(field.Separator.NotMarkerFields[0]))
-
-                    | LoopSeparator =>
-                      $(ListEndPos(field)) = $(if (field.HangingSeparator) CurTextPos else <[ frame.ListEndPos ]>);
-                      $(GotoParseLabel(field.Rule.NotMarkerFields[0]))
-
-                    | x             => assert(false, $"Invalid frame info value '$x'")
-                  }*/
-                ]>
-
-              | _ =>
-                match(field.NextSibling)
-                {
-                  | null  => _endLabel.Goto() // продолжения нет
-                  | field => GotoParseLabel(field)
-                }
+              | List =>//TODO: Fix counter invariants
+                <[ $(GotoParseLabel((field.Owner.Owner :> RuleStructureField.List).Rule.NotMarkerFields[0])) ]>;
+              | ListWithSeparatorRule =>
+                <[ $(GotoParseLabel((field.Owner.Owner :> RuleStructureField.ListWithSeparator).Separator.NotMarkerFields[0])) ]>;
+              | ListWithSeparatorSeparator =>
+                <[ $(GotoParseLabel((field.Owner.Owner :> RuleStructureField.ListWithSeparator).Rule.NotMarkerFields[0])) ]>;
+              | _ => <[ $(_endLabel.Goto()) ]>;
             }
           }
           def sourceStateComment = field.ToString();
-          if (field.IsPredicate)
-            continueCases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot continue parse from predicate state: '$sourceStateComment'.")) ]>);
-          else
+          match (field)
           {
-            def code = getContinueStateCode(field);
-            continueCases.Add(<[ case: | $(field.State) => _ = $sourceStateComment; startLevel = $(field.Level); $code; ]>);
+            | _ when field.IsPredicate =>
+              continueCases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot continue parse from predicate state: '$sourceStateComment'.")) ]>);
+            | RuleStructureField(Owner=RuleStructure(Owner=RuleStructureField.List as lst)) when lst.IsSkipAnyPattern =>
+              continueCases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot parse from optimized loop state: '$sourceStateComment'.")) ]>);
+            | _ =>
+              def code = getContinueStateCode(field);
+              continueCases.Add(<[ case: | $(field.State) => _ = $sourceStateComment; startLevel = $(field.Level); $code; ]>);
           }
         }
         continueCases.Add(<[ case: | x => assert(false, $"Unknown continue parse state '$x'.") ]>);
-        <[ match (frame.FailState) { ..$continueCases } ]>
+        <[ assert(continueList); match (frame.FailState) { ..$continueCases } ]>
       }
 
       def makeStartStateSelector() : PExpr
       {
         def startCases = SCG.List();
-        startCases.Add(<[ case: | -2 => $(makeContinueStateSelector()) ]>);
+        startCases.Add(<[ case: | -1 => $(makeContinueStateSelector()) ]>);
         foreach (field in ruleStructure.AllNonMarkerFields)
         {
           def comment = field.ToString();
-          if (field.IsPredicate)
-            startCases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot parse from predicate state: '$comment'.")) ]>);
-          else if (field is RuleStructureField(Owner=RuleStructure(Owner=RuleStructureField.List as lst)) when lst.IsSkipAnyPattern)            
-            startCases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot parse from predicate state: '$comment'.")) ]>);
-          else
-            startCases.Add(<[ case: | $(field.State) => _ = $comment; startLevel = $(field.Level); $(GotoParseLabel(field)) ]>);
+          match (field)
+          {
+            | _ when field.IsPredicate =>
+              startCases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot parse from predicate state: '$comment'.")) ]>);
+            | RuleStructureField(Owner=RuleStructure(Owner=RuleStructureField.List as lst)) when lst.IsSkipAnyPattern =>
+              startCases.Add(<[ case: | $(field.State) => assert(false, $($"Cannot parse from optimized loop state: '$comment'.")) ]>);
+            | _ =>
+              startCases.Add(<[ case: | $(field.State) => _ = $comment; startLevel = $(field.Level); $(GotoParseLabel(field)) ]>);
+          }
         }
         startCases.Add(<[ case: | x => assert(false, $"Unknown parse state '$x'.") ]>);
         <[ match (startState) { ..$startCases } ]>
