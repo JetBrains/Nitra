@@ -6,6 +6,7 @@ using Nemerle;
 using Nemerle.Imperative;
 using Nemerle.Assertions;
 using Nemerle.Collections;
+using Nemerle.Diff;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -23,7 +24,7 @@ namespace N2.VisualStudio.Coloring
     private         _linesToCache : int;
     private mutable _cachedSpan   : NToken;
     private         _cacheIndex   : array[int * int]; // array of tuple (StartPos, Index in _spanCache)
-    private mutable _cache        : List[SpanInfo];
+    private mutable _cache        : array[SpanInfo];
 
     public this(linesToCache : int)
       requires linesToCache > 0
@@ -31,12 +32,12 @@ namespace N2.VisualStudio.Coloring
       _linesToCache = linesToCache;
       _cachedSpan   = NToken();
       _cacheIndex   = array(10);
-      _cache        = List(linesToCache * 4);
+      _cache        = array(0);
     }
 
     public Predict([NotNull] changes : INormalizedTextChangeCollection) : void
     {
-      def predictedCache = List(_cache.Count);
+      def predictedCache = List(_cache.Length);
       def copySpan(span, delta)
       {
         def newStartPos = span.Location.StartPos + delta;
@@ -58,7 +59,7 @@ namespace N2.VisualStudio.Coloring
       }
       and loopOverCache(changeIndex, spanIndex, currentDelta, change) : void
       {
-        when (spanIndex < _cache.Count)
+        when (spanIndex < _cache.Length)
         {
           def span = _cache[spanIndex];
           if (span.Location.EndPos <= change.OldPosition)
@@ -74,16 +75,55 @@ namespace N2.VisualStudio.Coloring
       }
       and loopOverCacheTail(spanIndex, currentDelta)
       {
-        when (spanIndex < _cache.Count)
+        when (spanIndex < _cache.Length)
         {
           predictedCache.Add(copySpan(_cache[spanIndex], currentDelta));
           loopOverCacheTail(spanIndex + 1, currentDelta);
         }
       }
-      when (_cache.Count > 0)
+      when (_cache.Length > 0)
         loopOverChanges(0, 0, 0, _cache[0].Location.StartPos);
-      _cache = predictedCache;
-      _cachedSpan = if (predictedCache.Count > 0) NToken(predictedCache[0].Location.StartPos, predictedCache[predictedCache.Count - 1].Location.EndPos) else NToken();
+      _cache = predictedCache.ToArray();
+
+      def loopStart(startPos, endPos, index, currentDelta) : int * int
+      {
+        if (index < changes.Count)
+        {
+          def change = changes[index];
+          if (change.OldEnd <= startPos)
+            loopStart(startPos, endPos, index + 1, currentDelta + change.Delta)
+          else if (change.OldPosition < startPos && startPos < change.OldEnd)
+            if (change.Delta < 0)
+              (change.NewPosition, loopEnd(endPos, index, currentDelta))
+            else
+              (startPos + currentDelta, loopEnd(endPos, index, currentDelta))
+          else
+            (startPos + currentDelta, loopEnd(endPos, index, currentDelta))
+        }
+        else
+          (startPos + currentDelta, loopEnd(endPos, index, currentDelta))
+      }
+      and loopEnd(endPos, index, currentDelta) : int
+      {
+        if (index < changes.Count)
+        {
+          def change = changes[index];
+          if (change.OldEnd <= endPos)
+            loopEnd(endPos, index + 1, currentDelta + change.Delta)
+          else if (change.OldPosition < endPos && endPos < change.OldEnd)
+            if (change.Delta < 0)
+              change.NewPosition
+            else
+              endPos + currentDelta
+          else
+            endPos + currentDelta
+        }
+        else
+          endPos + currentDelta
+      }
+      _cachedSpan = NToken(loopStart(_cachedSpan.StartPos, _cachedSpan.EndPos, 0, 0));
+
+      FillCacheIndex();
     }
 
     public GetSpans(span : SnapshotSpan, [NotNull] parseResult : Parser) : array[SpanInfo]
@@ -96,7 +136,7 @@ namespace N2.VisualStudio.Coloring
       def (index, count) = GetSpansFromCache(startPos, endPos);
       def result = array(count);
       when (count > 0)
-        _cache.CopyTo(index, result, 0, count);
+        Array.Copy(_cache, index, result, 0, count);
       result
     }
 
@@ -108,10 +148,10 @@ namespace N2.VisualStudio.Coloring
     private GetSpansFromCache(startPos : int, endPos : int) : int * int
     {
       mutable index = FindSpanCacheIndex(startPos);
-      while (index < _cache.Count && _cache[index].Location.EndPos < startPos)
+      while (index < _cache.Length && _cache[index].Location.EndPos < startPos)
         ++index;
       def startIndex = index;
-      while (index < _cache.Count && _cache[index].Location.StartPos < endPos)
+      while (index < _cache.Length && _cache[index].Location.StartPos < endPos)
         ++index;
       (startIndex, index - startIndex)
     }
@@ -131,10 +171,10 @@ namespace N2.VisualStudio.Coloring
 
     private FillCache(span : SnapshotSpan, parseResult : Parser) : void
     {
-      _cache.Clear();
-      _cachedSpan = GetCacheWindow(span);
-      parseResult.GetSpans(_cachedSpan.StartPos, _cachedSpan.EndPos, _cache);
-      _cache.Sort(
+      _cachedSpan = GetCachedSpan(span);
+      def newCache = List(_cache.Length);
+      parseResult.GetSpans(_cachedSpan.StartPos, _cachedSpan.EndPos, newCache);
+      newCache.Sort(
         fun (a : SpanInfo, b : SpanInfo)
         {
           def startPos1 = a.Location.StartPos;
@@ -150,6 +190,7 @@ namespace N2.VisualStudio.Coloring
             else 0
           }
         });
+      _cache = newCache.ToArray();
       FillCacheIndex();
     }
 
@@ -157,12 +198,12 @@ namespace N2.VisualStudio.Coloring
     {
       for(mutable i = 0; i < _cacheIndex.Length; ++i)
       {
-        def index = _cache.Count * i / _cacheIndex.Length;
+        def index = _cache.Length * i / _cacheIndex.Length;
         _cacheIndex[i] = (_cache[index].Location.StartPos, index);
       }
     }
 
-    private GetCacheWindow(span : SnapshotSpan) : NToken
+    private GetCachedSpan(span : SnapshotSpan) : NToken
     {
       def (startLineNumber, _) = span.Start.GetLineAndColumn();
       def endLineNumber        = Math.Min(startLineNumber + _linesToCache, span.Snapshot.LineCount) - 1;
