@@ -54,14 +54,14 @@ namespace N2.DebugStrategies
         foreach (var stack in stacks)
           ProcessTopFrames(startTextPos, parser, stack, curTextPos, text, 0);
 
-        if (_bestResult != null)
-          break;
+        //if (_bestResult != null)
+        //  break;
 
         for (var index = stacks.Count - 1; index >= 0; index--)
           ProcessOtherFrames(startTextPos, parser, stacks[index], curTextPos, text, 0);
 
-        if (_bestResult != null)
-          break;
+        //if (_bestResult != null)
+        //  break;
 
         foreach (var stack in stacks)
         {
