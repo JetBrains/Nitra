@@ -389,11 +389,13 @@ namespace N2.DebugStrategies
           if (pos > bestPos)
           {
             results.Clear();
-            results.Add(Tuple.Create(pos, stackFrame, parsedStates));
             bestPos = pos;
           }
-          else if (pos == bestPos)
+          if (pos >= bestPos)
+          {
             results.Add(Tuple.Create(pos, stackFrame, parsedStates));
+            break;
+          }
         }
         while (state >= 0);
       }
