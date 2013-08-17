@@ -54,20 +54,20 @@ namespace N2.DebugStrategies
         foreach (var stack in stacks)
           ProcessTopFrames(startTextPos, parser, stack, curTextPos, text, 0);
 
-        if (_bestResult != null)
-          break;
+        //if (_bestResult != null)
+        //  break;
 
         for (var index = stacks.Count - 1; index >= 0; index--)
           ProcessOtherFrames(startTextPos, parser, stacks[index], curTextPos, text, 0);
 
-        if (_bestResult != null)
-          break;
+        //if (_bestResult != null)
+        //  break;
 
         foreach (var stack in stacks)
         {
           ProcessStackFrameSpeculative(startTextPos, parser, stack, curTextPos, text, 0);
-          if (_bestResult != null)
-            break;
+          //if (_bestResult != null)
+          //  break;
         }
 
         curTextPos++;
@@ -94,7 +94,7 @@ namespace N2.DebugStrategies
       {
         if (frame1 == frame2)
         {
-          Debug.Assert(child1.FailState - child2.FailState != 0);
+          //Debug.Assert(child1.FailState - child2.FailState != 0);
           return child1.FailState - child2.FailState;
         }
 
@@ -141,8 +141,8 @@ namespace N2.DebugStrategies
       for (var state = stackFrame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? stackFrame.GetNextState(stackFrame.FailState) :
       {
         nextState = stackFrame.GetNextState(state);
-        if (_bestResult != null)
-          return;
+        //if (_bestResult != null)
+        //  return;
 
         if (!stackFrame.IsTokenRule) //&& stackFrame.FailState == state
           TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel, state);
@@ -173,7 +173,7 @@ namespace N2.DebugStrategies
           || parsedStates.Count > 0 && HasParsedStaets(frame, parsedStates))
         {
           AddResult(curTextPos, lastPos, lastPos, state, frame, text, startTextPos);
-          break;
+          return;
         }
 
         var isParsed = pos > curTextPos;
@@ -206,6 +206,9 @@ namespace N2.DebugStrategies
           }
         }
       }
+
+      if (subruleLevel > 0)
+        ProcessStackFrameSpeculative(startTextPos, parser, frame, curTextPos, text, subruleLevel);
     }
 
     private void ProcessOtherFrames(int startTextPos, Parser parser, RecoveryStackFrame frame, int curTextPos, string text, int subruleLevel)
@@ -268,6 +271,9 @@ namespace N2.DebugStrategies
 
       foreach (var subFrame in frames)
       {
+        if (subFrame == null)
+          continue;
+
         if (subFrame.IsTokenRule)
           continue;
 
@@ -297,9 +303,9 @@ namespace N2.DebugStrategies
 
       if (stack.IsSpeculative && _bestResult.Stack.IsSpeculative) // спекулятивный фрейм стека
       {
-        Debug.Assert(false, "Этого не должно произойки, так как спекулятивный парсинг должен происходить в методе ProcessStackFrameSpeculative() который вызывается только если ProcessStackFrame() не нашел результат.");
+        //Debug.Assert(false, "Этого не должно произойки, так как спекулятивный парсинг должен происходить в методе ProcessStackFrameSpeculative() который вызывается только если ProcessStackFrame() не нашел результат.");
 // ReSharper disable once HeuristicUnreachableCode
-        return;
+        //return;
       }
 
       if (newResult.RuleEndPos   >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount > 0  && _bestResult.RecoveredTailCount <= 0) goto good; // если у newResult есть продолжение, а у _bestResult нет
