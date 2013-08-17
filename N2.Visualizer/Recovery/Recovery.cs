@@ -377,14 +377,14 @@ namespace N2.DebugStrategies
 
       var parsedStates = new List<ParsedStateInfo>(); ;
       var results = new List<Tuple<int, RecoveryStackFrame, List<ParsedStateInfo>>>();
-      var bestPos = -1;
+      var bestPos = curTextPos;
       foreach (var stackFrame in parents)
       {
         var state = stackFrame.FailState;
         do
         {
           state = stackFrame.GetNextState(state);
-          var pos = recoveryStack.TryParse(state, curTextPos, true, parsedStates, parser);
+          var pos = stackFrame.TryParse(state, curTextPos, true, parsedStates, parser);
 
           if (pos > bestPos)
           {
