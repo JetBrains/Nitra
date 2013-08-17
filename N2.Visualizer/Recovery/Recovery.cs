@@ -57,7 +57,7 @@ namespace N2.DebugStrategies
         if (_bestResult != null)
           break;
 
-        for (var index = stacks.Count - 1; index >= 0; index++)
+        for (var index = stacks.Count - 1; index >= 0; index--)
           ProcessOtherFrames(startTextPos, parser, stacks[index], curTextPos, text, 0);
 
         if (_bestResult != null)
