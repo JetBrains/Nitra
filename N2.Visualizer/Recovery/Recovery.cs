@@ -57,6 +57,8 @@ namespace N2.DebugStrategies
         if (_bestResult != null)
           break;
 
+        stacks.Reverse();
+
         foreach (var stack in stacks)
           ProcessOtherFrames(startTextPos, parser, stack, curTextPos, text, 0);
 
@@ -84,6 +86,42 @@ namespace N2.DebugStrategies
 
       FixAst(parser);
       Reset();
+    }
+
+    private static int CompareStack(RecoveryStackFrame frame1, RecoveryStackFrame frame2)
+    {
+      var child1 = frame1;
+      var child2 = frame2;
+      for(;;)
+      {
+        if (frame1 == frame2)
+        {
+          Debug.Assert(child1.FailState - child2.FailState != 0);
+          return child1.FailState - child2.FailState;
+        }
+
+        if (frame1.Parents.Count != 1)
+          return 0;
+        if (frame2.Parents.Count != 1)
+          return 0;
+
+        if (frame1.Depth == frame2.Depth)
+        {
+          child1 = frame1;
+          child2 = frame2;
+          frame1 = frame1.Parents.First();
+          frame2 = frame2.Parents.First();
+          continue;
+        }
+        if (frame1.Depth < frame2.Depth)
+        {
+          child1 = frame1;
+          frame1 = frame1.Parents.First();
+          continue;
+        }
+        child2 = frame2;
+        frame2 = frame2.Parents.First();
+      }
     }
 
     private void ProcessStackFrame(int startTextPos, Parser parser, RecoveryStackFrame recoveryStack, int curTextPos, string text, int subruleLevel)
@@ -293,10 +331,18 @@ namespace N2.DebugStrategies
 
       //// Если при восстановлении ничего не было пропарсено, то побеждать должен фрейм с большим FialState, так как
       //// иначе будут возникать фантомные значени. Если же что-то спарсилось, то побеждать должен фрейм с меньшим FialState.
-      //var winLastState = _bestResult.RecoveredCount == 0 && newResult.RecoveredCount == 0;
-      //var result = CompareStack(stack, _bestResult.Stack, winLastState);
-      //if (result > 0)  goto good;
-      //if (result < 0) return;
+      var winLastState = _bestResult.RecoveredHeadCount == 0 && newResult.RecoveredHeadCount == 0;
+      var newGrater = CompareStack(stack, _bestResult.Stack);
+      if (winLastState)
+      {
+        if (newGrater > 0) goto good;
+        if (newGrater < 0) return;
+      }
+      else
+      {
+        if (newGrater > 0) return;
+        if (newGrater < 0) goto good;
+      }
 
       if (endPos > _bestResult.EndPos) goto good;
       if (endPos < _bestResult.EndPos) return;
@@ -310,58 +356,6 @@ namespace N2.DebugStrategies
     good2:
       _bestResults.Add(new RecoveryResult(startPos, ruleEndPos, endPos, startState, stackLength, stack, text, failPos));
     }
-
-    ///// <param name="stack1">Стек для сразвнения</param>
-    ///// <param name="stack2">Стек для сразвнения</param>
-    ///// <param name="winLastState">Если true - будет побеждать фрейм с большим FailState и наоборот.</param>
-    ///// <returns>0 - стеки равны или несравнимы, 1 - первый стек лучше второго, -1 второй стек лучше.</returns>
-    //public static int CompareStack(RecoveryStackFrame stack1, RecoveryStackFrame stack2, bool winLastState)
-    //{
-    //  var len1 = stack1.Length;
-    //  var len2 = stack2.Length;
-    //  var len  = Math.Min(len1, len2);
-
-    //  if (len1 != len2) // отбрасываем "лишние" элементы самого длинного цикла.
-    //    if (len1 == len)
-    //      stack2 = SkipN(stack2, len2 - len1);
-    //    else
-    //      stack1 = SkipN(stack1, len1 - len2);
-
-    //  var result = CompareStackImpl(stack1, stack2, winLastState);
-
-    //  if (result == 0)
-    //    return len2 - len1; // если корни стеков равны, то лучше более короткий стек, так как более длинный является спекулятивным (более корткие постеки выкидываются вначале обработки)
-
-    //  return result;
-    //}
-
-    //private static int CompareStackImpl(RecoveryStackFrame stack1, RecoveryStackFrame stack2, bool winLastState)
-    //{
-    //  if (stack1.tl.IsEmpty)
-    //    return 0;
-
-    //  var result = CompareStackImpl((RecoveryStack)stack1.tl, (RecoveryStack)stack2.tl, winLastState);
-
-    //  if (result != 0)
-    //    return result;
-
-    //  var x = stack1.hd;
-    //  var y = stack2.hd;
-
-    //  if (!object.ReferenceEquals(x.RuleParser, y.RuleParser))
-    //    return 0; // стеки несравнимы
-
-    //  return winLastState
-    //    ? x.FailState - y.FailState  // лучше фрэйм с большим значением FailState
-    //    : y.FailState - x.FailState; // лучше фрэйм с меньшим значением FailState
-    //}
-
-    //private static RecoveryStack SkipN(RecoveryStack stack, int n)
-    //{
-    //  for (var i = 0; i < n; i++)
-    //    stack = (RecoveryStack)stack.tl;
-    //  return stack;
-    //}
 
     protected virtual int ContinueParse(int startTextPos, RecoveryStackFrame recoveryStack, Parser parser, bool trySkipStates)
     {
@@ -409,7 +403,7 @@ namespace N2.DebugStrategies
       }
 
       if (bestPos > curTextPos)
-        return curTextPos;
+        return bestPos;
 
       return Math.Max(parser.MaxFailPos, curTextPos);
     }
