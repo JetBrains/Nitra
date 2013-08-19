@@ -35,7 +35,7 @@ namespace N2.VisualStudio.Coloring
       _cache        = array(0);
     }
 
-    public Predict([NotNull] changes : INormalizedTextChangeCollection) : void
+    public Predict([NotNull] snapshot : ITextSnapshot, [NotNull] changes : INormalizedTextChangeCollection) : void
     {
       def predictedCache = List(_cache.Length);
       def copySpan(span, delta)
@@ -85,51 +85,53 @@ namespace N2.VisualStudio.Coloring
         loopOverChanges(0, 0, 0, _cache[0].Location.StartPos);
       _cache = predictedCache.ToArray();
 
-      def loopStart(startPos, endPos, index, currentDelta) : int * int
+      def loopCacheStart(startPos, index, currentDelta) : int
       {
         if (index < changes.Count)
         {
           def change = changes[index];
           if (change.OldEnd <= startPos)
-            loopStart(startPos, endPos, index + 1, currentDelta + change.Delta)
+            loopCacheStart(startPos, index + 1, currentDelta + change.Delta)
           else if (change.OldPosition < startPos && startPos < change.OldEnd)
-            if (change.Delta < 0)
-              (change.NewPosition, loopEnd(endPos, index, currentDelta))
-            else
-              (startPos + currentDelta, loopEnd(endPos, index, currentDelta))
-          else
-            (startPos + currentDelta, loopEnd(endPos, index, currentDelta))
-        }
-        else
-          (startPos + currentDelta, loopEnd(endPos, index, currentDelta))
-      }
-      and loopEnd(endPos, index, currentDelta) : int
-      {
-        if (index < changes.Count)
-        {
-          def change = changes[index];
-          if (change.OldEnd <= endPos)
-            loopEnd(endPos, index + 1, currentDelta + change.Delta)
-          else if (change.OldPosition < endPos && endPos < change.OldEnd)
             if (change.Delta < 0)
               change.NewPosition
             else
-              endPos + currentDelta
+              startPos + currentDelta
           else
-            endPos + currentDelta
+            startPos + currentDelta
         }
         else
-          endPos + currentDelta
+          startPos + currentDelta
       }
-      _cacheBounds = NToken(loopStart(_cacheBounds.StartPos, _cacheBounds.EndPos, 0, 0));
+      _cacheBounds = GetCacheBounds(snapshot, loopCacheStart(_cacheBounds.StartPos, 0, 0));
 
       UpdateCacheIndex();
     }
 
-    public Update([NotNull] parseResult : Parser) : array[NToken]
+    internal variant UpdateResult
+    {
+      | Nothing
+      | All
+      | Ranges { ranges : array[NToken] }
+    }
+
+    public Update([NotNull] parseResult : Parser) : UpdateResult
     {
       def newCache = LoadCache(parseResult);
       def diffItems = _cache.Diff(newCache, (a, b) => a.Location == b.Location && a.SpanClass == b.SpanClass : object);
+
+      // no changes
+      when (diffItems.Length == 0)
+        return UpdateResult.Nothing();
+
+      // changes on the edge of cache
+      when (diffItems[0].Index == 0 || diffItems[diffItems.Length - 1].Index == _cache.Length - 1)
+      {
+        _cacheBounds = NToken();
+        return UpdateResult.All()
+      }
+
+      // other changes
       def spansToUpdate = List();
       foreach (diffItem in diffItems)
       {
@@ -157,7 +159,7 @@ namespace N2.VisualStudio.Coloring
         else
         {
           initBounds(_cache[diffItem.Index]);
-          for(mutable i = 0; i <= diffItem.Deleted; ++i)
+          for(mutable i = 0; i < diffItem.Deleted; ++i)
             updateBounds(_cache[diffItem.Index + i]);
           foreach (x in diffItem.Inserted)
             updateBounds(x);
@@ -166,7 +168,7 @@ namespace N2.VisualStudio.Coloring
       }
       _cache = newCache;
       UpdateCacheIndex();
-      spansToUpdate.ToArray()
+      UpdateResult.Ranges(spansToUpdate.ToArray())
     }
 
     public GetSpans(span : SnapshotSpan, [NotNull] parseResult : Parser) : array[SpanInfo]
@@ -176,7 +178,7 @@ namespace N2.VisualStudio.Coloring
 
       unless (IsCacheContainsSpan(startPos, endPos))
       {
-        _cacheBounds = GetCacheBounds(span);
+        _cacheBounds = GetCacheBounds(span.Snapshot, span.Start);
         _cache = LoadCache(parseResult);
         UpdateCacheIndex();
       }
@@ -249,12 +251,12 @@ namespace N2.VisualStudio.Coloring
       }
     }
 
-    private GetCacheBounds(span : SnapshotSpan) : NToken
+    private GetCacheBounds(snapshot : ITextSnapshot, position : int) : NToken
     {
-      def (startLineNumber, _) = span.Start.GetLineAndColumn();
-      def endLineNumber        = Math.Min(startLineNumber + _linesToCache, span.Snapshot.LineCount) - 1;
-      def startLine            = span.Snapshot.GetLineFromLineNumber(startLineNumber);
-      def endLine              = span.Snapshot.GetLineFromLineNumber(endLineNumber);
+      def (startLineNumber, _) = snapshot.GetLineAndColumn(position);
+      def endLineNumber        = Math.Min(startLineNumber + _linesToCache, snapshot.LineCount) - 1;
+      def startLine            = snapshot.GetLineFromLineNumber(startLineNumber);
+      def endLine              = snapshot.GetLineFromLineNumber(endLineNumber);
       NToken(startLine.Start.Position, endLine.End.Position)
     }
   }
