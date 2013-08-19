@@ -46,23 +46,26 @@ namespace N2.DebugStrategies
       var curTextPos = startTextPos;
       var text = parser.Text;
       Debug.Assert(parser.RecoveryStacks.Count > 0);
-      var stacks = parser.RecoveryStacks;
-      var lastStack = stacks.Last();
+      var frames = parser.RecoveryStacks;
+      var lastStack = frames.Last();
 
-      while (curTextPos < text.Length && _bestResult == null)// && curTextPos - curTextPos < 400
+      while (curTextPos < text.Length && _candidats.Count == 0)// && curTextPos - curTextPos < 400
       {
-        foreach (var stack in stacks)
-          ProcessTopFrames(startTextPos, parser, stack, curTextPos, text, 0);
+        var newFrames = new List<RecoveryStackFrame>();
+        foreach (var frame in frames)
+          ProcessFindSpeculativeFrames(newFrames, startTextPos, parser, frame, curTextPos, text, 0);
+
+        newFrames.AddRange(frames);
+
+        var allFrames = Parser.PrepareRecoveryStacks(newFrames);
+
+        foreach (var frame in newFrames)
+          ProcessTopFrames(startTextPos, parser, frame, curTextPos, text, 0);
 
         Debug.Assert(true);
-        //if (_bestResult != null)
-        //  break;
 
-        for (var index = stacks.Count - 1; index >= 0; index--)
-          ProcessOtherFrames(startTextPos, parser, stacks[index], curTextPos, text, 0);
+        // TODO: Фильтруем результаты
 
-        //if (_bestResult != null)
-        //  break;
 
         curTextPos++;
         _visitedFrame.Clear();
@@ -74,10 +77,15 @@ namespace N2.DebugStrategies
         AddResult(text.Length, text.Length, text.Length, -1, lastStack, text, startTextPos);
 
       if (ReportResult != null)
-        ReportResult(_bestResult, _bestResults, _candidats, stacks);
+        ReportResult(_bestResult, _bestResults, _candidats, frames);
 
       FixAst(parser);
       Reset();
+    }
+
+    private void ProcessFindSpeculativeFrames(List<RecoveryStackFrame> newFrames, int startTextPos, Parser parser, RecoveryStackFrame frame, int curTextPos, string text, int i)
+    {
+      ProcessStackFrameSpeculative(newFrames, startTextPos, parser, frame, curTextPos, text, 0);
     }
 
     private static int CompareStack(RecoveryStackFrame frame1, RecoveryStackFrame frame2)
@@ -92,25 +100,33 @@ namespace N2.DebugStrategies
           return child1.FailState - child2.FailState;
         }
 
-        if (frame1.Parents.Count != 1)
-          return 0;
-        if (frame2.Parents.Count != 1)
-          return 0;
-
         if (frame1.Depth == frame2.Depth)
         {
+          if (frame1.Parents.Count != 1)
+            return 0;
+          if (frame2.Parents.Count != 1)
+            return 0;
+
           child1 = frame1;
           child2 = frame2;
           frame1 = frame1.Parents.First();
           frame2 = frame2.Parents.First();
           continue;
         }
+
         if (frame1.Depth < frame2.Depth)
         {
+          if (frame1.Parents.Count != 1)
+            return 0;
+
           child1 = frame1;
           frame1 = frame1.Parents.First();
           continue;
         }
+
+        if (frame2.Parents.Count != 1)
+          return 0;
+
         child2 = frame2;
         frame2 = frame2.Parents.First();
       }
@@ -126,7 +142,7 @@ namespace N2.DebugStrategies
         return;
     }
 
-    private void ProcessStackFrameSpeculative(int startTextPos, Parser parser, RecoveryStackFrame recoveryStack, int curTextPos, string text, int subruleLevel)
+    private void ProcessStackFrameSpeculative(List<RecoveryStackFrame> newFrames, int startTextPos, Parser parser, RecoveryStackFrame recoveryStack, int curTextPos, string text, int subruleLevel)
     {
       var stackFrame = recoveryStack;
 
@@ -134,11 +150,9 @@ namespace N2.DebugStrategies
       for (var state = stackFrame.FailState; state >= 0; state = nextState) //subruleLevel > 0 ? stackFrame.GetNextState(stackFrame.FailState) :
       {
         nextState = stackFrame.GetNextState(state);
-        //if (_bestResult != null)
-        //  return;
 
         if (!stackFrame.IsTokenRule) //&& stackFrame.FailState == state
-          TryParseSubrules(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel, state);
+          TryParseSubrules(newFrames, startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel, state);
       }
     }
 
@@ -165,7 +179,9 @@ namespace N2.DebugStrategies
         if (lastPos > curTextPos && lastPos - curTextPos > ParsedSpacesLen(frame, parsedStates)
           || parsedStates.Count > 0 && HasParsedStaets(frame, parsedStates))
         {
-          AddResult(curTextPos, lastPos, lastPos, state, frame, text, startTextPos);
+          var pos1 = pos >= 0 ? pos : curTextPos;
+          var pos2 = ContinueParse(pos1, frame, parser, true);
+          AddResult(pos1, lastPos, pos2, state, frame, text, startTextPos);
           break;
         }
 
@@ -195,12 +211,14 @@ namespace N2.DebugStrategies
 
               AddResult(curTextPos, ruleEndPos, endPos, -1, separatorFrame, text, startTextPos, true);
               return;
-            }
+            }// a b
           }
         }
       }
 
-      ProcessStackFrameSpeculative(startTextPos, parser, frame, curTextPos, text, subruleLevel);
+      var pos3 = ContinueParse(curTextPos, frame, parser, true);
+      if (pos3 >= 0)
+        AddResult(curTextPos, curTextPos, pos3, -1, frame, text, startTextPos);
     }
 
     private void ProcessOtherFrames(int startTextPos, Parser parser, RecoveryStackFrame frame, int curTextPos, string text, int subruleLevel)
@@ -247,7 +265,7 @@ namespace N2.DebugStrategies
       return sum;
     }
 
-    protected virtual void TryParseSubrules(int startTextPos, Parser parser, RecoveryStackFrame frame, int curTextPos, string text, int subruleLevel, int state)
+    protected virtual void TryParseSubrules(List<RecoveryStackFrame> newFrames, int startTextPos, Parser parser, RecoveryStackFrame frame, int curTextPos, string text, int subruleLevel, int state)
     {
       if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
         return;
@@ -272,13 +290,22 @@ namespace N2.DebugStrategies
         if (!_visitedFrame.Add(subFrame))
           continue;
 
-        ProcessStackFrame(startTextPos, parser, subFrame, curTextPos, text, subruleLevel + 1);
+        newFrames.Add(subFrame);
+        TryParseSubrules(newFrames, startTextPos, parser, subFrame, curTextPos, text, subruleLevel, 0);
       }
 
       _nestedLevel--;
     }
 
-    void AddResult(int startPos, int ruleEndPos, int endPos, int startState, RecoveryStackFrame stack, string text, int failPos, bool allowEmpty = false)
+    private void AddResult(int startPos, int ruleEndPos, int endPos, int startState, RecoveryStackFrame stack,
+      string text, int failPos, bool allowEmpty = false)
+    {
+      var skipedCount = startPos - failPos;
+      var newResult = new RecoveryResult(startPos, ruleEndPos, endPos, startState, 0, stack, text, failPos);
+      _candidats.Add(newResult);
+    }
+
+    void AddResult2(int startPos, int ruleEndPos, int endPos, int startState, RecoveryStackFrame stack, string text, int failPos, bool allowEmpty = false)
     {
       const int stackLength = 0; //stack.Length;
       var skipedCount = startPos - failPos;
@@ -383,6 +410,9 @@ namespace N2.DebugStrategies
           }
           if (pos >= bestPos)
           {
+            if (pos > 1)
+            { 
+            }
             results.Add(Tuple.Create(pos, stackFrame, parsedStates));
             break;
           }
