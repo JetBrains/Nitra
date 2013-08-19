@@ -145,6 +145,9 @@ namespace N2.Visualizer.ViewModels
       }
       var source = new SourceSnapshot(code);
 
+      if (StartRule == null)
+        return null;
+
       return _parserHost.DoParsing(source, _compositeGrammar, StartRule, recoveryStrategy);
     }
   }
