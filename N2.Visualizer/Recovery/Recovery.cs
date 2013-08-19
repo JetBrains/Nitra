@@ -54,6 +54,7 @@ namespace N2.DebugStrategies
         foreach (var stack in stacks)
           ProcessTopFrames(startTextPos, parser, stack, curTextPos, text, 0);
 
+        Debug.Assert(true);
         //if (_bestResult != null)
         //  break;
 
@@ -62,13 +63,6 @@ namespace N2.DebugStrategies
 
         //if (_bestResult != null)
         //  break;
-
-        foreach (var stack in stacks)
-        {
-          ProcessStackFrameSpeculative(startTextPos, parser, stack, curTextPos, text, 0);
-          //if (_bestResult != null)
-          //  break;
-        }
 
         curTextPos++;
         _visitedFrame.Clear();
@@ -130,7 +124,6 @@ namespace N2.DebugStrategies
       ProcessOtherFrames(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel);
       if (_bestResult != null)
         return;
-      ProcessStackFrameSpeculative(startTextPos, parser, recoveryStack, curTextPos, text, subruleLevel);
     }
 
     private void ProcessStackFrameSpeculative(int startTextPos, Parser parser, RecoveryStackFrame recoveryStack, int curTextPos, string text, int subruleLevel)
@@ -173,7 +166,7 @@ namespace N2.DebugStrategies
           || parsedStates.Count > 0 && HasParsedStaets(frame, parsedStates))
         {
           AddResult(curTextPos, lastPos, lastPos, state, frame, text, startTextPos);
-          return;
+          break;
         }
 
         var isParsed = pos > curTextPos;
@@ -207,8 +200,7 @@ namespace N2.DebugStrategies
         }
       }
 
-      if (subruleLevel > 0)
-        ProcessStackFrameSpeculative(startTextPos, parser, frame, curTextPos, text, subruleLevel);
+      ProcessStackFrameSpeculative(startTextPos, parser, frame, curTextPos, text, subruleLevel);
     }
 
     private void ProcessOtherFrames(int startTextPos, Parser parser, RecoveryStackFrame frame, int curTextPos, string text, int subruleLevel)
