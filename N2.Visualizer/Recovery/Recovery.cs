@@ -66,10 +66,12 @@ namespace N2.DebugStrategies
 
         // TODO: Фильтруем результаты
 
-
         curTextPos++;
         _visitedFrame.Clear();
       }
+
+      if (_candidats.Count > 1)
+        _candidats = FilterBest(_candidats).ToList();
 
       parser.MaxFailPos = maxFailPos;
 
@@ -81,6 +83,22 @@ namespace N2.DebugStrategies
 
       FixAst(parser);
       Reset();
+    }
+
+    private RecoveryResult[] FilterBest(List<RecoveryResult> candidats)
+    {
+      if (candidats.Count <= 1)
+        return candidats.ToArray();
+
+      candidats.Sort(CompareRecoveryResults);
+
+      var last = candidats[candidats.Count - 1];
+
+      var firstIndex = candidats.FindIndex(c => CompareRecoveryResults(last, c) == 0);
+      Debug.Assert(firstIndex >= 0);
+      var result = new RecoveryResult[candidats.Count - firstIndex];
+      candidats.CopyTo(firstIndex, result, 0, candidats.Count - firstIndex);
+      return result;
     }
 
     private void ProcessFindSpeculativeFrames(List<RecoveryStackFrame> newFrames, int startTextPos, Parser parser, RecoveryStackFrame frame, int curTextPos, string text, int i)
@@ -102,9 +120,9 @@ namespace N2.DebugStrategies
 
         if (frame1.Depth == frame2.Depth)
         {
-          if (frame1.Parents.Count != 1)
+          if (frame1.Parents.Count < 1)
             return 0;
-          if (frame2.Parents.Count != 1)
+          if (frame2.Parents.Count < 1)
             return 0;
 
           child1 = frame1;
@@ -116,7 +134,7 @@ namespace N2.DebugStrategies
 
         if (frame1.Depth < frame2.Depth)
         {
-          if (frame1.Parents.Count != 1)
+          if (frame1.Parents.Count < 1)
             return 0;
 
           child1 = frame1;
@@ -124,7 +142,7 @@ namespace N2.DebugStrategies
           continue;
         }
 
-        if (frame2.Parents.Count != 1)
+        if (frame2.Parents.Count < 1)
           return 0;
 
         child2 = frame2;
@@ -180,7 +198,7 @@ namespace N2.DebugStrategies
           || parsedStates.Count > 0 && HasParsedStaets(frame, parsedStates))
         {
           var pos1 = pos >= 0 ? pos : curTextPos;
-          var pos2 = ContinueParse(pos1, frame, parser, true);
+          var pos2 = pos >= 0 ? ContinueParse(pos1, frame, parser, true) : pos;
           AddResult(pos1, lastPos, pos2, state, frame, text, startTextPos);
           break;
         }
@@ -305,79 +323,58 @@ namespace N2.DebugStrategies
       _candidats.Add(newResult);
     }
 
-    void AddResult2(int startPos, int ruleEndPos, int endPos, int startState, RecoveryStackFrame stack, string text, int failPos, bool allowEmpty = false)
+    int CompareRecoveryResults(RecoveryResult result1, RecoveryResult result2)
     {
-      const int stackLength = 0; //stack.Length;
-      var skipedCount = startPos - failPos;
-      var newResult = new RecoveryResult(startPos, ruleEndPos, endPos, startState, stackLength, stack, text, failPos);
-      _candidats.Add(newResult);
+      var skipedCount = result1.StartPos - result1.FailPos;
 
-      if (newResult.SkipedCount > 0)
+      if (result1.RuleEndPos >= 0 && result1.SkipedCount == result2.SkipedCount && result1.RecoveredHeadCount == result2.RecoveredHeadCount && result1.RecoveredTailCount > 0  && result2.RecoveredTailCount <= 0) goto good; // если у newResult есть продолжение, а у _bestResult нет
+      if (result2.RuleEndPos >= 0 && result1.SkipedCount == result2.SkipedCount && result1.RecoveredHeadCount == result2.RecoveredHeadCount && result1.RecoveredTailCount <= 0 && result2.RecoveredTailCount > 0)  return -1;    // если у _bestResult есть продолжение, а у newResult нет
+
+      if (result1.Stack.Parents.SetEquals(result2.Stack.Parents))
+      {
+        if (result1.StartState < result2.StartState && result1.SkipedCount <= result2.SkipedCount) goto good;
+        if (result1.StartState > result2.StartState && result1.SkipedCount > result2.SkipedCount) return -1;
+      }
+
+      if (result1.Stack == result2.Stack)
       {
       }
 
-      if (!allowEmpty && startPos == endPos && endPos != text.Length) return;
+      if (result1.RuleEndPos >= 0 && result2.RuleEndPos <  0) goto good; //
+      if (result1.RuleEndPos <  0 && result2.RuleEndPos >= 0) return -1;
 
-      if (_bestResult == null)                   goto good;
+      if (result1.StartPos < result2.StartPos && result1.EndPos == result2.EndPos) goto good;
+      if (result1.StartPos > result2.StartPos && result1.EndPos == result2.EndPos) return -1;
 
-      if (stack.IsSpeculative && _bestResult.Stack.IsSpeculative) // спекулятивный фрейм стека
-      {
-        //Debug.Assert(false, "Этого не должно произойки, так как спекулятивный парсинг должен происходить в методе ProcessStackFrameSpeculative() который вызывается только если ProcessStackFrame() не нашел результат.");
-// ReSharper disable once HeuristicUnreachableCode
-        //return;
-      }
+      if (skipedCount < result2.SkipedCount) goto good;
+      if (skipedCount > result2.SkipedCount) return -1;
 
-      if (newResult.RuleEndPos   >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount > 0  && _bestResult.RecoveredTailCount <= 0) goto good; // если у newResult есть продолжение, а у _bestResult нет
-      if (_bestResult.RuleEndPos >= 0 && newResult.SkipedCount == _bestResult.SkipedCount && newResult.RecoveredHeadCount == _bestResult.RecoveredHeadCount && newResult.RecoveredTailCount <= 0 && _bestResult.RecoveredTailCount > 0) return;    // если у _bestResult есть продолжение, а у newResult нет
-
-      if (stack.Parents.SetEquals(_bestResult.Stack.Parents))
-      {
-        if (startState < _bestResult.StartState && newResult.SkipedCount <= _bestResult.SkipedCount) goto good;
-        if (startState > _bestResult.StartState && newResult.SkipedCount >  _bestResult.SkipedCount) return;
-      }
-
-      if (stack == _bestResult.Stack)
-      {
-      }
-
-      if (newResult.RuleEndPos >= 0 && _bestResult.RuleEndPos <  0) goto good; //
-      if (newResult.RuleEndPos <  0 && _bestResult.RuleEndPos >= 0) return;
-
-      if (startPos < _bestResult.StartPos && endPos == _bestResult.EndPos) goto good;
-      if (startPos   > _bestResult.StartPos && endPos == _bestResult.EndPos) return;
-
-      if (skipedCount < _bestResult.SkipedCount) goto good;
-      if (skipedCount > _bestResult.SkipedCount) return;
-
-      if (endPos > _bestResult.EndPos) goto good;
-      if (endPos < _bestResult.EndPos) return;
+      if (result1.EndPos > result2.EndPos) goto good;
+      if (result1.EndPos < result2.EndPos) return -1;
 
       //// Если при восстановлении ничего не было пропарсено, то побеждать должен фрейм с большим FialState, так как
       //// иначе будут возникать фантомные значени. Если же что-то спарсилось, то побеждать должен фрейм с меньшим FialState.
-      var winLastState = _bestResult.RecoveredHeadCount == 0 && newResult.RecoveredHeadCount == 0;
-      var newGrater = CompareStack(stack, _bestResult.Stack);
+      var winLastState = result2.RecoveredHeadCount == 0 && result1.RecoveredHeadCount == 0;
+      var newGrater = CompareStack(result1.Stack, result2.Stack);
       if (winLastState)
       {
         if (newGrater > 0) goto good;
-        if (newGrater < 0) return;
+        if (newGrater < 0) return -1;
       }
       else
       {
-        if (newGrater > 0) return;
+        if (newGrater > 0) return -1;
         if (newGrater < 0) goto good;
       }
 
-      if (endPos > _bestResult.EndPos) goto good;
-      if (endPos < _bestResult.EndPos) return;
+      if (result1.EndPos > result2.EndPos) goto good;
+      if (result1.EndPos < result2.EndPos) return -1;
 
       goto good2;
     good:
-      _bestResult = new RecoveryResult(startPos, ruleEndPos, endPos, startState, stackLength, stack, text, failPos);
-      _bestResults.Clear();
-      _bestResults.Add(_bestResult);
-      return;
+      return 1;
     good2:
-      _bestResults.Add(new RecoveryResult(startPos, ruleEndPos, endPos, startState, stackLength, stack, text, failPos));
+      return 0;
     }
 
     protected virtual int ContinueParse(int startTextPos, RecoveryStackFrame recoveryStack, Parser parser, bool trySkipStates)
