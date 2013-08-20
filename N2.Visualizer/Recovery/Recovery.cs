@@ -46,7 +46,7 @@ namespace N2.DebugStrategies
         }
     }
 
-    private static List<RecoveryStackFrame> PrepareRecoveryStacks(IEnumerable<RecoveryStackFrame> heads)
+    private static List<RecoveryStackFrame> PrepareRecoveryStacks(ICollection<RecoveryStackFrame> heads)
     {
       var allRecoveryStackFrames = new List<RecoveryStackFrame>();
 
@@ -235,16 +235,6 @@ namespace N2.DebugStrategies
     }
 
     // ReSharper disable once ParameterTypeCanBeEnumerable.Local
-    private static int Sum(List<ParsedStateInfo> parsedStates)
-    {
-      var sum = 0;
-// ReSharper disable once LoopCanBeConvertedToQuery
-      foreach (var parsedState in parsedStates)
-        sum += parsedState.Size;
-      return sum;
-    }
-
-    // ReSharper disable once ParameterTypeCanBeEnumerable.Local
     private static bool HasParsedStaets(RecoveryStackFrame frame, List<ParsedStateInfo> parsedStates)
     {
 // ReSharper disable once LoopCanBeConvertedToQuery
@@ -266,45 +256,6 @@ namespace N2.DebugStrategies
       return sum;
     }
 
-    int CompareRecoveryResults(RecoveryResult result1, RecoveryResult result2)
-    {
-    //  if (result1.RuleEndPos >= 0 && result1.RecoveredHeadCount == result2.RecoveredHeadCount && result1.RecoveredTailCount > 0  && result2.RecoveredTailCount <= 0) goto good; // если у newResult есть продолжение, а у _bestResult нет
-    //  if (result2.RuleEndPos >= 0 && result1.RecoveredHeadCount == result2.RecoveredHeadCount && result1.RecoveredTailCount <= 0 && result2.RecoveredTailCount > 0)  return -1;    // если у _bestResult есть продолжение, а у newResult нет
-
-    //  if (result1.Stack.Parents.SetEquals(result2.Stack.Parents) && result1.StartState < result2.StartState) goto good;
-
-    //  if (result1.RuleEndPos >= 0 && result2.RuleEndPos <  0) goto good; //
-    //  if (result1.RuleEndPos <  0 && result2.RuleEndPos >= 0) return -1;
-
-    //  if (result1.StartPos < result2.StartPos && result1.EndPos == result2.EndPos) goto good;
-    //  if (result1.StartPos > result2.StartPos && result1.EndPos == result2.EndPos) return -1;
-
-    //  if (result1.EndPos > result2.EndPos) goto good;
-    //  if (result1.EndPos < result2.EndPos) return -1;
-
-    //  //// Если при восстановлении ничего не было пропарсено, то побеждать должен фрейм с большим FialState, так как
-    //  //// иначе будут возникать фантомные значени. Если же что-то спарсилось, то побеждать должен фрейм с меньшим FialState.
-    //  var winLastState = result2.RecoveredHeadCount == 0 && result1.RecoveredHeadCount == 0;
-    //  var newGrater = CompareStack(result1.Stack, result2.Stack);
-    //  if (winLastState)
-    //  {
-    //    if (newGrater > 0) goto good;
-    //    if (newGrater < 0) return -1;
-    //  }
-    //  else
-    //  {
-    //    if (newGrater > 0) return -1;
-    //    if (newGrater < 0) goto good;
-    //  }
-
-    //  if (result1.EndPos > result2.EndPos) goto good;
-    //  if (result1.EndPos < result2.EndPos) return -1;
-
-    //  goto good2;
-    //good:
-      return 1;
-    }
-
     protected virtual int ContinueParse(int startTextPos, RecoveryStackFrame recoveryStack, Parser parser, bool trySkipStates)
     {
       return ContinueParseImpl(startTextPos, recoveryStack, parser, trySkipStates);
@@ -317,7 +268,7 @@ namespace N2.DebugStrategies
       if (parents.Count == 0)
         return curTextPos;
 
-      var parsedStates = new List<ParsedStateInfo>(); ;
+      var parsedStates = new List<ParsedStateInfo>();
       var results = new List<Tuple<int, RecoveryStackFrame, List<ParsedStateInfo>>>();
       var bestPos = curTextPos;
       foreach (var stackFrame in parents)
