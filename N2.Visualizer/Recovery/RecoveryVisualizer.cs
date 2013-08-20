@@ -39,29 +39,30 @@ namespace N2.DebugStrategies
       _recoveryPerformanceData.Init();
     }
 
-    public override void Strategy(int startTextPos, Parser parser)
+    public override int Strategy(Parser parser)
     {
       _recoveryPerformanceData.Timer.Start();
       _recoveryPerformanceData.Count++;
 
-      base.Strategy(startTextPos, parser);
+      var res = base.Strategy(parser);
 
       _recoveryPerformanceData.Timer.Stop();
+      return res;
     }
 
-    protected override void TryParseSubrules(List<RecoveryStackFrame> newFrames, int startTextPos, Parser parser, RecoveryStackFrame frame, int curTextPos, string text, int subruleLevel, int state)
-    {
-      if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
-        return;
+    //protected override void TryParseSubrules(List<RecoveryStackFrame> newFrames, int startTextPos, Parser parser, RecoveryStackFrame frame, int curTextPos, string text, int subruleLevel, int state)
+    //{
+    //  if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
+    //    return;
 
-      _recoveryPerformanceData.TryParseSubrulesCount++;
-      var time = _recoveryPerformanceData.Timer.Elapsed;
+    //  _recoveryPerformanceData.TryParseSubrulesCount++;
+    //  var time = _recoveryPerformanceData.Timer.Elapsed;
 
-      base.TryParseSubrules(newFrames, startTextPos, parser, frame, curTextPos, text, subruleLevel, state);
+    //  base.TryParseSubrules(newFrames, startTextPos, parser, frame, curTextPos, text, subruleLevel, state);
 
-      if (_nestedLevel == 0)
-        _recoveryPerformanceData.TryParseSubrulesTime += _recoveryPerformanceData.Timer.Elapsed - time;
-    }
+    //  if (_nestedLevel == 0)
+    //    _recoveryPerformanceData.TryParseSubrulesTime += _recoveryPerformanceData.Timer.Elapsed - time;
+    //}
 
     protected override int ContinueParse(int startTextPos, RecoveryStackFrame recoveryStack, Parser parser,
       bool trySkipStates)
@@ -87,9 +88,9 @@ namespace N2.DebugStrategies
       return result;
     }
 
-    protected override Recovery CreateSubRecovery()
-    {
-      return new RecoveryVisualizer(this);
-    }
+    //protected override Recovery CreateSubRecovery()
+    //{
+    //  return new RecoveryVisualizer(this);
+    //}
   }
 }
