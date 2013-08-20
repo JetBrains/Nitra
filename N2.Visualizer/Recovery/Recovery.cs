@@ -98,20 +98,27 @@ namespace N2.DebugStrategies
           {
             if (!InitFrame(parser, frame, true, failPos, curTextPos))
             {
+              frame.StartState = frame.FailState;
+              frame.StartParsePos = curTextPos;
               frame.EndParsePos = -1;
+              frame.MaxFailPos = failPos;
             }
           }
           else
           {
             int startParsePos = curTextPos;
+            int maxFailPos = failPos;
             foreach (var child in frame.Children)
+            {
               startParsePos = Math.Max(startParsePos, child.EndParsePos);
+              maxFailPos = Math.Max(maxFailPos, child.MaxFailPos);
+            }
             if (startParsePos == -1)
             {
               frame.StartState = -2;
               frame.StartParsePos = -1;
               frame.EndParsePos = -1;
-              frame.MaxFailPos = -1;
+              frame.MaxFailPos = maxFailPos;
               continue;
             }
             var state = frame.GetNextState(frame.FailState);
@@ -120,14 +127,14 @@ namespace N2.DebugStrategies
               frame.StartState = -1;
               frame.StartParsePos = startParsePos;
               frame.EndParsePos = startParsePos;
-              frame.MaxFailPos = -1;
+              frame.MaxFailPos = maxFailPos;
             }
             else
             {
               frame.StartState = -2;
               frame.StartParsePos = startParsePos;
               frame.EndParsePos = -1;
-              frame.MaxFailPos = -1;
+              frame.MaxFailPos = maxFailPos;
               for (; state >= 0; state = frame.GetNextState(state))
               {
                 parser.MaxFailPos = failPos;
@@ -138,7 +145,7 @@ namespace N2.DebugStrategies
                   frame.StartState = state;
                   frame.StartParsePos = startParsePos;
                   frame.EndParsePos = pos;
-                  frame.MaxFailPos = parser.MaxFailPos;
+                  frame.MaxFailPos = Math.Max(parser.MaxFailPos, maxFailPos);
                   break;
                 }
               }
