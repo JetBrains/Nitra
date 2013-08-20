@@ -13,8 +13,8 @@ namespace N2.Strategies
 namespace N2.DebugStrategies
 #endif
 {
-  using PrseData = Tuple<int, int, List<ParsedStateInfo>>;
-  using ReortData = Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>>;
+  using ParserData = Tuple<int, int, List<ParsedStateInfo>>;
+  using ReportData = Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>>;
 
   public class Recovery
   {
@@ -24,9 +24,9 @@ namespace N2.DebugStrategies
     protected int                           _nestedLevel  = 0;
     protected HashSet<RecoveryStackFrame>   _visitedFrame = new HashSet<RecoveryStackFrame>();
 
-    public ReortData ReportResult;
+    public ReportData ReportResult;
 
-    public Recovery(ReortData reportResult)
+    public Recovery(ReportData reportResult)
     {
       ReportResult = reportResult;
     }
@@ -39,7 +39,7 @@ namespace N2.DebugStrategies
       _nestedLevel = 0;
     }
 
-    public virtual void Strategy(int startTextPos, Parser parser)
+    public virtual int Strategy(Parser parser)
     {
       Reset();
       var maxFailPos = parser.MaxFailPos;
@@ -83,6 +83,7 @@ namespace N2.DebugStrategies
 
       FixAst(parser);
       Reset();
+      return -1;
     }
 
     private RecoveryResult[] FilterBest(List<RecoveryResult> candidats)
