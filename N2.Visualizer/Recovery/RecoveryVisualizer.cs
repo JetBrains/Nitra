@@ -49,7 +49,7 @@ namespace N2.DebugStrategies
       _recoveryPerformanceData.Timer.Stop();
     }
 
-    protected override void TryParseSubrules(int startTextPos, Parser parser, RecoveryStackFrame frame, int curTextPos, string text, int subruleLevel, int state)
+    protected override void TryParseSubrules(List<RecoveryStackFrame> newFrames, int startTextPos, Parser parser, RecoveryStackFrame frame, int curTextPos, string text, int subruleLevel, int state)
     {
       if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
         return;
@@ -57,7 +57,7 @@ namespace N2.DebugStrategies
       _recoveryPerformanceData.TryParseSubrulesCount++;
       var time = _recoveryPerformanceData.Timer.Elapsed;
 
-      base.TryParseSubrules(startTextPos, parser, frame, curTextPos, text, subruleLevel, state);
+      base.TryParseSubrules(newFrames, startTextPos, parser, frame, curTextPos, text, subruleLevel, state);
 
       if (_nestedLevel == 0)
         _recoveryPerformanceData.TryParseSubrulesTime += _recoveryPerformanceData.Timer.Elapsed - time;
