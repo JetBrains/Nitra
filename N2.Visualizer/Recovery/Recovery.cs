@@ -105,52 +105,7 @@ namespace N2.DebugStrategies
             }
           }
           else
-          {
-            int startParsePos = curTextPos;
-            int maxFailPos = failPos;
-            foreach (var child in frame.Children)
-            {
-              startParsePos = Math.Max(startParsePos, child.EndParsePos);
-              maxFailPos = Math.Max(maxFailPos, child.MaxFailPos);
-            }
-            if (startParsePos == -1)
-            {
-              frame.StartState = -2;
-              frame.StartParsePos = -1;
-              frame.EndParsePos = -1;
-              frame.MaxFailPos = maxFailPos;
-              continue;
-            }
-            var state = frame.GetNextState(frame.FailState);
-            if (state == -1)
-            {
-              frame.StartState = -1;
-              frame.StartParsePos = startParsePos;
-              frame.EndParsePos = startParsePos;
-              frame.MaxFailPos = maxFailPos;
-            }
-            else
-            {
-              frame.StartState = -2;
-              frame.StartParsePos = startParsePos;
-              frame.EndParsePos = -1;
-              frame.MaxFailPos = maxFailPos;
-              for (; state >= 0; state = frame.GetNextState(state))
-              {
-                parser.MaxFailPos = failPos;
-                var parsedStates = new List<ParsedStateInfo>();
-                var pos = frame.TryParse(state, startParsePos, true, parsedStates, parser);
-                if (pos > 0)
-                {
-                  frame.StartState = state;
-                  frame.StartParsePos = startParsePos;
-                  frame.EndParsePos = pos;
-                  frame.MaxFailPos = Math.Max(parser.MaxFailPos, maxFailPos);
-                  break;
-                }
-              }
-            }
-          }
+            ParseNonTopFrames(parser, curTextPos, failPos, frame);
         }
 
         Debug.Assert(true);
@@ -161,6 +116,49 @@ namespace N2.DebugStrategies
       }
 
       return -1;
+    }
+
+    private static void ParseNonTopFrames(Parser parser, int curTextPos, int failPos, RecoveryStackFrame frame)
+    {
+      int startParsePos = curTextPos;
+      int maxFailPos    = failPos;
+
+      foreach (var child in frame.Children)
+      {
+        startParsePos = Math.Max(startParsePos, child.EndParsePos);
+        maxFailPos    = Math.Max(maxFailPos, child.MaxFailPos);
+      }
+      var state = frame.GetNextState(frame.FailState);
+      if (state == -1)
+      {
+        frame.StartState    = -1;
+        frame.StartParsePos = startParsePos;
+        frame.EndParsePos   = startParsePos;
+        frame.MaxFailPos    = maxFailPos;
+      }
+      else
+      {
+        frame.StartState    = -2; // не начинало парситься, т.е. не нашло ни одного состояния с которого возможно допарсивание
+        frame.StartParsePos = startParsePos;
+        frame.EndParsePos   = -1;
+        frame.MaxFailPos    = maxFailPos;
+
+        for (; state >= 0; state = frame.GetNextState(state))
+        {
+          parser.MaxFailPos = failPos;
+          var parsedStates  = new List<ParsedStateInfo>();
+          var pos           = frame.TryParse(state, startParsePos, true, parsedStates, parser);
+
+          if (pos > 0)
+          {
+            frame.StartState    = state;
+            frame.StartParsePos = startParsePos;
+            frame.EndParsePos   = pos;
+            frame.MaxFailPos    = Math.Max(parser.MaxFailPos, maxFailPos);
+            break;
+          }
+        }
+      }
     }
 
     private bool InitFrame(Parser parser, RecoveryStackFrame frame, bool continueList, int failPos, int curTextPos)
