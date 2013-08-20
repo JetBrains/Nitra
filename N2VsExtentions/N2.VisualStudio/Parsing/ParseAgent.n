@@ -1,0 +1,113 @@
+﻿using N2.Runtime;
+using N2.Internal;
+
+using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Linq;
+
+using Microsoft.VisualStudio.Text;
+
+namespace N2.VisualStudio.Parsing
+{
+  public sealed class ParseAgent
+  {
+            _syncRoot    : object = object();
+    mutable _tokenSource : CancellationTokenSource;
+    mutable _currentTask : Task;
+
+    public Language : Language { get; }
+
+    public this([NotNull] language : Language)
+    {
+      Language = language;
+    }
+
+    public EnqueueParse([NotNull] snapshot : ITextSnapshot, fileName : string) : void
+    {
+      lock (_syncRoot)
+      {
+        if (_currentTask == null)
+        {
+          _tokenSource = CancellationTokenSource();
+          def token = _tokenSource.Token;
+          _currentTask = Task.Factory.StartNew(() => DoParse(snapshot, fileName, token) |> ReportResult, token);
+        }
+        else
+        {
+          _tokenSource.Cancel();
+          _tokenSource = CancellationTokenSource();
+          def token = _tokenSource.Token;
+          _currentTask = _currentTask.ContinueWith(_ => DoParse(snapshot, fileName, token) |> ReportResult, token);
+        }
+      }
+    }
+
+    private DoParse(snapshot : ITextSnapshot, fileName : string, token : CancellationToken) : DoParseResult
+    {
+      def timer = Stopwatch.StartNew();
+      def text = snapshot.GetText();
+      Trace.WriteLine("snapshot.GetText() took: " + timer.Elapsed);
+      def source = SourceSnapshot(text, 0, fileName);
+      try
+      {
+        timer.Restart();
+        def result = Language.Parse(source);
+        timer.Stop();
+        def info = "Parsing took: " + timer.Elapsed + "   Mb/sec:" + (text.Length / 1024.0 / 1024.0 / timer.Elapsed.TotalSeconds);
+        N2Package.Instance.SetStatusBarText(info);
+        token.ThrowIfCancellationRequested();
+        DoParseResult.Complete(snapshot, fileName, result)
+      }
+      catch
+      {
+        | _ is OperationCanceledException => throw;
+        | e => DoParseResult.Failed(snapshot, fileName,e)
+      }
+    }
+
+    private ReportResult(result : DoParseResult) : void
+    {
+      //TODO: add exception handling
+      | Complete(r) => ParseComplete?.Invoke(this, ParseCompleteEventArgs(result.Snapshot, result.FileName, r))
+      | Failed(e)   => ParseFailed?.Invoke(this, ParseFailedEventArgs(result.Snapshot, result.FileName, e))
+    }
+
+    [Record]
+    private variant DoParseResult
+    {
+      public Snapshot : ITextSnapshot;
+      public FileName : string;
+
+      | Complete { result    : Parser    }
+      | Failed   { exception : Exception }
+    }
+
+    public event ParseComplete : EventHandler[ParseCompleteEventArgs];
+    public event ParseFailed   : EventHandler[ParseFailedEventArgs];
+  }
+
+  [Record]
+  public sealed class ParseCompleteEventArgs : EventArgs
+  {
+    public Snapshot : ITextSnapshot { get; }
+    public FileName : string        { get; }
+    public Result   : Parser        { get; }
+  }
+
+  [Record]
+  public sealed class ParseFailedEventArgs : EventArgs
+  {
+    public Snapshot  : ITextSnapshot { get; }
+    public FileName  : string        { get; }
+    public Exception : Exception     { get; }
+  }
+}

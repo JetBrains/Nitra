@@ -1,6 +1,7 @@
 ﻿using N2;
 using N2.Internal;
 using N2.Runtime;
+using N2.VisualStudio.Parsing;
 
 using Nemerle;
 using Nemerle.Late;
@@ -26,34 +27,37 @@ namespace N2.VisualStudio.Coloring
   internal sealed class N2Classifier : IClassifier
   {
     private N2GlobalConfig              : IN2GlobalConfig { get; }
-    public  Language                    : Language { get; }
+    public  Language                    : Language        { get _parseAgent.Language }
+    private _parseAgent                 : ParseAgent;
     private _buffer                     : ITextBuffer;
     private _classificationTypeRegistry : IClassificationTypeRegistryService;
     private _classificationCache        : ClassificationCache;
+    private mutable _lastResult         : Parser;
 
-    public this(n2GlobalConfig : IN2GlobalConfig, language : Language, buffer : ITextBuffer, classificationTypeRegistry : IClassificationTypeRegistryService)
+    public this(n2GlobalConfig : IN2GlobalConfig, parseAgent : ParseAgent, buffer : ITextBuffer, classificationTypeRegistry : IClassificationTypeRegistryService)
     {
       N2GlobalConfig              = n2GlobalConfig;
-      Language                    = language;
+      _parseAgent                 = parseAgent;
       _buffer                     = buffer;
       _classificationTypeRegistry = classificationTypeRegistry;
       _classificationCache        = ClassificationCache(40);
       buffer.Changed += 
         fun(_, args)
         {
-          
-          _classificationCache.Predict(buffer.CurrentSnapshot, args.Changes);
-          def parseResult = GetParseResult();
-          when (parseResult != null)
+          _classificationCache.Predict(args.After, args.Changes);
+          _lastResult = null;
+        };
+      parseAgent.ParseComplete +=
+        fun(_, args)
+        {
+          _lastResult = args.Result;
+          match (_classificationCache.Update(args.Result))
           {
-            match (_classificationCache.Update(parseResult))
-            {
-              | Nothing => ()
-              | All     => OnClassificationChanged(SnapshotSpan(buffer.CurrentSnapshot, 0, buffer.CurrentSnapshot.Length));
-              | Ranges(rangesToUpdate) =>
-                foreach(range in rangesToUpdate)
-                  OnClassificationChanged(SnapshotSpan(buffer.CurrentSnapshot, range.StartPos, range.Length));
-            }
+            | Nothing => ()
+            | All     => OnClassificationChanged(SnapshotSpan(buffer.CurrentSnapshot, 0, buffer.CurrentSnapshot.Length));
+            | Ranges(rangesToUpdate) =>
+              foreach(range in rangesToUpdate)
+                OnClassificationChanged(SnapshotSpan(buffer.CurrentSnapshot, range.StartPos, range.Length));
           }
         };
     }
@@ -85,12 +89,8 @@ namespace N2.VisualStudio.Coloring
 
       def classificationSpans = List.[ClassificationSpan]();
 
-      def parseResult = GetParseResult();
-      when(parseResult == null)
-        return classificationSpans;
-
       def classifier = N2GlobalConfig.ClassificationTypeRegistryService;
-      def spanInfos  = _classificationCache.GetSpans(span, parseResult);
+      def spanInfos  = _classificationCache.GetSpans(span, _lastResult);
       def start      = span.Start : int;
       def end        = span.End   : int;
       foreach (spanInfo in spanInfos)
@@ -128,14 +128,6 @@ namespace N2.VisualStudio.Coloring
       //}
 
       classificationSpans
-    }
-
-    private GetParseResult() : Parser
-    {
-      if (_buffer.Properties.ContainsProperty(TextBufferProperties.ParseResult))
-        _buffer.Properties.GetProperty(TextBufferProperties.ParseResult) :> Parser
-      else
-        null
     }
 
     #endregion

@@ -1,9 +1,9 @@
-﻿using Microsoft.VisualStudio.Text.Adornments;
-using Microsoft.VisualStudio.Text.Tagging;
-using N2;
+﻿using N2;
 using N2.Internal;
+using N2.VisualStudio.Parsing;
 
 using Nemerle;
+using Nemerle.Extensions;
 using Nemerle.Imperative;
 using Nemerle.Collections;
 using Nemerle.Text;
@@ -12,6 +12,8 @@ using Nemerle.Utility;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Adornments;
+using Microsoft.VisualStudio.Text.Tagging;
 
 using System;
 using System.Diagnostics;
@@ -64,11 +66,11 @@ namespace N2.VisualStudio
       _ = VsShellUtilities.ShowMessageBox(serviceProvider, message, Constants.ProductName, icon, buttons, defaultButton);
     }
 
-    public GetLanguageForTextBuffer(
+    public GetParseAgentForTextBuffer(
       this globalConfig : IN2GlobalConfig,
-      buffer : ITextBuffer,
-      errorProvider : IErrorProviderFactory,
-      documentFactory : ITextDocumentFactoryService) : ValueOption[Language]
+      buffer            : ITextBuffer,
+      errorProvider     : IErrorProviderFactory,
+      documentFactory   : ITextDocumentFactoryService) : ValueOption[ParseAgent]
     {
       def path = buffer.GetFilePath();
       when (string.IsNullOrEmpty(path))
@@ -78,65 +80,48 @@ namespace N2.VisualStudio
       when (string.IsNullOrEmpty(ext))
         return VNone();
 
-      def language = globalConfig.GetLanguageByExtension(ext);
-
-      when (language is VSome(language))
+      match (globalConfig.GetLanguageByExtension(ext))
       {
-        unless (buffer.ContentType.Equals(language.ContentType))
-          buffer.ChangeContentType(language.ContentType, null);
+        | VSome(language) =>
+          unless (buffer.ContentType.Equals(language.ContentType))
+            buffer.ChangeContentType(language.ContentType, null);
 
-        unless (buffer.Properties.ContainsProperty(TextBufferProperties.Language))
-        {
-          buffer.Properties.AddProperty(TextBufferProperties.Language, language);
-
-          def getText(snapshot : ITextSnapshot) : string
+          if (buffer.Properties.ContainsProperty(TextBufferProperties.ParseAgent))
+            VSome(buffer.Properties[TextBufferProperties.ParseAgent] :> ParseAgent)
+          else
           {
-            def timer = System.Diagnostics.Stopwatch.StartNew();
-            def text = snapshot.GetText();
-            Trace.WriteLine("snapshot.GetText() took: " + timer.Elapsed);
-            text
+            def parseAgent = ParseAgent(language) <-
+            {
+              ParseFailed += (_, a) =>
+              {
+                def errorListHelper = GetErrorListHelper(buffer, documentFactory);
+                def errorListProvider = errorListHelper.GetErrorListProvider();
+                errorListProvider.Tasks.Clear();
+                def error = ErrorTask();
+                error.ErrorCategory = TaskErrorCategory.Error;
+                error.Category = TaskCategory.All;
+                error.Text = "INE: " + a.Exception.Message + Environment.NewLine + @"Please contact developers.";
+                error.ErrorCategory = TaskErrorCategory.Error;
+                _ = errorListProvider.Tasks.Add(error);
+              };
+              ParseComplete += (_, a) =>
+              {
+                UpdateErrors(a.Result, buffer, errorProvider, documentFactory);
+              };
+            };
+            buffer.Properties.AddProperty(TextBufferProperties.ParseAgent, parseAgent);
+
+            buffer.Changed +=
+              fun (_ : object, a : TextContentChangedEventArgs) : void
+              {
+                parseAgent.EnqueueParse(a.After, buffer.GetFilePath());
+              };
+            parseAgent.EnqueueParse(buffer.CurrentSnapshot, buffer.GetFilePath());
+
+            VSome(parseAgent)
           }
 
-          buffer.Changed +=
-            fun (_ : object, a : TextContentChangedEventArgs) : void
-            {
-              Reparse(language, buffer, getText(a.After), errorProvider, documentFactory);
-            };
-          Reparse(language, buffer, getText(buffer.CurrentSnapshot), errorProvider, documentFactory);
-        }
-      }
-
-      language
-    }
-
-    Reparse(language : Language, buffer : ITextBuffer,  code : string, errorProviderFactory : IErrorProviderFactory, documentFactory : ITextDocumentFactoryService) : void
-    {
-      def timer = System.Diagnostics.Stopwatch.StartNew();
-      def path = buffer.GetFilePath();
-      try
-      {
-        def parseResult = language.Parse(SourceSnapshot(code, 0, path));
-        timer.Stop();
-        def info = "Parsing took: " + timer.Elapsed + "   Mb/sec:" + (code.Length / 1024.0 / 1024.0 / timer.Elapsed.TotalSeconds);
-        N2Package.Instance.SetStatusBarText(info);
-        //Trace.WriteLine(info);
-
-        buffer.Properties[TextBufferProperties.ParseResult] = parseResult;
-
-        UpdateErrors(parseResult, buffer,  errorProviderFactory, documentFactory);
-      }
-      catch
-      {
-        | e =>
-          def errorListHelper = GetErrorListHelper(buffer, documentFactory);
-          def errorListProvider = errorListHelper.GetErrorListProvider();
-          errorListProvider.Tasks.Clear();
-          def error = ErrorTask();
-          error.ErrorCategory = TaskErrorCategory.Error;
-          error.Category = TaskCategory.All;
-          error.Text = "INE: " + e.Message + Environment.NewLine + @"Contact with developers, please.";
-          error.ErrorCategory = TaskErrorCategory.Error;
-          _ = errorListProvider.Tasks.Add(error);
+        | VNone => VNone()
       }
     }
 
