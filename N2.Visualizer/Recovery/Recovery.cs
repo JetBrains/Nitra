@@ -93,8 +93,8 @@ namespace N2.DebugStrategies
       Debug.Assert(parser.RecoveryStacks.Count > 0);
 
       var frames = PrepareRecoveryStacks(parser.RecoveryStacks);
-
-      while (curTextPos < text.Length)
+      List<RecoveryStackFrame> bestFrames = new List<RecoveryStackFrame>();
+      for (;curTextPos < text.Length && bestFrames.Count == 0; curTextPos++)
       {
         var newFrames = new HashSet<RecoveryStackFrame>(frames);
         foreach (var frame in frames)
@@ -119,23 +119,15 @@ namespace N2.DebugStrategies
             ParseNonTopFrames(parser, curTextPos, failPos, frame);
         }
 
-        Debug.Assert(true);
-
-        // TODO: Фильтруем результаты
-        var bestFrames = FindBestFrames(allFrames);
-
-        if (bestFrames.Count > 0)
-          break;
-
-        curTextPos++;
+        FindBestFrames(bestFrames, allFrames);
       }
 
       return -1;
     }
 
-    private List<RecoveryStackFrame> FindBestFrames(List<RecoveryStackFrame> allFrames)
+    private void FindBestFrames(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames)
     {
-      var bests = new List<RecoveryStackFrame>();
+      bestFrames.Clear();
 
       for (int i = allFrames.Count - 1; i >= 0; i--)
       {
@@ -148,7 +140,10 @@ namespace N2.DebugStrategies
         {
           var count = frame.Children.Count;
           if (count == 0)
-            bests.Add(frame);
+          {
+            if (frame.EndParsePos >= 0 || frame.MaxFailPos > frame.StartParsePos)
+              bestFrames.Add(frame);
+          }
           else if (count == 1)
             frame.Children[0].Best = true;
           else
@@ -159,14 +154,11 @@ namespace N2.DebugStrategies
             var g = res2.GroupBy(c => Tuple.Create(c.RecoveryRuleParser, c.RuleId));
             var res3 = g.SelectMany(e => Filter(e.ToList(), c => c.FailState)).ToList();
             var res4 = (res3.Any(c => c.IsSpeculative) && !res3.All(c => c.IsSpeculative)) ? res3.Where(c => !c.IsSpeculative) : res3;
-            Debug.Assert(res4.Count() > 0);
             foreach (var frame2 in res4)
               frame2.Best = true;
           }
         }
       }
-
-      return bests;
     }
 
     private static List<RecoveryStackFrame> Filter(List<RecoveryStackFrame> candidates, Func<RecoveryStackFrame, int> selector)
