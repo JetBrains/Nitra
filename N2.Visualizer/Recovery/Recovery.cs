@@ -63,6 +63,7 @@ namespace N2.DebugStrategies
       {
         var frame = allRecoveryStackFrames[i];
         frame.Index = i;
+        frame.Best = false;
         frame.Children.Clear();
       }
 
@@ -157,7 +158,8 @@ namespace N2.DebugStrategies
             var res2 = Filter(res1, c => c.EndParsePos >= 0 ? int.MaxValue : c.MaxFailPos);
             var g = res2.GroupBy(c => Tuple.Create(c.RecoveryRuleParser, c.RuleId));
             var res3 = g.SelectMany(e => Filter(e.ToList(), c => c.FailState)).ToList();
-            var res4 = res3.Any(c => c.IsSpeculative) ? res3.Where(c => !c.IsSpeculative) : res3;
+            var res4 = (res3.Any(c => c.IsSpeculative) && !res3.All(c => c.IsSpeculative)) ? res3.Where(c => !c.IsSpeculative) : res3;
+            Debug.Assert(res4.Count() > 0);
             foreach (var frame2 in res4)
               frame2.Best = true;
           }
