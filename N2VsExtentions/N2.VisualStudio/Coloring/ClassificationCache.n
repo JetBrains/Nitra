@@ -25,6 +25,7 @@ namespace N2.VisualStudio.Coloring
     private mutable _cacheBounds  : NToken;
     private         _cacheIndex   : array[int * int]; // array of tuple (StartPos, Index in _spanCache)
     private mutable _cache        : array[SpanInfo];
+    private mutable _cacheMissDetected : bool;
 
     public this(linesToCache : int)
       requires linesToCache > 0
@@ -117,6 +118,13 @@ namespace N2.VisualStudio.Coloring
 
     public Update([NotNull] parseResult : Parser) : UpdateResult
     {
+      when (_cacheMissDetected)
+      {
+        _cacheMissDetected = false;
+        _cacheBounds = NToken();
+        return UpdateResult.All()
+      }
+
       def newCache = LoadCache(parseResult);
       def diffItems = _cache.Diff(newCache, (a, b) => a.Location == b.Location && a.SpanClass == b.SpanClass : object);
 
@@ -176,18 +184,20 @@ namespace N2.VisualStudio.Coloring
       def startPos = span.Start.Position;
       def endPos   = span.End.Position;
 
-      when (!IsCacheContainsSpan(startPos, endPos) && parseResult != null)
+      if (IsCacheContainsSpan(startPos, endPos))
+        SearchCache(startPos, endPos)
+      else if (parseResult != null)
       {
         _cacheBounds = GetCacheBounds(span.Snapshot, span.Start);
         _cache = LoadCache(parseResult);
         UpdateCacheIndex();
+        SearchCache(startPos, endPos)
       }
-
-      def (index, count) = SearchCache(startPos, endPos);
-      def result = array(count);
-      when (count > 0)
-        Array.Copy(_cache, index, result, 0, count);
-      result
+      else
+      {
+        _cacheMissDetected = true;
+        array(0)
+      }
     }
 
     private IsCacheContainsSpan(startPos : int, endPos : int) : bool
@@ -195,7 +205,7 @@ namespace N2.VisualStudio.Coloring
       _cacheBounds.StartPos <= startPos && endPos <= _cacheBounds.EndPos
     }
 
-    private SearchCache(startPos : int, endPos : int) : int * int
+    private SearchCache(startPos : int, endPos : int) : array[SpanInfo]
     {
       mutable index = FindCacheIndex(startPos);
       while (index < _cache.Length && _cache[index].Location.EndPos < startPos)
@@ -203,7 +213,12 @@ namespace N2.VisualStudio.Coloring
       def startIndex = index;
       while (index < _cache.Length && _cache[index].Location.StartPos < endPos)
         ++index;
-      (startIndex, index - startIndex)
+
+      def count = index - startIndex;
+      def result = array(count);
+      when (count > 0)
+        Array.Copy(_cache, startIndex, result, 0, count);
+      result
     }
 
     private FindCacheIndex(pos : int) : int
@@ -244,11 +259,14 @@ namespace N2.VisualStudio.Coloring
 
     private UpdateCacheIndex() : void
     {
-      for(mutable i = 0; i < _cacheIndex.Length; ++i)
-      {
-        def index = _cache.Length * i / _cacheIndex.Length;
-        _cacheIndex[i] = (_cache[index].Location.StartPos, index);
-      }
+      if(_cache.Length > 0)
+        for(mutable i = 0; i < _cacheIndex.Length; ++i)
+        {
+          def index = _cache.Length * i / _cacheIndex.Length;
+          _cacheIndex[i] = (_cache[index].Location.StartPos, index);
+        }
+      else
+        _cacheIndex[0] = (0, 0);
     }
 
     private GetCacheBounds(snapshot : ITextSnapshot, position : int) : NToken

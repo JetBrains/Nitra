@@ -89,7 +89,8 @@ namespace N2.VisualStudio
 
 		public static string GetFilePath(this ITextBuffer textBuffer)
 		{
-			return GetFilePath((IPersistFileFormat)textBuffer.ToIVsTextBuffer());
+			var vsTextBuffer = (IPersistFileFormat)textBuffer.ToIVsTextBuffer();
+			return vsTextBuffer != null ? GetFilePath(vsTextBuffer) : null;
 		}
 
 		private static string GetFilePath(IPersistFileFormat persistFileFormat)
