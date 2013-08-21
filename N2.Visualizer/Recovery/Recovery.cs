@@ -92,10 +92,10 @@ namespace N2.DebugStrategies
 
       Debug.Assert(parser.RecoveryStacks.Count > 0);
 
-      var frames = PrepareRecoveryStacks(parser.RecoveryStacks);
       List<RecoveryStackFrame> bestFrames = new List<RecoveryStackFrame>();
       for (;curTextPos < text.Length && bestFrames.Count == 0; curTextPos++)
       {
+        var frames = PrepareRecoveryStacks(parser.RecoveryStacks);
         var newFrames = new HashSet<RecoveryStackFrame>(frames);
         foreach (var frame in frames)
           if (frame.Depth == 0)
