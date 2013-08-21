@@ -1,4 +1,5 @@
 ﻿#define DebugOutput
+using ICSharpCode.AvalonEdit.Editing;
 using N2.Internal;
 
 using System;
@@ -27,14 +28,13 @@ namespace N2.DebugStrategies
 
     private static void ClearAndCollectFrames(RecoveryStackFrame frame, List<RecoveryStackFrame> allRecoveryStackFrames)
     {
-      allRecoveryStackFrames.Add(frame);
-      frame.Depth = -1;
-      foreach (var parent in frame.Parents)
-        if (parent.Depth != -1)
-        {
-          parent.Depth = -1;
+      if (frame.Depth != -1)
+      {
+        allRecoveryStackFrames.Add(frame);
+        frame.Depth = -1;
+        foreach (var parent in frame.Parents)
           ClearAndCollectFrames(parent, allRecoveryStackFrames);
-        }
+      }
     }
     private static void UpdateFrameDepth(RecoveryStackFrame frame)
     {
@@ -57,7 +57,7 @@ namespace N2.DebugStrategies
       foreach (var stack in heads)
         UpdateFrameDepth(stack);
 
-      allRecoveryStackFrames.Sort((l, r) => l.Depth.CompareTo(r.Depth));
+      Sort(allRecoveryStackFrames);
 
       for (int i = 0; i < allRecoveryStackFrames.Count; ++i)
       {
@@ -68,9 +68,19 @@ namespace N2.DebugStrategies
 
       foreach (var frame in allRecoveryStackFrames)
         foreach (var parent in frame.Parents)
+        {
+          if (parent.Children.Contains(frame))
+            Debug.Assert(false);
+
           parent.Children.Add(frame);
+        }
 
       return allRecoveryStackFrames;
+    }
+
+    private static void Sort(List<RecoveryStackFrame> allRecoveryStackFrames)
+    {
+      allRecoveryStackFrames.Sort((l, r) => l.Depth.CompareTo(r.Depth));
     }
 
     public virtual int Strategy(Parser parser)
@@ -111,11 +121,57 @@ namespace N2.DebugStrategies
         Debug.Assert(true);
 
         // TODO: Фильтруем результаты
+        var bestFrames = FindBestFrames(allFrames);
+
+        if (bestFrames.Count > 0)
+          break;
 
         curTextPos++;
       }
 
       return -1;
+    }
+
+    private List<RecoveryStackFrame> FindBestFrames(List<RecoveryStackFrame> allFrames)
+    {
+      var bests = new List<RecoveryStackFrame>();
+
+      for (int i = allFrames.Count - 1; i >= 0; i--)
+      {
+        var frame = allFrames[i];
+
+        if (frame.Parents.Count == 0)
+          frame.Best = true;
+
+        if (frame.Best)
+        {
+          var count = frame.Children.Count;
+          if (count == 0)
+            bests.Add(frame);
+          else if (count == 1)
+            frame.Children[0].Best = true;
+          else
+          {
+            var candidates = frame.Children;
+            var res1 = Filter(candidates, c => c.EndParsePos);
+            var res2 = Filter(res1, c => c.EndParsePos >= 0 ? int.MaxValue : c.MaxFailPos);
+            var g = res2.GroupBy(c => Tuple.Create(c.RecoveryRuleParser, c.RuleId));
+            var res3 = g.SelectMany(e => Filter(e.ToList(), c => c.FailState)).ToList();
+            var res4 = res3.Any(c => c.IsSpeculative) ? res3.Where(c => !c.IsSpeculative) : res3;
+            foreach (var frame2 in res4)
+              frame2.Best = true;
+          }
+        }
+      }
+
+      return bests;
+    }
+
+    private static List<RecoveryStackFrame> Filter(List<RecoveryStackFrame> candidates, Func<RecoveryStackFrame, int> selector)
+    {
+      var max1 = candidates.Max(selector);
+      var res2 = candidates.Where(c => selector(c) == max1);
+      return res2.ToList();
     }
 
     private static void ParseNonTopFrames(Parser parser, int curTextPos, int failPos, RecoveryStackFrame frame)
