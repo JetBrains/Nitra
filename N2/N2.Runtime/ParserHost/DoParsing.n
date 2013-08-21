@@ -1,12 +1,14 @@
 ﻿using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 using N2.Internal;
 using N2.Runtime;
 
 using System;
+using System.Threading;
 using SCG = System.Collections.Generic;
 
 namespace N2
@@ -18,9 +20,19 @@ namespace N2
       DoParsing(source, AddGrammar(DefaultCompositeGrammar, descriptor.Grammar), descriptor)
     }
 
+    public DoParsing(source : SourceSnapshot, descriptor : SimpleRuleDescriptor, token : CancellationToken) : Parser
+    {
+      DoParsing(source, AddGrammar(DefaultCompositeGrammar, descriptor.Grammar), descriptor, token)
+    }
+
     public DoParsing(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : SimpleRuleDescriptor) : Parser
     {
-      DoParsing(source, grammar.GetSimpleRuleParser(descriptor))
+      DoParsing(source, grammar.GetSimpleRuleParser(descriptor), VNone())
+    }
+
+    public DoParsing(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : SimpleRuleDescriptor, token : CancellationToken) : Parser
+    {
+      DoParsing(source, grammar.GetSimpleRuleParser(descriptor), VSome(token))
     }
 
     public DoParsing(source : SourceSnapshot, descriptor : ExtensibleRuleDescriptor) : Parser
@@ -28,31 +40,57 @@ namespace N2
       DoParsing(source, AddGrammar(DefaultCompositeGrammar, descriptor.Grammar), descriptor)
     }
 
-    public DoParsing(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : ExtensibleRuleDescriptor) : Parser
+    public DoParsing(source : SourceSnapshot, descriptor : ExtensibleRuleDescriptor, token : CancellationToken) : Parser
     {
-      DoParsing(source, grammar.GetExtensibleRuleParser(descriptor, 0))
+      DoParsing(source, AddGrammar(DefaultCompositeGrammar, descriptor.Grammar), descriptor, token)
     }
 
-    private DoParsing(source : SourceSnapshot, ruleParser : StartRuleParser) : Parser
+    public DoParsing(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : ExtensibleRuleDescriptor) : Parser
     {
-      mutable parser = N2.Internal.Parser(source, source.Text.Length * 10, this, ruleParser);
-      _ = parser.Allocate(2);
-      mutable res = ruleParser.Parse(0, parser.Text, parser);
-      while (res < 0)
+      DoParsing(source, grammar.GetExtensibleRuleParser(descriptor, 0), VNone())
+    }
+
+    public DoParsing(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : ExtensibleRuleDescriptor, token : CancellationToken) : Parser
+    {
+      DoParsing(source, grammar.GetExtensibleRuleParser(descriptor, 0), VSome(token))
+    }
+
+    private DoParsing(source : SourceSnapshot, ruleParser : StartRuleParser, token : ValueOption[CancellationToken]) : Parser
+    {
+      def parser = N2.Internal.Parser(source, source.Text.Length * 10, this, ruleParser);
+      def registration = match(token)
       {
-        parser.RecoveryStacks.Clear();
-        ruleParser.FindRecoveryPosition(0, [], parser);
+        | VSome(token) => VSome(token.Register(() => parser.TerminateParsing = true))
+        | VNone        => VNone()
+      };
+      try
+      {
+        _ = parser.Allocate(2);
+        mutable res = ruleParser.Parse(0, parser.Text, parser);
+        while (res < 0)
+        {
+          when (parser.TerminateParsing)
+            return parser;
 
-        assert(parser.RecoveryStacks.Count > 0);
+          parser.RecoveryStacks.Clear();
+          ruleParser.FindRecoveryPosition(0, [], parser);
 
-        this.RecoveryStrategy(parser.MaxFailPos, parser);
+          assert(parser.RecoveryStacks.Count > 0);
 
-        res = ruleParser.Parse(0, parser.Text, parser);
+          this.RecoveryStrategy(parser.MaxFailPos, parser);
+
+          res = ruleParser.Parse(0, parser.Text, parser);
+        }
+
+        parser.ast[Parser.ResultOffset] = res;
+
+        parser
       }
-
-      parser.ast[Parser.ResultOffset] = res;
-
-      parser
+      finally
+      {
+        when (registration is VSome(registration))
+          registration.Dispose();
+      }
     }
   }
 }
