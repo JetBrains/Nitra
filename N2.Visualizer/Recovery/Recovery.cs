@@ -1,5 +1,4 @@
 ﻿#define DebugOutput
-using ICSharpCode.AvalonEdit.Editing;
 using N2.Internal;
 
 using System;
@@ -17,9 +16,34 @@ namespace N2.DebugStrategies
   using ParserData = Tuple<int, int, List<ParsedStateInfo>>;
   using ReportData = Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>>;
 
+  public class RecoveryAlternative
+  {
+    public int                StartState;
+    public int                StartParsePos;
+    public int                EndParsePos;
+    public int                MaxFailPos;
+    public RecoveryStackFrame Frame;
+
+    public RecoveryAlternative(int startState, int startParsePos, int endParsePos, int maxFailPos, RecoveryStackFrame frame)
+    {
+      StartState = startState;
+      StartParsePos = startParsePos;
+      EndParsePos = endParsePos;
+      MaxFailPos = maxFailPos;
+      Frame = frame;
+    }
+
+    public override string ToString()
+    {
+      return Frame + " | StartState=" + StartState + " StartParsePos=" + StartParsePos + " EndParsePos=" + EndParsePos + " MaxFailPos=" + MaxFailPos;
+    }
+  }
+
   public class Recovery
   {
     public ReportData ReportResult;
+
+    private Dictionary<RecoveryStackFrame, ParseAlternative[]> _visited = new Dictionary<RecoveryStackFrame, ParseAlternative[]>();
 
     public Recovery(ReportData reportResult)
     {
@@ -45,7 +69,6 @@ namespace N2.DebugStrategies
           UpdateFrameDepth(parent);
         }
     }
-
     private static List<RecoveryStackFrame> PrepareRecoveryStacks(ICollection<RecoveryStackFrame> heads)
     {
       var allRecoveryStackFrames = new List<RecoveryStackFrame>();
@@ -78,7 +101,6 @@ namespace N2.DebugStrategies
 
       return allRecoveryStackFrames;
     }
-
     private static void Sort(List<RecoveryStackFrame> allRecoveryStackFrames)
     {
       allRecoveryStackFrames.Sort((l, r) => l.Depth.CompareTo(r.Depth));
@@ -92,7 +114,8 @@ namespace N2.DebugStrategies
 
       Debug.Assert(parser.RecoveryStacks.Count > 0);
 
-      List<RecoveryStackFrame> bestFrames = new List<RecoveryStackFrame>();
+      var bestFrames = new List<RecoveryStackFrame>();
+
       for (;failPos + skipCount < text.Length && bestFrames.Count == 0; ++skipCount)
       {
         var frames = PrepareRecoveryStacks(parser.RecoveryStacks);
@@ -103,131 +126,238 @@ namespace N2.DebugStrategies
 
         var allFrames = PrepareRecoveryStacks(newFrames);
 
-        foreach (var frame in allFrames)
-        {
-          if (frame.Depth == 0)
-          {
-            if (!InitFrame(parser, frame, true, failPos, skipCount))
-            {
-              frame.StartState = frame.FailState;
-              frame.StartParsePos = failPos + skipCount;
-              frame.EndParsePos = -1;
-              frame.MaxFailPos = failPos;
-            }
-          }
-          else
-            ParseNonTopFrames(parser, frame, failPos, skipCount);
-        }
+        FindBestFrames(parser, bestFrames, allFrames, skipCount);
 
-        FindBestFrames(bestFrames, allFrames);
+        _visited.Clear();
       }
 
       return -1;
     }
 
-    private void FindBestFrames(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames)
+    // ReSharper disable once ParameterTypeCanBeEnumerable.Local
+    private void FindBestFrames(Parser parser, List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, int skipCount)
     {
       bestFrames.Clear();
 
-      for (int i = allFrames.Count - 1; i >= 0; i--)
+      foreach (var frame in allFrames)
       {
-        var frame = allFrames[i];
+        if (frame.Parents.Count == 0) // is root
+          ProcessFrame(parser, bestFrames, frame, skipCount);
+      }
 
-        if (frame.Parents.Count == 0)
-          frame.Best = true;
+      foreach (var frame in allFrames)
+      {
+        if (frame.Parents.Count == 0) // is root
+          ChoosingTheBestFrame(bestFrames, frame, -1);
+      }
+    }
 
-        if (frame.Best)
+    private void ChoosingTheBestFrame(List<RecoveryStackFrame> bestFrames, RecoveryStackFrame frame, int parentStart)
+    {
+      frame.Best = true;
+
+      if (frame.Children.Count == 0)
+      {
+        bestFrames.Add(frame);
+        return;
+      }
+      //else if (frame.Children.Count == 1)
+      //  ChoosingTheBestFrame(bestFrames, frame.Children[0]);
+      //else
+      {
+        var res0 = parentStart >= 0 ? frame.ParseAlternatives.Where(p => p.End == parentStart).ToArray() : frame.ParseAlternatives;
+        var res1 = FilterMax(res0, f => f.End);
+        var res2 = FilterMin(res1, f => f.State < 0 ? int.MaxValue : f.State); // побеждает меньшее состояние
+
+        if (frame.ToString().Contains("Attribute =") && frame.ToString().Contains("FailState=3"))
         {
-          var count = frame.Children.Count;
-          if (count == 0)
+        }
+
+        foreach (var alternative in res2)
+        {
+          var start = alternative.Start;
+          var children = FilterBetterEmptyIfAllEmpty(frame.Children, start);
+
+          if (children.Count == 0)
+            Debug.Assert(false);
+
+          foreach (var child in children)
           {
-            if (frame.EndParsePos >= 0 || frame.MaxFailPos > frame.StartParsePos)
-              bestFrames.Add(frame);
-          }
-          else if (count == 1)
-            frame.Children[0].Best = true;
-          else
-          {
-            var candidates = frame.Children;
-            var res1 = Filter(candidates, c => c.EndParsePos);
-            var res2 = Filter(res1, c => c.EndParsePos >= 0 ? int.MaxValue : c.MaxFailPos);
-            var g = res2.GroupBy(c => Tuple.Create(c.RecoveryRuleParser, c.RuleId));
-            var res3 = g.SelectMany(e => Filter(e.ToList(), c => c.FailState)).ToList();
-            var res4 = (res3.Any(c => c.IsSpeculative) && !res3.All(c => c.IsSpeculative)) ? res3.Where(c => !c.IsSpeculative) : res3;
-            foreach (var frame2 in res4)
-              frame2.Best = true;
+            if (child.ParseAlternatives.Any(p => p.End == start))
+              ChoosingTheBestFrame(bestFrames, child, start);
           }
         }
       }
     }
 
-    private static List<RecoveryStackFrame> Filter(List<RecoveryStackFrame> candidates, Func<RecoveryStackFrame, int> selector)
+    private static List<RecoveryStackFrame> FilterBetterEmptyIfAllEmpty(List<RecoveryStackFrame> children, int start)
+    {
+      var xs = children
+        .SelectMany(c => c.ParseAlternatives)
+        .Where(p => p.End == start).ToList();
+      var needFilterEmpty = xs.All(p => p.Start == p.End)
+                            && xs.Any(p => p.State < 0);
+
+      if (needFilterEmpty)
+      {
+      }
+
+      return needFilterEmpty
+        ? children.Where(c => c.ParseAlternatives.Any(p => p.Start == p.End && p.State < 0)).ToList()
+        : children;
+    }
+
+    private static IEnumerable<T> FilterIfExists<T>(List<T> res2, Func<T, bool> predicate)
+    {
+      return res2.Any(predicate) ? res2.Where(predicate) : res2;
+    }
+
+    private void ProcessFrame(Parser parser, List<RecoveryStackFrame> bestFrames, RecoveryStackFrame frame, int skipCount)
+    {
+      if (frame.ParseAlternatives != null)
+        return;
+
+      if (frame.Children.Count == 0)
+      {
+        // разбираемся с головами
+        if (frame.ToString().Contains("NewArray_2"))
+        {
+        }
+        else if (frame.ToString().Contains("AttributeArguments") && frame.ToString().Contains("FailState=3"))
+        {
+        }
+
+        var end = ParseTopFrame(parser, frame, skipCount);
+        var xx = new [] { end };
+        frame.ParseAlternatives = xx;
+        _visited.Add(frame, xx);
+      }
+      else
+      {
+        // разбираемся с промежуточными ветками
+
+        //// В надежде не то, что пользователь просто забыл ввести некоторые токены, пробуем пропарсить фрэйм с позиции облома.
+        //ParseNonTopFrame(parser, frame, frame.TextPos, skipCount);
+        var childEnds = new HashSet<ParseAlternative>();
+        ProcessChildren(childEnds, parser, bestFrames, frame, skipCount);
+
+        var curentEnds = new HashSet<ParseAlternative>();
+        foreach (var start in childEnds)
+          curentEnds.Add(ParseNonTopFrame(parser, frame, start.End, skipCount));
+
+        var xx = curentEnds.ToArray();
+        frame.ParseAlternatives = xx;
+        _visited.Add(frame, xx);
+
+        if (frame.ToString().Contains("AttributeSection = "))
+        {
+        }
+        else if (frame.ToString().Contains("Class = "))
+        {
+        }
+
+
+        Debug.Assert(true);
+      }
+    }
+
+    private void ProcessChildren(HashSet<ParseAlternative> ends, Parser parser, List<RecoveryStackFrame> bestFrames, RecoveryStackFrame frame, int skipCount)
+    {
+      foreach (var child in frame.Children)
+      {
+        ProcessFrame(parser, bestFrames, child, skipCount);
+        ends.UnionWith(child.ParseAlternatives);
+      }
+    }
+
+    private static ParseAlternative ParseAlternative(int startPos, int endPos, int state)
+    {
+      return new ParseAlternative(startPos, endPos, state);
+    }
+
+    /// <returns>Посиция окончания парсинга</returns>
+    private ParseAlternative ParseTopFrame(Parser parser, RecoveryStackFrame frame, int skipCount)
+    {
+      var curTextPos = frame.TextPos + skipCount;
+      for (var state = frame.FailState; state >= 0; state = frame.GetNextState(state))
+      {
+        parser.MaxFailPos = curTextPos;
+        var parsedStates = new List<ParsedStateInfo>();
+        var pos = frame.TryParse(state, curTextPos, false, parsedStates, parser);
+        if (NonVoidParsed(frame, curTextPos, pos, parsedStates, parser))
+        {
+          frame.StartState = state;
+          frame.StartParsePos = curTextPos;
+          frame.EndParsePos = pos;
+          frame.MaxFailPos = parser.MaxFailPos;
+          return ParseAlternative(curTextPos, pos >= 0 ? pos : parser.MaxFailPos, state); // TODO: Подумать как быть с parser.MaxFailPos
+        }
+      }
+
+      // Если ни одного состояния не пропарсились, то считаем, что пропарсилось состояние "за концом правила".
+      // Это соотвтствует полному пропуску остатка подправил данного правила.
+      frame.StartState = -1;
+      frame.StartParsePos = curTextPos;
+      frame.EndParsePos = curTextPos;
+      frame.MaxFailPos = curTextPos;
+
+      return ParseAlternative(curTextPos, curTextPos, -1);
+    }
+
+    private static ParseAlternative ParseNonTopFrame(Parser parser, RecoveryStackFrame frame, int failPos, int skipCount)
+    {
+      if (failPos < 0)
+      {
+      }
+      var startParsePos = failPos + skipCount;
+      var maxFailPos = failPos; // TODO: Возможно имеет смысл использовать startParsePos для инициализации maxFailPos.
+
+      var state = frame.GetNextState(frame.FailState);
+
+      frame.StartState = -2; // не начинало парситься, т.е. не нашло ни одного состояния с которого возможно допарсивание
+      frame.StartParsePos = startParsePos;
+      frame.EndParsePos = -1;
+      frame.MaxFailPos = maxFailPos;
+
+      for (; state >= 0; state = frame.GetNextState(state))
+      {
+        parser.MaxFailPos = failPos;
+        var parsedStates = new List<ParsedStateInfo>();
+        var pos = frame.TryParse(state, startParsePos, true, parsedStates, parser);
+        // TODO: Возможно здесь надо проверять с поммощью NonVoidParsed(), как в ProcessTopFrame
+        if (pos > 0)
+        {
+          frame.StartState = state;
+          frame.StartParsePos = startParsePos;
+          frame.EndParsePos = pos;
+          frame.MaxFailPos = parser.MaxFailPos;
+          return ParseAlternative(startParsePos, pos, state);
+        }
+      }
+
+      return ParseAlternative(startParsePos, startParsePos, -1);
+    }
+
+    private static List<ParseAlternative> FilterMax(ICollection<ParseAlternative> candidates, Func<ParseAlternative, int> selector)
     {
       var max1 = candidates.Max(selector);
       var res2 = candidates.Where(c => selector(c) == max1);
       return res2.ToList();
     }
 
-    private static void ParseNonTopFrames(Parser parser, RecoveryStackFrame frame, int failPos, int skipCount)
+    private static List<ParseAlternative> FilterMin(ICollection<ParseAlternative> candidates, Func<ParseAlternative, int> selector)
     {
-      int startParsePos = failPos + skipCount;
-      int maxFailPos    = failPos;
-
-      foreach (var child in frame.Children)
-      {
-        startParsePos = Math.Max(startParsePos, child.EndParsePos);
-        maxFailPos    = Math.Max(maxFailPos, child.MaxFailPos);
-      }
-      var state = frame.GetNextState(frame.FailState);
-      if (state == -1)
-      {
-        frame.StartState    = -1;
-        frame.StartParsePos = startParsePos;
-        frame.EndParsePos   = startParsePos;
-        frame.MaxFailPos    = maxFailPos;
-      }
-      else
-      {
-        frame.StartState    = -2; // не начинало парситься, т.е. не нашло ни одного состояния с которого возможно допарсивание
-        frame.StartParsePos = startParsePos;
-        frame.EndParsePos   = -1;
-        frame.MaxFailPos    = maxFailPos;
-
-        for (; state >= 0; state = frame.GetNextState(state))
-        {
-          parser.MaxFailPos = failPos;
-          var parsedStates  = new List<ParsedStateInfo>();
-          var pos           = frame.TryParse(state, startParsePos, true, parsedStates, parser);
-
-          if (pos > 0)
-          {
-            frame.StartState    = state;
-            frame.StartParsePos = startParsePos;
-            frame.EndParsePos   = pos;
-            frame.MaxFailPos    = Math.Max(parser.MaxFailPos, maxFailPos);
-            break;
-          }
-        }
-      }
+      var min = candidates.Min(selector);
+      var res2 = candidates.Where(c => selector(c) == min);
+      return res2.ToList();
     }
 
-    private bool InitFrame(Parser parser, RecoveryStackFrame frame, bool continueList, int failPos, int skipCount)
+
+    private static List<RecoveryStackFrame> Filter(List<RecoveryStackFrame> candidates, Func<RecoveryStackFrame, int> selector)
     {
-      for (var state = frame.FailState; state >= 0; state = frame.GetNextState(state))
-      {
-        parser.MaxFailPos = failPos;
-        var parsedStates = new List<ParsedStateInfo>();
-        var pos = frame.TryParse(state, failPos + skipCount, continueList, parsedStates, parser);
-        if (NonVoidParsed(frame, failPos + skipCount, pos, parsedStates, parser))
-        {
-          frame.StartState = state;
-          frame.StartParsePos = failPos + skipCount;
-          frame.EndParsePos = pos;
-          frame.MaxFailPos = parser.MaxFailPos;
-          return true;
-        }
-      }
-      return false;
+      var max1 = candidates.Max(selector);
+      var res2 = candidates.Where(c => selector(c) == max1);
+      return res2.ToList();
     }
 
     private bool NonVoidParsed(RecoveryStackFrame frame, int curTextPos, int pos, List<ParsedStateInfo> parsedStates, Parser parser)
@@ -242,7 +372,9 @@ namespace N2.DebugStrategies
       if (frame.IsTokenRule)
         return;
 
-      if (InitFrame(parser, frame, false, failPos, failPos + skipCount))
+      //if (InitFrame(parser, frame, false, failPos, skipCount))
+      var res = ParseTopFrame(parser, frame, skipCount);
+      if (res.State >= 0)
       {
         newFrames.Add(frame);
         return;
