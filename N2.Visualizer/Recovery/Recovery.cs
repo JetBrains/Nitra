@@ -39,13 +39,13 @@ namespace N2.DebugStrategies
 
       for (;failPos + skipCount < text.Length && bestFrames.Count == 0; ++skipCount)
       {
-        var frames = RecoveryUtils.PrepareRecoveryStacks(parser.RecoveryStacks);
+        var frames = parser.RecoveryStacks.PrepareRecoveryStacks();
         var newFrames = new HashSet<RecoveryStackFrame>(frames);
         foreach (var frame in frames)
           if (frame.Depth == 0)
             FindSpeculativeFrames(newFrames, parser, frame, failPos, skipCount);
 
-        var allFrames = RecoveryUtils.PrepareRecoveryStacks(newFrames);
+        var allFrames = newFrames.PrepareRecoveryStacks();
 
         FindBestFrames(parser, bestFrames, allFrames, skipCount);
 
@@ -373,39 +373,18 @@ namespace N2.DebugStrategies
       return res2.ToList();
     }
 
-    public static void ClearAndCollectFrames(this RecoveryStackFrame frame, List<RecoveryStackFrame> allRecoveryStackFrames)
-    {
-      if (frame.Depth != -1)
-      {
-        allRecoveryStackFrames.Add(frame);
-        frame.Depth = -1;
-        foreach (var parent in frame.Parents)
-          ClearAndCollectFrames(parent, allRecoveryStackFrames);
-      }
-    }
-
-    public static void UpdateFrameDepth(this RecoveryStackFrame frame)
-    {
-      foreach (var parent in frame.Parents)
-        if (parent.Depth <= frame.Depth + 1)
-        {
-          parent.Depth = frame.Depth + 1;
-          UpdateFrameDepth(parent);
-        }
-    }
-
     public static List<RecoveryStackFrame> PrepareRecoveryStacks(this ICollection<RecoveryStackFrame> heads)
     {
       var allRecoveryStackFrames = new List<RecoveryStackFrame>();
 
       foreach (var stack in heads)
-        ClearAndCollectFrames(stack, allRecoveryStackFrames);
+        stack.ClearAndCollectFrames(allRecoveryStackFrames);
       foreach (var stack in heads)
         stack.Depth = 0;
       foreach (var stack in heads)
-        UpdateFrameDepth(stack);
+        stack.UpdateFrameDepth();
 
-      Sort(allRecoveryStackFrames);
+      allRecoveryStackFrames.SortByDepth();
 
       for (int i = 0; i < allRecoveryStackFrames.Count; ++i)
       {
@@ -427,9 +406,30 @@ namespace N2.DebugStrategies
       return allRecoveryStackFrames;
     }
 
-    public static void Sort(List<RecoveryStackFrame> allRecoveryStackFrames)
+    private static void SortByDepth(this List<RecoveryStackFrame> allRecoveryStackFrames)
     {
       allRecoveryStackFrames.Sort((l, r) => l.Depth.CompareTo(r.Depth));
+    }
+
+    private static void ClearAndCollectFrames(this RecoveryStackFrame frame, List<RecoveryStackFrame> allRecoveryStackFrames)
+    {
+      if (frame.Depth != -1)
+      {
+        allRecoveryStackFrames.Add(frame);
+        frame.Depth = -1;
+        foreach (var parent in frame.Parents)
+          ClearAndCollectFrames(parent, allRecoveryStackFrames);
+      }
+    }
+
+    private static void UpdateFrameDepth(this RecoveryStackFrame frame)
+    {
+      foreach (var parent in frame.Parents)
+        if (parent.Depth <= frame.Depth + 1)
+        {
+          parent.Depth = frame.Depth + 1;
+          UpdateFrameDepth(parent);
+        }
     }
   }
 }
