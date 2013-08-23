@@ -16,29 +16,6 @@ namespace N2.DebugStrategies
   using ParserData = Tuple<int, int, List<ParsedStateInfo>>;
   using ReportData = Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>>;
 
-  public class RecoveryAlternative
-  {
-    public int                StartState;
-    public int                StartParsePos;
-    public int                EndParsePos;
-    public int                MaxFailPos;
-    public RecoveryStackFrame Frame;
-
-    public RecoveryAlternative(int startState, int startParsePos, int endParsePos, int maxFailPos, RecoveryStackFrame frame)
-    {
-      StartState = startState;
-      StartParsePos = startParsePos;
-      EndParsePos = endParsePos;
-      MaxFailPos = maxFailPos;
-      Frame = frame;
-    }
-
-    public override string ToString()
-    {
-      return Frame + " | StartState=" + StartState + " StartParsePos=" + StartParsePos + " EndParsePos=" + EndParsePos + " MaxFailPos=" + MaxFailPos;
-    }
-  }
-
   public class Recovery
   {
     public ReportData ReportResult;
@@ -48,62 +25,6 @@ namespace N2.DebugStrategies
     public Recovery(ReportData reportResult)
     {
       ReportResult = reportResult;
-    }
-
-    private static void ClearAndCollectFrames(RecoveryStackFrame frame, List<RecoveryStackFrame> allRecoveryStackFrames)
-    {
-      if (frame.Depth != -1)
-      {
-        allRecoveryStackFrames.Add(frame);
-        frame.Depth = -1;
-        foreach (var parent in frame.Parents)
-          ClearAndCollectFrames(parent, allRecoveryStackFrames);
-      }
-    }
-    private static void UpdateFrameDepth(RecoveryStackFrame frame)
-    {
-      foreach (var parent in frame.Parents)
-        if (parent.Depth <= frame.Depth + 1)
-        {
-          parent.Depth = frame.Depth + 1;
-          UpdateFrameDepth(parent);
-        }
-    }
-    private static List<RecoveryStackFrame> PrepareRecoveryStacks(ICollection<RecoveryStackFrame> heads)
-    {
-      var allRecoveryStackFrames = new List<RecoveryStackFrame>();
-
-      foreach (var stack in heads)
-        ClearAndCollectFrames(stack, allRecoveryStackFrames);
-      foreach (var stack in heads)
-        stack.Depth = 0;
-      foreach (var stack in heads)
-        UpdateFrameDepth(stack);
-
-      Sort(allRecoveryStackFrames);
-
-      for (int i = 0; i < allRecoveryStackFrames.Count; ++i)
-      {
-        var frame = allRecoveryStackFrames[i];
-        frame.Index = i;
-        frame.Best = false;
-        frame.Children.Clear();
-      }
-
-      foreach (var frame in allRecoveryStackFrames)
-        foreach (var parent in frame.Parents)
-        {
-          if (parent.Children.Contains(frame))
-            Debug.Assert(false);
-
-          parent.Children.Add(frame);
-        }
-
-      return allRecoveryStackFrames;
-    }
-    private static void Sort(List<RecoveryStackFrame> allRecoveryStackFrames)
-    {
-      allRecoveryStackFrames.Sort((l, r) => l.Depth.CompareTo(r.Depth));
     }
 
     public virtual int Strategy(Parser parser)
@@ -118,13 +39,13 @@ namespace N2.DebugStrategies
 
       for (;failPos + skipCount < text.Length && bestFrames.Count == 0; ++skipCount)
       {
-        var frames = PrepareRecoveryStacks(parser.RecoveryStacks);
+        var frames = RecoveryUtils.PrepareRecoveryStacks(parser.RecoveryStacks);
         var newFrames = new HashSet<RecoveryStackFrame>(frames);
         foreach (var frame in frames)
           if (frame.Depth == 0)
             FindSpeculativeFrames(newFrames, parser, frame, failPos, skipCount);
 
-        var allFrames = PrepareRecoveryStacks(newFrames);
+        var allFrames = RecoveryUtils.PrepareRecoveryStacks(newFrames);
 
         FindBestFrames(parser, bestFrames, allFrames, skipCount);
 
@@ -161,31 +82,27 @@ namespace N2.DebugStrategies
         bestFrames.Add(frame);
         return;
       }
-      //else if (frame.Children.Count == 1)
-      //  ChoosingTheBestFrame(bestFrames, frame.Children[0]);
-      //else
+
+      var res0 = parentStart >= 0 ? frame.ParseAlternatives.Where(p => p.End == parentStart).ToArray() : frame.ParseAlternatives;
+      var res1 = res0.FilterMax(f => f.End);
+      var res2 = res1.FilterMin(f => f.State < 0 ? int.MaxValue : f.State); // побеждает меньшее состояние
+
+      if (frame.ToString().Contains("Attribute =") && frame.ToString().Contains("FailState=3"))
       {
-        var res0 = parentStart >= 0 ? frame.ParseAlternatives.Where(p => p.End == parentStart).ToArray() : frame.ParseAlternatives;
-        var res1 = FilterMax(res0, f => f.End);
-        var res2 = FilterMin(res1, f => f.State < 0 ? int.MaxValue : f.State); // побеждает меньшее состояние
+      }
 
-        if (frame.ToString().Contains("Attribute =") && frame.ToString().Contains("FailState=3"))
+      foreach (var alternative in res2)
+      {
+        var start = alternative.Start;
+        var children = FilterBetterEmptyIfAllEmpty(frame.Children, start);
+
+        if (children.Count == 0)
+          Debug.Assert(false);
+
+        foreach (var child in children)
         {
-        }
-
-        foreach (var alternative in res2)
-        {
-          var start = alternative.Start;
-          var children = FilterBetterEmptyIfAllEmpty(frame.Children, start);
-
-          if (children.Count == 0)
-            Debug.Assert(false);
-
-          foreach (var child in children)
-          {
-            if (child.ParseAlternatives.Any(p => p.End == start))
-              ChoosingTheBestFrame(bestFrames, child, start);
-          }
+          if (child.ParseAlternatives.Any(p => p.End == start))
+            ChoosingTheBestFrame(bestFrames, child, start);
         }
       }
     }
@@ -203,7 +120,7 @@ namespace N2.DebugStrategies
       }
 
       return needFilterEmpty
-        ? FilterMin() children.Where(c => c.ParseAlternatives.Any(p => p.Start == p.End && p.State < 0)).ToList()
+        ? children.Where(c => c.ParseAlternatives.Any(p => p.Start == p.End && p.State < 0)).ToList()//.FilterMin()
         : children;
     }
 
@@ -338,28 +255,6 @@ namespace N2.DebugStrategies
       return ParseAlternative(startParsePos, startParsePos, -1);
     }
 
-    private static List<T> FilterMax<T>(ICollection<T> candidates, Func<T, int> selector)
-    {
-      var max1 = candidates.Max(selector);
-      var res2 = candidates.Where(c => selector(c) == max1);
-      return res2.ToList();
-    }
-
-    private static List<T> FilterMin<T>(ICollection<T> candidates, Func<T, int> selector)
-    {
-      var min = candidates.Min(selector);
-      var res2 = candidates.Where(c => selector(c) == min);
-      return res2.ToList();
-    }
-
-
-    private static List<T> Filter<T>(List<T> candidates, Func<T, int> selector)
-    {
-      var max1 = candidates.Max(selector);
-      var res2 = candidates.Where(c => selector(c) == max1);
-      return res2.ToList();
-    }
-
     private bool NonVoidParsed(RecoveryStackFrame frame, int curTextPos, int pos, List<ParsedStateInfo> parsedStates, Parser parser)
     {
       var lastPos = Math.Max(pos, parser.MaxFailPos);
@@ -436,66 +331,6 @@ namespace N2.DebugStrategies
       return sum;
     }
 
-    protected virtual int ContinueParse(int startTextPos, RecoveryStackFrame recoveryStack, Parser parser, bool trySkipStates)
-    {
-      return ContinueParseImpl(startTextPos, recoveryStack, parser, trySkipStates);
-    }
-
-    protected int ContinueParseImpl(int curTextPos, RecoveryStackFrame recoveryStack, Parser parser, bool trySkipStates)
-    {
-      var parents = recoveryStack.Parents;
-
-      if (parents.Count == 0)
-        return curTextPos;
-
-      var parsedStates = new List<ParsedStateInfo>();
-      var results = new List<Tuple<int, RecoveryStackFrame, List<ParsedStateInfo>>>();
-      var bestPos = curTextPos;
-      foreach (var stackFrame in parents)
-      {
-        var state = stackFrame.FailState;
-        do
-        {
-          state = stackFrame.GetNextState(state);
-          var pos = stackFrame.TryParse(state, curTextPos, true, parsedStates, parser);
-
-          if (pos > bestPos)
-          {
-            results.Clear();
-            bestPos = pos;
-          }
-          if (pos >= bestPos)
-          {
-            if (pos > 1)
-            { 
-            }
-            results.Add(Tuple.Create(pos, stackFrame, parsedStates));
-            break;
-          }
-        }
-        while (state >= 0);
-      }
-
-// ReSharper disable once LoopCanBeConvertedToQuery
-      foreach (var result in results)
-      {
-        var pos = ContinueParseImpl(result.Item1, result.Item2, parser, trySkipStates);
-        if (pos > bestPos)
-          bestPos = pos;
-      }
-
-      if (bestPos > curTextPos)
-        return bestPos;
-
-      return Math.Max(parser.MaxFailPos, curTextPos);
-    }
-
-    protected virtual int TryParse(Parser parser, RecoveryStackFrame recoveryStack, int curTextPos, int state, out List<ParsedStateInfo> parsedStates)
-    {
-      parsedStates = new List<ParsedStateInfo>();
-      return recoveryStack.TryParse(state, curTextPos, false, parsedStates, parser);
-    }
-
     private void FixAst(Parser parser)
     {
     //  // TODO: Надо переписать. Пока закоментил.
@@ -520,6 +355,81 @@ namespace N2.DebugStrategies
     //    stack.Head.RuleParser.PatchAst(stack.Head.AstStartPos, -2, -1, stack, parser);
     //  }
     }
+  }
 
+  internal static class RecoveryUtils
+  {
+    public static List<T> FilterMax<T>(this ICollection<T> candidates, Func<T, int> selector)
+    {
+      var max1 = candidates.Max(selector);
+      var res2 = candidates.Where(c => selector(c) == max1);
+      return res2.ToList();
+    }
+
+    public static List<T> FilterMin<T>(this ICollection<T> candidates, Func<T, int> selector)
+    {
+      var min = candidates.Min(selector);
+      var res2 = candidates.Where(c => selector(c) == min);
+      return res2.ToList();
+    }
+
+    public static void ClearAndCollectFrames(this RecoveryStackFrame frame, List<RecoveryStackFrame> allRecoveryStackFrames)
+    {
+      if (frame.Depth != -1)
+      {
+        allRecoveryStackFrames.Add(frame);
+        frame.Depth = -1;
+        foreach (var parent in frame.Parents)
+          ClearAndCollectFrames(parent, allRecoveryStackFrames);
+      }
+    }
+
+    public static void UpdateFrameDepth(this RecoveryStackFrame frame)
+    {
+      foreach (var parent in frame.Parents)
+        if (parent.Depth <= frame.Depth + 1)
+        {
+          parent.Depth = frame.Depth + 1;
+          UpdateFrameDepth(parent);
+        }
+    }
+
+    public static List<RecoveryStackFrame> PrepareRecoveryStacks(this ICollection<RecoveryStackFrame> heads)
+    {
+      var allRecoveryStackFrames = new List<RecoveryStackFrame>();
+
+      foreach (var stack in heads)
+        ClearAndCollectFrames(stack, allRecoveryStackFrames);
+      foreach (var stack in heads)
+        stack.Depth = 0;
+      foreach (var stack in heads)
+        UpdateFrameDepth(stack);
+
+      Sort(allRecoveryStackFrames);
+
+      for (int i = 0; i < allRecoveryStackFrames.Count; ++i)
+      {
+        var frame = allRecoveryStackFrames[i];
+        frame.Index = i;
+        frame.Best = false;
+        frame.Children.Clear();
+      }
+
+      foreach (var frame in allRecoveryStackFrames)
+        foreach (var parent in frame.Parents)
+        {
+          if (parent.Children.Contains(frame))
+            Debug.Assert(false);
+
+          parent.Children.Add(frame);
+        }
+
+      return allRecoveryStackFrames;
+    }
+
+    public static void Sort(List<RecoveryStackFrame> allRecoveryStackFrames)
+    {
+      allRecoveryStackFrames.Sort((l, r) => l.Depth.CompareTo(r.Depth));
+    }
   }
 }

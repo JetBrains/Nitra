@@ -64,30 +64,6 @@ namespace N2.DebugStrategies
     //    _recoveryPerformanceData.TryParseSubrulesTime += _recoveryPerformanceData.Timer.Elapsed - time;
     //}
 
-    protected override int ContinueParse(int startTextPos, RecoveryStackFrame recoveryStack, Parser parser,
-      bool trySkipStates)
-    {
-      var stratTime = _recoveryPerformanceData.Timer.Elapsed;
-      _recoveryPerformanceData.ContinueParseCount++;
-
-      var result = ContinueParseImpl(startTextPos, recoveryStack, parser, trySkipStates);
-
-      _recoveryPerformanceData.ContinueParseTime += _recoveryPerformanceData.Timer.Elapsed - stratTime;
-      return result;
-    }
-
-    protected override int TryParse(Parser parser, RecoveryStackFrame recoveryStack, int curTextPos, int state, out List<ParsedStateInfo> parsedStates)
-    {
-      _recoveryPerformanceData.TryParseCount++;
-      var timer = _recoveryPerformanceData.Timer.Elapsed;
-
-      var result = base.TryParse(parser, recoveryStack, curTextPos, state, out parsedStates);
-
-      _recoveryPerformanceData.TryParseTime += _recoveryPerformanceData.Timer.Elapsed - timer;
-
-      return result;
-    }
-
     //protected override Recovery CreateSubRecovery()
     //{
     //  return new RecoveryVisualizer(this);
