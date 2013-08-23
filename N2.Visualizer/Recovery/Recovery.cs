@@ -51,132 +51,105 @@ namespace N2.DebugStrategies
 
         var allFrames = newFrames.PrepareRecoveryStacks();
 
-        FindBestFrames(parser, bestFrames, allFrames, skipCount);
+        bestFrames.Clear();
+
+        ParseFrames(parser, skipCount, allFrames);
+
+        SelectBestFrames(bestFrames, allFrames);
 
         _visited.Clear();
       }
 
       return -1;
     }
-    
+
     #endregion
 
     #region Выбор лучшего фрейма
 
-    // ReSharper disable once ParameterTypeCanBeEnumerable.Local
-    private void FindBestFrames(Parser parser, List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, int skipCount)
+    private static void SelectBestFrames(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames)
     {
-      bestFrames.Clear();
-
-      foreach (var frame in allFrames)
+      allFrames[allFrames.Count - 1].Best = true; // единственный корень гарантированно последний
+      for (int i = allFrames.Count - 1; i >= 0; --i)
       {
-        if (frame.Parents.Count == 0) // is root
-          ProcessFrame(parser, bestFrames, frame, skipCount);
-      }
-
-      foreach (var frame in allFrames)
-      {
-        if (frame.Parents.Count == 0) // is root
-          ChoosingTheBestFrame(bestFrames, frame, -1);
-      }
-    }
-
-    private void ChoosingTheBestFrame(List<RecoveryStackFrame> bestFrames, RecoveryStackFrame frame, int parentStart)
-    {
-      frame.Best = true;
-
-      if (frame.Children.Count == 0)
-      {
-        bestFrames.Add(frame);
-        return;
-      }
-
-      var res0 = parentStart >= 0 ? frame.ParseAlternatives.Where(p => p.End == parentStart).ToArray() : frame.ParseAlternatives;
-      var res1 = res0.FilterMax(f => f.End);
-      var res2 = res1.FilterMin(f => f.State < 0 ? int.MaxValue : f.State); // побеждает меньшее состояние
-
-      if (frame.ToString().Contains("Attribute =") && frame.ToString().Contains("FailState=3"))
-      {
-      }
-
-      foreach (var alternative in res2)
-      {
-        var start = alternative.Start;
-        var children = frame.Children.FilterBetterEmptyIfAllEmpty(start);
-
-        if (children.Count == 0)
-          Debug.Assert(false);
-
-        foreach (var child in children)
+        var frame = allFrames[i];
+        if (frame.Best)
         {
-          if (child.ParseAlternatives.Any(p => p.End == start))
-            ChoosingTheBestFrame(bestFrames, child, start);
+          if (frame.Children.Count == 0)
+            bestFrames.Add(frame);
+          else
+          {
+            ParseAlternative[] res0;
+            if (frame.Parents.Count == 0)
+              res0 = frame.ParseAlternatives;
+            else
+            {
+              var parentStarts = new HashSet<int>();
+              foreach (var parent in frame.Parents)
+                foreach (var alternative in parent.ParseAlternatives)
+                  if (alternative.Start >= 0)
+                    parentStarts.Add(alternative.Start);
+              res0 = frame.ParseAlternatives.Where(alternative => parentStarts.Contains(alternative.End)).ToArray();
+            }
+
+            var res1 = res0.FilterMax(f => f.End);
+            var res2 = res1.FilterMin(f => f.State < 0 ? int.MaxValue : f.State); // побеждает меньшее состояние
+
+            foreach (var alternative in res2)
+            {
+              var start = alternative.Start;
+              var children = frame.Children.FilterBetterEmptyIfAllEmpty(start);
+
+              if (children.Count == 0)
+                Debug.Assert(false);
+
+              foreach (var child in children)
+              {
+                if (child.ParseAlternatives.Any(p => p.End == start))
+                  child.Best = true;
+              }
+            }
+          }
         }
-      }
-    }
-
-    private void ProcessFrame(Parser parser, List<RecoveryStackFrame> bestFrames, RecoveryStackFrame frame, int skipCount)
-    {
-      if (frame.ParseAlternatives != null)
-        return;
-
-      if (frame.Children.Count == 0)
-      {
-        // разбираемся с головами
-        if (frame.ToString().Contains("NewArray_2"))
-        {
-        }
-        else if (frame.ToString().Contains("AttributeArguments") && frame.ToString().Contains("FailState=3"))
-        {
-        }
-
-        var end = ParseTopFrame(parser, frame, skipCount);
-        var xx = new[] { end };
-        frame.ParseAlternatives = xx;
-        _visited.Add(frame, xx);
-      }
-      else
-      {
-        // разбираемся с промежуточными ветками
-
-        //// В надежде не то, что пользователь просто забыл ввести некоторые токены, пробуем пропарсить фрэйм с позиции облома.
-        //ParseNonTopFrame(parser, frame, frame.TextPos, skipCount);
-        var childEnds = new HashSet<ParseAlternative>();
-        ProcessChildren(childEnds, parser, bestFrames, frame, skipCount);
-
-        var curentEnds = new HashSet<ParseAlternative>();
-        foreach (var start in childEnds)
-          if (start.End >= 0)
-            curentEnds.Add(ParseNonTopFrame(parser, frame, start.End, skipCount));
-
-        var xx = curentEnds.ToArray();
-        frame.ParseAlternatives = xx;
-        _visited.Add(frame, xx);
-
-        if (frame.ToString().Contains("AttributeSection = "))
-        {
-        }
-        else if (frame.ToString().Contains("Class = "))
-        {
-        }
-
-
-        Debug.Assert(true);
-      }
-    }
-
-    private void ProcessChildren(HashSet<ParseAlternative> ends, Parser parser, List<RecoveryStackFrame> bestFrames, RecoveryStackFrame frame, int skipCount)
-    {
-      foreach (var child in frame.Children)
-      {
-        ProcessFrame(parser, bestFrames, child, skipCount);
-        ends.UnionWith(child.ParseAlternatives);
       }
     }
 
     #endregion
 
     #region Parsing
+
+    private void ParseFrames(Parser parser, int skipCount, List<RecoveryStackFrame> allFrames)
+    {
+      for (int i = 0; i < allFrames.Count; ++i)
+      {
+        var frame = allFrames[i];
+
+        if (frame.Depth == 0)
+        {
+          // разбираемся с головами
+          var end = ParseTopFrame(parser, frame, skipCount);
+          var xx = new[] { end };
+          frame.ParseAlternatives = xx;
+        }
+        else
+        {
+          // разбираемся с промежуточными ветками
+          // В надежде не то, что пользователь просто забыл ввести некоторые токены, пробуем пропарсить фрэйм с позиции облома.
+          var childEnds = new HashSet<int>();
+          foreach (var child in frame.Children)
+            foreach (var alternative in child.ParseAlternatives)
+              if (alternative.End >= 0)
+                childEnds.Add(alternative.End);
+
+          var curentEnds = new HashSet<ParseAlternative>();
+          foreach (var end in childEnds)
+            curentEnds.Add(ParseNonTopFrame(parser, frame, end));
+
+          var xx = curentEnds.ToArray();
+          frame.ParseAlternatives = xx;
+        }
+      }
+    }
 
     /// <returns>Посиция окончания парсинга</returns>
     private ParseAlternative ParseTopFrame(Parser parser, RecoveryStackFrame frame, int skipCount)
@@ -196,11 +169,9 @@ namespace N2.DebugStrategies
       return new ParseAlternative(curTextPos, curTextPos, curTextPos, -1);
     }
 
-    private static ParseAlternative ParseNonTopFrame(Parser parser, RecoveryStackFrame frame, int failPos, int skipCount)
+    private static ParseAlternative ParseNonTopFrame(Parser parser, RecoveryStackFrame frame, int continuePos)
     {
-      if (failPos < 0)
-        Debug.Assert(false);
-      var curTextPos = failPos + skipCount;
+      var curTextPos = continuePos;
       var maxfailPos = curTextPos;
       var state      = frame.GetNextState(frame.FailState);
 
