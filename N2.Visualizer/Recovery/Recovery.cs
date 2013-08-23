@@ -82,10 +82,14 @@ namespace N2.DebugStrategies
           bestFrames.Add(frame);
           continue;
         }
+
+        if (frame.ToString().Contains("AttributeSection = ") && frame.Depth == 14)
+          Debug.Assert(true);
         
         var alternatives0 = FilterChildrenParseAlternativesWichStartsFromParentsEnds(frame);
         var alternatives1 = alternatives0.FilterMax(f => f.End);
         var alternatives2 = alternatives1.FilterMin(f => f.State < 0 ? int.MaxValue : f.State); // побеждает меньшее состояние
+        frame.ParseAlternatives = alternatives2.ToArray();
 
         foreach (var alternative in alternatives2)
         {
@@ -113,8 +117,8 @@ namespace N2.DebugStrategies
       {
         var parentStarts = new HashSet<int>();
         foreach (var parent in frame.Parents)
-          foreach (var alternative in parent.ParseAlternatives)
-            if (alternative.Start >= 0)
+          if (parent.Best)
+            foreach (var alternative in parent.ParseAlternatives)
               parentStarts.Add(alternative.Start);
         res0 = frame.ParseAlternatives.Where(alternative => parentStarts.Contains(alternative.End)).ToArray();
       }
@@ -176,9 +180,9 @@ namespace N2.DebugStrategies
       return new ParseAlternative(curTextPos, curTextPos, 0, curTextPos, -1);
     }
 
-    private static ParseAlternative ParseNonTopFrame(Parser parser, RecoveryStackFrame frame, int continuePos)
+    private static ParseAlternative ParseNonTopFrame(Parser parser, RecoveryStackFrame frame, int curTextPos)
     {
-      var curTextPos = continuePos;
+      var parentsEat = frame.Children.Max(c => c.ParseAlternatives.Max(a => a.End == curTextPos ? a.ParentsEat : 0));
       var maxfailPos = curTextPos;
       var state      = frame.GetNextState(frame.FailState);
 
@@ -188,10 +192,10 @@ namespace N2.DebugStrategies
         var parsedStates = new List<ParsedStateInfo>();
         var pos = frame.TryParse(state, curTextPos, true, parsedStates, parser);
         if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parser))
-          return new ParseAlternative(curTextPos, pos, pos < 0 ? 0 : pos - curTextPos, parser.MaxFailPos, state);
+          return new ParseAlternative(curTextPos, pos, pos < 0 ? parentsEat : pos - curTextPos + parentsEat, parser.MaxFailPos, state);
       }
 
-      return new ParseAlternative(curTextPos, curTextPos, 0, maxfailPos, -1);
+      return new ParseAlternative(curTextPos, curTextPos, parentsEat, maxfailPos, -1);
     }
 
     #endregion
@@ -387,11 +391,11 @@ namespace N2.DebugStrategies
       // Если имеется несколько альтернативных пропарсиваний разбирающих пустую строку, то предпочитаем те что имеют State == -1 (пропускающие все 
       // состояния внутри текущего стека).
       
-      // Выбор между элементами можно делать только если у них у всех одинаковое начало (TextPos).
-      // TODO: Возможно имеет смысл сгруппировать фрэймы по TextPos и произвести фильтрацию по группам.
-      var maxTP = frames[0].TextPos;
-      if (frames.Any(f => f.TextPos != maxTP))
-        return frames;
+      //// Выбор между элементами можно делать только если у них у всех одинаковое начало (TextPos).
+      //// TODO: Возможно имеет смысл сгруппировать фрэймы по TextPos и произвести фильтрацию по группам.
+      //var maxTP = frames[0].TextPos;
+      //if (frames.Any(f => f.TextPos != maxTP))
+      //  return frames;
 
       // Вычисляем список 
       var xs = frames
@@ -400,17 +404,18 @@ namespace N2.DebugStrategies
       var needFilterEmpty = xs.All(p => p.Start == p.End)
                             && xs.Any(p => p.State < 0);
 
-      var result = needFilterEmpty
-        ? frames.Where(c => c.ParseAlternatives.Any(p => p.Start == p.End && p.State < 0)).ToList()//.FilterMin(c => c.Depth)
-        : frames;
+      var result = frames;
+        //needFilterEmpty
+        //? frames.Where(c => c.ParseAlternatives.Any(p => p.Start == p.End && p.State < 0)).ToList()//.FilterMin(c => c.Depth)
+        //: frames;
 
       if (result.Count == 1)
         return result;
 
-      if (needFilterEmpty && frames.Any(c => c.Depth == 0) && frames.Any(c => c.Depth != 0))
+      if (frames.All(f => f.ParseAlternatives.Max(a => a.ParentsEat) == 0))
       {
         // Если список содержит только элементы разбирающие пустую строку и при этом имеется элементы с нулевой глубиной, то предпочитаем их.
-        var res2 = frames.Where(c => c.Depth == 0).ToList();
+        var res2 = frames.FilterMin(c => c.Depth).ToList();
         //if (res2.Count != result.Count)
         //  Debug.Assert(true);
         return res2;
