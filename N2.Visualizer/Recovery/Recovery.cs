@@ -55,6 +55,7 @@ namespace N2.DebugStrategies
 
         ParseFrames(parser, skipCount, allFrames);
 
+        UpdateParseFramesAlternatives(allFrames);
         SelectBestFrames(bestFrames, allFrames);
 
         _visited.Clear();
@@ -67,26 +68,32 @@ namespace N2.DebugStrategies
 
     #region Выбор лучшего фрейма
 
-    private static void SelectBestFrames(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames)
+    private static void UpdateParseFramesAlternatives(List<RecoveryStackFrame> allFrames)
     {
       allFrames[allFrames.Count - 1].Best = true; // единственный корень гарантированно последний
       for (int i = allFrames.Count - 1; i >= 0; --i)
       {
         var frame = allFrames[i];
-        
+
         if (!frame.Best)
           continue;
 
         if (frame.Children.Count == 0)
         {
-          bestFrames.Add(frame);
           continue;
         }
 
-        if (frame.ToString().Contains("AttributeSection = ") && frame.Depth == 14)
-          Debug.Assert(true);
-        
-        var alternatives0 = FilterChildrenParseAlternativesWichStartsFromParentsEnds(frame);
+        switch (frame.Index)
+        {
+          case 14: break; // AttributeArguments SP=2 TP=3 FS=3 T=Rule D=0 I=14 PA=[(3, 3; E0, S-1)] OK  ◄─┐
+          case 67: break; // AttributeArguments SP=2 TP=3 FS=4 T=Rule D=4 I=67 PA=[(3, 3; E0, S-1)] !!! ◄─┤
+          case 75: break; // AttributeArguments SP=2 TP=3 FS=2 T=Rule D=9 I=75 PA=[(3, 3; E0, S-1)] !!! ◄─┤
+          case 76: break; // Attribute SP=2 TP=2 FS=3 T=Rule D=10 I=76 PA=[(3, 3; E0, S-1)]               │
+          case 79: break; // AttributeList SP=1 TP=1 FS=0 T=Rule D=13 I=79 PA=[(3, 3; E0, S-1)]           │
+          case 80: break; // AttributeSection SP=0 TP=1 FS=4 T=Rule D=14 I=80 PA=[(3, 5; E2, S5)]         │
+        }
+
+        var alternatives0 = FilterParseAlternativesWichStartsFromParentsEnds(frame);
         var alternatives1 = alternatives0.FilterMax(f => f.End);
         var alternatives2 = alternatives1.FilterMin(f => f.State < 0 ? int.MaxValue : f.State); // побеждает меньшее состояние
         frame.ParseAlternatives = alternatives2.ToArray();
@@ -94,7 +101,7 @@ namespace N2.DebugStrategies
         foreach (var alternative in alternatives2)
         {
           var start = alternative.Start;
-          var children = frame.Children.FilterBetterEmptyIfAllEmpty(start);
+          var children = frame.Children;
 
           if (children.Count == 0)
             Debug.Assert(false);
@@ -108,7 +115,49 @@ namespace N2.DebugStrategies
       }
     }
 
-    private static ParseAlternative[] FilterChildrenParseAlternativesWichStartsFromParentsEnds(RecoveryStackFrame frame)
+    private static void SelectBestFrames(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames)
+    {
+      for (int i = allFrames.Count - 1; i >= 0; --i)
+      {
+        var frame = allFrames[i];
+        
+        if (!frame.Best)
+          continue;
+
+        if (frame.Children.Count == 0)
+        {
+          bestFrames.Add(frame);
+          continue;
+        }
+
+        switch (frame.Index)
+        {
+          case 14: break; // AttributeArguments SP=2 TP=3 FS=3 T=Rule D=0 I=14 PA=[(3, 3; E0, S-1)] OK  ◄─┐
+          case 67: break; // AttributeArguments SP=2 TP=3 FS=4 T=Rule D=4 I=67 PA=[(3, 3; E0, S-1)] !!! ◄─┤
+          case 75: break; // AttributeArguments SP=2 TP=3 FS=2 T=Rule D=9 I=75 PA=[(3, 3; E0, S-1)] !!! ◄─┤
+          case 76: break; // Attribute SP=2 TP=2 FS=3 T=Rule D=10 I=76 PA=[(3, 3; E0, S-1)]               │
+          case 79: break; // AttributeList SP=1 TP=1 FS=0 T=Rule D=13 I=79 PA=[(3, 3; E0, S-1)]           │
+          case 80: break; // AttributeSection SP=0 TP=1 FS=4 T=Rule D=14 I=80 PA=[(3, 5; E2, S5)]         │
+        }
+
+        var bettreChildren = frame.Children.FilterBetterEmptyIfAllEmpty();
+        var poorerChildren = frame.Children.Where(c => !bettreChildren.Contains(c)).ToList();
+
+        if (poorerChildren.Count > 0)
+        ResetBestProperty(poorerChildren);
+      }
+    }
+
+    private static void ResetBestProperty(List<RecoveryStackFrame> poorerChildren)
+    {
+      foreach (var child in poorerChildren)
+      {
+        child.Best = false;
+        ResetBestProperty(child.Children);
+      }
+    }
+
+    private static ParseAlternative[] FilterParseAlternativesWichStartsFromParentsEnds(RecoveryStackFrame frame)
     {
       ParseAlternative[] res0;
       if (frame.Parents.Count == 0)
@@ -380,37 +429,13 @@ namespace N2.DebugStrategies
         }
     }
 
-    public static List<RecoveryStackFrame> FilterBetterEmptyIfAllEmpty(this List<RecoveryStackFrame> frames, int start)
+    public static List<RecoveryStackFrame> FilterBetterEmptyIfAllEmpty(this List<RecoveryStackFrame> frames)
     {
       if (frames.Count < 1)
         Debug.Assert(false);
 
       if (frames.Count <= 1)
         return frames;
-
-      // Если имеется несколько альтернативных пропарсиваний разбирающих пустую строку, то предпочитаем те что имеют State == -1 (пропускающие все 
-      // состояния внутри текущего стека).
-      
-      //// Выбор между элементами можно делать только если у них у всех одинаковое начало (TextPos).
-      //// TODO: Возможно имеет смысл сгруппировать фрэймы по TextPos и произвести фильтрацию по группам.
-      //var maxTP = frames[0].TextPos;
-      //if (frames.Any(f => f.TextPos != maxTP))
-      //  return frames;
-
-      // Вычисляем список 
-      var xs = frames
-        .SelectMany(c => c.ParseAlternatives)
-        .Where(p => p.End == start).ToList();
-      var needFilterEmpty = xs.All(p => p.Start == p.End)
-                            && xs.Any(p => p.State < 0);
-
-      var result = frames;
-        //needFilterEmpty
-        //? frames.Where(c => c.ParseAlternatives.Any(p => p.Start == p.End && p.State < 0)).ToList()//.FilterMin(c => c.Depth)
-        //: frames;
-
-      if (result.Count == 1)
-        return result;
 
       if (frames.All(f => f.ParseAlternatives.Max(a => a.ParentsEat) == 0))
       {
@@ -421,10 +446,7 @@ namespace N2.DebugStrategies
         return res2;
       }
 
-      if (result.Count < 1)
-        Debug.Assert(false);
-
-      return result;
+      return frames;
     }
 
     public static IEnumerable<T> FilterIfExists<T>(this List<T> res2, Func<T, bool> predicate)
