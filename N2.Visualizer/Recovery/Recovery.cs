@@ -203,7 +203,7 @@ namespace N2.DebugStrategies
       }
 
       return needFilterEmpty
-        ? children.Where(c => c.ParseAlternatives.Any(p => p.Start == p.End && p.State < 0)).ToList()
+        ? FilterMin() children.Where(c => c.ParseAlternatives.Any(p => p.Start == p.End && p.State < 0)).ToList()
         : children;
     }
 
@@ -338,14 +338,14 @@ namespace N2.DebugStrategies
       return ParseAlternative(startParsePos, startParsePos, -1);
     }
 
-    private static List<ParseAlternative> FilterMax(ICollection<ParseAlternative> candidates, Func<ParseAlternative, int> selector)
+    private static List<T> FilterMax<T>(ICollection<T> candidates, Func<T, int> selector)
     {
       var max1 = candidates.Max(selector);
       var res2 = candidates.Where(c => selector(c) == max1);
       return res2.ToList();
     }
 
-    private static List<ParseAlternative> FilterMin(ICollection<ParseAlternative> candidates, Func<ParseAlternative, int> selector)
+    private static List<T> FilterMin<T>(ICollection<T> candidates, Func<T, int> selector)
     {
       var min = candidates.Min(selector);
       var res2 = candidates.Where(c => selector(c) == min);
@@ -353,7 +353,7 @@ namespace N2.DebugStrategies
     }
 
 
-    private static List<RecoveryStackFrame> Filter(List<RecoveryStackFrame> candidates, Func<RecoveryStackFrame, int> selector)
+    private static List<T> Filter<T>(List<T> candidates, Func<T, int> selector)
     {
       var max1 = candidates.Max(selector);
       var res2 = candidates.Where(c => selector(c) == max1);
