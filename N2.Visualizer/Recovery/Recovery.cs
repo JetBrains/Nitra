@@ -231,7 +231,9 @@ namespace N2.DebugStrategies
 
     private static ParseAlternative ParseNonTopFrame(Parser parser, RecoveryStackFrame frame, int curTextPos)
     {
-      var parentsEat = frame.Children.Max(c => c.ParseAlternatives.Max(a => a.End == curTextPos ? a.ParentsEat : 0));
+      var parentsEat = frame.Children.Max(c => c.ParseAlternatives.Length == 0 
+                                              ? 0
+                                              : c.ParseAlternatives.Max(a => a.End == curTextPos ? a.ParentsEat : 0));
       var maxfailPos = curTextPos;
       var state      = frame.GetNextState(frame.FailState);
 
@@ -437,7 +439,7 @@ namespace N2.DebugStrategies
       if (frames.Count <= 1)
         return frames;
 
-      if (frames.All(f => f.ParseAlternatives.Max(a => a.ParentsEat) == 0))
+      if (frames.All(f => f.ParseAlternatives.Length == 0 || f.ParseAlternatives.Max(a => a.ParentsEat) == 0))
       {
         // Если список содержит только элементы разбирающие пустую строку и при этом имеется элементы с нулевой глубиной, то предпочитаем их.
         var res2 = frames.FilterMin(c => c.Depth).ToList();
