@@ -22,7 +22,7 @@ namespace N2.DebugStrategies
   public class Recovery
   {
     public ReportData ReportResult;
-    private Dictionary<RecoveryStackFrame, ParseAlternative[]> _visited = new Dictionary<RecoveryStackFrame, ParseAlternative[]>();
+    private readonly Dictionary<RecoveryStackFrame, ParseAlternative[]> _visited = new Dictionary<RecoveryStackFrame, ParseAlternative[]>();
 
     #region Инициализация и старт
 
@@ -146,7 +146,8 @@ namespace N2.DebugStrategies
 
         var curentEnds = new HashSet<ParseAlternative>();
         foreach (var start in childEnds)
-          curentEnds.Add(ParseNonTopFrame(parser, frame, start.End, skipCount));
+          if (start.End >= 0)
+            curentEnds.Add(ParseNonTopFrame(parser, frame, start.End, skipCount));
 
         var xx = curentEnds.ToArray();
         frame.ParseAlternatives = xx;
@@ -187,33 +188,32 @@ namespace N2.DebugStrategies
         var parsedStates = new List<ParsedStateInfo>();
         var pos = frame.TryParse(state, curTextPos, false, parsedStates, parser);
         if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parser))
-          return new ParseAlternative(curTextPos, pos >= 0 ? pos : parser.MaxFailPos, state); // TODO: Подумать как быть с parser.MaxFailPos
+          return new ParseAlternative(curTextPos, pos, parser.MaxFailPos, state); // TODO: Подумать как быть с parser.MaxFailPos
       }
 
       // Если ни одного состояния не пропарсились, то считаем, что пропарсилось состояние "за концом правила".
       // Это соотвтствует полному пропуску остатка подправил данного правила.
-      return new ParseAlternative(curTextPos, curTextPos, -1);
+      return new ParseAlternative(curTextPos, curTextPos, curTextPos, -1);
     }
 
     private static ParseAlternative ParseNonTopFrame(Parser parser, RecoveryStackFrame frame, int failPos, int skipCount)
     {
       if (failPos < 0)
-      {
-      }
-      var startParsePos = failPos + skipCount;
-      var state = frame.GetNextState(frame.FailState);
+        Debug.Assert(false);
+      var curTextPos = failPos + skipCount;
+      var maxfailPos = curTextPos;
+      var state      = frame.GetNextState(frame.FailState);
 
       for (; state >= 0; state = frame.GetNextState(state))
       {
-        parser.MaxFailPos = failPos;
+        parser.MaxFailPos = maxfailPos;
         var parsedStates = new List<ParsedStateInfo>();
-        var pos = frame.TryParse(state, startParsePos, true, parsedStates, parser);
-        // TODO: Возможно здесь надо проверять с поммощью NonVoidParsed(), как в ProcessTopFrame
-        if (pos > 0)
-          return new ParseAlternative(startParsePos, pos, state);
+        var pos = frame.TryParse(state, curTextPos, true, parsedStates, parser);
+        if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parser))
+          return new ParseAlternative(curTextPos, pos, parser.MaxFailPos, state);
       }
 
-      return new ParseAlternative(startParsePos, startParsePos, -1);
+      return new ParseAlternative(curTextPos, curTextPos, maxfailPos, -1);
     }
 
     #endregion
@@ -303,6 +303,18 @@ namespace N2.DebugStrategies
   {
     public static List<T> FilterMax<T>(this ICollection<T> candidates, Func<T, int> selector)
     {
+      var count = candidates.Count;
+      if (candidates.Count <= 1)
+      {
+        var lst = candidates as List<T>;
+        if (lst == null)
+        {
+          lst = new List<T>(count);
+          lst.AddRange(candidates);
+        }
+        return lst;
+      }
+
       var max1 = candidates.Max(selector);
       var res2 = candidates.Where(c => selector(c) == max1);
       return res2.ToList();
@@ -310,6 +322,18 @@ namespace N2.DebugStrategies
 
     public static List<T> FilterMin<T>(this ICollection<T> candidates, Func<T, int> selector)
     {
+      var count = candidates.Count;
+      if (candidates.Count <= 1)
+      {
+        var lst = candidates as List<T>;
+        if (lst == null)
+        {
+          lst = new List<T>(count);
+          lst.AddRange(candidates);
+        }
+        return lst;
+      }
+
       var min = candidates.Min(selector);
       var res2 = candidates.Where(c => selector(c) == min);
       return res2.ToList();
@@ -374,21 +398,50 @@ namespace N2.DebugStrategies
         }
     }
 
-    public static List<RecoveryStackFrame> FilterBetterEmptyIfAllEmpty(this List<RecoveryStackFrame> children, int start)
+    public static List<RecoveryStackFrame> FilterBetterEmptyIfAllEmpty(this List<RecoveryStackFrame> frames, int start)
     {
-      var xs = children
+      if (frames.Count < 1)
+        Debug.Assert(false);
+
+      if (frames.Count <= 1)
+        return frames;
+
+      // Если имеется несколько альтернативных пропарсиваний разбирающих пустую строку, то предпочитаем те что имеют State == -1 (пропускающие все 
+      // состояния внутри текущего стека).
+      
+      // Выбор между элементами можно делать только если у них у всех одинаковое начало (TextPos).
+      // TODO: Возможно имеет смысл сгруппировать фрэймы по TextPos и произвести фильтрацию по группам.
+      var maxTP = frames[0].TextPos;
+      if (frames.Any(f => f.TextPos != maxTP))
+        return frames;
+
+      // Вычисляем список 
+      var xs = frames
         .SelectMany(c => c.ParseAlternatives)
         .Where(p => p.End == start).ToList();
       var needFilterEmpty = xs.All(p => p.Start == p.End)
                             && xs.Any(p => p.State < 0);
 
-      if (needFilterEmpty)
+      var result = needFilterEmpty
+        ? frames.Where(c => c.ParseAlternatives.Any(p => p.Start == p.End && p.State < 0)).ToList()//.FilterMin(c => c.Depth)
+        : frames;
+
+      if (result.Count == 1)
+        return result;
+
+      if (needFilterEmpty && frames.Any(c => c.Depth == 0) && frames.Any(c => c.Depth != 0))
       {
+        // Если список содержит только элементы разбирающие пустую строку и при этом имеется элементы с нулевой глубиной, то предпочитаем их.
+        var res2 = frames.Where(c => c.Depth == 0).ToList();
+        //if (res2.Count != result.Count)
+        //  Debug.Assert(true);
+        return res2;
       }
 
-      return needFilterEmpty
-        ? children.Where(c => c.ParseAlternatives.Any(p => p.Start == p.End && p.State < 0)).ToList()//.FilterMin()
-        : children;
+      if (result.Count < 1)
+        Debug.Assert(false);
+
+      return result;
     }
 
     public static IEnumerable<T> FilterIfExists<T>(this List<T> res2, Func<T, bool> predicate)
