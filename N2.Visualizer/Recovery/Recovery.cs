@@ -1,4 +1,5 @@
-﻿#define DebugOutput
+﻿#region Пролог
+#define DebugOutput
 using N2.Internal;
 
 using System;
@@ -15,12 +16,15 @@ namespace N2.DebugStrategies
 {
   using ParserData = Tuple<int, int, List<ParsedStateInfo>>;
   using ReportData = Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>>;
+  
+#endregion
 
   public class Recovery
   {
     public ReportData ReportResult;
-
     private Dictionary<RecoveryStackFrame, ParseAlternative[]> _visited = new Dictionary<RecoveryStackFrame, ParseAlternative[]>();
+
+    #region Инициализация и старт
 
     public Recovery(ReportData reportResult)
     {
@@ -37,7 +41,7 @@ namespace N2.DebugStrategies
 
       var bestFrames = new List<RecoveryStackFrame>();
 
-      for (;failPos + skipCount < text.Length && bestFrames.Count == 0; ++skipCount)
+      for (; failPos + skipCount < text.Length && bestFrames.Count == 0; ++skipCount)
       {
         var frames = parser.RecoveryStacks.PrepareRecoveryStacks();
         var newFrames = new HashSet<RecoveryStackFrame>(frames);
@@ -54,6 +58,10 @@ namespace N2.DebugStrategies
 
       return -1;
     }
+    
+    #endregion
+
+    #region Выбор лучшего фрейма
 
     // ReSharper disable once ParameterTypeCanBeEnumerable.Local
     private void FindBestFrames(Parser parser, List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, int skipCount)
@@ -94,7 +102,7 @@ namespace N2.DebugStrategies
       foreach (var alternative in res2)
       {
         var start = alternative.Start;
-        var children = FilterBetterEmptyIfAllEmpty(frame.Children, start);
+        var children = frame.Children.FilterBetterEmptyIfAllEmpty(start);
 
         if (children.Count == 0)
           Debug.Assert(false);
@@ -105,28 +113,6 @@ namespace N2.DebugStrategies
             ChoosingTheBestFrame(bestFrames, child, start);
         }
       }
-    }
-
-    private static List<RecoveryStackFrame> FilterBetterEmptyIfAllEmpty(List<RecoveryStackFrame> children, int start)
-    {
-      var xs = children
-        .SelectMany(c => c.ParseAlternatives)
-        .Where(p => p.End == start).ToList();
-      var needFilterEmpty = xs.All(p => p.Start == p.End)
-                            && xs.Any(p => p.State < 0);
-
-      if (needFilterEmpty)
-      {
-      }
-
-      return needFilterEmpty
-        ? children.Where(c => c.ParseAlternatives.Any(p => p.Start == p.End && p.State < 0)).ToList()//.FilterMin()
-        : children;
-    }
-
-    private static IEnumerable<T> FilterIfExists<T>(List<T> res2, Func<T, bool> predicate)
-    {
-      return res2.Any(predicate) ? res2.Where(predicate) : res2;
     }
 
     private void ProcessFrame(Parser parser, List<RecoveryStackFrame> bestFrames, RecoveryStackFrame frame, int skipCount)
@@ -145,7 +131,7 @@ namespace N2.DebugStrategies
         }
 
         var end = ParseTopFrame(parser, frame, skipCount);
-        var xx = new [] { end };
+        var xx = new[] { end };
         frame.ParseAlternatives = xx;
         _visited.Add(frame, xx);
       }
@@ -187,10 +173,9 @@ namespace N2.DebugStrategies
       }
     }
 
-    private static ParseAlternative ParseAlternative(int startPos, int endPos, int state)
-    {
-      return new ParseAlternative(startPos, endPos, state);
-    }
+    #endregion
+
+    #region Parsing
 
     /// <returns>Посиция окончания парсинга</returns>
     private ParseAlternative ParseTopFrame(Parser parser, RecoveryStackFrame frame, int skipCount)
@@ -201,24 +186,13 @@ namespace N2.DebugStrategies
         parser.MaxFailPos = curTextPos;
         var parsedStates = new List<ParsedStateInfo>();
         var pos = frame.TryParse(state, curTextPos, false, parsedStates, parser);
-        if (NonVoidParsed(frame, curTextPos, pos, parsedStates, parser))
-        {
-          frame.StartState = state;
-          frame.StartParsePos = curTextPos;
-          frame.EndParsePos = pos;
-          frame.MaxFailPos = parser.MaxFailPos;
-          return ParseAlternative(curTextPos, pos >= 0 ? pos : parser.MaxFailPos, state); // TODO: Подумать как быть с parser.MaxFailPos
-        }
+        if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parser))
+          return new ParseAlternative(curTextPos, pos >= 0 ? pos : parser.MaxFailPos, state); // TODO: Подумать как быть с parser.MaxFailPos
       }
 
       // Если ни одного состояния не пропарсились, то считаем, что пропарсилось состояние "за концом правила".
       // Это соотвтствует полному пропуску остатка подправил данного правила.
-      frame.StartState = -1;
-      frame.StartParsePos = curTextPos;
-      frame.EndParsePos = curTextPos;
-      frame.MaxFailPos = curTextPos;
-
-      return ParseAlternative(curTextPos, curTextPos, -1);
+      return new ParseAlternative(curTextPos, curTextPos, -1);
     }
 
     private static ParseAlternative ParseNonTopFrame(Parser parser, RecoveryStackFrame frame, int failPos, int skipCount)
@@ -227,14 +201,7 @@ namespace N2.DebugStrategies
       {
       }
       var startParsePos = failPos + skipCount;
-      var maxFailPos = failPos; // TODO: Возможно имеет смысл использовать startParsePos для инициализации maxFailPos.
-
       var state = frame.GetNextState(frame.FailState);
-
-      frame.StartState = -2; // не начинало парситься, т.е. не нашло ни одного состояния с которого возможно допарсивание
-      frame.StartParsePos = startParsePos;
-      frame.EndParsePos = -1;
-      frame.MaxFailPos = maxFailPos;
 
       for (; state >= 0; state = frame.GetNextState(state))
       {
@@ -243,31 +210,21 @@ namespace N2.DebugStrategies
         var pos = frame.TryParse(state, startParsePos, true, parsedStates, parser);
         // TODO: Возможно здесь надо проверять с поммощью NonVoidParsed(), как в ProcessTopFrame
         if (pos > 0)
-        {
-          frame.StartState = state;
-          frame.StartParsePos = startParsePos;
-          frame.EndParsePos = pos;
-          frame.MaxFailPos = parser.MaxFailPos;
-          return ParseAlternative(startParsePos, pos, state);
-        }
+          return new ParseAlternative(startParsePos, pos, state);
       }
 
-      return ParseAlternative(startParsePos, startParsePos, -1);
+      return new ParseAlternative(startParsePos, startParsePos, -1);
     }
 
-    private bool NonVoidParsed(RecoveryStackFrame frame, int curTextPos, int pos, List<ParsedStateInfo> parsedStates, Parser parser)
-    {
-      var lastPos = Math.Max(pos, parser.MaxFailPos);
-      return lastPos > curTextPos && lastPos - curTextPos > ParsedSpacesLen(frame, parsedStates)
-          || parsedStates.Count > 0 && HasParsedStaets(frame, parsedStates);
-    }
+    #endregion
+
+    #region Спекулятивный поиск фреймов
 
     private void FindSpeculativeFrames(HashSet<RecoveryStackFrame> newFrames, Parser parser, RecoveryStackFrame frame, int failPos, int skipCount)
     {
       if (frame.IsTokenRule)
         return;
 
-      //if (InitFrame(parser, frame, false, failPos, skipCount))
       var res = ParseTopFrame(parser, frame, skipCount);
       if (res.State >= 0)
       {
@@ -308,53 +265,38 @@ namespace N2.DebugStrategies
         FindSpeculativeSubframes(newFrames, parser, subFrame, curTextPos, subFrame.FailState);
       }
     }
+    
+    #endregion
+
+    #region Модификация AST (FixAst)
 
     // ReSharper disable once ParameterTypeCanBeEnumerable.Local
-    private static bool HasParsedStaets(RecoveryStackFrame frame, List<ParsedStateInfo> parsedStates)
-    {
-// ReSharper disable once LoopCanBeConvertedToQuery
-      foreach (var parsedState in parsedStates)
-      {
-        if (!frame.IsVoidState(parsedState.State) && parsedState.Size > 0)
-          return true;
-      }
-      return false;
-    }
-
-// ReSharper disable once ParameterTypeCanBeEnumerable.Local
-    private static int ParsedSpacesLen(RecoveryStackFrame frame, List<ParsedStateInfo> parsedStates)
-    {
-      var sum = 0;
-// ReSharper disable once LoopCanBeConvertedToQuery
-      foreach (var parsedState in parsedStates)
-        sum += !frame.IsVoidState(parsedState.State) ? 0 : parsedState.Size;
-      return sum;
-    }
-
     private void FixAst(Parser parser)
     {
-    //  // TODO: Надо переписать. Пока закоментил.
-    //  Debug.Assert(_bestResult != null);
+      //  // TODO: Надо переписать. Пока закоментил.
+      //  Debug.Assert(_bestResult != null);
 
-    //  var frame = _bestResult.Stack.Head;
+      //  var frame = _bestResult.Stack.Head;
 
-    //  if (frame.AstStartPos < 0)
-    //    Debug.Assert(frame.AstPtr >= 0);
+      //  if (frame.AstStartPos < 0)
+      //    Debug.Assert(frame.AstPtr >= 0);
 
-    //  var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
-    //  var errorIndex = parser.ErrorData.Count;
-    //  parser.ErrorData.Add(error);
+      //  var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
+      //  var errorIndex = parser.ErrorData.Count;
+      //  parser.ErrorData.Add(error);
 
-    //  frame.RuleParser.PatchAst(_bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
+      //  frame.RuleParser.PatchAst(_bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
 
-    //  for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
-    //  {
-    //    if (stack.Head.RuleParser is ExtensibleRuleParser)
-    //      continue;
-    //    Debug.Assert(stack.Head.FailState >= 0);
-    //    stack.Head.RuleParser.PatchAst(stack.Head.AstStartPos, -2, -1, stack, parser);
-    //  }
+      //  for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
+      //  {
+      //    if (stack.Head.RuleParser is ExtensibleRuleParser)
+      //      continue;
+      //    Debug.Assert(stack.Head.FailState >= 0);
+      //    stack.Head.RuleParser.PatchAst(stack.Head.AstStartPos, -2, -1, stack, parser);
+      //  }
     }
+
+    #endregion
   }
 
   internal static class RecoveryUtils
@@ -430,6 +372,55 @@ namespace N2.DebugStrategies
           parent.Depth = frame.Depth + 1;
           UpdateFrameDepth(parent);
         }
+    }
+
+    public static List<RecoveryStackFrame> FilterBetterEmptyIfAllEmpty(this List<RecoveryStackFrame> children, int start)
+    {
+      var xs = children
+        .SelectMany(c => c.ParseAlternatives)
+        .Where(p => p.End == start).ToList();
+      var needFilterEmpty = xs.All(p => p.Start == p.End)
+                            && xs.Any(p => p.State < 0);
+
+      if (needFilterEmpty)
+      {
+      }
+
+      return needFilterEmpty
+        ? children.Where(c => c.ParseAlternatives.Any(p => p.Start == p.End && p.State < 0)).ToList()//.FilterMin()
+        : children;
+    }
+
+    public static IEnumerable<T> FilterIfExists<T>(this List<T> res2, Func<T, bool> predicate)
+    {
+      return res2.Any(predicate) ? res2.Where(predicate) : res2;
+    }
+
+    public static bool HasParsedStaets(this RecoveryStackFrame frame, List<ParsedStateInfo> parsedStates)
+    {
+// ReSharper disable once LoopCanBeConvertedToQuery
+      foreach (var parsedState in parsedStates)
+      {
+        if (!frame.IsVoidState(parsedState.State) && parsedState.Size > 0)
+          return true;
+      }
+      return false;
+    }
+
+    public static int ParsedSpacesLen(RecoveryStackFrame frame, List<ParsedStateInfo> parsedStates)
+    {
+      var sum = 0;
+// ReSharper disable once LoopCanBeConvertedToQuery
+      foreach (var parsedState in parsedStates)
+        sum += !frame.IsVoidState(parsedState.State) ? 0 : parsedState.Size;
+      return sum;
+    }
+
+    public static bool NonVoidParsed(this RecoveryStackFrame frame, int curTextPos, int pos, List<ParsedStateInfo> parsedStates, Parser parser)
+    {
+      var lastPos = Math.Max(pos, parser.MaxFailPos);
+      return lastPos > curTextPos && lastPos - curTextPos > ParsedSpacesLen(frame, parsedStates)
+             || parsedStates.Count > 0 && frame.HasParsedStaets(parsedStates);
     }
   }
 }
