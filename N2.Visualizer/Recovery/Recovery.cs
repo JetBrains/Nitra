@@ -258,13 +258,6 @@ namespace N2.DebugStrategies
       if (frame.IsTokenRule)
         return;
 
-      var res = ParseTopFrame(parser, frame, skipCount);
-      if (res.State >= 0)
-      {
-        newFrames.Add(frame);
-        return;
-      }
-
       if (!frame.IsPrefixParsed) // пытаемся восстановить пропущенный разделитель списка
       {
         var separatorFrame = frame.GetLoopBodyFrameForSeparatorState(failPos + skipCount, parser);
@@ -275,7 +268,7 @@ namespace N2.DebugStrategies
           // имеем дело с банальным концом цикла мы должны
           Debug.Assert(separatorFrame.Parents.Count == 1);
           var newFramesCount = newFrames.Count;
-          FindSpeculativeFrames(newFrames, parser, separatorFrame, failPos, failPos + skipCount);
+          FindSpeculativeFrames(newFrames, parser, separatorFrame, failPos, skipCount);
           if (newFrames.Count > newFramesCount)
             return;
         }
