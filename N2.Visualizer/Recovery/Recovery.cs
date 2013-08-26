@@ -138,23 +138,30 @@ namespace N2.DebugStrategies
           case 76: break; // Attribute SP=2 TP=2 FS=3 T=Rule D=10 I=76 PA=[(3, 3; E0, S-1)]               │
           case 79: break; // AttributeList SP=1 TP=1 FS=0 T=Rule D=13 I=79 PA=[(3, 3; E0, S-1)]           │
           case 80: break; // AttributeSection SP=0 TP=1 FS=4 T=Rule D=14 I=80 PA=[(3, 5; E2, S5)]         │
+          case 28: break;
         }
 
         var bettreChildren = frame.Children.FilterBetterEmptyIfAllEmpty();
-        var poorerChildren = frame.Children.Where(c => !bettreChildren.Contains(c)).ToList();
+        var poorerChildren = SubstractSet(frame, bettreChildren);
 
         if (poorerChildren.Count > 0)
-        ResetBestProperty(poorerChildren);
+          ResetBestProperty(poorerChildren);
       }
+    }
+
+    private static List<RecoveryStackFrame> SubstractSet(RecoveryStackFrame frame, List<RecoveryStackFrame> bettreChildren)
+    {
+      return frame.Children.Where(c => !bettreChildren.Contains(c)).ToList();
     }
 
     private static void ResetBestProperty(List<RecoveryStackFrame> poorerChildren)
     {
       foreach (var child in poorerChildren)
-      {
-        child.Best = false;
-        ResetBestProperty(child.Children);
-      }
+        if (child.Best)
+        {
+          child.Best = false;
+          ResetBestProperty(child.Children);
+        }
     }
 
     private static ParseAlternative[] FilterParseAlternativesWichStartsFromParentsEnds(RecoveryStackFrame frame)
