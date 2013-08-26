@@ -64,6 +64,9 @@ namespace N2.DebugStrategies
 
         if (IsAllFramesParseEmptyString(allFrames))
           bestFrames.Clear();
+        else
+        {
+        }
 
         _visited.Clear();
       }
@@ -95,20 +98,18 @@ namespace N2.DebugStrategies
           continue;
         }
 
-        switch (frame.Index)
+        switch (frame.Id)
         {
-          case 14: break; // AttributeArguments SP=2 TP=3 FS=3 T=Rule D=0 I=14 PA=[(3, 3; E0, S-1)] OK  ◄─┐
-          case 67: break; // AttributeArguments SP=2 TP=3 FS=4 T=Rule D=4 I=67 PA=[(3, 3; E0, S-1)] !!! ◄─┤
-          case 75: break; // AttributeArguments SP=2 TP=3 FS=2 T=Rule D=9 I=75 PA=[(3, 3; E0, S-1)] !!! ◄─┤
-          case 76: break; // Attribute SP=2 TP=2 FS=3 T=Rule D=10 I=76 PA=[(3, 3; E0, S-1)]               │
-          case 79: break; // AttributeList SP=1 TP=1 FS=0 T=Rule D=13 I=79 PA=[(3, 3; E0, S-1)]           │
-          case 80: break; // AttributeSection SP=0 TP=1 FS=4 T=Rule D=14 I=80 PA=[(3, 5; E2, S5)]         │
+          case 7: break;
         }
 
         var alternatives0 = FilterParseAlternativesWichStartsFromParentsEnds(frame);
-        var alternatives1 = alternatives0.FilterMax(f => f.End);
+        var alternatives1 = alternatives0.FilterMax(f => f.End >= 0 ? f.End : f.Fail);
         var alternatives2 = alternatives1.FilterMin(f => f.State < 0 ? int.MaxValue : f.State); // побеждает меньшее состояние
         frame.ParseAlternatives = alternatives2.ToArray();
+
+        if (frame.ParseAlternatives.Length != 1)
+          Debug.Assert(false);
 
         foreach (var alternative in alternatives2)
         {
@@ -120,7 +121,7 @@ namespace N2.DebugStrategies
 
           foreach (var child in children)
           {
-            if (child.ParseAlternatives.Any(p => p.End == start))
+            if (child.ParseAlternatives.Any(p => p.End < 0 ? p.Fail == start : p.End == start))
               child.Best = true;
           }
         }
@@ -153,41 +154,32 @@ namespace N2.DebugStrategies
           case 28: break;
         }
 
-        var bettreChildren = frame.Children.FilterBetterEmptyIfAllEmpty();
+        var children1 = FilterTopFramesWhichRecoveredOnFailStateIfExists(frame.Children);
+        var children2 = children1.FilterBetterEmptyIfAllEmpty();
+        var bettreChildren = RemoveSpeculativeFrames(children2);
         var poorerChildren = SubstractSet(frame, bettreChildren);
 
         if (poorerChildren.Count > 0)
           ResetBestProperty(poorerChildren);
       }
-
-      if (skipCount > 0 && bestFrames.Count > 1)
-        FilterTopFramesWhichRecoveredOnFailStateIfExists(bestFrames);
     }
 
-    private static void FilterTopFramesWhichRecoveredOnFailStateIfExists(List<RecoveryStackFrame> bestFrames)
+    private static List<RecoveryStackFrame> RemoveSpeculativeFrames(List<RecoveryStackFrame> frames)
     {
-      List<int> indecesToRemove = null;
+      var frames2 = frames.FilterMax(f => f.ParseAlternatives[0].ParentsEat).ToList();
+      var frames3 = frames2.FilterMin(f => f.FailState);
+      return frames3.ToList();
+    }
 
-      for (int index = 0; index < bestFrames.Count; index++)
+    private static List<RecoveryStackFrame> FilterTopFramesWhichRecoveredOnFailStateIfExists(List<RecoveryStackFrame> bestFrames)
+    {
+      if (bestFrames.Any(f => f.ParseAlternatives.Any(a => a.State == f.FailState)))
       {
-        var bestFrame = bestFrames[index];
-        if (HasTopFramesWhichRecoveredOnFailState(bestFrame))
-        {
-          if (indecesToRemove == null)
-            indecesToRemove = new List<int>();
-
-          for (int i = 0; i < index; i++)
-            indecesToRemove.Add(i);
-        }
-        else if (indecesToRemove != null)
-          indecesToRemove.Add(index);
+        // TODO: Устранить этот кабздец! Удалять фреймы прямо из массива.
+        return bestFrames.Where(f => f.ParseAlternatives.Any(a => a.State == f.FailState)).ToList();
       }
 
-      if (indecesToRemove == null)
-        return;
-
-      for (int index = indecesToRemove.Count - 1; index >= 0; index--)
-        bestFrames.RemoveAt(indecesToRemove[index]);
+      return bestFrames;
     }
 
     private static bool HasTopFramesWhichRecoveredOnFailState(RecoveryStackFrame frame)
@@ -241,6 +233,9 @@ namespace N2.DebugStrategies
       {
         var frame = allFrames[i];
 
+        if (frame.Id == 7)
+          Debug.Assert(true);
+
         if (frame.Depth == 0)
         {
           if (frame.ParseAlternatives != null)
@@ -252,13 +247,15 @@ namespace N2.DebugStrategies
         {
           // разбираемся с промежуточными ветками
           // В надежде не то, что пользователь просто забыл ввести некоторые токены, пробуем пропарсить фрэйм с позиции облома.
+          var curentEnds = new HashSet<ParseAlternative>();
           var childEnds = new HashSet<int>();
           foreach (var child in frame.Children)
             foreach (var alternative in child.ParseAlternatives)
               if (alternative.End >= 0)
                 childEnds.Add(alternative.End);
+              else
+                curentEnds.Add(new ParseAlternative(alternative.Fail, alternative.Fail, alternative.ParentsEat, 0, frame.FailState));
 
-          var curentEnds = new HashSet<ParseAlternative>();
           foreach (var end in childEnds)
             curentEnds.Add(ParseNonTopFrame(parser, frame, end));
 
@@ -284,7 +281,7 @@ namespace N2.DebugStrategies
         var pos = frame.TryParse(state, curTextPos, false, parsedStates, parser);
         if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parser))
         {
-          parseAlternative = new ParseAlternative(curTextPos, pos, pos < 0 ? 0 : pos - curTextPos, parser.MaxFailPos, state);
+          parseAlternative = new ParseAlternative(curTextPos, pos, (pos < 0 ? parser.MaxFailPos : pos) - curTextPos, pos < 0 ? parser.MaxFailPos : 0, state);
           frame.ParseAlternatives = new[] { parseAlternative };
           return parseAlternative;
         }
@@ -292,7 +289,7 @@ namespace N2.DebugStrategies
 
       // Если ни одного состояния не пропарсились, то считаем, что пропарсилось состояние "за концом правила".
       // Это соотвтствует полному пропуску остатка подправил данного правила.
-      parseAlternative = new ParseAlternative(curTextPos, curTextPos, 0, curTextPos, -1);
+      parseAlternative = new ParseAlternative(curTextPos, curTextPos, 0, 0, -1);
       frame.ParseAlternatives = new[] { parseAlternative };
       return parseAlternative;
     }
@@ -311,10 +308,10 @@ namespace N2.DebugStrategies
         var parsedStates = new List<ParsedStateInfo>();
         var pos = frame.TryParse(state, curTextPos, true, parsedStates, parser);
         if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parser))
-          return new ParseAlternative(curTextPos, pos, pos < 0 ? parentsEat : pos - curTextPos + parentsEat, parser.MaxFailPos, state);
+          return new ParseAlternative(curTextPos, pos, (pos < 0 ? parser.MaxFailPos : pos) - curTextPos + parentsEat, pos < 0 ? parser.MaxFailPos : 0, state);
       }
 
-      return new ParseAlternative(curTextPos, curTextPos, parentsEat, maxfailPos, -1);
+      return new ParseAlternative(curTextPos, curTextPos, parentsEat, 0, -1);
     }
 
     #endregion
