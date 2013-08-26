@@ -44,10 +44,14 @@ namespace N2.DebugStrategies
       for (; failPos + skipCount < text.Length && bestFrames.Count == 0; ++skipCount)
       {
         var frames = parser.RecoveryStacks.PrepareRecoveryStacks();
+
+        foreach (var frame in frames) // reset ParseAlternatives
+          frame.ParseAlternatives = null;
+
         var newFrames = new HashSet<RecoveryStackFrame>(frames);
         foreach (var frame in frames)
           if (frame.Depth == 0)
-            FindSpeculativeFrames(newFrames, parser, frame, failPos);
+            FindSpeculativeFrames(newFrames, parser, frame, failPos, skipCount);
 
         var allFrames = newFrames.PrepareRecoveryStacks();
 
@@ -157,18 +161,42 @@ namespace N2.DebugStrategies
       }
 
       if (skipCount > 0 && bestFrames.Count > 1)
-        FilterTopFramesWhichRecoweredOnFailState(bestFrames);
+        FilterTopFramesWhichRecoveredOnFailStateIfExists(bestFrames);
     }
 
-    private static void FilterTopFramesWhichRecoweredOnFailState(List<RecoveryStackFrame> bestFrames)
+    private static void FilterTopFramesWhichRecoveredOnFailStateIfExists(List<RecoveryStackFrame> bestFrames)
     {
-      if (bestFrames.Any(f => f.ParseAlternatives.Any(a => a.State == f.FailState)))
+      List<int> indecesToRemove = null;
+
+      for (int index = 0; index < bestFrames.Count; index++)
       {
-        // TODO: Устранить этот кабздец! Удалять фреймы прямо из массива.
-        var result = bestFrames.Where(f => f.ParseAlternatives.Any(a => a.State == f.FailState)).ToList();
-        bestFrames.Clear();
-        bestFrames.AddRange(result);
+        var bestFrame = bestFrames[index];
+        if (HasTopFramesWhichRecoveredOnFailState(bestFrame))
+        {
+          if (indecesToRemove == null)
+            indecesToRemove = new List<int>();
+
+          for (int i = 0; i < index; i++)
+            indecesToRemove.Add(i);
+        }
+        else if (indecesToRemove != null)
+          indecesToRemove.Add(index);
       }
+
+      if (indecesToRemove == null)
+        return;
+
+      for (int index = indecesToRemove.Count - 1; index >= 0; index--)
+        bestFrames.RemoveAt(indecesToRemove[index]);
+    }
+
+    private static bool HasTopFramesWhichRecoveredOnFailState(RecoveryStackFrame frame)
+    {
+      var failState = frame.FailState;
+      foreach (ParseAlternative a in frame.ParseAlternatives)
+        if (a.State == failState)
+          return true;
+      return false;
     }
 
     private static List<RecoveryStackFrame> SubstractSet(RecoveryStackFrame frame, List<RecoveryStackFrame> bettreChildren)
@@ -215,10 +243,10 @@ namespace N2.DebugStrategies
 
         if (frame.Depth == 0)
         {
+          if (frame.ParseAlternatives != null)
+            continue; // пропаршено во время попытки найти спекулятивные подфреймы
           // разбираемся с головами
-          var end = ParseTopFrame(parser, frame, skipCount);
-          var xx = new[] { end };
-          frame.ParseAlternatives = xx;
+          ParseTopFrame(parser, frame, skipCount);
         }
         else
         {
@@ -243,7 +271,9 @@ namespace N2.DebugStrategies
     /// <returns>Посиция окончания парсинга</returns>
     private ParseAlternative ParseTopFrame(Parser parser, RecoveryStackFrame frame, int skipCount)
     {
-      if (frame.Index == 28)
+      ParseAlternative parseAlternative;
+
+      if (frame.Id == 28)
         Debug.Assert(true);
 
       var curTextPos = frame.TextPos + skipCount;
@@ -253,12 +283,18 @@ namespace N2.DebugStrategies
         var parsedStates = new List<ParsedStateInfo>();
         var pos = frame.TryParse(state, curTextPos, false, parsedStates, parser);
         if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parser))
-          return new ParseAlternative(curTextPos, pos, pos < 0 ? 0 : pos - curTextPos, parser.MaxFailPos, state); // TODO: Подумать как быть с parser.MaxFailPos
+        {
+          parseAlternative = new ParseAlternative(curTextPos, pos, pos < 0 ? 0 : pos - curTextPos, parser.MaxFailPos, state);
+          frame.ParseAlternatives = new[] { parseAlternative };
+          return parseAlternative;
+        }
       }
 
       // Если ни одного состояния не пропарсились, то считаем, что пропарсилось состояние "за концом правила".
       // Это соотвтствует полному пропуску остатка подправил данного правила.
-      return new ParseAlternative(curTextPos, curTextPos, 0, curTextPos, -1);
+      parseAlternative = new ParseAlternative(curTextPos, curTextPos, 0, curTextPos, -1);
+      frame.ParseAlternatives = new[] { parseAlternative };
+      return parseAlternative;
     }
 
     private static ParseAlternative ParseNonTopFrame(Parser parser, RecoveryStackFrame frame, int curTextPos)
@@ -285,10 +321,21 @@ namespace N2.DebugStrategies
 
     #region Спекулятивный поиск фреймов
 
-    private void FindSpeculativeFrames(HashSet<RecoveryStackFrame> newFrames, Parser parser, RecoveryStackFrame frame, int failPos)
+    private void FindSpeculativeFrames(HashSet<RecoveryStackFrame> newFrames, Parser parser, RecoveryStackFrame frame, int failPos, int skipCount)
     {
       if (frame.IsTokenRule)
         return;
+
+      if (frame.Id == 28)
+        Debug.Assert(true);
+
+      if (frame.Depth == 0)
+      {
+        var parseAlternative = ParseTopFrame(parser, frame, skipCount);
+        // Не спекулировать на правилах которые что-то парсят. Такое может случиться после пропуска грязи.
+        if (skipCount > 0 && parseAlternative.End > 0 && parseAlternative.ParentsEat > 0)
+          return;
+      }
 
       if (!frame.IsPrefixParsed) // пытаемся восстановить пропущенный разделитель списка
       {
@@ -300,17 +347,17 @@ namespace N2.DebugStrategies
           // имеем дело с банальным концом цикла мы должны
           Debug.Assert(separatorFrame.Parents.Count == 1);
           var newFramesCount = newFrames.Count;
-          FindSpeculativeFrames(newFrames, parser, separatorFrame, failPos);
+          FindSpeculativeFrames(newFrames, parser, separatorFrame, failPos, skipCount);
           if (newFrames.Count > newFramesCount)
             return;
         }
       }
 
       for (var state = frame.FailState; state >= 0; state = frame.GetNextState(state))
-        FindSpeculativeSubframes(newFrames, parser, frame, failPos, state);
+        FindSpeculativeSubframes(newFrames, parser, frame, failPos, state, skipCount);
     }
 
-    protected virtual void FindSpeculativeSubframes(HashSet<RecoveryStackFrame> newFrames, Parser parser, RecoveryStackFrame frame, int curTextPos, int state)
+    protected virtual void FindSpeculativeSubframes(HashSet<RecoveryStackFrame> newFrames, Parser parser, RecoveryStackFrame frame, int curTextPos, int state, int skipCount)
     {
       foreach (var subFrame in frame.GetSpeculativeFramesForState(curTextPos, parser, state))
       {
@@ -320,7 +367,7 @@ namespace N2.DebugStrategies
         if (!newFrames.Add(subFrame))
           continue;
 
-        FindSpeculativeSubframes(newFrames, parser, subFrame, curTextPos, subFrame.FailState);
+        FindSpeculativeSubframes(newFrames, parser, subFrame, curTextPos, subFrame.FailState, skipCount);
       }
     }
     
