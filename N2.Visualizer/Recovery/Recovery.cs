@@ -100,16 +100,23 @@ namespace N2.DebugStrategies
 
         switch (frame.Id)
         {
-          case 7: break;
+          case 41: break;
         }
 
         var alternatives0 = FilterParseAlternativesWichStartsFromParentsEnds(frame);
-        var alternatives1 = alternatives0.FilterMax(f => f.End >= 0 ? f.End : f.Fail);
-        var alternatives2 = alternatives1.FilterMin(f => f.State < 0 ? int.MaxValue : f.State); // побеждает меньшее состояние
-        frame.ParseAlternatives = alternatives2.ToArray();
-
-        if (frame.ParseAlternatives.Length != 1)
+        if (alternatives0.Length == 0)
           Debug.Assert(false);
+        var alternatives1 = FilterMaxEndOrFail(alternatives0);
+        if (alternatives1.Count == 0)
+          Debug.Assert(false);
+        var alternatives2 = FilterMinState(alternatives1); // побеждает меньшее состояние
+        if (alternatives2.Count == 0)
+          Debug.Assert(false);
+
+        if (alternatives2.Count > 1)
+          Debug.Assert(false);
+
+        frame.ParseAlternatives = alternatives2.ToArray();
 
         foreach (var alternative in alternatives2)
         {
@@ -120,12 +127,25 @@ namespace N2.DebugStrategies
             Debug.Assert(false);
 
           foreach (var child in children)
-          {
-            if (child.ParseAlternatives.Any(p => p.End < 0 ? p.Fail == start : p.End == start))
+            if (EndWith(child, start))
               child.Best = true;
-          }
         }
       }
+    }
+
+    private static bool EndWith(RecoveryStackFrame child, int end)
+    {
+      return child.ParseAlternatives.Any(p => p.End < 0 ? p.Fail == end : p.End == end);
+    }
+
+    private static List<ParseAlternative> FilterMinState(List<ParseAlternative> alternatives1)
+    {
+      return alternatives1.FilterMin(f => f.State < 0 ? int.MaxValue : f.State);
+    }
+
+    private static List<ParseAlternative> FilterMaxEndOrFail(ParseAlternative[] alternatives0)
+    {
+      return alternatives0.FilterMax(f => f.End >= 0 ? f.End : f.Fail);
     }
 
     private static void SelectBestFrames(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, int skipCount)
@@ -143,29 +163,51 @@ namespace N2.DebugStrategies
           continue;
         }
 
-        switch (frame.Index)
+        switch (frame.Id)
         {
-          case 14: break; // AttributeArguments SP=2 TP=3 FS=3 T=Rule D=0 I=14 PA=[(3, 3; E0, S-1)] OK  ◄─┐
-          case 67: break; // AttributeArguments SP=2 TP=3 FS=4 T=Rule D=4 I=67 PA=[(3, 3; E0, S-1)] !!! ◄─┤
-          case 75: break; // AttributeArguments SP=2 TP=3 FS=2 T=Rule D=9 I=75 PA=[(3, 3; E0, S-1)] !!! ◄─┤
-          case 76: break; // Attribute SP=2 TP=2 FS=3 T=Rule D=10 I=76 PA=[(3, 3; E0, S-1)]               │
-          case 79: break; // AttributeList SP=1 TP=1 FS=0 T=Rule D=13 I=79 PA=[(3, 3; E0, S-1)]           │
-          case 80: break; // AttributeSection SP=0 TP=1 FS=4 T=Rule D=14 I=80 PA=[(3, 5; E2, S5)]         │
-          case 28: break;
+          case 17: break;
+          case 18: break;
+          case 19: break;
+          case 20: break;
+          case 21: break;
+          case 22: break;
+          case 23: break;
+          case 44: break;
         }
 
-        var children1 = FilterTopFramesWhichRecoveredOnFailStateIfExists(frame.Children);
-        var children2 = children1.FilterBetterEmptyIfAllEmpty();
-        var bettreChildren = RemoveSpeculativeFrames(children2);
+        var children0 = OnlyBastFrames(frame);
+        var children1 = FilterEmptyChildrenWhenFailSateCanParseEmptySting(frame, children0);
+        var children2 = FilterTopFramesWhichRecoveredOnFailStateIfExists(children1);
+        var children3 = children2.FilterBetterEmptyIfAllEmpty();
+        var bettreChildren = RemoveSpeculativeFrames(children3);
         var poorerChildren = SubstractSet(frame, bettreChildren);
 
         if (poorerChildren.Count > 0)
           ResetBestProperty(poorerChildren);
+
+        if (bettreChildren.Count == 0)
+          bestFrames.Add(frame);
       }
+    }
+
+    private static List<RecoveryStackFrame> FilterEmptyChildrenWhenFailSateCanParseEmptySting(RecoveryStackFrame frame, List<RecoveryStackFrame> frames)
+    {
+      if (frame.IsSateCanParseEmptyString(frame.FailState))
+        return frames.Where(f => f.ParseAlternatives.Any(a => a.ParentsEat != 0)).ToList();
+
+      return frames;
+    }
+
+    private static List<RecoveryStackFrame> OnlyBastFrames(RecoveryStackFrame frame)
+    {
+      return frame.Children.Where(f => f.Best).ToList();
     }
 
     private static List<RecoveryStackFrame> RemoveSpeculativeFrames(List<RecoveryStackFrame> frames)
     {
+      if (frames.Count <= 1)
+        return frames;
+
       var frames2 = frames.FilterMax(f => f.ParseAlternatives[0].ParentsEat).ToList();
       var frames3 = frames2.FilterMin(f => f.FailState);
       return frames3.ToList();
@@ -254,7 +296,7 @@ namespace N2.DebugStrategies
               if (alternative.End >= 0)
                 childEnds.Add(alternative.End);
               else
-                curentEnds.Add(new ParseAlternative(alternative.Fail, alternative.Fail, alternative.ParentsEat, 0, frame.FailState));
+                curentEnds.Add(new ParseAlternative(alternative.Fail, -1, alternative.ParentsEat, alternative.Fail, frame.FailState));
 
           foreach (var end in childEnds)
             curentEnds.Add(ParseNonTopFrame(parser, frame, end));
@@ -502,9 +544,6 @@ namespace N2.DebugStrategies
 
     public static List<RecoveryStackFrame> FilterBetterEmptyIfAllEmpty(this List<RecoveryStackFrame> frames)
     {
-      if (frames.Count < 1)
-        Debug.Assert(false);
-
       if (frames.Count <= 1)
         return frames;
 
