@@ -180,7 +180,7 @@ namespace N2.DebugStrategies
         var children2 = FilterTopFramesWhichRecoveredOnFailStateIfExists(children1);
         var children3 = children2.FilterBetterEmptyIfAllEmpty();
         var bettreChildren = RemoveSpeculativeFrames(children3);
-        var poorerChildren = SubstractSet(frame, bettreChildren);
+        var poorerChildren = SubstractSet(frame.Children, bettreChildren);
 
         if (poorerChildren.Count > 0)
           ResetBestProperty(poorerChildren);
@@ -193,7 +193,10 @@ namespace N2.DebugStrategies
     private static List<RecoveryStackFrame> FilterEmptyChildrenWhenFailSateCanParseEmptySting(RecoveryStackFrame frame, List<RecoveryStackFrame> frames)
     {
       if (frame.IsSateCanParseEmptyString(frame.FailState))
-        return frames.Where(f => f.ParseAlternatives.Any(a => a.ParentsEat != 0)).ToList();
+      {
+        var result = frames.Where(f => f.ParseAlternatives.Any(a => a.ParentsEat != 0 || frame.TextPos < a.Start)).ToList();
+        return result;
+      }
 
       return frames;
     }
@@ -233,9 +236,9 @@ namespace N2.DebugStrategies
       return false;
     }
 
-    private static List<RecoveryStackFrame> SubstractSet(RecoveryStackFrame frame, List<RecoveryStackFrame> bettreChildren)
+    private static List<RecoveryStackFrame> SubstractSet(List<RecoveryStackFrame> set1, ICollection<RecoveryStackFrame> set2)
     {
-      return frame.Children.Where(c => !bettreChildren.Contains(c)).ToList();
+      return set1.Where(c => !set2.Contains(c)).ToList();
     }
 
     private static void ResetBestProperty(List<RecoveryStackFrame> poorerChildren)
