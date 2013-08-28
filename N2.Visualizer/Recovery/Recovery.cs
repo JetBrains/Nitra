@@ -85,7 +85,10 @@ namespace N2.DebugStrategies
 
     private static void UpdateParseFramesAlternatives(List<RecoveryStackFrame> allFrames)
     {
-      allFrames[allFrames.Count - 1].Best = true; // единственный корень гарантированно последний
+      var root = allFrames[allFrames.Count - 1];
+      root.Best = true; // единственный корень гарантированно последний
+      root.ParseAlternatives = FilterMaxEndOrFail(root.ParseAlternatives.ToList()).ToArray();
+
       for (int i = allFrames.Count - 1; i >= 0; --i)
       {
         var frame = allFrames[i];
@@ -100,25 +103,22 @@ namespace N2.DebugStrategies
 
         switch (frame.Id)
         {
-          case 41: break;
+          case 187: break;
+          case 188: break;
+          case 189: break;
+          case 284: break;
         }
 
-        var alternatives0 = FilterParseAlternativesWichStartsFromParentsEnds(frame);
-        //if (alternatives0.Length == 0)
-        //  Debug.Assert(false);
-        var alternatives1 = FilterMaxEndOrFail(alternatives0);
-        //if (alternatives1.Count == 0)
-        //  Debug.Assert(false);
-        var alternatives2 = FilterMinState(alternatives1); // побеждает меньшее состояние
-        //if (alternatives2.Count == 0)
-        //  Debug.Assert(false);
+        var alternatives0 = FilterParseAlternativesWichEndsEqualsParentsStarts(frame);
+        //var x = FilterMinStart(frame, alternatives0);
+        var alternatives1 = alternatives0;//FilterMaxEndOrFail(alternatives0);
+        var alternatives2 = FilterMinState(alternatives1); // TODO: вынести на следующую стадию! // побеждает меньшее состояние
+        var alternatives3 = alternatives2;//FilterMinStart(frame, alternatives2);
 
-        //if (alternatives2.Count > 1)
-        //  Debug.Assert(false);
 
-        frame.ParseAlternatives = alternatives2.ToArray();
+        frame.ParseAlternatives = alternatives3.ToArray();
 
-        foreach (var alternative in alternatives2)
+        foreach (var alternative in alternatives3)
         {
           var start = alternative.Start;
           var children = frame.Children;
@@ -133,19 +133,37 @@ namespace N2.DebugStrategies
       }
     }
 
+    private static List<ParseAlternative> FilterMinStart(RecoveryStackFrame frame, List<ParseAlternative> alternatives)
+    {
+      //if (frame.TypeName == "ListSeparator" || frame.TypeName == "ListBody")
+      //{
+      //  var result = alternatives.Where(a => a.State >= 0).ToList().FilterMin(a => a.Start);
+
+      //  return result.Count == 0 ? alternatives : result;
+      //}
+
+      return alternatives.FilterMin(a => a.Start);
+    }
+
     private static bool EndWith(RecoveryStackFrame child, int end)
     {
       return child.ParseAlternatives.Any(p => p.End < 0 ? p.Fail == end : p.End == end);
     }
 
-    private static List<ParseAlternative> FilterMinState(List<ParseAlternative> alternatives1)
+    private static List<ParseAlternative> FilterMinState(List<ParseAlternative> alternatives)
     {
-      return alternatives1.FilterMin(f => f.State < 0 ? int.MaxValue : f.State);
+      if (alternatives.Count <= 1)
+        return alternatives.ToList();
+
+      return alternatives.FilterMin(f => f.State < 0 ? int.MaxValue : f.State);
     }
 
-    private static List<ParseAlternative> FilterMaxEndOrFail(ParseAlternative[] alternatives0)
+    private static List<ParseAlternative> FilterMaxEndOrFail(List<ParseAlternative> alternatives)
     {
-      return alternatives0.FilterMax(f => f.End >= 0 ? f.End : f.Fail);
+      if (alternatives.Count <= 1)
+        return alternatives.ToList();
+
+      return alternatives.FilterMax(f => f.End >= 0 ? f.End : f.Fail);
     }
 
     private static void SelectBestFrames(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, int skipCount)
@@ -173,13 +191,16 @@ namespace N2.DebugStrategies
           case 22: break;
           case 23: break;
           case 44: break;
+          case 189: break;
         }
 
         var children0 = OnlyBastFrames(frame);
         var children1 = FilterEmptyChildrenWhenFailSateCanParseEmptySting(frame, children0);
         var children2 = FilterTopFramesWhichRecoveredOnFailStateIfExists(children1);
         var children3 = children2.FilterBetterEmptyIfAllEmpty();
-        var bettreChildren = RemoveSpeculativeFrames(children3);
+        var children4 = FilterNonFailedFrames(children3);// RemoveSpeculativeFrames(children3);
+        var bettreChildren = SelectMinFailSateIfTextPosEquals(children4);
+
         var poorerChildren = SubstractSet(frame.Children, bettreChildren);
 
         if (poorerChildren.Count > 0)
@@ -188,6 +209,29 @@ namespace N2.DebugStrategies
         if (bettreChildren.Count == 0)
           bestFrames.Add(frame);
       }
+
+      FilterFailSateEqualsStateIfExists(bestFrames);
+    }
+
+    private static void FilterFailSateEqualsStateIfExists(List<RecoveryStackFrame> bestFrames)
+    {
+      if (bestFrames.Any(f => f.ParseAlternatives.Any(a => f.FailState == a.State)))
+        for (int index = bestFrames.Count - 1; index >= 0; index--)
+        {
+          var f = bestFrames[index];
+          if (!f.ParseAlternatives.Any(a => f.FailState == a.State))
+            bestFrames.RemoveAt(index);
+        }
+    }
+
+    private static List<RecoveryStackFrame> SelectMinFailSateIfTextPosEquals(List<RecoveryStackFrame> children4)
+    {
+      return children4.GroupBy(f => f.TextPos).SelectMany(fs => fs.ToList().FilterMin(f => f.FailState)).ToList();
+    }
+
+    private static List<RecoveryStackFrame> FilterNonFailedFrames(List<RecoveryStackFrame> children3)
+    {
+      return children3.FilterIfExists(f => f.ParseAlternatives.Any(a => a.End >= 0)).ToList();
     }
 
     private static List<RecoveryStackFrame> FilterEmptyChildrenWhenFailSateCanParseEmptySting(RecoveryStackFrame frame, List<RecoveryStackFrame> frames)
@@ -251,11 +295,11 @@ namespace N2.DebugStrategies
         }
     }
 
-    private static ParseAlternative[] FilterParseAlternativesWichStartsFromParentsEnds(RecoveryStackFrame frame)
+    private static List<ParseAlternative> FilterParseAlternativesWichEndsEqualsParentsStarts(RecoveryStackFrame frame)
     {
-      ParseAlternative[] res0;
+      List<ParseAlternative> res0;
       if (frame.Parents.Count == 0)
-        res0 = frame.ParseAlternatives;
+        res0 = frame.ParseAlternatives.ToList();
       else
       {
         var parentStarts = new HashSet<int>();
@@ -263,7 +307,7 @@ namespace N2.DebugStrategies
           if (parent.Best)
             foreach (var alternative in parent.ParseAlternatives)
               parentStarts.Add(alternative.Start);
-        res0 = frame.ParseAlternatives.Where(alternative => parentStarts.Contains(alternative.End)).ToArray();
+        res0 = frame.ParseAlternatives.Where(alternative => parentStarts.Contains(alternative.End)).ToList();
       }
       return res0;
     }
