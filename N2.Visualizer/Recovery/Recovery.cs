@@ -104,17 +104,17 @@ namespace N2.DebugStrategies
         }
 
         var alternatives0 = FilterParseAlternativesWichStartsFromParentsEnds(frame);
-        if (alternatives0.Length == 0)
-          Debug.Assert(false);
+        //if (alternatives0.Length == 0)
+        //  Debug.Assert(false);
         var alternatives1 = FilterMaxEndOrFail(alternatives0);
-        if (alternatives1.Count == 0)
-          Debug.Assert(false);
+        //if (alternatives1.Count == 0)
+        //  Debug.Assert(false);
         var alternatives2 = FilterMinState(alternatives1); // побеждает меньшее состояние
-        if (alternatives2.Count == 0)
-          Debug.Assert(false);
+        //if (alternatives2.Count == 0)
+        //  Debug.Assert(false);
 
-        if (alternatives2.Count > 1)
-          Debug.Assert(false);
+        //if (alternatives2.Count > 1)
+        //  Debug.Assert(false);
 
         frame.ParseAlternatives = alternatives2.ToArray();
 
@@ -278,7 +278,7 @@ namespace N2.DebugStrategies
       {
         var frame = allFrames[i];
 
-        if (frame.Id == 7)
+        if (frame.Id == 50)
           Debug.Assert(true);
 
         if (frame.Depth == 0)
@@ -341,20 +341,26 @@ namespace N2.DebugStrategies
 
     private static ParseAlternative ParseNonTopFrame(Parser parser, RecoveryStackFrame frame, int curTextPos)
     {
+      //if (frame.Id == 187)
+      //  Debug.Assert(false);
       var parentsEat = frame.Children.Max(c => c.ParseAlternatives.Length == 0 
                                               ? 0
                                               : c.ParseAlternatives.Max(a => a.End == curTextPos ? a.ParentsEat : 0));
       var maxfailPos = curTextPos;
-      var state      = frame.GetNextState(frame.FailState);
 
-      for (; state >= 0; state = frame.GetNextState(state))
+      // Мы должны попытаться пропарсить даже если состояние полученное в первый раз от frame.GetNextState(state) 
+      // меньше нуля, так как при этом производится попытка пропарсить следующий элемент цикла.
+      var state      = frame.FailState;
+      do
       {
+        state = frame.GetNextState(state);
         parser.MaxFailPos = maxfailPos;
         var parsedStates = new List<ParsedStateInfo>();
         var pos = frame.TryParse(state, curTextPos, true, parsedStates, parser);
         if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parser))
           return new ParseAlternative(curTextPos, pos, (pos < 0 ? parser.MaxFailPos : pos) - curTextPos + parentsEat, pos < 0 ? parser.MaxFailPos : 0, state);
       }
+      while (state >= 0);
 
       return new ParseAlternative(curTextPos, curTextPos, parentsEat, 0, -1);
     }
