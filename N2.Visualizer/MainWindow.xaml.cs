@@ -102,6 +102,9 @@ namespace N2.Visualizer
 
       _text.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
       _text.TextArea.TextView.LineTransformers.Add(_textMarkerService);
+      _text.Options.ConvertTabsToSpaces = true;
+      _text.Options.EnableRectangularSelection = true;
+      _text.Options.IndentationSize = 2;
 
       _testsTreeView.SelectedValuePath = "FullPath";
 
