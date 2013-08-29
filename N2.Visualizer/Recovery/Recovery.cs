@@ -199,7 +199,9 @@ namespace N2.DebugStrategies
         var children2 = FilterTopFramesWhichRecoveredOnFailStateIfExists(children1);
         var children3 = children2.FilterBetterEmptyIfAllEmpty();
         var children4 = FilterNonFailedFrames(children3);// RemoveSpeculativeFrames(children3);
-        var bettreChildren = SelectMinFailSateIfTextPosEquals(children4);
+        var children5 = SelectMinFailSateIfTextPosEquals(children4);// RemoveSpeculativeFrames(children3);
+        var children6 = FilterEmptyChildren(children5);// RemoveSpeculativeFrames(children3);
+        var bettreChildren = children6;
 
         var poorerChildren = SubstractSet(frame.Children, bettreChildren);
 
@@ -211,6 +213,11 @@ namespace N2.DebugStrategies
       }
 
       FilterFailSateEqualsStateIfExists(bestFrames);
+    }
+
+    private static List<RecoveryStackFrame> FilterEmptyChildren(List<RecoveryStackFrame> children5)
+    {
+      return SubstractSet(children5, children5.Where(f => f.ParseAlternatives.All(a => f.TextPos == a.Start && a.ParentsEat == 0 && a.State < 0 && f.FailState == 0)).ToList());
     }
 
     private static void FilterFailSateEqualsStateIfExists(List<RecoveryStackFrame> bestFrames)
