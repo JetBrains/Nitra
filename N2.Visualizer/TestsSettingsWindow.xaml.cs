@@ -33,7 +33,11 @@ namespace N2.Visualizer
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
-      _testsLocationRootTextBox.Text = _settings.TestsLocationRoot;
+      var dir = _settings.TestsLocationRoot ?? "";
+      if (Directory.Exists(dir))
+        _testsLocationRootTextBox.Text = dir;
+      else
+        _testsLocationRootTextBox.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Personal), "Visualizer");
     }
 
     bool Validate_TestsLocationRoot()
@@ -51,7 +55,25 @@ namespace N2.Visualizer
 
       if (!Directory.Exists(testsLocationRootFull))
       {
-        MessageBox.Show(this, "Path '" + testsLocationRootFull + "' does not exits.");
+        var res = MessageBox.Show(this, "Path '" + testsLocationRootFull + "' does not exits. Create it?", "Visualizer", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+        if (res == MessageBoxResult.No)
+          return false;
+
+        try
+        {
+          Directory.CreateDirectory(testsLocationRootFull);
+          TestsLocationRoot = testsLocationRoot;
+          return true;
+        }
+        catch (Exception ex)
+        {
+          MessageBox.Show(this, "Can't create the folder '" + testsLocationRootFull + "'.\r\n" + ex.Message, "Visualizer", MessageBoxButton.OK,
+            MessageBoxImage.Error);
+          return false;
+        }
+
+
         _testsLocationRootTextBox.Focus();
         return false;
       }
@@ -72,17 +94,40 @@ namespace N2.Visualizer
 
     private void _testsLocationRootTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-      var fullPath = Path.GetFullPath(_testsLocationRootTextBox.Text ?? "");
-      _testsLocationRootFullPathTextBlock.Text = fullPath;
-      if (Directory.Exists(fullPath))
+      try
       {
-        _testsLocationRootFullPathTextBlock.Opacity = 0.4;
-        _testsLocationRootFullPathTextBlock.Foreground = new SolidColorBrush { Color = Colors.Black };
+        var fullPath = Path.GetFullPath(_testsLocationRootTextBox.Text ?? "");
+        _testsLocationRootFullPathTextBlock.Text = fullPath;
+        if (Directory.Exists(fullPath))
+        {
+          _testsLocationRootFullPathTextBlock.Opacity = 0.4;
+          _testsLocationRootFullPathTextBlock.Foreground = new SolidColorBrush { Color = Colors.Black };
+        }
+        else
+          SetRedColor();
       }
-      else
+      catch (Exception ex)
       {
-        _testsLocationRootFullPathTextBlock.Opacity = 1.0;
-        _testsLocationRootFullPathTextBlock.Foreground = new SolidColorBrush { Color = Colors.Red };
+        _testsLocationRootFullPathTextBlock.Text = "Error: " + ex.Message;
+        SetRedColor();
+      }
+    }
+
+    private void SetRedColor()
+    {
+      _testsLocationRootFullPathTextBlock.Opacity = 1.0;
+      _testsLocationRootFullPathTextBlock.Foreground = new SolidColorBrush {Color = Colors.Red};
+    }
+
+    private void _chooseFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+      var dialog = new System.Windows.Forms.FolderBrowserDialog();
+      dialog.Description = "Select root folder for Nitra Visualizer tests.";
+      dialog.SelectedPath = _testsLocationRootTextBox.Text;
+      dialog.ShowNewFolderButton = true;
+      if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+      {
+        _testsLocationRootTextBox.Text = dialog.SelectedPath;
       }
     }
   }

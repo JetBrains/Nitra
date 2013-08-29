@@ -102,7 +102,9 @@ namespace N2.Visualizer
 
       _text.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
       _text.TextArea.TextView.LineTransformers.Add(_textMarkerService);
-
+      _text.Options.ConvertTabsToSpaces = true;
+      _text.Options.EnableRectangularSelection = true;
+      _text.Options.IndentationSize = 2;
       _testsTreeView.SelectedValuePath = "FullPath";
 
       LoadTests();
@@ -140,7 +142,10 @@ namespace N2.Visualizer
       var path     = selected == null ? null : selected.FullPath;
       var testSuits = new ObservableCollection<TestSuitVm>();
 
-      foreach (var dir in Directory.GetDirectories(_settings.TestsLocationRoot))
+      if (!Directory.Exists(_settings.TestsLocationRoot ?? ""))
+        return;
+
+      foreach (var dir in Directory.GetDirectories(_settings.TestsLocationRoot ?? ""))
       {
         var testSuit = new TestSuitVm(_settings.TestsLocationRoot, dir);
         if (path != null)
@@ -524,6 +529,10 @@ namespace N2.Visualizer
       {
         ClearMarkers();
         MessageBox.Show(this, ex.Message);
+      }
+      catch (Exception ex)
+      {
+        Debug.WriteLine(ex.ToString());
       }
     }
 
@@ -911,7 +920,11 @@ namespace N2.Visualizer
 
     private bool ShowTestsSettingsDialog()
     {
-      var dialog = new TestsSettingsWindow { Owner = this };
+      var dialog = new TestsSettingsWindow();
+      
+      if (this.IsVisible)
+        dialog.Owner = this;
+
       if (dialog.ShowDialog() ?? false)
       {
         _settings.TestsLocationRoot = dialog.TestsLocationRoot;
@@ -958,7 +971,17 @@ namespace N2.Visualizer
 
     private void SelectTest(string testSuitPath, string testName)
     {
+      if (!CheckTestFolder())
+      {
+        MessageBox.Show(this, "The test folder does not exists.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        return;
+      }
+
       var testSuits = (ObservableCollection<TestSuitVm>) _testsTreeView.ItemsSource;
+
+      if (testSuits == null)
+        return;
+
       var result = testSuits.FirstOrDefault(ts => ts.FullPath == testSuitPath);
       if (result == null)
         return;
