@@ -183,24 +183,27 @@ namespace N2.DebugStrategies
 
         switch (frame.Id)
         {
-          case 17: break;
-          case 18: break;
-          case 19: break;
-          case 20: break;
-          case 21: break;
-          case 22: break;
-          case 23: break;
-          case 44: break;
           case 189: break;
         }
 
+        // Отбрасывает всех потомков у которых свойство Best == false
         var children0 = OnlyBastFrames(frame);
+        // отбрасывает потомков не съедающих символов, в случае если они ростут из состяния допускающего пустую строку (цикл или необязательное правило)
         var children1 = FilterEmptyChildrenWhenFailSateCanParseEmptySting(frame, children0);
+        // отберат фреймы которые которые продолжают парсинг с состояния облом. Такое может случиться если была пропущена грязь, а сразу за ней 
+        // идет корректная конструкция. Пример из джейсона: {a:.2}. Здесь "." - это грязь за которой идет корректное Value. Фильтрация производится
+        // только если среди потомков есть подпадающие под условия.
         var children2 = FilterTopFramesWhichRecoveredOnFailStateIfExists(children1);
+        // Если все потомки парсят пустую строку (во всех путях пропарсивания васех потомков ParentsEat == 0), то отбираем потомков с наименьшей глубиной (Depth).
         var children3 = children2.FilterBetterEmptyIfAllEmpty();
-        var children4 = FilterNonFailedFrames(children3);// RemoveSpeculativeFrames(children3);
-        var children5 = SelectMinFailSateIfTextPosEquals(children4);// RemoveSpeculativeFrames(children3);
-        var children6 = FilterEmptyChildren(children5);// RemoveSpeculativeFrames(children3);
+        // Если среди потомков есть фреймы пропарсившие код (у которых End >= 0), то отбираем их, отбрасывая фреймы пропарсившие с Fail-мо. 
+        // TODO: Возожно нужно делать это более осторожно, так как при наличии нескольких ошибок Fail-фреймы могут оказаться более предпочтительным. Но возможно они отфильтруются раньше.
+        var children4 = FilterNonFailedFrames(children3);
+        // Для каждой группы потомков с одинаковым местом фэйла (TextPos) отбираем такие которые начали парситься с меньшего состояния (подправила).
+        var children5 = SelectMinFailSateIfTextPosEquals(children4);
+        // Отбрасываем потомков все альтеративы которых пропарсили пустую строку.
+        var children6 = FilterEmptyChildren(children5);
+
         var bettreChildren = children6;
 
         var poorerChildren = SubstractSet(frame.Children, bettreChildren);
