@@ -58,7 +58,10 @@ namespace N2.Visualizer
         var res = MessageBox.Show(this, "Path '" + testsLocationRootFull + "' does not exits. Create it?", "Visualizer", MessageBoxButton.YesNo, MessageBoxImage.Question);
 
         if (res == MessageBoxResult.No)
+        {
+          _testsLocationRootTextBox.Focus();
           return false;
+        }
 
         try
         {
@@ -70,12 +73,9 @@ namespace N2.Visualizer
         {
           MessageBox.Show(this, "Can't create the folder '" + testsLocationRootFull + "'.\r\n" + ex.Message, "Visualizer", MessageBoxButton.OK,
             MessageBoxImage.Error);
+          _testsLocationRootTextBox.Focus();
           return false;
         }
-
-
-        _testsLocationRootTextBox.Focus();
-        return false;
       }
 
       TestsLocationRoot = testsLocationRoot;

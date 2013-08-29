@@ -42,8 +42,9 @@ namespace N2.Visualizer
       _testsRootTextBlock.Text = root;
       var paths = baseTestSuit == null 
         ? ""
-        : string.Join(Environment.NewLine, 
-            baseTestSuit.SynatxModules.Select(m => Utils.MakeRelativePath(root, m.GetType().Assembly.Location)).Distinct());
+        : string.Join(Environment.NewLine,
+            baseTestSuit.SynatxModules.Select(m => 
+              Utils.MakeRelativePath(from: root, isFromDir: true, to: m.GetType().Assembly.Location, isToDir: false)).Distinct());
       _assemblies.Text = paths;
       UpdateSyntaxModules(paths, root);
 
@@ -238,7 +239,7 @@ namespace N2.Visualizer
       {
         var path = Path.Combine(testsLocationRootFullPath, assemblyPath.Trim());
         var fullPath = Path.GetFullPath(path);
-        var relativeAssemblyPath = Utils.MakeRelativePath(testsLocationRootFullPath, fullPath);
+        var relativeAssemblyPath = Utils.MakeRelativePath(testsLocationRootFullPath, true, fullPath, false);
         if (!string.IsNullOrWhiteSpace(relativeAssemblyPath))
           result.Add(relativeAssemblyPath);
       }

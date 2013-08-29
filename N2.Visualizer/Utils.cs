@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Runtime.InteropServices;
 using System.Reflection;
 using System.IO;
 using System.Text.RegularExpressions;
@@ -40,14 +41,30 @@ namespace N2.Visualizer
       return _configRx.Replace(assemblyFilePath, @"\" + Settings.Default.Config + @"\");
     }
 
-    public static string MakeRelativePath(string baseDir, string filePath)
+    enum FILE_ATTRIBUTE
     {
-      var assemblyUri = new Uri(filePath);
-      var rootUri = new Uri(EnsureBackslash(baseDir));
-      return rootUri.MakeRelativeUri(assemblyUri).ToString();
+      DIRECTORY = 0x10,
+      NORMAL = 0x80
     }
 
-    private static string EnsureBackslash(string baseDir)
+
+    [DllImport("shlwapi.dll", EntryPoint = "PathRelativePathTo")]
+    static extern bool PathRelativePathTo(StringBuilder lpszDst,
+        string from, FILE_ATTRIBUTE attrFrom,
+        string to,   FILE_ATTRIBUTE attrTo);
+
+    public static string MakeRelativePath(string from, bool isFromDir, string to, bool isToDir)
+    {
+      var builder = new StringBuilder(1024);
+      var result = PathRelativePathTo(builder, from, isFromDir ? FILE_ATTRIBUTE.DIRECTORY : 0, to, isToDir ? FILE_ATTRIBUTE.DIRECTORY : 0);
+
+      if (result)
+        return builder.ToString();
+
+      return to;
+    }
+
+    public static string EnsureBackslash(string baseDir)
     {
       return baseDir.Length == 0 ? "" : baseDir[baseDir.Length - 1] == '\\' ? baseDir : baseDir + @"\";
     }
@@ -69,7 +86,7 @@ namespace N2.Visualizer
       //    <Lib Path="../sss/Json.Grammar.dll"><SyntaxModule Name="JasonParser" /></Lib>
       //    <Lib Path="../sss/JsonEx.dll"><SyntaxModule Name="JsonEx" StartRule="Start" /></Lib>
       //  </Config>
-      var libs = syntaxModules.GroupBy(m => MakeRelativePath(root, m.GetType().Assembly.Location))
+      var libs = syntaxModules.GroupBy(m => MakeRelativePath(from:root, isFromDir:true, to:m.GetType().Assembly.Location, isToDir:false))
         .Select(asm =>
           new XElement("Lib", 
             new XAttribute("Path", asm.Key),
