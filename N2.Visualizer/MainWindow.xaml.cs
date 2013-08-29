@@ -129,6 +129,11 @@ namespace N2.Visualizer
       _settings.WindowLWidth     = this.Width;
       _settings.ActiveTabIndex   = _tabControl.SelectedIndex;
 
+      SaveSelectedTestAndTestSuit();
+    }
+
+    private void SaveSelectedTestAndTestSuit()
+    {
       if (_currentTestSuit != null)
       {
         _settings.SelectedTestSuit = _currentTestSuit.TestSuitPath;
@@ -1133,6 +1138,7 @@ namespace N2.Visualizer
         _text.Text = test.Code;
         _currentTestSuit = test.TestSuit;
         ShowDiff(test);
+
       }
 
       var testSuit = e.NewValue as TestSuitVm;
@@ -1142,6 +1148,10 @@ namespace N2.Visualizer
         _currentTestSuit = testSuit;
         _para.Inlines.Clear();
       }
+
+      SaveSelectedTestAndTestSuit();
+
+      _settings.Save();
     }
 
     private void OnRemoveTestSuit(object sender, ExecutedRoutedEventArgs e)
