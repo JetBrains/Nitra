@@ -10,6 +10,7 @@ using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Tagging;
 
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -17,39 +18,66 @@ namespace N2.VisualStudio.Outlining
 {
   public class OutliningTagger : ITagger[IOutliningRegionTag]
   {
-    private N2GlobalConfig      : IN2GlobalConfig { get; }
-    public  Language            : Language        { get _parseAgent.Language }
-    private _parseAgent         : ParseAgent;
-    private _buffer             : ITextBuffer;
+    public                   Language    : Language        { get _parseAgent.Language }
+    private                  _parseAgent : ParseAgent;
+    private                  _buffer     : ITextBuffer;
+    private mutable volatile _data       : OutliningData;
 
-    public this(n2GlobalConfig : IN2GlobalConfig, parseAgent : ParseAgent, buffer : ITextBuffer)
+    [Record]
+    private struct OutliningData
     {
-      N2GlobalConfig = n2GlobalConfig;
+      public Outlinings    : List[OutliningInfo];
+      public Snapshot      : ITextSnapshot;
+    }
+
+    public this(parseAgent : ParseAgent, buffer : ITextBuffer)
+    {
       _parseAgent    = parseAgent;
       _buffer        = buffer;
+
+      def parseResult = _parseAgent.LastResult;
+      _data = 
+        if (parseResult != null)
+          OutliningData(GetOutlinings(parseResult), buffer.CurrentSnapshot)
+        else
+          OutliningData(null, buffer.CurrentSnapshot);
+
+      _parseAgent.ParseComplete += fun (_, args)
+      {
+        _data = OutliningData(GetOutlinings(args.Result), args.Snapshot);
+        TagsChanged?.Invoke(this, SnapshotSpanEventArgs(SnapshotSpan(args.Snapshot, 0, args.Snapshot.Length)));
+      };
+      _parseAgent.ParseFailed += fun (_, args)
+      {
+        _data = OutliningData(null, args.Snapshot);
+        TagsChanged?.Invoke(this, SnapshotSpanEventArgs(SnapshotSpan(args.Snapshot, 0, args.Snapshot.Length)));
+      };
     }
 
     public event TagsChanged : EventHandler[SnapshotSpanEventArgs];
 
     public GetTags(_spans : NormalizedSnapshotSpanCollection) : Seq[ITagSpan[IOutliningRegionTag]]
     {
-      def parseResult = _parseAgent.LastResult;
-      if (parseResult != null)
+      def data = _data;
+      if (data.Outlinings != null)
       {
-        def outlinings = List();
-        parseResult.GetOutlining(outlinings);
         def result = List();
-        foreach (o in outlinings)
+        foreach (o in data.Outlinings)
         {
           def span = o.Span;
-          def currentSpn = SnapshotSpan(_buffer.CurrentSnapshot, span.StartPos, span.EndPos - span.StartPos);
+          def currentSpn = SnapshotSpan(data.Snapshot, span.StartPos, span.Length);
           result.Add(TagSpan(currentSpn, OutliningRegionTag(o.IsDefaultCollapsed, o.IsImplementation, null, null)));
         }
         result
       }
-      else
-        array(0)
+      else Enumerable.Empty()
+    }
+
+    private GetOutlinings(parseResult : Parser) : List[OutliningInfo]
+    {
+      def outlinings = List();
+      parseResult.GetOutlining(outlinings);
+      outlinings
     }
   }
 }
-

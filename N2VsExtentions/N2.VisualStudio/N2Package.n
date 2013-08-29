@@ -1,9 +1,12 @@
 ﻿using Nemerle;
+using Nemerle.Late;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
 
 using System;
+using System.IO;
+using System.Reflection;
 using System.ComponentModel.Design;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
@@ -12,6 +15,8 @@ using System.Windows.Forms;
 
 using EnvDTE;
 using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Adornments;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 
@@ -31,10 +36,31 @@ namespace N2.VisualStudio
     private mutable _menuService : OleMenuCommandService;
     mutable _statusbar : IVsStatusbar;
 
-    protected override Initialize ( ) : void
+    protected override Initialize() : void
     {
       base.Initialize();
       Instance = this;
+      def dte = GetService(typeof(DTE)) :> DTE;
+      dte.Events.DTEEvents.OnStartupComplete += _ =>
+      {
+        def config = GetServiceFromServiceModel.[IN2GlobalConfig]();
+        def errorProvider = GetServiceFromServiceModel.[IErrorProviderFactory]();
+        def documentFactoryService = GetServiceFromServiceModel.[ITextDocumentFactoryService]();
+        documentFactoryService.TextDocumentCreated += fun(_, args)
+        {
+          def textDocument = args.TextDocument;
+          def buffer       = textDocument.TextBuffer;
+          def ext          = Path.GetExtension(args.TextDocument.FilePath);
+          unless (string.IsNullOrEmpty(ext))
+          when (config.GetLanguageByExtension(ext) is VSome(language))
+          {
+            unless (buffer.ContentType.Equals(language.ContentType))
+              buffer.ChangeContentType(language.ContentType, null);
+
+            _ = Utils.CreateParseAgent(buffer, language, errorProvider, documentFactoryService);
+          }
+        };
+      };
       _menuService = GetService(typeof(IMenuCommandService)) :> OleMenuCommandService;
       when ( _menuService != null && !this.Zombied)
       {
@@ -108,5 +134,15 @@ namespace N2.VisualStudio
     }
 
     #endregion
+
+    
+
+    private GetServiceFromServiceModel[T]() : T
+    {
+      def componentModelServiceKey = Type.GetType("Microsoft.VisualStudio.ComponentModelHost.SComponentModel, Microsoft.VisualStudio.ComponentModelHost", true);
+      def componentModel = GetService(componentModelServiceKey);
+      def getServiceMethod = componentModel.GetType().GetMethod("GetService", array[]);
+      getServiceMethod.MakeGenericMethod(array[typeof(T)]).Invoke(componentModel, array[]) :> T
+    }
   }
 }

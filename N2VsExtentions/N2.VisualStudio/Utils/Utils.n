@@ -98,63 +98,36 @@ namespace N2.VisualStudio
       _ = VsShellUtilities.ShowMessageBox(serviceProvider, message, Constants.ProductName, icon, buttons, defaultButton);
     }
 
-    public GetParseAgentForTextBuffer(
-      this globalConfig : IN2GlobalConfig,
-      buffer            : ITextBuffer,
-      errorProvider     : IErrorProviderFactory,
-      documentFactory   : ITextDocumentFactoryService) : ValueOption[ParseAgent]
+    public CreateParseAgent(buffer : ITextBuffer, language : Language, errorProvider : IErrorProviderFactory, documentFactory : ITextDocumentFactoryService) : ParseAgent
     {
-      def path = buffer.GetFilePath();
-      when (string.IsNullOrEmpty(path))
-        return VNone();
-
-      def ext = Path.GetExtension(path);
-      when (string.IsNullOrEmpty(ext))
-        return VNone();
-
-      match (globalConfig.GetLanguageByExtension(ext))
+      def parseAgent = ParseAgent(language) <-
       {
-        | VSome(language) =>
-          unless (buffer.ContentType.Equals(language.ContentType))
-            buffer.ChangeContentType(language.ContentType, null);
+        ParseFailed += (_, a) =>
+        {
+          def errorListHelper = GetErrorListHelper(buffer, documentFactory);
+          def errorListProvider = errorListHelper.GetErrorListProvider();
+          errorListProvider.Tasks.Clear();
+          def error = ErrorTask();
+          error.ErrorCategory = TaskErrorCategory.Error;
+          error.Category = TaskCategory.All;
+          error.Text = "INE: " + a.Exception.Message + Environment.NewLine + @"Please contact developers.";
+          error.ErrorCategory = TaskErrorCategory.Error;
+          _ = errorListProvider.Tasks.Add(error);
+        };
+        ParseComplete += (_, a) =>
+        {
+          UpdateErrors(a.Result, buffer, errorProvider, documentFactory);
+        };
+      };
+      buffer.Properties.AddProperty(TextBufferProperties.ParseAgent, parseAgent);
 
-          if (buffer.Properties.ContainsProperty(TextBufferProperties.ParseAgent))
-            VSome(buffer.Properties[TextBufferProperties.ParseAgent] :> ParseAgent)
-          else
-          {
-            def parseAgent = ParseAgent(language) <-
-            {
-              ParseFailed += (_, a) =>
-              {
-                def errorListHelper = GetErrorListHelper(buffer, documentFactory);
-                def errorListProvider = errorListHelper.GetErrorListProvider();
-                errorListProvider.Tasks.Clear();
-                def error = ErrorTask();
-                error.ErrorCategory = TaskErrorCategory.Error;
-                error.Category = TaskCategory.All;
-                error.Text = "INE: " + a.Exception.Message + Environment.NewLine + @"Please contact developers.";
-                error.ErrorCategory = TaskErrorCategory.Error;
-                _ = errorListProvider.Tasks.Add(error);
-              };
-              ParseComplete += (_, a) =>
-              {
-                UpdateErrors(a.Result, buffer, errorProvider, documentFactory);
-              };
-            };
-            buffer.Properties.AddProperty(TextBufferProperties.ParseAgent, parseAgent);
-
-            buffer.Changed +=
-              fun (_ : object, a : TextContentChangedEventArgs) : void
-              {
-                parseAgent.EnqueueParse(a.After, buffer.GetFilePath());
-              };
-            parseAgent.EnqueueParse(buffer.CurrentSnapshot, buffer.GetFilePath());
-
-            VSome(parseAgent)
-          }
-
-        | VNone => VNone()
-      }
+      buffer.Changed +=
+        fun (_ : object, a : TextContentChangedEventArgs) : void
+        {
+          parseAgent.EnqueueParse(a.After, buffer.GetFilePath());
+        };
+      parseAgent.EnqueueParse(buffer.CurrentSnapshot, buffer.GetFilePath());
+      parseAgent
     }
 
     GetErrorListHelper(buffer : ITextBuffer, documentFactory : ITextDocumentFactoryService) : ErrorListHelper
