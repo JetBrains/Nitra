@@ -60,7 +60,7 @@ namespace N2.DebugStrategies
         ParseFrames(parser, skipCount, allFrames);
 
         UpdateParseFramesAlternatives(allFrames);
-        SelectBestFrames(bestFrames, allFrames, skipCount);
+        SelectBestFrames(bestFrames, allFrames);
 
         if (IsAllFramesParseEmptyString(allFrames))
           bestFrames.Clear();
@@ -97,28 +97,20 @@ namespace N2.DebugStrategies
           continue;
 
         if (frame.Children.Count == 0)
-        {
           continue;
-        }
 
         switch (frame.Id)
         {
-          case 187: break;
-          case 188: break;
-          case 189: break;
           case 284: break;
         }
 
         var alternatives0 = FilterParseAlternativesWichEndsEqualsParentsStarts(frame);
-        //var x = FilterMinStart(frame, alternatives0);
-        var alternatives1 = alternatives0;//FilterMaxEndOrFail(alternatives0);
-        var alternatives2 = FilterMinState(alternatives1); // TODO: вынести на следующую стадию! // побеждает меньшее состояние
-        var alternatives3 = alternatives2;//FilterMinStart(frame, alternatives2);
+        var alternatives9 = FilterMinState(alternatives0);
 
 
-        frame.ParseAlternatives = alternatives3.ToArray();
+        frame.ParseAlternatives = alternatives9.ToArray();
 
-        foreach (var alternative in alternatives3)
+        foreach (var alternative in alternatives9)
         {
           var start = alternative.Start;
           var children = frame.Children;
@@ -133,18 +125,6 @@ namespace N2.DebugStrategies
       }
     }
 
-    private static List<ParseAlternative> FilterMinStart(RecoveryStackFrame frame, List<ParseAlternative> alternatives)
-    {
-      //if (frame.TypeName == "ListSeparator" || frame.TypeName == "ListBody")
-      //{
-      //  var result = alternatives.Where(a => a.State >= 0).ToList().FilterMin(a => a.Start);
-
-      //  return result.Count == 0 ? alternatives : result;
-      //}
-
-      return alternatives.FilterMin(a => a.Start);
-    }
-
     private static bool EndWith(RecoveryStackFrame child, int end)
     {
       return child.ParseAlternatives.Any(p => p.End < 0 ? p.Fail == end : p.End == end);
@@ -155,7 +135,12 @@ namespace N2.DebugStrategies
       if (alternatives.Count <= 1)
         return alternatives.ToList();
 
-      return alternatives.FilterMin(f => f.State < 0 ? int.MaxValue : f.State);
+      var result = alternatives.FilterMin(f => f.State < 0 ? int.MaxValue : f.State);
+
+      if (result.Count != alternatives.Count)
+        Debug.Assert(true);
+
+      return result;
     }
 
     private static List<ParseAlternative> FilterMaxEndOrFail(List<ParseAlternative> alternatives)
@@ -166,7 +151,7 @@ namespace N2.DebugStrategies
       return alternatives.FilterMax(f => f.End >= 0 ? f.End : f.Fail);
     }
 
-    private static void SelectBestFrames(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, int skipCount)
+    private static void SelectBestFrames(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames)
     {
       for (int i = allFrames.Count - 1; i >= 0; --i)
       {
@@ -193,7 +178,7 @@ namespace N2.DebugStrategies
         // отберат фреймы которые которые продолжают парсинг с состояния облом. Такое может случиться если была пропущена грязь, а сразу за ней 
         // идет корректная конструкция. Пример из джейсона: {a:.2}. Здесь "." - это грязь за которой идет корректное Value. Фильтрация производится
         // только если среди потомков есть подпадающие под условия.
-        var children2 = FilterTopFramesWhichRecoveredOnFailStateIfExists(children1);
+        var children2 = FilterTopFramesWhichRecoveredOnFailStateIfExists(children1); // TODO: Похоже это дело дублирует FilterFailSateEqualsStateIfExists
         // Если все потомки парсят пустую строку (во всех путях пропарсивания васех потомков ParentsEat == 0), то отбираем потомков с наименьшей глубиной (Depth).
         var children3 = children2.FilterBetterEmptyIfAllEmpty();
         // Если среди потомков есть фреймы пропарсившие код (у которых End >= 0), то отбираем их, отбрасывая фреймы пропарсившие с Fail-мо. 
@@ -202,10 +187,9 @@ namespace N2.DebugStrategies
         // Для каждой группы потомков с одинаковым местом фэйла (TextPos) отбираем такие которые начали парситься с меньшего состояния (подправила).
         var children5 = SelectMinFailSateIfTextPosEquals(children4);
         // Отбрасываем потомков все альтеративы которых пропарсили пустую строку.
-        var children6 = FilterEmptyChildren(children5);
+        var children9 = FilterEmptyChildren(children5);
 
-        var bettreChildren = children6;
-
+        var bettreChildren = children9;
         var poorerChildren = SubstractSet(frame.Children, bettreChildren);
 
         if (poorerChildren.Count > 0)
