@@ -902,7 +902,8 @@ namespace N2.Visualizer
 
     private void MenuItem_Click_TestsSettings(object sender, RoutedEventArgs e)
     {
-      ShowTestsSettingsDialog();
+      if (ShowTestsSettingsDialog())
+        LoadTests();
     }
 
     bool CheckTestFolder()
