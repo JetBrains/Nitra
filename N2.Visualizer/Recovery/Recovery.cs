@@ -71,6 +71,12 @@ namespace N2.DebugStrategies
         _visited.Clear();
       }
 
+      var allBestFrames = bestFrames.UpdateDepthAndCollectAllFrames();
+      allBestFrames.RemoveAll(frame => !frame.Best);
+      foreach (var frame in allBestFrames)
+        if (frame.ParseAlternatives.Length != 1)
+          Debug.Assert(false);
+
       return -1;
     }
 
@@ -530,7 +536,7 @@ namespace N2.DebugStrategies
       return res2.ToList();
     }
 
-    public static List<RecoveryStackFrame> PrepareRecoveryStacks(this ICollection<RecoveryStackFrame> heads)
+    public static List<RecoveryStackFrame> UpdateDepthAndCollectAllFrames(this ICollection<RecoveryStackFrame> heads)
     {
       var allRecoveryStackFrames = new List<RecoveryStackFrame>();
 
@@ -542,6 +548,13 @@ namespace N2.DebugStrategies
         stack.UpdateFrameDepth();
 
       allRecoveryStackFrames.SortByDepth();
+
+      return allRecoveryStackFrames;
+    }
+
+    public static List<RecoveryStackFrame> PrepareRecoveryStacks(this ICollection<RecoveryStackFrame> heads)
+    {
+      var allRecoveryStackFrames = heads.UpdateDepthAndCollectAllFrames();
 
       for (int i = 0; i < allRecoveryStackFrames.Count; ++i)
       {
