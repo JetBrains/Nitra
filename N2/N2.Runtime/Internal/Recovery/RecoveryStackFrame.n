@@ -48,15 +48,16 @@ namespace N2.Internal
     static mutable _value : int;
     static NextValue() : int { _value++; _value }
     
-    [RecordIgnore, EqualsIgnore] public mutable Id               : int = NextValue();
-    [RecordIgnore, EqualsIgnore] public mutable Index            : int;
-    [RecordIgnore, EqualsIgnore] public mutable Depth            : int = 0;
-    [RecordIgnore, EqualsIgnore] public         Parents          : SCG.HashSet[RecoveryStackFrame] = SCG.HashSet();
-    [RecordIgnore, EqualsIgnore] public         Children         : SCG.List[RecoveryStackFrame] = SCG.List();
-    [RecordIgnore, EqualsIgnore] public mutable Mode             : RecoveryStackFrameMode = RecoveryStackFrameMode.Both;
-
-    [RecordIgnore, EqualsIgnore] public mutable Best             : bool;
+    [RecordIgnore, EqualsIgnore] public mutable Id                : int = NextValue();
+    [RecordIgnore, EqualsIgnore] public mutable Index             : int;
+    [RecordIgnore, EqualsIgnore] public mutable Depth             : int = 0;
+    [RecordIgnore, EqualsIgnore] public         Parents           : SCG.HashSet[RecoveryStackFrame] = SCG.HashSet();
+    [RecordIgnore, EqualsIgnore] public         Children          : SCG.List[RecoveryStackFrame] = SCG.List();
+    [RecordIgnore, EqualsIgnore] public mutable Mode              : RecoveryStackFrameMode = RecoveryStackFrameMode.Both;
+                                                                  
+    [RecordIgnore, EqualsIgnore] public mutable Best              : bool;
     [RecordIgnore, EqualsIgnore] public mutable ParseAlternatives : array[ParseAlternative];
+    [RecordIgnore, EqualsIgnore] public mutable IsSpeculative     : bool;
 
     public TextPos      : int;
 
@@ -236,23 +237,24 @@ namespace N2.Internal
 
     public GetSpeculativeFramesForState(textPos : int, parser : Parser, state : int) : array[RecoveryStackFrame]
     {
-      def parent = if (FailState == state)
-        this
-      else
-      {
-        def newFrame = match (this)
+      def parent =
+        if (FailState == state)
+          this
+        else
         {
-          | Extensible        as frame => parser.RecoveryStackFrame_Extensible_AlwaysReturn   (null, frame.TextPos, frame.RuleParser, state)
-          | Root                       => assert3(false)
-          | ExtensiblePrefix           => assert3(false)
-          | ExtensiblePostfix          => assert3(false)
-          | ListBody          as frame => parser.RecoveryStackFrame_ListBody_AlwaysReturn     (null, frame.TextPos, frame.AstHandle, state, frame.Counter)
-          | ListSeparator     as frame => parser.RecoveryStackFrame_ListSeparator_AlwaysReturn(null, frame.TextPos, frame.AstHandle, state, frame.Counter)
-          | Rule              as frame => parser.RecoveryStackFrame_Rule_AlwaysReturn         (null, frame.TextPos, frame.AstHandle, state)
-        }
-        newFrame.Parents.UnionWith(Parents);
-        newFrame
-      }
+          def newFrame = match (this)
+          {
+            | Extensible        as frame => parser.RecoveryStackFrame_Extensible_AlwaysReturn   (null, frame.TextPos, frame.RuleParser, state)
+            | Root                       => assert3(false)
+            | ExtensiblePrefix           => assert3(false)
+            | ExtensiblePostfix          => assert3(false)
+            | ListBody          as frame => parser.RecoveryStackFrame_ListBody_AlwaysReturn     (null, frame.TextPos, frame.AstHandle, state, frame.Counter)
+            | ListSeparator     as frame => parser.RecoveryStackFrame_ListSeparator_AlwaysReturn(null, frame.TextPos, frame.AstHandle, state, frame.Counter)
+            | Rule              as frame => parser.RecoveryStackFrame_Rule_AlwaysReturn         (null, frame.TextPos, frame.AstHandle, state)
+          }
+          newFrame.Parents.UnionWith(Parents);
+          newFrame
+        };
       def makeExtentionFrame(ruleParser)
       {
         def handle = parser.AstHandle_Extention(ruleParser, -1, textPos);
@@ -290,22 +292,28 @@ namespace N2.Internal
           | _ => assert3(false)
         }
       }
-      match (parent)
-      {
-        | Extensible as frame =>
-          match (frame.State)
-          {
-            | 0 => array[parser.RecoveryStackFrame_ExtensiblePrefix_AlwaysReturn(parent, textPos, parser.AstHandle_Prefix(frame.RuleParser.ParserData, -1, textPos), frame.RuleParser)]
-            | 1 => array[parser.RecoveryStackFrame_ExtensiblePostfix_AlwaysReturn(parent, textPos, parser.AstHandle_Postfix(frame.RuleParser.ParserData, -1, textPos), frame.RuleParser)]
-            | _ => assert3(false)
-          }
-        | ExtensiblePrefix  as frame => frame.RuleParser.PrefixRules.MapToArray(makeExtentionFrame)
-        | ExtensiblePostfix as frame => frame.RuleParser.PostfixRules.Skip(frame.RuleParser.FirstPostfixRule).MapToArray(makeExtentionFrame)
-        | Root(ruleParser)           => makeChild(ruleParser, -1)
-        | ListBody
-        | ListSeparator
-        | Rule                       => makeChild(GetRuleParser().GetRuleParserForState(state))
-      }
+      def results =
+        match (parent)
+        {
+          | Extensible as frame =>
+            match (frame.State)
+            {
+              | 0 => array[parser.RecoveryStackFrame_ExtensiblePrefix_AlwaysReturn(parent, textPos, parser.AstHandle_Prefix(frame.RuleParser.ParserData, -1, textPos), frame.RuleParser)]
+              | 1 => array[parser.RecoveryStackFrame_ExtensiblePostfix_AlwaysReturn(parent, textPos, parser.AstHandle_Postfix(frame.RuleParser.ParserData, -1, textPos), frame.RuleParser)]
+              | _ => assert3(false)
+            }
+          | ExtensiblePrefix  as frame => frame.RuleParser.PrefixRules.MapToArray(makeExtentionFrame)
+          | ExtensiblePostfix as frame => frame.RuleParser.PostfixRules.Skip(frame.RuleParser.FirstPostfixRule).MapToArray(makeExtentionFrame)
+          | Root(ruleParser)           => makeChild(ruleParser, -1)
+          | ListBody
+          | ListSeparator
+          | Rule                       => makeChild(GetRuleParser().GetRuleParserForState(state))
+        };
+        
+      foreach (result in results)
+        result.IsSpeculative = true;
+        
+      results
     }
 
 
@@ -328,23 +336,6 @@ namespace N2.Internal
               | Extention => GetRuleParser().IsTokenRule // ???
               | _ => false
             }
-        }
-      }
-    }
-
-    public IsSpeculative : bool
-    {
-      get
-      {
-        match (this)
-        {
-          | Root                     => false
-          | ExtensiblePrefix(handle, _)
-          | ExtensiblePostfix(handle, _)
-          | ListBody     (handle, _, _)
-          | ListSeparator(handle, _, _)
-          | Rule         (handle, _) => handle.AstPtr < 0
-          | Extensible               => false //TODO: Подумать как это реализовать правильно.
         }
       }
     }

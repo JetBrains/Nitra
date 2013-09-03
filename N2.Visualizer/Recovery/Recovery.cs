@@ -107,28 +107,39 @@ namespace N2.DebugStrategies
 
         switch (frame.Id)
         {
-          case 284: break;
+          case 189: break;
         }
+
+        var children = frame.Children;
+
+        if (children.Count == 0)
+          Debug.Assert(false);
 
         var alternatives0 = FilterParseAlternativesWichEndsEqualsParentsStarts(frame);
         var alternatives9 = FilterMinState(alternatives0);
-
 
         frame.ParseAlternatives = alternatives9.ToArray();
 
         foreach (var alternative in alternatives9)
         {
           var start = alternative.Start;
-          var children = frame.Children;
-
-          if (children.Count == 0)
-            Debug.Assert(false);
 
           foreach (var child in children)
             if (EndWith(child, start))
               child.Best = true;
         }
       }
+    }
+
+    private static List<RecoveryStackFrame> FilterNotEmpyPrefixChildren(RecoveryStackFrame frame, List<RecoveryStackFrame> children)
+    {
+      if (frame is RecoveryStackFrame.ExtensiblePrefix && children.Count > 1)
+      {
+        if (children.Any(c => c.ParseAlternatives.Any(a => a.State < 0)) && children.Any(c => c.ParseAlternatives.Any(a => a.State >= 0)))
+          return children.Where(c => c.ParseAlternatives.Any(a => a.State >= 0)).ToList();
+      }
+
+      return children;
     }
 
     private static bool EndWith(RecoveryStackFrame child, int end)
@@ -162,7 +173,7 @@ namespace N2.DebugStrategies
       for (int i = allFrames.Count - 1; i >= 0; --i)
       {
         var frame = allFrames[i];
-        
+
         if (!frame.Best)
           continue;
 
@@ -193,7 +204,8 @@ namespace N2.DebugStrategies
         // Для каждой группы потомков с одинаковым местом фэйла (TextPos) отбираем такие которые начали парситься с меньшего состояния (подправила).
         var children5 = SelectMinFailSateIfTextPosEquals(children4);
         // Отбрасываем потомков все альтеративы которых пропарсили пустую строку.
-        var children9 = FilterEmptyChildren(children5);
+        var children6 = FilterEmptyChildren(children5);
+        var children9 = children6;//FilterNotEmpyPrefixChildren(frame, children6);
 
         var bettreChildren = children9;
         var poorerChildren = SubstractSet(frame.Children, bettreChildren);
