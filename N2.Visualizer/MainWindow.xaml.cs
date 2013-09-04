@@ -186,15 +186,28 @@ namespace N2.Visualizer
       if (!object.ReferenceEquals(_tabControl.SelectedItem, _reflectionTabItem))
         return;
 
+
+      if (_reflectionTreeView.ItemsSource == null)
+        return;
+
+      if (_reflectionTreeView.IsKeyboardFocusWithin)
+        return;
+
+
       _doChangeCaretPos = true;
       try
       {
-        var node = FindNode(treeView1.Items, _text.CaretOffset);
+        var node = FindNode((ReflectionStruct[])_reflectionTreeView.ItemsSource, _text.CaretOffset);
 
         if (node != null)
         {
-          node.IsSelected = true;
-          node.BringIntoView();
+          var selected = _reflectionTreeView.SelectedItem as ReflectionStruct;
+          
+          if (node == selected)
+            return;
+
+          _reflectionTreeView.SelectedItem = node;
+          _reflectionTreeView.BringIntoView(node);
         }
       }
       finally
@@ -203,22 +216,19 @@ namespace N2.Visualizer
       }
     }
 
-    private TreeViewItem FindNode(ItemCollection items, int p)
+    private ReflectionStruct FindNode(IEnumerable<ReflectionStruct> items, int p)
     {
-
-      foreach (TreeViewItem item in items)
+      foreach (ReflectionStruct node in items)
       {
-        item.IsExpanded = true;
-        var node = (ReflectionStruct)item.Tag;
-
         if (node.Location.StartPos <= p && p < node.Location.EndPos)
         {
-          item.IsExpanded = true;
 
-          if (item.Items.Count == 0)
-            return item;
+          if (node.Children.Count == 0)
+            return node;
 
-          return FindNode(item.Items, p);
+          _reflectionTreeView.Expand(node);
+
+          return FindNode(node.Children, p);
         }
       }
 
@@ -330,20 +340,23 @@ namespace N2.Visualizer
     {
       _needUpdateReflection = false;
 
-      treeView1.Items.Clear();
+      //_reflectionTreeView.Items.Clear();
 
       if (_parseResult == null)
         return;
 
       var root = _parseResult.Reflect();
-      var treeNode = new TreeViewItem();
-      treeNode.Expanded += node_Expanded;
-      treeNode.Header = root.Description;
-      treeNode.Tag = root;
-      treeNode.ContextMenu = (ContextMenu)Resources["TreeContextMenu"];
-      if (root.Children.Count != 0)
-        treeNode.Items.Add(new TreeViewItem());
-      treeView1.Items.Add(treeNode);
+
+      _reflectionTreeView.ItemsSource = new[] { (ReflectionStruct)root };
+
+      //var treeNode = new TreeViewItem();
+      //treeNode.Expanded += node_Expanded;
+      //treeNode.Header = root.Description;
+      //treeNode.Tag = root;
+      //treeNode.ContextMenu = (ContextMenu)Resources["TreeContextMenu"];
+      //if (root.Children.Count != 0)
+      //  treeNode.Items.Add(new TreeViewItem());
+      //treeView1.Items.Add(treeNode);
     }
 
     private void UpdateHtmlPrettyPrint()
@@ -427,33 +440,6 @@ namespace N2.Visualizer
         path.Push(curr.Header.ToString());
 
       return path.Count == 0 ? "" : string.Join(@"\", path);
-    }
-
-    private void treeView1_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
-    {
-      var item = (TreeViewItem)e.NewValue;
-
-      if (item == null)
-        return;
-
-      if (_parseResult != null && _parseResult.IsSuccess)
-        _status.Text = MakePath(item);
-
-      if (_doChangeCaretPos)
-        return;
-
-      _doTreeOperation = true;
-      try
-      {
-        var info = (ReflectionStruct)item.Tag;
-
-        _text.TextArea.AllowCaretOutsideSelection();
-        _text.Select(info.Location.StartPos, info.Location.Length);
-      }
-      finally
-      {
-        _doTreeOperation = false;
-      }
     }
 
     private void MenuItem_Click(object sender, RoutedEventArgs e)
@@ -895,11 +881,11 @@ namespace N2.Visualizer
 
     private void CopyReflectionNodeText(object sender, ExecutedRoutedEventArgs e)
     {
-      var value = treeView1.SelectedValue as TreeViewItem;
+      var value = _reflectionTreeView.SelectedItem as ReflectionStruct;
 
       if (value != null)
       {
-        var result = value.Header.ToString();
+        var result = value.Description;
         Clipboard.SetData(DataFormats.Text, result);
         Clipboard.SetData(DataFormats.UnicodeText, result);
       }
@@ -1269,6 +1255,43 @@ namespace N2.Visualizer
     private void OnRepars(object sender, ExecutedRoutedEventArgs e)
     {
       Dispatcher.Invoke(new Action(DoParse));
+    }
+
+    private void OnTreeViewItemSelected(object sender, RoutedEventArgs e)
+    {
+      if (!Object.ReferenceEquals(sender, e.OriginalSource))
+        return;
+
+      var item = e.OriginalSource as TreeViewItem;
+      if (item != null)
+        item.BringIntoView();
+    }
+
+    private void _reflectionTreeView_SelectedItemChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+      if (_doChangeCaretPos)
+        return;
+
+      var node = e.NewValue as ReflectionStruct;
+
+      if (node == null)
+        return;
+
+      if (_text.IsKeyboardFocusWithin)
+        return;
+
+      _doTreeOperation = true;
+      try
+      {
+        _text.TextArea.Caret.Offset = node.Location.StartPos;
+        _text.ScrollTo(_text.TextArea.Caret.Line, _text.TextArea.Caret.Line);
+        _text.TextArea.AllowCaretOutsideSelection();
+        _text.Select(node.Location.StartPos, node.Location.Length);
+      }
+      finally
+      {
+        _doTreeOperation = false;
+      }
     }
   }
 }
