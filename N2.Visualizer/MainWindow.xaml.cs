@@ -524,7 +524,7 @@ namespace N2.Visualizer
         
         recovery.ReportResult = null;
       }
-      catch (TypeLoadException ex)
+      catch (Exception ex)
       {
         ClearMarkers();
         MessageBox.Show(this, ex.Message);
