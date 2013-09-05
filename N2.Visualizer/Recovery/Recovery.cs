@@ -320,6 +320,8 @@ namespace N2.DebugStrategies
             foreach (var alternative in parent.ParseAlternatives)
               parentStarts.Add(alternative.Start);
         res0 = frame.ParseAlternatives.Where(alternative => parentStarts.Contains(alternative.End)).ToList();
+        if (res0.Count == 0)
+          res0 = frame.ParseAlternatives.Where(alternative => parentStarts.Contains(alternative.Fail)).ToList();
       }
       return res0;
     }
