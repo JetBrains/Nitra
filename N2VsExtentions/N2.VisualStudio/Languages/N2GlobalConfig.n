@@ -1,7 +1,6 @@
 ﻿using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Formatting;
-using System.ComponentModel.Composition;
 using Microsoft.VisualStudio.Utilities;
 
 using Nemerle;
@@ -10,6 +9,7 @@ using Nemerle.Text;
 using Nemerle.Utility;
 
 using System;
+using System.ComponentModel.Composition;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
@@ -17,6 +17,8 @@ using System.Linq;
 using System.Reflection;
 using System.Windows.Media;
 using System.Xml.Linq;
+
+using NLog;
 
 using GdiColor = System.Drawing.Color;
 
@@ -33,6 +35,8 @@ namespace N2.VisualStudio
   [Export(typeof(IN2GlobalConfig))]
   public class N2GlobalConfig : IN2GlobalConfig
   {
+    _logger : Logger = LogManager.GetLogger(typeof(this).FullName);
+
     public Languages : list[Language] { get; }
 
     static _expandPropertyRegex         : Regex                       = Regex(@"\$(\w(\w|\d)*)", RegexOptions.Compiled);
@@ -66,78 +70,96 @@ namespace N2.VisualStudio
       _properties["Configuration"] = Constants.Configuration;
 
       ConfigPath   = Path.Combine(root, n2ConfigName);
-      def config   = XElement.Load(ConfigPath);
+      def config   =
+        try XElement.Load(ConfigPath)
+        catch
+        { e =>
+          _logger.FatalException($"Failed to read config file '$ConfigPath'", e);
+          throw;
+        }
 
       #endregion
 
-      // Init Properties
-      foreach (prop in config.Element("Properties")?.Elements() ?? [])
-        _properties[prop.Name.LocalName] = prop.Value ?? "";
-
-
-      #region Init Languages
-
-      foreach (lang in config.Element("Languages")?.Elements("Language") ?? [])
+      try
       {
-        def name           = lang.Attribute("Name").Value;
-        def oldContentType = contentTypeRegistryService.GetContentType(name);
-        def fileExtentions = lang.Attribute("FileExtentions")?.Value?.SplitToList(';').RevMap(s => s.Trim().ToLowerInvariant());
+        // Init Properties
+        foreach (prop in config.Element("Properties")?.Elements() ?? [])
+          _properties[prop.Name.LocalName] = prop.Value ?? "";
 
-        when (oldContentType != null) // remove if exists
+
+        #region Init Languages
+
+        foreach (lang in config.Element("Languages")?.Elements("Language") ?? [])
         {
-          foreach (extension in List(fileExtensionRegistryService.GetExtensionsForContentType(oldContentType)))
-            fileExtensionRegistryService.RemoveFileExtension(extension);
+          def name           = lang.Attribute("Name").Value;
+          def oldContentType = contentTypeRegistryService.GetContentType(name);
+          def fileExtentions = lang.Attribute("FileExtentions")?.Value?.SplitToList(';').RevMap(s => s.Trim().ToLowerInvariant());
 
-          contentTypeRegistryService.RemoveContentType(name);
-        }
-
-        def contentType = contentTypeRegistryService.AddContentType(name, ["code"]);
-
-        def language =
-          Language(name, contentType, fileExtentions,
-            grammar   = lang.Attribute("Grammar").Value,
-            startRule = lang.Attribute("StartRule").Value,
-            modules   = (lang.Elements("Module") ?? []).Map(e => ExpandProperty(e.Value)));
-
-        foreach (ext in fileExtentions)
-        {
-          _languageMap[ext] = language;
-          try
-            fileExtensionRegistryService.AddFileExtension(ext, contentType);
-          catch
-          { e is InvalidOperationException =>
-            assert2(false, e.Message)
-          }
-        }
-
-        Languages ::= language;
-      }
-
-      #endregion
-
-      #region Read SpanClasses
-
-      foreach (spanClass in config.Element("SpanClasses")?.Elements() ?? [])
-      {
-        def name = spanClass.Name.LocalName;
-        def foreground = spanClass.Attribute("Foreground")?.Value;
-        _spanClassStyleBuilders[name] = fun(mutable properties)
-        {
-          when (foreground != null)
+          when (oldContentType != null) // remove if exists
           {
-            def foreColor = GdiColor.FromName(foreground);
-            properties = properties.SetForeground(Color.FromRgb(foreColor.R, foreColor.G, foreColor.B));
-          }
-          properties
-        };
-      }
+            foreach (extension in List(fileExtensionRegistryService.GetExtensionsForContentType(oldContentType)))
+              fileExtensionRegistryService.RemoveFileExtension(extension);
 
-      #endregion
+            contentTypeRegistryService.RemoveContentType(name);
+          }
+
+          def contentType = contentTypeRegistryService.AddContentType(name, ["code"]);
+
+          def language =
+            Language(name, contentType, fileExtentions,
+              grammar   = lang.Attribute("Grammar").Value,
+              startRule = lang.Attribute("StartRule").Value,
+              modules   = (lang.Elements("Module") ?? []).Map(e => ExpandProperty(e.Value)));
+
+          foreach (ext in fileExtentions)
+          {
+            _languageMap[ext] = language;
+            try
+              fileExtensionRegistryService.AddFileExtension(ext, contentType);
+            catch
+            { e is InvalidOperationException =>
+              assert2(false, e.Message)
+            }
+          }
+
+          Languages ::= language;
+        }
+
+        #endregion
+
+        #region Read SpanClasses
+
+        foreach (spanClass in config.Element("SpanClasses")?.Elements() ?? [])
+        {
+          def name = spanClass.Name.LocalName;
+          def foreground = spanClass.Attribute("Foreground")?.Value;
+          _spanClassStyleBuilders[name] = fun(mutable properties)
+          {
+            when (foreground != null)
+            {
+              def foreColor = GdiColor.FromName(foreground);
+              properties = properties.SetForeground(Color.FromRgb(foreColor.R, foreColor.G, foreColor.B));
+            }
+            properties
+          };
+        }
+
+        #endregion
+      }
+      catch
+      { e =>
+        _logger.FatalException($"Failed to parse config file '$ConfigPath'", e);
+        throw;
+      }
     }
 
     public ApplySpanClassStyles(formatMap : IClassificationFormatMap, classificationTypeRegistryService : IClassificationTypeRegistryService) : void
     {
-      def formalLanguageClassificationType = classificationTypeRegistryService.GetClassificationType("formal language");
+      _logger.Trace("ApplySpanClassStyles");
+      def formalLanguage = "formal language";
+      def formalLanguageClassificationType = classificationTypeRegistryService.GetClassificationType(formalLanguage);
+      when (formalLanguageClassificationType == null)
+        _logger.Debug($"Classification type '$formalLanguage' not found");
       formatMap.BeginBatchUpdate();
       try
         foreach (kv with (name = kv.Key, builder = kv.Value) in _spanClassStyleBuilders)
@@ -146,10 +168,16 @@ namespace N2.VisualStudio
           when (classificationType == null)
           {
             def newClassificationType = classificationTypeRegistryService.CreateClassificationType(name, [formalLanguageClassificationType]);
+            _logger.Debug($"Classification type '$name' created");
             def newProperties = builder(formatMap.GetTextProperties(newClassificationType));
             formatMap.SetTextProperties(newClassificationType, newProperties);
           }
         }
+      catch
+      { e =>
+        _logger.TraceException("ApplySpanClassStyles failed", e);
+        throw;
+      }
       finally formatMap.EndBatchUpdate();
     }
 
