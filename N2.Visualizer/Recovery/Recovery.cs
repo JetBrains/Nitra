@@ -33,11 +33,22 @@ namespace N2.DebugStrategies
 
     public virtual int Strategy(Parser parser)
     {
-      var failPos = parser.MaxFailPos;
-      var skipCount = 0;
-      var text = parser.Text;
-
       Debug.Assert(parser.RecoveryStacks.Count > 0);
+
+      while (parser.RecoveryStacks.Count > 0)
+      {
+        var failPos = parser.MaxFailPos;
+        var skipCount = 0;
+        var bestFrames = CollectBestFrames(failPos, ref skipCount, parser);
+        FixAst(bestFrames, failPos, skipCount, parser);
+      }
+
+      return parser.Text.Length;
+    }
+
+    private List<RecoveryStackFrame> CollectBestFrames(int failPos, ref int skipCount, Parser parser)
+    {
+      var text = parser.Text;
 
       var bestFrames = new List<RecoveryStackFrame>();
 
@@ -51,7 +62,11 @@ namespace N2.DebugStrategies
         var newFrames = new HashSet<RecoveryStackFrame>(frames);
         foreach (var frame in frames)
           if (frame.Depth == 0)
+          {
+            if (frame.TextPos != failPos)
+              Debug.Assert(false);
             FindSpeculativeFrames(newFrames, parser, frame, failPos, skipCount);
+          }
 
         var allFrames = newFrames.PrepareRecoveryStacks();
 
@@ -72,40 +87,7 @@ namespace N2.DebugStrategies
           break;
       }
 
-      var allBestFrames = bestFrames.UpdateDepthAndCollectAllFrames();
-      allBestFrames.RemoveAll(frame => !frame.Best);
-      foreach (var frame in allBestFrames)
-        if (frame.ParseAlternatives.Length != 1)
-          Debug.Assert(false);
-
-      parser.RecoveryStacks.Clear();
-
-      var errorIndex = parser.ErrorData.Count;
-      parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), allBestFrames.ToArray()));
-
-      var parents = new HashSet<RecoveryStackFrame>();
-      foreach (var frame in bestFrames)
-      {
-        if (frame.PatchAst(errorIndex, parser))
-          foreach (var parent in frame.Parents)
-            if (parent.Best)
-              parents.Add(parent);
-      }
-
-      while (parents.Count > 0 && !parents.Contains(allBestFrames[allBestFrames.Count - 1]))//пока не содержит корень
-      {
-        var newParents = new HashSet<RecoveryStackFrame>();
-        foreach (var frame in parents)
-        {
-          if (frame.ContinueParse(parser))
-            foreach (var parent in frame.Parents)
-              if (parent.Best)
-                newParents.Add(parent);
-        }
-        parents = newParents;
-      }
-
-      return text.Length;
+      return bestFrames;
     }
 
     private bool IsAllFramesParseEmptyString(IEnumerable<RecoveryStackFrame> allFrames)
@@ -510,29 +492,40 @@ namespace N2.DebugStrategies
     #region Модификация AST (FixAst)
 
     // ReSharper disable once ParameterTypeCanBeEnumerable.Local
-    private void FixAst(Parser parser)
+    private void FixAst(List<RecoveryStackFrame> bestFrames, int failPos, int skipCount, Parser parser)
     {
-      //  // TODO: Надо переписать. Пока закоментил.
-      //  Debug.Assert(_bestResult != null);
+      var allBestFrames = bestFrames.UpdateDepthAndCollectAllFrames();
+      allBestFrames.RemoveAll(frame => !frame.Best);
+      foreach (var frame in allBestFrames)
+        if (frame.ParseAlternatives.Length != 1)
+          Debug.Assert(false);
 
-      //  var frame = _bestResult.Stack.Head;
+      parser.RecoveryStacks.Clear();
 
-      //  if (frame.AstStartPos < 0)
-      //    Debug.Assert(frame.AstPtr >= 0);
+      var errorIndex = parser.ErrorData.Count;
+      parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), allBestFrames.ToArray()));
 
-      //  var error = new ParseErrorData(new NToken(_bestResult.FailPos, _bestResult.StartPos), _bestResults.ToArray());
-      //  var errorIndex = parser.ErrorData.Count;
-      //  parser.ErrorData.Add(error);
+      var parents = new HashSet<RecoveryStackFrame>();
+      foreach (var frame in bestFrames)
+      {
+        if (frame.PatchAst(errorIndex, parser))
+          foreach (var parent in frame.Parents)
+            if (parent.Best)
+              parents.Add(parent);
+      }
 
-      //  frame.RuleParser.PatchAst(_bestResult.StartPos, _bestResult.StartState, errorIndex, _bestResult.Stack, parser);
-
-      //  for (var stack = _bestResult.Stack.Tail as RecoveryStack; stack != null; stack = stack.Tail as RecoveryStack)
-      //  {
-      //    if (stack.Head.RuleParser is ExtensibleRuleParser)
-      //      continue;
-      //    Debug.Assert(stack.Head.FailState >= 0);
-      //    stack.Head.RuleParser.PatchAst(stack.Head.AstStartPos, -2, -1, stack, parser);
-      //  }
+      while (parents.Count > 0 && !parents.Contains(allBestFrames[allBestFrames.Count - 1]))//пока не содержит корень
+      {
+        var newParents = new HashSet<RecoveryStackFrame>();
+        foreach (var frame in parents)
+        {
+          if (frame.ContinueParse(parser))
+            foreach (var parent in frame.Parents)
+              if (parent.Best)
+                newParents.Add(parent);
+        }
+        parents = newParents;
+      }
     }
 
     #endregion
