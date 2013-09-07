@@ -21,27 +21,11 @@ namespace N2.Compiler
       def code = SCG.List();
       def createAst(structure)
       {
-        if (structure is RuleStructure.Ast(Symbol = N2.Typing.ExtentionRuleSymbol as symbol))
+        if (structure is RuleStructure.Ast(Symbol = N2.Typing.ExtentionRuleSymbol))
         {
-          def (patchFirstRuleIndex, parentType) = if (symbol is ExtentionRuleSymbol(ExtentionType = Prefix))
-            (<[
-              assert3(parser.ast[parent.AstHandle.AstPtr + N2.Internal.ExtensibleRuleParser.PrefixOfs.List] == 0);
-              parser.ast[parent.AstHandle.AstPtr + N2.Internal.ExtensibleRuleParser.PrefixOfs.List] = newAstPtr;
-            ]>, <[ N2.Internal.RecoveryStackFrame.ExtensiblePrefix ]>)
-          else
-            (<[
-              assert3(parser.ast[parent.AstHandle.AstPtr + N2.Internal.ExtensibleRuleParser.PostfixOfs.List] == 0);
-              parser.ast[frame.AstHandle.AstPtr] = parser.ast[frame.AstHandle.AstPtr] | N2.Internal.ExtensibleRuleParser.AstFlags.Best;
-              parser.ast[parent.AstHandle.AstPtr + N2.Internal.ExtensibleRuleParser.PostfixOfs.List] = newAstPtr;
-              parser.ast[parent.AstHandle.AstPtr + N2.Internal.ExtensibleRuleParser.PostfixOfs.FirstRuleIndex] = parent.RuleParser.FirstPostfixRule;
-            ]>, <[ N2.Internal.RecoveryStackFrame.ExtensiblePostfix ]>);
           <[
             def newAstPtr = parser.Allocate($(structure.Size), $(structure.AstId : global));
             frame.AstHandle.AstPtr = newAstPtr;
-            assert3(frame.Parents.Count == 1);
-            def parent = frame.Parents.First() :> $parentType;
-            assert3(parent.AstHandle.AstPtr > 0);
-            $patchFirstRuleIndex;
             newAstPtr
           ]>
         }
@@ -60,58 +44,83 @@ namespace N2.Compiler
       def cases = SCG.List();
       foreach ((structure, fields) in asts.KeyValuePairs)
       {
-        foreach (field in fields)
-        {
-          def getSize = match (field)
+        if (structure.Owner is List as owner when owner.IsSkipAnyPattern)
+          foreach (field in fields)
+            cases.Add(<[ case: | $(field.State) => assert3(false) ]>)
+        else
+          foreach (field in fields)
           {
-            | Empty                                      => Some(<[ 0 ]>)
-            | TokenString    (str)                       => Some(<[ { assert3($(ParseMethodEmitter.CheckStringCode(str, <[ parser.Text ]>, <[ startPos ]>))); $(str.Length); } ]>)
-            | TokenCall      (ruleSymbol)                => Some(<[ $(MakeTokenRuleCall(ruleSymbol, <[ startPos ]>, <[ parser.Text ]>)) - startPos ]>)
-            | SimpleCall     (ruleSymbol)                => Some(<[ $(Owner.MakeParserName(ruleSymbol) : global).Parse(startPos, parser.Text, parser) - startPos ]>)
-            | ExtensibleCall (ruleSymbol, bindingPower)  => Some(<[ $(Owner.MakeParserName(ruleSymbol, bindingPower) : global).Parse(startPos, parser.Text, parser) - startPos ]>)
-            | Option | List | ListWithSeparator//TODO: FIXME если у поля есть предикат то восстановление может начатья перед циклом
-            | Marker => None()
-          }
-          def patch = <[
-            when (startState == $(field.State))
+            def getSize = match (field)
             {
-              $(if (getSize is Some(getSize))
-                <[
-                  parser.ErrorData[errorIndex].Data = $getSize;
-                  assert3(parser.ErrorData[errorIndex].Data >= 0);
-                  startState = GetNextState(startState);
-                ]>
-                else
-                <[
-                  assert3(false);
-                ]>
-              )
+              | Empty                                      => Some(<[ 0 ]>)
+              | TokenString    (str)                       => Some(<[ { assert3($(ParseMethodEmitter.CheckStringCode(str, <[ parser.Text ]>, <[ startPos ]>))); $(str.Length); } ]>)
+              | TokenCall      (ruleSymbol)                => Some(<[ $(MakeTokenRuleCall(ruleSymbol, <[ startPos ]>, <[ parser.Text ]>)) - startPos ]>)
+              | SimpleCall     (ruleSymbol)                => Some(<[ $(Owner.MakeParserName(ruleSymbol) : global).Parse(startPos, parser.Text, parser) - startPos ]>)
+              | ExtensibleCall (ruleSymbol, bindingPower)  => Some(<[ $(Owner.MakeParserName(ruleSymbol, bindingPower) : global).Parse(startPos, parser.Text, parser) - startPos ]>)
+              | Option | List | ListWithSeparator//TODO: FIXME если у поля есть предикат то восстановление может начатья перед циклом
+              | Marker => None()
             }
-            parser.PatchAst(this, astPtr, errorIndex, $(field.State), startState, $(field.Offset));
-          ]>;
-          def body = if (field.IsStart)
-            <[
-              def astPtr = if (frame.AstHandle.AstPtr > 0)
-                frame.AstHandle.AstPtr;
-              else
-                $(createAst(structure));
-              $patch;
-            ]>;
-          else
-            <[
-              def astPtr = frame.AstHandle.AstPtr;
-              assert3(astPtr > 0);
-              $patch;
-            ]>;
-          def frameType = match (field.Owner)
-          {
-            | Ast | Option                 => <[ N2.Internal.RecoveryStackFrame.Rule ]>
-            | List | ListWithSeparatorRule => <[ N2.Internal.RecoveryStackFrame.ListBody ]>
-            | ListWithSeparatorSeparator   => <[ N2.Internal.RecoveryStackFrame.ListSeparator ]>
-            | Predicate                    => assert3(false);
+            def getAst = if (field.IsStart)
+              <[
+                mutable astPtr = if (frame.AstHandle.AstPtr > 0)
+                  frame.AstHandle.AstPtr;
+                else
+                  $(createAst(structure));
+              ]>;
+            else
+              <[
+                mutable astPtr = frame.AstHandle.AstPtr;
+                assert3(astPtr > 0);
+              ]>;
+            def frameType = match (field.Owner)
+            {
+              | Ast | Option                 => <[ N2.Internal.RecoveryStackFrame.Rule ]>
+              | List | ListWithSeparatorRule => <[ N2.Internal.RecoveryStackFrame.ListBody ]>
+              | ListWithSeparatorSeparator   => <[ N2.Internal.RecoveryStackFrame.ListSeparator ]>
+              | Predicate                    => assert3(false);
+            }
+            def (astPtr, astPtrRef) = if (structure is RuleStructure.Ast(Symbol = N2.Typing.ExtentionRuleSymbol))
+              ([<[ astPtr ]>], [<[ ref astPtr ]>])
+            else
+              ([], []);
+            def frameCounter = match (structure.Owner)
+            {
+              | List              as field when field.UseCounter => [<[ frame.Counter ]>]
+              | ListWithSeparator as field when field.UseCounter => [<[ frame.Counter ]>]
+              | _                                                => []
+            }
+            cases.Add(<[ case:
+              | $(field.State) =>
+                def frame = frame :> $frameType;
+                frame.AstHandle.UpdateAstPtr(parser);
+                $getAst;
+                when (startState == $(field.State))
+                {
+                  $(if (getSize is Some(getSize))
+                    <[
+                      parser.ErrorData[errorIndex].Data = $getSize;
+                      assert3(parser.ErrorData[errorIndex].Data >= 0);
+                      startState = GetNextState(startState);
+                    ]>
+                    else
+                    <[
+                      assert3(false);
+                    ]>
+                  )
+                }
+                parser.PatchAst(this, astPtr, errorIndex, $(field.State), startState, $(field.Offset));
+                def pos = $(structure.ParseFunctionName : global)(frame.StartPos, parser.Text, ..$astPtrRef, parser);
+                if (pos < 0)
+                {
+                  def startPos = frame.StartPos;
+                  foreach (parent in frame.Parents)
+                    $(structure.FindRecoveryPositionFunctionName : global)(startPos, ..$frameCounter, ..$astPtr, parent, parser);
+                  false
+                }
+                else
+                  true
+              ]>);
           }
-          cases.Add(<[ case: | $(field.State) => def frame = frame :> $frameType; $body ]>);
-        }
       }
       cases.Add(<[ case: | _ => assert(false); ]>);
       code.Add(<[ match (failState) { ..$cases }]>);

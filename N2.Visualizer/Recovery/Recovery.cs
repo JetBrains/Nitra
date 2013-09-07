@@ -41,7 +41,7 @@ namespace N2.DebugStrategies
 
       var bestFrames = new List<RecoveryStackFrame>();
 
-      for (; failPos + skipCount < text.Length && bestFrames.Count == 0; ++skipCount)
+      for (; failPos + skipCount < text.Length; ++skipCount)
       {
         var frames = parser.RecoveryStacks.PrepareRecoveryStacks();
 
@@ -68,7 +68,8 @@ namespace N2.DebugStrategies
         {
         }
 
-        _visited.Clear();
+        if (bestFrames.Count != 0)
+          break;
       }
 
       var allBestFrames = bestFrames.UpdateDepthAndCollectAllFrames();
@@ -77,7 +78,34 @@ namespace N2.DebugStrategies
         if (frame.ParseAlternatives.Length != 1)
           Debug.Assert(false);
 
-      return -1;
+      parser.RecoveryStacks.Clear();
+
+      var errorIndex = parser.ErrorData.Count;
+      parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), allBestFrames.ToArray()));
+
+      var parents = new HashSet<RecoveryStackFrame>();
+      foreach (var frame in bestFrames)
+      {
+        if (frame.PatchAst(errorIndex, parser))
+          foreach (var parent in frame.Parents)
+            if (parent.Best)
+              parents.Add(parent);
+      }
+
+      while (parents.Count > 0 && !parents.Contains(allBestFrames[allBestFrames.Count - 1]))//пока не содержит корень
+      {
+        var newParents = new HashSet<RecoveryStackFrame>();
+        foreach (var frame in parents)
+        {
+          if (frame.ContinueParse(parser))
+            foreach (var parent in frame.Parents)
+              if (parent.Best)
+                newParents.Add(parent);
+        }
+        parents = newParents;
+      }
+
+      return text.Length;
     }
 
     private bool IsAllFramesParseEmptyString(IEnumerable<RecoveryStackFrame> allFrames)
@@ -445,15 +473,15 @@ namespace N2.DebugStrategies
 
       if (!frame.IsPrefixParsed) // пытаемся восстановить пропущенный разделитель списка
       {
-        var separatorFrame = frame.GetLoopBodyFrameForSeparatorState(failPos, parser);
+        var bodyFrame = frame.GetLoopBodyFrameForSeparatorState(failPos, parser);
 
-        if (separatorFrame != null)
+        if (bodyFrame != null)
         {
           // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы
           // имеем дело с банальным концом цикла мы должны
-          Debug.Assert(separatorFrame.Parents.Count == 1);
+          Debug.Assert(bodyFrame.Parents.Count == 1);
           var newFramesCount = newFrames.Count;
-          FindSpeculativeFrames(newFrames, parser, separatorFrame, failPos, skipCount);
+          FindSpeculativeFrames(newFrames, parser, bodyFrame, failPos, skipCount);
           if (newFrames.Count > newFramesCount)
             return;
         }
