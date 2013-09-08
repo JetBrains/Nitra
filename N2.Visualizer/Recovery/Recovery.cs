@@ -496,9 +496,9 @@ namespace N2.DebugStrategies
     {
       var allBestFrames = bestFrames.UpdateDepthAndCollectAllFrames();
       allBestFrames.RemoveAll(frame => !frame.Best);
-      foreach (var frame in allBestFrames)
-        if (frame.ParseAlternatives.Length != 1)
-          Debug.Assert(false);
+      //foreach (var frame in allBestFrames)
+      //  if (frame.ParseAlternatives.Length != 1)
+      //    Debug.Assert(false);
 
       parser.RecoveryStacks.Clear();
 
