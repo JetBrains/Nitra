@@ -16,39 +16,150 @@ namespace N2.Compiler
 {
   internal partial class ParseMethodEmitter : MethodEmitter
   {
-    public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
+    public CompileFuntion(structure : RuleStructure) : void
+    {
+      def body = if (Owner.Environment.IsIdeMode)
+        <[ IgnoreParams(); assert(false); ]>
+      else
+        CompileFuntionBody(structure);
+      def function = match (structure)
+      {
+        | RuleStructure.Ast(Symbol = ExtentionRuleSymbol) =>
+          <[decl:
+            public override Parse(mutable curTextPos : int, text : string, resultRef : ref int, parser : N2.Internal.Parser) : int
+            {
+              $body
+            }
+          ]>
+        | RuleStructure.Ast(Symbol = SimpleRuleSymbol) =>
+          <[decl:
+            public override Parse(mutable curTextPos : int, text : string, parser : N2.Internal.Parser) : int
+            {
+              $body
+            }
+          ]>
+        | RuleStructure.Ast => assert3(false)
+        | _ =>
+          <[decl:
+            private $(FunctionName(structure) : global)(mutable curTextPos : int, text : string, parser : N2.Internal.Parser) : int
+            {
+              $body
+            }
+          ]>;
+      }
+      _tb.DefineConditional(function);
+    }
+
+    public CompileFuntionBody(structure : RuleStructure) : PExpr
     {
       def code = SCG.List();
-      def setResultRef = if (ruleStructure.Symbol is ExtentionRuleSymbol)
-        <[ resultRef = $(AstPtr(ruleStructure).Var); ]>
+      def endLabel = Environment.MakeLabel("EndParse");
+      def setResultRef = if (structure is RuleStructure.Ast(Symbol = ExtentionRuleSymbol))
+        <[ resultRef = $(AstPtr(structure).Var); ]>
       else
         <[ {} ]>;
-
-      code.Add(<[ _ = $(ruleStructure.ToString()) ]>);
+      def jumpToRecovery(structure : RuleStructure) : PExpr
+      {
+        def code = SCG.List();
+        def field = structure.NonMarkerFields.First();
+        code.Add(<[
+          if (parseState >= $(field.EndState))
+            $CurTextPos += $(AstPtr(field.Owner).GetSize(field)); // skip
+          else
+            continueParse();
+        ]>);
+        foreach (field in structure.NonMarkerFields.Skip(1))
+          code.Add(<[
+            if (parseState >= $(field.EndState))
+              $CurTextPos += $(AstPtr(field.Owner).GetSize(field)); // skip
+            else
+              $(GotoRecoveryLabel(field))
+          ]>);
+        code.Add(<[ assert3(false) ]>);
+        <[ { continueParse: { ..$code } } ]>.FlattenPExpr();
+      }
+      def checkMemoize(structure : RuleStructure, okCode : PExpr, failCode : PExpr) : PExpr
+      {
+        <[
+          $(AstPtr(structure).Var) = parser.TryGetAst($CurTextPos, $(structure.AstId : global));
+          when ($(AstPtr(structure).Var) > 0)
+          {
+            parseState = $(AstPtr(structure).Get(structure.HeaderState));
+            if (parseState == N2.Internal.Parser.AstParsedState)
+            {
+              $CurTextPos += parser.AstSize($(AstPtr(structure).Var), $(structure.SizesStart), $(structure.SizesEnd));
+              $okCode;
+            }
+            else if (parseState < 0)
+            {
+              parseState = ~parseState;
+              $(jumpToRecovery(structure : RuleStructure));
+            }
+            else
+            {
+              $failCode
+            }
+          }
+        ]>
+      }
+      def memoizeCode = if (structure is RuleStructure.Ast as ruleStructure)
+      {
+        if (ruleStructure.Symbol is SimpleRuleSymbol)
+          checkMemoize(ruleStructure, endLabel.Goto(),
+          <[
+            $CurTextPos = -1;
+            def maxFailPos = $(AstPtr(ruleStructure).GetSize(ruleStructure.NonMarkerFields.Last()));
+            when (maxFailPos > parser.MaxFailPos)
+              parser.MaxFailPos = maxFailPos;
+            $(endLabel.Goto());
+          ]>)
+        else
+          <[
+            $(AstPtr(ruleStructure).Var) = 0;
+            when (resultRef > 0)
+            {
+              $(AstPtr(ruleStructure).Var) = resultRef;
+              parseState = parser.ast[resultRef + 2];
+              assert(parseState < 0 && parseState != N2.Internal.Parser.AstParsedState);
+              parseState = ~parseState;
+              $(jumpToRecovery(ruleStructure));
+            }
+          ]>;
+      }
+      else
+        checkMemoize(structure, GotoOkLabel(structure), GotoFailLabel(structure));
+      code.Add(<[
+        mutable tmpSize    : int; _ = tmpSize;
+        mutable parseState : int; _ = parseState;
+        mutable newPos     : int; _ = newPos;
+        mutable $(AstPtr(structure).Var);
+        mutable $(AstStart(structure));
+      ]>);
+      code.Add(<[ _ = $(structure.ToString()) ]>);
+      code.Add(memoizeCode);
       //code.AddRange(_fields.Map(field => <[ _ = $(field.Print()) ]>));
 
-      code.Add(<[ $(AstStart(ruleStructure)) = $CurTextPos; ]>);
-      code.Add(GotoParseLabel(ruleStructure.NotMarkerFields[0]));
+      code.Add(<[ $(AstStart(structure)) = $CurTextPos; ]>);
+      CompileFieldsNoneRecursive(code, structure);
 
       //parse ok
-      code.Add(OkLabel(ruleStructure));
-      code.Add(AstPtr(ruleStructure).Set(ruleStructure.HeaderState, <[ N2.Internal.Parser.AstParsedState ]>));// правило полностью разобрано.
+      code.Add(OkLabel(structure));
+      code.Add(AstPtr(structure).Set(structure.HeaderState, <[ N2.Internal.Parser.AstParsedState ]>));// правило полностью разобрано.
       code.Add(setResultRef);
-      code.Add(_endLabel.Goto());
+      code.Add(endLabel.Goto());
 
       //parse fail
-      code.Add(FailLabel(ruleStructure));
-      code.Add(<[ when ($(AstPtr(ruleStructure).Var) > 0) // АСТ создано
+      code.Add(FailLabel(structure));
+      code.Add(<[ when ($(AstPtr(structure).Var) > 0) // АСТ создано
                   {
-                    $(AstPtr(ruleStructure).Set(ruleStructure.HeaderState, <[ parseState ]>));
-                    $(AstPtr(ruleStructure).Set(ruleStructure.NotMarkerFields.Last(), <[ parser.MaxFailPos ]>));
+                    $(AstPtr(structure).Set(structure.HeaderState, <[ parseState ]>));
+                    $(AstPtr(structure).Set(structure.NonMarkerFields.Last(), <[ parser.MaxFailPos ]>));
                     $setResultRef;
                   }
       ]>);
-      code.Add(<[ $CurTextPos = -1; $(_endLabel.Goto()); ]>);
-      CompileFields(code, ruleStructure);
+      code.Add(<[ $CurTextPos = -1; $(endLabel.Goto()); ]>);
 
-      def debugCode = if (ruleStructure.Symbol.LastLocation is Some(loc) when Owner.Environment.Manager.Options.EmitDebug)
+      def debugCode = if (structure is RuleStructure.Ast(Symbol = SyntaxRuleSymbol(LastLocation = Some(loc))) when Owner.Environment.Manager.Options.EmitDebug)
       {
         def debugCode = <[ () ]>;
         debugCode.Location = loc.NLocation();
@@ -56,17 +167,9 @@ namespace N2.Compiler
       }
       else
         <[ {} ]>;
-      code.Add(<[ $(_endLabel.Label()); $debugCode; $CurTextPos; ]>);
+      code.Add(<[ $(endLabel.Label()); $debugCode; $CurTextPos; ]>);
 
-      def variables = SCG.List();
-      variables.Add(<[
-        mutable tmpSize    : int; _ = tmpSize;
-        mutable parseState : int; _ = parseState;
-        mutable newPos     : int; _ = newPos;
-      ]>);
-      variables.AddRange(LocalVariables.Filter(_ != "resultRef").Map(name => <[ mutable $(name : global) ]>));
-
-      variables.Concat(code).FlattenPExpr();
+      code.FlattenPExpr();
     }
   }
 }

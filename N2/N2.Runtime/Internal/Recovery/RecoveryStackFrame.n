@@ -1,66 +1,580 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
+using Nemerle.Extensions;
 
 using System;
+using System.Text;
 using SCG = System.Collections.Generic;
 using System.Linq;
 
+using N2.Runtime.Reflection;
+
 namespace N2.Internal
 {
-  public enum FrameInfo
+  public enum RecoveryStackFrameMode
   {
-    | None = 0
-    | LoopBody
-    | LoopSeparator
+    | Optional
+    | Required
+    | Both
   }
 
   [Record]
-  public class RecoveryStackFrame
+  [StructuralEquality]
+  public struct ParseAlternative
   {
-    public         RuleParser   : IRecoveryRuleParser;
-    public         RuleId       : int;
-    public mutable AstPtr       : int;
-    public         AstStartPos  : int;
-    public         FailState    : int;
-    public         Counter      : int;
-    public         ListStartPos : int;
-    public         ListEndPos   : int;
-    public         IsRootAst    : bool;
-    public         Info         : FrameInfo;
+    public Start      : int;
+    public End        : int;
+    [EqualsIgnore]
+    public ParentsEat : int;
+    [EqualsIgnore]
+    public Fail  : int;
+    public State : int;
 
+    public EndText : string { get { if (End < 0) $"F$Fail" else End.ToString() } }
+    
     public override ToString() : string
     {
-      def props = SCG.List();
-      props.Add($"FailState=$FailState");
-      when (Info != FrameInfo.None)
-        props.Add($"Info=$Info");
-      when (ListStartPos > 0)
-        props.Add($"ListStartPos=$ListStartPos");
-      when (ListEndPos > 0)
-        props.Add($"ListEndPos=$ListEndPos");
-      when (IsRootAst)
-        props.Add("RootAst");
-      $"$(RuleParser.RuleName) = $(RuleParser.CodeWithStates)  (..$props)"
+      $"($Start, $EndText; E$ParentsEat, S$State)"
     }
+  }
+  
+  [Record]
+  [StructuralEquality]
+  public variant RecoveryStackFrame
+  {
+    static mutable _value : int;
+    static NextValue() : int { _value++; _value }
+    public Parser : Parser { get; private set; }
+    [RecordIgnore, EqualsIgnore] public mutable Id                : int = NextValue();
+    [RecordIgnore, EqualsIgnore] public mutable Index             : int;
+    [RecordIgnore, EqualsIgnore] public mutable Depth             : int = 0;
+    [RecordIgnore, EqualsIgnore] public         Parents           : SCG.HashSet[RecoveryStackFrame] = SCG.HashSet();
+    [RecordIgnore, EqualsIgnore] public         Children          : SCG.List[RecoveryStackFrame] = SCG.List();
+    [RecordIgnore, EqualsIgnore] public mutable Mode              : RecoveryStackFrameMode = RecoveryStackFrameMode.Both;
+                                                                  
+    [RecordIgnore, EqualsIgnore] public mutable Best              : bool;
+    [RecordIgnore, EqualsIgnore] public mutable ParseAlternatives : array[ParseAlternative];
+    [RecordIgnore, EqualsIgnore] public mutable IsSpeculative     : bool;
 
-    public override Equals(obj : object) : bool
-    {
-      match (obj)
+    public TextPos      : int;
+
+    | Root
       {
-        | obj is this => 
-          this.RuleParser : object  == obj.RuleParser
-          && this.RuleId      == obj.RuleId     
-          && this.AstStartPos == obj.AstStartPos
-          && this.FailState   == obj.FailState  
-        | _ => false
+        StartRuleParser : StartRuleParser;
+        public override GetNextState(state : int) : int { _ = state; -1 }
+      }
+
+    | Extensible
+      {
+        RuleParser   : ExtensibleRuleParser;
+        State        : int;
+        public override GetNextState(state : int) : int { | 0 => 1 | _ => -1 }
+      }
+
+    | ExtensiblePrefix
+      {
+        AstHandle    : AstHandle.ExtensiblePrefix;
+        RuleParser   : ExtensibleRuleParser;
+        public override GetNextState(state : int) : int { _ = state; -1 }
+      }
+
+    | ExtensiblePostfix
+      {
+        AstHandle    : AstHandle.ExtensiblePostfix;
+        RuleParser   : ExtensibleRuleParser;
+        public override GetNextState(state : int) : int { _ = state; -1 }
+      }
+
+    | Rule
+      {
+        AstHandle    : AstHandle;
+        State        : int;
+        public override GetNextState(state : int) : int { GetRuleParser().GetNextState(state) }
+      }
+
+    | ListBody
+      {
+        AstHandle    : AstHandle.Subrule;
+        State        : int;
+        Counter      : int;
+        [RecordIgnore, EqualsIgnore] mutable MissedSeparator : ListSeparator = null;
+        public override GetNextState(state : int) : int { GetRuleParser().GetNextState(state) }
+      }
+
+    | ListSeparator
+      {
+        AstHandle    : AstHandle.Subrule;
+        State        : int;
+        Counter      : int;
+        public override GetNextState(state : int) : int { GetRuleParser().GetNextState(state) }
+        public override GetLoopBodyFrameForSeparatorState(textPos : int, parser : Parser) : RecoveryStackFrame.ListBody
+        {
+          mutable bodyId;
+          mutable firstState;
+          if (AstHandle.RuleParser.GetLoopBodyForSeparator(AstHandle.RuleId, out bodyId, out firstState))
+          {
+            assert3(Parents.Count == 1);
+            def parent = Parents.First();
+            def astHandle = parser.AstHandle_Subrule(AstHandle.RuleParser, bodyId, -1, textPos);
+            def frame = parser.RecoveryStackFrame_ListBody_AlwaysReturn(parent, textPos, astHandle, firstState, Counter);
+            frame.MissedSeparator = this;
+            frame
+          }
+          else
+            null
+        }
+      }
+      
+    //public RuleId : int
+    //{
+    //  get
+    //  {
+    //    match (this)
+    //    {
+    //      | Extensible as ex => if (ex.State == 0) ex.RuleParser.PrefixId else ex.RuleParser.PostfixId
+    //      | ListBody         (astHandle, _, _) 
+    //      | ListSeparator    (astHandle, _, _)
+    //      | ExtensiblePrefix (astHandle, _)
+    //      | ExtensiblePostfix(astHandle, _)
+    //      | Rule             (astHandle, _) => astHandle.RuleId
+    //    }
+    //  }
+    //}
+
+    public IsPrefixParsed : bool
+    {
+      get
+      {
+        match (this)
+        {
+          | ListBody     (_, state, _) 
+          | ListSeparator(_, state, _)
+          | Rule         (_, state) =>
+            def parser = GetRuleParser();
+            for (mutable i = parser.GetStartState(state); i < state; i = parser.GetNextState(i))
+              unless (parser.IsVoidState(i))
+                return true;
+            false
+            
+          | Extensible        as frame => frame.State != 0
+          | ExtensiblePrefix           => false
+          | ExtensiblePostfix          => false
+          | Root                       => false
+        }
       }
     }
     
-    public override GetHashCode() : int
+    public IsLoopSeparatorStart : bool { get { this is ListSeparator } }
+    
+    public StartPos : int
     {
-      this.RuleParser.GetHashCode() ^ RuleId ^ AstStartPos ^ FailState  
+      get
+      {
+        match (this)
+        {
+          | Root                       => 0
+          | ListBody          as frame => frame.AstHandle.TextPos
+          | ListSeparator     as frame => frame.AstHandle.TextPos
+          | Extensible        as frame => frame.TextPos
+          | Rule              as frame => frame.AstHandle.TextPos
+          | ExtensiblePrefix  as frame => frame.AstHandle.TextPos
+          | ExtensiblePostfix as frame => frame.AstHandle.TextPos
+        }
+      }
+    }
+    
+    public FailState : int
+    {
+      get
+      {
+        match (this)
+        {
+          | ListBody     (_, state, _) 
+          | ListSeparator(_, state, _)
+          | Extensible   (_, state)
+          | Rule         (_, state) => state
+          | Root
+          | ExtensiblePrefix
+          | ExtensiblePostfix => 0
+        }
+      }
+    }
+    
+    public IsVoidState(state : int) : bool
+    {
+      match (this)
+      {
+        | ListBody
+        | ListSeparator
+        | Rule              => GetRuleParser().IsVoidState(state)
+        | Root
+        | Extensible
+        | ExtensiblePrefix
+        | ExtensiblePostfix => false
+      }
+    }
+    
+    public IsSateCanParseEmptyString(state : int) : bool
+    {
+      match (this)
+      {
+        | Root
+        | Extensible
+        | ExtensiblePrefix
+        | ExtensiblePostfix => false
+        | ListBody
+        | ListSeparator
+        | Rule              => GetRuleParser().IsStateCanParseEmptyString(state)
+      }
+    }
+    
+    
+    public abstract GetNextState(state : int) : int;
+    public virtual GetLoopBodyFrameForSeparatorState(textPos : int, parser : Parser) : RecoveryStackFrame.ListBody { IgnoreParams(); null }
+
+    public GetSpeculativeFramesForState(textPos : int, parser : Parser, state : int) : array[RecoveryStackFrame]
+    {
+      def parent =
+        if (FailState == state)
+          this
+        else
+        {
+          def newFrame = match (this)
+          {
+            | Extensible        as frame => parser.RecoveryStackFrame_Extensible_AlwaysReturn   (null, frame.TextPos, frame.RuleParser, state)
+            | Root                       => assert3(false)
+            | ExtensiblePrefix           => assert3(false)
+            | ExtensiblePostfix          => assert3(false)
+            | ListBody          as frame => parser.RecoveryStackFrame_ListBody_AlwaysReturn     (null, frame.TextPos, frame.AstHandle, state, frame.Counter)
+            | ListSeparator     as frame => parser.RecoveryStackFrame_ListSeparator_AlwaysReturn(null, frame.TextPos, frame.AstHandle, state, frame.Counter)
+            | Rule              as frame => parser.RecoveryStackFrame_Rule_AlwaysReturn         (null, frame.TextPos, frame.AstHandle, state)
+          }
+          newFrame.Parents.UnionWith(Parents);
+          newFrame
+        };
+      def makeExtentionFrame(ruleParser)
+      {
+        def handle = parser.AstHandle_Extention(parent, ruleParser, -1, textPos);
+        parser.RecoveryStackFrame_Rule_AlwaysReturn(parent, textPos, handle, ruleParser.StartState)
+      }
+      def makeChild(ruleParser : IRecoveryRuleParser, ruleId)
+      {
+        def makeSubrule()
+        {
+          def handle = parser.AstHandle_Subrule(ruleParser, ruleId, -1, textPos);
+          match ((ruleParser :> IRuleParserReflection).Reflection(ruleId))
+          {
+            | Option                     as structure => array[parser.RecoveryStackFrame_Rule_AlwaysReturn         (parent, textPos, handle, structure.Subrules[0].State)]
+            | List                       as structure => array[parser.RecoveryStackFrame_ListBody_AlwaysReturn     (parent, textPos, handle, structure.Subrules[0].State, 0)]
+            | ListWithSeparatorRule      as structure => array[parser.RecoveryStackFrame_ListBody_AlwaysReturn     (parent, textPos, handle, structure.Subrules[0].State, 0)]
+            | ListWithSeparatorSeparator as structure => array[parser.RecoveryStackFrame_ListSeparator_AlwaysReturn(parent, textPos, handle, structure.Subrules[0].State, 0)]
+            | Ast                                     => assert3(false)
+            | Predicate                               => assert3(false)
+          }
+        }
+        match (ruleParser)
+        {
+          | null                               => array[]
+          | ExtensibleRuleParser as ruleParser => array[parser.RecoveryStackFrame_Extensible_AlwaysReturn(parent, textPos, ruleParser, 0)]
+          | SimpleRuleParser     as ruleParser =>
+            if (ruleParser.RuleId == ruleId)
+              array[parser.RecoveryStackFrame_Rule_AlwaysReturn(parent, textPos, parser.AstHandle_Simple(ruleParser, -1, textPos), ruleParser.StartState)]
+            else
+              makeSubrule()
+          | ExtentionRuleParser  as ruleParser =>
+            if (ruleParser.RuleId == ruleId)
+              array[parser.RecoveryStackFrame_Rule_AlwaysReturn(parent, textPos, parser.AstHandle_Extention(parent, ruleParser, -1, textPos), ruleParser.StartState)]
+            else
+              makeSubrule()
+          | _ => assert3(false)
+        }
+      }
+      def results =
+        match (parent)
+        {
+          | Extensible as frame =>
+            match (frame.State)
+            {
+              | 0 => array[parser.RecoveryStackFrame_ExtensiblePrefix_AlwaysReturn(parent, textPos, parser.AstHandle_Prefix(frame.RuleParser.ParserData, -1, textPos), frame.RuleParser)]
+              | 1 => array[parser.RecoveryStackFrame_ExtensiblePostfix_AlwaysReturn(parent, textPos, parser.AstHandle_Postfix(frame.RuleParser.ParserData, -1, textPos), frame.RuleParser)]
+              | _ => assert3(false)
+            }
+          | ExtensiblePrefix  as frame => frame.RuleParser.PrefixRules.MapToArray(makeExtentionFrame)
+          | ExtensiblePostfix as frame => frame.RuleParser.PostfixRules.Skip(frame.RuleParser.FirstPostfixRule).MapToArray(makeExtentionFrame)
+          | Root(ruleParser)           => makeChild(ruleParser, -1)
+          | ListBody
+          | ListSeparator
+          | Rule                       => makeChild(GetRuleParser().GetRuleParserForState(state))
+        };
+        
+      foreach (result in results)
+        result.IsSpeculative = true;
+        
+      results
+    }
+
+
+    public IsTokenRule : bool
+    {
+      get
+      {
+        match (this)
+        {
+          | Root
+          | ListBody
+          | ListSeparator => false
+          | Extensible as frame => frame.RuleParser.IsTokenRule
+          | ExtensiblePrefix
+          | ExtensiblePostfix => false
+          | Rule(handle, _) => 
+            match (handle)
+            {
+              | Simple
+              | Extention => GetRuleParser().IsTokenRule // ???
+              | _ => false
+            }
+        }
+      }
+    }
+
+    public CodeForState(state : int) : string
+    {
+      GetRuleParser().CodeForState(state)
+    }
+    
+    private GetRuleParser() : IRecoveryRuleParser
+    {
+      match (this)
+      {
+        | Root                       => assert3(false);
+        | ExtensiblePrefix  as frame => frame.RuleParser
+        | ExtensiblePostfix as frame => frame.RuleParser
+        | ListBody          as frame => frame.AstHandle.RuleParser
+        | ListSeparator     as frame => frame.AstHandle.RuleParser
+        | Rule              as frame =>
+          match (frame.AstHandle)
+          {
+            | Extention as handle => handle.RuleParser
+            | Subrule   as handle => handle.RuleParser
+            | Simple    as handle => handle.RuleParser
+            | _                   => assert3(false)
+          }
+
+        | Extensible        as frame => frame.RuleParser
+      }
+    }
+
+    public TryParse(state : int, curTextPos : int, continueList : bool, parsedStates : SCG.List[ParsedStateInfo], parser : Parser) : int
+    {
+      match (this)
+      {
+        | ExtensiblePrefix
+        | ExtensiblePostfix
+        | ListBody
+        | ListSeparator
+        | Rule
+        | Extensible        => GetRuleParser().TryParse(this, state, curTextPos, continueList, parsedStates, parser)
+        | Root(startParser) => startParser.Parse(curTextPos, parser.Text, parser)
+      }
+    }
+
+    private MakeMissedSeparator(parser : Parser) : void
+    {
+      when (this is ListBody as listBody)
+      when (listBody.MissedSeparator != null)
+      {
+        def error = parser.ErrorData.Count;
+        parser.ErrorData.Add(ParseErrorData(NToken(listBody.MissedSeparator.StartPos, listBody.MissedSeparator.StartPos), array[]));
+        def rp = (listBody.MissedSeparator : this).GetRuleParser();
+        _ = rp.PatchAst(listBody.MissedSeparator.StartPos, -1, error, listBody.MissedSeparator, parser);
+        listBody.MissedSeparator = null;
+      }
+    }
+
+    public PatchAst(errorIndex : int, parser : Parser) : bool
+    {
+      MakeMissedSeparator(parser);
+      //assert3(ParseAlternatives.Length == 1);
+      def pa = ParseAlternatives[0];
+      def startPos   = pa.Start;
+      def startState = pa.State;
+      GetRuleParser().PatchAst(startPos, startState, errorIndex, this, parser)
+    }
+
+    public ContinueParse(parser : Parser) : bool
+    {
+      MakeMissedSeparator(parser);
+      //assert3(ParseAlternatives.Length == 1);
+      GetRuleParser().PatchAst(-1, -2, -1, this, parser)
+    }
+
+    public Dot : string
+    {
+      get
+      {
+        DotStacks([this])
+      }
+    }
+
+    static _colors = array["aquamarine", "beige", "brown1", "burlywood1", "cadetblue1", "chartreuse1", "coral1", "darkorchid2", "deepskyblue2", "gold1", "azure3", "aquamarine3", "deeppink", "blue1", "brown", "cadetblue", "darkorchid1", "antiquewhite4", "aquamarine4", "azure4", "bisque3", "burlywood", "chartreuse", "chocolate", "coral", "cornflowerblue", "cornsilk4", "cyan3", "darkgoldenrod3", "darkolivegreen1", "darkorange1", "darkseagreen", "darkslateblue", "darkslategray4", "deeppink1", "deepskyblue1", "dimgrey", "dodgerblue4", "firebrick4", "gold", "goldenrod"];
+
+    public static DotStacks(stacks : Seq[RecoveryResult]) : string
+    {
+      DotStacks(stacks.Map(r => r.Stack))
+    }
+
+    public static DotStacks(stacks : Seq[RecoveryStackFrame]) : string
+    {
+      def allFrames = SCG.HashSet();
+      def collectAllFrames(frame : RecoveryStackFrame) : void
+      {
+        unless (allFrames.Add(frame))
+          return;
+          
+        foreach (child in frame.Children)
+           collectAllFrames(child);
+      }
+      
+      foreach (frame in stacks)
+        collectAllFrames(frame);
+        
+      def map = Hashtable();
+      def fillMap(frame : RecoveryStackFrame) : void
+      {
+        mutable counter;
+        _ = map.TryGetValue(frame, out counter);
+        
+        map[frame] = counter + 1;
+        when (frame is ListBody as frame when frame.MissedSeparator != null)
+          fillMap(frame.MissedSeparator);
+        
+        foreach (subFrame in frame.Parents)
+          fillMap(subFrame);
+          
+      }
+      foreach (frame in allFrames) 
+        when (frame.Depth == 0)
+          fillMap(frame);
+      
+      def name(frame : RecoveryStackFrame) : string
+      {
+        def str = match (frame)
+        {
+          | Root => "Root"
+          | _ =>
+            def ruleParser = frame.GetRuleParser();
+            ruleParser.GetType().FullName+ "_" + ruleParser.RuleName + "_" + frame.TypeName + "_" + frame.TextPos + "_" + frame.FailState;
+        }
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(str)).Replace("+", "_1").Replace("/", "_2").Replace("=", "_3")
+      }
+      def visited = SCG.HashSet();
+      def nodes = SCG.List();
+      def edges = SCG.List();
+      def label(frame : RecoveryStackFrame, index : int) : string
+      {
+        def label = match (frame)
+        {
+          | Root => $"Root PA=[..$(frame.ParseAlternatives)] Best=$(frame.Best)"
+          | _ =>
+            def parser = frame.GetRuleParser();
+            def makeCode()
+            {
+              def str = parser.CodeWithStates.Replace("\"", "\\\"");
+              def count = 30;
+              def sb = StringBuilder();
+              def parts = str.Split(array[' '], StringSplitOptions.RemoveEmptyEntries);
+              mutable len = 0;
+              foreach (part in parts)
+              {
+                len += part.Length;
+                if (len > count)
+                {
+                  len = 0;
+                  _ = sb.Append("\n  ");
+                }
+                else
+                  _ = sb.Append(" ");
+                _ = sb.Append(part);
+              }
+          
+              sb.ToString();
+            }
+          def failRuleCode = "\n" + makeCode();
+          def txt = frame.Parser.Text;
+          def len(a : ParseAlternative) : int { (if (a.End < 0) a.Fail else a.End) - a.Start }
+          def getText(a : ParseAlternative) : string
+          {
+            txt.Substring(a.Start, len(a)).Replace("\"", "\\\"")
+          }
+          def parses = frame.ParseAlternatives.Map(a => $<#\n  ($(a.Start), $(a.EndText)); E$(a.ParentsEat), S$(a.State): '$(getText(a))'#>);
+          def label = $"$(parser.RuleName) $(frame.Info) ..$parses \n";
+          $"$label$failRuleCode"
+        }
+        def color = if (map[frame] == 1 && index < _colors.Length) $" color=$(_colors[index]) style=filled" else "";
+        name(frame) + $<#[label="$label"$color shape=box]#>
+      }
+      def visitNodes(frame : RecoveryStackFrame, index : int) : void
+      {
+        when (visited.Add(frame))
+        {
+          when (frame is ListBody as frame when frame.MissedSeparator != null)
+          {
+            edges.Add($"$(name(frame)) -> $(name(frame.MissedSeparator)) [dir=back color=red]");
+            visitNodes(frame.MissedSeparator, index);
+          }
+          nodes.Add(frame, index);
+          foreach (parent in frame.Parents)
+          {
+            def color = if (frame.Best && parent.Best) " color=lime" else "";
+            edges.Add($"$(name(frame)) -> $(name(parent)) [dir=back$color]");
+            visitNodes(parent, index);
+          }
+        }
+      }
+      foreach (frame in stacks with i)
+        visitNodes(frame, i);
+      $<#
+digraph RecoveryStackFrame
+{
+  ..$(nodes; ";\n  "; label);
+  ..$(edges; ";\n  ");
+}#>
+    }
+    
+    public Info : string
+    {
+      get { $<#$(if (Best) "B " else "") SP=$StartPos TP=$TextPos FS=$FailState T=$TypeName D=$Depth Id=$Id$(if (IsSpeculative) " S" else "") PA=[..$ParseAlternatives]#> }
+    }
+
+    public TypeName : string
+    {
+      get
+      {
+        match (this)
+        {
+          | Root              => "Root"
+          | ExtensiblePrefix  => "Prefix"
+          | ExtensiblePostfix => "Postfix"
+          | ListBody          => "ListBody"
+          | ListSeparator     => "ListSeparator"
+          | Rule              => "Rule"
+          | Extensible        => "Extensible"
+        }
+      }
+    }
+    
+    public override ToString() : string
+    {
+      match (this)
+      {
+        | Root => "Root"
+        | _ =>
+          def ruleParser = GetRuleParser();
+          $"$TypeName: $(ruleParser.RuleName) = $(ruleParser.CodeWithStates) | $Info"
+      }
     }
   }
 }

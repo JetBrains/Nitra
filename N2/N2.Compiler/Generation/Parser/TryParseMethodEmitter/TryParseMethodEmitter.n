@@ -1,13 +1,14 @@
-﻿using N2.Typing;
+﻿using N2.Internal;
+using N2.Typing;
 using N2.Model;
 
 using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
-using Nemerle.Imperative;
 
 using System;
 using SCG = System.Collections.Generic;
@@ -35,20 +36,8 @@ namespace N2.Compiler
 
     public Emit() : void
     {
-      def defineBoolMethod(name : string, predicate : RuleStructureField -> bool)
-      {
-        _tb.DefineConditional(<[decl:
-          public override $(name : global)(state : int) : bool
-          {
-            $(if (Environment.IsIdeMode)
-              <[ IgnoreParams(); false ]>
-            else
-              CompileBoolMethod(RuleStructure, predicate))
-          }
-        ]>);
-      }
       _tb.DefineConditional(<[decl:
-        public override TryParse(recoveryStack : list[N2.Internal.RecoveryStackFrame].Cons, startState : int, mutable curTextPos : int, parsedStates : SCG.List[N2.Internal.ParsedStateInfo], parser : N2.Internal.Parser) : int
+        public override TryParse(frame : RecoveryStackFrame, startState : int, mutable curTextPos : int, continueList : bool, parsedStates : SCG.List[ParsedStateInfo], parser : N2.Internal.Parser) : int
         {
           def text = parser.Text;
           mutable startLevel;
@@ -59,63 +48,77 @@ namespace N2.Compiler
             CompileAst(RuleStructure))
         }
       ]>);
-      _tb.DefineConditional(<[decl:
-        public override GetParsersForState(startState : int) : array[N2.Internal.IRecoveryRuleParser]
-        {
-          $(if (Environment.IsIdeMode)
-            <[ IgnoreParams(); null ]>
-          else
-            CompileGetParsersForState(RuleStructure))
-        }
-      ]>);
-      defineBoolMethod("IsStateCanParseEmptyString", _.CanParseEmptyString);
-      defineBoolMethod("IsVoidState",                field => field.SrcRule.Type is RuleType.Void);
-      defineBoolMethod("IsStartState",               _.IsStart);
-      defineBoolMethod("IsLoopSeparatorStart",       _.IsLoopSeparatorStart);
-      defineBoolMethod("IsLoopSeparator",            _.IsLoopSeparator);
-      defineBoolMethod("IsLoopBody",                 _.IsLoopBody);
-
+      //TODO: Move this methods outside TryParseMethodEmitter
+      DefineStateMapMethod("IsStateCanParseEmptyString", _.CanParseEmptyString);
+      DefineStateMapMethod("IsVoidState",                field => field.SrcRule.Type is RuleType.Void);
+      DefineStateMapMethod("IsStartState",               _.IsStart);
+      DefineStateMapMethod("IsLoopSeparatorStart",       _.IsLoopSeparatorStart);
+      DefineStateMapMethod("IsLoopSeparator",            _.IsLoopSeparator);
+      DefineStateMapMethod("IsLoopBody",                 _.IsLoopBody);
+      DefineStateMapMethod("GetStartState",               field : RuleStructureField => field.Owner.NonMarkerFields[0].State);
+      
+      _tb.DefineConditional(<[decl: public override GetLoopBodyForSeparator(separatorId : int, bodyId : out int, firstState : out int) : bool { $(Compile_GetLoopBodyForSeparator(RuleStructure)) } ]>);
+      _tb.DefineConditional(<[decl: public override GetRuleParserForState(state : int) : IRecoveryRuleParser * int { $(Compile_GetRuleParserForState(RuleStructure)) } ]>);
+      _tb.DefineConditional(<[decl: public override CodeForState(state : int) : string { $(Compile_CodeForState(RuleStructure)) } ]>);
       _tb.DefineConditional(<[decl: public override IsTokenRule    : bool   { get { $(RuleStructure.Symbol.Options.IsExplicitSpaces) } } ]>);
-      _tb.DefineConditional(<[decl: public Code           : string { get { $(RuleStructure.SrcRule.ToString()) } } ]>);
-      _tb.DefineConditional(<[decl: public RuleName       : string { get { $(RuleStructure.Symbol.Name) } } ]>);
-      _tb.DefineConditional(<[decl: public CodeWithStates : string { get { $(RuleStructure.ToString()) } } ]>);
-      _tb.DefineConditional(<[decl: public CodeForState(state : int) : string { $(CompileCodeForState(RuleStructure)) } ]>);
-      _tb.DefineConditional(<[decl: public override GetBodyStartStateForSeparator(state : int, ruleParser : out N2.Internal.IRecoveryRuleParser, itemId : out int) : int { $(CompileGetBodyStartStateForSeparator(RuleStructure)) } ]>);
+      _tb.DefineConditional(<[decl: public override Code           : string { get { $(RuleStructure.SrcRule.ToString()) } } ]>);
+      _tb.DefineConditional(<[decl: public override CodeWithStates : string { get { $(RuleStructure.ToString()) } } ]>);
+      _tb.DefineConditional(<[decl: public override RuleName       : string { get { $(RuleStructure.Symbol.Name) } } ]>);
 
-      _tb.DefineConditional(<[decl: private static EmptyArray : array[N2.Internal.IRecoveryRuleParser] = array(0) ]>);
+      _tb.DefineConditional(<[decl: private static EmptyArray : array[RecoveryStackFrame] = array(0) ]>);
     }
 
     public CurTextPos : PExpr { get { <[ curTextPos ]> } }
 
-    CompileGetBodyStartStateForSeparator(ruleStructure : RuleStructure.Ast) : PExpr
+    Compile_GetLoopBodyForSeparator(ruleStructure : RuleStructure.Ast) : PExpr
     {
-      // Генерирует код возвращающий первое состояне тела цикла для любого состояния соответствующего разделителю этого же цикла.
-      // Если задано неверное состояние не соответствующее разделителю цикла, возвращается -1.
-      def cases = SCG.List();
-      def groups = ruleStructure.AllNonMarkerFields.Where(fld => fld.Owner is RuleStructure.ListWithSeparatorSeparator).GroupBy(fld => fld.Owner).ToList();
+      def loops = SCG.List();
 
-      if (groups.Count == 0)
-        <[ IgnoreParams(); -1 ]>
-      else
+      foreach (field is RuleStructureField.ListWithSeparator in ruleStructure.AllNonMarkerFields)
       {
-        foreach (group in groups)
-        {
-          def sep = group.Key :> RuleStructure.ListWithSeparatorSeparator;
-          def loopField = sep.Owner :> RuleStructureField.ListWithSeparator;
-          def firstField = loopField.Rule.NotMarkerFields[0]; // первое поле не маркер
-          def patterns = group.Map(g => <[ $(g.State) ]>);
-          def body = <[ ruleParser = this; itemId = $(loopField.Rule.AstId : global); $(firstField.State) ]>;
-          def case = MatchCase(patterns, body);
-          cases.Add(case);
-        }
-
-        cases.Add(<[ case: | _ => -1 ]>);
-
-        <[ match (state) { ..$cases } ]>
+        loops.Add(<[  
+          when (separatorId == $(field.Separator.AstId : global))
+          {
+            bodyId = $(field.Rule.AstId : global);
+            firstState = $(field.Rule.NonMarkerFields[0].State : int);
+            return true;
+          } ]>);
       }
+
+      <[ IgnoreParams(); ..$loops; false ]>
     }
 
-    CompileCodeForState(ruleStructure : RuleStructure.Ast) : PExpr
+    Compile_GetRuleParserForState(ruleStructure : RuleStructure.Ast) : PExpr
+    {
+      def code = SCG.List();
+      foreach (field in ruleStructure.AllNonMarkerFields)
+      {
+        def value = match (field)
+        {
+          | Marker
+          | Empty
+          | TokenString
+          | TokenCall                                => <[ (null, -1) ]>
+          | SimpleCall    (ruleSymbol)               => <[ ($(Owner.MakeParserName(ruleSymbol) : global), $(Owner.MakeParserName(ruleSymbol) : global).RuleId) ]>
+          | ExtensibleCall(ruleSymbol, bindingPower) => <[ ($(Owner.MakeParserName(ruleSymbol, bindingPower) : global), -1) ]>
+          | Option                          as field => <[ (this, $(field.Rule.AstId : global)) ]>
+          | List                            as field => <[ (this, $(field.Rule.AstId : global)) ]>
+          | ListWithSeparator               as field => <[ (this, $(field.Rule.AstId : global)) ]>
+        }
+        code.Add(<[ case: | $(field.State) => $value ]>);
+      }
+
+      code.Add(<[ case: | _ => assert3(false) ]>);
+
+      <[
+        match (state)
+        {
+          ..$code
+        }
+      ]>
+    }
+
+    Compile_CodeForState(ruleStructure : RuleStructure.Ast) : PExpr
     {
       def nextField(field : RuleStructureField) : RuleStructureField
       {

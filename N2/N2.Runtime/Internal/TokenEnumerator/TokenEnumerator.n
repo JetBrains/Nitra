@@ -1,0 +1,332 @@
+﻿using N2.Runtime.Reflection;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+using SCG =  System.Collections.Generic;
+
+namespace N2.Internal
+{
+  public class TokenEnumerator
+  {
+    _parser : Parser;
+
+    public this(parser : Parser) { _parser = parser; }
+
+    _stack  : SCG.Stack[ParseFrame] = SCG.Stack();
+    
+    mutable _ruleStructure : RuleStructure;
+    mutable _fieldIndex    : int;
+    mutable _astPtr        : int;
+    mutable _curTextPos    : int;
+    mutable _listEndPos    : int;
+    mutable _listSep       : bool;
+    
+    public Start(astPtr : int, curTextPos : int) : TokenEnumerator
+    {
+      assert3(_parser != null);
+      _stack.Clear();
+      
+      _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, astPtr);
+      _astPtr         = astPtr;
+      _fieldIndex     = -1;
+      _curTextPos     = curTextPos;
+      _listEndPos     = -1;
+      this
+    }
+    
+    public NextTokenSize() : int
+    {
+      _fieldIndex++;
+      def rules = _ruleStructure.Subrules;
+      if (_fieldIndex >= rules.Count)
+      {
+        if (_stack.Count > 0)
+        {
+          (_ruleStructure, _astPtr, _fieldIndex, _curTextPos, _listEndPos, _listSep) = _stack.Pop();
+          NextTokenSize()
+        }
+        else
+          -1
+      }
+      else
+      {
+        def state = _parser.ast[_astPtr + ExtensibleRuleParser.AstOfs.State];
+        def invalidState = state >= 0 && _ruleStructure.Subrules[_fieldIndex].State >= state;
+        def ruleInfo = rules[_fieldIndex];
+        mutable fullSize;
+        mutable skip;
+        when (!invalidState)
+        {
+          def sizePtr = _astPtr + ruleInfo.Offset;
+          def size = _parser.GetSkipAndSize2(sizePtr);
+          if (size >= 0)
+          {
+            fullSize = size;
+            skip = 0;
+          }
+          else
+          {
+            fullSize = ~size;
+            skip = fullSize - _parser.GetSkip(sizePtr);
+          }
+        }
+
+        match (ruleInfo)
+        {
+          | Empty =>
+            if (invalidState)
+              -1
+            else
+            {
+              _curTextPos += fullSize;
+              NextTokenSize()
+            }
+
+          | TokenCall
+          | TokenString
+          | ExtensibleCall    (_, true)
+          | SimpleCall        (_, true) =>
+            if (invalidState)
+              -1
+            else
+            {
+              _curTextPos += fullSize;
+              fullSize - skip
+            }
+
+          | SimpleCall        (ruleParser, _) =>
+            if (invalidState)
+            {
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, int.MaxValue - 1, _curTextPos + fullSize, _listEndPos, _listSep));
+              _astPtr = _parser.TryGetAst(_curTextPos, ruleParser.RuleId);
+              if (_astPtr > 0)
+              {
+                _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+                _fieldIndex     = -1;
+                _listEndPos = -1;
+                NextTokenSize()
+              }
+              else
+                -1
+            }
+            else
+            {
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex, _curTextPos + fullSize, _listEndPos, _listSep));
+              _curTextPos    += skip;
+              _astPtr         = _parser.GetAst(_curTextPos, ruleParser.RuleId);
+              _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+              _fieldIndex     = -1;
+              _listEndPos     = -1;
+              NextTokenSize()
+            }
+
+          | ExtensibleCall(ruleParser, _)    =>
+            if (invalidState)
+            {
+              _listEndPos     = -1;
+              mutable prefixAst = _parser.TryGetAst(_curTextPos, ruleParser.PrefixId);
+              if (prefixAst > 0)
+              {
+                def astPtr      = _parser.TryGetPrefix(ref _curTextPos, ref prefixAst);
+                if (astPtr > 0)
+                {
+                  _stack.Push(ParseFrame(_ruleStructure, _astPtr, int.MaxValue - 1, _curTextPos, _listEndPos, _listSep));
+                  _astPtr         = astPtr;
+                  _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, astPtr);
+                  _fieldIndex     = -1;
+                  _listEndPos     = -1;
+                  NextTokenSize()
+                }
+                else
+                  -1;
+              }
+              else
+                -1;
+            }
+            else if (fullSize - skip == 0)
+            {
+              _curTextPos += skip;
+              NextTokenSize()
+            }
+            else if (_listEndPos == -1)
+            {
+              _listEndPos     = _curTextPos + fullSize;
+              _curTextPos    += skip;
+              mutable prefixAst = _parser.GetAst(_curTextPos, ruleParser.PrefixId);
+              def astPtr      = ruleParser.BestPrefix(_parser.TryGetPrefix(ref _curTextPos, ref prefixAst), _parser);
+              assert3(astPtr > 0);
+              def rule        = _parser.ParserHost.GetRuleStructure(_parser, astPtr);
+              def astSize     = rule.GetSize(astPtr, _parser);
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex - 1, _curTextPos + astSize, _listEndPos, _listSep));
+              _astPtr         = astPtr;
+              _ruleStructure  = rule;
+              _fieldIndex     = -1;
+              _listEndPos     = -1;
+              NextTokenSize()
+            }
+            else if (_curTextPos < _listEndPos)
+            {
+              mutable postfixAst = _parser.GetAst(_curTextPos, ruleParser.PostfixId);
+              def bestResult = ruleParser.BestPostfix(_parser.TryGetPostfix(ref _curTextPos, ref postfixAst), _parser);
+              assert3(bestResult > 0);
+              def rule        = _parser.ParserHost.GetRuleStructure(_parser, bestResult);
+              def astSize     = rule.GetSize(bestResult, _parser);
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex - 1, _curTextPos + astSize, _listEndPos, _listSep));
+              _astPtr         = bestResult;
+              _ruleStructure  = rule;
+              _fieldIndex     = -1;
+              _listEndPos     = -1;
+              NextTokenSize()
+            }
+            else
+            {
+              assert3(_curTextPos == _listEndPos);
+              NextTokenSize()
+            }
+
+          | Option            (rule) =>
+            if (invalidState)
+            {
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, int.MaxValue - 1, _curTextPos, _listEndPos, _listSep));
+              _astPtr = _parser.TryGetAst(_curTextPos, rule.Id);
+              if (_astPtr > 0)
+              {
+                _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+                _fieldIndex     = -1;
+                _listEndPos = -1;
+                NextTokenSize()
+              }
+              else
+                -1
+            }
+            else if (fullSize - skip == 0)
+            {
+              _curTextPos += skip;
+              NextTokenSize()
+            }
+            else
+            {
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex, _curTextPos + fullSize, _listEndPos, _listSep));
+              _curTextPos    += skip;
+              _astPtr         = _parser.GetAst(_curTextPos, rule.Id);
+              _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+              _fieldIndex     = -1;
+              _listEndPos = -1;
+              NextTokenSize()
+            }
+
+          | List              (rule) =>
+            if (invalidState)
+            {
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, int.MaxValue - 1, _curTextPos, _listEndPos, _listSep));
+              _astPtr = _parser.TryGetAst(_curTextPos, rule.Id);
+              if (_astPtr > 0)
+              {
+                _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+                _fieldIndex     = -1;
+                _listEndPos = -1;
+                NextTokenSize()
+              }
+              else
+                -1
+            }
+            else if (fullSize - skip == 0)
+            {
+              _curTextPos += skip;
+              NextTokenSize()
+            }
+            else if (_listEndPos == -1)
+            {
+              _listEndPos     = _curTextPos + fullSize;
+              _curTextPos    += skip;
+              def astPtr      = _parser.GetAst(_curTextPos, rule.Id);
+              def astSize     = rule.GetSize(astPtr, _parser);
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex - 1, _curTextPos + astSize, _listEndPos, _listSep));
+              _astPtr         = astPtr;
+              _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+              _listEndPos     = -1;
+              _fieldIndex     = -1;
+              NextTokenSize()
+            }
+            else if (_curTextPos < _listEndPos)
+            {
+              def astPtr      = _parser.GetAst(_curTextPos, rule.Id);
+              def astSize     = rule.GetSize(astPtr, _parser);
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex - 1, _curTextPos + astSize, _listEndPos, _listSep));
+              _astPtr         = astPtr;
+              _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+              _listEndPos     = -1;
+              _fieldIndex     = -1;
+              NextTokenSize()
+            }
+            else
+            {
+              assert3(_curTextPos == _listEndPos);
+              NextTokenSize()
+            }
+
+          | ListWithSeparator (rule, separator) =>
+            if (invalidState)
+            {
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, int.MaxValue - 1, _curTextPos, _listEndPos, _listSep));
+              _astPtr = _parser.TryGetAst(_curTextPos, rule.Id);
+              if (_astPtr > 0)
+              {
+                _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+                _fieldIndex     = -1;
+                _listEndPos = -1;
+                NextTokenSize()
+              }
+              else
+                -1
+            }
+            else if (fullSize - skip == 0)
+            {
+              _curTextPos += skip;
+              NextTokenSize()
+            }
+            else if (_listEndPos == -1)
+            {
+              _listEndPos     = _curTextPos + fullSize;
+              _curTextPos    += skip;
+              def astPtr      = _parser.GetAst(_curTextPos, rule.Id);
+              def astSize     = rule.GetSize(astPtr, _parser);
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex - 1, _curTextPos + astSize, _listEndPos, true));
+              _astPtr         = astPtr;
+              _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+              _listEndPos     = -1;
+              _fieldIndex     = -1;
+              NextTokenSize()
+            }
+            else if (_curTextPos < _listEndPos)
+            {
+              def curRule = if (_listSep) separator else rule;
+              def astPtr      = _parser.GetAst(_curTextPos, curRule.Id);
+              def astSize     = curRule.GetSize(astPtr, _parser);
+              _stack.Push(ParseFrame(_ruleStructure, _astPtr, _fieldIndex - 1, _curTextPos + astSize, _listEndPos, !_listSep));
+              _astPtr         = astPtr;
+              _ruleStructure  = _parser.ParserHost.GetRuleStructure(_parser, _astPtr);
+              _listEndPos     = -1;
+              _fieldIndex     = -1;
+              NextTokenSize()
+            }
+            else
+            {
+              assert3(_curTextPos == _listEndPos);
+              NextTokenSize()
+            }
+
+          | Predicate                => assert3(false); //NextTokenSize()
+          | Marker                   => assert3(false); //NextTokenSize()
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,5 @@
-﻿using Nemerle;
+﻿using N2.Runtime.Internal;
+using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -12,18 +13,27 @@ namespace N2.Internal
 {
   public sealed partial class ExtensibleRuleParser
   {
+    public BestPostfix(mutable bestResult : int, parser : Parser) : int
+    {
+      // пропускаем правила с низкой силой связывания.
+      while (bestResult > 0 && (parser.ast[bestResult] & AstMask.Id) < FirstPostfixRuleId)
+        bestResult = parser.ast[bestResult + AstOfs.Next];
+      // ищем лучшее правило среди тех у кого подходящая сила связывания.
+      while (bestResult > 0 && (parser.ast[bestResult] & AstMask.Flags) != AstFlags.Best)
+        bestResult = parser.ast[bestResult + AstOfs.Next];
+      bestResult;
+    }
+
     public ParsePostfix(mutable curTextPos : int, text : string, parser : Parser) : int
     {
       unchecked
       {
         mutable postfixAst;
-        mutable newEndPos;
-        mutable newResult;
-        mutable bestEndPos= curTextPos;
-        mutable bestResult= 0;
-        mutable lastResult= 0;
+        mutable state = ExtentionRuleParserState();
+        state.parser = parser;
+        state.curTextPos = curTextPos;
+
         mutable i;
-        mutable j;
         mutable c; // временная переменная для отсечения правил по первой букве
 
         when (curTextPos >= text.Length) // постфиксное правило которое не съело ни одного символа игнорируется
@@ -35,40 +45,28 @@ namespace N2.Internal
           def maxFailPos = parser.ast[postfixAst + PostfixOfs.MaxFailPos];
           when (parser.MaxFailPos < maxFailPos)
             parser.MaxFailPos = maxFailPos;
-          lastResult = parser.TryGetPostfix(ref curTextPos, ref postfixAst);//список разобраных с этого места правил
-          bestResult = lastResult;
+          state.lastResult = parser.TryGetPostfix(ref curTextPos, ref postfixAst);//список разобраных с этого места правил
+          state.bestResult = state.lastResult;
           i = parser.ast[postfixAst + PostfixOfs.FirstRuleIndex] - 1;//индекс первого не разобранного правила
           if (i >= FirstPostfixRule)// не всё разобрано
           {
-            //ищем лучшее правило
-            while (bestResult > 0 && (parser.ast[bestResult] & PostfixMask.Mark) != PostfixMark.Best)
-              bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
-            if (bestResult > 0 && parser.ast[bestResult + AstOfs.State] == Parser.AstParsedState)//Убеждаемся что разбор успешный
-              bestEndPos = curTextPos + GetPostfixSize(bestResult, parser);
+            state.bestResult = BestPostfix(state.bestResult, parser);
+            if (state.bestResult > 0 && parser.ast[state.bestResult + AstOfs.State] == Parser.AstParsedState)//Убеждаемся что разбор успешный
+              state.bestEndPos = curTextPos + GetPostfixSize(state.bestResult, parser);
             else
-              bestEndPos = -1;
+              state.bestEndPos = -1;
             goto postfix_parse;//парсим то что не распарсили раньше
           }
           else
           {
-            // пропускаем правила с низкой силой связывания.
-            while (bestResult > 0 && (parser.ast[bestResult] & PostfixMask.Id) < FirstPostfixRuleId)
-              bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
-            // ищем лучшее правило среди тех у кого подходящая сила связывания.
-            while (bestResult > 0 && (parser.ast[bestResult] & PostfixMask.Mark) != PostfixMark.Best)
-              bestResult = parser.ast[bestResult + PostfixAstOfs.Next];
-            if (bestResult > 0)
+            state.bestResult = BestPostfix(state.bestResult, parser);
+            if (state.bestResult > 0)
             {
-              def state = parser.ast[bestResult + AstOfs.State];
-              if (state == Parser.AstParsedState)//Убеждаемся что разбор успешный
-                return curTextPos + GetPostfixSize(bestResult, parser);
-              else if (state < 0)
-              {
-                parser.ast[bestResult + PostfixOfs.Next] = 0;//FIXME. обработать неоднозначности.
-                def postfixRule = PostfixRuleParser(bestResult, parser);
-                newResult = bestResult;
-                return postfixRule.Parse(curTextPos, text, ref newResult, parser);
-              }
+              def astState = parser.ast[state.bestResult + AstOfs.State];
+              if (astState == Parser.AstParsedState)//Убеждаемся что разбор успешный
+                return curTextPos + GetPostfixSize(state.bestResult, parser);
+              else if (astState < 0)
+                assert3(false)
               else
                 return curTextPos;//облом. Заканчиваем разбор.
             }
@@ -80,8 +78,9 @@ namespace N2.Internal
         postfixAst = parser.Allocate(PostfixOfs.NodeSize, PostfixId);
         parser.ast[postfixAst + PostfixOfs.Next] = parser.memoize[curTextPos];
         parser.memoize[curTextPos] = postfixAst;
-        bestResult = 0;
-        lastResult = 0;
+        state.bestResult = 0;
+        state.bestEndPos = curTextPos;
+        state.lastResult = 0;
         i = PostfixRules.Length - 1;
       label postfix_parse;
         parser.ast[postfixAst + PostfixOfs.FirstRuleIndex] = FirstPostfixRule;
@@ -91,53 +90,28 @@ namespace N2.Internal
           def postfixRule = PostfixRules[i];
           when (postfixRule.LowerBound <= c && c <= postfixRule.UpperBound)
           {
-            newResult = -1;
-            newEndPos = postfixRule.Parse(curTextPos, text, ref newResult, parser);
-            when (newResult > 0)//АСТ создано
-            {
-              parser.ast[newResult + AstOfs.Next] = lastResult; lastResult = newResult;//добавляем в список
-              //определяем является ли даный АСТ лучшим из тех что разобрали
-              if (bestResult > 0)
-              {
-                if (bestEndPos < 0) when (newEndPos >= 0) goto postfix_new_better;
-                else                when (newEndPos < 0)  goto postfix_best_better;
-                def bestCount = PostfixRuleParser(bestResult, parser).FieldsCount;
-                def newCount  = PostfixRuleParser(newResult, parser).FieldsCount;
-                def end = Math.Min(bestCount, newCount) + AstOfs.Sizes;
-                for (j = AstOfs.Sizes; j < end; ++j)
-                {
-                  def newSize  = parser.GetSize(newResult + j);
-                  def bestSize = parser.GetSize(bestResult + j);
-                  when (bestSize < newSize) goto postfix_new_better;
-                  when (bestSize > newSize) goto postfix_best_better;
-                }
-                when (newCount < bestCount) goto postfix_best_better;
-                when (newCount > bestCount) goto postfix_new_better;
-                goto postfix_equal;
-              }
-              else
-                goto postfix_new_better;
-            label postfix_equal;//АСТ равен лучшему. Неоднозначность.
-              parser.ast[newResult] = parser.ast[newResult] | PostfixMark.Equal;
-              assert(bestEndPos == newEndPos);
-              continue;
-            label postfix_new_better;//Новый АСТ лучше
-              bestEndPos = newEndPos;
-              bestResult = newResult;
-              parser.ast[newResult] = parser.ast[newResult] | PostfixMark.Best;
-              continue;
-            label postfix_best_better;
-              continue;
-            }
+            state.newResult = -1;
+            state.newEndPos = postfixRule.Parse(curTextPos, text, ref state.newResult, parser);
+            when (state.newResult > 0)
+              state.Append();
           }
         }
 
-        parser.ast[postfixAst + PostfixOfs.List] = lastResult;
+        parser.ast[postfixAst + PostfixOfs.List] = state.lastResult;
+
+        when (state.bestResult <= 0 || state.bestEndPos < 0)// не смогли разобрать постфикс
+        {
+          when (curTextPos > parser.MaxFailPos)
+            parser.MaxFailPos = curTextPos;
+          parser.ast[postfixAst + PostfixOfs.MaxFailPos] = parser.MaxFailPos;
+          return curTextPos;
+        }
+
         parser.ast[postfixAst + PostfixOfs.MaxFailPos] = parser.MaxFailPos;
 
-        when (bestEndPos <= curTextPos)
+        when (state.bestEndPos <= curTextPos)
           return curTextPos;
-        bestEndPos;
+        state.bestEndPos;
       }
     }
   }

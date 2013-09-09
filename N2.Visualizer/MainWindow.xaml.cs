@@ -16,6 +16,7 @@ using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.SharpDevelop.Editor;
 using Microsoft.Win32;
+using N2.DebugStrategies;
 using N2.Internal;
 using N2.Runtime.Reflection;
 using N2.Visualizer.Properties;
@@ -23,11 +24,10 @@ using System.Diagnostics;
 using System.Text;
 using N2.Visualizer.ViewModels;
 using Nemerle.Diff;
-using RecoveryStack = Nemerle.Core.list<N2.Internal.RecoveryStackFrame>.Cons;
 
 namespace N2.Visualizer
 {
-  using RecoveryInfo = Tuple<RecoveryResult, RecoveryResult[], RecoveryResult[], RecoveryStack[]>;
+  using RecoveryInfo = Tuple<RecoveryResult, RecoveryResult[], RecoveryResult[], RecoveryStackFrame[]>;
   using System.Windows.Documents;
 
   /// <summary>
@@ -128,6 +128,11 @@ namespace N2.Visualizer
       _settings.WindowLWidth     = this.Width;
       _settings.ActiveTabIndex   = _tabControl.SelectedIndex;
 
+      SaveSelectedTestAndTestSuit();
+    }
+
+    private void SaveSelectedTestAndTestSuit()
+    {
       if (_currentTestSuit != null)
       {
         _settings.SelectedTestSuit = _currentTestSuit.TestSuitPath;
@@ -162,7 +167,7 @@ namespace N2.Visualizer
       _testsTreeView.ItemsSource = testSuits;
     }
 
-    private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats, List<RecoveryStack> stacks)
+    private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats, List<RecoveryStackFrame> stacks)
     {
       _recoveryResults.Add(Tuple.Create(bestResult, bestResults.ToArray(), candidats.ToArray(), stacks.ToArray()));
     }
@@ -472,14 +477,13 @@ namespace N2.Visualizer
 
       try
       {
-        var recovery = _currentTestSuit.Recovery;
-        recovery.ReportResult = ReportRecoveryResult;
+        var recovery = new RecoveryVisualizer(ReportRecoveryResult);
         _recoveryResults.Clear();
         _recoveryTreeView.Items.Clear();
         _errorsTreeView.Items.Clear();
         var timer = Stopwatch.StartNew();
 
-        _parseResult = _currentTestSuit.Run(_text.Text, null);
+        _parseResult = _currentTestSuit.Run(_text.Text, null, recovery.Strategy);
 
         _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
 
@@ -490,20 +494,17 @@ namespace N2.Visualizer
 
         _outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
 
-        _recoveryTime.Text = recovery.Timer.Elapsed.ToString();
-        _recoveryCount.Text = recovery.Count.ToString(CultureInfo.InvariantCulture);
+        _recoveryTime.Text = recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
+        _recoveryCount.Text = recovery.RecoveryPerformanceData.Count.ToString(CultureInfo.InvariantCulture);
 
-        _continueParseTime.Text = recovery.ContinueParseTime.ToString();
-        _continueParseCount.Text = recovery.ContinueParseCount.ToString(CultureInfo.InvariantCulture);
+        _continueParseTime.Text = recovery.RecoveryPerformanceData.ContinueParseTime.ToString();
+        _continueParseCount.Text = recovery.RecoveryPerformanceData.ContinueParseCount.ToString(CultureInfo.InvariantCulture);
 
-        _tryParseSubrulesTime.Text = recovery.TryParseSubrulesTime.ToString();
-        _tryParseSubrulesCount.Text = recovery.TryParseSubrulesCount.ToString(CultureInfo.InvariantCulture);
+        _tryParseSubrulesTime.Text = recovery.RecoveryPerformanceData.TryParseSubrulesTime.ToString();
+        _tryParseSubrulesCount.Text = recovery.RecoveryPerformanceData.TryParseSubrulesCount.ToString(CultureInfo.InvariantCulture);
 
-        _tryParseTime.Text = recovery.TryParseTime.ToString();
-        _tryParseCount.Text = recovery.TryParseCount.ToString(CultureInfo.InvariantCulture);
-
-        _tryParseNoCacheTime.Text = recovery.TryParseNoCacheTime.ToString();
-        _tryParseNoCacheCount.Text = recovery.TryParseNoCacheCount.ToString(CultureInfo.InvariantCulture);
+        _tryParseTime.Text = recovery.RecoveryPerformanceData.TryParseTime.ToString();
+        _tryParseCount.Text = recovery.RecoveryPerformanceData.TryParseCount.ToString(CultureInfo.InvariantCulture);
 
         ShowRecoveryResults();
         TryReportError();
@@ -511,13 +512,10 @@ namespace N2.Visualizer
         
         recovery.ReportResult = null;
       }
-      catch (TypeLoadException ex)
+      catch (Exception ex)
       {
         ClearMarkers();
         MessageBox.Show(this, ex.Message);
-      }
-      catch (Exception ex)
-      {
         Debug.WriteLine(ex.ToString());
       }
     }
@@ -579,32 +577,32 @@ namespace N2.Visualizer
             var node = new TreeViewItem();
             node.Header = recoveryResult;
 
-            foreach (var frame in recoveryResult.Stack)
-            {
-              var frameNode = new TreeViewItem();
-              frameNode.Header = frame;
-              node.Items.Add(frameNode);
-            }
+            //foreach (var frame in recoveryResult.Stack)
+            //{
+            //  var frameNode = new TreeViewItem();
+            //  frameNode.Header = frame;
+            //  node.Items.Add(frameNode);
+            //}
 
             treeNode.Items.Add(node);
           }
         }
 
-        var stacks = treeNode.Tag as RecoveryStack[];
+        var stacks = treeNode.Tag as RecoveryStackFrame[];
 
         if (stacks != null)
         {
           foreach (var stack in stacks)
           {
             var node = new TreeViewItem();
-            node.Header = stack.hd;
+            node.Header = stack;
 
-            foreach (var frame in stack)
-            {
-              var frameNode = new TreeViewItem();
-              frameNode.Header = frame;
-              node.Items.Add(frameNode);
-            }
+            //foreach (var frame in stack)
+            //{
+            //  var frameNode = new TreeViewItem();
+            //  frameNode.Header = frame;
+            //  node.Items.Add(frameNode);
+            //}
 
             treeNode.Items.Add(node);
           }
@@ -893,7 +891,8 @@ namespace N2.Visualizer
 
     private void MenuItem_Click_TestsSettings(object sender, RoutedEventArgs e)
     {
-      ShowTestsSettingsDialog();
+      if (ShowTestsSettingsDialog())
+        LoadTests();
     }
 
     bool CheckTestFolder()
@@ -986,12 +985,12 @@ namespace N2.Visualizer
     private void OnRunTests(object sender, ExecutedRoutedEventArgs e)
     {
       if (CheckTestFolder())
-        RunTests();
+        RunTests(new Recovery(null).Strategy);
       else
         MessageBox.Show(this, "Can't run tests.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
-    private void RunTests()
+    private void RunTests(RecoveryStrategy recoveryStrategy)
     {
       if (_testsTreeView.ItemsSource == null)
         return;
@@ -1001,15 +1000,15 @@ namespace N2.Visualizer
       foreach (var testSuit in testSuits)
       {
         foreach (var test in testSuit.Tests)
-          RunTest(test);
+          RunTest(test, recoveryStrategy);
 
         testSuit.TestStateChanged();
       }
     }
 
-    private void RunTest(TestVm test)
+    private void RunTest(TestVm test, RecoveryStrategy recoveryStrategy)
     {
-      test.Run();
+      test.Run(recoveryStrategy);
 
       ShowDiff(test);
     }
@@ -1143,6 +1142,7 @@ namespace N2.Visualizer
         _text.Text = test.Code;
         _currentTestSuit = test.TestSuit;
         ShowDiff(test);
+
       }
 
       var testSuit = e.NewValue as TestSuitVm;
@@ -1152,6 +1152,10 @@ namespace N2.Visualizer
         _currentTestSuit = testSuit;
         _para.Inlines.Clear();
       }
+
+      SaveSelectedTestAndTestSuit();
+
+      _settings.Save();
     }
 
     private void OnRemoveTestSuit(object sender, ExecutedRoutedEventArgs e)
@@ -1175,16 +1179,16 @@ namespace N2.Visualizer
 
     private void OnRunTest(object sender, ExecutedRoutedEventArgs e)
     {
-      RunTest();
+      RunTest(new Recovery(null).Strategy);
     }
 
-    private void RunTest()
+    private void RunTest(RecoveryStrategy recoveryStrategy)
     {
       {
         var test = _testsTreeView.SelectedItem as TestVm;
         if (test != null)
         {
-          RunTest(test);
+          RunTest(test, recoveryStrategy);
           test.TestSuit.TestStateChanged();
 
           if (test.TestState == TestState.Failure)
@@ -1195,7 +1199,7 @@ namespace N2.Visualizer
       if (testSuit != null)
       {
         foreach (var test in testSuit.Tests)
-          RunTest(test);
+          RunTest(test, recoveryStrategy);
         testSuit.TestStateChanged();
       }
     }
@@ -1219,7 +1223,7 @@ namespace N2.Visualizer
 
     private void _testsTreeView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-      RunTest();
+      RunTest(new Recovery(null).Strategy);
       e.Handled = true;
     }
 

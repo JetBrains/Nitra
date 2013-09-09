@@ -16,47 +16,37 @@ namespace N2
 {
   public partial class ParserHost
   {
-    public DoParsing(source : SourceSnapshot, descriptor : SimpleRuleDescriptor) : Parser
+    public DoParsing(source : SourceSnapshot, descriptor : StartRuleDescriptor, recoveryStrategy : RecoveryStrategy = null) : Parser
     {
-      DoParsing(source, AddGrammar(DefaultCompositeGrammar, descriptor.Grammar), descriptor)
+      DoParsing(source, AddGrammar(DefaultCompositeGrammar, descriptor.Grammar), descriptor, recoveryStrategy);
     }
 
-    public DoParsing(source : SourceSnapshot, descriptor : SimpleRuleDescriptor, token : CancellationToken) : Parser
+    public DoParsing(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : StartRuleDescriptor, recoveryStrategy : RecoveryStrategy = null) : Parser
     {
-      DoParsing(source, AddGrammar(DefaultCompositeGrammar, descriptor.Grammar), descriptor, token)
+      match (descriptor)
+      {
+        | desc is SimpleRuleDescriptor     => DoParsingImpl(source, grammar.GetSimpleRuleParser(desc), recoveryStrategy, VNone())
+        | desc is ExtensibleRuleDescriptor => DoParsingImpl(source, grammar.GetExtensibleRuleParser(desc, 0), recoveryStrategy, VNone())
+        | _ => assert3(false, "DoParsing support only SimpleRuleDescriptor or ExtensibleRuleDescriptor")
+      }
     }
 
-    public DoParsing(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : SimpleRuleDescriptor) : Parser
+    public DoParsing(source : SourceSnapshot, descriptor : StartRuleDescriptor, recoveryStrategy : RecoveryStrategy, token : CancellationToken) : Parser
     {
-      DoParsing(source, grammar.GetSimpleRuleParser(descriptor), VNone())
+      DoParsing(source, AddGrammar(DefaultCompositeGrammar, descriptor.Grammar), descriptor, recoveryStrategy, token);
     }
 
-    public DoParsing(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : SimpleRuleDescriptor, token : CancellationToken) : Parser
+    public DoParsing(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : StartRuleDescriptor, recoveryStrategy : RecoveryStrategy, token : CancellationToken) : Parser
     {
-      DoParsing(source, grammar.GetSimpleRuleParser(descriptor), VSome(token))
+      match (descriptor)
+      {
+        | desc is SimpleRuleDescriptor     => DoParsingImpl(source, grammar.GetSimpleRuleParser(desc), recoveryStrategy, VSome(token))
+        | desc is ExtensibleRuleDescriptor => DoParsingImpl(source, grammar.GetExtensibleRuleParser(desc, 0), recoveryStrategy, VSome(token))
+        | _ => assert3(false, "DoParsing support only SimpleRuleDescriptor or ExtensibleRuleDescriptor")
+      }
     }
 
-    public DoParsing(source : SourceSnapshot, descriptor : ExtensibleRuleDescriptor) : Parser
-    {
-      DoParsing(source, AddGrammar(DefaultCompositeGrammar, descriptor.Grammar), descriptor)
-    }
-
-    public DoParsing(source : SourceSnapshot, descriptor : ExtensibleRuleDescriptor, token : CancellationToken) : Parser
-    {
-      DoParsing(source, AddGrammar(DefaultCompositeGrammar, descriptor.Grammar), descriptor, token)
-    }
-
-    public DoParsing(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : ExtensibleRuleDescriptor) : Parser
-    {
-      DoParsing(source, grammar.GetExtensibleRuleParser(descriptor, 0), VNone())
-    }
-
-    public DoParsing(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : ExtensibleRuleDescriptor, token : CancellationToken) : Parser
-    {
-      DoParsing(source, grammar.GetExtensibleRuleParser(descriptor, 0), VSome(token))
-    }
-
-    private DoParsing(source : SourceSnapshot, ruleParser : StartRuleParser, token : ValueOption[CancellationToken]) : Parser
+    private DoParsingImpl(source : SourceSnapshot, ruleParser : StartRuleParser, recoveryStrategy : RecoveryStrategy, token : ValueOption[CancellationToken]) : Parser
     {
       def parser = N2.Internal.Parser(source, source.Text.Length * 10, this, ruleParser);
       def registration = match(token)
@@ -70,13 +60,13 @@ namespace N2
         mutable prevMaxFailPos;
         _ = parser.Allocate(2);
         mutable res = ruleParser.Parse(0, parser.Text, parser);
-        while (res < 0)
+        when (res < 0)
         {
           when (parser.TerminateParsing)
             return parser;
 
           parser.RecoveryStacks.Clear();
-          ruleParser.FindRecoveryPosition(0, [], parser);
+          ruleParser.FindRecoveryPosition(0, RecoveryStackFrame.Root(parser, 0, ruleParser), parser);
 
           assert(parser.RecoveryStacks.Count > 0);
 
@@ -85,10 +75,15 @@ namespace N2
           prevMaxFailPos = parser.MaxFailPos;
           prevRecoveryStacks = parser.RecoveryStacks.ToArray();
 
-          this.RecoveryStrategy(parser.MaxFailPos, parser);
-
-          res = ruleParser.Parse(0, parser.Text, parser);
+          res = if (recoveryStrategy == null)
+          {
+            assert3(this.RecoveryStrategy != null);
+            this.RecoveryStrategy(parser);
+          }
+          else
+            recoveryStrategy(parser);
         }
+        assert3(res >= 0);
 
         parser.ast[Parser.ResultOffset] = res;
 
