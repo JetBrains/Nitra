@@ -496,14 +496,10 @@ namespace N2.DebugStrategies
     {
       var allBestFrames = bestFrames.UpdateDepthAndCollectAllFrames();
       allBestFrames.RemoveAll(frame => !frame.Best);
-      //foreach (var frame in allBestFrames)
-      //  if (frame.ParseAlternatives.Length != 1)
-      //    Debug.Assert(false);
-
       parser.RecoveryStacks.Clear();
 
       var errorIndex = parser.ErrorData.Count;
-      parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), allBestFrames.ToArray()));
+      parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), allBestFrames.ToArray(), parser.ErrorData.Count));
 
       var parents = new HashSet<RecoveryStackFrame>();
       foreach (var frame in bestFrames)
