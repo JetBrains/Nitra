@@ -34,6 +34,7 @@ namespace N2.Internal
     public State : int;
 
     public EndText : string { get { if (End < 0) $"F$Fail" else End.ToString() } }
+    public Stop : int { get { if (End < 0) Fail else End } }
     
     public override ToString() : string
     {
@@ -50,9 +51,9 @@ namespace N2.Internal
     [EqualsIgnore] public mutable Id                : int;
     [EqualsIgnore] public mutable Index             : int;
     [EqualsIgnore] public mutable Depth             : int = 0;
+    [EqualsIgnore] public mutable Mode              : RecoveryStackFrameMode = RecoveryStackFrameMode.Both;
     [EqualsIgnore] public         Parents           : SCG.HashSet[RecoveryStackFrame] = SCG.HashSet();
     [EqualsIgnore] public         Children          : SCG.List[RecoveryStackFrame] = SCG.List();
-    [EqualsIgnore] public mutable Mode              : RecoveryStackFrameMode = RecoveryStackFrameMode.Both;
                                                     
     [EqualsIgnore] public mutable Best              : bool;
     [EqualsIgnore] public mutable ParseAlternatives : array[ParseAlternative];
@@ -65,11 +66,23 @@ namespace N2.Internal
       this.Id      = parser.GenerateId();
     }
 
+    public Clone() : RecoveryStackFrame
+    {
+      null
+    }
+
     public this(other : this)
     {
-      this.TextPos = other.TextPos;
-      this.Parser  = other.Parser;
-      this.Id      = other.Id;
+      this.TextPos            = other.TextPos;
+      this.Parser             = other.Parser;
+      this.Id                 = other.Id;
+      this.Index              = other.Index;
+      this.Depth              = other.Depth;
+      this.Mode               = other.Mode;
+      
+      this.Best               = other.Best;
+      this.ParseAlternatives  = other.ParseAlternatives;
+      this.IsSpeculative      = other.IsSpeculative;
     }
     
     | Root
@@ -138,22 +151,7 @@ namespace N2.Internal
             null
         }
       }
-      
-    //public RuleId : int
-    //{
-    //  get
-    //  {
-    //    match (this)
-    //    {
-    //      | Extensible as ex => if (ex.State == 0) ex.RuleParser.PrefixId else ex.RuleParser.PostfixId
-    //      | ListBody         (astHandle, _, _) 
-    //      | ListSeparator    (astHandle, _, _)
-    //      | ExtensiblePrefix (astHandle, _)
-    //      | ExtensiblePostfix(astHandle, _)
-    //      | Rule             (astHandle, _) => astHandle.RuleId
-    //    }
-    //  }
-    //}
+
 
     public IsPrefixParsed : bool
     {
@@ -411,8 +409,9 @@ namespace N2.Internal
           // Это левый фрейм. Он успешно пропарсился. Стало быть его нужно удалить. Но здесь мы это сделать не можем. Так что просто помечаем его.
           error.Deleted = true;
         }
-        
-        parser.ErrorData.Add(ParseErrorData(NToken(frame.StartPos, frame.StartPos), array[frame], error.Index));
+        def id = frame.Id;
+        def realFrame = error.AllBestFrames.First(f => f.Id == id);
+        parser.ErrorData.Add(ParseErrorData(NToken(frame.StartPos, frame.StartPos), array[realFrame], error.Index));
         error.Index++; // меняем сообщения об ошибках местами
         
         def rp = (frame : this).GetRuleParser();
@@ -438,6 +437,53 @@ namespace N2.Internal
       GetRuleParser().PatchAst(-1, -2, -1, this, parser)
     }
 
+    private CloneInternal() : RecoveryStackFrame
+    {
+      match (this)
+      {
+        | ListBody          as x => RecoveryStackFrame.ListBody         (this, x.AstHandle, x.State, x.Counter)
+        | ListSeparator     as x => RecoveryStackFrame.ListSeparator    (this, x.AstHandle, x.State, x.Counter)
+        | Extensible        as x => RecoveryStackFrame.Extensible       (this, x.RuleParser, x.State)
+        | Rule              as x => RecoveryStackFrame.Rule             (this, x.AstHandle, x.State)
+        | Root              as x => RecoveryStackFrame.Root             (this, x.StartRuleParser)
+        | ExtensiblePrefix  as x => RecoveryStackFrame.ExtensiblePrefix (this, x.AstHandle, x.RuleParser)
+        | ExtensiblePostfix as x => RecoveryStackFrame.ExtensiblePostfix(this, x.AstHandle, x.RuleParser)
+      }
+    }
+    
+    public static CloneGraph(graph : SCG.List[RecoveryStackFrame]) : SCG.List[RecoveryStackFrame]
+    {
+      def cloned = SCG.List(graph.Count);
+      def map    = Hashtable(graph.Count);
+      
+      foreach (node in graph)
+      {
+        def clone = node.CloneInternal();
+        cloned.Add(clone);
+        map.Add(node.Id, clone);
+      }
+      
+      foreach (node in graph)
+      {
+        def clone    = map[node.Id];
+        def children = clone.Children;
+        
+        foreach (oldNode when oldNode.Best in node.Children)
+          children.Add(map[oldNode.Id]);
+
+        def parents  = clone.Parents;
+        
+        foreach (oldNode when oldNode.Best in node.Parents)
+        {
+          def newNode = map[oldNode.Id];
+          newNode.Index = parents.Count;
+          _ = parents.Add(newNode);
+        }
+      }      
+      
+      cloned
+    }
+    
     public Dot : string
     {
       get

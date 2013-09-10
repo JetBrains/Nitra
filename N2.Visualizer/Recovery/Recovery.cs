@@ -505,13 +505,21 @@ namespace N2.DebugStrategies
     private void FixAst(List<RecoveryStackFrame> bestFrames, int failPos, int skipCount, Parser parser)
     {
       parser.MaxFailPos = failPos;
-      var allBestFrames = bestFrames.UpdateReverseDepthAndCollectAllFrames();
       parser.RecoveryStacks.Clear();
+      if (bestFrames.Count == 0)
+        return;
 
-      foreach (var frame in bestFrames)
+      var allBestFrames = bestFrames.UpdateReverseDepthAndCollectAllFrames();
+      var first = bestFrames[0];
+      var cloned = RecoveryStackFrame.CloneGraph(allBestFrames);
+      var firstBestFrame = new[] { first };
+      allBestFrames = firstBestFrame.UpdateReverseDepthAndCollectAllFrames();
+      RecoveryUtils.RemoveFramesUnnecessaryAlternatives(allBestFrames);
+
+      foreach (var frame in firstBestFrame)
       {
         var errorIndex = parser.ErrorData.Count;
-        parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), allBestFrames.ToArray(), parser.ErrorData.Count));
+        parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), cloned.ToArray(), parser.ErrorData.Count));
         if (!frame.PatchAst(errorIndex, parser))
           ResetParentsBestProperty(frame.Parents);
         frame.Best = false;
@@ -567,6 +575,43 @@ namespace N2.DebugStrategies
       var min = candidates.Min(selector);
       var res2 = candidates.Where(c => selector(c) == min);
       return res2.ToList();
+    }
+
+    public static void RemoveFramesUnnecessaryAlternatives(List<RecoveryStackFrame> allFrames)
+    {
+      for (int i = 0; i < allFrames.Count; ++i)
+      {
+        var frame = allFrames[i];
+
+        if (!frame.Best)
+          continue;
+
+        if (frame.Parents.Count == 0)
+          continue;
+
+        switch (frame.Id)
+        {
+          case 189: break;
+        }
+
+        var parents      = frame.Parents;
+        var alternatives = frame.ParseAlternatives;
+        var starts       = new HashSet<int>();
+
+        foreach (var a in alternatives)
+          starts.Add(a.Stop);
+
+        foreach (var parent in parents)
+          RemoveUnnecessaryAlternatives(parent, starts);
+      }
+    }
+
+    private static void RemoveUnnecessaryAlternatives(RecoveryStackFrame frame, HashSet<int> starts)
+    {
+      if (frame.ParseAlternatives.Length > 1)
+        frame.ParseAlternatives = frame.ParseAlternatives.Where(a => starts.Contains(a.Start)).ToArray();
+      else if (frame.ParseAlternatives.Length == 1)
+        Debug.Assert(starts.Contains(frame.ParseAlternatives[0].Start));
     }
 
     public static List<RecoveryStackFrame> UpdateReverseDepthAndCollectAllFrames(this ICollection<RecoveryStackFrame> heads)
