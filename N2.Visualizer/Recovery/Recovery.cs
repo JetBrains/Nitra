@@ -504,6 +504,7 @@ namespace N2.DebugStrategies
     // ReSharper disable once ParameterTypeCanBeEnumerable.Local
     private void FixAst(List<RecoveryStackFrame> bestFrames, int failPos, int skipCount, Parser parser)
     {
+      parser.MaxFailPos = failPos;
       var allBestFrames = bestFrames.UpdateReverseDepthAndCollectAllFrames();
       parser.RecoveryStacks.Clear();
 
