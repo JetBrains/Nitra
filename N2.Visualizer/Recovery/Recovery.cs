@@ -221,7 +221,7 @@ namespace N2.DebugStrategies
         var poorerChildren = SubstractSet(frame.Children, bettreChildren);
 
         if (poorerChildren.Count > 0)
-          ResetBestProperty(poorerChildren);
+          ResetChildrenBestProperty(poorerChildren);
 
         if (bettreChildren.Count == 0)
           bestFrames.Add(frame);
@@ -307,13 +307,23 @@ namespace N2.DebugStrategies
       return set1.Where(c => !set2.Contains(c)).ToList();
     }
 
-    private static void ResetBestProperty(List<RecoveryStackFrame> poorerChildren)
+    private static void ResetChildrenBestProperty(List<RecoveryStackFrame> poorerChildren)
     {
       foreach (var child in poorerChildren)
         if (child.Best)
         {
           child.Best = false;
-          ResetBestProperty(child.Children);
+          ResetChildrenBestProperty(child.Children);
+        }
+    }
+
+    private static void ResetParentsBestProperty(HashSet<RecoveryStackFrame> parents)
+    {
+      foreach (var parent in parents)
+        if (parent.Best)
+        {
+          parent.Best = false;
+          ResetParentsBestProperty(parent.Parents);
         }
     }
 
@@ -494,33 +504,24 @@ namespace N2.DebugStrategies
     // ReSharper disable once ParameterTypeCanBeEnumerable.Local
     private void FixAst(List<RecoveryStackFrame> bestFrames, int failPos, int skipCount, Parser parser)
     {
-      var allBestFrames = bestFrames.UpdateDepthAndCollectAllFrames();
-      allBestFrames.RemoveAll(frame => !frame.Best);
+      var allBestFrames = bestFrames.UpdateReverseDepthAndCollectAllFrames();
       parser.RecoveryStacks.Clear();
 
-      var errorIndex = parser.ErrorData.Count;
-      parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), allBestFrames.ToArray(), parser.ErrorData.Count));
-
-      var parents = new HashSet<RecoveryStackFrame>();
       foreach (var frame in bestFrames)
       {
-        if (frame.PatchAst(errorIndex, parser))
-          foreach (var parent in frame.Parents)
-            if (parent.Best)
-              parents.Add(parent);
+        var errorIndex = parser.ErrorData.Count;
+        parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), allBestFrames.ToArray(), parser.ErrorData.Count));
+        if (!frame.PatchAst(errorIndex, parser))
+          ResetParentsBestProperty(frame.Parents);
+        frame.Best = false;
       }
 
-      while (parents.Count > 0 && !parents.Contains(allBestFrames[allBestFrames.Count - 1]))//пока не содержит корень
+      for (int i = 0; i < allBestFrames.Count - 1; ++i)//последним идет корень. Его фиксить не надо
       {
-        var newParents = new HashSet<RecoveryStackFrame>();
-        foreach (var frame in parents)
-        {
-          if (frame.ContinueParse(parser))
-            foreach (var parent in frame.Parents)
-              if (parent.Best)
-                newParents.Add(parent);
-        }
-        parents = newParents;
+        var frame = allBestFrames[i];
+        if (frame.Best)
+          if (!frame.ContinueParse(parser))
+            ResetParentsBestProperty(frame.Parents);
       }
     }
 
@@ -565,6 +566,23 @@ namespace N2.DebugStrategies
       var min = candidates.Min(selector);
       var res2 = candidates.Where(c => selector(c) == min);
       return res2.ToList();
+    }
+
+    public static List<RecoveryStackFrame> UpdateReverseDepthAndCollectAllFrames(this ICollection<RecoveryStackFrame> heads)
+    {
+      var allRecoveryStackFrames = new List<RecoveryStackFrame>();
+
+      foreach (var stack in heads)
+        stack.ClearAndCollectFrames(allRecoveryStackFrames);
+      foreach (var stack in heads)
+        stack.Depth = 0;
+      foreach (var stack in heads)
+        stack.UpdateFrameReverseDepth();
+
+      allRecoveryStackFrames.SortByDepth();
+      allRecoveryStackFrames.Reverse();
+
+      return allRecoveryStackFrames;
     }
 
     public static List<RecoveryStackFrame> UpdateDepthAndCollectAllFrames(this ICollection<RecoveryStackFrame> heads)
@@ -631,6 +649,19 @@ namespace N2.DebugStrategies
           parent.Depth = frame.Depth + 1;
           UpdateFrameDepth(parent);
         }
+    }
+
+    private static void UpdateFrameReverseDepth(this RecoveryStackFrame frame)
+    {
+      if (frame.Parents.Count == 0)
+        frame.Depth = 0;
+      else
+      {
+        foreach (var parent in frame.Parents)
+          if (parent.Depth == -1)
+            UpdateFrameReverseDepth(parent);
+        frame.Depth = frame.Parents.Max(x => x.Depth) + 1;
+      }
     }
 
     public static List<RecoveryStackFrame> FilterBetterEmptyIfAllEmpty(this List<RecoveryStackFrame> frames)
