@@ -49,6 +49,11 @@ namespace N2.Visualizer
         WriteSpan(_missingNodeClass, ruleDescriptor.Name);
     }
 
+    public override void AmbiguousNode(IAmbiguousAst ast)
+    {
+      WriteSpan(_missingNodeClass, "ambiguous " + ast.RuleDescriptor.Name);
+    }
+
     public override void NewLine()
     {
       IndentNewLine();
