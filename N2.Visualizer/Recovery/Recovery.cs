@@ -63,8 +63,8 @@ namespace N2.DebugStrategies
         foreach (var frame in frames)
           if (frame.Depth == 0)
           {
-            if (frame.TextPos != failPos)
-              Debug.Assert(false);
+            //if (frame.TextPos != failPos)
+            //  Debug.Assert(false);
             FindSpeculativeFrames(newFrames, parser, frame, failPos, skipCount);
           }
 

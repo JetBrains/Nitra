@@ -481,6 +481,7 @@ namespace N2.Visualizer
         _recoveryResults.Clear();
         _recoveryTreeView.Items.Clear();
         _errorsTreeView.Items.Clear();
+        _reflectionTreeView.ItemsSource = null;
         var timer = Stopwatch.StartNew();
 
         _parseResult = _currentTestSuit.Run(_text.Text, null, recovery.Strategy);
