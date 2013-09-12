@@ -63,7 +63,7 @@ namespace N2.DebugStrategies
 
         var newFrames = new HashSet<RecoveryStackFrame>(frames);
         foreach (var frame in frames)
-          if (frame.Depth == 0)
+          //if (frame.Depth == 0)
           {
             //if (frame.TextPos != failPos)
             //  Debug.Assert(false);
@@ -71,12 +71,18 @@ namespace N2.DebugStrategies
           }
 
         var allFrames = newFrames.PrepareRecoveryStacks();
+        UpdateIsSpeculative(frames, allFrames);
+
 
         bestFrames.Clear();
 
         ParseFrames(parser, skipCount, allFrames);
 
         UpdateParseFramesAlternatives(allFrames);
+        foreach (var f in allFrames)
+          if (f.IsTop && !f.IsSpeculative)
+            Debug.WriteLine(f);
+
         SelectBestFrames(bestFrames, allFrames);
 
         if (IsAllFramesParseEmptyString(allFrames))
@@ -92,9 +98,16 @@ namespace N2.DebugStrategies
       return bestFrames;
     }
 
+    private static void UpdateIsSpeculative(List<RecoveryStackFrame> frames, List<RecoveryStackFrame> allFrames)
+    {
+      var frameSet = new HashSet<RecoveryStackFrame>(frames);
+      foreach (var frame in allFrames)
+        frame.IsSpeculative = !frameSet.Contains(frame);
+    }
+
     static List<RecoveryStackFrame> Top(List<RecoveryStackFrame> allFrames)
     {
-      return allFrames.Where(f => f.Best && !f.Children.Any(c => c.Best)).ToList();
+      return allFrames.Where(f => f.IsTop).ToList();
     }
 
     private bool IsAllFramesParseEmptyString(IEnumerable<RecoveryStackFrame> allFrames)
@@ -133,7 +146,8 @@ namespace N2.DebugStrategies
           Debug.Assert(false);
 
         var alternatives0 = RecoveryUtils.FilterParseAlternativesWichEndsEqualsParentsStarts(frame);
-        var alternatives9 = RecoveryUtils.FilterMinState(alternatives0);
+        //var alternatives9 = RecoveryUtils.FilterMinState(alternatives0);
+        var alternatives9 = alternatives0;
 
         frame.ParseAlternatives = alternatives9.ToArray();
 
@@ -165,8 +179,8 @@ namespace N2.DebugStrategies
 
         switch (frame.Id)
         {
-          case 27: break;
-          case 69: break;
+          case 65: break;
+          case 23: break;
         }
 
         // Отбрасывает всех потомков у которых свойство Best == false
@@ -183,8 +197,8 @@ namespace N2.DebugStrategies
         // TODO: Возожно нужно делать это более осторожно, так как при наличии нескольких ошибок Fail-фреймы могут оказаться более предпочтительным. Но возможно они отфильтруются раньше.
         var children4 = RecoveryUtils.FilterNonFailedFrames(children3);
         // Для каждой группы потомков с одинаковым местом фэйла (TextPos) отбираем такие которые начали парситься с меньшего состояния (подправила).
-        var children5 = RecoveryUtils.SelectMinFailSateIfTextPosEquals(children4);
-        //var children5 = children4;
+        //var children5 = RecoveryUtils.SelectMinFailSateIfTextPosEquals(children4);
+        var children5 = children4;
         // Отбрасываем потомков все альтеративы которых пропарсили пустую строку.
         var children6 = RecoveryUtils.FilterEmptyChildren(children5);
         var children9 = children6;//FilterNotEmpyPrefixChildren(frame, children6);
@@ -199,7 +213,8 @@ namespace N2.DebugStrategies
           bestFrames.Add(frame);
       }
 
-      RecoveryUtils.FilterFailSateEqualsStateIfExists(bestFrames);
+      // Реализовано не корректно. Выбирать FS==S можно только если у нас скипается грязь и допарсивание не пропускает состояний. Как-то так.
+      //RecoveryUtils.FilterFailSateEqualsStateIfExists(bestFrames);
     }
 
     #endregion
