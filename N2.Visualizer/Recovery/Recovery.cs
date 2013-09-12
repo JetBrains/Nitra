@@ -1,6 +1,8 @@
 ﻿#region Пролог
 #define DebugOutput
 using N2.Internal;
+using IntRuleCallKey = Nemerle.Builtins.Tuple<int, N2.Internal.RuleCallKey>;
+
 
 using System;
 using System.Collections.Generic;
@@ -90,6 +92,11 @@ namespace N2.DebugStrategies
       return bestFrames;
     }
 
+    static List<RecoveryStackFrame> Top(List<RecoveryStackFrame> allFrames)
+    {
+      return allFrames.Where(f => f.Best && !f.Children.Any(c => c.Best)).ToList();
+    }
+
     private bool IsAllFramesParseEmptyString(IEnumerable<RecoveryStackFrame> allFrames)
     {
       return allFrames.All(f => f.ParseAlternatives.All(a => a.ParentsEat == 0));
@@ -158,7 +165,8 @@ namespace N2.DebugStrategies
 
         switch (frame.Id)
         {
-          case 189: break;
+          case 27: break;
+          case 69: break;
         }
 
         // Отбрасывает всех потомков у которых свойство Best == false
@@ -176,6 +184,7 @@ namespace N2.DebugStrategies
         var children4 = RecoveryUtils.FilterNonFailedFrames(children3);
         // Для каждой группы потомков с одинаковым местом фэйла (TextPos) отбираем такие которые начали парситься с меньшего состояния (подправила).
         var children5 = RecoveryUtils.SelectMinFailSateIfTextPosEquals(children4);
+        //var children5 = children4;
         // Отбрасываем потомков все альтеративы которых пропарсили пустую строку.
         var children6 = RecoveryUtils.FilterEmptyChildren(children5);
         var children9 = children6;//FilterNotEmpyPrefixChildren(frame, children6);
@@ -818,7 +827,7 @@ namespace N2.DebugStrategies
 
 	  public static List<RecoveryStackFrame> SelectMinFailSateIfTextPosEquals(List<RecoveryStackFrame> children4)
 	  {
-	    return children4.GroupBy(f => f.TextPos).SelectMany(fs => fs.ToList().FilterMin(f => f.FailState)).ToList();
+	    return children4.GroupBy(f =>  new IntRuleCallKey(f.TextPos, f.RuleKey)).SelectMany(fs => fs.ToList().FilterMin(f => f.FailState)).ToList();
 	  }
 
 	  public static List<RecoveryStackFrame> FilterNonFailedFrames(List<RecoveryStackFrame> children3)
