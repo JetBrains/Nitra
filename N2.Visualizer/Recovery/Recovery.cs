@@ -252,8 +252,9 @@ namespace N2.DebugStrategies
 
         if (frame.Depth == 0)
         {
-          if (frame.ParseAlternatives != null)
-            continue; // пропаршено во время попытки найти спекулятивные подфреймы
+          // TODO: парсим вотор раз. Не хорошо.
+          //if (frame.ParseAlternatives != null)
+          //  continue; // пропаршено во время попытки найти спекулятивные подфреймы
           // разбираемся с головами
           ParseTopFrame(parser, frame, skipCount);
         }
@@ -284,7 +285,7 @@ namespace N2.DebugStrategies
     {
       ParseAlternative parseAlternative;
 
-      if (frame.Id == 28)
+      if (frame.Id == 467)
         Debug.Assert(true);
 
       var curTextPos = frame.TextPos + skipCount;
