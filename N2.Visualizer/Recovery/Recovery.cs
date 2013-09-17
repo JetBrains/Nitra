@@ -845,7 +845,7 @@ namespace N2.DebugStrategies
 
 	  public static List<RecoveryStackFrame> FilterEmptyChildren(List<RecoveryStackFrame> children5)
 	  {
-	    return SubstractSet(children5, children5.Where(f => f.ParseAlternatives.All(a => f.TextPos == a.Start && a.ParentsEat == 0 && a.State < 0 && f.FailState == 0)).ToList());
+	    return SubstractSet(children5, children5.Where(f => f.StartPos == f.TextPos && f.ParseAlternatives.All(a => f.TextPos == a.Start && a.ParentsEat == 0 && a.State < 0 && f.FailState == 0)).ToList());
 	  }
 
 	  public static void FilterFailSateEqualsStateIfExists(List<RecoveryStackFrame> bestFrames)
@@ -1035,7 +1035,6 @@ pre
     static readonly XElement _end = new XElement("span", _default, "◂");
     static readonly Regex _removePA = new Regex(@" PA=\[.*\]", RegexOptions.Compiled);
 
-    [Conditional("Visualize")]
     public static void PrintParseAlternatives(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, Parser parser)
     {
       RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
