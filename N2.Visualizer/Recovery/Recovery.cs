@@ -77,12 +77,12 @@ namespace N2.DebugStrategies
 
         RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
 
-        ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser);
+        ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser, skipCount);
 
-        SelectBestFrames(bestFrames, allFrames);
+        SelectBestFrames(bestFrames, allFrames, skipCount);
 
         //RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
-        ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser);
+        ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount);
 
         if (IsAllFramesParseEmptyString(allFrames))
           bestFrames.Clear();
@@ -182,7 +182,7 @@ namespace N2.DebugStrategies
       }
     }
 
-    private static void SelectBestFrames(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames)
+    private static void SelectBestFrames(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, int skipCount)
     {
       for (int i = allFrames.Count - 1; i >= 0; --i)
       {
@@ -206,7 +206,7 @@ namespace N2.DebugStrategies
         // Отбрасывает всех потомков у которых свойство Best == false
         var children0 = RecoveryUtils.OnlyBastFrames(frame);
         // отбрасывает потомков не съедающих символов, в случае если они ростут из состяния допускающего пустую строку (цикл или необязательное правило)
-        var children1 = RecoveryUtils.FilterEmptyChildrenWhenFailSateCanParseEmptySting(frame, children0);
+        var children1 = RecoveryUtils.FilterEmptyChildrenWhenFailSateCanParseEmptySting(frame, children0, skipCount);
         // отберат фреймы которые которые продолжают парсинг с состояния облом. Такое может случиться если была пропущена грязь, а сразу за ней 
         // идет корректная конструкция. Пример из джейсона: {a:.2}. Здесь "." - это грязь за которой идет корректное Value. Фильтрация производится
         // только если среди потомков есть подпадающие под условия.
@@ -220,7 +220,7 @@ namespace N2.DebugStrategies
         //var children5 = RecoveryUtils.SelectMinFailSateIfTextPosEquals(children4);
         var children5 = children4;
         // Отбрасываем потомков все альтеративы которых пропарсили пустую строку.
-        var children6 = RecoveryUtils.FilterEmptyChildren(children5);
+        var children6 = RecoveryUtils.FilterEmptyChildren(children5, skipCount);
         var children9 = children6;//FilterNotEmpyPrefixChildren(frame, children6);
 
         var bettreChildren = children9;
@@ -373,9 +373,12 @@ namespace N2.DebugStrategies
         FindSpeculativeSubframes(newFrames, parser, frame, failPos, state, skipCount);
     }
 
-    protected virtual void FindSpeculativeSubframes(HashSet<RecoveryStackFrame> newFrames, Parser parser, RecoveryStackFrame frame, int curTextPos, int state, int skipCount)
+    protected virtual void FindSpeculativeSubframes(HashSet<RecoveryStackFrame> newFrames, Parser parser, RecoveryStackFrame frame, int failPos, int state, int skipCount)
     {
-      foreach (var subFrame in frame.GetSpeculativeFramesForState(frame.TextPos + skipCount, parser, state))
+      if (failPos != frame.TextPos)
+        return;
+
+      foreach (var subFrame in frame.GetSpeculativeFramesForState(failPos, parser, state))
       {
         if (subFrame.IsTokenRule)
           continue;
@@ -383,7 +386,7 @@ namespace N2.DebugStrategies
         if (!newFrames.Add(subFrame))
           continue;
 
-        FindSpeculativeSubframes(newFrames, parser, subFrame, curTextPos, subFrame.FailState, skipCount);
+        FindSpeculativeSubframes(newFrames, parser, subFrame, failPos, subFrame.FailState, skipCount);
       }
     }
     
@@ -843,9 +846,11 @@ namespace N2.DebugStrategies
 	    return alternatives.FilterMax(f => f.End >= 0 ? f.End : f.Fail);
 	  }
 
-	  public static List<RecoveryStackFrame> FilterEmptyChildren(List<RecoveryStackFrame> children5)
+    public static List<RecoveryStackFrame> FilterEmptyChildren(List<RecoveryStackFrame> children5, int skipCount)
 	  {
-	    return SubstractSet(children5, children5.Where(f => f.StartPos == f.TextPos && f.ParseAlternatives.All(a => f.TextPos == a.Start && a.ParentsEat == 0 && a.State < 0 && f.FailState == 0)).ToList());
+	    return SubstractSet(children5, children5.Where(f => 
+        f.StartPos == f.TextPos
+        && f.ParseAlternatives.All(a => f.TextPos + skipCount == a.Start && a.ParentsEat == 0 && a.State < 0 && f.FailState2 == 0)).ToList());
 	  }
 
 	  public static void FilterFailSateEqualsStateIfExists(List<RecoveryStackFrame> bestFrames)
@@ -869,11 +874,11 @@ namespace N2.DebugStrategies
 	    return children3.FilterIfExists(f => f.ParseAlternatives.Any(a => a.End >= 0)).ToList();
 	  }
 
-	  public static List<RecoveryStackFrame> FilterEmptyChildrenWhenFailSateCanParseEmptySting(RecoveryStackFrame frame, List<RecoveryStackFrame> frames)
+	  public static List<RecoveryStackFrame> FilterEmptyChildrenWhenFailSateCanParseEmptySting(RecoveryStackFrame frame, List<RecoveryStackFrame> frames, int skipCount)
 	  {
 	    if (frame.IsSateCanParseEmptyString(frame.FailState))
 	    {
-	      var result = frames.Where(f => f.ParseAlternatives.Any(a => a.ParentsEat != 0 || frame.TextPos < a.Start)).ToList();
+        var result = frames.Where(f => f.ParseAlternatives.Any(a => a.ParentsEat != 0 || frame.TextPos + skipCount < a.Start)).ToList();
 	      return result;
 	    }
 
@@ -1035,7 +1040,7 @@ pre
     static readonly XElement _end = new XElement("span", _default, "◂");
     static readonly Regex _removePA = new Regex(@" PA=\[.*\]", RegexOptions.Compiled);
 
-    public static void PrintParseAlternatives(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, Parser parser)
+    public static void PrintParseAlternatives(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, Parser parser, int skipCount)
     {
       RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
       var results = new List<List<XElement>>();
@@ -1046,7 +1051,7 @@ pre
           continue;
 
         results.Add(new List<XElement> { new XElement("span", frame) });
-        var prefixs = MakeAlternativesPrefixs(frame, parser);
+        var prefixs  = MakeAlternativesPrefixs(frame, parser, skipCount);
         var postfixs = MakeAlternativesPostfixs(null, frame, parser, frame.ParseAlternatives[0].Start);
 
         foreach (var prefix in prefixs)
@@ -1136,7 +1141,7 @@ pre
       return results;
     }
 
-    private static List<Tuple<int, XElement>> MakeAlternativesPrefixs(RecoveryStackFrame frame, Parser parser)
+    private static List<Tuple<int, XElement>> MakeAlternativesPrefixs(RecoveryStackFrame frame, Parser parser, int skipCount)
     {
       if (frame.Parents.Count == 0) // это корневой фрейм
         return new List<Tuple<int, XElement>> { Tuple.Create(0, new XElement("span", MakeTitle(frame, null), _start)) };
@@ -1157,7 +1162,7 @@ pre
         if (!parent.Best && RecoveryUtils.StartWith(parent, (HashSet<int>)ends))
           continue;
 
-        var intermediate = MakeAlternativesPrefixs(parent, parser);
+        var intermediate = MakeAlternativesPrefixs(parent, parser, skipCount);
 
         foreach (var result in intermediate)
         {
@@ -1165,6 +1170,8 @@ pre
           var prefix = result.Item2;
           var text = parser.Text.Substring(pos, frame.TextPos - pos);
           var span = new XElement("span", _start, title, new XElement("span", parsedClass, text));
+          if (isTop && skipCount > 0)
+            span.Add(new XElement("span", _garbageClass, parser.Text.Substring(frame.TextPos, skipCount)));
 
           if (skipedStatesCode != null)
             span.Add(skipedStatesCode);
