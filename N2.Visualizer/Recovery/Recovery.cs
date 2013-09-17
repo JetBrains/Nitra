@@ -55,8 +55,6 @@ namespace N2.DebugStrategies
     {
       var text = parser.Text;
 
-      var bestFrames = new List<RecoveryStackFrame>();
-
       for (; failPos + skipCount < text.Length; ++skipCount)
       {
         var frames = parser.RecoveryStacks.PrepareRecoveryStacks();
@@ -65,8 +63,6 @@ namespace N2.DebugStrategies
           frame.ParseAlternatives = null;
 
         var allFrames = CollectSpeculativeFrames(failPos, skipCount, parser, frames);
-
-        bestFrames.Clear();
 
         ParseFrames(parser, skipCount, allFrames);
 
@@ -79,7 +75,7 @@ namespace N2.DebugStrategies
 
         ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser, skipCount);
 
-        SelectBestFrames(bestFrames, allFrames, skipCount);
+        var bestFrames = SelectBestFrames(allFrames, skipCount);
 
         //RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
         ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount);
@@ -91,13 +87,13 @@ namespace N2.DebugStrategies
         }
 
         if (bestFrames.Count != 0)
-          break;
+          return bestFrames;
         else
         {
         }
       }
 
-      return bestFrames;
+      return new List<RecoveryStackFrame>();
     }
 
 
@@ -182,8 +178,10 @@ namespace N2.DebugStrategies
       }
     }
 
-    private static void SelectBestFrames(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, int skipCount)
+    private static List<RecoveryStackFrame> SelectBestFrames(List<RecoveryStackFrame> allFrames, int skipCount)
     {
+      var bestFrames = new List<RecoveryStackFrame>();
+
       for (int i = allFrames.Count - 1; i >= 0; --i)
       {
         var frame = allFrames[i];
@@ -235,6 +233,13 @@ namespace N2.DebugStrategies
 
       // Реализовано не корректно. Выбирать FS==S можно только если у нас скипается грязь и допарсивание не пропускает состояний. Как-то так.
       //RecoveryUtils.FilterFailSateEqualsStateIfExists(bestFrames);
+      bestFrames = FilterBestIfExists(bestFrames);
+      return bestFrames;
+    }
+
+    private static List<RecoveryStackFrame> FilterBestIfExists(List<RecoveryStackFrame> bestFrames)
+    {
+      return RecoveryUtils.FilterIfExists(bestFrames, f => !f.IsSpeculative).ToList();
     }
 
     #endregion
