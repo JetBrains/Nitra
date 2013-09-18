@@ -22,6 +22,7 @@ namespace N2.DebugStrategies
 {
   using ParserData = Tuple<int, int, List<ParsedStateInfo>>;
   using ReportData = Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>>;
+  using Nodes = Nemerle.Core.list<ParseAlternativesVisializer.Node>;
   
 //#endregion
 
@@ -80,7 +81,7 @@ namespace N2.DebugStrategies
 
         RecoveryUtils.CheckGraph(allFrames);
 
-        ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser, skipCount);
+        ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser, skipCount, "All available alternatives.");
 
         RecoveryUtils.CheckGraph(allFrames);
 
@@ -88,8 +89,7 @@ namespace N2.DebugStrategies
 
         RecoveryUtils.CheckGraph(allFrames, bestFrames);
 
-        //RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
-        ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount);
+        ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount, "Best alternatives.");
 
         if (IsAllFramesParseEmptyString(allFrames))
           bestFrames.Clear();
@@ -441,7 +441,7 @@ namespace N2.DebugStrategies
       RecoveryUtils.RemoveFramesUnnecessaryAlternatives(allFrames, first);
       RecoveryUtils.CheckGraph(allFrames, firstBestFrame);
 
-      ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount);
+      ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount, "Selected alternative.");
 
 
       allFrames = allFrames.UpdateReverseDepthAndCollectAllFrames();
@@ -1067,10 +1067,20 @@ namespace N2.DebugStrategies
 	  {
 	    return parent.ParseAlternatives.Any(p => p.Start == a.End);
 	  }
+
+    public static HashSet<int> Stops(this RecoveryStackFrame frame)
+	  {
+      var stops = new HashSet<int>();
+      foreach (var a in frame.ParseAlternatives)
+        stops.Add(a.Stop);
+
+      return stops;
+	  }
   }
 
   class ParseAlternativesVisializer
   {
+    #region HtmlTemplate
     private const string HtmlTemplate = @"
 <html>
 <head>
@@ -1133,168 +1143,245 @@ pre
 </pre>
 </body>
 </html>
-";
+"; 
+    #endregion
 
-    static readonly XAttribute _garbageClass = new XAttribute("class", "garbage");
-    static readonly XAttribute _parsedClass = new XAttribute("class", "parsed");
-    static readonly XAttribute _prefixClass = new XAttribute("class", "prefix");
-    static readonly XAttribute _postfixClass = new XAttribute("class", "postfix");
-    static readonly XAttribute _skipedStateClass = new XAttribute("class", "skipedState");
-    static readonly XAttribute _currentRulePrefixClass = new XAttribute("class", "currentRulePrefix");
-    static readonly XAttribute _default = new XAttribute("class", "default");
+    static readonly XAttribute _garbageClass      = new XAttribute("class", "garbage");
+    static readonly XAttribute _topClass          = new XAttribute("class", "parsed");
+    static readonly XAttribute _prefixClass       = new XAttribute("class", "prefix");
+    static readonly XAttribute _postfixClass      = new XAttribute("class", "postfix");
+    static readonly XAttribute _skipedStateClass  = new XAttribute("class", "skipedState");
+    static readonly XAttribute _default           = new XAttribute("class", "default");
 
-    static readonly XElement _start = new XElement("span", _default, "▸");
-    static readonly XElement _end = new XElement("span", _default, "◂");
-    static readonly Regex _removePA = new Regex(@" PA=\[.*\]", RegexOptions.Compiled);
+    static readonly XElement  _start              = new XElement("span", _default, "▸");
+    static readonly XElement  _end                = new XElement("span", _default, "◂");
+    static readonly Regex     _removePA           = new Regex(@" PA=\[.*\]", RegexOptions.Compiled);
 
-    public static void PrintParseAlternatives(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, Parser parser, int skipCount)
+    /// <summary>
+    /// Описывает одно пропарсивание. Для каждого RecoveryStackFrame сздается столько Node сколько в нем есть ParseAlternative.
+    /// </summary>
+    public class Node
     {
-      RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
-      var results = new List<List<XElement>>();
+      public readonly RecoveryStackFrame  Frame;
+      public readonly int                 ParseAlternativeIndex;
+      public readonly List<Node>          Parents;
 
-      foreach (var frame in bestFrames)
+      public Node(RecoveryStackFrame frame, int parseAlternativeIndex, Dictionary<int, Node> nodeMap)
       {
-        if (!frame.IsTop)
-          continue;
+        Frame = frame;
+        ParseAlternativeIndex = parseAlternativeIndex;
 
-        results.Add(new List<XElement> { new XElement("span", frame) });
-        var prefixs  = MakeAlternativesPrefixs(frame, parser, skipCount);
-        var postfixs = MakeAlternativesPostfixs(null, frame, parser, frame.ParseAlternatives[0].Start);
-
-        foreach (var prefix in prefixs)
-        {
-          foreach (var postfix in postfixs)
-          {
-            var all = new List<XElement> { prefix.Item2, postfix };
-            results.Add(all);
-          }
-        }
-      }
-
-      var ps = new List<XNode>(results.Count);
-      foreach (var result in results)
-      {
-        if (result.Count == 1)
-        {
-          ps.Add(new XText("\r\n"));
-          ps.Add(result[0]);
-        }
-        else
-          ps.Add(new XElement("span", result));
-        ps.Add(new XText("\r\n"));
-      }
-
-      var template = XElement.Parse(HtmlTemplate);
-      var content = template.Descendants("content").First();
-      Debug.Assert(content.Parent != null);
-      content.Parent.ReplaceAll(ps);
-      var filePath = Path.ChangeExtension(Path.GetTempFileName(), ".html");
-      template.Save(filePath);
-      Process.Start(filePath);
-    }
-
-    private static List<XElement> MakeAlternativesPostfixs(XElement prefix, RecoveryStackFrame frame, Parser parser, int start)
-    {
-      var results = new List<XElement>();
-
-      if (frame.Parents.Count == 0) // это корневой фрейм
-      {
-        if (prefix != null)
-          results.Add(prefix);
-        return results;
-      }
-
-      var isTop = frame.IsTop;
-      var parsedClass = isTop ? _parsedClass : _postfixClass;
-
-      foreach (var a in frame.ParseAlternatives)
-      {
-        if (a.Start != start)
-          continue;
-
-        var title = MakeTitle(frame, a);
-        var text = parser.Text.Substring(a.Start, a.Stop - a.Start);
-        var startState = isTop ? frame.FailState : frame.GetNextState(frame.FailState);
-        var endState = a.State;
-
-        var span = new XElement("span", parsedClass, title, prefix);
-
-        if (startState != endState)
-          span.Add(new XElement("span", _skipedStateClass, SkipedStatesCode(frame, startState, endState)));
-
-        span.Add(text);
-        span.Add(_end);
-
-        if (a.End < 0)
-        {
-          span.Add(new XElement("span", _garbageClass, "<FAIL>"));
-          results.Add(span);
-          continue;
-        }
+        var parents = new List<Node>();
+        var stop = frame.ParseAlternatives[parseAlternativeIndex].Stop;
 
         foreach (var parent in frame.Parents)
         {
           if (!parent.Best)
             continue;
 
-          if (RecoveryUtils.StartWith(parent, a))
+          for (int index = 0; index < parent.ParseAlternatives.Length; index++)
           {
-            var intermediate = MakeAlternativesPostfixs(span, parent, parser, a.End);
-            results.AddRange(intermediate);
+            var a = parent.ParseAlternatives[index];
+            if (stop == a.Start)
+            {
+              var key = parent.Id << 8 | index;
+              Node node;
+              if (!nodeMap.TryGetValue(key, out node))
+                nodeMap[key] = node = new Node(parent, index, nodeMap);
+              parents.Add(node);
+            }
           }
         }
+
+        Parents = parents;
       }
 
-      return results;
-    }
-
-    private static List<Tuple<int, XElement>> MakeAlternativesPrefixs(RecoveryStackFrame frame, Parser parser, int skipCount)
-    {
-      if (frame.Parents.Count == 0) // это корневой фрейм
-        return new List<Tuple<int, XElement>> { Tuple.Create(0, new XElement("span", MakeTitle(frame, null), _start)) };
-
-      var isTop = frame.IsTop;
-      var parsedClass = isTop ? _parsedClass : _prefixClass;
-      var title = MakeTitle(frame, null);
-      var skipedStatesCode =
-          frame.FailState2 < frame.FailState
-            ? new XElement("span", _skipedStateClass, SkipedStatesCode(frame, frame.FailState2, frame.FailState))
-            : null;
-
-      var results = new List<Tuple<int, XElement>>();
-      var ends = RecoveryUtils.Ends(frame);
-
-      foreach (var parent in frame.Parents)
+      private List<Nodes> GetFlatParseAlternatives()
       {
-        if (!parent.Best && RecoveryUtils.StartWith(parent, (HashSet<int>)ends))
-          continue;
+        var total = new List<Nodes>();
 
-        var intermediate = MakeAlternativesPrefixs(parent, parser, skipCount);
-
-        foreach (var result in intermediate)
+        foreach (var parent in Parents)
         {
-          var pos = result.Item1;
-          var prefix = result.Item2;
-          var text = parser.Text.Substring(pos, frame.TextPos - pos);
-          var span = new XElement("span", _start, title, new XElement("span", parsedClass, text));
-          if (isTop && skipCount > 0)
-            span.Add(new XElement("span", _garbageClass, parser.Text.Substring(frame.TextPos, skipCount)));
+          var results = parent.GetFlatParseAlternatives();
+          for (int index = 0; index < results.Count; index++)
+            results[index] = new Nodes.Cons(this, results[index]);
 
-          if (skipedStatesCode != null)
-            span.Add(skipedStatesCode);
+          total.AddRange(results);
+        }
 
-          prefix.Add(span);
+        if (total.Count == 0)
+          total.Add(new Nodes.Cons(this, Nodes.Nil._N_constant_object));
 
-          results.Add(Tuple.Create(frame.TextPos, prefix));
+        return total;
+      }
+
+      public List<XElement> GetHtml()
+      {
+        var results = new List<XElement>();
+        var paths = GetFlatParseAlternatives();
+
+        if (Frame.Id == 83)
+        {
+        }
+
+        foreach (var path in paths)
+          results.Add(MakeHtml(path.Reverse()));
+
+        return results;
+      }
+
+      private static XElement MakeHtml(Nodes nodes)
+      {
+        if (nodes.IsEmpty)
+          return null;
+
+        var node               = nodes.Head;
+        var a                  = node.ParseAlternative;
+        var frame              = node.Frame;
+        var parsingFailAtState = frame.FailState2;
+        var recursionState     = frame.FailState;
+        var isTop              = frame.IsTop;
+
+        var parsedClass = isTop ? _topClass : _postfixClass;
+
+        var title = MakeTitle(frame, a);
+
+        var prefixText = frame.Parser.Text.Substring(frame.StartPos, frame.TextPos - frame.StartPos);
+        var prefix = string.IsNullOrEmpty(prefixText) ? null : new XElement("span", _prefixClass, prefixText);
+
+        var postfixText = frame.Parser.Text.Substring(a.Start, a.Stop - a.Start);
+        var postfix = string.IsNullOrEmpty(postfixText) ? null : new XElement("span", isTop ? _topClass : _postfixClass, postfixText);
+
+        if (parsingFailAtState > 100 || parsingFailAtState < 0 || recursionState < 0)
+        {
+          //Debug.Assert(false);
+        }
+
+        XElement skippedPrefix  = null;
+        XElement skippedPostfix = null;
+
+        if (frame.Id == 81)
+        {
+        }
+
+        var endState = a.State;
+
+        if (isTop)
+        {
+          if (recursionState != endState)
+            skippedPrefix = new XElement("span", _skipedStateClass, SkipedStatesCode(frame, parsingFailAtState, endState));
+        }
+        else 
+        {
+          if (parsingFailAtState < recursionState)
+          {
+            if (frame.Id == 120)
+            {
+            }
+            skippedPrefix = new XElement("span", _skipedStateClass, SkipedStatesCode(frame, parsingFailAtState, recursionState));
+          }
+
+          var startState = frame.GetNextState(recursionState);
+
+          if (startState != endState)
+            skippedPostfix = new XElement("span", _skipedStateClass, SkipedStatesCode(frame, startState, endState));
+        }
+
+        var content = MakeHtml(nodes.Tail);
+        
+        var fail = a.End < 0 ? new XElement("span", _garbageClass, "<FAIL>") : null;
+        var span = new XElement("span", parsedClass, title, _start, prefix, skippedPrefix, content, skippedPostfix, postfix, _end, fail);
+        if (frame.Parents.Count == 0)
+          span.Add("\r\n");
+        return span;
+      }
+
+      public ParseAlternative ParseAlternative { get { return Frame.ParseAlternatives[ParseAlternativeIndex]; }}
+
+      #region Equality
+
+      protected bool Equals(Node other)
+      {
+        return Equals(Frame, other.Frame) && ParseAlternativeIndex == other.ParseAlternativeIndex;
+      }
+
+      public override bool Equals(object obj)
+      {
+        if (ReferenceEquals(null, obj)) return false;
+        if (ReferenceEquals(this, obj)) return true;
+        if (obj.GetType() != this.GetType()) return false;
+        return Equals((Node)obj);
+      }
+
+      public override int GetHashCode()
+      {
+        unchecked
+        {
+          return ((Frame != null ? Frame.GetHashCode() : 0) * 397) ^ ParseAlternativeIndex;
         }
       }
 
-      return results;
+      public static bool operator ==(Node left, Node right)
+      {
+        return Equals(left, right);
+      }
+
+      public static bool operator !=(Node left, Node right)
+      {
+        return !Equals(left, right);
+      }
+      
+      #endregion
+
+      public override string ToString()
+      {
+        return _removePA.Replace(Frame.ToString(), " PS=" + ParseAlternative);
+      }
+    }
+
+    /// <summary>
+    /// Формирует HTML-файл графически описывающий варианты продолжения прасинга из графа и открывает его в бруозере исползуемом по умолчанию.
+    /// </summary>
+    public static void PrintParseAlternatives(List<RecoveryStackFrame> bestFrames, List<RecoveryStackFrame> allFrames, Parser parser, int skipCount, string msg = null)
+    {
+      RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
+      var nodes = new List<Node>();
+      var results = new List<XNode>();
+      var nodeMap = new Dictionary<int, Node>();
+
+      if (msg != null)
+        results.Add(new XText(msg + "\r\n\r\n"));
+
+      results.Add(new XText(parser.DebugText + "\r\n\r\n"));
+
+      foreach (var frame in bestFrames)
+      {
+        if (!frame.IsTop)
+          continue;
+
+        results.Add(new XText("\r\n"));
+        results.Add(new XElement("span", frame, ":\r\n"));
+
+        for (int index = 0; index < frame.ParseAlternatives.Length; index++)
+        {
+          var node = new Node(frame, index, nodeMap);
+          results.AddRange(node.GetHtml());
+          nodes.Add(node);
+        }
+      }
+
+      var template = XElement.Parse(HtmlTemplate);
+      var content = template.Descendants("content").First();
+      Debug.Assert(content.Parent != null);
+      content.Parent.ReplaceAll(results);
+      var filePath = Path.ChangeExtension(Path.GetTempFileName(), ".html");
+      template.Save(filePath);
+      Process.Start(filePath);
     }
 
     private static string SkipedStatesCode(RecoveryStackFrame frame, int startState, int endState)
     {
-      return string.Join(" ", frame.CodeForStates(startState, endState));
+      return string.Join(" ", frame.CodeForStates(startState, endState, true));
     }
 
     private static XAttribute MakeTitle(RecoveryStackFrame frame, ParseAlternative? a)
