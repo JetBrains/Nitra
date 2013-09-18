@@ -1283,7 +1283,7 @@ pre
 
           var startState = frame.GetNextState(recursionState);
 
-          if (startState != endState)
+          if (startState >= 0 && (startState < endState || endState < 0))
             skippedPostfix = new XElement("span", _skipedStateClass, SkipedStatesCode(frame, startState, endState));
         }
 
