@@ -1,5 +1,6 @@
 ﻿//#region Пролог
 #define DebugOutput
+using JetBrains.Util;
 using N2.Internal;
 
 using IntRuleCallKey = Nemerle.Builtins.Tuple<int, N2.Internal.RuleCallKey>;
@@ -66,16 +67,26 @@ namespace N2.DebugStrategies
 
         ParseFrames(parser, skipCount, allFrames);
 
+        RecoveryUtils.CheckGraph(allFrames);
+
         UpdateParseFramesAlternatives(allFrames);
         foreach (var f in allFrames)
           if (f.IsTop && !f.IsSpeculative)
             Debug.WriteLine(f);
 
+        RecoveryUtils.CheckGraph(allFrames);
+
         RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
+
+        RecoveryUtils.CheckGraph(allFrames);
 
         ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser, skipCount);
 
+        RecoveryUtils.CheckGraph(allFrames);
+
         var bestFrames = SelectBestFrames(allFrames, skipCount);
+
+        RecoveryUtils.CheckGraph(allFrames, bestFrames);
 
         //RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
         ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount);
@@ -158,9 +169,6 @@ namespace N2.DebugStrategies
 
         var children = frame.Children;
 
-        if (children.Count == 0)
-          Debug.Assert(false);
-
         var alternatives0 = RecoveryUtils.FilterParseAlternativesWichEndsEqualsParentsStarts(frame);
         //var alternatives9 = RecoveryUtils.FilterMinState(alternatives0);
         var alternatives9 = alternatives0;
@@ -189,8 +197,11 @@ namespace N2.DebugStrategies
         if (!frame.Best)
           continue;
 
-        if (frame.Children.Count == 0)
+        if (!HasChildren(frame))
         {
+          if (frame.Children.Count != 0)
+          {
+          }
           bestFrames.Add(frame);
           continue;
         }
@@ -231,10 +242,12 @@ namespace N2.DebugStrategies
           bestFrames.Add(frame);
       }
 
-      // Реализовано не корректно. Выбирать FS==S можно только если у нас скипается грязь и допарсивание не пропускает состояний. Как-то так.
-      //RecoveryUtils.FilterFailSateEqualsStateIfExists(bestFrames);
-      bestFrames = FilterBestIfExists(bestFrames);
       return bestFrames;
+    }
+
+    private static bool HasChildren(RecoveryStackFrame frame)
+    {
+      return frame.Children.Any(c => c.Best);
     }
 
     private static List<RecoveryStackFrame> FilterBestIfExists(List<RecoveryStackFrame> bestFrames)
@@ -279,7 +292,7 @@ namespace N2.DebugStrategies
           foreach (var end in childEnds)
             curentEnds.Add(ParseNonTopFrame(parser, frame, end));
 
-          var xx = curentEnds.ToArray();
+          var xx = Enumerable.ToArray(curentEnds);
           frame.ParseAlternatives = xx;
         }
       }
@@ -410,9 +423,26 @@ namespace N2.DebugStrategies
 
       var allFrames = bestFrames.UpdateDepthAndCollectAllFrames();
       var cloned = RecoveryStackFrame.CloneGraph(allFrames);
+
+      var filtererBestFrames = FilterBestIfExists(bestFrames);
+      if (filtererBestFrames.Count > 1)
+        filtererBestFrames = new List<RecoveryStackFrame> { filtererBestFrames[0] };
+      if (filtererBestFrames.Count != bestFrames.Count)
+      {
+        RecoveryUtils.RemoveOthrHeads(allFrames, filtererBestFrames);
+        RecoveryUtils.CheckGraph(allFrames, filtererBestFrames);
+        allFrames = filtererBestFrames.UpdateDepthAndCollectAllFrames();
+        RecoveryUtils.CheckGraph(allFrames, filtererBestFrames);
+        bestFrames = filtererBestFrames;
+      }
+
       var first = bestFrames[0];
-      var firstBestFrame = new[] { first };
+      var firstBestFrame = bestFrames;
       RecoveryUtils.RemoveFramesUnnecessaryAlternatives(allFrames, first);
+      RecoveryUtils.CheckGraph(allFrames, firstBestFrame);
+
+      ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount);
+
 
       allFrames = allFrames.UpdateReverseDepthAndCollectAllFrames();
 
@@ -487,7 +517,11 @@ namespace N2.DebugStrategies
 
       // set IsMarked on parents of head
 
+      RecoveryUtils.CheckGraph(allFrames);
+
       RemoveOthrHeads(allFrames, head);
+
+      RecoveryUtils.CheckGraph(allFrames);
 
       // удаляем ParseAlternatives-ы с которых не может быть начат парсинг фрейма head.
       UpdateParseAlternativesTopToDown(allFrames);
@@ -529,10 +563,23 @@ namespace N2.DebugStrategies
       UpdateParseAlternativesTopToDown(allFrames);
     }
 
-	  private static void RemoveOthrHeads(List<RecoveryStackFrame> allFrames, RecoveryStackFrame livingHead)
+	  public static void RemoveOthrHeads(List<RecoveryStackFrame> allFrames, RecoveryStackFrame livingHead)
 	  {
 	    livingHead.IsMarked = true;
 
+      PropageteMarkeds(allFrames);
+    }
+
+    public static void RemoveOthrHeads(List<RecoveryStackFrame> allFrames, List<RecoveryStackFrame> livingHeads)
+    {
+      foreach (var livingHead in livingHeads)
+        livingHead.IsMarked = true;
+
+      PropageteMarkeds(allFrames);
+    }
+
+	  private static void PropageteMarkeds(List<RecoveryStackFrame> allFrames)
+	  {
 	    foreach (var frame in allFrames)
 	    {
 	      if (!frame.IsMarked)
@@ -587,6 +634,56 @@ namespace N2.DebugStrategies
       }
     }
 
+    public static void CheckGraph(List<RecoveryStackFrame> allFrames, List<RecoveryStackFrame> bestFrames = null)
+    {
+      var setBest = new HashSet<RecoveryStackFrame>();
+
+      if (bestFrames != null)
+      {
+        setBest.UnionWith(bestFrames);
+
+        foreach (var frame in bestFrames)
+        {
+          if (!frame.IsTop)
+            Debug.Assert(false);
+        }
+      }
+
+      var setAll = new HashSet<RecoveryStackFrame>();
+
+	    foreach (var frame in allFrames)
+	      if (frame.Best)
+	        if (!setAll.Add(frame))
+            Debug.Assert(false);
+
+
+	    foreach (var frame in allFrames)
+	    {
+        if (!frame.Best)
+          continue;
+
+	      var hasNoChildren = true;
+
+        foreach (var child in frame.Children)
+	      {
+          if (!child.Best)
+            continue;
+
+	        hasNoChildren = false;
+
+	        if (!setAll.Contains(child))
+            Debug.Assert(false);
+
+          if (!child.Parents.Contains(frame))
+            Debug.Assert(false);
+        }
+
+        if (hasNoChildren && bestFrames != null)
+          if (!setBest.Contains(frame))
+            Debug.Assert(false);
+      }
+	  }
+
 	  public static void UpdateParseAlternativesTopToDown(List<RecoveryStackFrame> allFrames)
     {
       if (allFrames.Count == 0)
@@ -607,6 +704,10 @@ namespace N2.DebugStrategies
           continue;
 
         starts.Clear();
+
+        if (frame.Id == 308)
+        {
+        }
 
         // собираем допустимые стартовые позиции для текущего фрейма
         foreach (var child in children)

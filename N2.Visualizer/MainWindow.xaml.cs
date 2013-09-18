@@ -263,7 +263,9 @@ namespace N2.Visualizer
           var marker = _textMarkerService.Create(location.StartPos, location.Length);
           marker.MarkerType = TextMarkerType.SquigglyUnderline;
           marker.MarkerColor = Colors.Red;
-          marker.ToolTip = error.Message + "\r\n\r\n" + error.DebugText;
+          string text;
+          try { text = error.DebugText; } catch { text = ""; }
+          marker.ToolTip = error.Message + "\r\n\r\n" + text;
 
           var errorNode = new TreeViewItem();
           errorNode.Header = "(" + error.Location.EndLineColumn + "): " + error.Message;
