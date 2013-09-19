@@ -164,13 +164,14 @@ namespace N2.DebugStrategies
 
         switch (frame.Id)
         {
-          case 189: break;
+          case 338: break;
         }
+
+        var isExistsNotFailedAlternatives = RecoveryUtils.IsExistsNotFailedAlternatives(frame);
 
         var children = frame.Children;
 
         var alternatives0 = RecoveryUtils.FilterParseAlternativesWichEndsEqualsParentsStarts(frame);
-        //var alternatives9 = RecoveryUtils.FilterMinState(alternatives0);
         var alternatives9 = alternatives0;
 
         frame.ParseAlternatives = alternatives9.ToArray();
@@ -180,7 +181,7 @@ namespace N2.DebugStrategies
           var start = alternative.Start;
 
           foreach (var child in children)
-            if (RecoveryUtils.EndWith(child, start))
+            if (RecoveryUtils.EndWith(child, start, isExistsNotFailedAlternatives))
               child.Best = true;
         }
       }
@@ -208,14 +209,15 @@ namespace N2.DebugStrategies
 
         switch (frame.Id)
         {
-          case 65: break;
-          case 23: break;
+          case 338: break;
         }
 
         // Отбрасывает всех потомков у которых свойство Best == false
         var children0 = RecoveryUtils.OnlyBastFrames(frame);
         // отбрасывает потомков не съедающих символов, в случае если они ростут из состяния допускающего пустую строку (цикл или необязательное правило)
-        var children1 = RecoveryUtils.FilterEmptyChildrenWhenFailSateCanParseEmptySting(frame, children0, skipCount);
+        // TODO: Следующая эвристика отбрасывает вполне корректные альтернативы, которые могут пропарситься ниже по стеку. 
+        // Например, в "случае class A {A(){ batch /*<-*/AddPart(); }}" выбрасываются варианты с проскипаным идентификатором.
+        var children1 = children0;//RecoveryUtils.FilterEmptyChildrenWhenFailSateCanParseEmptySting(frame, children0, skipCount);
         // отберат фреймы которые которые продолжают парсинг с состояния облом. Такое может случиться если была пропущена грязь, а сразу за ней 
         // идет корректная конструкция. Пример из джейсона: {a:.2}. Здесь "." - это грязь за которой идет корректное Value. Фильтрация производится
         // только если среди потомков есть подпадающие под условия.
@@ -517,11 +519,11 @@ namespace N2.DebugStrategies
 
       // set IsMarked on parents of head
 
-      RecoveryUtils.CheckGraph(allFrames);
+      CheckGraph(allFrames);
 
       RemoveOthrHeads(allFrames, head);
 
-      RecoveryUtils.CheckGraph(allFrames);
+      CheckGraph(allFrames);
 
       // удаляем ParseAlternatives-ы с которых не может быть начат парсинг фрейма head.
       UpdateParseAlternativesTopToDown(allFrames);
@@ -927,9 +929,12 @@ namespace N2.DebugStrategies
 	    return children;
 	  }
 
-	  public static bool EndWith(RecoveryStackFrame child, int end)
+	  public static bool EndWith(RecoveryStackFrame child, int end, bool choiceOnlyNonFailedAlternatives)
 	  {
-	    return child.ParseAlternatives.Any(p => p.End < 0 ? p.Fail == end : p.End == end);
+      if (choiceOnlyNonFailedAlternatives)
+        return child.ParseAlternatives.Any(p => p.End == end);
+
+      return child.ParseAlternatives.Any(p => p.Stop == end);
 	  }
 
 	  public static List<ParseAlternative> FilterMinState(List<ParseAlternative> alternatives)
@@ -1075,6 +1080,16 @@ namespace N2.DebugStrategies
         stops.Add(a.Stop);
 
       return stops;
+	  }
+
+	  public static bool IsExistsNotFailedAlternatives(RecoveryStackFrame frame)
+	  {
+	    return frame.Children.Any(f => f.ParseAlternatives.Any(a => a.End >= 0));
+	  }
+
+	  public static List<ParseAlternative> FilterNotFailedParseAlternatives(List<ParseAlternative> alternatives0)
+	  {
+	    return alternatives0.Where(a => a.End >= 0).ToList();
 	  }
   }
 
