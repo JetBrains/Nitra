@@ -22,6 +22,7 @@ namespace N2.DebugStrategies
 {
   using ParserData = Tuple<int, int, List<ParsedStateInfo>>;
   using ReportData = Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>>;
+  using ParseAlternativeNodes = Nemerle.Core.list<ParseAlternativeNode>;
   using Nodes = Nemerle.Core.list<ParseAlternativesVisializer.Node>;
   
 //#endregion
@@ -156,16 +157,20 @@ namespace N2.DebugStrategies
       {
         var frame = allFrames[i];
 
+        switch (frame.Id)
+        {
+          case 321: break;
+          case 322: break;
+          case 254: break;
+        }
+
+        var x = frame as RecoveryStackFrame.ListBody;
+
         if (!frame.Best)
           continue;
 
         if (frame.Children.Count == 0)
           continue;
-
-        switch (frame.Id)
-        {
-          case 338: break;
-        }
 
         var isExistsNotFailedAlternatives = RecoveryUtils.IsExistsNotFailedAlternatives(frame);
 
@@ -215,7 +220,7 @@ namespace N2.DebugStrategies
         // Отбрасывает всех потомков у которых свойство Best == false
         var children0 = RecoveryUtils.OnlyBastFrames(frame);
         // отбрасывает потомков не съедающих символов, в случае если они ростут из состяния допускающего пустую строку (цикл или необязательное правило)
-        // TODO: Следующая эвристика отбрасывает вполне корректные альтернативы, которые могут пропарситься ниже по стеку. 
+        // TODO: 1. Следующая эвристика отбрасывает вполне корректные альтернативы, которые могут пропарситься ниже по стеку. 
         // Например, в "случае class A {A(){ batch /*<-*/AddPart(); }}" выбрасываются варианты с проскипаным идентификатором.
         var children1 = children0;//RecoveryUtils.FilterEmptyChildrenWhenFailSateCanParseEmptySting(frame, children0, skipCount);
         // отберат фреймы которые которые продолжают парсинг с состояния облом. Такое может случиться если была пропущена грязь, а сразу за ней 
@@ -231,7 +236,8 @@ namespace N2.DebugStrategies
         //var children5 = RecoveryUtils.SelectMinFailSateIfTextPosEquals(children4);
         var children5 = children4;
         // Отбрасываем потомков все альтеративы которых пропарсили пустую строку.
-        var children6 = RecoveryUtils.FilterEmptyChildren(children5, skipCount);
+        // TODO: 2. См. TODO 1.
+        var children6 = children5; //RecoveryUtils.FilterEmptyChildren(children5, skipCount);
         var children9 = children6;//FilterNotEmpyPrefixChildren(frame, children6);
 
         var bettreChildren = children9;
@@ -305,8 +311,11 @@ namespace N2.DebugStrategies
     {
       ParseAlternative parseAlternative;
 
-      if (frame.Id == 467)
-        Debug.Assert(true);
+      switch (frame.Id)
+      {
+        case 254: break;
+        case 322: break;
+      }
 
       var curTextPos = frame.TextPos + skipCount;
       for (var state = frame.FailState; state >= 0; state = frame.GetNextState(state))
@@ -331,11 +340,12 @@ namespace N2.DebugStrategies
 
     private static ParseAlternative ParseNonTopFrame(Parser parser, RecoveryStackFrame frame, int curTextPos)
     {
-      //if (frame.Id == 187)
-      //  Debug.Assert(false);
-      var parentsEat = frame.Children.Max(c => c.ParseAlternatives.Length == 0 
-                                              ? 0
-                                              : c.ParseAlternatives.Max(a => a.End == curTextPos ? a.ParentsEat : 0));
+      switch (frame.Id)
+      {
+        case 254: break;
+        case 321: break;
+      }
+      var parentsEat = ParentsMaxEat(frame, curTextPos);
       var maxfailPos = curTextPos;
 
       // Мы должны попытаться пропарсить даже если состояние полученное в первый раз от frame.GetNextState(state) 
@@ -353,6 +363,13 @@ namespace N2.DebugStrategies
       while (state >= 0);
 
       return new ParseAlternative(curTextPos, curTextPos, parentsEat, 0, -1);
+    }
+
+    private static int ParentsMaxEat(RecoveryStackFrame frame, int curTextPos)
+    {
+      return frame.Children.Max(c => c.ParseAlternatives.Length == 0 
+        ? 0
+        : c.ParseAlternatives.Max(a => a.End == curTextPos ? a.ParentsEat : 0));
     }
 
     #endregion
@@ -546,7 +563,12 @@ namespace N2.DebugStrategies
             frame.ParseAlternatives = alternatives0.ToArray();
             MarkChildren(frame);
             if (alternatives0.Count == 0)
+            {
+              if (frame.Id == 321)
+              {
+              }
               frame.Best = false;
+            }
           }
         }
 
@@ -598,6 +620,10 @@ namespace N2.DebugStrategies
 	    // update Best by Marked
 	    foreach (var frame in allFrames)
 	    {
+        if (!frame.IsMarked && frame.Id == 321)
+        {
+        }
+
 	      frame.Best = frame.IsMarked;
 	      frame.IsMarked = false;
 	    }
@@ -630,7 +656,12 @@ namespace N2.DebugStrategies
             frame.ParseAlternatives = alternatives0.ToArray();
             MarkChildren(frame);
             if (alternatives0.Count == 0)
+            {
+              if (frame.Id == 321)
+              {
+              }
               frame.Best = false;
+            }
           }
         }
       }
@@ -1042,18 +1073,24 @@ namespace N2.DebugStrategies
 	    foreach (var child in poorerChildren)
 	      if (child.Best)
 	      {
-	        child.Best = false;
+          if (child.Id == 321)
+          {
+          }
+          child.Best = false;
 	        ResetChildrenBestProperty(child.Children);
 	      }
 	  }
 
 	  public static void ResetParentsBestProperty(HashSet<RecoveryStackFrame> parents)
 	  {
-	    foreach (var parent in parents)
-	      if (parent.Best)
+	    foreach (var frame in parents)
+        if (frame.Best)
 	      {
-	        parent.Best = false;
-	        ResetParentsBestProperty(parent.Parents);
+          if (frame.Id == 321)
+          {
+          }
+          frame.Best = false;
+          ResetParentsBestProperty(frame.Parents);
 	      }
 	  }
 
@@ -1175,59 +1212,11 @@ pre
     /// <summary>
     /// Описывает одно пропарсивание. Для каждого RecoveryStackFrame сздается столько Node сколько в нем есть ParseAlternative.
     /// </summary>
-    public class Node
+    public class Node : ParseAlternativeNode
     {
-      public readonly RecoveryStackFrame  Frame;
-      public readonly int                 ParseAlternativeIndex;
-      public readonly List<Node>          Parents;
-
-      public Node(RecoveryStackFrame frame, int parseAlternativeIndex, Dictionary<int, Node> nodeMap)
+      public Node(RecoveryStackFrame frame, int parseAlternativeIndex, Dictionary<int, ParseAlternativeNode> nodeMap)
+        : base(frame, parseAlternativeIndex, nodeMap)
       {
-        Frame = frame;
-        ParseAlternativeIndex = parseAlternativeIndex;
-
-        var parents = new List<Node>();
-        var stop = frame.ParseAlternatives[parseAlternativeIndex].Stop;
-
-        foreach (var parent in frame.Parents)
-        {
-          if (!parent.Best)
-            continue;
-
-          for (int index = 0; index < parent.ParseAlternatives.Length; index++)
-          {
-            var a = parent.ParseAlternatives[index];
-            if (stop == a.Start)
-            {
-              var key = parent.Id << 8 | index;
-              Node node;
-              if (!nodeMap.TryGetValue(key, out node))
-                nodeMap[key] = node = new Node(parent, index, nodeMap);
-              parents.Add(node);
-            }
-          }
-        }
-
-        Parents = parents;
-      }
-
-      private List<Nodes> GetFlatParseAlternatives()
-      {
-        var total = new List<Nodes>();
-
-        foreach (var parent in Parents)
-        {
-          var results = parent.GetFlatParseAlternatives();
-          for (int index = 0; index < results.Count; index++)
-            results[index] = new Nodes.Cons(this, results[index]);
-
-          total.AddRange(results);
-        }
-
-        if (total.Count == 0)
-          total.Add(new Nodes.Cons(this, Nodes.Nil._N_constant_object));
-
-        return total;
       }
 
       public List<XElement> GetHtml()
@@ -1240,117 +1229,80 @@ pre
         }
 
         foreach (var path in paths)
-          results.Add(MakeHtml(path.Reverse()));
+          results.Add(MakeHtml(path));
 
         return results;
       }
 
-      private static XElement MakeHtml(Nodes nodes)
+      private static XElement MakeHtml(ParseAlternativeNodes nodes)
       {
-        if (nodes.IsEmpty)
-          return null;
-
-        var node               = nodes.Head;
-        var a                  = node.ParseAlternative;
-        var frame              = node.Frame;
-        var parsingFailAtState = frame.FailState2;
-        var recursionState     = frame.FailState;
-        var isTop              = frame.IsTop;
-
-        var parsedClass = isTop ? _topClass : _postfixClass;
-
-        var title = MakeTitle(frame, a);
-
-        var prefixText = frame.Parser.Text.Substring(frame.StartPos, frame.TextPos - frame.StartPos);
-        var prefix = string.IsNullOrEmpty(prefixText) ? null : new XElement("span", _prefixClass, prefixText);
-
-        var postfixText = frame.Parser.Text.Substring(a.Start, a.Stop - a.Start);
-        var postfix = string.IsNullOrEmpty(postfixText) ? null : new XElement("span", isTop ? _topClass : _postfixClass, postfixText);
-
-        if (parsingFailAtState > 100 || parsingFailAtState < 0 || recursionState < 0)
+        XElement content = null;
+        while (true)
         {
-          //Debug.Assert(false);
-        }
+          if (nodes.IsEmpty)
+            return null;
 
-        XElement skippedPrefix  = null;
-        XElement skippedPostfix = null;
+          var node = nodes.Head;
+          var a = node.ParseAlternative;
+          var frame = node.Frame;
+          var parsingFailAtState = frame.FailState2;
+          var recursionState = frame.FailState;
+          var isTop = frame.IsTop;
 
-        if (frame.Id == 81)
-        {
-        }
+          var parsedClass = isTop ? _topClass : _postfixClass;
 
-        var endState = a.State;
+          var title = MakeTitle(frame, a);
 
-        if (isTop)
-        {
-          if (recursionState != endState)
-            skippedPrefix = new XElement("span", _skipedStateClass, SkipedStatesCode(frame, parsingFailAtState, endState));
-        }
-        else 
-        {
-          if (parsingFailAtState < recursionState)
+          var prefixText = frame.Parser.Text.Substring(frame.StartPos, frame.TextPos - frame.StartPos);
+          var prefix = string.IsNullOrEmpty(prefixText) ? null : new XElement("span", _prefixClass, prefixText);
+
+          var postfixText = frame.Parser.Text.Substring(a.Start, a.Stop - a.Start);
+          var postfix = string.IsNullOrEmpty(postfixText) ? null : new XElement("span", isTop ? _topClass : _postfixClass, postfixText);
+
+          if (parsingFailAtState > 100 || parsingFailAtState < 0 || recursionState < 0)
           {
-            if (frame.Id == 120)
-            {
-            }
-            skippedPrefix = new XElement("span", _skipedStateClass, SkipedStatesCode(frame, parsingFailAtState, recursionState));
+            //Debug.Assert(false);
           }
 
-          var startState = frame.GetNextState(recursionState);
+          XElement skippedPrefix = null;
+          XElement skippedPostfix = null;
 
-          if (startState >= 0 && (startState < endState || endState < 0))
-            skippedPostfix = new XElement("span", _skipedStateClass, SkipedStatesCode(frame, startState, endState));
+          if (frame.Id == 81)
+          {
+          }
+
+          var endState = a.State;
+
+          if (isTop)
+          {
+            if (recursionState != endState)
+              skippedPrefix = new XElement("span", _skipedStateClass, SkipedStatesCode(frame, parsingFailAtState, endState));
+          }
+          else
+          {
+            if (parsingFailAtState < recursionState)
+            {
+              if (frame.Id == 120)
+              {
+              }
+              skippedPrefix = new XElement("span", _skipedStateClass, SkipedStatesCode(frame, parsingFailAtState, recursionState));
+            }
+
+            var startState = frame.GetNextState(recursionState);
+
+            if (startState >= 0 && (startState < endState || endState < 0))
+              skippedPostfix = new XElement("span", _skipedStateClass, SkipedStatesCode(frame, startState, endState));
+          }
+
+          var fail = a.End < 0 ? new XElement("span", _garbageClass, "<FAIL>") : null;
+          var span = new XElement("span", parsedClass, title, _start, prefix, skippedPrefix, content, skippedPostfix, postfix, _end, fail);
+
+          if (frame.Parents.Count == 0)
+            span.Add("\r\n");
+
+          nodes = nodes.Tail;
+          content = span;
         }
-
-        var content = MakeHtml(nodes.Tail);
-        
-        var fail = a.End < 0 ? new XElement("span", _garbageClass, "<FAIL>") : null;
-        var span = new XElement("span", parsedClass, title, _start, prefix, skippedPrefix, content, skippedPostfix, postfix, _end, fail);
-        if (frame.Parents.Count == 0)
-          span.Add("\r\n");
-        return span;
-      }
-
-      public ParseAlternative ParseAlternative { get { return Frame.ParseAlternatives[ParseAlternativeIndex]; }}
-
-      #region Equality
-
-      protected bool Equals(Node other)
-      {
-        return Equals(Frame, other.Frame) && ParseAlternativeIndex == other.ParseAlternativeIndex;
-      }
-
-      public override bool Equals(object obj)
-      {
-        if (ReferenceEquals(null, obj)) return false;
-        if (ReferenceEquals(this, obj)) return true;
-        if (obj.GetType() != this.GetType()) return false;
-        return Equals((Node)obj);
-      }
-
-      public override int GetHashCode()
-      {
-        unchecked
-        {
-          return ((Frame != null ? Frame.GetHashCode() : 0) * 397) ^ ParseAlternativeIndex;
-        }
-      }
-
-      public static bool operator ==(Node left, Node right)
-      {
-        return Equals(left, right);
-      }
-
-      public static bool operator !=(Node left, Node right)
-      {
-        return !Equals(left, right);
-      }
-      
-      #endregion
-
-      public override string ToString()
-      {
-        return _removePA.Replace(Frame.ToString(), " PS=" + ParseAlternative);
       }
     }
 
@@ -1362,7 +1314,7 @@ pre
       RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
       var nodes = new List<Node>();
       var results = new List<XNode>();
-      var nodeMap = new Dictionary<int, Node>();
+      var nodeMap = new Dictionary<int, ParseAlternativeNode>();
 
       if (msg != null)
         results.Add(new XText(msg + "\r\n\r\n"));
