@@ -1240,7 +1240,7 @@ pre
         while (true)
         {
           if (nodes.IsEmpty)
-            return null;
+            return content;
 
           var node = nodes.Head;
           var a = node.ParseAlternative;
