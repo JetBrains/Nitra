@@ -86,6 +86,8 @@ namespace N2.DebugStrategies
 
         RecoveryUtils.CheckGraph(allFrames);
 
+        var bestNodes = SelectBestFrames2(FramesToNodes(allFrames), skipCount);
+
         var bestFrames = SelectBestFrames(allFrames, skipCount);
 
         RecoveryUtils.CheckGraph(allFrames, bestFrames);
@@ -108,6 +110,19 @@ namespace N2.DebugStrategies
       return new List<RecoveryStackFrame>();
     }
 
+    private List<ParseAlternativeNode> FramesToNodes(List<RecoveryStackFrame> allFrames)
+    {
+      var result  = new List<ParseAlternativeNode>();
+      var nodeMap = new Dictionary<int, ParseAlternativeNode>();
+
+      foreach (var frame in allFrames)
+        for (int i = 0; i < frame.ParseAlternatives.Length; i++)
+          result.Add(new ParseAlternativeNode(frame, i, nodeMap));
+
+      //result.Sort((a, b) => a.Frame.Depth.CompareTo(b.Frame.Depth));
+
+      return result;
+    }
 
 
     private List<RecoveryStackFrame> CollectSpeculativeFrames(int failPos, int skipCount, Parser parser, List<RecoveryStackFrame> frames)
@@ -190,6 +205,11 @@ namespace N2.DebugStrategies
               child.Best = true;
         }
       }
+    }
+
+    private static List<ParseAlternativeNode> SelectBestFrames2(List<ParseAlternativeNode> nodes, int skipCount)
+    {
+      return nodes;
     }
 
     private static List<RecoveryStackFrame> SelectBestFrames(List<RecoveryStackFrame> allFrames, int skipCount)
