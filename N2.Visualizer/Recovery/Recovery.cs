@@ -1339,10 +1339,8 @@ pre
       var results = new List<XNode>();
       var nodeMap = new Dictionary<int, ParseAlternativeNode>();
 
-      if (msg != null)
-        results.Add(new XText(msg + "\r\n\r\n"));
-
       results.Add(new XText(parser.DebugText + "\r\n\r\n"));
+      var alternativesCount = 0;
 
       foreach (var frame in bestFrames)
       {
@@ -1355,10 +1353,14 @@ pre
         for (int index = 0; index < frame.ParseAlternatives.Length; index++)
         {
           var node = new Node(frame, index, nodeMap);
-          results.AddRange(node.GetHtml());
+          var result = node.GetHtml();
+          results.AddRange(result);
+          alternativesCount += result.Count;
           nodes.Add(node);
         }
       }
+
+      results.Insert(0, new XText(msg + " " + alternativesCount + " alternatives.\r\n\r\n"));
 
       var template = XElement.Parse(HtmlTemplate);
       var content = template.Descendants("content").First();
