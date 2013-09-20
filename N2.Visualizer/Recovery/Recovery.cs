@@ -214,7 +214,7 @@ namespace N2.DebugStrategies
 
         switch (frame.Id)
         {
-          case 338: break;
+          case 283: break;
         }
 
         // Отбрасывает всех потомков у которых свойство Best == false
@@ -228,7 +228,9 @@ namespace N2.DebugStrategies
         // только если среди потомков есть подпадающие под условия.
         var children2 = RecoveryUtils.FilterTopFramesWhichRecoveredOnFailStateIfExists(children1); // TODO: Похоже это дело дублирует FilterFailSateEqualsStateIfExists
         // Если все потомки парсят пустую строку (во всех путях пропарсивания васех потомков ParentsEat == 0), то отбираем потомков с наименьшей глубиной (Depth).
-        var children3 = children2.FilterBetterEmptyIfAllEmpty();
+        // TODO: FilterBetterEmptyIfAllEmpty выбирает подветвь содержащую Extensible -> Postfix когда есть альтернатива с Extensible -> Prefix, которую нужно предпочитать
+        // Так что FilterBetterEmptyIfAllEmpty не применима.
+        var children3 = children2; // children2.FilterBetterEmptyIfAllEmpty();
         // Если среди потомков есть фреймы пропарсившие код (у которых End >= 0), то отбираем их, отбрасывая фреймы пропарсившие с Fail-мо. 
         // TODO: Возожно нужно делать это более осторожно, так как при наличии нескольких ошибок Fail-фреймы могут оказаться более предпочтительным. Но возможно они отфильтруются раньше.
         var children4 = RecoveryUtils.FilterNonFailedFrames(children3);
@@ -986,7 +988,15 @@ namespace N2.DebugStrategies
 	    if (alternatives.Count <= 1)
 	      return alternatives.ToList();
 
-	    return alternatives.FilterMax(f => f.End >= 0 ? f.End : f.Fail);
+      var maxEnd  = alternatives.Max(a => a.End);
+      var maxFail = alternatives.Max(a => a.Fail);
+      if (maxEnd >= 0 && maxEnd < maxFail)
+        Debug.Assert(false);
+
+      if (alternatives.Any(a => a.End >= 0))
+        return alternatives.FilterMax(f => f.End);
+
+      return alternatives.FilterMax(f => f.Fail);
 	  }
 
     public static List<RecoveryStackFrame> FilterEmptyChildren(List<RecoveryStackFrame> children5, int skipCount)
@@ -1223,6 +1233,19 @@ pre
       {
         var results = new List<XElement>();
         var paths = GetFlatParseAlternatives();
+
+        if (paths.Count == 2)
+        {
+          var x = paths[0];
+          var y = paths[1];
+          for (; !x.IsEmpty && !y.IsEmpty; x = x.Tail, y = y.Tail)
+          {
+            if (x.Head != y.Head)
+            {
+              
+            }
+          }
+        }
 
         if (Frame.Id == 83)
         {
