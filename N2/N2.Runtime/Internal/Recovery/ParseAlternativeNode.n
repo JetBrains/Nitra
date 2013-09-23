@@ -19,42 +19,162 @@ namespace N2.Internal
     {
       public Frame                 : RecoveryStackFrame;
       public ParseAlternativeIndex : int;
-      [EqualsIgnore]
-      public Parents               : List[ParseAlternativeNode];
 
-      public this(frame : RecoveryStackFrame, parseAlternativeIndex : int, nodeMap : Dictionary[int, ParseAlternativeNode])
+      [EqualsIgnore]
+      [FlagAccessor(Best, IsVisited, IsMarked, IsClone, IsInsideToken, flags = WantSetter)]
+      mutable _state : StateFlag;
+      
+      [EqualsIgnore]
+      protected _children : List[ParseAlternativeNode] = List();
+      
+      [EqualsIgnore]
+      protected _parents     : List[ParseAlternativeNode];
+
+      private this(frame : RecoveryStackFrame, parseAlternativeIndex : int, nodeMap : Dictionary[int, ParseAlternativeNode])
       {
+        assert3(frame.Best);
+        assert3(frame.ParseAlternatives.Length > 0);
+        assert3(parseAlternativeIndex >= 0);
+        assert3(parseAlternativeIndex < 0xFF);
+        assert3(parseAlternativeIndex < frame.ParseAlternatives.Length);
+        
         this.Frame = frame;
         this.ParseAlternativeIndex = parseAlternativeIndex;
+        this.Best = true;
+        nodeMap.Add(frame.Id << 8 | parseAlternativeIndex, this);
+        
+        def parseAlternative = frame.ParseAlternatives[parseAlternativeIndex];
+        def fail  = parseAlternative.Fail;
+        //def start = parseAlternative.Start;
+        def end   = parseAlternative.End;
 
-        def parents = List();
-        def stop = frame.ParseAlternatives[parseAlternativeIndex].Stop;
+        def frameParents = frame.Parents;
+        mutable parentCount = 0;
+        
+        foreach (parent when parent.Best in frameParents)
+          parentCount += parent.ParseAlternatives.Length;
 
-        foreach (parent in frame.Parents)
+        def parents = List(parentCount);
+        
+        foreach (parent when parent.Best in frameParents with i)
         {
-          when (!parent.Best)
-            continue;
-
           for (mutable index = 0; index < parent.ParseAlternatives.Length; index++)
           {
             def a = parent.ParseAlternatives[index];
-            when (stop == a.Start)
+            when (end == a.Start && a.End >= 0 || a.End == -1 && end == -1 && a.Start == fail)
             {
               def key = parent.Id << 8 | index;
               mutable node;
               when (!nodeMap.TryGetValue(key, out node))
-              {
                 node = ParseAlternativeNode(parent, index, nodeMap);
-                nodeMap[key] = node;
-              }
               parents.Add(node);
             }
           }
         }
 
-        Parents = parents;
+        _parents = parents;
+      }
+      
+      public static MakeGraph(topFrames : Seq[RecoveryStackFrame]) : List[ParseAlternativeNode]
+      {
+        def nodeMap = Dictionary.[int, ParseAlternativeNode]();
+
+        foreach (frame when frame.IsTop in topFrames)
+          for (mutable i = 0; i < frame.ParseAlternatives.Length; i++)
+            _ = ParseAlternativeNode(frame, i, nodeMap);
+
+        def result = nodeMap.Values.ToList();
+        result.Sort(fun(a, b) { def res = a.Frame.Depth - b.Frame.Depth;  if (res != 0)  res else a.ParseAlternativeIndex - b.ParseAlternativeIndex; });
+        
+        // fill children
+        foreach (node in result)
+        {
+          assert3(node.Best);
+          foreach (parent in node._parents)
+            parent._children.Add(node);
+        }
+        
+        result
       }
 
+      
+      public HasChildren : bool
+      {
+        get
+        {
+          foreach (node in _children)
+            when (node.Best)
+              return true;
+            
+          false
+        }
+      }
+      
+      public HasParents : bool
+      {
+        get
+        {
+          foreach (node in _parents)
+            when (node.Best)
+              return true;
+            
+          false
+        }
+      }
+      
+      public IsTop : bool { get { this.Best && !this.HasChildren } }
+      
+      public IsRoot : bool { get { this.Best && !this.HasParents } }
+      
+      public IsEmpty : bool
+      {
+        get
+        {
+          def frame = this.Frame;
+          
+          when (frame.StartPos != frame.TextPos)
+            return false;
+            
+          def a = frame.ParseAlternatives[ParseAlternativeIndex];
+          
+          frame.TextPos == a.Stop
+        }
+      }
+      
+      public Parents : Seq[ParseAlternativeNode]
+      {
+        get
+        {
+          foreach (node when node.Best in _parents)
+            yield node;
+        }
+      }
+
+      public AllParents : Seq[ParseAlternativeNode]
+      {
+        get
+        {
+          _parents
+        }
+      }
+      
+      public Children : Seq[ParseAlternativeNode]
+      {
+        get
+        {
+          foreach (node when node.Best in _children)
+            yield node;
+        }
+      }
+      
+      public AllChildren : Seq[ParseAlternativeNode]
+      {
+        get
+        {
+          _children
+        }
+      }
+      
       public GetFlatParseAlternatives() : List[list[ParseAlternativeNode]]
       {
         def total = List();
@@ -76,6 +196,168 @@ namespace N2.Internal
 
       public ParseAlternative : ParseAlternative { get { Frame.ParseAlternatives[ParseAlternativeIndex] }}
 
+      public static DownToTop(nodes : List[ParseAlternativeNode], task : Action[ParseAlternativeNode]) : void
+      {
+        for (mutable i = nodes.Count - 1; i >= 0; i--)
+        {
+          def node = nodes[i];
+          when (node.Best)
+            task(node);
+        }
+      }
+
+      public static TopToDown(nodes : List[ParseAlternativeNode], task : Action[ParseAlternativeNode]) : void
+      {
+        foreach (node in nodes)
+        {
+          when (node.Best)
+            task(node);
+        }
+      }
+      
+      public Remove() : void
+      {
+        def children = this.Children.ToList();
+        
+        foreach (child in children)
+        {
+          def parents = child.Parents.ToList();
+          
+          when (parents.Count == 1)
+          {
+            assert3(parents[0] == this);
+            child.Remove();
+          }
+        }
+        
+        this.Best = false;
+      }
+
+      public static DotNodes(stacks : Seq[ParseAlternativeNode]) : string
+      {
+        def allFrames = HashSet();
+        def collectAllFrames(frame : ParseAlternativeNode) : void
+        {
+          unless (allFrames.Add(frame))
+            return;
+          
+          foreach (parent in frame.Parents)
+             collectAllFrames(parent);
+        }
+      
+        foreach (frame in stacks)
+          collectAllFrames(frame);
+        
+        def map = Hashtable();
+        def colorIndex(frame)
+        {
+          mutable value;
+          _ = map.TryGetValue(frame, out value);
+          value
+        }
+        def fillMap(node : ParseAlternativeNode) : void
+        {
+          def frame = node.Frame;
+          mutable counter;
+          _ = map.TryGetValue(frame, out counter);
+        
+          map[frame] = counter + 1;
+          //TODO: доработать ParseAlternativeNode чтобы он поддерживал MissedSeparator
+          //when (frame is ListBody as frame when frame.MissedSeparator != null)
+          //  fillMap(frame.MissedSeparator);
+        
+          foreach (subFrame in node.Parents)
+            fillMap(subFrame);
+          
+        }
+        foreach (node in allFrames) 
+          when (node.IsTop)
+            fillMap(node);
+      
+        def name(frame : ParseAlternativeNode) : string
+        {
+          (frame.Frame.Id << 8 | frame.ParseAlternativeIndex).ToString()
+        }
+        def visited = HashSet();
+        def nodes = List();
+        def edges = List();
+        def label(node : ParseAlternativeNode, index : int) : string
+        {
+          def frame = node.Frame;
+          def label = 
+            match (frame)
+            {
+              | Root => $<#Root PA=$(node.ParseAlternative)$(if (node.Best) " B" else "")#>
+              | _ =>
+                def parser = frame.GetRuleParser();
+                def makeCode()
+                {
+                  def str = parser.CodeWithStates.Replace("\"", "\\\"");
+                  def count = 30;
+                  def sb = Text.StringBuilder();
+                  def parts = str.Split(array[' '], StringSplitOptions.RemoveEmptyEntries);
+                  mutable len = 0;
+                  foreach (part in parts)
+                  {
+                    len += part.Length;
+                    if (len > count)
+                    {
+                      len = 0;
+                      _ = sb.Append("\n  ");
+                    }
+                    else
+                      _ = sb.Append(" ");
+                    _ = sb.Append(part);
+                  }
+          
+                  sb.ToString();
+                }
+              def failRuleCode = "\n" + makeCode();
+              def txt = frame.Parser.Text;
+              def len(a : ParseAlternative) : int { (if (a.End < 0) a.Fail else a.End) - a.Start }
+              def getText(a : ParseAlternative) : string
+              {
+                txt.Substring(a.Start, len(a)).Replace("\"", "\\\"")
+              }
+              def a = node.ParseAlternative;
+              def parse = $<#  '$(getText(a))'#>;
+              def top = if (frame.IsTop) "T" else "";
+              def pa = $" PA=[..$(frame.ParseAlternatives)]";
+              def label = $"$top«$(parser.RuleName)»$(frame.Info(pa)): $parse\n";
+              $"$label$failRuleCode"
+            };
+          def color = if (colorIndex(frame) == 1 && index < RecoveryStackFrame._colors.Length) $" color=$(RecoveryStackFrame._colors[index]) style=filled" else "";
+          name(node) + $<#[label="$label"$color shape=box]#>
+        }
+        def visitNodes(node : ParseAlternativeNode, index : int) : void
+        {
+          //def frame = node.Frame;
+          when (visited.Add(node))
+          {
+            //when (frame is ListBody as frame when frame.MissedSeparator != null)
+            //{
+            //  edges.Add($"$(name(frame)) -> $(name(frame.MissedSeparator)) [dir=back color=red]");
+            //  visitNodes(frame.MissedSeparator, index);
+            //}
+            nodes.Add(node, index);
+            foreach (parent in node.AllParents)
+            {
+              def color = if (node.Best && parent.Best) " color=lime" else "";
+              edges.Add($"$(name(node)) -> $(name(parent)) [dir=back$color]");
+              visitNodes(parent, index);
+            }
+          }
+        }
+        foreach (node in stacks with i)
+          visitNodes(node, i);
+        $<#
+  digraph ParseAlternativeNode
+  {
+    ..$(nodes; ";\n  "; label);
+    ..$(edges; ";\n  ");
+  }#>
+      }
+      
       public override ToString() : string
       {
         this.Frame.ToStringImpl($" PA=[$(this.ParseAlternative)]")
