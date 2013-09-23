@@ -53,7 +53,7 @@ namespace N2.DebugStrategies
       return parser.Text.Length;
     }
 
-    private List<RecoveryStackFrame> CollectBestFrames(int failPos, ref int skipCount, Parser parser)
+    private List<ParseAlternativeNode> CollectBestFrames(int failPos, ref int skipCount, Parser parser)
     {
       var text = parser.Text;
 
@@ -104,41 +104,41 @@ namespace N2.DebugStrategies
 
         ParseAlternativesVisializer.PrintParseAlternatives(parser, bestNodes, "Best alternatives 2.");
 
-        UpdateParseFramesAlternatives(allFrames);
+        //UpdateParseFramesAlternatives(allFrames);
 
 
-        RecoveryUtils.CheckGraph(allFrames);
+        //RecoveryUtils.CheckGraph(allFrames);
 
-        RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
+        //RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
 
-        RecoveryUtils.CheckGraph(allFrames);
+        //RecoveryUtils.CheckGraph(allFrames);
 
-        ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser, skipCount, "All available alternatives.");
+        //ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser, skipCount, "All available alternatives.");
 
-        RecoveryUtils.CheckGraph(allFrames);
+        //RecoveryUtils.CheckGraph(allFrames);
 
         //nodes = ParseAlternativeNode.MakeGraph(allFrames);
 
-        var bestFrames = SelectBestFrames(allFrames, skipCount);
+        //var bestFrames = SelectBestFrames(allFrames, skipCount);
 
-        RecoveryUtils.CheckGraph(allFrames, bestFrames);
+        //RecoveryUtils.CheckGraph(allFrames, bestFrames);
 
-        ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount, "Best alternatives.");
+        //ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount, "Best alternatives.");
 
         if (IsAllFramesParseEmptyString(allFrames))
-          bestFrames.Clear();
+          bestNodes.Clear();
         else
         {
         }
 
-        if (bestFrames.Count != 0)
-          return bestFrames;
+        if (bestNodes.Count != 0)
+          return bestNodes;
         else
         {
         }
       }
 
-      return new List<RecoveryStackFrame>();
+      return new List<ParseAlternativeNode>();
     }
 
     private static void CalcIsInsideTokenProperty(List<RecoveryStackFrame> frames)
@@ -235,31 +235,65 @@ namespace N2.DebugStrategies
 
     private static List<ParseAlternativeNode> SelectBestFrames2(List<ParseAlternativeNode> nodes, int skipCount)
     {
-      var bestFrames = new List<ParseAlternativeNode>();
+      ParseAlternativeNode.DownToTop(nodes, RemoveChildrenIfAllChildrenIsEmpty);
+      ParseAlternativeNode.TopToDown(nodes, CalcIsSuccessfullyParsed);
+      ParseAlternativeNode.DownToTop(nodes, RemoveIsSuccessfullyParsed);
 
-      for (int i = nodes.Count - 1; i >= 0; --i)
+      var bestNodes = FindBestNodes(nodes);
+      return bestNodes;
+    }
+
+    private static List<ParseAlternativeNode> FindBestNodes(List<ParseAlternativeNode> nodes)
+    {
+      var bestNodes = new List<ParseAlternativeNode>();
+
+      foreach (var node in nodes)
+        if (node.IsTop)
+          bestNodes.Add(node);
+
+      return bestNodes;
+    }
+
+    private static void RemoveIsSuccessfullyParsed(ParseAlternativeNode node)
+    {
+      if (node.IsSuccessfullyParsed)
+        node.Remove();
+    }
+
+    private static void CalcIsSuccessfullyParsed(ParseAlternativeNode node)
+    {
+      var frame = node.Frame;
+      var a     = node.ParseAlternative;
+
+      if (frame.Id == 265)
       {
-        var node = nodes[i];
-
-        if (!node.Best)
-          continue;
-
-        switch (node.Frame.Id)
-        {
-          case 283: break;
-        }
-
-
-        RemoveChildrenIfAllChildrenIsEmpty(node);
-
-        if (!node.HasChildren)
-        {
-          bestFrames.Add(node);
-          continue;
-        }
       }
 
-      return bestFrames;
+      if (node.IsTop)
+      {
+        if (frame.TextPos != a.Start)
+          return;
+
+        for (int i = frame.FailState2; i != -1; i = frame.GetNextState(i)) // TODO: Разобраться: c frame.FailState (FS) получалась фигня. С frame.FailState2 (RS) то что нужно. 
+          if (!frame.IsSateCanParseEmptyString(i))
+            return;
+
+        node.IsSuccessfullyParsed = true;
+      }
+      else
+      {
+        // если все чилды IsSuccessfullyParsed то и node IsSuccessfullyParsed = true
+
+        foreach (var child in node.Children)
+          if (!child.IsSuccessfullyParsed)
+            return;
+
+        for (int i = frame.GetNextState(frame.FailState); i != -1; i = frame.GetNextState(i))
+          if (!frame.IsSateCanParseEmptyString(i))
+            return;
+
+        node.IsSuccessfullyParsed = true;
+      }
     }
 
     private static void RemoveChildrenIfAllChildrenIsEmpty(ParseAlternativeNode node)
@@ -516,12 +550,14 @@ namespace N2.DebugStrategies
     #region Модификация AST (FixAst)
 
     // ReSharper disable once ParameterTypeCanBeEnumerable.Local
-    private void FixAst(List<RecoveryStackFrame> bestFrames, int failPos, int skipCount, Parser parser)
+    private void FixAst(List<ParseAlternativeNode> bestNodes, int failPos, int skipCount, Parser parser)
     {
       parser.MaxFailPos = failPos;
       parser.RecoveryStacks.Clear();
-      if (bestFrames.Count == 0)
+      if (bestNodes.Count == 0)
         return;
+
+      var bestFrames = new List<RecoveryStackFrame>(); //FIXME: Дописать!
 
       var allFrames = bestFrames.UpdateDepthAndCollectAllFrames();
       var cloned = RecoveryStackFrame.CloneGraph(allFrames);
