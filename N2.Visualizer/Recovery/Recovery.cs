@@ -1,8 +1,10 @@
 ﻿//#region Пролог
 #define DebugOutput
+using System.Collections;
 using JetBrains.Util;
 using N2.Internal;
 
+using NB = Nemerle.Builtins;
 using IntRuleCallKey = Nemerle.Builtins.Tuple<int, N2.Internal.RuleCallKey>;
 
 using System;
@@ -197,20 +199,66 @@ namespace N2.DebugStrategies
     {
       ParseAlternativeNode.DownToTop(nodes, RemoveChildrenIfAllChildrenIsEmpty);
       RemoveSuccessfullyParsed(nodes);
-      //RemoveDuplicateTopNodes(nodes);
+      RemoveDuplicateNodes(nodes);
 
       var bestNodes = FindBestNodes(nodes);
       return bestNodes;
     }
 
-    private static void RemoveDuplicateTopNodes(List<ParseAlternativeNode> nodes)
+    /// <summary>
+    /// Удаляет спекулятивные альтернативы, если среди результатов есть аналогичные не спекулятивные, а так же альтернативы у которых все дочерние
+    /// элементы удалены как успешно спарсившиеся или пустышки, и у альтернативы несходится TP и Start.
+    /// </summary>
+    private static void RemoveDuplicateNodes(List<ParseAlternativeNode> nodes)
     {
-      ParseAlternativeNode.DownToTop(nodes, RemoveDuplicateTopNodes);
+      ParseAlternativeNode.DownToTop(nodes, RemoveDuplicateNodes);
     }
 
-    private static void RemoveDuplicateTopNodes(ParseAlternativeNode node)
+    private static void RemoveDuplicateNodes(ParseAlternativeNode node)
     {
-      //node.Children.GroupBy(c => new { c.Frame.RuleKey, c.Frame.TextPos,  });
+      var groups = node.Children.GroupBy(c => Create(c.Frame.RuleKey, c.ParseAlternative)).ToList();
+
+      foreach (var group in groups)
+      {
+        var g = group.ToList();
+
+        if (g.Count <= 1)
+          continue;
+
+        var index = g.FindIndex(n => !n.Frame.IsSpeculative && n.Frame.FailState == n.Frame.FailState2); // Ищем индекс не спекулятивного стека.
+        if (index >= 0)
+        {
+          // удаляем все кроме не спекулятивного стека
+          for (int i = 0; i < g.Count; i++)
+            if (i != index)
+              g[i].Remove();
+
+          return;
+        }
+
+        if (g.Any(n => n.Frame.TextPos < n.ParseAlternative.Start && n.IsTop))
+        {
+          var result = g.Where(n => n.Frame.TextPos < n.ParseAlternative.Start && n.IsTop).ToList();
+
+          if (g.Count == result.Count)
+            Debug.Assert(false, "У нас остались только невалидные альтернативы (n.Frame.TextPos < n.ParseAlternative.Start)");
+
+          foreach (var n in result)
+            n.Remove();
+
+          return;
+        }
+      }
+    }
+
+    private static NB.Tuple<T1, T2> Create<T1, T2>(T1 field1, T2 field2)
+    {
+      return new NB.Tuple<T1, T2>(field1, field2);
+    }
+
+    private static NB.Tuple<T1, T2, T3> Create<T1, T2, T3>(T1 field1, T2 field2, T3 field3)
+    {
+      return new NB.Tuple<T1, T2, T3>(field1, field2, field3);
     }
 
     private static void RemoveSuccessfullyParsed(List<ParseAlternativeNode> nodes)
@@ -281,74 +329,6 @@ namespace N2.DebugStrategies
       }
       foreach (var child in node.Children)
         child.Remove();
-    }
-
-    private static List<RecoveryStackFrame> SelectBestFrames(List<RecoveryStackFrame> allFrames, int skipCount)
-    {
-      var bestFrames = new List<RecoveryStackFrame>();
-
-      for (int i = allFrames.Count - 1; i >= 0; --i)
-      {
-        var frame = allFrames[i];
-
-        if (!frame.Best)
-          continue;
-
-        if (!HasChildren(frame))
-        {
-          if (frame.Children.Count != 0)
-          {
-          }
-          bestFrames.Add(frame);
-          continue;
-        }
-
-        switch (frame.Id)
-        {
-          case 283: break;
-        }
-
-        // Отбрасывает всех потомков у которых свойство Best == false
-        var children0 = RecoveryUtils.OnlyBastFrames(frame);
-        // отбрасывает потомков не съедающих символов, в случае если они ростут из состяния допускающего пустую строку (цикл или необязательное правило)
-        // TODO: 1. Следующая эвристика отбрасывает вполне корректные альтернативы, которые могут пропарситься ниже по стеку. 
-        // Например, в "случае class A {A(){ batch /*<-*/AddPart(); }}" выбрасываются варианты с проскипаным идентификатором.
-        var children1 = children0;//RecoveryUtils.FilterEmptyChildrenWhenFailSateCanParseEmptySting(frame, children0, skipCount);
-        // отберат фреймы которые которые продолжают парсинг с состояния облом. Такое может случиться если была пропущена грязь, а сразу за ней 
-        // идет корректная конструкция. Пример из джейсона: {a:.2}. Здесь "." - это грязь за которой идет корректное Value. Фильтрация производится
-        // только если среди потомков есть подпадающие под условия.
-        var children2 = RecoveryUtils.FilterTopFramesWhichRecoveredOnFailStateIfExists(children1); // TODO: Похоже это дело дублирует FilterFailSateEqualsStateIfExists
-        // Если все потомки парсят пустую строку (во всех путях пропарсивания васех потомков ParentsEat == 0), то отбираем потомков с наименьшей глубиной (Depth).
-        // TODO: FilterBetterEmptyIfAllEmpty выбирает подветвь содержащую Extensible -> Postfix когда есть альтернатива с Extensible -> Prefix, которую нужно предпочитать
-        // Так что FilterBetterEmptyIfAllEmpty не применима.
-        var children3 = children2; // children2.FilterBetterEmptyIfAllEmpty();
-        // Если среди потомков есть фреймы пропарсившие код (у которых End >= 0), то отбираем их, отбрасывая фреймы пропарсившие с Fail-мо. 
-        // TODO: Возожно нужно делать это более осторожно, так как при наличии нескольких ошибок Fail-фреймы могут оказаться более предпочтительным. Но возможно они отфильтруются раньше.
-        var children4 = RecoveryUtils.FilterNonFailedFrames(children3);
-        // Для каждой группы потомков с одинаковым местом фэйла (TextPos) отбираем такие которые начали парситься с меньшего состояния (подправила).
-        //var children5 = RecoveryUtils.SelectMinFailSateIfTextPosEquals(children4);
-        var children5 = children4;
-        // Отбрасываем потомков все альтеративы которых пропарсили пустую строку.
-        // TODO: 2. См. TODO 1.
-        var children6 = children5; //RecoveryUtils.FilterEmptyChildren(children5, skipCount);
-        var children9 = children6;//FilterNotEmpyPrefixChildren(frame, children6);
-
-        var bettreChildren = children9;
-        var poorerChildren = RecoveryUtils.SubstractSet(frame.Children, bettreChildren);
-
-        if (poorerChildren.Count > 0)
-          RecoveryUtils.ResetChildrenBestProperty(poorerChildren);
-
-        if (bettreChildren.Count == 0)
-          bestFrames.Add(frame);
-      }
-
-      return bestFrames;
-    }
-
-    private static bool HasChildren(RecoveryStackFrame frame)
-    {
-      return frame.Children.Any(c => c.Best);
     }
 
     private static List<RecoveryStackFrame> FilterBestIfExists(List<RecoveryStackFrame> bestFrames)
@@ -1233,6 +1213,58 @@ namespace N2.DebugStrategies
 	  {
 	    return alternatives0.Where(a => a.End >= 0).ToList();
 	  }
+
+    public static bool LongerThan<T>(this IEnumerable<T> collection, int count)
+    {
+      Debug.Assert(count >= 0);
+
+      // ReSharper disable once PossibleMultipleEnumeration
+      int len = TryGetFastCount<T>(collection);
+
+      if (len >= 0)
+        return len > count;
+
+      var num = 0;
+
+      foreach (var obj in collection)
+        if (++num > count)
+          return true;
+
+      return false;
+    }
+
+    public static bool CountIs<T>(this IEnumerable<T> collection, int exactCount)
+    {
+      int count = TryGetFastCount<T>(collection);
+      if (count >= 0)
+        return count == exactCount;
+
+      var num = 0;
+
+      foreach (var obj in collection)
+      {
+        if (++num > exactCount)
+          return false;
+      }
+      return num == exactCount;
+    }
+
+    public static int TryGetFastCount<T>(this IEnumerable<T> collection)
+    {
+      var collection1 = collection as ICollection<T>;
+      if (collection1 != null)
+        return collection1.Count;
+        
+      var collection2 = collection as ICollection;
+      if (collection2 != null)
+        return collection2.Count;
+        
+      var str = collection as string;
+      if (str != null)
+        return str.Length;
+
+      return -1;
+    }
   }
 
   static class ParseAlternativesVisializer
