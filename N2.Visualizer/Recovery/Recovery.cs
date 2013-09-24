@@ -77,15 +77,15 @@ namespace N2.DebugStrategies
 
         ParseFrames(parser, skipCount, allFrames);
 
-        ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser, skipCount, "All available alternatives.");
+        //ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser, skipCount, "All available alternatives.");
 
         var nodes = ParseAlternativeNode.MakeGraph(allFrames);
 
-        ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "Best alternatives 2.");
+        //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "Best alternatives 2.");
 
-        var bestNodes = SelectBestFrames2(nodes, skipCount);
+        var bestNodes = SelectBestFrames2(parser, nodes, skipCount);
 
-        ParseAlternativesVisializer.PrintParseAlternatives(parser, bestNodes, "Best alternatives 2.");
+        //ParseAlternativesVisializer.PrintParseAlternatives(parser, bestNodes, "Best alternatives 2.");
 
         if (IsAllFramesParseEmptyString(allFrames))
           bestNodes.Clear();
@@ -195,15 +195,56 @@ namespace N2.DebugStrategies
       }
     }
 
-    private static List<ParseAlternativeNode> SelectBestFrames2(List<ParseAlternativeNode> nodes, int skipCount)
+    private static List<ParseAlternativeNode> SelectBestFrames2(Parser parser, List<ParseAlternativeNode> nodes, int skipCount)
     {
+      RemoveTheShorterAlternative(nodes);
+      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveTheShorterAlternative.");
+      //X.VisualizeFrames(nodes);
+
       RemoveAlternativesWithALotOfSkippedTokens(nodes);
+      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveAlternativesWithALotOfSkippedTokens.");
+      //X.VisualizeFrames(nodes);
+      
       ParseAlternativeNode.DownToTop(nodes, RemoveChildrenIfAllChildrenIsEmpty);
+      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveChildrenIfAllChildrenIsEmpty.");
+      //X.VisualizeFrames(nodes);
+      
       RemoveSuccessfullyParsed(nodes);
+      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveSuccessfullyParsed.");
+      //X.VisualizeFrames(nodes);
+      
       RemoveDuplicateNodes(nodes);
+      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveDuplicateNodes.");
+      //X.VisualizeFrames(nodes);
 
       var bestNodes = FindBestNodes(nodes);
       return bestNodes;
+    }
+
+    private static void RemoveTheShorterAlternative(List<ParseAlternativeNode> nodes)
+    {
+      var roots = nodes.Where(n => n.IsRoot).ToList();
+
+      if (roots.Any(n => n.ParseAlternative.End >= 0))
+      {
+        var max = nodes.Max(n => n.ParseAlternative.End);
+
+        foreach (var node in roots)
+          if (node.ParseAlternative.End != max)
+            node.Remove();
+
+        return;
+      }
+
+      var maxFail = nodes.Max(n => n.ParseAlternative.Fail);
+
+      foreach (var node in roots)
+        if (node.ParseAlternative.Fail != maxFail)
+          node.Remove();
+
+      foreach (var node in nodes)
+        if (node.IsRoot && node.Best)
+          Debug.WriteLine(node.ParseAlternative);
     }
 
     private static void RemoveAlternativesWithALotOfSkippedTokens(List<ParseAlternativeNode> nodes)
@@ -554,7 +595,7 @@ namespace N2.DebugStrategies
       RecoveryUtils.RemoveFramesUnnecessaryAlternatives(allFrames, first);
       RecoveryUtils.CheckGraph(allFrames, firstBestFrame);
 
-      ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount, "Selected alternative.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount, "Selected alternative.");
 
 
       allFrames = allFrames.UpdateReverseDepthAndCollectAllFrames();
@@ -1439,10 +1480,12 @@ pre
     private static XElement MakeHtml(ParseAlternativeNodes nodes)
     {
       XElement content = null;
+      var skippedTokenCount = 0;
+
       while (true)
       {
         if (nodes.IsEmpty)
-          return content;
+          return new XElement("span", skippedTokenCount + " skipped ", content);
 
         var node = nodes.Head;
         var a = node.ParseAlternative;
@@ -1450,6 +1493,8 @@ pre
         var parsingFailAtState = frame.FailState2;
         var recursionState = frame.FailState;
         var isTop = frame.IsTop;
+
+        skippedTokenCount += node.SkipedMandatoryTokenCount;
 
         var parsedClass = isTop ? _topClass : _postfixClass;
 
