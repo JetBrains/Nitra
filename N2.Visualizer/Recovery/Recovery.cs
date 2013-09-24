@@ -3,7 +3,7 @@
 using System.Collections;
 using JetBrains.Util;
 using N2.Internal;
-
+using Nemerle.Collections;
 using NB = Nemerle.Builtins;
 using IntRuleCallKey = Nemerle.Builtins.Tuple<int, N2.Internal.RuleCallKey>;
 
@@ -197,7 +197,7 @@ namespace N2.DebugStrategies
 
     private static List<ParseAlternativeNode> SelectBestFrames2(List<ParseAlternativeNode> nodes, int skipCount)
     {
-      //CalcSkipedMandatoryTokenCount(nodes);
+      RemoveAlternativesWithALotOfSkippedTokens(nodes);
       ParseAlternativeNode.DownToTop(nodes, RemoveChildrenIfAllChildrenIsEmpty);
       RemoveSuccessfullyParsed(nodes);
       RemoveDuplicateNodes(nodes);
@@ -206,17 +206,18 @@ namespace N2.DebugStrategies
       return bestNodes;
     }
 
-    private static void CalcSkipedMandatoryTokenCount(List<ParseAlternativeNode> nodes)
+    private static void RemoveAlternativesWithALotOfSkippedTokens(List<ParseAlternativeNode> nodes)
     {
-      ParseAlternativeNode.DownToTop(nodes, CalcSkipedMandatoryTokenCount);
+      ParseAlternativeNode.DownToTop(nodes, RemoveAlternativesWithALotOfSkippedTokens);
     }
 
-    private static void CalcSkipedMandatoryTokenCount(ParseAlternativeNode node)
+    private static void RemoveAlternativesWithALotOfSkippedTokens(ParseAlternativeNode node)
     {
-      var x = node.SkipedMandatoryTokenCount;
-      if (x > 0)
-      {
-      }
+      var min = node.HasChildren ? node.Children.Min(n => n.MinTotalSkipedMandatoryTokenCount) : 0;
+
+      foreach (var child in node.Children)
+        if (child.MinTotalSkipedMandatoryTokenCount != min)
+          child.Remove();
     }
 
     /// <summary>
@@ -583,7 +584,7 @@ namespace N2.DebugStrategies
 
 	internal static class RecoveryUtils
   {
-    public static List<T> FilterMax<T>(this ICollection<T> candidates, Func<T, int> selector)
+    public static List<T> FilterMax<T>(this System.Collections.Generic.ICollection<T> candidates, Func<T, int> selector)
     {
       var count = candidates.Count;
       if (candidates.Count <= 1)
@@ -602,7 +603,7 @@ namespace N2.DebugStrategies
       return res2.ToList();
     }
 
-    public static List<T> FilterMin<T>(this ICollection<T> candidates, Func<T, int> selector)
+    public static List<T> FilterMin<T>(this System.Collections.Generic.ICollection<T> candidates, Func<T, int> selector)
     {
       var count = candidates.Count;
       if (candidates.Count <= 1)
@@ -882,7 +883,7 @@ namespace N2.DebugStrategies
         Debug.Assert(starts.Contains(frame.ParseAlternatives[0].Start));
     }
 
-    public static List<RecoveryStackFrame> UpdateReverseDepthAndCollectAllFrames(this ICollection<RecoveryStackFrame> heads)
+    public static List<RecoveryStackFrame> UpdateReverseDepthAndCollectAllFrames(this System.Collections.Generic.ICollection<RecoveryStackFrame> heads)
     {
       var allRecoveryStackFrames = new List<RecoveryStackFrame>();
 
@@ -897,7 +898,7 @@ namespace N2.DebugStrategies
       return allRecoveryStackFrames;
     }
 
-    public static List<RecoveryStackFrame> UpdateDepthAndCollectAllFrames(this ICollection<RecoveryStackFrame> heads)
+    public static List<RecoveryStackFrame> UpdateDepthAndCollectAllFrames(this System.Collections.Generic.ICollection<RecoveryStackFrame> heads)
     {
       var allRecoveryStackFrames = new List<RecoveryStackFrame>();
 
@@ -913,7 +914,7 @@ namespace N2.DebugStrategies
       return allRecoveryStackFrames;
     }
 
-    public static List<RecoveryStackFrame> PrepareRecoveryStacks(this ICollection<RecoveryStackFrame> heads)
+    public static List<RecoveryStackFrame> PrepareRecoveryStacks(this System.Collections.Generic.ICollection<RecoveryStackFrame> heads)
     {
       var allRecoveryStackFrames = heads.UpdateDepthAndCollectAllFrames();
 
@@ -1162,7 +1163,7 @@ namespace N2.DebugStrategies
 	    return false;
 	  }
 
-	  public static List<RecoveryStackFrame> SubstractSet(List<RecoveryStackFrame> set1, ICollection<RecoveryStackFrame> set2)
+	  public static List<RecoveryStackFrame> SubstractSet(List<RecoveryStackFrame> set1, System.Collections.Generic.ICollection<RecoveryStackFrame> set2)
 	  {
 	    return set1.Where(c => !set2.Contains(c)).ToList();
 	  }
@@ -1265,7 +1266,7 @@ namespace N2.DebugStrategies
 
     public static int TryGetFastCount<T>(this IEnumerable<T> collection)
     {
-      var collection1 = collection as ICollection<T>;
+      var collection1 = collection as System.Collections.Generic.ICollection<T>;
       if (collection1 != null)
         return collection1.Count;
         
