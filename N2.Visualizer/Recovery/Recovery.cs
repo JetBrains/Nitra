@@ -218,6 +218,9 @@ namespace N2.DebugStrategies
       //X.VisualizeFrames(nodes);
 
       var bestNodes = FindBestNodes(nodes);
+      //X.VisualizeFrames(nodes);
+      X.VisualizeFrames(bestNodes);
+      ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveDuplicateNodes.");
       return bestNodes;
     }
 
@@ -1492,7 +1495,8 @@ pre
         var frame = node.Frame;
         var parsingFailAtState = frame.FailState2;
         var recursionState = frame.FailState;
-        var isTop = frame.IsTop;
+        var isTop = node.IsTop;
+        var text = frame.Parser.Text;
 
         skippedTokenCount += node.SkipedMandatoryTokenCount;
 
@@ -1500,10 +1504,10 @@ pre
 
         var title = MakeTitle(frame, a);
 
-        var prefixText = frame.Parser.Text.Substring(frame.StartPos, frame.TextPos - frame.StartPos);
+        var prefixText = text.Substring(frame.StartPos, frame.TextPos - frame.StartPos);
         var prefix = string.IsNullOrEmpty(prefixText) ? null : new XElement("span", _prefixClass, prefixText);
 
-        var postfixText = frame.Parser.Text.Substring(a.Start, a.Stop - a.Start);
+        var postfixText = text.Substring(a.Start, a.Stop - a.Start);
         var postfix = string.IsNullOrEmpty(postfixText) ? null : new XElement("span", isTop ? _topClass : _postfixClass, postfixText);
 
         if (parsingFailAtState > 100 || parsingFailAtState < 0 || recursionState < 0)
@@ -1544,7 +1548,7 @@ pre
         var fail = a.End < 0 ? new XElement("span", _garbageClass, "<FAIL>") : null;
         var span = new XElement("span", parsedClass, title, _start, prefix, skippedPrefix, content, skippedPostfix, postfix, _end, fail);
 
-        if (frame.Parents.Count == 0)
+        if (!node.HasParents)
           span.Add("\r\n");
 
         nodes = nodes.Tail;
