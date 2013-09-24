@@ -77,53 +77,13 @@ namespace N2.DebugStrategies
 
         ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser, skipCount, "All available alternatives.");
 
-        //RecoveryUtils.CheckGraph(allFrames);
-
-        //foreach (var f in allFrames)
-        //  if (f.IsTop && !f.IsSpeculative)
-        //    Debug.WriteLine(f);
-
         var nodes = ParseAlternativeNode.MakeGraph(allFrames);
 
         ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "Best alternatives 2.");
 
-        //ParseAlternativeNode.DownToTop(nodes, n =>
-        //{
-        //  var start = n.ParseAlternative.Start;
-
-        //  foreach (var node in n.Children)
-        //  {
-        //    if (node.ParseAlternative.Stop != start)
-        //      node.Remove();
-        //  }
-
-        //});
-        
-
         var bestNodes = SelectBestFrames2(nodes, skipCount);
 
         ParseAlternativesVisializer.PrintParseAlternatives(parser, bestNodes, "Best alternatives 2.");
-
-        //UpdateParseFramesAlternatives(allFrames);
-
-
-        //RecoveryUtils.CheckGraph(allFrames);
-
-        //RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
-
-        //RecoveryUtils.CheckGraph(allFrames);
-
-        //ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser, skipCount, "All available alternatives.");
-
-        //RecoveryUtils.CheckGraph(allFrames);
-
-        //nodes = ParseAlternativeNode.MakeGraph(allFrames);
-
-        //var bestFrames = SelectBestFrames(allFrames, skipCount);
-
-        //RecoveryUtils.CheckGraph(allFrames, bestFrames);
-
-        //ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount, "Best alternatives.");
 
         if (IsAllFramesParseEmptyString(allFrames))
           bestNodes.Clear();
@@ -236,11 +196,27 @@ namespace N2.DebugStrategies
     private static List<ParseAlternativeNode> SelectBestFrames2(List<ParseAlternativeNode> nodes, int skipCount)
     {
       ParseAlternativeNode.DownToTop(nodes, RemoveChildrenIfAllChildrenIsEmpty);
-      ParseAlternativeNode.TopToDown(nodes, CalcIsSuccessfullyParsed);
-      ParseAlternativeNode.DownToTop(nodes, RemoveIsSuccessfullyParsed);
+      RemoveSuccessfullyParsed(nodes);
+      //RemoveDuplicateTopNodes(nodes);
 
       var bestNodes = FindBestNodes(nodes);
       return bestNodes;
+    }
+
+    private static void RemoveDuplicateTopNodes(List<ParseAlternativeNode> nodes)
+    {
+      ParseAlternativeNode.DownToTop(nodes, RemoveDuplicateTopNodes);
+    }
+
+    private static void RemoveDuplicateTopNodes(ParseAlternativeNode node)
+    {
+      //node.Children.GroupBy(c => new { c.Frame.RuleKey, c.Frame.TextPos,  });
+    }
+
+    private static void RemoveSuccessfullyParsed(List<ParseAlternativeNode> nodes)
+    {
+      ParseAlternativeNode.TopToDown(nodes, CalcIsSuccessfullyParsed);
+      ParseAlternativeNode.DownToTop(nodes, RemoveMarked);
     }
 
     private static List<ParseAlternativeNode> FindBestNodes(List<ParseAlternativeNode> nodes)
@@ -254,9 +230,9 @@ namespace N2.DebugStrategies
       return bestNodes;
     }
 
-    private static void RemoveIsSuccessfullyParsed(ParseAlternativeNode node)
+    private static void RemoveMarked(ParseAlternativeNode node)
     {
-      if (node.IsSuccessfullyParsed)
+      if (node.IsMarked)
         node.Remove();
     }
 
@@ -265,7 +241,7 @@ namespace N2.DebugStrategies
       var frame = node.Frame;
       var a     = node.ParseAlternative;
 
-      if (frame.Id == 265)
+      if (frame.Id == 185)
       {
       }
 
@@ -278,21 +254,21 @@ namespace N2.DebugStrategies
           if (!frame.IsSateCanParseEmptyString(i))
             return;
 
-        node.IsSuccessfullyParsed = true;
+        node.IsMarked = true;
       }
       else
       {
-        // если все чилды IsSuccessfullyParsed то и node IsSuccessfullyParsed = true
+        // если все чилды IsMarked то и node IsMarked = true
 
         foreach (var child in node.Children)
-          if (!child.IsSuccessfullyParsed)
+          if (!child.IsMarked)
             return;
 
         for (int i = frame.GetNextState(frame.FailState); i != -1; i = frame.GetNextState(i))
           if (!frame.IsSateCanParseEmptyString(i))
             return;
 
-        node.IsSuccessfullyParsed = true;
+        node.IsMarked = true;
       }
     }
 
@@ -552,6 +528,10 @@ namespace N2.DebugStrategies
     // ReSharper disable once ParameterTypeCanBeEnumerable.Local
     private void FixAst(List<ParseAlternativeNode> bestNodes, int failPos, int skipCount, Parser parser)
     {
+      foreach (var node in bestNodes)
+        if (node.Frame.TextPos + skipCount != node.ParseAlternative.Start)
+          Debug.Assert(false);
+
       parser.MaxFailPos = failPos;
       parser.RecoveryStacks.Clear();
       if (bestNodes.Count == 0)
