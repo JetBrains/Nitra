@@ -197,6 +197,9 @@ namespace N2.DebugStrategies
 
     private static List<ParseAlternativeNode> SelectBestFrames2(Parser parser, List<ParseAlternativeNode> nodes, int skipCount)
     {
+      ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveTheShorterAlternative.");
+      X.VisualizeFrames(nodes);
+
       RemoveTheShorterAlternative(nodes);
       //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveTheShorterAlternative.");
       //X.VisualizeFrames(nodes);
@@ -446,7 +449,7 @@ namespace N2.DebugStrategies
       switch (frame.Id)
       {
         case 254: break;
-        case 322: break;
+        case 262: break;
       }
 
       var curTextPos = frame.TextPos + skipCount;
@@ -475,7 +478,7 @@ namespace N2.DebugStrategies
       switch (frame.Id)
       {
         case 254: break;
-        case 321: break;
+        case 262: break;
       }
       var parentsEat = ParentsMaxEat(frame, curTextPos);
       var maxfailPos = curTextPos;
@@ -513,7 +516,7 @@ namespace N2.DebugStrategies
       if (frame.IsTokenRule || frame.IsInsideToken) // не спекулируем кишки токенов
         return;
 
-      if (frame.Id == 28)
+      if (frame.Id == 182)
         Debug.Assert(true);
 
       if (frame.Depth == 0)
@@ -538,7 +541,7 @@ namespace N2.DebugStrategies
           if (newFrames.Count > newFramesCount)
             return;
         }
-      }
+      } 
       for (var state = frame.Depth == 0 ? frame.FailState : frame.GetNextState(frame.FailState); state >= 0; state = frame.GetNextState(state))
         FindSpeculativeSubframes(newFrames, parser, frame, failPos, state, skipCount);
     }
