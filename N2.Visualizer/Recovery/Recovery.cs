@@ -197,12 +197,26 @@ namespace N2.DebugStrategies
 
     private static List<ParseAlternativeNode> SelectBestFrames2(List<ParseAlternativeNode> nodes, int skipCount)
     {
+      //CalcSkipedMandatoryTokenCount(nodes);
       ParseAlternativeNode.DownToTop(nodes, RemoveChildrenIfAllChildrenIsEmpty);
       RemoveSuccessfullyParsed(nodes);
       RemoveDuplicateNodes(nodes);
 
       var bestNodes = FindBestNodes(nodes);
       return bestNodes;
+    }
+
+    private static void CalcSkipedMandatoryTokenCount(List<ParseAlternativeNode> nodes)
+    {
+      ParseAlternativeNode.DownToTop(nodes, CalcSkipedMandatoryTokenCount);
+    }
+
+    private static void CalcSkipedMandatoryTokenCount(ParseAlternativeNode node)
+    {
+      var x = node.SkipedMandatoryTokenCount;
+      if (x > 0)
+      {
+      }
     }
 
     /// <summary>

@@ -23,6 +23,10 @@ namespace N2.Internal
       [EqualsIgnore]
       [FlagAccessor(Best, IsVisited, IsMarked, IsClone, IsInsideToken, flags = WantSetter)]
       mutable _state : StateFlag;
+
+      mutable _skipedMandatoryTokenCount         : int = -1;
+      mutable _maxTotalSkipedMandatoryTokenCount : int = -1;
+      mutable _minTotalSkipedMandatoryTokenCount : int = -1;
       
       [EqualsIgnore]
       protected _children : List[ParseAlternativeNode] = List();
@@ -178,6 +182,90 @@ namespace N2.Internal
         }
       }
       
+      ResetSkipedMandatoryTokenCount() : void
+      {
+        _skipedMandatoryTokenCount         = -1;
+        _minTotalSkipedMandatoryTokenCount = -1;
+        _maxTotalSkipedMandatoryTokenCount = -1;
+      }
+      
+      public SkipedMandatoryTokenCount : int
+      {
+        get
+        {
+          when (_skipedMandatoryTokenCount < 0)
+            _skipedMandatoryTokenCount = CalcSkipedMandatoryTokenCount();
+            
+          _skipedMandatoryTokenCount
+        }
+      }
+      public MaxTotalSkipedMandatoryTokenCount : int
+      {
+        get
+        {
+          when (_maxTotalSkipedMandatoryTokenCount < 0)
+          {
+            def max = if (HasChildren) Children.Max(n => n.MaxTotalSkipedMandatoryTokenCount) else 0;
+            _maxTotalSkipedMandatoryTokenCount = max + SkipedMandatoryTokenCount;
+          }
+            
+          _maxTotalSkipedMandatoryTokenCount
+        }
+      }
+
+      public MinTotalSkipedMandatoryTokenCount : int
+      {
+        get
+        {
+          when (_minTotalSkipedMandatoryTokenCount < 0)
+          {
+            def mix = if (HasChildren) Children.Min(n => n.MaxTotalSkipedMandatoryTokenCount) else 0;
+            _minTotalSkipedMandatoryTokenCount = mix + SkipedMandatoryTokenCount;
+          }
+            
+          _minTotalSkipedMandatoryTokenCount
+        }
+      }
+
+      public CalcSkipedMandatoryTokenCount() : int
+      {
+        def endState           = this.ParseAlternative.State;
+        def frame              = this.Frame;
+        def parsingFailAtState = frame.FailState2;
+        def recursionState     = frame.FailState;
+        def ruleParser         = frame.GetRuleParser();
+        def calcSkipedMandatoryTokenCount(startState : int, endState : int) : int
+        {
+          mutable count = 0;
+          
+          for (mutable i = startState; i != endState; i = frame.GetNextState(i))
+            count += ruleParser.GetMandatoryTokensForState(i);
+            
+          count
+        }
+        
+        mutable skippedPrefixMandatoryTokenCount  = 0;
+        mutable skippedPostfixMandatoryTokenCount = 0;
+
+        if (this.IsTop)
+        {
+          when (recursionState != endState)
+            skippedPrefixMandatoryTokenCount = calcSkipedMandatoryTokenCount(parsingFailAtState, endState);
+        }
+        else
+        {
+          when (parsingFailAtState < recursionState)
+            skippedPrefixMandatoryTokenCount = calcSkipedMandatoryTokenCount(parsingFailAtState, recursionState);
+
+          def startState = frame.GetNextState(recursionState);
+
+          when (startState >= 0 && (startState < endState || endState < 0))
+            skippedPostfixMandatoryTokenCount = calcSkipedMandatoryTokenCount(startState, endState);
+        }
+        
+        skippedPrefixMandatoryTokenCount + skippedPostfixMandatoryTokenCount
+      }
+      
       public GetFlatParseAlternatives() : List[list[ParseAlternativeNode]]
       {
         def total = List();
@@ -232,7 +320,10 @@ namespace N2.Internal
             child.Remove();
           }
         }
-        
+
+        foreach (node in Parents)
+          node.ResetSkipedMandatoryTokenCount();
+
         this.Best = false;
       }
 
@@ -325,8 +416,10 @@ namespace N2.Internal
               def a = node.ParseAlternative;
               def parse = $<#  '$(getText(a))'#>;
               def top = if (frame.IsTop) "T" else "";
-              def pa = $" PA=[..$(frame.ParseAlternatives)]";
-              def label = $"$top«$(parser.RuleName)»$(frame.Info(pa, node.Best)): $parse\n";
+              def pa = $" PA$(node.ParseAlternative)";
+              def minMaxSkip = if (node.IsTop) null else $"\nMinST=$(node.MinTotalSkipedMandatoryTokenCount) MaxST=$(node.MaxTotalSkipedMandatoryTokenCount)";
+              def skipedTokens = $"$minMaxSkip ST=$(node.SkipedMandatoryTokenCount)";
+              def label = $"$top«$(parser.RuleName)»$(frame.Info(pa, node.Best))$skipedTokens: $parse\n";
               $"$label$failRuleCode"
             };
           def color = if (colorIndex(frame) == 1 && index < RecoveryStackFrame._colors.Length) $" color=$(RecoveryStackFrame._colors[index]) style=filled" else "";
