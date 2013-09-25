@@ -217,11 +217,10 @@ namespace N2.DebugStrategies
       //X.VisualizeFrames(nodes);
       
       RemoveDuplicateNodes(nodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveDuplicateNodes.");
-      //X.VisualizeFrames(nodes);
+      ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveDuplicateNodes.");
+      X.VisualizeFrames(nodes);
 
       var bestNodes = FindBestNodes(nodes);
-      //X.VisualizeFrames(nodes);
       X.VisualizeFrames(bestNodes);
       ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveDuplicateNodes.");
       return bestNodes;
@@ -1487,11 +1486,13 @@ pre
     {
       XElement content = null;
       var skippedTokenCount = 0;
+      var id = nodes.IsEmpty ? "???" : nodes.Head.Id.ToString();
+      
 
       while (true)
       {
         if (nodes.IsEmpty)
-          return new XElement("span", skippedTokenCount + " skipped ", content);
+          return new XElement("span", id + " " + skippedTokenCount + " skipped ", content);
 
         var node = nodes.Head;
         var a = node.ParseAlternative;
@@ -1505,7 +1506,7 @@ pre
 
         var parsedClass = isTop ? _topClass : _postfixClass;
 
-        var title = MakeTitle(frame, a);
+        var title = MakeTitle(node);
 
         var prefixText = text.Substring(frame.StartPos, frame.TextPos - frame.StartPos);
         var prefix = string.IsNullOrEmpty(prefixText) ? null : new XElement("span", _prefixClass, prefixText);
@@ -1564,9 +1565,9 @@ pre
       return string.Join(" ", frame.CodeForStates(startState, endState, true));
     }
 
-    private static XAttribute MakeTitle(RecoveryStackFrame frame, ParseAlternative? a)
+    private static XAttribute MakeTitle(ParseAlternativeNode node)
     {
-      return new XAttribute("title", a == null ? frame.ToString() : _removePA.Replace(frame.ToString(), " PA=" + a));
+      return new XAttribute("title", _removePA.Replace(node.Frame.ToString(), "." + node.ParseAlternativeIndex + " PA=" + node.ParseAlternative));
     }
   }
   

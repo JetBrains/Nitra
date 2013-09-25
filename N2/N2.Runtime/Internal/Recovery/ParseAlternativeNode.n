@@ -23,6 +23,9 @@ namespace N2.Internal
       [EqualsIgnore]
       [FlagAccessor(Best, IsVisited, IsMarked, IsClone, IsInsideToken, flags = WantSetter)]
       mutable _state : StateFlag;
+      
+      [EqualsIgnore]
+      MissedSeparator : ParseAlternativeNode;
 
       [EqualsIgnore] mutable _skipedMandatoryTokenCount         : int = -1;
       [EqualsIgnore] mutable _maxTotalSkipedMandatoryTokenCount : int = -1;
@@ -39,19 +42,37 @@ namespace N2.Internal
         assert3(frame.Best);
         assert3(frame.ParseAlternatives.Length > 0);
         assert3(parseAlternativeIndex >= 0);
-        assert3(parseAlternativeIndex < 0xFF);
         assert3(parseAlternativeIndex < frame.ParseAlternatives.Length);
         
         this.Frame = frame;
         this.ParseAlternativeIndex = parseAlternativeIndex;
         this.Best = true;
-        nodeMap.Add(frame.Id << 8 | parseAlternativeIndex, this);
+        nodeMap.Add(MakeKey(frame, parseAlternativeIndex), this);
         
         def parseAlternative = frame.ParseAlternatives[parseAlternativeIndex];
         def fail  = parseAlternative.Fail;
         //def start = parseAlternative.Start;
         def end   = parseAlternative.End;
+        
+        def getNode(frame : RecoveryStackFrame, parseAlternativeIndex : int) : ParseAlternativeNode
+        {
+          def key = MakeKey(frame, parseAlternativeIndex);
+          mutable node;
+          when (!nodeMap.TryGetValue(key, out node))
+            node = ParseAlternativeNode(frame, parseAlternativeIndex, nodeMap);
+          node
+        }
 
+        when (frame is ListBody as body when body.MissedSeparator != null)
+        {
+          def missed = body.MissedSeparator;
+          assert3(missed.ParseAlternatives.Length == 1);
+          assert3(body.StartPos == missed.StartPos);
+          assert3(body.StartPos == missed.ParseAlternatives[0].Start);
+          
+          this.MissedSeparator = getNode(missed, 0);
+        }
+        
         def frameParents = frame.Parents;
         mutable parentCount = 0;
         
@@ -67,10 +88,7 @@ namespace N2.Internal
             def a = parent.ParseAlternatives[index];
             when (end == a.Start && a.End >= 0 || a.End == -1 && end == -1 && a.Start == fail)
             {
-              def key = parent.Id << 8 | index;
-              mutable node;
-              when (!nodeMap.TryGetValue(key, out node))
-                node = ParseAlternativeNode(parent, index, nodeMap);
+              def node = getNode(parent, index);
               parents.Add(node);
             }
           }
@@ -79,13 +97,25 @@ namespace N2.Internal
         _parents = parents;
       }
       
+      public static MakeKey(frame : RecoveryStackFrame, parseAlternativeIndex : int) : int
+      {
+        assert3(parseAlternativeIndex < 100);
+        frame.Id * 100 + parseAlternativeIndex
+      }
+      
+      public static IsAdded(nodeMap : Dictionary[int, ParseAlternativeNode], frame : RecoveryStackFrame, parseAlternativeIndex : int) : bool
+      {
+        nodeMap.ContainsKey(MakeKey(frame, parseAlternativeIndex))
+      }
+      
       public static MakeGraph(topFrames : Seq[RecoveryStackFrame]) : List[ParseAlternativeNode]
       {
         def nodeMap = Dictionary.[int, ParseAlternativeNode]();
 
         foreach (frame when frame.IsTop in topFrames)
           for (mutable i = 0; i < frame.ParseAlternatives.Length; i++)
-            _ = ParseAlternativeNode(frame, i, nodeMap);
+            unless (IsAdded(nodeMap, frame, i))
+              _ = ParseAlternativeNode(frame, i, nodeMap);
 
         def result = nodeMap.Values.ToList();
         result.Sort(fun(a, b) { def res = a.Frame.Depth - b.Frame.Depth;  if (res != 0)  res else a.ParseAlternativeIndex - b.ParseAlternativeIndex; });
@@ -129,6 +159,8 @@ namespace N2.Internal
       public IsTop : bool { get { this.Best && !this.HasChildren } }
       
       public IsRoot : bool { get { this.Best && !this.HasParents } }
+      
+      public Id : int { get { MakeKey(this.Frame, this.ParseAlternativeIndex) } }
 
       public IsEmpty : bool
       {
@@ -360,9 +392,9 @@ namespace N2.Internal
           _ = map.TryGetValue(frame, out counter);
         
           map[frame] = counter + 1;
-          //TODO: доработать ParseAlternativeNode чтобы он поддерживал MissedSeparator
-          //when (frame is ListBody as frame when frame.MissedSeparator != null)
-          //  fillMap(frame.MissedSeparator);
+
+          when (node.MissedSeparator != null)
+            fillMap(node.MissedSeparator);
         
           foreach (subFrame in node.Parents)
             fillMap(subFrame);
@@ -372,9 +404,9 @@ namespace N2.Internal
           when (node.IsTop)
             fillMap(node);
       
-        def name(frame : ParseAlternativeNode) : string
+        def name(node : ParseAlternativeNode) : string
         {
-          (frame.Frame.Id << 8 | frame.ParseAlternativeIndex).ToString()
+          node.Id.ToString()
         }
         def visited = HashSet();
         def nodes = List();
@@ -423,7 +455,7 @@ namespace N2.Internal
               def pa = $" PA$(node.ParseAlternative)";
               def minMaxSkip = if (node.IsTop) null else $"\nMinST=$(node.MinTotalSkipedMandatoryTokenCount) MaxST=$(node.MaxTotalSkipedMandatoryTokenCount)";
               def skipedTokens = $"$minMaxSkip ST=$(node.SkipedMandatoryTokenCount)";
-              def label = $"$top«$(parser.RuleName)»$(frame.Info(pa, node.Best))$skipedTokens: $parse\n";
+              def label = $"$top«$(parser.RuleName)»$(frame.Info(node.Id, pa, node.Best))$skipedTokens: $parse\n";
               $"$label$failRuleCode"
             };
           def color = if (colorIndex(frame) == 1 && index < RecoveryStackFrame._colors.Length) $" color=$(RecoveryStackFrame._colors[index]) style=filled" else "";
@@ -434,11 +466,11 @@ namespace N2.Internal
           //def frame = node.Frame;
           when (visited.Add(node))
           {
-            //when (frame is ListBody as frame when frame.MissedSeparator != null)
-            //{
-            //  edges.Add($"$(name(frame)) -> $(name(frame.MissedSeparator)) [dir=back color=red]");
-            //  visitNodes(frame.MissedSeparator, index);
-            //}
+            when (node.MissedSeparator != null)
+            {
+              edges.Add($"$(name(node)) -> $(name(node.MissedSeparator)) [dir=back color=red]");
+              visitNodes(node.MissedSeparator, index);
+            }
             nodes.Add(node, index);
             foreach (parent in node.AllParents)
             {
@@ -460,7 +492,7 @@ namespace N2.Internal
       
       public override ToString() : string
       {
-        this.Frame.ToStringImpl($" PA=[$(this.ParseAlternative)]")
+        this.Frame.ToStringImpl(this.Id, $" PA=[$(this.ParseAlternative)]")
       }
     }
 }
