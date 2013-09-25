@@ -1485,6 +1485,7 @@ pre
     private static XElement MakeHtml(ParseAlternativeNodes nodes)
     {
       XElement content = null;
+      XElement missedSeparator = null;
       var skippedTokenCount = 0;
       var id = nodes.IsEmpty ? "???" : nodes.Head.Id.ToString();
       
@@ -1514,17 +1515,8 @@ pre
         var postfixText = text.Substring(a.Start, a.Stop - a.Start);
         var postfix = string.IsNullOrEmpty(postfixText) ? null : new XElement("span", isTop ? _topClass : _postfixClass, postfixText);
 
-        if (parsingFailAtState > 100 || parsingFailAtState < 0 || recursionState < 0)
-        {
-          //Debug.Assert(false);
-        }
-
         XElement skippedPrefix = null;
         XElement skippedPostfix = null;
-
-        if (frame.Id == 81)
-        {
-        }
 
         var endState = a.State;
 
@@ -1537,9 +1529,6 @@ pre
         {
           if (parsingFailAtState < recursionState)
           {
-            if (frame.Id == 120)
-            {
-            }
             skippedPrefix = new XElement("span", _skipedStateClass, SkipedStatesCode(frame, parsingFailAtState, recursionState));
           }
 
@@ -1550,7 +1539,19 @@ pre
         }
 
         var fail = a.End < 0 ? new XElement("span", _garbageClass, "<FAIL>") : null;
-        var span = new XElement("span", parsedClass, title, _start, prefix, skippedPrefix, content, skippedPostfix, postfix, _end, fail);
+        var span = new XElement("span", parsedClass, title, _start, prefix, missedSeparator, skippedPrefix, content, skippedPostfix, postfix, _end, fail);
+
+        var missed = node.MissedSeparator;
+
+        if (missed != null)
+        {
+          if (node.Id == 4200)
+          {
+          }
+          missedSeparator = new XElement("span", _skipedStateClass, _start, MakeTitle(missed), SkipedStatesCode(frame, missed.Frame.FirstState, -1), _end);
+        }
+        else
+          missedSeparator = null;
 
         if (!node.HasParents)
           span.Add("\r\n");
