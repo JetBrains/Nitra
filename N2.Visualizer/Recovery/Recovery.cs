@@ -63,44 +63,40 @@ namespace N2.DebugStrategies
       {
         var frames = parser.RecoveryStacks.PrepareRecoveryStacks();
 
-        foreach (var frame in frames) // reset ParseAlternatives
-        {
-          frame.ParseAlternatives = null;
-          frame.Best = true;
-        }
-
-        // TODO: Возможно могут быть случаи когда кишки токена также парсятся из не токен-правил. Что делать в этом случае? Выдавать ошибку?
-        
-        CalcIsInsideTokenProperty(frames);
+        InitFrames(frames);
 
         var allFrames = CollectSpeculativeFrames(failPos, skipCount, parser, frames);
 
         ParseFrames(parser, skipCount, allFrames);
 
-        //ParseAlternativesVisializer.PrintParseAlternatives(allFrames, allFrames, parser, skipCount, "All available alternatives.");
+        if (IsAllFramesParseEmptyString(allFrames))
+          continue;
 
         var nodes = ParseAlternativeNode.MakeGraph(allFrames);
-
-        //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "Best alternatives 2.");
-
         var bestNodes = SelectBestFrames2(parser, nodes, skipCount);
 
-        //ParseAlternativesVisializer.PrintParseAlternatives(parser, bestNodes, "Best alternatives 2.");
-
-        if (IsAllFramesParseEmptyString(allFrames))
-          bestNodes.Clear();
-        else
-        {
-        }
+        if (IsAllFramesParseEmptyString(nodes))
+          Debug.Assert(false);
 
         if (bestNodes.Count != 0)
           return bestNodes;
-        else
-        {
-        }
+          
+        Debug.Assert(false);
       }
 
       return new List<ParseAlternativeNode>();
+    }
+
+    private static void InitFrames(List<RecoveryStackFrame> frames)
+    {
+      foreach (var frame in frames) // reset ParseAlternatives
+      {
+        frame.ParseAlternatives = null;
+        frame.Best = true;
+      }
+
+      // TODO: Возможно могут быть случаи когда кишки токена также парсятся из не токен-правил. Что делать в этом случае? Выдавать ошибку?
+      CalcIsInsideTokenProperty(frames);
     }
 
     private static void CalcIsInsideTokenProperty(List<RecoveryStackFrame> frames)
@@ -140,9 +136,28 @@ namespace N2.DebugStrategies
       return allFrames.Where(f => f.IsTop).ToList();
     }
 
-    private bool IsAllFramesParseEmptyString(IEnumerable<RecoveryStackFrame> allFrames)
+    private bool IsAllFramesParseEmptyString(IEnumerable<ParseAlternativeNode> nodes)
     {
-      return allFrames.All(f => f.ParseAlternatives.All(a => a.ParentsEat == 0));
+      foreach (var node in nodes)
+      {
+        if (!node.Best)
+          continue;
+
+        if (!node.ParseAlternative.IsEmpty)
+          return false;
+      }
+
+      return true;
+    }
+
+    private bool IsAllFramesParseEmptyString(IEnumerable<RecoveryStackFrame> frames)
+    {
+      foreach (var frame in frames)
+        foreach (var a in frame.ParseAlternatives)
+          if (!a.IsEmpty)
+            return false;
+
+      return true;
     }
 
     #endregion
