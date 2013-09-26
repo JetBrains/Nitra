@@ -1,15 +1,12 @@
 ﻿//#region Пролог
 #define DebugOutput
-using System.Collections;
-using JetBrains.Util;
+using System.Globalization;
 using N2.Internal;
-using Nemerle.Collections;
 using NB = Nemerle.Builtins;
 using IntRuleCallKey = Nemerle.Builtins.Tuple<int, N2.Internal.RuleCallKey>;
 
 using System;
 using System.IO;
-using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -31,7 +28,6 @@ namespace N2.DebugStrategies
   public class Recovery
   {
     public ReportData ReportResult;
-    private readonly Dictionary<RecoveryStackFrame, ParseAlternative[]> _visited = new Dictionary<RecoveryStackFrame, ParseAlternative[]>();
 
     #region Инициализация и старт
 
@@ -124,16 +120,12 @@ namespace N2.DebugStrategies
     }
 
 
-    private static void UpdateIsSpeculative(List<RecoveryStackFrame> frames, List<RecoveryStackFrame> allFrames)
+    // ReSharper disable once ParameterTypeCanBeEnumerable.Local
+    private static void UpdateIsSpeculative(IEnumerable<RecoveryStackFrame> sourceFrames, List<RecoveryStackFrame> allFrames)
     {
-      var frameSet = new HashSet<RecoveryStackFrame>(frames);
+      var frameSet = new HashSet<RecoveryStackFrame>(sourceFrames);
       foreach (var frame in allFrames)
         frame.IsSpeculative = !frameSet.Contains(frame);
-    }
-
-    static List<RecoveryStackFrame> Top(List<RecoveryStackFrame> allFrames)
-    {
-      return allFrames.Where(f => f.IsTop).ToList();
     }
 
     private bool IsAllFramesParseEmptyString(IEnumerable<ParseAlternativeNode> nodes)
@@ -164,80 +156,34 @@ namespace N2.DebugStrategies
 
     #region Выбор лучшего фрейма
 
-    private static void UpdateParseFramesAlternatives(List<RecoveryStackFrame> allFrames)
-    {
-      var root = allFrames[allFrames.Count - 1];
-      root.Best = true; // единственный корень гарантированно последний
-      //root.ParseAlternatives = RecoveryUtils.FilterMaxEndOrFail(root.ParseAlternatives.ToList()).ToArray();
-
-      for (int i = allFrames.Count - 1; i >= 0; --i)
-      {
-        var frame = allFrames[i];
-
-        switch (frame.Id)
-        {
-          case 321: break;
-          case 322: break;
-          case 254: break;
-        }
-
-        var x = frame as RecoveryStackFrame.ListBody;
-
-        if (!frame.Best)
-          continue;
-
-        if (frame.Children.Count == 0)
-          continue;
-
-        //var isExistsNotFailedAlternatives = RecoveryUtils.IsExistsNotFailedAlternatives(frame);
-        var isExistsNotFailedAlternatives = false;
-
-        var children = frame.Children;
-
-        var alternatives0 = RecoveryUtils.FilterParseAlternativesWichEndsEqualsParentsStarts(frame);
-        var alternatives9 = alternatives0;
-
-        frame.ParseAlternatives = alternatives9.ToArray();
-
-        foreach (var alternative in alternatives9)
-        {
-          var start = alternative.Start;
-
-          foreach (var child in children)
-            if (RecoveryUtils.EndWith(child, start, isExistsNotFailedAlternatives))
-              child.Best = true;
-        }
-      }
-    }
-
     private static List<ParseAlternativeNode> SelectBestFrames2(Parser parser, List<ParseAlternativeNode> nodes, int skipCount)
     {
-      ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveTheShorterAlternative.");
+      ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveTheShorterAlternative.");
       X.VisualizeFrames(nodes);
 
       RemoveTheShorterAlternative(nodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveTheShorterAlternative.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "AftFer RemoveTheShorterAlternative.");
       //X.VisualizeFrames(nodes);
 
       RemoveAlternativesWithALotOfSkippedTokens(nodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveAlternativesWithALotOfSkippedTokens.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveAlternativesWithALotOfSkippedTokens.");
       //X.VisualizeFrames(nodes);
       
       ParseAlternativeNode.DownToTop(nodes, RemoveChildrenIfAllChildrenIsEmpty);
-      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveChildrenIfAllChildrenIsEmpty.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveChildrenIfAllChildrenIsEmpty.");
       //X.VisualizeFrames(nodes);
       
       RemoveSuccessfullyParsed(nodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveSuccessfullyParsed.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveSuccessfullyParsed.");
       //X.VisualizeFrames(nodes);
       
       RemoveDuplicateNodes(nodes);
-      ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveDuplicateNodes.");
+      ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveDuplicateNodes.");
       X.VisualizeFrames(nodes);
 
       var bestNodes = FindBestNodes(nodes);
       X.VisualizeFrames(bestNodes);
-      ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, "After RemoveDuplicateNodes.");
+      ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveDuplicateNodes.");
       return bestNodes;
     }
 
@@ -332,6 +278,7 @@ namespace N2.DebugStrategies
       return new NB.Tuple<T1, T2>(field1, field2);
     }
 
+    // ReSharper disable once UnusedMember.Local
     private static NB.Tuple<T1, T2, T3> Create<T1, T2, T3>(T1 field1, T2 field2, T3 field3)
     {
       return new NB.Tuple<T1, T2, T3>(field1, field2, field3);
@@ -343,6 +290,7 @@ namespace N2.DebugStrategies
       ParseAlternativeNode.DownToTop(nodes, RemoveMarked);
     }
 
+    // ReSharper disable once ParameterTypeCanBeEnumerable.Local
     private static List<ParseAlternativeNode> FindBestNodes(List<ParseAlternativeNode> nodes)
     {
       var bestNodes = new List<ParseAlternativeNode>();
@@ -374,7 +322,7 @@ namespace N2.DebugStrategies
         if (frame.TextPos != a.Start)
           return;
 
-        for (int i = frame.FailState2; i != -1; i = frame.GetNextState(i)) // TODO: Разобраться: c frame.FailState (FS) получалась фигня. С frame.FailState2 (RS) то что нужно. 
+        for (int i = frame.FailState2; i != -1; i = frame.GetNextState(i))
           if (!frame.IsSateCanParseEmptyString(i))
             return;
 
@@ -409,19 +357,18 @@ namespace N2.DebugStrategies
 
     private static List<RecoveryStackFrame> FilterBestIfExists(List<RecoveryStackFrame> bestFrames)
     {
-      return RecoveryUtils.FilterIfExists(bestFrames, f => !f.IsSpeculative).ToList();
+      return bestFrames.FilterIfExists(f => !f.IsSpeculative).ToList();
     }
 
     #endregion
 
     #region Parsing
 
+    // ReSharper disable once ParameterTypeCanBeEnumerable.Local
     private void ParseFrames(Parser parser, int skipCount, List<RecoveryStackFrame> allFrames)
     {
-      for (int i = 0; i < allFrames.Count; ++i)
+      foreach (var frame in allFrames)
       {
-        var frame = allFrames[i];
-
         if (frame.Id == 50)
           Debug.Assert(true);
 
@@ -449,8 +396,8 @@ namespace N2.DebugStrategies
           foreach (var end in childEnds)
             curentEnds.Add(ParseNonTopFrame(parser, frame, end));
 
-          var xx = Enumerable.ToArray(curentEnds);
-          frame.ParseAlternatives = xx;
+          var parseAlternatives = curentEnds.ToArray();
+          frame.ParseAlternatives = parseAlternatives;
         }
       }
     }
@@ -936,14 +883,6 @@ namespace N2.DebugStrategies
 	    return FilterMax(frame.ParseAlternatives, a => a.Stop);
 	  }
 
-	  private static void RemoveUnnecessaryAlternatives(RecoveryStackFrame frame, HashSet<int> starts)
-    {
-      if (frame.ParseAlternatives.Length > 1)
-        frame.ParseAlternatives = frame.ParseAlternatives.Where(a => starts.Contains(a.Start)).ToArray();
-      else if (frame.ParseAlternatives.Length == 1)
-        Debug.Assert(starts.Contains(frame.ParseAlternatives[0].Start));
-    }
-
     public static List<RecoveryStackFrame> UpdateReverseDepthAndCollectAllFrames(this System.Collections.Generic.ICollection<RecoveryStackFrame> heads)
     {
       var allRecoveryStackFrames = new List<RecoveryStackFrame>();
@@ -1113,12 +1052,13 @@ namespace N2.DebugStrategies
 	    return children;
 	  }
 
-	  public static bool EndWith(RecoveryStackFrame child, int end, bool choiceOnlyNonFailedAlternatives)
+	  public static bool EndWith(RecoveryStackFrame child, int end)
 	  {
-      if (choiceOnlyNonFailedAlternatives)
-        return child.ParseAlternatives.Any(p => p.End == end);
+	    foreach (ParseAlternative p in child.ParseAlternatives)
+	      if (p.Stop == end)
+          return true;
 
-      return child.ParseAlternatives.Any(p => p.Stop == end);
+      return false;
 	  }
 
 	  public static List<ParseAlternative> FilterMinState(List<ParseAlternative> alternatives)
@@ -1197,10 +1137,7 @@ namespace N2.DebugStrategies
 	  public static List<RecoveryStackFrame> FilterTopFramesWhichRecoveredOnFailStateIfExists(List<RecoveryStackFrame> bestFrames)
 	  {
 	    if (bestFrames.Any(f => f.ParseAlternatives.Any(a => a.State == f.FailState)))
-	    {
-	      // TODO: Устранить этот кабздец! Удалять фреймы прямо из массива.
 	      return bestFrames.Where(f => f.ParseAlternatives.Any(a => a.State == f.FailState)).ToList();
-	    }
 
 	    return bestFrames;
 	  }
@@ -1289,58 +1226,6 @@ namespace N2.DebugStrategies
 	  {
 	    return alternatives0.Where(a => a.End >= 0).ToList();
 	  }
-
-    public static bool LongerThan<T>(this IEnumerable<T> collection, int count)
-    {
-      Debug.Assert(count >= 0);
-
-      // ReSharper disable once PossibleMultipleEnumeration
-      int len = TryGetFastCount<T>(collection);
-
-      if (len >= 0)
-        return len > count;
-
-      var num = 0;
-
-      foreach (var obj in collection)
-        if (++num > count)
-          return true;
-
-      return false;
-    }
-
-    public static bool CountIs<T>(this IEnumerable<T> collection, int exactCount)
-    {
-      int count = TryGetFastCount<T>(collection);
-      if (count >= 0)
-        return count == exactCount;
-
-      var num = 0;
-
-      foreach (var obj in collection)
-      {
-        if (++num > exactCount)
-          return false;
-      }
-      return num == exactCount;
-    }
-
-    public static int TryGetFastCount<T>(this IEnumerable<T> collection)
-    {
-      var collection1 = collection as System.Collections.Generic.ICollection<T>;
-      if (collection1 != null)
-        return collection1.Count;
-        
-      var collection2 = collection as ICollection;
-      if (collection2 != null)
-        return collection2.Count;
-        
-      var str = collection as string;
-      if (str != null)
-        return str.Length;
-
-      return -1;
-    }
   }
 
   static class ParseAlternativesVisializer
@@ -1420,7 +1305,6 @@ pre
 
     static readonly XElement  _start              = new XElement("span", _default, "▸");
     static readonly XElement  _end                = new XElement("span", _default, "◂");
-    static readonly Regex     _removePA           = new Regex(@" PA=\[.*\]", RegexOptions.Compiled);
 
     /// <summary>
     /// Формирует HTML-файл графически описывающий варианты продолжения прасинга из графа и открывает его в бруозере исползуемом по умолчанию.
@@ -1430,16 +1314,13 @@ pre
       RecoveryUtils.UpdateParseAlternativesTopToDown(allFrames);
       var nodes = ParseAlternativeNode.MakeGraph(bestFrames);
 
-      PrintParseAlternatives(parser, nodes, msg);
+      PrintParseAlternatives(parser, nodes, skipCount, msg);
     }
 
-    public static void PrintParseAlternatives(Parser parser, List<ParseAlternativeNode> nodes, string msg = null)
+    public static void PrintParseAlternatives(Parser parser, List<ParseAlternativeNode> nodes, int skipCount, string msg = null)
     {
-      var results = new List<XNode>();
-
-      results.Add(new XText(parser.DebugText + "\r\n\r\n"));
+      var results = new List<XNode> { new XText(parser.DebugText + "\r\n\r\n") };
       var alternativesCount = 0;
-
       var topNodes = nodes.Where(n => n.IsTop).ToList();
 
       foreach (var g in topNodes.GroupBy(n => n.Frame))
@@ -1502,7 +1383,7 @@ pre
       XElement content = null;
       XElement missedSeparator = null;
       var skippedTokenCount = 0;
-      var id = nodes.IsEmpty ? "???" : nodes.Head.Id.ToString();
+      var id = nodes.IsEmpty ? "???" : nodes.Head.Id.ToString(CultureInfo.InvariantCulture);
       
 
       while (true)
@@ -1583,7 +1464,7 @@ pre
 
     private static XAttribute MakeTitle(ParseAlternativeNode node)
     {
-      return new XAttribute("title", _removePA.Replace(node.Frame.ToString(), "." + node.ParseAlternativeIndex + " PA=" + node.ParseAlternative));
+      return new XAttribute("title", node);
     }
   }
   
