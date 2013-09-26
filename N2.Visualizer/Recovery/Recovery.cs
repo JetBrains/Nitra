@@ -570,7 +570,7 @@ namespace N2.DebugStrategies
       foreach (var frame in firstBestFrame)
       {
         var errorIndex = parser.ErrorData.Count;
-        parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), cloned.ToArray(), parser.ErrorData.Count));
+        parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), bestNodes.ToArray(), parser.ErrorData.Count));
         if (!frame.PatchAst(errorIndex, parser))
           RecoveryUtils.ResetParentsBestProperty(frame.Parents);
         frame.Best = false;
