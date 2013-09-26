@@ -158,8 +158,8 @@ namespace N2.DebugStrategies
 
     private static List<ParseAlternativeNode> SelectBestFrames2(Parser parser, List<ParseAlternativeNode> nodes, int skipCount)
     {
-      ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveTheShorterAlternative.");
-      X.VisualizeFrames(nodes);
+      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveTheShorterAlternative.");
+      //X.VisualizeFrames(nodes);
 
       RemoveTheShorterAlternative(nodes);
       //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "AftFer RemoveTheShorterAlternative.");
@@ -178,12 +178,12 @@ namespace N2.DebugStrategies
       //X.VisualizeFrames(nodes);
       
       RemoveDuplicateNodes(nodes);
-      ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveDuplicateNodes.");
-      X.VisualizeFrames(nodes);
+      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveDuplicateNodes.");
+      //X.VisualizeFrames(nodes);
 
       var bestNodes = FindBestNodes(nodes);
-      X.VisualizeFrames(bestNodes);
-      ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveDuplicateNodes.");
+      //X.VisualizeFrames(bestNodes);
+      //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveDuplicateNodes.");
       return bestNodes;
     }
 
@@ -561,7 +561,8 @@ namespace N2.DebugStrategies
 
       bestNodes = new List<ParseAlternativeNode>(bestNodes.GroupBy(node => node.Frame).Select(group => group.First()));
       var allNodes = bestNodes.UpdateReverseDepthAndCollectAllNodes();
-      var nodesForError = allNodes.ToArray();//сделать клонирование
+      var nodesForError = ParseAlternativeNode.CloneGraph(allNodes).ToArray();//сделать клонирование
+
       var markers = new Dictionary<ParseAlternativeNode, HashSet<ParseAlternativeNode>>();
       for (int i = allNodes.Count - 1; i >= 0; --i)
       {
@@ -592,10 +593,10 @@ namespace N2.DebugStrategies
         node.Best = false;
       }
 
-      for (int i = 0; i < allNodes.Count - 1; ++i)//последним идет корень. Его фиксить не надо
+      for (int i = 0; i < allNodes.Count; ++i)//последним идет корень. Его фиксить не надо
       {
         var node = allNodes[i];
-        if (node.Best)
+        if (node.Best && !(node.Frame is RecoveryStackFrame.Root))
           if (!node.ContinueParse(parser))
             RecoveryUtils.ResetParentsBestProperty(node.Parents);
       }
@@ -985,12 +986,14 @@ namespace N2.DebugStrategies
         node.Depth = -1;
         foreach (var parent in node.Parents)
           ClearAndCollectNodes(parent, allNodes);
+        if (node.MissedSeparator != null)
+          ClearAndCollectNodes(node.MissedSeparator, allNodes);
       }
     }
 
     private static void UpdateNodeReverseDepth(this ParseAlternativeNode node)
     {
-      if (node.Parents.Count() == 0)
+      if (!node.HasParents)
         node.Depth = 0;
       else
       {

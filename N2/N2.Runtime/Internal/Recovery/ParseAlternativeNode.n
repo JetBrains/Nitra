@@ -37,7 +37,7 @@ namespace N2.Internal
       protected _children : List[ParseAlternativeNode] = List();
       
       [EqualsIgnore]
-      protected _parents     : List[ParseAlternativeNode];
+      protected _parents     : List[ParseAlternativeNode] = List();
 
       private this(frame : RecoveryStackFrame, parseAlternativeIndex : int, nodeMap : Dictionary[int, ParseAlternativeNode])
       {
@@ -81,7 +81,7 @@ namespace N2.Internal
         foreach (parent when parent.Best in frameParents)
           parentCount += parent.ParseAlternatives.Length;
 
-        def parents = List(parentCount);
+        def parents = _parents;
         
         foreach (parent when parent.Best in frameParents with i)
         {
@@ -95,8 +95,6 @@ namespace N2.Internal
             }
           }
         }
-
-        _parents = parents;
       }
       
       public static MakeKey(frame : RecoveryStackFrame, parseAlternativeIndex : int) : int
@@ -193,10 +191,7 @@ namespace N2.Internal
 
       public AllParents : Seq[ParseAlternativeNode]
       {
-        get
-        {
-          _parents
-        }
+        get { _parents }
       }
       
       public Children : Seq[ParseAlternativeNode]
@@ -373,8 +368,8 @@ namespace N2.Internal
         {
           // костыли и подпорки для обхода проблем возникающих от восстановления разделителя цикла
           def frame = node.Frame;
-          node.Best  = true;
-          frame.Best = true;
+          node.Best  = false;
+          frame.Best = false;
           mutable errorIndex = parser.ErrorData.Count;
           // Берем последнее сообщение об ошибке, так как его только что добавили, а MissedSeparator должен идти перед ним.
           def error = parser.ErrorData[errorIndex - 1];
@@ -389,7 +384,6 @@ namespace N2.Internal
           error.Index++; // меняем сообщения об ошибках местами
         
           def rp = frame.GetRuleParser();
-          // TODO: У PatchAst должен появиться парметр принимающий индекс парс-альтернативы. Надо пофиксить вызов PatchAst после этого.
           _ = rp.PatchAst(frame.StartPos, -1, errorIndex, frame, parser);
           this.MissedSeparator = null;
         }
@@ -408,6 +402,60 @@ namespace N2.Internal
       {
         MakeMissedSeparator(parser);
         Frame.GetRuleParser().PatchAst(-1, -2, -1, Frame, parser)
+      }
+      
+      public this(other : this, frameMap : Hashtable[int, RecoveryStackFrame])
+      {
+        this.Frame                              =  frameMap[other.Frame.Id];
+        this.ParseAlternativeIndex              =  other.ParseAlternativeIndex             ;
+        this._state                             =  other._state                            ;
+        this.MissedSeparator                    =  other.MissedSeparator                   ;
+        this.Depth                              =  other.Depth                             ;
+        this._skipedMandatoryTokenCount         =  other._skipedMandatoryTokenCount        ;
+        this._maxTotalSkipedMandatoryTokenCount =  other._maxTotalSkipedMandatoryTokenCount;
+        this._minTotalSkipedMandatoryTokenCount =  other._minTotalSkipedMandatoryTokenCount;
+      }
+      
+      public static CloneGraph(graph : List[ParseAlternativeNode]) : List[ParseAlternativeNode]
+      {
+        def cloned   = List(graph.Count);
+        def nodeMap  = Hashtable(graph.Count);
+        def frameMap = Hashtable(graph.Count(n => n.ParseAlternativeIndex == 0));
+
+        foreach (node in graph)
+        {
+          def frame = node.Frame;
+          def id = frame.Id;
+          unless (frameMap.Contains(id))
+            frameMap.Add(id, frame.CloneInternal());
+        }
+        
+        foreach (node in graph)
+        {
+          def clone = ParseAlternativeNode(node, frameMap);
+          cloned.Add(clone);
+          nodeMap.Add(node.Id, clone);
+        }
+      
+        foreach (node in graph)
+        {
+          def clone    = nodeMap[node.Id];
+          def children = clone._children;
+        
+          foreach (oldNode in node.Children)
+          {
+            mutable child;
+            when (nodeMap.TryGetValue(oldNode.Id, out child))
+              children.Add(child);
+          }
+
+          def parents = clone._parents;
+        
+          foreach (oldNode in node.Parents)
+            _ = parents.Add(nodeMap[oldNode.Id]);
+        }      
+      
+        cloned
       }
 
       public static DotNodes(stacks : Seq[ParseAlternativeNode]) : string
