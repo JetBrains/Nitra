@@ -528,6 +528,25 @@ namespace N2.DebugStrategies
 
     #region Модификация AST (FixAst)
 
+    void MarkRecoveryNodes(ParseAlternativeNode node, ParseAlternativeNode mark, Dictionary<ParseAlternativeNode, HashSet<ParseAlternativeNode>> markers)
+    {
+      HashSet<ParseAlternativeNode> markSet;
+      if (markers.TryGetValue(node, out markSet))
+      {
+        if (markSet.Contains(mark))
+          return;
+      }
+      else
+      {
+        markSet = new HashSet<ParseAlternativeNode>();
+        markers[node] = markSet;
+      }
+      markSet.Add(mark);
+      foreach (var child in node.Children)
+        if (child.Best)
+          MarkRecoveryNodes(child, mark, markers);
+    }
+
     // ReSharper disable once ParameterTypeCanBeEnumerable.Local
     private void FixAst(List<ParseAlternativeNode> bestNodes, int failPos, int skipCount, Parser parser)
     {
@@ -540,48 +559,45 @@ namespace N2.DebugStrategies
       if (bestNodes.Count == 0)
         return;
 
-      var bestFrames = new List<RecoveryStackFrame>(); //FIXME: Дописать!
-
-      var allFrames = bestFrames.UpdateDepthAndCollectAllFrames();
-      var cloned = RecoveryStackFrame.CloneGraph(allFrames);
-
-      var filtererBestFrames = FilterBestIfExists(bestFrames);
-      if (filtererBestFrames.Count > 1)
-        filtererBestFrames = new List<RecoveryStackFrame> { filtererBestFrames[0] };
-      if (filtererBestFrames.Count != bestFrames.Count)
+      bestNodes = new List<ParseAlternativeNode>(bestNodes.GroupBy(node => node.Frame).Select(group => group.First()));
+      var allNodes = bestNodes.UpdateReverseDepthAndCollectAllNodes();
+      var nodesForError = allNodes.ToArray();//сделать клонирование
+      var markers = new Dictionary<ParseAlternativeNode, HashSet<ParseAlternativeNode>>();
+      for (int i = allNodes.Count - 1; i >= 0; --i)
       {
-        RecoveryUtils.RemoveOthrHeads(allFrames, filtererBestFrames);
-        RecoveryUtils.CheckGraph(allFrames, filtererBestFrames);
-        allFrames = filtererBestFrames.UpdateDepthAndCollectAllFrames();
-        RecoveryUtils.CheckGraph(allFrames, filtererBestFrames);
-        bestFrames = filtererBestFrames;
+        var node = allNodes[i];
+        if (node.Children.Count() > 1 && !(node.Frame is RecoveryStackFrame.ExtensiblePrefix || node.Frame is RecoveryStackFrame.ExtensiblePostfix))
+        {
+          foreach (var child in node.Children)
+            MarkRecoveryNodes(child, child, markers);
+        }
       }
 
-      var first = bestFrames[0];
-      var firstBestFrame = bestFrames;
-      RecoveryUtils.RemoveFramesUnnecessaryAlternatives(allFrames, first);
-      RecoveryUtils.CheckGraph(allFrames, firstBestFrame);
+      if (markers.Count > 0)
+      {
+        bestNodes = bestNodes
+          .GroupBy(node => markers[node], HashSet<ParseAlternativeNode>.CreateSetComparer())
+          .Select(g => new List<ParseAlternativeNode>(g))
+          .OrderBy(g => g.Count)
+          .First();
+        allNodes = bestNodes.UpdateReverseDepthAndCollectAllNodes();
+      }
 
-      //ParseAlternativesVisializer.PrintParseAlternatives(bestFrames, allFrames, parser, skipCount, "Selected alternative.");
-
-
-      allFrames = allFrames.UpdateReverseDepthAndCollectAllFrames();
-
-      foreach (var frame in firstBestFrame)
+      foreach (var node in bestNodes)
       {
         var errorIndex = parser.ErrorData.Count;
-        parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), bestNodes.ToArray(), parser.ErrorData.Count));
-        if (!frame.PatchAst(errorIndex, parser))
-          RecoveryUtils.ResetParentsBestProperty(frame.Parents);
-        frame.Best = false;
+        parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), nodesForError, parser.ErrorData.Count));
+        if (!node.PatchAst(errorIndex, parser))
+          RecoveryUtils.ResetParentsBestProperty(node.Parents);
+        node.Best = false;
       }
 
-      for (int i = 0; i < allFrames.Count - 1; ++i)//последним идет корень. Его фиксить не надо
+      for (int i = 0; i < allNodes.Count - 1; ++i)//последним идет корень. Его фиксить не надо
       {
-        var frame = allFrames[i];
-        if (frame.Best)
-          if (!frame.ContinueParse(parser))
-            RecoveryUtils.ResetParentsBestProperty(frame.Parents);
+        var node = allNodes[i];
+        if (node.Best)
+          if (!node.ContinueParse(parser))
+            RecoveryUtils.ResetParentsBestProperty(node.Parents);
       }
     }
 
@@ -883,19 +899,18 @@ namespace N2.DebugStrategies
 	    return FilterMax(frame.ParseAlternatives, a => a.Stop);
 	  }
 
-    public static List<RecoveryStackFrame> UpdateReverseDepthAndCollectAllFrames(this System.Collections.Generic.ICollection<RecoveryStackFrame> heads)
+    public static List<ParseAlternativeNode> UpdateReverseDepthAndCollectAllNodes(this System.Collections.Generic.ICollection<ParseAlternativeNode> heads)
     {
-      var allRecoveryStackFrames = new List<RecoveryStackFrame>();
+      var allNodes = new List<ParseAlternativeNode>();
 
-      foreach (var stack in heads)
-        stack.ClearAndCollectFrames(allRecoveryStackFrames);
-      foreach (var stack in heads)
-        stack.UpdateFrameReverseDepth();
+      foreach (var node in heads)
+        node.ClearAndCollectNodes(allNodes);
+      foreach (var node in heads)
+        node.UpdateNodeReverseDepth();
 
-      allRecoveryStackFrames.SortByDepth();
-      allRecoveryStackFrames.Reverse();
+      allNodes.Sort((l, r) => -l.Depth.CompareTo(r.Depth));
 
-      return allRecoveryStackFrames;
+      return allNodes;
     }
 
     public static List<RecoveryStackFrame> UpdateDepthAndCollectAllFrames(this System.Collections.Generic.ICollection<RecoveryStackFrame> heads)
@@ -962,16 +977,27 @@ namespace N2.DebugStrategies
         }
     }
 
-    private static void UpdateFrameReverseDepth(this RecoveryStackFrame frame)
+    private static void ClearAndCollectNodes(this ParseAlternativeNode node, List<ParseAlternativeNode> allNodes)
     {
-      if (frame.Parents.Count == 0)
-        frame.Depth = 0;
+      if (node.Depth != -1)
+      {
+        allNodes.Add(node);
+        node.Depth = -1;
+        foreach (var parent in node.Parents)
+          ClearAndCollectNodes(parent, allNodes);
+      }
+    }
+
+    private static void UpdateNodeReverseDepth(this ParseAlternativeNode node)
+    {
+      if (node.Parents.Count() == 0)
+        node.Depth = 0;
       else
       {
-        foreach (var parent in frame.Parents)
+        foreach (var parent in node.Parents)
           if (parent.Depth == -1)
-            UpdateFrameReverseDepth(parent);
-        frame.Depth = frame.Parents.Max(x => x.Depth) + 1;
+            UpdateNodeReverseDepth(parent);
+        node.Depth = node.Parents.Max(x => x.Depth) + 1;
       }
     }
 
@@ -1179,19 +1205,15 @@ namespace N2.DebugStrategies
 	      }
 	  }
 
-	  public static void ResetParentsBestProperty(HashSet<RecoveryStackFrame> parents)
+	  public static void ResetParentsBestProperty(IEnumerable<ParseAlternativeNode> parents)
 	  {
-	    foreach (var frame in parents)
-        if (frame.Best)
+	    foreach (var node in parents)
+        if (node.Best)
 	      {
-          if (frame.Id == 321)
-          {
-          }
-          frame.Best = false;
-          ResetParentsBestProperty(frame.Parents);
+          node.Best = false;
+          ResetParentsBestProperty(node.Parents);
 	      }
 	  }
-
 
 	  public static bool StartWith(RecoveryStackFrame parent, HashSet<int> ends)
 	  {
