@@ -56,10 +56,13 @@ namespace N2.DebugStrategies
     private List<ParseAlternativeNode> CollectBestFrames(int failPos, ref int skipCount, Parser parser)
     {
       var text = parser.Text;
-
+      var beginFrames = new HashSet<RecoveryStackFrame>(parser.RecoveryStacks.PrepareRecoveryStacks());
       for (; failPos + skipCount < text.Length; ++skipCount)
       {
         var frames = parser.RecoveryStacks.PrepareRecoveryStacks();
+        foreach (var frame in frames)
+          if (!beginFrames.Contains(frame))
+            Debug.WriteLine(frame.ToString());
 
         InitFrames(frames);
 
@@ -368,7 +371,7 @@ namespace N2.DebugStrategies
     {
       foreach (var frame in allFrames)
       {
-        if (frame.Id == 50)
+        if (frame.Id == 34)
           Debug.Assert(true);
 
         if (frame.Depth == 0)
@@ -408,8 +411,8 @@ namespace N2.DebugStrategies
 
       switch (frame.Id)
       {
-        case 254: break;
-        case 262: break;
+        case 256: break;
+        case 34: break;
       }
 
       var curTextPos = frame.TextPos + skipCount;
@@ -438,7 +441,7 @@ namespace N2.DebugStrategies
       switch (frame.Id)
       {
         case 254: break;
-        case 262: break;
+        case 34: break;
       }
       var parentsEat = ParentsMaxEat(frame, curTextPos);
       var maxfailPos = curTextPos;
@@ -489,10 +492,19 @@ namespace N2.DebugStrategies
 
       if (!frame.IsPrefixParsed) // пытаемся восстановить пропущенный разделитель списка
       {
-        var bodyFrame = frame.GetLoopBodyFrameForSeparatorState(failPos + skipCount, parser);
+        switch (frame.Id)
+        {
+          case 69: break;
+        }
+        var bodyFrame = frame.GetLoopBodyFrameForSeparatorState(failPos, parser);
 
         if (bodyFrame != null)
         {
+          switch (bodyFrame.Id)
+          {
+            case 181: break;
+            case 256: break;
+          }
           // Нас просят попробовать востановить отстуствующий разделитель цикла. Чтобы знать, нужно ли это дела, или мы
           // имеем дело с банальным концом цикла мы должны
           Debug.Assert(bodyFrame.Parents.Count == 1);
@@ -511,10 +523,22 @@ namespace N2.DebugStrategies
       if (failPos != frame.TextPos)
         return;
 
-      foreach (var subFrame in frame.GetSpeculativeFramesForState(failPos + skipCount, parser, state))
+      switch (frame.Id)
+      {
+        case 69: break;
+        case 181: break;
+      }
+
+      foreach (var subFrame in frame.GetSpeculativeFramesForState(failPos, parser, state))
       {
         if (subFrame.IsTokenRule)
           continue;
+
+        switch (subFrame.Id)
+        {
+          case 181: break;
+          case 256: break;
+        }
 
         if (!newFrames.Add(subFrame))
           continue;
@@ -1006,8 +1030,8 @@ namespace N2.DebugStrategies
         {
           if (parent.Children.Contains(frame))
             Debug.Assert(false);
-
-          parent.Children.Add(frame);
+          else
+            parent.Children.Add(frame);
         }
 
       return allRecoveryStackFrames;
