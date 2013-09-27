@@ -489,7 +489,7 @@ namespace N2.DebugStrategies
 
       if (!frame.IsPrefixParsed) // пытаемся восстановить пропущенный разделитель списка
       {
-        var bodyFrame = frame.GetLoopBodyFrameForSeparatorState(failPos, parser);
+        var bodyFrame = frame.GetLoopBodyFrameForSeparatorState(failPos + skipCount, parser);
 
         if (bodyFrame != null)
         {
@@ -511,7 +511,7 @@ namespace N2.DebugStrategies
       if (failPos != frame.TextPos)
         return;
 
-      foreach (var subFrame in frame.GetSpeculativeFramesForState(failPos, parser, state))
+      foreach (var subFrame in frame.GetSpeculativeFramesForState(failPos + skipCount, parser, state))
       {
         if (subFrame.IsTokenRule)
           continue;
