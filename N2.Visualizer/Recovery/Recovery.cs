@@ -563,26 +563,7 @@ namespace N2.DebugStrategies
       var allNodes = bestNodes.UpdateReverseDepthAndCollectAllNodes();
       var nodesForError = ParseAlternativeNode.CloneGraph(allNodes).ToArray();//сделать клонирование
 
-      var markers = new Dictionary<ParseAlternativeNode, HashSet<ParseAlternativeNode>>();
-      for (int i = allNodes.Count - 1; i >= 0; --i)
-      {
-        var node = allNodes[i];
-        if (node.Children.Count() > 1 && !(node.Frame is RecoveryStackFrame.ExtensiblePrefix || node.Frame is RecoveryStackFrame.ExtensiblePostfix))
-        {
-          foreach (var child in node.Children)
-            MarkRecoveryNodes(child, child, markers);
-        }
-      }
-
-      if (markers.Count > 0)
-      {
-        bestNodes = bestNodes
-          .GroupBy(node => markers[node], HashSet<ParseAlternativeNode>.CreateSetComparer())
-          .Select(g => new List<ParseAlternativeNode>(g))
-          .OrderBy(g => g.Count)
-          .First();
-        allNodes = bestNodes.UpdateReverseDepthAndCollectAllNodes();
-      }
+      allNodes = FilterNodesForFix(ref bestNodes, allNodes);
 
       foreach (var node in bestNodes)
       {
@@ -600,6 +581,30 @@ namespace N2.DebugStrategies
           if (!node.ContinueParse(parser))
             RecoveryUtils.ResetParentsBestProperty(node.Parents);
       }
+    }
+
+    private List<ParseAlternativeNode> FilterNodesForFix(ref List<ParseAlternativeNode> bestNodes, List<ParseAlternativeNode> allNodes)
+    {
+      var markers = new Dictionary<ParseAlternativeNode, HashSet<ParseAlternativeNode>>();
+      for (int i = allNodes.Count - 1; i >= 0; --i)
+      {
+        var node = allNodes[i];
+        var frame = node.Frame;
+        if (!(frame is RecoveryStackFrame.ExtensiblePrefix || frame is RecoveryStackFrame.ExtensiblePostfix) && node.HasAtLeastTwoChildren)
+          foreach (var child in node.Children)
+            MarkRecoveryNodes(child, child, markers);
+      }
+
+      if (markers.Count > 0)
+      {
+        bestNodes = bestNodes
+          .GroupBy(node => markers[node], HashSet<ParseAlternativeNode>.CreateSetComparer())
+          .Select(g => new List<ParseAlternativeNode>(g))
+          .OrderBy(g => g.Count)
+          .First();
+        allNodes = bestNodes.UpdateReverseDepthAndCollectAllNodes();
+      }
+      return allNodes;
     }
 
     #endregion
