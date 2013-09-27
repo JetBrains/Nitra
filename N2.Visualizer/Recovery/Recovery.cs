@@ -2,6 +2,7 @@
 #define DebugOutput
 using System.Globalization;
 using N2.Internal;
+using N2.Runtime.Errors;
 using NB = Nemerle.Builtins;
 using IntRuleCallKey = Nemerle.Builtins.Tuple<int, N2.Internal.RuleCallKey>;
 
@@ -11,6 +12,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Xml.Linq;
+using SCG = System.Collections.Generic;
 
 #if N2RUNTIME
 namespace N2.Strategies
@@ -156,7 +158,9 @@ namespace N2.DebugStrategies
 
     #region Выбор лучшего фрейма
 
+    // ReSharper disable UnusedParameter.Local
     private static List<ParseAlternativeNode> SelectBestFrames2(Parser parser, List<ParseAlternativeNode> nodes, int skipCount)
+    // ReSharper restore UnusedParameter.Local
     {
       //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveTheShorterAlternative.");
       //X.VisualizeFrames(nodes);
@@ -353,11 +357,6 @@ namespace N2.DebugStrategies
       }
       foreach (var child in node.Children)
         child.Remove();
-    }
-
-    private static List<RecoveryStackFrame> FilterBestIfExists(List<RecoveryStackFrame> bestFrames)
-    {
-      return bestFrames.FilterIfExists(f => !f.IsSpeculative).ToList();
     }
 
     #endregion
@@ -559,16 +558,29 @@ namespace N2.DebugStrategies
       if (bestNodes.Count == 0)
         return;
 
-      bestNodes = new List<ParseAlternativeNode>(bestNodes.GroupBy(node => node.Frame).Select(group => group.First()));
-      var allNodes = bestNodes.UpdateReverseDepthAndCollectAllNodes();
-      var nodesForError = ParseAlternativeNode.CloneGraph(allNodes).ToArray();//сделать клонирование
+      var loc = new Location(parser.Source, new NToken(failPos, failPos + skipCount));
+      if (skipCount > 0)
+        parser.ReportError(new UnexpectedTokenError(loc));
+
+      var allNodes = bestNodes.UpdateDepthAndCollectAllNodes();
+      TryAddErrorsForMissedSeparators(parser, loc, allNodes);
+
+      if (bestNodes.All(n => n.MinTotalSkipedMandatoryTokenCount != 0))
+      {
+        var nodesForError = ParseAlternativeNode.CloneGraph(allNodes).ToArray();//сделать клонирование
+        parser.ReportError(new ExpectedRulesError(loc, nodesForError));
+      }
+
+      bestNodes = bestNodes.GroupBy(node => node.Frame).Select(group => group.First()).ToList();
+      allNodes = bestNodes.UpdateReverseDepthAndCollectAllNodes();
 
       allNodes = FilterNodesForFix(ref bestNodes, allNodes);
 
       foreach (var node in bestNodes)
       {
         var errorIndex = parser.ErrorData.Count;
-        parser.ErrorData.Add(new ParseErrorData(new NToken(failPos, failPos + skipCount), nodesForError, parser.ErrorData.Count));
+        var parseErrorData = new ParseErrorData(new NToken(failPos, failPos + skipCount));
+        parser.ErrorData.Add(parseErrorData);
         if (!node.PatchAst(errorIndex, parser))
           RecoveryUtils.ResetParentsBestProperty(node.Parents);
         node.Best = false;
@@ -580,6 +592,24 @@ namespace N2.DebugStrategies
         if (node.Best && !(node.Frame is RecoveryStackFrame.Root))
           if (!node.ContinueParse(parser))
             RecoveryUtils.ResetParentsBestProperty(node.Parents);
+      }
+    }
+
+    // ReSharper disable once ParameterTypeCanBeEnumerable.Local
+    /// <summary>Костыли и подпорки для обхода проблем возникающих от восстановления разделителя цикла</summary>
+    private static void TryAddErrorsForMissedSeparators(Parser parser, Location loc, List<ParseAlternativeNode> allNodes)
+    {
+      var missedSeparators = allNodes.Where(n => n.MissedSeparator != null);
+
+      // TODO: Может ли у нас быть более одного восстановленного разделителя? Например, в альтернативных ветках?
+      foreach (var node in missedSeparators)
+      {
+        var missedSeparator = node.MissedSeparator;
+        var errorPos = missedSeparator.Frame.StartPos;
+        parser.ReportError(new ExpectedRulesError(loc, new[] { missedSeparator }));
+        parser.ErrorData.Add(new ParseErrorData(new NToken(errorPos, errorPos)));
+        node.MakeMissedSeparator(parser);
+        missedSeparator.Best = true;
       }
     }
 
@@ -614,7 +644,7 @@ namespace N2.DebugStrategies
 
 	internal static class RecoveryUtils
   {
-    public static List<T> FilterMax<T>(this System.Collections.Generic.ICollection<T> candidates, Func<T, int> selector)
+    public static List<T> FilterMax<T>(this SCG.ICollection<T> candidates, Func<T, int> selector)
     {
       var count = candidates.Count;
       if (candidates.Count <= 1)
@@ -633,7 +663,7 @@ namespace N2.DebugStrategies
       return res2.ToList();
     }
 
-    public static List<T> FilterMin<T>(this System.Collections.Generic.ICollection<T> candidates, Func<T, int> selector)
+    public static List<T> FilterMin<T>(this SCG.ICollection<T> candidates, Func<T, int> selector)
     {
       var count = candidates.Count;
       if (candidates.Count <= 1)
@@ -905,7 +935,7 @@ namespace N2.DebugStrategies
 	    return FilterMax(frame.ParseAlternatives, a => a.Stop);
 	  }
 
-    public static List<ParseAlternativeNode> UpdateReverseDepthAndCollectAllNodes(this System.Collections.Generic.ICollection<ParseAlternativeNode> heads)
+    public static List<ParseAlternativeNode> UpdateReverseDepthAndCollectAllNodes(this SCG.ICollection<ParseAlternativeNode> heads)
     {
       var allNodes = new List<ParseAlternativeNode>();
 
@@ -919,7 +949,33 @@ namespace N2.DebugStrategies
       return allNodes;
     }
 
-    public static List<RecoveryStackFrame> UpdateDepthAndCollectAllFrames(this System.Collections.Generic.ICollection<RecoveryStackFrame> heads)
+    public static List<ParseAlternativeNode> UpdateDepthAndCollectAllNodes(this List<ParseAlternativeNode> heads)
+    {
+      var allNodes = new List<ParseAlternativeNode>();
+
+      foreach (var node in heads)
+        node.ClearAndCollectNodes(allNodes);
+      foreach (var node in heads)
+        node.Depth = 0;
+      foreach (var node in heads)
+        node.UpdateDepth();
+
+      allNodes.Sort((l, r) => l.Depth.CompareTo(r.Depth));
+
+      return allNodes;
+    }
+
+    public static void UpdateDepth(this ParseAlternativeNode node)
+	  {
+      foreach (var parent in node.Parents)
+        if (parent.Depth <= node.Depth + 1)
+        {
+          parent.Depth = node.Depth + 1;
+          UpdateDepth(parent);
+        }
+    }
+
+	  public static List<RecoveryStackFrame> UpdateDepthAndCollectAllFrames(this SCG.ICollection<RecoveryStackFrame> heads)
     {
       var allRecoveryStackFrames = new List<RecoveryStackFrame>();
 
@@ -935,7 +991,7 @@ namespace N2.DebugStrategies
       return allRecoveryStackFrames;
     }
 
-    public static List<RecoveryStackFrame> PrepareRecoveryStacks(this System.Collections.Generic.ICollection<RecoveryStackFrame> heads)
+    public static List<RecoveryStackFrame> PrepareRecoveryStacks(this SCG.ICollection<RecoveryStackFrame> heads)
     {
       var allRecoveryStackFrames = heads.UpdateDepthAndCollectAllFrames();
 
@@ -979,6 +1035,8 @@ namespace N2.DebugStrategies
         if (parent.Depth <= frame.Depth + 1)
         {
           parent.Depth = frame.Depth + 1;
+          if (parent.Depth > 200)
+            Debug.Assert(true);
           UpdateFrameDepth(parent);
         }
     }
@@ -991,8 +1049,8 @@ namespace N2.DebugStrategies
         node.Depth = -1;
         foreach (var parent in node.Parents)
           ClearAndCollectNodes(parent, allNodes);
-        if (node.MissedSeparator != null)
-          ClearAndCollectNodes(node.MissedSeparator, allNodes);
+        //if (node.MissedSeparator != null)
+        //  ClearAndCollectNodes(node.MissedSeparator, allNodes);
       }
     }
 
@@ -1195,7 +1253,7 @@ namespace N2.DebugStrategies
 	    return false;
 	  }
 
-	  public static List<RecoveryStackFrame> SubstractSet(List<RecoveryStackFrame> set1, System.Collections.Generic.ICollection<RecoveryStackFrame> set2)
+    public static List<RecoveryStackFrame> SubstractSet(List<RecoveryStackFrame> set1, SCG.ICollection<RecoveryStackFrame> set2)
 	  {
 	    return set1.Where(c => !set2.Contains(c)).ToList();
 	  }
