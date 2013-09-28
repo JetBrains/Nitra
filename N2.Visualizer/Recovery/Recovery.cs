@@ -196,28 +196,52 @@ namespace N2.DebugStrategies
 
     private static void RemoveTheShorterAlternative(List<ParseAlternativeNode> nodes)
     {
-      var roots = nodes.Where(n => n.IsRoot).ToList();
+      var roots   = new List<ParseAlternativeNode>();
+      var max     = -1;
+      var maxFail = -1;
+      var removed = 0;
 
-      if (roots.Any(n => n.ParseAlternative.End >= 0))
+      foreach (var root in nodes)
       {
-        var max = nodes.Max(n => n.ParseAlternative.End);
+        if (!root.IsRoot)
+          continue;
 
-        foreach (var node in roots)
-          if (node.ParseAlternative.End != max)
-            node.Remove();
+        roots.Add(root);
 
-        return;
+        var a = root.ParseAlternative;
+
+        if (a.End >= 0)
+        {
+          if (a.End > max)
+            max = a.End;
+        }
+        else if (a.Fail > maxFail)
+          maxFail = a.Fail;
       }
 
-      var maxFail = nodes.Max(n => n.ParseAlternative.Fail);
+      Debug.Assert(max >= 0 || maxFail >= 0);
 
-      foreach (var node in roots)
+      if (max >= maxFail)
+      {
+        foreach (var node in roots)
+          if (node.ParseAlternative.End != max)
+          {
+            node.Remove();
+            removed++;
+          }
+      }
+      else foreach (var node in roots)
         if (node.ParseAlternative.Fail != maxFail)
+        {
           node.Remove();
+          removed++;
+        }
 
-      foreach (var node in nodes)
-        if (node.IsRoot && node.Best)
-          Debug.WriteLine(node.ParseAlternative);
+      Debug.Assert(roots.Count - removed == 1);
+
+      //foreach (var node in roots)
+      //  if (node.IsRoot && node.Best)
+      //    Debug.WriteLine(node.ParseAlternative);
     }
 
     private static void RemoveAlternativesWithALotOfSkippedTokens(List<ParseAlternativeNode> nodes)
@@ -412,7 +436,7 @@ namespace N2.DebugStrategies
       switch (frame.Id)
       {
         case 256: break;
-        case 34: break;
+        case 32: break;
       }
 
       var curTextPos = frame.TextPos + skipCount;
@@ -440,7 +464,7 @@ namespace N2.DebugStrategies
     {
       switch (frame.Id)
       {
-        case 254: break;
+        case 19: break;
         case 34: break;
       }
       var parentsEat = ParentsMaxEat(frame, curTextPos);
