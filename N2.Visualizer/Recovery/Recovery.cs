@@ -181,10 +181,11 @@ namespace N2.DebugStrategies
       //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "AftFer RemoveTheShorterAlternative.");
       //X.VisualizeFrames(nodes);
 
-      RemoveAlternativesWithALotOfSkippedTokens(nodes);
+      FilterAlternativesWithMinimumSkippedTokens(nodes);
       //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveAlternativesWithALotOfSkippedTokens.");
       //X.VisualizeFrames(nodes);
-      
+      //ParseAlternativeNode.DownToTop(nodes, CalcMinSkipedMandatoryTokenCount);
+
       ParseAlternativeNode.DownToTop(nodes, RemoveChildrenIfAllChildrenIsEmpty);
       //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveChildrenIfAllChildrenIsEmpty.");
       //X.VisualizeFrames(nodes);
@@ -197,26 +198,41 @@ namespace N2.DebugStrategies
       //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveDuplicateNodes.");
       //X.VisualizeFrames(nodes);
 
-      var bestNodes = FindBestNodes(nodes);
+      var bestNodes = GetTopNodes(nodes);
       //X.VisualizeFrames(bestNodes);
       //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveDuplicateNodes.");
       return bestNodes;
     }
 
+    public static List<ParseAlternativeNode> GetRoots(List<ParseAlternativeNode> nodes)
+    {
+      var roots = new List<ParseAlternativeNode>();
+
+      for (int i = nodes.Count - 1; i >= 0; i--)
+      {
+        var root = nodes[i];
+
+        if (!root.Best)
+          continue;
+
+        if (!root.IsRoot)
+          break;
+
+        roots.Add(root);
+      }
+
+      return roots;
+    }
+
     private static void RemoveTheShorterAlternative(List<ParseAlternativeNode> nodes)
     {
-      var roots   = new List<ParseAlternativeNode>();
+      var roots   = GetRoots(nodes);
       var max     = -1;
       var maxFail = -1;
       var removed = 0;
 
-      foreach (var root in nodes)
+      foreach (var root in roots)
       {
-        if (!root.IsRoot)
-          continue;
-
-        roots.Add(root);
-
         var a = root.ParseAlternative;
 
         if (a.End >= 0)
@@ -253,18 +269,98 @@ namespace N2.DebugStrategies
       //    Debug.WriteLine(node.ParseAlternative);
     }
 
-    private static void RemoveAlternativesWithALotOfSkippedTokens(List<ParseAlternativeNode> nodes)
+    private static void FilterAlternativesWithMinimumSkippedTokens(List<ParseAlternativeNode> nodes)
     {
-      ParseAlternativeNode.DownToTop(nodes, RemoveAlternativesWithALotOfSkippedTokens);
+      var topNodes = GetTopNodes(nodes);
+      // получаем все альтернативы пропарсивания в плоском режиме
+      var alternatives = topNodes.SelectMany(n => n.GetFlatParseAlternatives()).ToList();
+      // рассчитываем минимальное число пропускаемых токенов среди альтернатив
+      var min = alternatives.Min(a => a.Sum(n => n.SkipedMandatoryTokenCount));
+      // помечаем все узлы альтернатив с минимальным пропуском токенов
+      foreach (var a in alternatives)
+        if (a.Sum(n => n.SkipedMandatoryTokenCount) == min)
+          foreach (var n in a)
+            n.IsMarked = true;
+
+      // удаляем все узлы за исключением помеченных на предыдущем шаге
+      foreach (var node in nodes)
+      {
+        var isMarked = node.IsMarked;
+        node.Best = isMarked;
+        if (isMarked)
+          node.IsMarked = false;
+      }
+
+      // TODO: Написать оптимизированную версию с нахрапа не вышло. Надо сделать это в будущем!
+
+      //ParseAlternativeNode.DownToTop(nodes, CalcMinSkipedMandatoryTokenCount);
+      //
+      //var minSkip = int.MaxValue;
+      //
+      //var topNodes = GetTopNodes(nodes);
+      //
+      //foreach (var node in topNodes)
+      //  if (node.MinSkipedMandatoryTokenCount < minSkip)
+      //    minSkip = node.MinSkipedMandatoryTokenCount;
+      //
+      //var bestNodes = new List<ParseAlternativeNode>();
+      //
+      //if (minSkip != int.MaxValue)
+      //  foreach (var node in topNodes)
+      //    if (node.MinSkipedMandatoryTokenCount == minSkip)
+      //      bestNodes.Add(node);
+      //
+      //UpdateBest(bestNodes, nodes);
     }
 
-    private static void RemoveAlternativesWithALotOfSkippedTokens(ParseAlternativeNode node)
+    private static void UpdateBest(List<ParseAlternativeNode> bestNodes, List<ParseAlternativeNode> nodes)
     {
-      var min = node.HasChildren ? node.Children.Min(n => n.MinTotalSkipedMandatoryTokenCount) : 0;
+      foreach (var bestNode in bestNodes)
+      {
+        bestNode.IsMarked = true;
+        bestNode.MinSkipedMandatoryTokenCount = int.MaxValue;
+      }
+
+      foreach (var node in nodes)
+        if (node.IsMarked)
+          foreach (var parent in node.Parents)
+            parent.IsMarked = true;
+
+      foreach (var node in nodes)
+      {
+        var isMarked = node.IsMarked;
+        node.Best = isMarked;
+        if (isMarked)
+          node.IsMarked = false;
+      }
+
+      //TODO: Для реалтаймного обновления MinSkipedMandatoryTokenCount его нужно делать в ParseAlternativeNode
+      //// Update MinSkipedMandatoryTokenCount
+      //foreach (var bestNode in bestNodes)
+      //{
+      //  var min = int.MaxValue;
+      //
+      //  foreach (var parent in bestNode.Parents)
+      //  {
+      //    var curr = parent.MinSkipedMandatoryTokenCount;
+      //    if (curr < min)
+      //      min = curr;
+      //  }
+      //
+      //  bestNode.MinSkipedMandatoryTokenCount = min == int.MaxValue ? bestNode.SkipedMandatoryTokenCount else bestNode.SkipedMandatoryTokenCount + min;
+      //} 
+    }
+
+    private static void CalcMinSkipedMandatoryTokenCount(ParseAlternativeNode node)
+    {
+      var parentMin = node.MinSkipedMandatoryTokenCount;
 
       foreach (var child in node.Children)
-        if (child.MinTotalSkipedMandatoryTokenCount != min)
-          child.Remove();
+      {
+        var value = child.SkipedMandatoryTokenCount + parentMin;
+        if (value < child.MinSkipedMandatoryTokenCount)
+          child.MinSkipedMandatoryTokenCount = value;
+      }
     }
 
     /// <summary>
@@ -331,7 +427,7 @@ namespace N2.DebugStrategies
     }
 
     // ReSharper disable once ParameterTypeCanBeEnumerable.Local
-    private static List<ParseAlternativeNode> FindBestNodes(List<ParseAlternativeNode> nodes)
+    private static List<ParseAlternativeNode> GetTopNodes(List<ParseAlternativeNode> nodes)
     {
       var bestNodes = new List<ParseAlternativeNode>();
 
@@ -386,6 +482,13 @@ namespace N2.DebugStrategies
 
     private static void RemoveChildrenIfAllChildrenIsEmpty(ParseAlternativeNode node)
     {
+      switch (node.Id)
+      {
+        case 28300: break;
+        case 28400: break;
+        case 28500: break;
+      }
+
       foreach (var n in node.Children)
       {
         if (!n.IsEmpty)
@@ -622,7 +725,10 @@ namespace N2.DebugStrategies
       var allNodes = bestNodes.UpdateDepthAndCollectAllNodes();
       TryAddErrorsForMissedSeparators(parser, loc, allNodes);
 
-      if (bestNodes.All(n => n.MinTotalSkipedMandatoryTokenCount != 0))
+      // TODO: Надо пдумать об автоматическом обновлении MinSkipedMandatoryTokenCount
+      ParseAlternativeNode.DownToTop(allNodes, CalcMinSkipedMandatoryTokenCount);
+
+      if (bestNodes.All(n => n.MinSkipedMandatoryTokenCount != 0))
       {
         var nodesForError = ParseAlternativeNode.CloneGraph(allNodes).ToArray();//сделать клонирование
         parser.ReportError(new ExpectedRulesError(loc, nodesForError));
@@ -714,7 +820,7 @@ namespace N2.DebugStrategies
 
 #region Utility methods
 
-	internal static class RecoveryUtils
+  internal static class RecoveryUtils
   {
     public static List<T> FilterMax<T>(this SCG.ICollection<T> candidates, Func<T, int> selector)
     {
@@ -813,9 +919,9 @@ namespace N2.DebugStrategies
       UpdateParseAlternativesTopToDown(allFrames);
     }
 
-	  public static void RemoveOthrHeads(List<RecoveryStackFrame> allFrames, RecoveryStackFrame livingHead)
-	  {
-	    livingHead.IsMarked = true;
+    public static void RemoveOthrHeads(List<RecoveryStackFrame> allFrames, RecoveryStackFrame livingHead)
+    {
+      livingHead.IsMarked = true;
 
       PropageteMarkeds(allFrames);
     }
@@ -828,35 +934,35 @@ namespace N2.DebugStrategies
       PropageteMarkeds(allFrames);
     }
 
-	  private static void PropageteMarkeds(List<RecoveryStackFrame> allFrames)
-	  {
-	    foreach (var frame in allFrames)
-	    {
-	      if (!frame.IsMarked)
-	        continue;
+    private static void PropageteMarkeds(List<RecoveryStackFrame> allFrames)
+    {
+      foreach (var frame in allFrames)
+      {
+        if (!frame.IsMarked)
+          continue;
 
-	      if (frame.Parents.Count == 0)
-	        continue;
+        if (frame.Parents.Count == 0)
+          continue;
 
-	      foreach (var parent in frame.Parents)
-	        if (parent.Best && !parent.IsMarked)
-	          parent.IsMarked = true;
-	    }
+        foreach (var parent in frame.Parents)
+          if (parent.Best && !parent.IsMarked)
+            parent.IsMarked = true;
+      }
 
-	    // update Best by Marked
-	    foreach (var frame in allFrames)
-	    {
+      // update Best by Marked
+      foreach (var frame in allFrames)
+      {
         if (!frame.IsMarked && frame.Id == 321)
         {
         }
 
-	      frame.Best = frame.IsMarked;
-	      frame.IsMarked = false;
-	    }
-	  }
+        frame.Best = frame.IsMarked;
+        frame.IsMarked = false;
+      }
+    }
 
-	  public static void UpdateParseAlternativesDownToTop(List<RecoveryStackFrame> allFrames)
-	  {
+    public static void UpdateParseAlternativesDownToTop(List<RecoveryStackFrame> allFrames)
+    {
       if (allFrames.Count == 0)
         return;
       
@@ -910,27 +1016,27 @@ namespace N2.DebugStrategies
 
       var setAll = new HashSet<RecoveryStackFrame>();
 
-	    foreach (var frame in allFrames)
-	      if (frame.Best)
-	        if (!setAll.Add(frame))
+      foreach (var frame in allFrames)
+        if (frame.Best)
+          if (!setAll.Add(frame))
             Debug.Assert(false);
 
 
-	    foreach (var frame in allFrames)
-	    {
+      foreach (var frame in allFrames)
+      {
         if (!frame.Best)
           continue;
 
-	      var hasNoChildren = true;
+        var hasNoChildren = true;
 
         foreach (var child in frame.Children)
-	      {
+        {
           if (!child.Best)
             continue;
 
-	        hasNoChildren = false;
+          hasNoChildren = false;
 
-	        if (!setAll.Contains(child))
+          if (!setAll.Contains(child))
             Debug.Assert(false);
 
           if (!child.Parents.Contains(frame))
@@ -941,9 +1047,9 @@ namespace N2.DebugStrategies
           if (!setBest.Contains(frame))
             Debug.Assert(false);
       }
-	  }
+    }
 
-	  public static void UpdateParseAlternativesTopToDown(List<RecoveryStackFrame> allFrames)
+    public static void UpdateParseAlternativesTopToDown(List<RecoveryStackFrame> allFrames)
     {
       if (allFrames.Count == 0)
         return;
@@ -995,17 +1101,17 @@ namespace N2.DebugStrategies
       }
     }
 
-	  public static void MarkChildren(RecoveryStackFrame frame)
-	  {
-	    foreach (var child in frame.Children)
-	      if (frame.Best)
-	        child.IsMarked = true;
-	  }
+    public static void MarkChildren(RecoveryStackFrame frame)
+    {
+      foreach (var child in frame.Children)
+        if (frame.Best)
+          child.IsMarked = true;
+    }
 
-	  private static List<ParseAlternative> FilterMaxStop(RecoveryStackFrame frame)
-	  {
-	    return FilterMax(frame.ParseAlternatives, a => a.Stop);
-	  }
+    private static List<ParseAlternative> FilterMaxStop(RecoveryStackFrame frame)
+    {
+      return FilterMax(frame.ParseAlternatives, a => a.Stop);
+    }
 
     public static List<ParseAlternativeNode> UpdateReverseDepthAndCollectAllNodes(this SCG.ICollection<ParseAlternativeNode> heads)
     {
@@ -1038,7 +1144,7 @@ namespace N2.DebugStrategies
     }
 
     public static void UpdateDepth(this ParseAlternativeNode node)
-	  {
+    {
       foreach (var parent in node.Parents)
         if (parent.Depth <= node.Depth + 1)
         {
@@ -1047,7 +1153,7 @@ namespace N2.DebugStrategies
         }
     }
 
-	  public static List<RecoveryStackFrame> UpdateDepthAndCollectAllFrames(this SCG.ICollection<RecoveryStackFrame> heads)
+    public static List<RecoveryStackFrame> UpdateDepthAndCollectAllFrames(this SCG.ICollection<RecoveryStackFrame> heads)
     {
       var allRecoveryStackFrames = new List<RecoveryStackFrame>();
 
@@ -1188,60 +1294,60 @@ namespace N2.DebugStrategies
              || parsedStates.Count > 0 && frame.HasParsedStaets(parsedStates);
     }
 
-	  public static List<ParseAlternative> FilterParseAlternativesWichEndsEqualsParentsStarts(RecoveryStackFrame frame)
-	  {
-	    List<ParseAlternative> res0;
-	    if (frame.Parents.Count == 0)
-	      res0 = frame.ParseAlternatives.ToList();
-	    else
-	    {
-	      var parentStarts = new HashSet<int>();
-	      foreach (var parent in frame.Parents)
-	        if (parent.Best)
-	          foreach (var alternative in parent.ParseAlternatives)
-	            parentStarts.Add(alternative.Start);
-	      res0 = frame.ParseAlternatives.Where(alternative => parentStarts.Contains(alternative.Stop)).ToList();
-	    }
-	    return res0;
-	  }
+    public static List<ParseAlternative> FilterParseAlternativesWichEndsEqualsParentsStarts(RecoveryStackFrame frame)
+    {
+      List<ParseAlternative> res0;
+      if (frame.Parents.Count == 0)
+        res0 = frame.ParseAlternatives.ToList();
+      else
+      {
+        var parentStarts = new HashSet<int>();
+        foreach (var parent in frame.Parents)
+          if (parent.Best)
+            foreach (var alternative in parent.ParseAlternatives)
+              parentStarts.Add(alternative.Start);
+        res0 = frame.ParseAlternatives.Where(alternative => parentStarts.Contains(alternative.Stop)).ToList();
+      }
+      return res0;
+    }
 
-	  public static List<RecoveryStackFrame> FilterNotEmpyPrefixChildren(RecoveryStackFrame frame, List<RecoveryStackFrame> children)
-	  {
-	    if (frame is RecoveryStackFrame.ExtensiblePrefix && children.Count > 1)
-	    {
-	      if (children.Any(c => c.ParseAlternatives.Any(a => a.State < 0)) && children.Any(c => c.ParseAlternatives.Any(a => a.State >= 0)))
-	        return children.Where(c => c.ParseAlternatives.Any(a => a.State >= 0)).ToList();
-	    }
+    public static List<RecoveryStackFrame> FilterNotEmpyPrefixChildren(RecoveryStackFrame frame, List<RecoveryStackFrame> children)
+    {
+      if (frame is RecoveryStackFrame.ExtensiblePrefix && children.Count > 1)
+      {
+        if (children.Any(c => c.ParseAlternatives.Any(a => a.State < 0)) && children.Any(c => c.ParseAlternatives.Any(a => a.State >= 0)))
+          return children.Where(c => c.ParseAlternatives.Any(a => a.State >= 0)).ToList();
+      }
 
-	    return children;
-	  }
+      return children;
+    }
 
-	  public static bool EndWith(RecoveryStackFrame child, int end)
-	  {
-	    foreach (ParseAlternative p in child.ParseAlternatives)
-	      if (p.Stop == end)
+    public static bool EndWith(RecoveryStackFrame child, int end)
+    {
+      foreach (ParseAlternative p in child.ParseAlternatives)
+        if (p.Stop == end)
           return true;
 
       return false;
-	  }
+    }
 
-	  public static List<ParseAlternative> FilterMinState(List<ParseAlternative> alternatives)
-	  {
-	    if (alternatives.Count <= 1)
-	      return alternatives.ToList();
+    public static List<ParseAlternative> FilterMinState(List<ParseAlternative> alternatives)
+    {
+      if (alternatives.Count <= 1)
+        return alternatives.ToList();
 
-	    var result = alternatives.FilterMin(f => f.State < 0 ? Int32.MaxValue : f.State);
+      var result = alternatives.FilterMin(f => f.State < 0 ? Int32.MaxValue : f.State);
 
-	    if (result.Count != alternatives.Count)
-	      Debug.Assert(true);
+      if (result.Count != alternatives.Count)
+        Debug.Assert(true);
 
-	    return result;
-	  }
+      return result;
+    }
 
-	  public static List<ParseAlternative> FilterMaxEndOrFail(List<ParseAlternative> alternatives)
-	  {
-	    if (alternatives.Count <= 1)
-	      return alternatives.ToList();
+    public static List<ParseAlternative> FilterMaxEndOrFail(List<ParseAlternative> alternatives)
+    {
+      if (alternatives.Count <= 1)
+        return alternatives.ToList();
 
       var maxEnd  = alternatives.Max(a => a.End);
       var maxFail = alternatives.Max(a => a.Fail);
@@ -1252,140 +1358,140 @@ namespace N2.DebugStrategies
         return alternatives.FilterMax(f => f.End);
 
       return alternatives.FilterMax(f => f.Fail);
-	  }
+    }
 
     public static List<RecoveryStackFrame> FilterEmptyChildren(List<RecoveryStackFrame> children5, int skipCount)
-	  {
-	    return SubstractSet(children5, children5.Where(f => 
+    {
+      return SubstractSet(children5, children5.Where(f => 
         f.StartPos == f.TextPos
         && f.ParseAlternatives.All(a => f.TextPos + skipCount == a.Start && a.ParentsEat == 0 && a.State < 0 && f.FailState2 == 0)).ToList());
-	  }
+    }
 
-	  public static void FilterFailSateEqualsStateIfExists(List<RecoveryStackFrame> bestFrames)
-	  {
-	    if (bestFrames.Any(f => f.ParseAlternatives.Any(a => f.FailState == a.State)))
-	      for (int index = bestFrames.Count - 1; index >= 0; index--)
-	      {
-	        var f = bestFrames[index];
-	        if (!f.ParseAlternatives.Any(a => f.FailState == a.State))
-	          bestFrames.RemoveAt(index);
-	      }
-	  }
+    public static void FilterFailSateEqualsStateIfExists(List<RecoveryStackFrame> bestFrames)
+    {
+      if (bestFrames.Any(f => f.ParseAlternatives.Any(a => f.FailState == a.State)))
+        for (int index = bestFrames.Count - 1; index >= 0; index--)
+        {
+          var f = bestFrames[index];
+          if (!f.ParseAlternatives.Any(a => f.FailState == a.State))
+            bestFrames.RemoveAt(index);
+        }
+    }
 
-	  public static List<RecoveryStackFrame> SelectMinFailSateIfTextPosEquals(List<RecoveryStackFrame> children4)
-	  {
-	    return children4.GroupBy(f =>  new IntRuleCallKey(f.TextPos, f.RuleKey)).SelectMany(fs => fs.ToList().FilterMin(f => f.FailState)).ToList();
-	  }
+    public static List<RecoveryStackFrame> SelectMinFailSateIfTextPosEquals(List<RecoveryStackFrame> children4)
+    {
+      return children4.GroupBy(f =>  new IntRuleCallKey(f.TextPos, f.RuleKey)).SelectMany(fs => fs.ToList().FilterMin(f => f.FailState)).ToList();
+    }
 
-	  public static List<RecoveryStackFrame> FilterNonFailedFrames(List<RecoveryStackFrame> children3)
-	  {
-	    return children3.FilterIfExists(f => f.ParseAlternatives.Any(a => a.End >= 0)).ToList();
-	  }
+    public static List<RecoveryStackFrame> FilterNonFailedFrames(List<RecoveryStackFrame> children3)
+    {
+      return children3.FilterIfExists(f => f.ParseAlternatives.Any(a => a.End >= 0)).ToList();
+    }
 
-	  public static List<RecoveryStackFrame> FilterEmptyChildrenWhenFailSateCanParseEmptySting(RecoveryStackFrame frame, List<RecoveryStackFrame> frames, int skipCount)
-	  {
-	    if (frame.IsSateCanParseEmptyString(frame.FailState))
-	    {
+    public static List<RecoveryStackFrame> FilterEmptyChildrenWhenFailSateCanParseEmptySting(RecoveryStackFrame frame, List<RecoveryStackFrame> frames, int skipCount)
+    {
+      if (frame.IsSateCanParseEmptyString(frame.FailState))
+      {
         var result = frames.Where(f => f.ParseAlternatives.Any(a => a.ParentsEat != 0 || frame.TextPos + skipCount < a.Start)).ToList();
-	      return result;
-	    }
+        return result;
+      }
 
-	    return frames;
-	  }
+      return frames;
+    }
 
-	  public static List<RecoveryStackFrame> OnlyBastFrames(RecoveryStackFrame frame)
-	  {
-	    return frame.Children.Where(f => f.Best).ToList();
-	  }
+    public static List<RecoveryStackFrame> OnlyBastFrames(RecoveryStackFrame frame)
+    {
+      return frame.Children.Where(f => f.Best).ToList();
+    }
 
-	  public static List<RecoveryStackFrame> FilterTopFramesWhichRecoveredOnFailStateIfExists(List<RecoveryStackFrame> bestFrames)
-	  {
-	    if (bestFrames.Any(f => f.ParseAlternatives.Any(a => a.State == f.FailState)))
-	      return bestFrames.Where(f => f.ParseAlternatives.Any(a => a.State == f.FailState)).ToList();
+    public static List<RecoveryStackFrame> FilterTopFramesWhichRecoveredOnFailStateIfExists(List<RecoveryStackFrame> bestFrames)
+    {
+      if (bestFrames.Any(f => f.ParseAlternatives.Any(a => a.State == f.FailState)))
+        return bestFrames.Where(f => f.ParseAlternatives.Any(a => a.State == f.FailState)).ToList();
 
-	    return bestFrames;
-	  }
+      return bestFrames;
+    }
 
-	  public static List<RecoveryStackFrame> RemoveSpeculativeFrames(List<RecoveryStackFrame> frames)
-	  {
-	    if (frames.Count <= 1)
-	      return frames;
+    public static List<RecoveryStackFrame> RemoveSpeculativeFrames(List<RecoveryStackFrame> frames)
+    {
+      if (frames.Count <= 1)
+        return frames;
 
-	    var frames2 = frames.FilterMax(f => f.ParseAlternatives[0].ParentsEat).ToList();
-	    var frames3 = frames2.FilterMin(f => f.FailState);
-	    return frames3.ToList();
-	  }
+      var frames2 = frames.FilterMax(f => f.ParseAlternatives[0].ParentsEat).ToList();
+      var frames3 = frames2.FilterMin(f => f.FailState);
+      return frames3.ToList();
+    }
 
-	  public static bool HasTopFramesWhichRecoveredOnFailState(RecoveryStackFrame frame)
-	  {
-	    var failState = frame.FailState;
-	    foreach (ParseAlternative a in frame.ParseAlternatives)
-	      if (a.State == failState)
-	        return true;
-	    return false;
-	  }
+    public static bool HasTopFramesWhichRecoveredOnFailState(RecoveryStackFrame frame)
+    {
+      var failState = frame.FailState;
+      foreach (ParseAlternative a in frame.ParseAlternatives)
+        if (a.State == failState)
+          return true;
+      return false;
+    }
 
     public static List<RecoveryStackFrame> SubstractSet(List<RecoveryStackFrame> set1, SCG.ICollection<RecoveryStackFrame> set2)
-	  {
-	    return set1.Where(c => !set2.Contains(c)).ToList();
-	  }
+    {
+      return set1.Where(c => !set2.Contains(c)).ToList();
+    }
 
-	  public static void ResetChildrenBestProperty(List<RecoveryStackFrame> poorerChildren)
-	  {
-	    foreach (var child in poorerChildren)
-	      if (child.Best)
-	      {
+    public static void ResetChildrenBestProperty(List<RecoveryStackFrame> poorerChildren)
+    {
+      foreach (var child in poorerChildren)
+        if (child.Best)
+        {
           if (child.Id == 321)
           {
           }
           child.Best = false;
-	        ResetChildrenBestProperty(child.Children);
-	      }
-	  }
+          ResetChildrenBestProperty(child.Children);
+        }
+    }
 
-	  public static void ResetParentsBestProperty(IEnumerable<ParseAlternativeNode> parents)
-	  {
-	    foreach (var node in parents)
+    public static void ResetParentsBestProperty(IEnumerable<ParseAlternativeNode> parents)
+    {
+      foreach (var node in parents)
         if (node.Best)
-	      {
+        {
           node.Best = false;
           ResetParentsBestProperty(node.Parents);
-	      }
-	  }
+        }
+    }
 
-	  public static bool StartWith(RecoveryStackFrame parent, HashSet<int> ends)
-	  {
-	    return parent.ParseAlternatives.Any(a => ends.Contains(a.Start));
-	  }
+    public static bool StartWith(RecoveryStackFrame parent, HashSet<int> ends)
+    {
+      return parent.ParseAlternatives.Any(a => ends.Contains(a.Start));
+    }
 
-	  public static HashSet<int> Ends(RecoveryStackFrame frame)
-	  {
-	    return new HashSet<int>(frame.ParseAlternatives.Select(a => a.Stop));
-	  }
+    public static HashSet<int> Ends(RecoveryStackFrame frame)
+    {
+      return new HashSet<int>(frame.ParseAlternatives.Select(a => a.Stop));
+    }
 
-	  public static bool StartWith(RecoveryStackFrame parent, ParseAlternative a)
-	  {
-	    return parent.ParseAlternatives.Any(p => p.Start == a.End);
-	  }
+    public static bool StartWith(RecoveryStackFrame parent, ParseAlternative a)
+    {
+      return parent.ParseAlternatives.Any(p => p.Start == a.End);
+    }
 
     public static HashSet<int> Stops(this RecoveryStackFrame frame)
-	  {
+    {
       var stops = new HashSet<int>();
       foreach (var a in frame.ParseAlternatives)
         stops.Add(a.Stop);
 
       return stops;
-	  }
+    }
 
-	  public static bool IsExistsNotFailedAlternatives(RecoveryStackFrame frame)
-	  {
-	    return frame.Children.Any(f => f.ParseAlternatives.Any(a => a.End >= 0));
-	  }
+    public static bool IsExistsNotFailedAlternatives(RecoveryStackFrame frame)
+    {
+      return frame.Children.Any(f => f.ParseAlternatives.Any(a => a.End >= 0));
+    }
 
-	  public static List<ParseAlternative> FilterNotFailedParseAlternatives(List<ParseAlternative> alternatives0)
-	  {
-	    return alternatives0.Where(a => a.End >= 0).ToList();
-	  }
+    public static List<ParseAlternative> FilterNotFailedParseAlternatives(List<ParseAlternative> alternatives0)
+    {
+      return alternatives0.Where(a => a.End >= 0).ToList();
+    }
   }
 
   static class ParseAlternativesVisializer
@@ -1544,12 +1650,13 @@ pre
       XElement missedSeparator = null;
       var skippedTokenCount = 0;
       var id = nodes.IsEmpty ? "???" : nodes.Head.Id.ToString(CultureInfo.InvariantCulture);
+      var minSkip = nodes.IsEmpty ? 0 : nodes.Head.MinSkipedMandatoryTokenCount;
       
 
       while (true)
       {
         if (nodes.IsEmpty)
-          return new XElement("span", id + " " + skippedTokenCount + " skipped ", content);
+          return new XElement("span", id + " " + skippedTokenCount + " (" + minSkip + ") " + " skipped ", content);
 
         var node = nodes.Head;
         var a = node.ParseAlternative;
