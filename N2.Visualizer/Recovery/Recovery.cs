@@ -85,7 +85,16 @@ namespace N2.DebugStrategies
         Debug.Assert(false);
       }
 
-      return new List<ParseAlternativeNode>();
+      {
+        var frames = new List<RecoveryStackFrame>();
+        frames.Add(parser.RecoveryStacks.Last());
+        frames = frames.PrepareRecoveryStacks();
+        InitFrames(frames);
+        ParseFrames(parser, skipCount, frames);
+        var nodes = ParseAlternativeNode.MakeGraph(frames);
+        nodes.RemoveAll(node => node.Frame.Depth != 0);
+        return nodes;
+      }
     }
 
     private static void InitFrames(List<RecoveryStackFrame> frames)
@@ -668,9 +677,24 @@ namespace N2.DebugStrategies
       {
         var node = allNodes[i];
         var frame = node.Frame;
-        if (!(frame is RecoveryStackFrame.ExtensiblePrefix || frame is RecoveryStackFrame.ExtensiblePostfix) && node.HasAtLeastTwoChildren)
-          foreach (var child in node.Children)
-            MarkRecoveryNodes(child, child, markers);
+        if (node.HasAtLeastTwoChildren)
+        {
+          if (frame is RecoveryStackFrame.ExtensiblePrefix || frame is RecoveryStackFrame.ExtensiblePostfix)
+          {
+            foreach (var group in node.Children.Where(n => n.Best).GroupBy(n => n.Frame.RuleKey))
+            {
+              var children = new List<ParseAlternativeNode>(group);
+              if (children.Count >= 2)
+                foreach (var child in children)
+                  MarkRecoveryNodes(child, child, markers);
+            }
+          }
+          else
+          {
+            foreach (var child in node.Children)
+              MarkRecoveryNodes(child, child, markers);
+          }
+        }
       }
 
       if (markers.Count > 0)
