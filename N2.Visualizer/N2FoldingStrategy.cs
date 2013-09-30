@@ -22,26 +22,35 @@ namespace N2.Visualizer
         return Enumerable.Empty<NewFolding>();
       }
 
-      var timer = Stopwatch.StartNew();
-      var outlining = new List<OutliningInfo>();
-      parseResult.GetOutlining(outlining);
-      TimeSpan = timer.Elapsed;
-
-      var result = new List<NewFolding>();
-      foreach (var o in outlining)
+      try
       {
-        var newFolding = new NewFolding
-        {
-          DefaultClosed = o.IsDefaultCollapsed,
-          StartOffset = o.Span.StartPos,
-          EndOffset = o.Span.EndPos
-        };
-        result.Add(newFolding);
-      }
-      result.Sort((a, b) => a.StartOffset.CompareTo(b.StartOffset));
+        var timer = Stopwatch.StartNew();
+        var outlining = new List<OutliningInfo>();
+        parseResult.GetOutlining(outlining);
+        TimeSpan = timer.Elapsed;
 
-      firstErrorOffset = 0;
-      return result;
+        var result = new List<NewFolding>();
+        foreach (var o in outlining)
+        {
+          var newFolding = new NewFolding
+          {
+            DefaultClosed = o.IsDefaultCollapsed,
+            StartOffset = o.Span.StartPos,
+            EndOffset = o.Span.EndPos
+          };
+          result.Add(newFolding);
+        }
+        result.Sort((a, b) => a.StartOffset.CompareTo(b.StartOffset));
+
+        firstErrorOffset = 0;
+        return result;
+      }
+      catch (Exception ex)
+      {
+        Debug.WriteLine(ex.Message);
+        firstErrorOffset = 0;
+        return Enumerable.Empty<NewFolding>();
+      }
     }
 
     public Parser Parser { get; set; }

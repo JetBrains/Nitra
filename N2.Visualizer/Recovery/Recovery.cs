@@ -529,7 +529,7 @@ namespace N2.DebugStrategies
               if (alternative.End >= 0)
                 childEnds.Add(alternative.End);
               else
-                curentEnds.Add(new ParseAlternative(alternative.Fail, -1, alternative.ParentsEat, alternative.Fail, frame.FailState));
+                curentEnds.Add(new ParseAlternative(alternative.Fail, -1, alternative.ParentsEat, alternative.Fail, frame.FailState, 0));
 
           foreach (var end in childEnds)
             curentEnds.Add(ParseNonTopFrame(parser, frame, end));
@@ -547,19 +547,46 @@ namespace N2.DebugStrategies
 
       switch (frame.Id)
       {
-        case 256: break;
+        case 70: break;
         case 32: break;
       }
 
       var curTextPos = frame.TextPos + skipCount;
+      var parsedStates = new List<ParsedStateInfo>();
+
+      //if (parser.MaxFailPos > curTextPos)// state != frame.FailState
+      {
+        var maxFailPos = parser.MaxFailPos;
+        var ends = frame.ParstAllGrammarTokens(curTextPos);
+
+        foreach (var end in Sort(ends))
+        {
+          if (end < 0 || end - curTextPos == 0)
+            continue;
+          
+          parser.MaxFailPos = maxFailPos;
+          var state = frame.FailState;
+          var pos2 = frame.TryParse(state, end, false, parsedStates, parser);
+          if (pos2 >= 0 && frame.NonVoidParsed(end, pos2, parsedStates, parser))
+          {
+            parseAlternative = new ParseAlternative(end, pos2, (pos2 < 0 ? parser.MaxFailPos : pos2) - end, pos2 < 0 ? parser.MaxFailPos : 0, state, end - curTextPos);
+            frame.ParseAlternatives = new[] { parseAlternative };
+            return parseAlternative;
+          }
+        }
+
+        parser.MaxFailPos = maxFailPos;
+      }
+
+
       for (var state = frame.FailState; state >= 0; state = frame.GetNextState(state))
       {
         parser.MaxFailPos = curTextPos;
-        var parsedStates = new List<ParsedStateInfo>();
         var pos = frame.TryParse(state, curTextPos, false, parsedStates, parser);
+
         if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parser))
         {
-          parseAlternative = new ParseAlternative(curTextPos, pos, (pos < 0 ? parser.MaxFailPos : pos) - curTextPos, pos < 0 ? parser.MaxFailPos : 0, state);
+          parseAlternative = new ParseAlternative(curTextPos, pos, (pos < 0 ? parser.MaxFailPos : pos) - curTextPos, pos < 0 ? parser.MaxFailPos : 0, state, 0);
           frame.ParseAlternatives = new[] { parseAlternative };
           return parseAlternative;
         }
@@ -567,9 +594,14 @@ namespace N2.DebugStrategies
 
       // Если ни одного состояния не пропарсились, то считаем, что пропарсилось состояние "за концом правила".
       // Это соотвтствует полному пропуску остатка подправил данного правила.
-      parseAlternative = new ParseAlternative(curTextPos, curTextPos, 0, 0, -1);
+      parseAlternative = new ParseAlternative(curTextPos, curTextPos, 0, 0, -1, 0);
       frame.ParseAlternatives = new[] { parseAlternative };
       return parseAlternative;
+    }
+
+    private static IOrderedEnumerable<int> Sort(HashSet<int> ends)
+    {
+      return ends.OrderBy(x => x);
     }
 
     private static ParseAlternative ParseNonTopFrame(Parser parser, RecoveryStackFrame frame, int curTextPos)
@@ -592,11 +624,11 @@ namespace N2.DebugStrategies
         var parsedStates = new List<ParsedStateInfo>();
         var pos = frame.TryParse(state, curTextPos, true, parsedStates, parser);
         if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parser))
-          return new ParseAlternative(curTextPos, pos, (pos < 0 ? parser.MaxFailPos : pos) - curTextPos + parentsEat, pos < 0 ? parser.MaxFailPos : 0, state);
+          return new ParseAlternative(curTextPos, pos, (pos < 0 ? parser.MaxFailPos : pos) - curTextPos + parentsEat, pos < 0 ? parser.MaxFailPos : 0, state, 0);
       }
       while (state >= 0);
 
-      return new ParseAlternative(curTextPos, curTextPos, parentsEat, 0, -1);
+      return new ParseAlternative(curTextPos, curTextPos, parentsEat, 0, -1, 0);
     }
 
     private static int ParentsMaxEat(RecoveryStackFrame frame, int curTextPos)
@@ -710,7 +742,7 @@ namespace N2.DebugStrategies
     private void FixAst(List<ParseAlternativeNode> bestNodes, int failPos, int skipCount, Parser parser)
     {
       foreach (var node in bestNodes)
-        if (node.Frame.TextPos + skipCount != node.ParseAlternative.Start)
+        if (node.Frame.TextPos + skipCount != node.ParseAlternative.Start - node.ParseAlternative.Skip)
           Debug.Assert(false);
 
       parser.MaxFailPos = failPos;
@@ -718,31 +750,36 @@ namespace N2.DebugStrategies
       if (bestNodes.Count == 0)
         return;
 
-      var loc = new Location(parser.Source, new NToken(failPos, failPos + skipCount));
-      if (skipCount > 0)
-        parser.ReportError(new UnexpectedTokenError(loc));
-
       var allNodes = bestNodes.UpdateDepthAndCollectAllNodes();
-      TryAddErrorsForMissedSeparators(parser, loc, allNodes);
-
-      // TODO: Надо пдумать об автоматическом обновлении MinSkipedMandatoryTokenCount
-      ParseAlternativeNode.DownToTop(allNodes, CalcMinSkipedMandatoryTokenCount);
-
-      if (bestNodes.All(n => n.MinSkipedMandatoryTokenCount != 0))
-      {
-        var nodesForError = ParseAlternativeNode.CloneGraph(allNodes).ToArray();//сделать клонирование
-        parser.ReportError(new ExpectedRulesError(loc, nodesForError));
-      }
+      var nodesForError = ParseAlternativeNode.CloneGraph(allNodes).ToArray();//сделать клонирование
 
       bestNodes = bestNodes.GroupBy(node => node.Frame).Select(group => group.First()).ToList();
       allNodes = bestNodes.UpdateReverseDepthAndCollectAllNodes();
 
       allNodes = FilterNodesForFix(ref bestNodes, allNodes);
 
+      Debug.Assert(bestNodes.Count > 0);
+      Debug.Assert(bestNodes.Aggregate((n1, n2) => n1 != null && n1.ParseAlternative.Skip == n2.ParseAlternative.Skip ? n2 : null) != null);
+
+      // формируем ошибки начало
+      var totalSkip = skipCount + bestNodes[0].ParseAlternative.Skip;
+      var loc = new Location(parser.Source, new NToken(failPos, failPos + totalSkip));
+      if (totalSkip > 0)
+        parser.ReportError(new UnexpectedTokenError(loc));
+      TryAddErrorsForMissedSeparators(parser, loc, allNodes);
+
+      // TODO: Надо пдумать об автоматическом обновлении MinSkipedMandatoryTokenCount
+      ParseAlternativeNode.DownToTop(allNodes, CalcMinSkipedMandatoryTokenCount);
+
+      if (bestNodes.All(n => n.MinSkipedMandatoryTokenCount != 0))
+        parser.ReportError(new ExpectedRulesError(loc, nodesForError));
+
+      // формируем ошибки конец
+
       foreach (var node in bestNodes)
       {
         var errorIndex = parser.ErrorData.Count;
-        var parseErrorData = new ParseErrorData(new NToken(failPos, failPos + skipCount));
+        var parseErrorData = new ParseErrorData(new NToken(failPos, failPos + skipCount + node.ParseAlternative.Skip));
         parser.ErrorData.Add(parseErrorData);
         if (!node.PatchAst(errorIndex, parser))
           RecoveryUtils.ResetParentsBestProperty(node.Parents);

@@ -623,29 +623,33 @@ namespace N2.Visualizer
       if (_parseResult == null)
         return;
 
-      var line = e.Line;
-      var spans = new List<SpanInfo>();
-      var timer = Stopwatch.StartNew();
-      _parseResult.GetSpans(line.Offset, line.EndOffset, spans);
-      _highlightingTimeSpan = timer.Elapsed;
-      _highlightingTime.Text = _highlightingTimeSpan.ToString();
-
-      foreach (var span in spans)
+      try
       {
-        HighlightingColor color;
-        if (_highlightingStyles.TryGetValue(span.SpanClass.Name, out color))
+        var line = e.Line;
+        var spans = new List<SpanInfo>();
+        var timer = Stopwatch.StartNew();
+        _parseResult.GetSpans(line.Offset, line.EndOffset, spans);
+        _highlightingTimeSpan = timer.Elapsed;
+        _highlightingTime.Text = _highlightingTimeSpan.ToString();
+
+        foreach (var span in spans)
         {
-          var startOffset = Math.Max(line.Offset, span.Location.StartPos);
-          var endOffset = Math.Min(line.EndOffset, span.Location.EndPos);
-          var section = new HighlightedSection
+          HighlightingColor color;
+          if (_highlightingStyles.TryGetValue(span.SpanClass.Name, out color))
           {
-            Offset = startOffset,
-            Length = endOffset - startOffset,
-            Color = color
-          };
-          e.Sections.Add(section);
+            var startOffset = Math.Max(line.Offset, span.Location.StartPos);
+            var endOffset = Math.Min(line.EndOffset, span.Location.EndPos);
+            var section = new HighlightedSection
+            {
+              Offset = startOffset,
+              Length = endOffset - startOffset,
+              Color = color
+            };
+            e.Sections.Add(section);
+          }
         }
       }
+      catch (Exception ex) { Debug.WriteLine(ex.Message); }
     }
 
     private void textBox1_MouseHover(object sender, MouseEventArgs e)
