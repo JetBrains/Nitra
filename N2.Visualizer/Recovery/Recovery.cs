@@ -274,13 +274,18 @@ namespace N2.DebugStrategies
       var topNodes = GetTopNodes(nodes);
       // получаем все альтернативы пропарсивания в плоском режиме
       var alternatives = topNodes.SelectMany(n => n.GetFlatParseAlternatives()).ToList();
-      // рассчитываем минимальное число пропускаемых токенов среди альтернатив
-      var min = alternatives.Min(a => a.Sum(n => n.SkipedMandatoryTokenCount));
+      // рассчитываем минимальное число пропускаемых токенов среди альтернатив.
+      var min = alternatives.Min(x => SkippedTokenCount(x));
+      var minAlternatives = alternatives.Where(a => SkippedTokenCount(a) == min).ToList();
+      var hasAll = minAlternatives.Any(a => !a.IsEmpty && a.Head.ParseAlternative.Skip > 0)
+                && minAlternatives.Any(a => !a.IsEmpty && a.Head.ParseAlternative.Skip == 0);
+      var bestAlternatives = hasAll ? minAlternatives.Where(a => !a.IsEmpty && a.Head.ParseAlternative.Skip == 0).ToList()
+                                    : minAlternatives;
+
       // помечаем все узлы альтернатив с минимальным пропуском токенов
-      foreach (var a in alternatives)
-        if (a.Sum(n => n.SkipedMandatoryTokenCount) == min)
-          foreach (var n in a)
-            n.IsMarked = true;
+      foreach (var a in bestAlternatives)
+        foreach (var n in a)
+          n.IsMarked = true;
 
       // удаляем все узлы за исключением помеченных на предыдущем шаге
       foreach (var node in nodes)
@@ -311,6 +316,15 @@ namespace N2.DebugStrategies
       //      bestNodes.Add(node);
       //
       //UpdateBest(bestNodes, nodes);
+    }
+
+    private static int SkippedTokenCountWithoutSkip(ParseAlternativeNodes x)
+    {
+      return x.Sum(a => a.SkipedMandatoryTokenCount);
+    }
+    private static int SkippedTokenCount(ParseAlternativeNodes x)
+    {
+      return x.Sum(a => (a.ParseAlternative.Skip > 0 ? 1 : 0) + a.SkipedMandatoryTokenCount);
     }
 
     private static void UpdateBest(List<ParseAlternativeNode> bestNodes, List<ParseAlternativeNode> nodes)
@@ -402,7 +416,11 @@ namespace N2.DebugStrategies
             Debug.Assert(false, "У нас остались только невалидные альтернативы (n.Frame.TextPos < n.ParseAlternative.Start)");
 
           foreach (var n in result)
+          {
+            if (n.Id == 8300)
+            { }
             n.Remove();
+          }
 
           return;
         }
@@ -541,7 +559,7 @@ namespace N2.DebugStrategies
     }
 
     /// <returns>Посиция окончания парсинга</returns>
-    private ParseAlternative ParseTopFrame(Parser parser, RecoveryStackFrame frame, int skipCount)
+    private List<ParseAlternative> ParseTopFrame(Parser parser, RecoveryStackFrame frame, int skipCount)
     {
       ParseAlternative parseAlternative;
 
@@ -553,8 +571,8 @@ namespace N2.DebugStrategies
 
       var curTextPos = frame.TextPos + skipCount;
       var parsedStates = new List<ParsedStateInfo>();
+      var parseAlternatives = new List<ParseAlternative>(4);
 
-      //if (parser.MaxFailPos > curTextPos)// state != frame.FailState
       {
         var maxFailPos = parser.MaxFailPos;
         var ends = frame.ParstAllGrammarTokens(curTextPos);
@@ -563,15 +581,16 @@ namespace N2.DebugStrategies
         {
           if (end < 0 || end - curTextPos == 0)
             continue;
-          
+
           parser.MaxFailPos = maxFailPos;
           var state = frame.FailState;
           var pos2 = frame.TryParse(state, end, false, parsedStates, parser);
           if (pos2 >= 0 && frame.NonVoidParsed(end, pos2, parsedStates, parser))
           {
             parseAlternative = new ParseAlternative(end, pos2, (pos2 < 0 ? parser.MaxFailPos : pos2) - end, pos2 < 0 ? parser.MaxFailPos : 0, state, end - curTextPos);
-            frame.ParseAlternatives = new[] { parseAlternative };
-            return parseAlternative;
+            parseAlternatives.Add(parseAlternative);
+            parser.MaxFailPos = maxFailPos;
+            break;
           }
         }
 
@@ -587,16 +606,18 @@ namespace N2.DebugStrategies
         if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parser))
         {
           parseAlternative = new ParseAlternative(curTextPos, pos, (pos < 0 ? parser.MaxFailPos : pos) - curTextPos, pos < 0 ? parser.MaxFailPos : 0, state, 0);
-          frame.ParseAlternatives = new[] { parseAlternative };
-          return parseAlternative;
+          parseAlternatives.Add(parseAlternative);
+          frame.ParseAlternatives = parseAlternatives.ToArray();
+          return parseAlternatives;
         }
       }
 
       // Если ни одного состояния не пропарсились, то считаем, что пропарсилось состояние "за концом правила".
       // Это соотвтствует полному пропуску остатка подправил данного правила.
       parseAlternative = new ParseAlternative(curTextPos, curTextPos, 0, 0, -1, 0);
-      frame.ParseAlternatives = new[] { parseAlternative };
-      return parseAlternative;
+      parseAlternatives.Add(parseAlternative);
+      frame.ParseAlternatives = parseAlternatives.ToArray();
+      return parseAlternatives;
     }
 
     private static IOrderedEnumerable<int> Sort(HashSet<int> ends)
@@ -652,10 +673,12 @@ namespace N2.DebugStrategies
 
       if (frame.Depth == 0)
       {
-        var parseAlternative = ParseTopFrame(parser, frame, skipCount);
-        // Не спекулировать на правилах которые что-то парсят. Такое может случиться после пропуска грязи.
-        if (skipCount > 0 && parseAlternative.End > 0 && parseAlternative.ParentsEat > 0)
-          return;
+        var textPos = frame.TextPos;
+        var parseAlternatives = ParseTopFrame(parser, frame, skipCount);
+        foreach (var parseAlternative in parseAlternatives)
+          // Не спекулировать на правилах которые что-то парсят. Такое может случиться после пропуска грязи.
+          if ((skipCount > 0 || parseAlternative.Skip > 0) && parseAlternative.End > 0 && parseAlternative.End > textPos)
+            return;
       }
 
       if (!frame.IsPrefixParsed) // пытаемся восстановить пропущенный разделитель списка
@@ -1636,7 +1659,7 @@ pre
           if (!node.Best)
             continue;
 
-          var result = node.GetHtml();
+          var result = node.GetHtml(skipCount);
           results.AddRange(result);
           alternativesCount += result.Count;
         }
@@ -1653,7 +1676,7 @@ pre
       Process.Start(filePath);
     }
 
-    public static List<XElement> GetHtml(this ParseAlternativeNode node)
+    public static List<XElement> GetHtml(this ParseAlternativeNode node, int skipCount)
     {
       var results = new List<XElement>();
       var paths = node.GetFlatParseAlternatives();
@@ -1666,7 +1689,6 @@ pre
         {
           if (x.Head != y.Head)
           {
-
           }
         }
       }
@@ -1676,12 +1698,12 @@ pre
       }
 
       foreach (var path in paths)
-        results.Add(MakeHtml(path));
+        results.Add(MakeHtml(path, skipCount));
 
       return results;
     }
 
-    private static XElement MakeHtml(ParseAlternativeNodes nodes)
+    private static XElement MakeHtml(ParseAlternativeNodes nodes, int skipCount)
     {
       XElement content = null;
       XElement missedSeparator = null;
@@ -1704,6 +1726,8 @@ pre
         var text = frame.Parser.Text;
 
         skippedTokenCount += node.SkipedMandatoryTokenCount;
+        if (a.Skip > 0)
+          skippedTokenCount++;
 
         var parsedClass = isTop ? _topClass : _postfixClass;
 
@@ -1719,6 +1743,13 @@ pre
         XElement skippedPostfix = null;
 
         var endState = a.State;
+
+        var skippedText = a.Skip + skipCount > 0 ? new XElement("span", _garbageClass, text.Substring(frame.TextPos, a.Skip + skipCount)) : null;
+
+        if (a.Skip > 0)
+        {
+
+        }
 
         if (isTop)
         {
@@ -1739,7 +1770,7 @@ pre
         }
 
         var fail = a.End < 0 ? new XElement("span", _garbageClass, "<FAIL>") : null;
-        var span = new XElement("span", parsedClass, title, _start, prefix, missedSeparator, skippedPrefix, content, skippedPostfix, postfix, _end, fail);
+        var span = new XElement("span", parsedClass, title, _start, prefix, skippedText, missedSeparator, skippedPrefix, content, skippedPostfix, postfix, _end, fail);
 
         var missed = node.MissedSeparator;
 
