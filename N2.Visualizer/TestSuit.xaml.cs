@@ -341,8 +341,8 @@ namespace N2.Visualizer
       var dialog = new OpenFileDialog
       {
         DefaultExt = ".dll",
-        Filter = "Parser module (.dll)|*.dll",
-        Title = "Load partser"
+        Filter = "Parser library (.dll)|*.dll",
+        Title = "Load parser"
       };
       if (dialog.ShowDialog(this) ?? false)
       {
