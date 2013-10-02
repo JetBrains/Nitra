@@ -39,7 +39,7 @@ namespace N2.DebugStrategies
       _recoveryPerformanceData.Init();
     }
 
-    public override int Strategy(Parser parser)
+    public override int Strategy(ParseResult parser)
     {
       _recoveryPerformanceData.Timer.Start();
       _recoveryPerformanceData.Count++;

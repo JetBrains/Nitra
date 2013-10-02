@@ -36,7 +36,7 @@ namespace N2.Visualizer
   public partial class MainWindow
   {
     bool _loading = true;
-    Parser _parseResult;
+    ParseResult _parseResult;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
     readonly Timer _parseTimer;
@@ -492,7 +492,7 @@ namespace N2.Visualizer
 
         _text.TextArea.TextView.Redraw(DispatcherPriority.Input);
 
-        _foldingStrategy.Parser = _parseResult;
+        _foldingStrategy.ParseResult = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
 
         _outliningTime.Text = _foldingStrategy.TimeSpan.ToString();

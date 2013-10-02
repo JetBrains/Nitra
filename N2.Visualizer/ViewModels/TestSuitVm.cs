@@ -136,7 +136,7 @@ namespace N2.Visualizer.ViewModels
     }
 
     [CanBeNull]
-    public Parser Run([NotNull] string code, [CanBeNull] string gold, RecoveryStrategy recoveryStrategy)
+    public ParseResult Run([NotNull] string code, [CanBeNull] string gold, RecoveryStrategy recoveryStrategy)
     {
       if (_parserHost == null)
       {

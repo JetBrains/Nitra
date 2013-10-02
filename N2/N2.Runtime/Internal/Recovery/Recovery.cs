@@ -25,7 +25,7 @@ namespace N2.DebugStrategies
       ReportResult = reportResult;
     }
 
-    public virtual int Strategy(Parser parser)
+    public virtual int Strategy(ParseResult parser)
     {
       parser = parser;
       return -1;

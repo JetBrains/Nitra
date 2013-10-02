@@ -12,7 +12,7 @@ namespace N2.Visualizer.ViewModels
     public string     TestPath          { get; private set; }
     public TestSuitVm TestSuit          { get; private set; }
     public string     Name              { get { return Path.GetFileNameWithoutExtension(TestPath); } }
-    public Parser     Result            { get; private set; }
+    public ParseResult     Result            { get; private set; }
     public string     PrettyPrintResult { get; private set; }
 
     public override string Hint { get { return Code; } }
@@ -38,7 +38,7 @@ namespace N2.Visualizer.ViewModels
         TestState = TestState.Ignored;
     }
 
-    public Parser Run(RecoveryStrategy recoveryStrategy)
+    public ParseResult Run(RecoveryStrategy recoveryStrategy)
     {
       if (TestSuit.TestState == TestState.Ignored)
         return null;

@@ -15,7 +15,7 @@ namespace N2.Visualizer
 
     public override IEnumerable<NewFolding> CreateNewFoldings(TextDocument document, out int firstErrorOffset)
     {
-      var parseResult = Parser;
+      var parseResult = ParseResult;
       if (parseResult == null)
       {
         firstErrorOffset = 0;
@@ -53,6 +53,6 @@ namespace N2.Visualizer
       }
     }
 
-    public Parser Parser { get; set; }
+    public ParseResult ParseResult { get; set; }
   }
 }

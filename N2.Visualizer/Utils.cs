@@ -21,7 +21,7 @@ namespace N2.Visualizer
       assemblyFilePath = UpdatePathForConfig(assemblyFilePath);
 
       var assembly = Assembly.ReflectionOnlyLoadFrom(assemblyFilePath);
-      var runtime = typeof(N2.Internal.Parser).Assembly.GetName();
+      var runtime = typeof(N2.Internal.ParseResult).Assembly.GetName();
       foreach (var reference in assembly.GetReferencedAssemblies())
       {
         if (reference.Name == runtime.Name)
