@@ -186,7 +186,7 @@ namespace N2.DebugStrategies
       //X.VisualizeFrames(nodes);
       //ParseAlternativeNode.DownToTop(nodes, CalcMinSkipedMandatoryTokenCount);
 
-      ParseAlternativeNode.DownToTop(nodes, RemoveChildrenIfAllChildrenIsEmpty);
+      ParseAlternativeNode.TopToDown(nodes, RemoveChildrenIfAllChildrenIsEmpty);
       //ParseAlternativesVisializer.PrintParseAlternatives(parser, nodes, skipCount, "After RemoveChildrenIfAllChildrenIsEmpty.");
       //X.VisualizeFrames(nodes);
       
@@ -502,7 +502,7 @@ namespace N2.DebugStrategies
     {
       switch (node.Id)
       {
-        case 28300: break;
+        case 1901  : break;
         case 28400: break;
         case 28500: break;
       }
