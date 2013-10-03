@@ -1055,17 +1055,36 @@ namespace N2.Visualizer
 
       foreach (var diffItem in textA.Diff(textB))
       {
-        // определяем нужно ли выводить разделитель
-        var nextIndexA = Math.Max(indexA, diffItem.Index - rangeToShow);
-        if (nextIndexA > indexA + 1)
-          output.Add(MakeLine("..."));
+        //в начале итерации indexA содержит индекс строки идущей сразу за предыдущим блоком
 
-        // показваем не боле rangeToShow предыдущих строк
-        indexA = nextIndexA;
-        while (indexA < diffItem.Index)
+        // определяем нужно ли выводить разделитель
+        if (diffItem.Index - indexA > rangeToShow * 2)
         {
-          output.Add(MakeLine(textA[indexA]));
-          ++indexA;
+          //показываем строки идущие после предыдущего блока
+          for (var i = 0; i < rangeToShow; ++i)
+          {
+            output.Add(MakeLine(textA[indexA]));
+            ++indexA;
+          }
+
+          output.Add(MakeLine("...", Brushes.LightGray));
+
+          //показываем строки идущие перед текущим блоком
+          indexA = diffItem.Index - rangeToShow;
+          for (var i = 0; i < rangeToShow; ++i)
+          {
+            output.Add(MakeLine(textA[indexA]));
+            ++indexA;
+          }
+        }
+        else
+        {
+          //показываем строки между блоками
+          while (indexA < diffItem.Index)
+          {
+            output.Add(MakeLine(textA[indexA]));
+            ++indexA;
+          }
         }
 
         // показываем удаленные строки
@@ -1078,19 +1097,19 @@ namespace N2.Visualizer
         // показываем добавленные строки
         foreach (var insertedItem in diffItem.Inserted)
           output.Add(MakeLine(insertedItem, Brushes.LightGreen));
+      }
 
-        // показываем не более rangeToShow последующих строк
-        var tailLinesToShow = Math.Min(rangeToShow, textA.Length - indexA);
+      // показываем не более rangeToShow последующих строк
+      var tailLinesToShow = Math.Min(rangeToShow, textA.Length - indexA);
 
-        for (var i = 0; i < tailLinesToShow; ++i)
-        {
-          output.Add(MakeLine(textA[indexA]));
-          ++indexA;
-        }
+      for (var i = 0; i < tailLinesToShow; ++i)
+      {
+        output.Add(MakeLine(textA[indexA]));
+        ++indexA;
       }
 
       if (indexA < textA.Length)
-        output.Add(MakeLine("..."));
+        output.Add(MakeLine("...", Brushes.LightGray));
 
       output.Add(MakeLine("END-DIFF", Brushes.LightGray));
 
