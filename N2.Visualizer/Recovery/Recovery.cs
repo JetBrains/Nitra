@@ -786,7 +786,7 @@ namespace N2.DebugStrategies
 
       // формируем ошибки начало
       var totalSkip = skipCount + bestNodes[0].ParseAlternative.Skip;
-      var loc = new Location(parseResult.Source, new NToken(failPos, failPos + totalSkip));
+      var loc = new Location(parseResult, new NToken(failPos, failPos + totalSkip));
       if (totalSkip > 0)
         parseResult.ReportError(new UnexpectedTokenError(loc));
       TryAddErrorsForMissedSeparators(parseResult, loc, allNodes);
