@@ -13,26 +13,35 @@ namespace N2.Visualizer
     private StringWriter _writer; // for HtmlEncode
     private string _missingNodeClass;
     private string _debugClass;
+    private string _garbageClass;
     private int _currentIndent;
     private int _lastStartLine;
     private int _lastIndentEnd;
 
-    public HtmlPrettyPrintWriter(PrettyPrintOptions options, string missingNodeClass, string debugClass)
+    public HtmlPrettyPrintWriter(PrettyPrintOptions options, string missingNodeClass, string debugClass, string garbageClass)
       : base(options)
     {
       _buffer = new StringBuilder();
       _writer = new StringWriter(_buffer);
       _missingNodeClass = missingNodeClass;
       _debugClass = debugClass;
+      _garbageClass = garbageClass;
     }
 
-    public override void Token(SourceSnapshot source, NToken token)
+    protected override void Garbage(SourceSnapshot source, NToken skip)
     {
+      var text = source.Text.Substring(skip.StartPos, skip.Length);
+      WriteSpan(_garbageClass, text);
+    }
+
+    protected override void FormatToken(SourceSnapshot source, NToken token)
+    {
+      TryPrintGarbage(source, token);
       var text = source.Text.Substring(token.StartPos, token.Length);
       WebUtility.HtmlEncode(text, _writer);
     }
 
-    public override void String(NToken token, string text)
+    protected override void FormatString(SourceSnapshot source, NToken token, string text)
     {
       if (token.IsEmpty)
       {
