@@ -171,36 +171,36 @@ namespace N2.DebugStrategies
     #region Выбор лучшего фрейма
 
     // ReSharper disable UnusedParameter.Local
-    private static List<ParseAlternativeNode> SelectBestFrames2(ParseResult parseResult, List<ParseAlternativeNode> nodes, int skipCount)
+    private static List<ParseAlternativeNode> SelectBestFrames2(ParseResult _parseResult, List<ParseAlternativeNode> nodes, int _skipCount)
     // ReSharper restore UnusedParameter.Local
     {
-      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "After RemoveTheShorterAlternative.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "After RemoveTheShorterAlternative.");
       //X.VisualizeFrames(nodes);
 
       RemoveTheShorterAlternative(nodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "AftFer RemoveTheShorterAlternative.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "AftFer RemoveTheShorterAlternative.");
       //X.VisualizeFrames(nodes);
 
       FilterAlternativesWithMinimumSkippedTokens(nodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "After RemoveAlternativesWithALotOfSkippedTokens.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "After RemoveAlternativesWithALotOfSkippedTokens.");
       //X.VisualizeFrames(nodes);
       //ParseAlternativeNode.DownToTop(nodes, CalcMinSkipedMandatoryTokenCount);
 
       ParseAlternativeNode.TopToDown(nodes, RemoveChildrenIfAllChildrenIsEmpty);
-      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "After RemoveChildrenIfAllChildrenIsEmpty.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "After RemoveChildrenIfAllChildrenIsEmpty.");
       //X.VisualizeFrames(nodes);
       
       RemoveSuccessfullyParsed(nodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "After RemoveSuccessfullyParsed.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "After RemoveSuccessfullyParsed.");
       //X.VisualizeFrames(nodes);
       
       RemoveDuplicateNodes(nodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "After RemoveDuplicateNodes.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "After RemoveDuplicateNodes.");
       //X.VisualizeFrames(nodes);
 
       var bestNodes = GetTopNodes(nodes);
       //X.VisualizeFrames(bestNodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "After RemoveDuplicateNodes.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "After RemoveDuplicateNodes.");
       return bestNodes;
     }
 
@@ -297,72 +297,11 @@ namespace N2.DebugStrategies
       }
 
       // TODO: Написать оптимизированную версию с нахрапа не вышло. Надо сделать это в будущем!
-
-      //ParseAlternativeNode.DownToTop(nodes, CalcMinSkipedMandatoryTokenCount);
-      //
-      //var minSkip = int.MaxValue;
-      //
-      //var topNodes = GetTopNodes(nodes);
-      //
-      //foreach (var node in topNodes)
-      //  if (node.MinSkipedMandatoryTokenCount < minSkip)
-      //    minSkip = node.MinSkipedMandatoryTokenCount;
-      //
-      //var bestNodes = new List<ParseAlternativeNode>();
-      //
-      //if (minSkip != int.MaxValue)
-      //  foreach (var node in topNodes)
-      //    if (node.MinSkipedMandatoryTokenCount == minSkip)
-      //      bestNodes.Add(node);
-      //
-      //UpdateBest(bestNodes, nodes);
     }
 
-    private static int SkippedTokenCountWithoutSkip(ParseAlternativeNodes x)
-    {
-      return x.Sum(a => a.SkipedMandatoryTokenCount);
-    }
     private static int SkippedTokenCount(ParseAlternativeNodes x)
     {
       return x.Sum(a => (a.ParseAlternative.Skip > 0 ? 1 : 0) + a.SkipedMandatoryTokenCount);
-    }
-
-    private static void UpdateBest(List<ParseAlternativeNode> bestNodes, List<ParseAlternativeNode> nodes)
-    {
-      foreach (var bestNode in bestNodes)
-      {
-        bestNode.IsMarked = true;
-        bestNode.MinSkipedMandatoryTokenCount = int.MaxValue;
-      }
-
-      foreach (var node in nodes)
-        if (node.IsMarked)
-          foreach (var parent in node.Parents)
-            parent.IsMarked = true;
-
-      foreach (var node in nodes)
-      {
-        var isMarked = node.IsMarked;
-        node.Best = isMarked;
-        if (isMarked)
-          node.IsMarked = false;
-      }
-
-      //TODO: Для реалтаймного обновления MinSkipedMandatoryTokenCount его нужно делать в ParseAlternativeNode
-      //// Update MinSkipedMandatoryTokenCount
-      //foreach (var bestNode in bestNodes)
-      //{
-      //  var min = int.MaxValue;
-      //
-      //  foreach (var parent in bestNode.Parents)
-      //  {
-      //    var curr = parent.MinSkipedMandatoryTokenCount;
-      //    if (curr < min)
-      //      min = curr;
-      //  }
-      //
-      //  bestNode.MinSkipedMandatoryTokenCount = min == int.MaxValue ? bestNode.SkipedMandatoryTokenCount else bestNode.SkipedMandatoryTokenCount + min;
-      //} 
     }
 
     private static void CalcMinSkipedMandatoryTokenCount(ParseAlternativeNode node)
@@ -432,11 +371,10 @@ namespace N2.DebugStrategies
       return new NB.Tuple<T1, T2>(field1, field2);
     }
 
-    // ReSharper disable once UnusedMember.Local
-    private static NB.Tuple<T1, T2, T3> Create<T1, T2, T3>(T1 field1, T2 field2, T3 field3)
-    {
-      return new NB.Tuple<T1, T2, T3>(field1, field2, field3);
-    }
+    //private static NB.Tuple<T1, T2, T3> Create<T1, T2, T3>(T1 field1, T2 field2, T3 field3)
+    //{
+    //  return new NB.Tuple<T1, T2, T3>(field1, field2, field3);
+    //}
 
     private static void RemoveSuccessfullyParsed(List<ParseAlternativeNode> nodes)
     {
@@ -880,7 +818,7 @@ namespace N2.DebugStrategies
 
 #region Utility methods
 
-  internal static class RecoveryUtils
+  public static class RecoveryUtils
   {
     public static List<T> FilterMax<T>(this SCG.ICollection<T> candidates, Func<T, int> selector)
     {
@@ -1384,7 +1322,7 @@ namespace N2.DebugStrategies
 
     public static bool EndWith(RecoveryStackFrame child, int end)
     {
-      foreach (ParseAlternative p in child.ParseAlternatives)
+      foreach (var p in child.ParseAlternatives)
         if (p.Stop == end)
           return true;
 
@@ -1485,7 +1423,7 @@ namespace N2.DebugStrategies
     public static bool HasTopFramesWhichRecoveredOnFailState(RecoveryStackFrame frame)
     {
       var failState = frame.FailState;
-      foreach (ParseAlternative a in frame.ParseAlternatives)
+      foreach (var a in frame.ParseAlternatives)
         if (a.State == failState)
           return true;
       return false;
@@ -1554,7 +1492,7 @@ namespace N2.DebugStrategies
     }
   }
 
-  static class ParseAlternativesVisializer
+  public static class ParseAlternativesVisializer
   {
     #region HtmlTemplate
     private const string HtmlTemplate = @"
@@ -1790,6 +1728,8 @@ pre
         nodes = nodes.Tail;
         content = span;
       }
+
+      throw new Exception("MakeHtml failed");
     }
 
     private static string SkipedStatesCode(RecoveryStackFrame frame, int startState, int endState)
@@ -1802,6 +1742,6 @@ pre
       return new XAttribute("title", node);
     }
   }
-  
-  #endregion
+
+#endregion
 }

@@ -37,8 +37,9 @@ namespace N2.VisualStudio
 
     // Cache the Menu Command Service since we will use it multiple times
     private mutable _menuService : OleMenuCommandService;
-    mutable _statusbar : IVsStatusbar;
-    private _logger : Logger = LogManager.GetLogger(typeof(this).FullName);
+    private mutable _statusbar   : IVsStatusbar;
+    private         _logger      : Logger = LogManager.GetLogger(typeof(this).FullName);
+    private mutable _dteEvents   : DTEEvents;
 
     public DataHostService : IVsDataHostService { get; private set; }
 
@@ -49,31 +50,48 @@ namespace N2.VisualStudio
 
       Instance = this;
       DataHostService = GetService(typeof(IVsDataHostService)) :> IVsDataHostService;
-      def dte = GetService(typeof(DTE)) :> DTE;
-      dte.Events.DTEEvents.OnStartupComplete += _ =>
-      {
-        _logger.Trace("StartupComplete event fired");
 
+      def subscribeTextDocumentCreated() : bool
+      {
         def config = GetServiceFromServiceModel.[IN2GlobalConfig]();
         def errorProvider = GetServiceFromServiceModel.[IErrorProviderFactory]();
         def documentFactoryService = GetServiceFromServiceModel.[ITextDocumentFactoryService]();
-        documentFactoryService.TextDocumentCreated += fun(_, args)
+        if (config != null && errorProvider != null && documentFactoryService != null)
         {
-          def textDocument = args.TextDocument;
-          def buffer       = textDocument.TextBuffer;
-          def ext          = Path.GetExtension(args.TextDocument.FilePath);
-          unless (string.IsNullOrEmpty(ext))
-          when (config.GetLanguageByExtension(ext) is VSome(language))
+          documentFactoryService.TextDocumentCreated += fun(_, args)
           {
-            unless (buffer.ContentType.Equals(language.ContentType))
-              buffer.ChangeContentType(language.ContentType, null);
+            def textDocument = args.TextDocument;
+            def buffer       = textDocument.TextBuffer;
+            def ext          = Path.GetExtension(args.TextDocument.FilePath);
+            unless (string.IsNullOrEmpty(ext))
+            when (config.GetLanguageByExtension(ext) is VSome(language))
+            {
+              unless (buffer.ContentType.Equals(language.ContentType))
+                buffer.ChangeContentType(language.ContentType, null);
 
-            _ = Utils.CreateParseAgent(buffer, language, errorProvider, documentFactoryService);
-          }
+              _ = Utils.CreateParseAgent(buffer, language, errorProvider, documentFactoryService);
+            }
+          };
+          true
+        }
+        else false
+      }
+
+      if (subscribeTextDocumentCreated())
+        _logger.Trace("TextDocumentCreated event subscribed from Initialize method");
+      else
+      {
+        _dteEvents = (GetService(typeof(DTE)) :> DTE).Events.DTEEvents;
+        _dteEvents.OnStartupComplete += _ =>
+        {
+          if (subscribeTextDocumentCreated())
+            _logger.Trace("TextDocumentCreated event subscribed from OnStartupComplete event");
+          else
+            _logger.Trace("Failed to subscribe TextDocumentCreated event");
         };
-      };
+      }
       _menuService = GetService(typeof(IMenuCommandService)) :> OleMenuCommandService;
-      when ( _menuService != null && !this.Zombied)
+      when (_menuService != null && !this.Zombied)
       {
         // Each command is uniquely identified by a Guid/integer pair.
         def id = CommandID(GuidsList.GuidN2ToolWindowCmdSet, PkgCmdId.CmdidToolWindow);
@@ -128,13 +146,13 @@ namespace N2.VisualStudio
 
     public OfficialName(pbstrName : out string) : int
     {
-      pbstrName = "nemerle 2.0";
+      pbstrName = "Nitra";
       VSConstants.S_OK;
     }
 
     public ProductDetails(pbstrProductDetails : out string) : int
     {
-      pbstrProductDetails = "nemerle 2.0 product details";
+      pbstrProductDetails = AssemblyConstants.ProductDetails;
       VSConstants.S_OK;
     }
 
@@ -145,8 +163,6 @@ namespace N2.VisualStudio
     }
 
     #endregion
-
-    
 
     private GetServiceFromServiceModel[T]() : T
     {
