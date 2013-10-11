@@ -1,0 +1,82 @@
+﻿using N2.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+using N2.Model;
+
+namespace N2.Compiler
+{
+  internal sealed partial class UpdateMandatoryTokensMethodEmitter : MethodEmitter
+  {
+    public CompileAst(ruleStructure : RuleStructure.Ast) : PExpr
+    {
+      def code = SCG.List();
+      def fields = ruleStructure.AllNonMarkerFields;
+      code.Add(<[ mutable updated = false; ]>);
+      code.Add(<[ mutable count; ]>);
+      code.Add(<[
+        when (_mandatoryTokensForState == null)//TODO: вынести в метод.
+        {
+          _mandatoryTokensForState = array($(fields.Length));
+          for (mutable i = 0; i < $(fields.Length); ++i)
+            _mandatoryTokensForState[i] = ~0;
+        }
+      ]>);
+      def sumFields(fields)
+      {
+        def make(fields)
+        {
+          | [] => assert3(false);
+          | [field] => <[ _mandatoryTokensForState[$(field.State)] ]>
+          | [field1, field2] => <[ N2.Internal.ParseResult.AddMandatoryTokens(_mandatoryTokensForState[$(field1.State)], _mandatoryTokensForState[$(field2.State)]) ]>
+          | field :: fields => <[ N2.Internal.ParseResult.AddMandatoryTokens(_mandatoryTokensForState[$(field.State)], $(make(fields))) ]>
+        }
+        make(fields.NToList())
+      }
+      for (mutable i = fields.Length - 1; i >= 0; --i)
+      {
+        def field = fields[i];
+        def countCode = match (field)
+        {
+          | Empty                                      => <[ 0 ]>
+          | TokenString    (str)                       => if (str.Length == 0) <[ 0 ]> else <[ 1 ]>
+          | TokenCall      (ruleSymbol)                => if (ruleSymbol.CanParseEmptyString) <[ 0 ]> else <[ 1 ]>
+          | SimpleCall     (ruleSymbol)                => <[ $(Owner.MakeParserName(ruleSymbol) : global).MandatoryTokens ]>
+          | ExtensibleCall (ruleSymbol, bindingPower)  => <[ $(Owner.MakeParserName(ruleSymbol, bindingPower) : global).MandatoryTokens ]>
+          | Option                                     => <[ 0 ]>
+          | List              as field                 =>
+            match (field.MinCount)
+            {
+              | 0 => <[ 0 ]>
+              | 1 => <[ $(sumFields(field.Rule.NonMarkerFields)) ]>
+              | c => <[ $c * $(sumFields(field.Rule.NonMarkerFields)) ]>
+            }
+          | ListWithSeparator as field                 =>
+            match (field.MinCount)
+            {
+              | 0 => <[ 0 ]>
+              | 1 => <[ $(sumFields(field.Rule.NonMarkerFields)) ]>
+              | c => <[ $c * $(sumFields(field.Rule.NonMarkerFields)) + $(c - 1) * $(sumFields(field.Separator.NonMarkerFields)) ]>
+            }
+          | Marker                                     => assert3(false)
+        }
+        code.Add(<[
+          count = $countCode;
+          updated = updated || count != _mandatoryTokensForState[$(field.State)];
+          _mandatoryTokensForState[$(field.State)] = count;
+        ]>);
+      }
+      code.Add(<[ MandatoryTokens = $(sumFields(ruleStructure.NonMarkerFields)) ]>);
+      code.Add(<[ updated; ]>);
+      code.FlattenPExpr();
+    }
+  }
+}

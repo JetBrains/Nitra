@@ -18,56 +18,84 @@ namespace N2.Compiler
   {
     public CompileFuntion(structure : RuleStructure) : void
     {
-      def function = if (structure is RuleStructure.Ast as astStructure)
-        if (astStructure.Symbol is ExtentionRuleSymbol)
-          <[decl:
-            public override FindRecoveryPosition(mutable curTextPos : int, astPtr : int, stack : list[N2.Internal.RecoveryStackFrame], parser : N2.Internal.Parser) : void
-            {
-              $(if (Owner.Environment.IsIdeMode)
-                <[ _ = curTextPos; _ = text; _ = astPtr; _ = parser; -1 ]>
-              else
-                CompileFuntionBody(astStructure))
-            }
-          ]>
-        else
-          <[decl:
-            public override FindRecoveryPosition(mutable curTextPos : int, stack : list[N2.Internal.RecoveryStackFrame], parser : N2.Internal.Parser) : void
-            {
-              $(if (Owner.Environment.IsIdeMode)
-                <[ _ = curTextPos; _ = text; _ = parser; -1 ]>
-              else
-                CompileFuntionBody(astStructure))
-            }
-          ]>
+      def body = if (Owner.Environment.IsIdeMode)
+        <[ IgnoreParams(); assert(false); ]>
       else
-        <[decl:
-          private $(FunctionName(structure) : global)(mutable curTextPos : int, stack : list[N2.Internal.RecoveryStackFrame], parser : N2.Internal.Parser) : void
-          {
-            $(CompileFuntionBody(structure))
-          }
-        ]>;
-      _tb.DefineConditional(function);
+        CompileFuntionBody(structure);
+      def function = match (structure)
+      {
+        | RuleStructure.Ast(Symbol = ExtensionRuleSymbol) =>
+          <[decl:
+            public override FindRecoveryPosition(mutable curTextPos : int, astPtr : int, stack : N2.Internal.RecoveryStackFrame, parseResult : N2.Internal.ParseResult) : void
+            {
+              $body
+            }
+          ]>
+        | RuleStructure.Ast(Symbol = SimpleRuleSymbol) =>
+          <[decl:
+            public override FindRecoveryPosition(mutable curTextPos : int, stack : N2.Internal.RecoveryStackFrame, parseResult : N2.Internal.ParseResult) : void
+            {
+              $body
+            }
+          ]>
+        | RuleStructure.Ast => assert3(false)
+        | RuleStructure.List                       as structure1 when structure1.UseCounter
+        | RuleStructure.ListWithSeparatorRule      as structure2 when structure2.UseCounter
+        | RuleStructure.ListWithSeparatorSeparator as structure3 when structure3.UseCounter =>
+          <[decl:
+            private $(FunctionName(structure) : global)(mutable curTextPos : int, counter : int, stack : N2.Internal.RecoveryStackFrame, parseResult : N2.Internal.ParseResult) : void
+            {
+              $body
+            }
+          ]>;
+        | _ =>
+          <[decl:
+            private $(FunctionName(structure) : global)(mutable curTextPos : int, stack : N2.Internal.RecoveryStackFrame, parseResult : N2.Internal.ParseResult) : void
+            {
+              $body
+            }
+          ]>;
+      }
+      TypeBuilder.DefineConditional(function);
     }
 
     public CompileFuntionBody(structure : RuleStructure) : PExpr
     {
-      def setAstPtr = if (structure is RuleStructure.Ast(Symbol = ExtentionRuleSymbol))
-          <[ def $(AstPtr(structure).Var) = astPtr ]>;
-        else
-          <[ def $(AstPtr(structure).Var) = parser.TryGetAst(astStart, $(structure.AstId : global)); ]>;
+      def setAstPtr = match (structure)
+      {
+        | RuleStructure.Ast(Symbol = ExtensionRuleSymbol) =>
+          <[
+            def $(AstPtr(structure).Var) = astPtr;
+            def astHandle = parseResult.AstHandle_Extension(stack, this, $(AstPtr(structure).Var), $CurTextPos);
+          ]>
+        | RuleStructure.Ast(Symbol = SimpleRuleSymbol) =>
+          <[
+            def $(AstPtr(structure).Var) = parseResult.TryGetAst($CurTextPos, $(structure.AstId : global));
+            def astHandle = parseResult.AstHandle_Simple(this, $(AstPtr(structure).Var), $CurTextPos);
+          ]>
+        | Option
+        | List
+        | ListWithSeparatorRule
+        | ListWithSeparatorSeparator =>
+          <[
+            def $(AstPtr(structure).Var) = parseResult.TryGetAst($CurTextPos, $(structure.AstId : global));
+            def astHandle = parseResult.AstHandle_Subrule(this, $(structure.AstId : global), $(AstPtr(structure).Var), $CurTextPos);
+          ]>
+        | RuleStructure.Ast => assert(false);
+        | RuleStructure.Predicate => assert(false);
+      }
 
       def fieldsCode = SCG.List();
       CompileFieldsNoneRecursive(fieldsCode, structure);
-      def failFields = structure.NotMarkerFields.Skip(1).NToList();
+      def failFields = structure.NonMarkerFields.Skip(1).NToList();
       def endSelect = Environment.MakeLabel("EndSelect");
       def selectFailFieldMatch =
-        [<[case: | $(structure.NotMarkerFields.First().State) => startState = $(structure.NotMarkerFields.First().State); $(endSelect.Goto());]>] +
+        [<[case: | $(structure.NonMarkerFields.First().State) => startState = $(structure.NonMarkerFields.First().State); $(endSelect.Goto());]>] +
         failFields.Map(field => <[case: | $(field.State) => $(GotoSelectStartStateLabel(field.PrevSibling))]>) +
         [<[case: | _ => assert3(false) ]>];
       def selectFailField = failFields.Reverse().Map(_.PrevSibling).Map(field => <[ $(SelectStartStateLabel(field)); startState = $(field.State); when ($(AstPtr(structure).GetRaw(field)) != 0) $(endSelect.Goto()); ]>);
       <[
         _ = $(structure.ToString());
-        def astStart = $CurTextPos;
         $setAstPtr;
 
         mutable startState;
@@ -78,13 +106,13 @@ namespace N2.Compiler
         }
         else
         {
-          parseState = $(structure.NotMarkerFields.First().State);
-          startState = $(structure.NotMarkerFields.First().State);
+          parseState = $(structure.NonMarkerFields.First().State);
+          startState = $(structure.NonMarkerFields.First().State);
           $(endSelect.Goto());
         }
 
-        when (parseState == N2.Internal.Parser.AstParsedState)
-          parseState = $(structure.NotMarkerFields.Last().State);
+        when (parseState == N2.Internal.ParseResult.AstParsedState)
+          parseState = $(structure.NonMarkerFields.Last().State);
         assert3(parseState >= 0);
 
         match (parseState)

@@ -264,6 +264,15 @@ namespace N2
       JetBrains.Util.NounUtil.GetPlural(name);
     }
 
+    public MakePlural(fieldName : option[string], _context : Context) : string
+    {
+      match (fieldName)
+      {
+        | Some(name) => name
+        | _ => "Token"
+      }
+    }
+
     public MakePlural(fieldName : option[string], rule : Rule, _context : Context) : string
     {
       match (fieldName)
@@ -473,6 +482,8 @@ namespace N2
         | Chars(chars)                             => FSMBuilder.Seq(chars)
         | Repeat(min, max, rule)                   => FSMBuilder.Repeat(min, max, convert(rule))
         | RepeatWithSeparator(min, max, rule, sep) => FSMBuilder.RepeatWithSeparator(min, max, convert(rule), convert(sep))
+        | Invert(rule)                             => FSMTransform.Invert(FSMBuilder.Seq([FSMBuilder.AllStrings, convert(rule), FSMBuilder.AllStrings]))
+        | Subtract(rule1, rule2)                   => FSMTransform.Sub(convert(rule1), convert(rule2))
         | Call(RuleRef.Some(symbol) as ruleRef) =>
           if (visitedRules.Add(symbol))
           {
@@ -561,9 +572,24 @@ namespace N2
       def (type, callRuleOptions) =
         if (ruleRef is RuleRef.Some(RuleDefSymbol as ruleSymbol))
         {
-          when (ruleSymbol is ExtentionRuleSymbol)
+          when (ruleSymbol is ExtensionRuleSymbol)
             Project.CurrentProject.Error(QualifiedName,
-              "You can't use directly reference an extention rule. Use reference to extensible rule instead or make a separate rule.", -1);
+              "You can't use directly reference an extension rule. Use reference to extensible rule instead or make a separate rule.", -1);
+              
+          def declarationSiteContext = context.GetContext.[RuleDeclarationSiteContext]();
+          match (declarationSiteContext.DeclarationSite)
+          {
+            | declarationSite is ExtendSyntaxSymbol =>
+              when (declarationSite.Extend is Some(declaration) when declaration.IsToken)
+                Project.CurrentProject.Error(ruleRef.Location, "Can't refer to a syntax rule from token.", -1);            
+              
+            | declarationSite is RuleDefSymbol =>
+              when (declarationSite.IsToken && !ruleSymbol.IsToken)
+                Project.CurrentProject.Error(ruleRef.Location, "Can't refer to a syntax rule from token.", -1);            
+            
+            | _                  => ()
+          }
+              
           (ruleSymbol.Type, ruleSymbol.Options)
         }
         else
@@ -739,6 +765,33 @@ namespace N2
       }
 
       loop(context)
+    }
+
+    public CalcType(rule : Rule) : RuleType
+    {
+      def defaultType(rule : Rule) { if (rule.Type is RuleType.Void) RuleType.Void() else RuleType.List(rule.Type) }
+      
+      match (rule)
+      {
+        | Rule.Sequence(elems) => 
+          def (predicates, any) = elems.DivideLast();
+          match (any)
+          {
+            | Rule.Call(RuleRef.Some(anyRule is RegularRuleSymbol), 0) => //when anyRule.Name == "Any" =>
+              //assert2(false);
+              def isAllPredicates = predicates.ForAll(p => p is Rule.Not || p is Rule.And);
+              def isAny           = RegularRuleExtensions.IsAnyDfa(anyRule.Fsm);
+
+              if (isAllPredicates && isAny)
+                RuleType.Chars()
+              else
+                defaultType(rule)
+
+            | _ => defaultType(rule)
+          }
+
+        | _ => defaultType(rule)
+      }
     }
   } // module
 } // ns

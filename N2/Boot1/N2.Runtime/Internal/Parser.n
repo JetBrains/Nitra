@@ -29,18 +29,20 @@ namespace N2.Internal
     public mutable memoize        : array[int];
     public mutable allocated      : int;
     public         ParserHost     : ParserHost;
-    public mutable ParsingMode    : ParsingMode;
 
     public         Source         : SourceSnapshot;
     public         Text           : string;
     public         RuleParser     : RuleParser { get }
     public mutable LastParseStart : int;
     public mutable LastParseEnd   : int;
-    public         ListData       : SCG.List[RecoveryListData];
-    public         RecoveryStack  : SCG.Stack[RecoveryStackFrame];
+    public         RecoveryStacks : SCG.List[list[RecoveryStackFrame]];
     public         ErrorData      : SCG.List[ParseErrorData];
-    public mutable IgnoreRecovery : bool;
-    public mutable MaxFailPos     : int;
+    private mutable _maxFailPos   : int;
+    public MaxFailPos : int
+    {
+      get { _maxFailPos }
+      set { _maxFailPos = value }
+    }
 
     public IsSuccess : bool { get { ErrorData.Count == 0 } }
 
@@ -80,8 +82,7 @@ namespace N2.Internal
     public this(source : SourceSnapshot, initalSize : int, parserHost : ParserHost, ruleParser : RuleParser)
     {
       ErrorData       = SCG.List();
-      ListData        = SCG.List();
-      RecoveryStack   = SCG.Stack();
+      RecoveryStacks  = SCG.List();
       def textSize    = source.Text.Length;
       this.Source     = source;
       this.Text       = source.Text;
@@ -92,7 +93,6 @@ namespace N2.Internal
       LastParseStart  = -1;
       LastParseEnd    = -1;
       MaxFailPos      = 0;
-      ParsingMode     = ParsingMode.Parsing;
       this.RuleParser = ruleParser;
     }
 
@@ -113,16 +113,34 @@ namespace N2.Internal
       newAst;
     }
 
-    public TryGetPrefix(pos : ref int, prefixAst : int) : int
+    public TryGetPrefix(pos : ref int, prefixAst : ref int) : int
     {
       mutable bestResult = ast[prefixAst + ExtensibleRuleParser.PrefixOfs.List];
       when (bestResult < 0)
       {
         def error = ErrorData[~bestResult];
+        when (error.Skip.Length == 0)
+          return -1;//правило восстановилось пустым.
         pos += error.Skip.Length; // грязь
-        def res = ast[GetAst(pos, ast[prefixAst + ExtensibleRuleParser.PrefixOfs.Id]) + ExtensibleRuleParser.PrefixOfs.List]; // исходная ссылка на AST
-        when (res != 0)
-          bestResult = res;
+        prefixAst = GetAst(pos, ast[prefixAst + ExtensibleRuleParser.PrefixOfs.Id]);
+        bestResult = ast[prefixAst + ExtensibleRuleParser.PrefixOfs.List]; // исходная ссылка на AST
+        assert3(bestResult >= 0 || ErrorData[~bestResult].Skip.Length == 0);
+      }
+      bestResult;
+    }
+
+    public TryGetPostfix(pos : ref int, postfixAst : ref int) : int
+    {
+      mutable bestResult = ast[postfixAst + ExtensibleRuleParser.PostfixOfs.List];
+      when (bestResult < 0)
+      {
+        def error = ErrorData[~bestResult];
+        when (error.Skip.Length == 0)
+          return -1;//правило восстановилось пустым.
+        pos += error.Skip.Length; // грязь
+        postfixAst = GetAst(pos, ast[postfixAst + ExtensibleRuleParser.PostfixOfs.Id] & ExtensibleRuleParser.PostfixMask.Id);
+        bestResult = ast[postfixAst + ExtensibleRuleParser.PostfixOfs.List]; // исходная ссылка на AST
+        assert3(bestResult >= 0 || ErrorData[~bestResult].Skip.Length == 0);
       }
       bestResult;
     }
@@ -138,8 +156,7 @@ namespace N2.Internal
     public GetAst(pos : int, ruleId : int) : int
     {
       def astPtr = TryGetAst(pos , ruleId);
-      assert2(astPtr > 0);
-      assert(astPtr > 0);
+      assert3(astPtr > 0);
       astPtr;
     }
 
@@ -196,25 +213,22 @@ namespace N2.Internal
 
     public PatchAst(ruleParser : IRecoveryRuleParser, astPtr : int, errorIndex : int, failState : int, startState : int, failFieldOffset : int) : void
     {
-      if (startState >= 0)
-        ast[astPtr + 2] = ~startState;
+      if (startState == -2)
+        ast[astPtr + 2] = ~failState;
       else
-        ast[astPtr + 2] = AstParsedState;
-      mutable field = astPtr + failFieldOffset;
-      ast[field] = ~errorIndex;
-      ++field;
-      for (mutable state = ruleParser.GetNextState(failState); state != startState; state = ruleParser.GetNextState(state))
       {
-        ast[field] = int.MinValue;
+        if (startState >= 0)
+          ast[astPtr + 2] = ~startState;
+        else
+          ast[astPtr + 2] = AstParsedState;
+        mutable field = astPtr + failFieldOffset;
+        ast[field] = ~errorIndex;
         ++field;
-      }
-    }
-
-    public StartRecovery(startTextPos : int) : void
-    {
-      unless (IgnoreRecovery)
-      {
-        this.ParserHost.RecoveryStrategy(startTextPos, this);
+        for (mutable state = ruleParser.GetNextState(failState); state != startState; state = ruleParser.GetNextState(state))
+        {
+          ast[field] = int.MinValue;
+          ++field;
+        }
       }
     }
 

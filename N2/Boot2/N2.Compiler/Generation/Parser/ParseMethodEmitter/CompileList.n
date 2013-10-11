@@ -1,4 +1,7 @@
-﻿using Nemerle;
+﻿using N2.Model;
+using N2.Typing;
+
+using Nemerle;
 using Nemerle.Imperative;
 using Nemerle.Collections;
 using Nemerle.Compiler.Parsetree;
@@ -9,15 +12,50 @@ using System;
 using SCG = System.Collections.Generic;
 using System.Linq;
 
-using N2.Model;
 
 namespace N2.Compiler
 {
   internal partial class ParseMethodEmitter : MethodEmitter
   {
+    public CompileSkipAny(code : SCG.List[PExpr], field : RuleStructureField.List) : void
+    {
+      assert3(field.Rule.Fields.Length == 1);
+      def headPredicateCode = CompilePredicate(field.HeadPredicates, GotoFailParseLabel(field));
+      def firstChild        = field.Rule.NonMarkerFields[0];
+      def fail              = PExprLabel(this.Environment.Manager, "childFail");
+      def childPredicateCode = CompilePredicate(firstChild.HeadPredicates, fail.Goto());
+      code.Add(<[
+        $(ParseLabel(field));
+          _ = $(field.ToString());
+          $headPredicateCode;
+          $(AllocateParentAst(field));
+        $(RecoveryLabel(field));
+          when (true)
+          {
+            def startPos = $CurTextPos;
+            while ($(CurTextPos) < text.Length)
+            {
+              $childPredicateCode;
+              ++ $(CurTextPos);
+            }
+            $(fail.Label());
+            $(AstPtr(field.Owner).Set(field, <[ $CurTextPos - startPos ]>));
+          }
+          $(GotoContinueParseLabel(field));
+      ]>);
+    }
+
     public override CompileList(code : SCG.List[PExpr], field : RuleStructureField.List) : void
     {
-      def stateData = ListStateData(this, field);
+      when (field.IsSkipAnyPattern)
+      {
+        CompileSkipAny(code, field);
+        return;
+      }
+
+      CompileFuntion(field.Rule);
+      def localVariableEmitter = LocalVariableEmitter();
+      def stateData = ListStateData(localVariableEmitter, field);
       def ifCounterEqualsToMaxThenContinue()
       {
         if (field.MaxCount is Some(max))
@@ -44,39 +82,35 @@ namespace N2.Compiler
 
       def headPredicateCode = CompilePredicate(field.HeadPredicates, GotoFailParseLabel(field));
 
-      def firstChild = field.Rule.NotMarkerFields[0];
-      code.Add(<[
+      def body = <[
         $(ParseLabel(field));
           _ = $(field.ToString());
-          $(CheckOwnerMemoize(field));
           $headPredicateCode;
           $(AllocateParentAst(field));
         $(RecoveryLabel(field));
           $(stateData.Init());
           $(stateData.ListStartPos) = $CurTextPos;
           $(stateData.ListEndPos) = $CurTextPos;
-          $(AstStart(field.Rule)) = $CurTextPos;
-          $(GotoParseLabel(firstChild));
-
-        $(OkLabel(field.Rule));
-          when ($(stateData.ListEndPos) == $CurTextPos)
-            $(GotoFailLabel(field.Rule));
-          $(stateData.ListEndPos) = $CurTextPos;
-          $(stateData.Inc());
-          $(AstPtr(field.Rule).Set(field.Rule.HeaderState, <[ N2.Internal.Parser.AstParsedState ]>));// правило полностью разобрано.
-          $(AstPtr(field.Owner).Set(field, <[ $CurTextPos - $(stateData.ListStartPos) ]>));
-          $(ifCounterEqualsToMaxThenContinue());
-          $(AstStart(field.Rule)) = $CurTextPos;
-          $(GotoParseLabel(firstChild));
-
-        $(FailLabel(field.Rule));
-          when ($(AstPtr(field.Rule).Var) > 0) // АСТ создано
-            $(AstPtr(field.Rule).Set(field.Rule.HeaderState, <[ parseState ]>));
-          $(ifCounterLessThanMinThenFail());
-          $CurTextPos = $(AstStart(field.Rule));
-          $(AstPtr(field.Owner).Set(field, <[ $CurTextPos - $(stateData.ListStartPos) ]>));
-          $(GotoContinueParseLabel(field));
-      ]>);
+          while (true)
+          {
+            $CurTextPos = $(FunctionName(field.Rule) : global)($CurTextPos, text, parseResult);
+            if ($(stateData.ListEndPos) < $CurTextPos)
+            {
+              $(stateData.ListEndPos) = $CurTextPos;
+              $(stateData.Inc());
+              $(AstPtr(field.Owner).Set(field, <[ $CurTextPos - $(stateData.ListStartPos) ]>));
+              $(ifCounterEqualsToMaxThenContinue());
+            }
+            else
+            {
+              $(ifCounterLessThanMinThenFail());
+              $CurTextPos = $(stateData.ListEndPos);
+              $(AstPtr(field.Owner).Set(field, <[ $CurTextPos - $(stateData.ListStartPos) ]>));
+              $(GotoContinueParseLabel(field));
+            }
+          }
+      ]>;
+      code.Add(<[ when (true) { ..$(localVariableEmitter.Define()); $body } ]>);
     }
   }
 }

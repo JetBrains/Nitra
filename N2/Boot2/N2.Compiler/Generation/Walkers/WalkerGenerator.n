@@ -4,6 +4,7 @@ using N2.Typing;
 using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -35,36 +36,38 @@ namespace N2.Compiler
 
     public virtual PrefixAmbiguity(ruleSymbol : ExtensibleRuleSymbol) : PExpr
     {
-      _ = ruleSymbol;
+      def message = $"Ambiguity between prefix rules of '$(ruleSymbol.FullName)'.";
       <[
-        _ = parser;
+        _ = parseResult;
         _ = endPos;
-        throw N2.Runtime.PrefixAmbiguityException($"Ambiguity between prefix rules of '$RuleFullName'.", __startPos, Parser, ambiguities);
+        throw N2.Runtime.PrefixAmbiguityException($message, __startPos, ParseResult, ambiguities);
       ]>
     }
 
     public virtual PostfixAmbiguity(ruleSymbol : ExtensibleRuleSymbol) : PExpr
     {
-      _ = ruleSymbol;
+      def message = $"Ambiguity between postfix rules of '$(ruleSymbol.FullName)'.";
       <[
-        _ = parser;
+        _ = parseResult;
         _ = endPos;
-        throw N2.Runtime.PostfixAmbiguityException($"Ambiguity between postfix rules of '$RuleFullName'.", __startPos, Parser, ambiguities);
+        throw N2.Runtime.PostfixAmbiguityException($message, __startPos, ParseResult, ambiguities);
       ]>
     }
 
     public virtual PrefixMissed(ruleSymbol : ExtensibleRuleSymbol) : PExpr
     {
-      _ = ruleSymbol;
-      <[ throw N2.Runtime.PrefixMissedException($"Expected '$RuleFullName' rule.", pos, Parser); ]>
+      def message = $"Expected '$(ruleSymbol.FullName)' rule.";
+      <[
+        _ = parseResult;
+        throw N2.Runtime.PrefixMissedException($message, pos, ParseResult);
+      ]>
     }
 
     public virtual SimpleMissed(ruleSymbol : SimpleRuleSymbol) : PExpr
     {
-      _ = ruleSymbol;
       def message = $"Expected '$(ruleSymbol.FullName)' rule.";
       <[
-        _ = parser;
+        _ = parseResult;
         throw N2.Runtime.SimpleMissedException($message, pos);
       ]>
     }
@@ -98,17 +101,33 @@ namespace N2.Compiler
 
     public CallSimpleRule(field : RuleStructureField.SimpleCall, parentAstPointer : AstPointerScope, params args : array[PExpr]) : PExpr
     {
-      def allArgs = <[ ref pos ]> ::  <[ parser ]> :: args.NToList();
-      <[
+      def walkCode = <[
         pos += $(parentAstPointer.Access().GetSkip(field));
-        this.$(GetFieldNameForWalkerCall(field.Symbol, 0) : usesite).Walk(..$allArgs);
-      ]>
+        this.$(GetFieldNameForWalkerCall(field.Symbol, 0) : usesite).Walk(ref pos, parseResult, ..$args);
+      ]>;
+      if (field.CanParseEmptyString)
+        walkCode
+      else
+        <[
+          if ($(parentAstPointer.Access().GetSize(field)) > 0)
+            $walkCode
+          else
+          {
+            pos += $(parentAstPointer.Access().GetSkip(field));
+            this.$(GetFieldNameForWalkerCall(field.Symbol, 0) : usesite).OnSimpleMissed(pos, parseResult, ..$args);
+          }
+        ]>
     }
 
-    public CallExtensibleRule(field : RuleStructureField.ExtensibleCall, params args : array[PExpr]) : PExpr
+    public CallExtensibleRule(field : RuleStructureField.ExtensibleCall, parentAstPointer : AstPointerScope, params args : array[PExpr]) : PExpr
     {
-      def allArgs = <[ ref pos ]> ::  <[ parser ]> :: args.NToList();
-      <[ this.$(GetFieldNameForWalkerCall(field.Symbol, field.BindingPower) : usesite).Walk(..$allArgs); ]>
+      <[
+        pos += $(parentAstPointer.Access().GetSkip(field));
+        if ($(parentAstPointer.Access().GetSize(field)) > 0)
+          this.$(GetFieldNameForWalkerCall(field.Symbol, field.BindingPower) : usesite).Walk(ref pos, parseResult, ..$args);
+        else
+          this.$(GetFieldNameForWalkerCall(field.Symbol, field.BindingPower) : usesite).OnPrefixMissed(pos, parseResult, ..$args);
+      ]>
     }
 
     public GetCalledWalkers() : IEnumerable[SyntaxRuleSymbol * int * string]
@@ -124,7 +143,7 @@ namespace N2.Compiler
       pointerAllocator.Compile(astMissingCode, code).FlattenPExpr();
     }
 
-    public WalkerCodeForExtentionRule(ruleSymbol : ExtentionRuleSymbol) : PExpr
+    public WalkerCodeForExtensionRule(ruleSymbol : ExtensionRuleSymbol) : PExpr
     {
       def astPointer = AstPointer.Existing(ruleSymbol.Structure, ConstantEmitter, "astPtr");
       <[
@@ -150,7 +169,7 @@ namespace N2.Compiler
       def statements = List();
       def arguments = List();
 
-      when (ruleStructure is RuleStructure.Ast(Symbol = ExtentionRuleSymbol(ExtentionType = Postfix)))
+      when (ruleStructure is RuleStructure.Ast(Symbol = ExtensionRuleSymbol(ExtensionType = Postfix)))
         arguments.Add(<[ prefix ]>);
 
       statements.Add(<[ def __listStartPos = pos; ]>);
@@ -206,6 +225,8 @@ namespace N2.Compiler
       , emptyCode        : PExpr
       ) : PExpr
     {
+      assert3(!field.IsSkipAnyPattern);
+
       def loopCode = <[
         def loop()
         {

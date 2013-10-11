@@ -19,7 +19,7 @@ namespace N2.Internal
       PrefixRules.MapToArray(_ :> IRecoveryRuleParser)
     }
 
-    public Code           : string { get Descriptor.Name }
+    public Code           : string { get { Descriptor.Name } }
     public CodeWithStates : string { get Descriptor.Name }
     public RuleName       : string { get Descriptor.Name }
     public CodeForState(_state : int) : string { Descriptor.Name }
@@ -36,6 +36,7 @@ namespace N2.Internal
 
     public GetPrefixSize(bestResult : int, parser : Parser) : int
     {
+      assert(parser.ast[bestResult + AstOfs.State] == Parser.AstParsedState);
       mutable size = 0;
       mutable i = bestResult + AstOfs.Sizes;
       mutable end = i + PrefixRuleParser(bestResult, parser).FieldsCount;
@@ -44,11 +45,22 @@ namespace N2.Internal
       size;
     }
 
+    public GetPostfixSize(bestResult : int, parser : Parser) : int
+    {
+      assert(parser.ast[bestResult + AstOfs.State] == Parser.AstParsedState);
+      mutable size = 0;
+      mutable i = bestResult + AstOfs.Sizes;
+      mutable end = i + PostfixRuleParser(bestResult, parser).FieldsCount;
+      for (; i < end; ++i)
+        size += parser.GetSize(i);
+      size;
+    }
+
     public override GetParsersForState(startState : int) : array[IRecoveryRuleParser]
     {
-      assert2(startState == 0);
-      assert(startState == 0);
-      this.PrefixRules.MapToArray(x => x :> IRecoveryRuleParser)
+      | 0 => this.PrefixRules.MapToArray(x => x :> IRecoveryRuleParser)
+      | 1 => this.PostfixRules.Skip(FirstPostfixRule).MapToArray(x => x :> IRecoveryRuleParser)
+      | _ => assert3(false)
     }
 
     public override IsStateCanParseEmptyString(state : int) : bool { state != 0 }
@@ -57,11 +69,42 @@ namespace N2.Internal
     public override IsLoopSeparatorStart(state : int) : bool { IgnoreParams(); false }
     public override IsLoopSeparator     (state : int) : bool { IgnoreParams(); false }
     public override IsLoopBody          (state : int) : bool { IgnoreParams(); false }
-    public override GetBodyStartStateForSeparator(state : int) : int { IgnoreParams(); -1 }
+    public override GetBodyStartStateForSeparator(state : int, ruleParser : out IRecoveryRuleParser, itemId : out int) : int { IgnoreParams(); ruleParser = null; itemId = -1; -1 }
+
+    public override IsTokenRule : bool { get { Descriptor.IsTokenRule } }
 
     public PatchAst(_startPos : int, _startState : int, errorIndex : int, stack : list[RecoveryStackFrame].Cons, parser : N2.Internal.Parser) : void
     {
-      parser.ast[stack.Head.AstPtr + PrefixOfs.List] = ~errorIndex;
+      def frame = stack.Head;
+      when (frame.AstPtr <= 0)
+      {
+        if (frame.FailState == PrefixState)
+        {
+          assert3(parser.TryGetAst(frame.AstStartPos, PrefixId) == 0);
+          frame.AstPtr = parser.Allocate(PrefixOfs.NodeSize, PrefixId);
+          parser.ast[frame.AstPtr + PrefixOfs.Next] = parser.memoize[frame.AstStartPos];
+          parser.memoize[frame.AstStartPos] = frame.AstPtr;
+        }
+        else if (frame.FailState == PostfixState)
+        {
+          assert3(parser.TryGetAst(frame.AstStartPos, PostfixId) == 0);
+          frame.AstPtr = parser.Allocate(PostfixOfs.NodeSize, PostfixId);
+          parser.ast[frame.AstPtr + PostfixOfs.Next] = parser.memoize[frame.AstStartPos];
+          parser.memoize[frame.AstStartPos] = frame.AstPtr;
+        }
+        else assert(false);
+      }
+      if (frame.FailState == PrefixState)
+      {
+        assert3(parser.ast[stack.Head.AstPtr + PrefixOfs.List] == 0);
+        parser.ast[stack.Head.AstPtr + PrefixOfs.List] = ~errorIndex;
+      }
+      else if (frame.FailState == PostfixState)
+      {
+        assert3(parser.ast[stack.Head.AstPtr + PostfixOfs.List] == 0);
+        parser.ast[stack.Head.AstPtr + PostfixOfs.List] = ~errorIndex;
+      }
+      else assert(false);
     }
 
     public GetNextState(state : int) : int
