@@ -513,7 +513,7 @@ namespace N2.DebugStrategies
 
       {
         var maxFailPos = parseResult.MaxFailPos;
-        var ends = frame.ParstAllGrammarTokens(curTextPos);
+        var ends = frame.ParseAllGrammarTokens(curTextPos);
 
         foreach (var end in Sort(ends))
         {
