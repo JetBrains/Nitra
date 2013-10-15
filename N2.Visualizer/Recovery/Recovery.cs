@@ -440,14 +440,13 @@ namespace N2.DebugStrategies
     {
       switch (node.Id)
       {
-        case 1901  : break;
-        case 28400: break;
-        case 28500: break;
+        case 1900: break;
+        case 1800: break;
       }
 
       foreach (var n in node.Children)
       {
-        if (!n.IsEmpty)
+        if (!n.IsEmpty || n.Frame is RecoveryStackFrame.ListBody)
           return;
       }
       foreach (var child in node.Children)
@@ -567,8 +566,8 @@ namespace N2.DebugStrategies
     {
       switch (frame.Id)
       {
-        case 19: break;
-        case 34: break;
+        case 12: break;
+        case 13: break;
       }
       var parentsEat = ParentsMaxEat(frame, curTextPos);
       var maxfailPos = curTextPos;
@@ -582,7 +581,7 @@ namespace N2.DebugStrategies
         parseResult.MaxFailPos = maxfailPos;
         var parsedStates = new List<ParsedStateInfo>();
         var pos = frame.TryParse(state, curTextPos, true, parsedStates, parseResult);
-        if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parseResult))
+        if (frame.NonVoidParsed(curTextPos, pos, parsedStates, parseResult) || frame.IsLoopSeparatorStart && pos < 0 && state < 0)
           return new ParseAlternative(curTextPos, pos, (pos < 0 ? parseResult.MaxFailPos : pos) - curTextPos + parentsEat, pos < 0 ? parseResult.MaxFailPos : 0, state, 0);
       }
       while (state >= 0);
