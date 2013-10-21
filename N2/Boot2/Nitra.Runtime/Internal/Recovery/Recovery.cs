@@ -1,10 +1,10 @@
 ﻿//#region Пролог
 #define DebugOutput
 using System.Globalization;
-using N2.Internal;
-using N2.Runtime.Errors;
+using Nitra.Internal;
+using Nitra.Runtime.Errors;
 using NB = Nemerle.Builtins;
-using IntRuleCallKey = Nemerle.Builtins.Tuple<int, N2.Internal.RuleCallKey>;
+using IntRuleCallKey = Nemerle.Builtins.Tuple<int, Nitra.Internal.RuleCallKey>;
 
 using System;
 using System.IO;
@@ -15,10 +15,10 @@ using System.Xml.Linq;
 using SCG = System.Collections.Generic;
 
 #if N2RUNTIME
-namespace N2.Strategies
+namespace Nitra.Strategies
 #else
 // ReSharper disable once CheckNamespace
-namespace N2.DebugStrategies
+namespace Nitra.DebugStrategies
 #endif
 {
   using ParserData = Tuple<int, int, List<ParsedStateInfo>>;
