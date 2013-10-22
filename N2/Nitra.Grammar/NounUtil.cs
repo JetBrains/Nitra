@@ -11,7 +11,7 @@ namespace JetBrains.Util
 
     static NounUtil()
     {
-      using (var streamReader = new StreamReader(typeof(NounUtil).Assembly.GetManifestResourceStream("N2.Grammar.resources.plural.txt")))
+      using (var streamReader = new StreamReader(typeof(NounUtil).Assembly.GetManifestResourceStream("Nitra.Grammar.resources.plural.txt")))
       {
         while (true)
         {
