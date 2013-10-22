@@ -170,37 +170,36 @@ namespace Nitra.DebugStrategies
 
     #region Выбор лучшего фрейма
 
-    // ReSharper disable UnusedParameter.Local
-    private static List<ParseAlternativeNode> SelectBestFrames2(ParseResult _parseResult, List<ParseAlternativeNode> nodes, int _skipCount)
-    // ReSharper restore UnusedParameter.Local
+    private static List<ParseAlternativeNode> SelectBestFrames2(ParseResult parseResult, List<ParseAlternativeNode> nodes, int skipCount)
     {
-      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "After RemoveTheShorterAlternative.");
+      Debug.Assert(skipCount >= 0 && parseResult != null);
+      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "After RemoveTheShorterAlternative.");
       //X.VisualizeFrames(nodes);
 
       RemoveTheShorterAlternative(nodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "AftFer RemoveTheShorterAlternative.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "AftFer RemoveTheShorterAlternative.");
       //X.VisualizeFrames(nodes);
 
       FilterAlternativesWithMinimumSkippedTokens(nodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "After RemoveAlternativesWithALotOfSkippedTokens.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "After RemoveAlternativesWithALotOfSkippedTokens.");
       //X.VisualizeFrames(nodes);
       //ParseAlternativeNode.DownToTop(nodes, CalcMinSkipedMandatoryTokenCount);
 
       ParseAlternativeNode.TopToDown(nodes, RemoveChildrenIfAllChildrenIsEmpty);
-      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "After RemoveChildrenIfAllChildrenIsEmpty.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "After RemoveChildrenIfAllChildrenIsEmpty.");
       //X.VisualizeFrames(nodes);
       
       RemoveSuccessfullyParsed(nodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "After RemoveSuccessfullyParsed.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "After RemoveSuccessfullyParsed.");
       //X.VisualizeFrames(nodes);
       
       RemoveDuplicateNodes(nodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "After RemoveDuplicateNodes.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "After RemoveDuplicateNodes.");
       //X.VisualizeFrames(nodes);
 
       var bestNodes = GetTopNodes(nodes);
       //X.VisualizeFrames(bestNodes);
-      //ParseAlternativesVisializer.PrintParseAlternatives(_parseResult, nodes, _skipCount, "After RemoveDuplicateNodes.");
+      //ParseAlternativesVisializer.PrintParseAlternatives(parseResult, nodes, skipCount, "After RemoveDuplicateNodes.");
       return bestNodes;
     }
 
