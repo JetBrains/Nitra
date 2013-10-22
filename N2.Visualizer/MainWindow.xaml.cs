@@ -113,6 +113,9 @@ namespace N2.Visualizer
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
       _loading = false;
+
+      if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) != 0)
+        return;
       SelectTest(_settings.SelectedTestSuit, _settings.SelectedTest);
     }
 
