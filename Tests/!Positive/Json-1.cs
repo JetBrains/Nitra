@@ -1,7 +1,7 @@
 ﻿// REFERENCE: Json.Grammar.dll
 
-using N2;
-using N2.Tests;
+using Nitra;
+using Nitra.Tests;
 
 using System;
 using System.IO;
