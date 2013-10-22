@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace N2.VisualStudio
+namespace Nitra.VisualStudio
 {
 	/// <summary>
 	/// A helper class for checking arguments.

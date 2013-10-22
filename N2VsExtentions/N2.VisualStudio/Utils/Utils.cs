@@ -20,7 +20,7 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Language.Intellisense;
 
-namespace N2.VisualStudio
+namespace Nitra.VisualStudio
 {
 	static partial class Utils
 	{
