@@ -16,16 +16,16 @@ using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.SharpDevelop.Editor;
 using Microsoft.Win32;
-using N2.DebugStrategies;
-using N2.Internal;
-using N2.Runtime.Reflection;
-using N2.Visualizer.Properties;
+using Nitra.DebugStrategies;
+using Nitra.Internal;
+using Nitra.Runtime.Reflection;
+using Nitra.Visualizer.Properties;
 using System.Diagnostics;
 using System.Text;
-using N2.Visualizer.ViewModels;
+using Nitra.Visualizer.ViewModels;
 using Nemerle.Diff;
 
-namespace N2.Visualizer
+namespace Nitra.Visualizer
 {
   using RecoveryInfo = Tuple<RecoveryResult, RecoveryResult[], RecoveryResult[], RecoveryStackFrame[]>;
   using System.Windows.Documents;

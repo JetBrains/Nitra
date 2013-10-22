@@ -1,7 +1,7 @@
 ﻿using System;
-using N2.DebugStrategies;
-using N2.Internal;
-using N2.Visualizer.Annotations;
+using Nitra.DebugStrategies;
+using Nitra.Internal;
+using Nitra.Visualizer.Annotations;
 
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -9,7 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Xml.Linq;
 
-namespace N2.Visualizer.ViewModels
+namespace Nitra.Visualizer.ViewModels
 {
   class TestSuitVm : FullPathVm
   {
@@ -79,7 +79,7 @@ namespace N2.Visualizer.ViewModels
 
         if (ex.FileName.EndsWith("config.xml", StringComparison.OrdinalIgnoreCase))
           additionMsg = @"The configuration file (config.xml) not exists in the test suit folder.";
-        else if (ex.FileName.EndsWith("N2.Runtime.dll", StringComparison.OrdinalIgnoreCase))
+        else if (ex.FileName.EndsWith("Nitra.Runtime.dll", StringComparison.OrdinalIgnoreCase))
           additionMsg = @"Try to recompile the parser.";
 
         if (additionMsg != null)

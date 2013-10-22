@@ -5,7 +5,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 
-namespace N2.Visualizer
+namespace Nitra.Visualizer
 {
   /// <summary>
   /// Exposes attached behaviors that can be

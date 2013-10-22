@@ -1,6 +1,6 @@
 ﻿using System.Linq;
 
-namespace N2.Visualizer.ViewModels
+namespace Nitra.Visualizer.ViewModels
 {
   class SyntaxModuleVm
   {

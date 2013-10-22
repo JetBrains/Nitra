@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.Configuration;
 using System.Linq;
 using System.Windows;
-using N2.Visualizer.Properties;
+using Nitra.Visualizer.Properties;
 
-namespace N2.Visualizer
+namespace Nitra.Visualizer
 {
   /// <summary>
   /// Interaction logic for App.xaml

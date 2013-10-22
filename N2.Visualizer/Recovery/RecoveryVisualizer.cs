@@ -1,15 +1,15 @@
 ﻿//#define DebugOutput
-using N2.Internal;
+using Nitra.Internal;
 
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 
 #if N2RUNTIME
-namespace N2.Strategies
+namespace Nitra.Strategies
 #else
 // ReSharper disable once CheckNamespace
-namespace N2.DebugStrategies
+namespace Nitra.DebugStrategies
 #endif
 {
   using PrseData = Tuple<int, int, List<ParsedStateInfo>>;

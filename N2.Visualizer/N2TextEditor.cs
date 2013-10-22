@@ -8,7 +8,7 @@ using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.AvalonEdit.Document;
 using System.Windows.Media;
 
-namespace N2.Visualizer
+namespace Nitra.Visualizer
 {
   public class N2TextEditor : TextEditor
   {

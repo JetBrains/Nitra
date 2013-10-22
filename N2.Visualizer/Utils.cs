@@ -7,10 +7,10 @@ using System.Reflection;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
-using N2.Visualizer.Annotations;
-using N2.Visualizer.Properties;
+using Nitra.Visualizer.Annotations;
+using Nitra.Visualizer.Properties;
 
-namespace N2.Visualizer
+namespace Nitra.Visualizer
 {
   static class Utils
   {
@@ -21,14 +21,14 @@ namespace N2.Visualizer
       assemblyFilePath = UpdatePathForConfig(assemblyFilePath);
 
       var assembly = Assembly.ReflectionOnlyLoadFrom(assemblyFilePath);
-      var runtime = typeof(N2.Internal.ParseResult).Assembly.GetName();
+      var runtime = typeof(Nitra.Internal.ParseResult).Assembly.GetName();
       foreach (var reference in assembly.GetReferencedAssemblies())
       {
         if (reference.Name == runtime.Name)
         {
           if (reference.Version == runtime.Version)
             break;
-          throw new ApplicationException("Assembly '" + assemblyFilePath + "' use incompatible runtime (N2.Runtime.dll) version " + reference.Version
+          throw new ApplicationException("Assembly '" + assemblyFilePath + "' use incompatible runtime (Nitra.Runtime.dll) version " + reference.Version
             + ". The current runtime has version " + runtime.Version + ".");
         }
       }

@@ -5,7 +5,7 @@ using System.Text;
 using System.Net;
 using System.IO;
 
-namespace N2.Visualizer
+namespace Nitra.Visualizer
 {
   internal class HtmlPrettyPrintWriter : PrettyPrintWriter
   {

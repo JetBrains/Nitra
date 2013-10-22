@@ -1,4 +1,4 @@
-﻿using N2.Visualizer.Properties;
+﻿using Nitra.Visualizer.Properties;
 
 using System;
 using System.IO;
@@ -11,10 +11,10 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using System.Xml.Linq;
-using N2.Visualizer.ViewModels;
+using Nitra.Visualizer.ViewModels;
 using Microsoft.Win32;
 
-namespace N2.Visualizer
+namespace Nitra.Visualizer
 {
   internal partial class TestSuit
   {

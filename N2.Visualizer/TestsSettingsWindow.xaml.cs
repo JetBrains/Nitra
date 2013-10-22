@@ -11,9 +11,9 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 //using System.Windows.Shapes;
-using N2.Visualizer.Properties;
+using Nitra.Visualizer.Properties;
 
-namespace N2.Visualizer
+namespace Nitra.Visualizer
 {
   /// <summary>
   /// Interaction logic for TestsSettingsWindow.xaml

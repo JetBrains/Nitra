@@ -1,8 +1,8 @@
 ﻿using System;
 using System.ComponentModel;
-using N2.Visualizer.Annotations;
+using Nitra.Visualizer.Annotations;
 
-namespace N2.Visualizer.ViewModels
+namespace Nitra.Visualizer.ViewModels
 {
   abstract class FullPathVm : INotifyPropertyChanged
   {

@@ -1,11 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using N2.Internal;
-using N2.Visualizer.Annotations;
+using Nitra.Internal;
+using Nitra.Visualizer.Annotations;
 using Nemerle.Diff;
 
-namespace N2.Visualizer.ViewModels
+namespace Nitra.Visualizer.ViewModels
 {
   class TestVm : FullPathVm
   {

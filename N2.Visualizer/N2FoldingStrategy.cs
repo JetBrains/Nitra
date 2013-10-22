@@ -4,10 +4,10 @@ using System.Linq;
 using System.Text;
 using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Document;
-using N2.Internal;
+using Nitra.Internal;
 using System.Diagnostics;
 
-namespace N2.Visualizer
+namespace Nitra.Visualizer
 {
   public sealed class N2FoldingStrategy : AbstractFoldingStrategy
   {

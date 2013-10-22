@@ -6,9 +6,9 @@ using System.Text;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
-using N2.Runtime.Reflection;
+using Nitra.Runtime.Reflection;
 
-namespace N2.Visualizer.ViewModels
+namespace Nitra.Visualizer.ViewModels
 {
   public class ReflectionStructColorConverter : IValueConverter
   {

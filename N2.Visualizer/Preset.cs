@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Collections.ObjectModel;
 
-namespace N2.Visualizer
+namespace Nitra.Visualizer
 {
   public class Preset
   {
