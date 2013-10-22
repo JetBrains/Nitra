@@ -459,7 +459,7 @@ namespace Nitra.Visualizer
     
     private void FileOpenExecuted(object sender, RoutedEventArgs e)
     {
-      var dialog = new OpenFileDialog { Filter = "C# (.cs)|*.cs|Nitra (.n2)|*.n2|JSON (.json)|*.json|Text (.txt)|*.txt|All|*.*" };
+      var dialog = new OpenFileDialog { Filter = "C# (.cs)|*.cs|Nitra (.nitra)|*.nitra|JSON (.json)|*.json|Text (.txt)|*.txt|All|*.*" };
 // ReSharper disable once ConstantNullCoalescingCondition
       if (dialog.ShowDialog(this) ?? false)
       {
