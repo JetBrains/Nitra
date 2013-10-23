@@ -33,12 +33,12 @@ namespace Nitra.Visualizer
 
     protected override IVisualLineTransformer CreateColorizer(IHighlightingDefinition highlightingDefinition)
     {
-      return new N2HighlightingColorizer(this);
+      return new NitraHighlightingColorizer(this);
     }
 
-    private sealed class N2HighlightingColorizer : DocumentColorizingTransformer
+    private sealed class NitraHighlightingColorizer : DocumentColorizingTransformer
     {
-      public N2HighlightingColorizer(NitraTextEditor textEditor)
+      public NitraHighlightingColorizer(NitraTextEditor textEditor)
       {
         _textEditor = textEditor;
       }
