@@ -10,9 +10,9 @@ using System.Windows.Media;
 
 namespace Nitra.Visualizer
 {
-  public class N2TextEditor : TextEditor
+  public class NitraTextEditor : TextEditor
   {
-    public N2TextEditor()
+    public NitraTextEditor()
     {
       SyntaxHighlighting = new StubHighlightingDefinition();
     }
@@ -38,12 +38,12 @@ namespace Nitra.Visualizer
 
     private sealed class N2HighlightingColorizer : DocumentColorizingTransformer
     {
-      public N2HighlightingColorizer(N2TextEditor textEditor)
+      public N2HighlightingColorizer(NitraTextEditor textEditor)
       {
         _textEditor = textEditor;
       }
 
-      private readonly N2TextEditor _textEditor;
+      private readonly NitraTextEditor _textEditor;
 
       protected override void ColorizeLine(DocumentLine line)
       {

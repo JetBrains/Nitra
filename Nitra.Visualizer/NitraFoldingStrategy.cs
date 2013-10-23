@@ -9,7 +9,7 @@ using System.Diagnostics;
 
 namespace Nitra.Visualizer
 {
-  public sealed class N2FoldingStrategy : AbstractFoldingStrategy
+  public sealed class NitraFoldingStrategy : AbstractFoldingStrategy
   {
     public TimeSpan TimeSpan { get; private set; }
 

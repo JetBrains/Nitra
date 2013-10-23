@@ -42,7 +42,7 @@ namespace Nitra.Visualizer
     readonly Timer _parseTimer;
     readonly Dictionary<string, HighlightingColor> _highlightingStyles;
     readonly TextMarkerService _textMarkerService;
-    readonly N2FoldingStrategy _foldingStrategy;
+    readonly NitraFoldingStrategy _foldingStrategy;
     readonly FoldingManager _foldingManager;
     readonly ToolTip _textBox1Tooltip;
     bool _needUpdateReflection;
@@ -81,7 +81,7 @@ namespace Nitra.Visualizer
 
       _tabControl.SelectedIndex = _settings.ActiveTabIndex;
       _findGrid.Visibility      = System.Windows.Visibility.Collapsed;
-      _foldingStrategy          = new N2FoldingStrategy();
+      _foldingStrategy          = new NitraFoldingStrategy();
       _textBox1Tooltip          = new ToolTip { PlacementTarget = _text };
       _parseTimer               = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
       _parseTimer.Elapsed      += _parseTimer_Elapsed;
