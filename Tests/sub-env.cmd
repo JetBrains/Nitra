@@ -5,5 +5,5 @@ if not defined NemerleBinPathRoot set NemerleBinPathRoot=%ProgramFiles%\Nemerle
 if not defined Nemerle set Nemerle=%NemerleBinPathRoot%\Net-4.0
 set RuntimeDllPath=%~dp0\..\Nitra\Nitra.Runtime\bin\%Configuration%
 set CoreDllPath=%~dp0\..\Nitra\Nitra.Core\bin\%Configuration%
-set N2CompilerDllPath=%~dp0\..\Nitra\Nitra.Compiler\bin\%Configuration%\Stage1
-rem for %%d in (%N2CompilerDllPath%\*.dll) DO %NGen% install %%d
+set CompilerDllPath=%~dp0\..\Nitra\Nitra.Compiler\bin\%Configuration%\Stage1
+rem for %%d in (%CompilerDllPath%\*.dll) DO %NGen% install %%d
