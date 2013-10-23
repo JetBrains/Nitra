@@ -14,7 +14,7 @@ using System.Linq;
 using System.Xml.Linq;
 using SCG = System.Collections.Generic;
 
-#if N2RUNTIME
+#if NITRA_RUNTIME
 namespace Nitra.Strategies
 #else
 // ReSharper disable once CheckNamespace

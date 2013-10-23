@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
 
-#if N2RUNTIME
+#if NITRA_RUNTIME
 namespace Nitra.Strategies
 #else
 // ReSharper disable once CheckNamespace
