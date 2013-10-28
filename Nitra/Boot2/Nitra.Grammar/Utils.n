@@ -91,7 +91,7 @@ namespace Nitra
         Compiler.Location.Default
     }
 
-    public N2Location(this location : Compiler.Location) : Nitra.Location
+    public NitraLocation(this location : Compiler.Location) : Nitra.Location
     {
       def source = SourceSnapshot("", "", location.FileIndex, location.File, array(0), 0);
       def tok = NToken(0, 0);
@@ -657,29 +657,89 @@ namespace Nitra
       loop(context.TryGetContext())
     }
 
+    public SequenceTyping(_baseRule : option[ExtensibleRuleSymbol], precedence : int, fieldName : option[string], context : Context, 
+      options : RuleDefinitionOptions, leftRule : G.RuleExpression, rightRules : list[G.RuleExpression], self : G.RuleExpression) : Nitra.Model.Rule
+    {
+      def bp1   = if (precedence < 0) -precedence + 1 else precedence;
+      def bp2   = if (precedence < 0) -precedence     else precedence;
+      def flat = List();
+      def tryExtractSpaceSequence(rule : Rule) : void
+      {
+        // assume that 's' is generated whitespace rule
+        match (rule)
+        {
+          | Sequence([String as call1, Call(s, 0) as call2])
+          | Sequence([Call   as call1, Call(s, 0) as call2]) =>
+            when (s.IsGenerated)
+            {
+              flat.Add(call1);
+              flat.Add(call2);
+              return
+            }
+          | _ => ()
+        }
+        flat.Add(rule);
+      }
+      tryExtractSpaceSequence(leftRule.Typing(_baseRule, bp1, None(), context, options));
+      foreach (rule in rightRules)
+        tryExtractSpaceSequence(rule.Typing(_baseRule, bp2, None(), context, options));
+        
+      def matchKeyMarker(rule : Rule) : bool
+      {
+        rule is Rule.Call(Some(MarkerSymbol(FullName="Identifiers.key")), 0)
+      }
+
+      // Устанавливаем литералам идущим за Identifiers.key свойство IsKeyToken в true
+      {
+        mutable mark = false;
+        foreach (r in flat)
+        {
+          if (matchKeyMarker(r))
+          {
+            if (mark)
+              ProjectSystem.NitraProject.CurrentProject.Error(r.Location, "The Identifiers.key marker must follow before literal.", -1);
+            else
+              mark = true;
+          }
+          else when (mark)
+          {
+            if (r is String as str)
+              str.IsKeyToken = true;
+            else
+              ProjectSystem.NitraProject.CurrentProject.Error(r.Location, "The Identifiers.key marker must follow before literal.", -1);
+              
+            mark = false;
+          }
+        }
+      }
+        
+      def rules =  flat.NToList();
+      def type  = MakeType(rules.Map(_.Type));
+      Rule.Sequence(self.Location, type, MakeName(fieldName, rules, context), rules);
+    }
+    
     public StringRuleTyping(loc : Location, value : string, fieldName : option[string], context : Context, options : RuleDefinitionOptions) : Rule
     {
       def keywordContext = context.TryGetContext.[KeywordRegexContext]();
       def newFieldName   = MakeLiteralName(fieldName, value, context);
       def type           = RuleType.Chars();
-      def str            = Rule.String(loc, type, newFieldName, value, context);
       def loc            = loc.FromEnd();
 
       if (options.IsExplicitSpaces)
-        str
+        Rule.String(loc, type, newFieldName, value, context, keywordContext?.FindRule(value)?.IsSome)
       else
       {
-        def symbol =
+        def (symbol, isKeyToken) =
           if (keywordContext?.FindRule(value) is Some as sym)
-            sym : option[_]
+            (sym : option[_], true)
           else
           {
             def moduleContext = context.GetContext.[SyntaxModuleBodyContext]();
-            moduleContext.GetSpaceRule(context, "s", loc);
+            (moduleContext.GetSpaceRule(context, "s", loc), false)
           };
         def ruleRef = RuleRef.Create(loc, symbol, true);
         def S = Rule.Call(loc, RuleType.Void(), "", ruleRef, 0);
-        Rule.Sequence(loc, type, newFieldName, [str, S])
+        Rule.Sequence(loc, type, newFieldName, [Rule.String(loc, type, newFieldName, value, context, isKeyToken), S])
       }
     }
 
