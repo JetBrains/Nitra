@@ -724,7 +724,7 @@ namespace Nitra.DebugStrategies
 
       // формируем ошибки начало
       var totalSkip = skipCount + bestNodes[0].ParseAlternative.Skip;
-      var loc = new Location(parseResult, new NToken(failPos, failPos + totalSkip));
+      var loc = new Location(parseResult, new NSpan(failPos, failPos + totalSkip));
       if (totalSkip > 0)
         parseResult.ReportError(new UnexpectedTokenError(loc));
       TryAddErrorsForMissedSeparators(parseResult, loc, allNodes);
@@ -740,7 +740,7 @@ namespace Nitra.DebugStrategies
       foreach (var node in bestNodes)
       {
         var errorIndex = parseResult.ErrorData.Count;
-        var parseErrorData = new ParseErrorData(new NToken(failPos, failPos + skipCount + node.ParseAlternative.Skip));
+        var parseErrorData = new ParseErrorData(new NSpan(failPos, failPos + skipCount + node.ParseAlternative.Skip));
         parseResult.ErrorData.Add(parseErrorData);
         if (!node.PatchAst(errorIndex, parseResult))
           RecoveryUtils.ResetParentsBestProperty(node.Parents);
@@ -768,7 +768,7 @@ namespace Nitra.DebugStrategies
         var missedSeparator = node.MissedSeparator;
         var errorPos = missedSeparator.Frame.StartPos;
         parseResult.ReportError(new ExpectedRulesError(loc, new[] { missedSeparator }));
-        parseResult.ErrorData.Add(new ParseErrorData(new NToken(errorPos, errorPos)));
+        parseResult.ErrorData.Add(new ParseErrorData(new NSpan(errorPos, errorPos)));
         node.MakeMissedSeparator(parseResult);
         missedSeparator.Best = true;
       }
