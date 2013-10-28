@@ -640,8 +640,8 @@ namespace Nitra.Visualizer
           HighlightingColor color;
           if (_highlightingStyles.TryGetValue(span.SpanClass.Name, out color))
           {
-            var startOffset = Math.Max(line.Offset, span.Location.StartPos);
-            var endOffset = Math.Min(line.EndOffset, span.Location.EndPos);
+            var startOffset = Math.Max(line.Offset, span.Span.StartPos);
+            var endOffset = Math.Min(line.EndOffset, span.Span.EndPos);
             var section = new HighlightedSection
             {
               Offset = startOffset,
