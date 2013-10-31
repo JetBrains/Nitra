@@ -1,0 +1,174 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using Nitra.Internal;
+using Nitra.Runtime.Reflection;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Runtime
+{
+  public abstract class AstWalkerBase
+  {
+    public abstract OnRegularCall      (ruleInfo : RuleInfo.RegularCall,       startPos : int, endPos : int) : void;
+    public abstract OnTokenString      (ruleInfo : RuleInfo.TokenString,       startPos : int, endPos : int) : void;
+    public abstract OnSimpleCall       (ruleInfo : RuleInfo.SimpleCall,        startPos : int, endPos : int) : bool;
+    public abstract OnExtensibleCall   (ruleInfo : RuleInfo.ExtensibleCall,    startPos : int, endPos : int) : bool;
+    public abstract OnOption           (ruleInfo : RuleInfo.Option,            startPos : int, endPos : int) : bool;
+    public abstract OnList             (ruleInfo : RuleInfo.List,              startPos : int, endPos : int) : bool;
+    public abstract OnListWithSeparator(ruleInfo : RuleInfo.ListWithSeparator, startPos : int, endPos : int) : bool;
+
+    public Walk(astPtr : int, mutable curTextPos : int, parseResult : ParseResult) : int
+    {
+      when (astPtr <= 0)
+        return -1;
+
+      match (parseResult.ParserHost.GetRuleParser(parseResult, astPtr))
+      {
+        | ExtensibleRuleParserData as ruleParserData => WalkExtension(astPtr, curTextPos, ruleParserData.GetParser(0), parseResult)
+        | _                                          => WalkAst      (astPtr, curTextPos, parseResult)
+      }
+    }
+
+    public WalkExtensible(mutable curTextPos : int, ruleParser : ExtensibleRuleParser, parseResult : ParseResult) : int
+    {
+      curTextPos = WalkExtension(parseResult.TryGetAst(curTextPos, ruleParser.PrefixId), curTextPos, ruleParser, parseResult);
+      if (curTextPos >= 0)
+      {
+        mutable endPos;
+        do
+        {
+          endPos = curTextPos;
+          curTextPos = WalkExtension(parseResult.TryGetAst(curTextPos, ruleParser.PostfixId), curTextPos, ruleParser, parseResult);
+        }
+        while (curTextPos >= 0);
+        endPos
+      }
+      else
+        -1
+    }
+
+    public WalkExtension(astPtr : int, mutable curTextPos : int, ruleParser : ExtensibleRuleParser, parseResult : ParseResult) : int
+    {
+      when (astPtr <= 0)
+        return -1;
+
+      def id = parseResult.ast[astPtr] & ExtensibleRuleParser.AstMask.Id;
+      if (id == ruleParser.PrefixId)
+      {
+        mutable prefixAst = astPtr;
+        def astPtr = ruleParser.BestPrefix(parseResult.TryGetPrefix(ref curTextPos, ref prefixAst), parseResult);
+        WalkAst(astPtr, curTextPos, parseResult)
+      }
+      else
+      {
+        mutable postfixAst = astPtr;
+        def astPtr = ruleParser.BestPostfix(parseResult.TryGetPostfix(ref curTextPos, ref postfixAst), parseResult);
+        WalkAst(astPtr, curTextPos, parseResult)
+      }
+    }
+
+    private WalkAst(astPtr : int, mutable curTextPos : int, parseResult : ParseResult) : int
+    {
+      when (astPtr <= 0)
+        return -1;
+      def state = parseResult.ast[astPtr + ExtensibleRuleParser.AstOfs.State];
+
+      foreach (ruleInfo in parseResult.ParserHost.GetRuleStructure(parseResult, astPtr).Subrules)
+      {
+        if (state >= 0 && ruleInfo.State >= state)
+        {//обработка состояния облома
+          match (ruleInfo)
+          {
+            | RegularCall       as ruleInfo =>       OnRegularCall      (ruleInfo, curTextPos, -1)
+            | TokenString       as ruleInfo =>       OnTokenString      (ruleInfo, curTextPos, -1)
+            | SimpleCall        as ruleInfo => when (OnSimpleCall       (ruleInfo, curTextPos, -1)) _ = Walk(parseResult.TryGetAst(curTextPos, ruleInfo.RuleParser.RuleId), curTextPos, parseResult)
+            | ExtensibleCall    as ruleInfo => when (OnExtensibleCall   (ruleInfo, curTextPos, -1)) _ = WalkExtension(parseResult.TryGetAst(curTextPos, ruleInfo.RuleParser.PrefixId), curTextPos, ruleInfo.RuleParser, parseResult)
+            | Option            as ruleInfo => when (OnOption           (ruleInfo, curTextPos, -1)) _ = WalkAst(parseResult.TryGetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult)
+            | List              as ruleInfo => when (OnList             (ruleInfo, curTextPos, -1)) _ = WalkAst(parseResult.TryGetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult)
+            | ListWithSeparator as ruleInfo => when (OnListWithSeparator(ruleInfo, curTextPos, -1)) _ = WalkAst(parseResult.TryGetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult)
+            | Empty                         => ()
+            | Predicate                     => assert3(false)
+            | Marker                        => assert3(false)
+          }
+          return -1;
+        }
+        else
+        {
+          def size = 
+          {
+            def sizePtr = astPtr + ruleInfo.Offset;
+            def size = parseResult.GetSkipAndSize2(sizePtr);
+            if (size >= 0)
+              size
+            else
+            {
+              def skip = parseResult.GetSkip(sizePtr);
+              curTextPos += skip;
+              (~size) - skip
+            }
+          }
+          def endPos = curTextPos + size;
+          match (ruleInfo)
+          {
+            | RegularCall as ruleInfo => OnRegularCall(ruleInfo, curTextPos, endPos); curTextPos = endPos;
+            | TokenString as ruleInfo => OnTokenString(ruleInfo, curTextPos, endPos); curTextPos = endPos;
+
+            | SimpleCall as ruleInfo =>
+              if (OnSimpleCall(ruleInfo, curTextPos, endPos) && size != 0)
+                curTextPos = Walk(parseResult.GetAst(curTextPos, ruleInfo.RuleParser.RuleId), curTextPos, parseResult);
+              else
+                curTextPos = endPos;
+
+            | ExtensibleCall as ruleInfo =>
+              if (OnExtensibleCall(ruleInfo, curTextPos, endPos) && size != 0)
+              {
+                curTextPos = WalkExtension(parseResult.GetAst(curTextPos, ruleInfo.RuleParser.PrefixId), curTextPos, ruleInfo.RuleParser, parseResult);
+                while (curTextPos < endPos)
+                  curTextPos = WalkExtension(parseResult.GetAst(curTextPos, ruleInfo.RuleParser.PostfixId), curTextPos, ruleInfo.RuleParser,parseResult);
+              }
+              else
+                curTextPos = endPos;
+
+            | Option as ruleInfo =>
+              if (OnOption(ruleInfo, curTextPos, endPos) && size != 0)
+                curTextPos = WalkAst(parseResult.GetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult);
+              else
+                curTextPos = endPos;
+
+            | List as ruleInfo =>
+              if (OnList(ruleInfo, curTextPos, endPos))
+                while (curTextPos < endPos)
+                  curTextPos = WalkAst(parseResult.GetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult);
+              else
+                curTextPos = endPos;
+
+            | ListWithSeparator as ruleInfo =>
+              if (OnListWithSeparator(ruleInfo, curTextPos, endPos))
+                while (true)
+                {
+                  when (curTextPos >= endPos) break;
+                  curTextPos = WalkAst(parseResult.GetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult);
+
+                  when (curTextPos >= endPos) break;
+                  curTextPos = WalkAst(parseResult.GetAst(curTextPos, ruleInfo.Separator.Id), curTextPos, parseResult);
+                }
+              else
+                curTextPos = endPos;
+
+            | Empty     => ()
+            | Predicate => assert3(false)
+            | Marker    => assert3(false)
+          }
+          assert3(endPos == curTextPos);
+        }
+      }
+      curTextPos
+    }
+  }
+}
