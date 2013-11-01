@@ -33,9 +33,21 @@ namespace Nitra.Visualizer
         Directory.CreateDirectory(path);
 
       var found = Directory.EnumerateFiles(path, "*.test").FirstOrDefault(file => File.ReadAllText(file).Equals(_code, StringComparison.Ordinal));
-      
+
       if (found == null)
-        return "test-" + (Directory.EnumerateFiles(path, "*.test").Count() + 1).ToString("0000");
+      {
+        const string Ext = ".test";
+
+        var fileIndex = Directory.EnumerateFiles(path, "*" + Ext).Count();
+        string fileName;
+        do
+        {
+          fileIndex++;
+          fileName = "test-" + fileIndex.ToString("0000");
+        }
+        while (File.Exists(Path.Combine(path, fileName + Ext)));
+        return fileName;
+      }
 
       return Path.GetFileNameWithoutExtension(found);
     }
