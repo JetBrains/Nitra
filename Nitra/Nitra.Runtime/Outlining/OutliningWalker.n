@@ -1,0 +1,132 @@
+﻿using Nemerle;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.Internal;
+using Nitra.Runtime.Reflection;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Runtime.Outlining
+{
+  internal class OutliningWalker : AstWalkerBase
+  {
+    internal variant OutlineMarker
+    {
+      | Begin { pos : int; isImplementation : bool }
+      | End   { pos : int }
+      | HiddenByDefault
+    }
+
+    private Markers : List[OutlineMarker] = List();
+    private mutable _lastSpaceStartPos : int;
+    private mutable _lastSpaceEndPos   : int;
+
+    public override OnOption(ruleInfo : RuleInfo.Option, startPos : int, endPos : int) : bool
+    {
+      IgnoreParams();
+      true
+    }
+
+    public override OnList(ruleInfo : RuleInfo.List, startPos : int, endPos : int) : bool
+    {
+      IgnoreParams();
+      true
+    }
+
+    public override OnListWithSeparator(ruleInfo : RuleInfo.ListWithSeparator, startPos : int, endPos : int) : bool
+    {
+      IgnoreParams();
+      true
+    }
+
+    public override OnTokenString(ruleInfo : RuleInfo.TokenString, startPos : int, endPos : int) : void
+    {
+      IgnoreParams();
+    }
+
+    public override OnRegularCall(ruleInfo : RuleInfo.RegularCall, startPos : int, endPos : int) : void
+    {
+      IgnoreParams();
+    }
+
+    public override OnSimpleCall(ruleInfo : RuleInfo.SimpleCall, startPos : int, endPos : int) : bool
+    {
+      IgnoreParams();
+      if (IsWhitespaceRule(ruleInfo.RuleParser.Descriptor))
+      {
+        if (startPos < endPos || (_lastSpaceEndPos < startPos && startPos == endPos))
+        {
+          _lastSpaceStartPos = startPos;
+          _lastSpaceEndPos   = endPos;
+        }
+        else when (_lastSpaceEndPos < startPos && endPos < 0)
+        {
+          _lastSpaceStartPos = startPos;
+          _lastSpaceEndPos   = startPos;
+        }
+        false
+      }
+      else
+        !ruleInfo.RuleParser.Descriptor.IsTokenRule
+    }
+
+    public override OnExtensibleCall(ruleInfo : RuleInfo.ExtensibleCall, startPos : int, endPos : int) : bool
+    {
+      IgnoreParams();
+      !ruleInfo.RuleParser.Descriptor.IsTokenRule
+    }
+
+    public override OnMarker(ruleInfo : RuleInfo.Marker, startPos : int, _endPos : int) : void
+    {
+      match (ruleInfo.Name)
+      {
+        | "Outline.outline_impl"         with (isImplementation = true,  isNeedSkipSpaces = false)
+        | "Outline.outline_begin"        with (isImplementation = false, isNeedSkipSpaces = false)
+        | "Outline.outline_begin_before" with (isImplementation = false, isNeedSkipSpaces = true) =>
+          def pos = if (isNeedSkipSpaces && _lastSpaceEndPos == startPos) _lastSpaceStartPos else startPos;
+          Markers.Add(OutlineMarker.Begin(pos, isImplementation));
+
+        | "Outline.outline_end"          with isNeedSkipSpaces = false
+        | "Outline.outline_end_before"   with isNeedSkipSpaces = true =>
+          def pos = if (isNeedSkipSpaces && _lastSpaceEndPos == startPos) _lastSpaceStartPos else startPos;
+          Markers.Add(OutlineMarker.End(pos));
+
+        | "Outline.outline_hiden" =>
+          Markers.Add(OutlineMarker.HiddenByDefault());
+
+        | _ => ()
+      }
+    }
+
+    public GetOutlining(outlinings : List[OutliningInfo]) : void
+    {
+      def stack = Stack();
+      mutable isHiddenByDefault = false;
+      foreach (marker in Markers)
+      {
+        | Begin(pos, isImplementation) =>
+          stack.Push((pos, isHiddenByDefault, isImplementation));
+          isHiddenByDefault = false;
+
+        | End(endPos) =>
+          when (stack.Count > 0)
+          {
+            def (startPos, isHiddenByDefault, isImplementation) = stack.Pop();
+            when (startPos < endPos)
+              outlinings.Add(OutliningInfo(NSpan(startPos, endPos), isHiddenByDefault, isImplementation));
+          }
+
+        | HiddenByDefault => isHiddenByDefault = true;
+      }
+      // assert2(stack.Count == 0)
+    }
+
+    private static IsWhitespaceRule(rd : RuleDescriptor) : bool
+    {
+      rd.Grammar.FullName == "Whitespaces" && (rd.Name == "s" || rd.Name == "S")
+    }
+  }
+}
