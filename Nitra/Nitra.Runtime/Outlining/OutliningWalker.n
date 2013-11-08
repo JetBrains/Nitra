@@ -11,20 +11,14 @@ using System.Linq;
 
 namespace Nitra.Runtime.Outlining
 {
-  internal sealed class OutliningWalker : AstWalkerBase[FakeVoid]
+  internal sealed class OutliningWalker : AstWalkerBase[List[OutliningInfo]]
   {
-    internal variant OutlineMarker
-    {
-      | Begin { pos : int; isImplementation : bool }
-      | End   { pos : int }
-      | HiddenByDefault
-    }
-
-    private Markers : List[OutlineMarker] = List();
     private mutable _lastSpaceStartPos : int;
     private mutable _lastSpaceEndPos   : int;
+    private mutable _isHiddenByDefault : bool;
+    private         _outliningStarts   : Stack[int * bool * bool] = Stack();
 
-    public override OnSimpleCall(ruleInfo : SubruleInfo.SimpleCall, startPos : int, endPos : int, parseResult : ParseResult, context : FakeVoid) : void
+    public override OnSimpleCall(ruleInfo : SubruleInfo.SimpleCall, startPos : int, endPos : int, parseResult : ParseResult, context : List[OutliningInfo]) : void
     {
       if (IsWhitespaceRule(ruleInfo.RuleParser.Descriptor))
       {
@@ -45,55 +39,38 @@ namespace Nitra.Runtime.Outlining
         base.OnSimpleCall(ruleInfo, startPos, endPos, parseResult, context);
     }
 
-    public override OnExtensibleCall(ruleInfo : SubruleInfo.ExtensibleCall, startPos : int, endPos : int, parseResult : ParseResult, context : FakeVoid) : void
+    public override OnExtensibleCall(ruleInfo : SubruleInfo.ExtensibleCall, startPos : int, endPos : int, parseResult : ParseResult, context : List[OutliningInfo]) : void
     {
       unless (ruleInfo.RuleParser.Descriptor.IsTokenRule)
         base.OnExtensibleCall(ruleInfo, startPos, endPos, parseResult, context);
     }
 
-    public override OnMarker(ruleInfo : SubruleInfo.Marker, startPos : int, _endPos : int, _parseResult : ParseResult, _ : FakeVoid) : void
+    public override OnMarker(ruleInfo : SubruleInfo.Marker, startPos : int, _endPos : int, _parseResult : ParseResult, context : List[OutliningInfo]) : void
     {
       match (ruleInfo.Name)
       {
         | "Outline.outline_impl"         with (isImplementation = true,  isNeedSkipSpaces = false)
         | "Outline.outline_begin"        with (isImplementation = false, isNeedSkipSpaces = false)
         | "Outline.outline_begin_before" with (isImplementation = false, isNeedSkipSpaces = true) =>
-          def pos = if (isNeedSkipSpaces && _lastSpaceEndPos == startPos) _lastSpaceStartPos else startPos;
-          Markers.Add(OutlineMarker.Begin(pos, isImplementation));
+          def outliningStartPos = if (isNeedSkipSpaces && _lastSpaceEndPos == startPos) _lastSpaceStartPos else startPos;
+          _outliningStarts.Push(outliningStartPos, _isHiddenByDefault, isImplementation);
+          _isHiddenByDefault = false;
 
         | "Outline.outline_end"          with isNeedSkipSpaces = false
         | "Outline.outline_end_before"   with isNeedSkipSpaces = true =>
-          def pos = if (isNeedSkipSpaces && _lastSpaceEndPos == startPos) _lastSpaceStartPos else startPos;
-          Markers.Add(OutlineMarker.End(pos));
+          def outliningEndPos = if (isNeedSkipSpaces && _lastSpaceEndPos == startPos) _lastSpaceStartPos else startPos;
+          when (_outliningStarts.Count > 0)
+          {
+            def (outliningStartPos, isHiddenByDefault, isImplementation) = _outliningStarts.Pop();
+            def outlining = OutliningInfo(NSpan(outliningStartPos, outliningEndPos), isHiddenByDefault, isImplementation);
+            context.Add(outlining);
+          }
 
         | "Outline.outline_hiden" =>
-          Markers.Add(OutlineMarker.HiddenByDefault());
+          _isHiddenByDefault = true;
 
         | _ => ()
       }
-    }
-
-    public GetOutlining(outlinings : List[OutliningInfo]) : void
-    {
-      def stack = Stack();
-      mutable isHiddenByDefault = false;
-      foreach (marker in Markers)
-      {
-        | Begin(pos, isImplementation) =>
-          stack.Push((pos, isHiddenByDefault, isImplementation));
-          isHiddenByDefault = false;
-
-        | End(endPos) =>
-          when (stack.Count > 0)
-          {
-            def (startPos, isHiddenByDefault, isImplementation) = stack.Pop();
-            when (startPos < endPos)
-              outlinings.Add(OutliningInfo(NSpan(startPos, endPos), isHiddenByDefault, isImplementation));
-          }
-
-        | HiddenByDefault => isHiddenByDefault = true;
-      }
-      // assert2(stack.Count == 0)
     }
 
     private static IsWhitespaceRule(rd : RuleDescriptor) : bool
