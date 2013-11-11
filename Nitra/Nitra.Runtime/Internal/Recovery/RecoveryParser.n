@@ -1,0 +1,147 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+using Nemerle.Extensions;
+
+using Nitra.Runtime.Reflection;
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Internal
+{
+  public class RecoveryParser
+  {
+    [Record, StructuralEquality]
+    public class ParseRecord
+    {
+      public StartPos : int;
+      public Sequence : SequenceInfo;
+      public Index    : int;
+
+      public Next() : ParseRecord
+      {
+        ParseRecord(StartPos, Sequence, Index + 1)
+      }
+    }
+
+    private Records     : array[SCG.HashSet[ParseRecord]];
+    private ParseResult : ParseResult;
+    private Stack       : SCG.Stack[ParseRecord];
+
+    public this(length : int, parseResult : ParseResult)
+    {
+      Records = array(length + 1);
+      ParseResult = parseResult;
+      Stack = Stack(50);
+    }
+
+    private AddRecord(curPos : int, nextPos : int, record : ParseRecord) : void
+    {
+      mutable set = Records[nextPos];
+      when (set == null)
+      {
+        set = SCG.HashSet();
+        Records[nextPos] = set;
+      }
+      when (set.Add(record) && curPos == nextPos)
+        Stack.Push(record);
+    }
+
+    public Parse(seq : SequenceInfo) : void
+    {
+      def text = ParseResult.Text;
+      AddRecord(0, 0, ParseRecord(0, seq, 0));
+      Stack.Clear();
+      for (mutable textPos = 0; textPos < Records.Length; ++textPos)
+      {
+        def set = Records[textPos];
+        when (set == null)
+          continue;
+        foreach (record in set)
+          Stack.Push(record);
+        while (Stack.Count > 0)
+        {
+          def record = Stack.Pop();
+          if (record.Index >= record.Sequence.Subrules.Length)
+          {
+            //Completion
+          }
+          else match (record.Sequence.Subrules[record.Index])
+          {
+            | Empty                     => ()
+            | Marker                    => assert3(false)
+            | RegularCall       as rule =>
+              def endPos = rule.Descriptor.Parse(textPos, text);
+              when (endPos > 0)
+                AddRecord(textPos, endPos, record.Next());
+
+            | TokenString       as rule =>
+              def str = rule.Str;
+              when (textPos + str.Length < text.Length)
+                fail:
+                {
+                  for (mutable i = 0; i < str.Length; ++i)
+                    when (text[textPos + i] != str[i])
+                      fail();
+                  AddRecord(textPos, textPos + str.Length, record.Next());
+                }
+
+            | ExtensibleCall    as rule => NotImplemented;
+            | SimpleCall        as rule =>
+              def sequence = rule.RuleParser.Reflection(rule.RuleParser.RuleId);
+              AddRecord(textPos, textPos, ParseRecord(textPos, sequence, 0));
+
+            | Option            as rule =>
+              AddRecord(textPos, textPos, ParseRecord(textPos, rule.Rule, 0));
+              AddRecord(textPos, textPos, record.Next());
+
+            | List              as rule =>
+              mutable curPos = pos;
+              mutable counter = 0;
+              while (true)
+              {
+                def newPos = PraseSequence(rule.Rule, curPos, text, parseResult);
+                if (newPos < 0)
+                  break;
+                else
+                  curPos = newPos;
+                ++counter;
+                when (counter == rule.Max)
+                  break;
+              }
+              if (counter < rule.Min) -1 else curPos
+
+            | ListWithSeparator as rule =>
+              mutable curPos = pos;
+              mutable endPos = pos;
+              mutable counter = 0;
+              while (true)
+              {
+                def newPos = PraseSequence(rule.Rule, curPos, text, parseResult);
+                if (newPos < 0)
+                  break;
+                else
+                  curPos = newPos;
+                ++counter;
+                endPos = curPos;
+                when (counter == rule.Max)
+                  break;
+
+                def newPos = PraseSequence(rule.Separator, curPos, text, parseResult);
+                if (newPos < 0)
+                  break;
+                else
+                  curPos = newPos;
+                when (rule.HangingSeparator)
+                  endPos = curPos;
+              }
+              if (counter < rule.Min) -1 else endPos
+          }
+        }
+      }
+    }
+  }
+}
