@@ -22,7 +22,7 @@ namespace Nitra.Internal
       public Index    : int;
 
       | Simple
-      | Extension                  { ExtensibleStartPos : int; Subrule : SubruleInfo.ExtensibleCall }
+      | Extension                  { ExtensibleStartPos : int; RuleParser : ExtensibleRuleParser }
       | Option                     { NextRecord : ParseRecord; }
       | List                       { Counter : int; Subrule : SubruleInfo.List;              NextRecord : ParseRecord; }
       | ListWithSeparatorRule      { Counter : int; Subrule : SubruleInfo.ListWithSeparator; NextRecord : ParseRecord; }
@@ -37,7 +37,7 @@ namespace Nitra.Internal
         match (this)
         {
           | Simple                          => ParseRecord.Simple                    (StartPos, Sequence, Index + 1)
-          | Extension                  as r => ParseRecord.Extension                 (StartPos, Sequence, Index + 1, r.ExtensibleStartPos, r.Subrule)
+          | Extension                  as r => ParseRecord.Extension                 (StartPos, Sequence, Index + 1, r.ExtensibleStartPos, r.RuleParser)
           | Option                     as r => ParseRecord.Option                    (StartPos, Sequence, Index + 1, r.NextRecord)
           | List                       as r => ParseRecord.List                      (StartPos, Sequence, Index + 1, r.Counter, r.Subrule, r.NextRecord)
           | ListWithSeparatorRule      as r => ParseRecord.ListWithSeparatorRule     (StartPos, Sequence, Index + 1, r.Counter, r.Subrule, r.NextRecord)
@@ -50,9 +50,9 @@ namespace Nitra.Internal
     private ParseResult : ParseResult;
     private Stack       : SCG.Stack[ParseRecord];
 
-    public this(length : int, parseResult : ParseResult)
+    public this(parseResult : ParseResult)
     {
-      Records     = array(length + 1);
+      Records     = array(parseResult.Text.Length);
       ParseResult = parseResult;
       Stack       = SCG.Stack(50);
     }
@@ -69,7 +69,29 @@ namespace Nitra.Internal
         Stack.Push(record);
     }
 
-    public Parse() : void
+    public StartParse(ruleParser : RuleParser) : void
+    {
+      def textPos = 0;
+      match (ruleParser)
+      {
+        | SimpleRuleParser     as ruleParser =>
+          def sequence = ruleParser.Reflection(ruleParser .RuleId);
+          AddRecord(textPos, textPos, ParseRecord.Simple(textPos, sequence, 0));
+
+        | ExtensibleRuleParser as ruleParser =>
+          foreach (prefixRule in ruleParser.PrefixRules)
+          {
+            def sequence = prefixRule.Reflection(prefixRule.RuleId);
+            AddRecord(textPos, textPos, ParseRecord.Extension(textPos, sequence, 0, textPos, ruleParser));
+          }
+
+        | _ => assert3(false)
+      }
+      Stack.Clear();
+      Parse();
+    }
+
+    private Parse() : void
     {
       for (mutable textPos = 0; textPos < Records.Length; ++textPos)
       {
@@ -89,25 +111,64 @@ namespace Nitra.Internal
       }
     }
 
+    public CompletionSimple(textPos : int, record : ParseRecord.Simple, recordsToComplete : SCG.IEnumerable[ParseRecord]) : void
+    {
+      foreach (x when !x.IsComplete in recordsToComplete)
+        when (x.CurSubrule is SimpleCall as rule when rule.RuleParser : object == record.Sequence.Parser)
+          AddRecord(textPos, textPos, x.Next());
+    }
+
+    public CompletionExtension(textPos : int, record : ParseRecord.Extension, recordsToComplete : SCG.IEnumerable[ParseRecord]) : void
+    {
+      def extensibleParser = record.RuleParser;
+      foreach (x when !x.IsComplete in recordsToComplete)
+        when (x.CurSubrule is ExtensibleCall as rule when rule.RuleParser : object == extensibleParser)
+          AddRecord(textPos, textPos, x.Next());
+    }
+
     public Completion(textPos : int, record : ParseRecord) : void
     {
       match (record)
       {
         | Simple as record =>
-          foreach (x when !x.IsComplete in Records[record.StartPos])
-            when (x.CurSubrule is SimpleCall as rule when rule.RuleParser : object == record.Sequence.Parser)
-              AddRecord(textPos, textPos, x.Next());
+          if (record.StartPos == textPos)
+          {
+            def records = SCG.List();
+            do
+            {
+              records.Clear();
+              records.AddRange(Records[record.StartPos]);
+              CompletionSimple(textPos, record, records);
+            }
+            while(records.Count != Records[record.StartPos].Count);
+          }
+          else
+          {
+            CompletionSimple(textPos, record, Records[record.StartPos]);
+          }
 
         | Extension as record =>
-          def extensibleParser = record.Subrule.RuleParser;
-          foreach (x when !x.IsComplete in Records[record.ExtensibleStartPos])
-            when (x.CurSubrule is ExtensibleCall as rule when rule.RuleParser : object == extensibleParser)
-              AddRecord(textPos, textPos, x.Next());
-          foreach (postfixRule in record.Subrule.RuleParser.PostfixRules)
+          def extensibleParser = record.RuleParser;
+          if (record.StartPos == textPos)
+          {
+            def records = SCG.List();
+            do
+            {
+              records.Clear();
+              records.AddRange(Records[record.ExtensibleStartPos]);
+              CompletionExtension(textPos, record, records);
+            }
+            while(records.Count != Records[record.StartPos].Count);
+          }
+          else
+          {
+            CompletionExtension(textPos, record, Records[record.ExtensibleStartPos]);
+          }
+          foreach (postfixRule in record.RuleParser.PostfixRules)
             when (extensibleParser.FirstPostfixRuleId <= postfixRule.RuleId)
             {
               def sequence = postfixRule.Reflection(postfixRule.RuleId);
-              AddRecord(textPos, textPos, ParseRecord.Extension(textPos, sequence, 0, record.ExtensibleStartPos, record.Subrule));
+              AddRecord(textPos, textPos, ParseRecord.Extension(textPos, sequence, 0, record.ExtensibleStartPos, record.RuleParser));
             }
 
         | Option                     as record =>
@@ -153,7 +214,7 @@ namespace Nitra.Internal
           foreach (prefixRule in rule.RuleParser.PrefixRules)
           {
             def sequence = prefixRule.Reflection(prefixRule.RuleId);
-            AddRecord(textPos, textPos, ParseRecord.Extension(textPos, sequence, 0, textPos, rule));
+            AddRecord(textPos, textPos, ParseRecord.Extension(textPos, sequence, 0, textPos, rule.RuleParser));
           }
 
         | SimpleCall        as rule =>
