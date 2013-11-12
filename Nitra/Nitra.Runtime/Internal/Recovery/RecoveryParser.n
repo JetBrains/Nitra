@@ -71,12 +71,6 @@ namespace Nitra.Internal
 
     public Parse() : void
     {
-      def counterLessThanMax(counter: int, max : Nullable[int]) : bool
-      {
-        !max.HasValue || counter < max.GetValueOrDefault()
-      }
-
-      def text = ParseResult.Text;
       for (mutable textPos = 0; textPos < Records.Length; ++textPos)
       {
         def set = Records[textPos];
@@ -88,92 +82,106 @@ namespace Nitra.Internal
         {
           def record = Stack.Pop();
           if (record.IsComplete)
-          {
-            //Completion
-            match (record)
-            {
-              | Simple as record =>
-                foreach (x when !x.IsComplete in Records[record.StartPos])
-                  when (x.CurSubrule is SimpleCall as rule when rule.RuleParser : object == record.Sequence.Parser)
-                    AddRecord(textPos, textPos, x.Next());
-
-              | Extension as record =>
-                def extensibleParser = record.Subrule.RuleParser;
-                foreach (x when !x.IsComplete in Records[record.ExtensibleStartPos])
-                  when (x.CurSubrule is ExtensibleCall as rule when rule.RuleParser : object == extensibleParser)
-                    AddRecord(textPos, textPos, x.Next());
-                foreach (postfixRule in record.Subrule.RuleParser.PostfixRules)
-                  when (extensibleParser.FirstPostfixRuleId <= postfixRule.RuleId)
-                  {
-                    def sequence = postfixRule.Reflection(postfixRule.RuleId);
-                    AddRecord(textPos, textPos, ParseRecord.Extension(textPos, sequence, 0, record.ExtensibleStartPos, record.Subrule));
-                  }
-
-              | Option                     as record =>
-                AddRecord(textPos, textPos, record.NextRecord);
-
-              | List                       as record =>
-                when (counterLessThanMax(record.Counter, record.Subrule.Max))
-                  AddRecord(textPos, textPos, ParseRecord.List(textPos, record.Subrule.Rule, 0, counter = record.Counter + 1, subrule = record.Subrule, nextRecord = record.NextRecord));
-                when (record.Counter >= record.Subrule.Min)
-                  AddRecord(textPos, textPos, record.NextRecord);
-
-              | ListWithSeparatorRule      as record =>
-                AddRecord(textPos, textPos, ParseRecord.ListWithSeparatorSeparator(textPos, record.Subrule.Rule, 0, counter = record.Counter + 1, subrule = record.Subrule, nextRecord = record.NextRecord));
-                when (record.Counter >= record.Subrule.Min)
-                  AddRecord(textPos, textPos, record.NextRecord);
-
-              | ListWithSeparatorSeparator as record =>
-                when (counterLessThanMax(record.Counter, record.Subrule.Max))
-                  AddRecord(textPos, textPos, ParseRecord.ListWithSeparatorRule(textPos, record.Subrule.Rule, 0, counter = record.Counter, subrule = record.Subrule, nextRecord = record.NextRecord));
-                when (record.Subrule.HangingSeparator && record.Counter >= record.Subrule.Min)
-                  AddRecord(textPos, textPos, record.NextRecord);
-            }
-          }
-          else match (record.CurSubrule)
-          {
-            | Empty                     => ()
-            | Marker                    => assert3(false)
-            | RegularCall       as rule =>
-              def endPos = rule.Descriptor.Parse(textPos, text);
-              when (endPos >= 0)
-                AddRecord(textPos, endPos, record.Next());
-
-            | TokenString       as rule =>
-              def endPos = rule.Parse(textPos, text);
-              when (endPos >= 0)
-                AddRecord(textPos, endPos, record.Next());
-
-            | ExtensibleCall    as rule =>
-              foreach (prefixRule in rule.RuleParser.PrefixRules)
-              {
-                def sequence = prefixRule.Reflection(prefixRule.RuleId);
-                AddRecord(textPos, textPos, ParseRecord.Extension(textPos, sequence, 0, textPos, rule));
-              }
-
-            | SimpleCall        as rule =>
-              def sequence = rule.RuleParser.Reflection(rule.RuleParser.RuleId);
-              AddRecord(textPos, textPos, ParseRecord.Simple(textPos, sequence, 0));
-
-            | Option            as rule =>
-              def nextRecord = record.Next();
-              AddRecord(textPos, textPos, ParseRecord.Option(textPos, rule.Rule, 0, nextRecord));
-              AddRecord(textPos, textPos, nextRecord);
-
-            | List              as rule =>
-              def nextRecord = record.Next();
-              AddRecord(textPos, textPos, ParseRecord.List(textPos, rule.Rule, 0, counter = 0, subrule = rule, nextRecord = nextRecord));
-              when (rule.Min == 0)
-                AddRecord(textPos, textPos, nextRecord);
-
-            | ListWithSeparator as rule =>
-              def nextRecord = record.Next();
-              AddRecord(textPos, textPos, ParseRecord.ListWithSeparatorRule(textPos, rule.Rule, 0, counter = 0, subrule = rule, nextRecord = nextRecord));
-              when (rule.Min == 0)
-                AddRecord(textPos, textPos, nextRecord);
-          }
+            Completion(textPos, record)
+          else
+            PredictionOrScanning(textPos, record)
         }
       }
+    }
+
+    public Completion(textPos : int, record : ParseRecord) : void
+    {
+      match (record)
+      {
+        | Simple as record =>
+          foreach (x when !x.IsComplete in Records[record.StartPos])
+            when (x.CurSubrule is SimpleCall as rule when rule.RuleParser : object == record.Sequence.Parser)
+              AddRecord(textPos, textPos, x.Next());
+
+        | Extension as record =>
+          def extensibleParser = record.Subrule.RuleParser;
+          foreach (x when !x.IsComplete in Records[record.ExtensibleStartPos])
+            when (x.CurSubrule is ExtensibleCall as rule when rule.RuleParser : object == extensibleParser)
+              AddRecord(textPos, textPos, x.Next());
+          foreach (postfixRule in record.Subrule.RuleParser.PostfixRules)
+            when (extensibleParser.FirstPostfixRuleId <= postfixRule.RuleId)
+            {
+              def sequence = postfixRule.Reflection(postfixRule.RuleId);
+              AddRecord(textPos, textPos, ParseRecord.Extension(textPos, sequence, 0, record.ExtensibleStartPos, record.Subrule));
+            }
+
+        | Option                     as record =>
+          AddRecord(textPos, textPos, record.NextRecord);
+
+        | List                       as record =>
+          when (CounterLessThanMax(record.Counter, record.Subrule.Max))
+            AddRecord(textPos, textPos, ParseRecord.List(textPos, record.Subrule.Rule, 0, counter = record.Counter + 1, subrule = record.Subrule, nextRecord = record.NextRecord));
+          when (record.Counter >= record.Subrule.Min)
+            AddRecord(textPos, textPos, record.NextRecord);
+
+        | ListWithSeparatorRule      as record =>
+          AddRecord(textPos, textPos, ParseRecord.ListWithSeparatorSeparator(textPos, record.Subrule.Rule, 0, counter = record.Counter + 1, subrule = record.Subrule, nextRecord = record.NextRecord));
+          when (record.Counter >= record.Subrule.Min)
+            AddRecord(textPos, textPos, record.NextRecord);
+
+        | ListWithSeparatorSeparator as record =>
+          when (CounterLessThanMax(record.Counter, record.Subrule.Max))
+            AddRecord(textPos, textPos, ParseRecord.ListWithSeparatorRule(textPos, record.Subrule.Rule, 0, counter = record.Counter, subrule = record.Subrule, nextRecord = record.NextRecord));
+          when (record.Subrule.HangingSeparator && record.Counter >= record.Subrule.Min)
+            AddRecord(textPos, textPos, record.NextRecord);
+      }
+    }
+
+    public PredictionOrScanning(textPos : int, record : ParseRecord) : void
+    {
+      def text = ParseResult.Text;
+      match (record.CurSubrule)
+      {
+        | Empty                     => ()
+        | Marker                    => assert3(false)
+        | RegularCall       as rule =>
+          def endPos = rule.Descriptor.Parse(textPos, text);
+          when (endPos >= 0)
+            AddRecord(textPos, endPos, record.Next());
+
+        | TokenString       as rule =>
+          def endPos = rule.Parse(textPos, text);
+          when (endPos >= 0)
+            AddRecord(textPos, endPos, record.Next());
+
+        | ExtensibleCall    as rule =>
+          foreach (prefixRule in rule.RuleParser.PrefixRules)
+          {
+            def sequence = prefixRule.Reflection(prefixRule.RuleId);
+            AddRecord(textPos, textPos, ParseRecord.Extension(textPos, sequence, 0, textPos, rule));
+          }
+
+        | SimpleCall        as rule =>
+          def sequence = rule.RuleParser.Reflection(rule.RuleParser.RuleId);
+          AddRecord(textPos, textPos, ParseRecord.Simple(textPos, sequence, 0));
+
+        | Option            as rule =>
+          def nextRecord = record.Next();
+          AddRecord(textPos, textPos, ParseRecord.Option(textPos, rule.Rule, 0, nextRecord));
+          AddRecord(textPos, textPos, nextRecord);
+
+        | List              as rule =>
+          def nextRecord = record.Next();
+          AddRecord(textPos, textPos, ParseRecord.List(textPos, rule.Rule, 0, counter = 0, subrule = rule, nextRecord = nextRecord));
+          when (rule.Min == 0)
+            AddRecord(textPos, textPos, nextRecord);
+
+        | ListWithSeparator as rule =>
+          def nextRecord = record.Next();
+          AddRecord(textPos, textPos, ParseRecord.ListWithSeparatorRule(textPos, rule.Rule, 0, counter = 0, subrule = rule, nextRecord = nextRecord));
+          when (rule.Min == 0)
+            AddRecord(textPos, textPos, nextRecord);
+      }
+    }
+
+    private static CounterLessThanMax(counter: int, max : Nullable[int]) : bool
+    {
+      !max.HasValue || counter < max.GetValueOrDefault()
     }
   }
 }
