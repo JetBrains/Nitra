@@ -17,9 +17,9 @@ namespace Nitra.Internal
     [Record, StructuralEquality]
     public variant ParseRecord
     {
-      public StartPos : int;
-      public Sequence : SequenceInfo;
-      public Index    : int;
+      public SequenceStartPos : int;
+      public Sequence         : SequenceInfo;
+      public Index            : int;
 
       | Simple
       | Extension                  { ExtensibleStartPos : int; RuleParser : ExtensibleRuleParser }
@@ -36,12 +36,12 @@ namespace Nitra.Internal
         assert3(!IsComplete);
         match (this)
         {
-          | Simple                          => ParseRecord.Simple                    (StartPos, Sequence, Index + 1)
-          | Extension                  as r => ParseRecord.Extension                 (StartPos, Sequence, Index + 1, r.ExtensibleStartPos, r.RuleParser)
-          | Option                     as r => ParseRecord.Option                    (StartPos, Sequence, Index + 1, r.NextRecord)
-          | List                       as r => ParseRecord.List                      (StartPos, Sequence, Index + 1, r.Counter, r.Subrule, r.NextRecord)
-          | ListWithSeparatorRule      as r => ParseRecord.ListWithSeparatorRule     (StartPos, Sequence, Index + 1, r.Counter, r.Subrule, r.NextRecord)
-          | ListWithSeparatorSeparator as r => ParseRecord.ListWithSeparatorSeparator(StartPos, Sequence, Index + 1, r.Counter, r.Subrule, r.NextRecord)
+          | Simple                          => ParseRecord.Simple                    (SequenceStartPos, Sequence, Index + 1)
+          | Extension                  as r => ParseRecord.Extension                 (SequenceStartPos, Sequence, Index + 1, r.ExtensibleStartPos, r.RuleParser)
+          | Option                     as r => ParseRecord.Option                    (SequenceStartPos, Sequence, Index + 1, r.NextRecord)
+          | List                       as r => ParseRecord.List                      (SequenceStartPos, Sequence, Index + 1, r.Counter, r.Subrule, r.NextRecord)
+          | ListWithSeparatorRule      as r => ParseRecord.ListWithSeparatorRule     (SequenceStartPos, Sequence, Index + 1, r.Counter, r.Subrule, r.NextRecord)
+          | ListWithSeparatorSeparator as r => ParseRecord.ListWithSeparatorSeparator(SequenceStartPos, Sequence, Index + 1, r.Counter, r.Subrule, r.NextRecord)
         }
       }
 
@@ -57,7 +57,7 @@ namespace Nitra.Internal
           | ListWithSeparatorSeparator => "ListSeparator"
         }
         def subrule = if (IsComplete) "#COMPLETE#" else CurSubrule.ToString();
-        $"$name $StartPos $subrule"
+        $"$name $SequenceStartPos $subrule"
       }
     }
 
@@ -65,7 +65,22 @@ namespace Nitra.Internal
     private ParseResult : ParseResult;
     private Stack       : SCG.Stack[ParseRecord];
 
-    private Ast         : Hashtable[int * SequenceInfo, SCG.HashSet[int * ParseRecord]] = Hashtable();
+    [Record, StructuralEquality]
+    private struct SequenceStart
+    {
+      public Pos      : int;
+      public Sequence : SequenceInfo;
+    }
+
+    [Record, StructuralEquality]
+    private struct ParseRecordStart
+    {
+      public PrevPos : int;
+      public Pos     : int;
+      public Record  : ParseRecord;
+    }
+
+    private Ast : Hashtable[SequenceStart, SCG.HashSet[ParseRecordStart]] = Hashtable();
 
     public this(parseResult : ParseResult)
     {
@@ -85,14 +100,14 @@ namespace Nitra.Internal
       def newRecord = set.Add(record);
       when (newRecord)
       {
-        def key = (record.StartPos, record.Sequence);
+        def key = SequenceStart(record.SequenceStartPos, record.Sequence);
         mutable astSet;
         when (!Ast.TryGetValue(key, out astSet))
         {
           astSet = SCG.HashSet();
           Ast[key] = astSet;
         }
-        _ = astSet.Add((nextPos, record));
+        _ = astSet.Add(ParseRecordStart(curPos, nextPos, record));
       }
       when (newRecord && curPos == nextPos)
         Stack.Push(record);
@@ -140,19 +155,19 @@ namespace Nitra.Internal
       }
     }
 
-    public CompletionSimple(textPos : int, record : ParseRecord.Simple, recordsToComplete : SCG.IEnumerable[ParseRecord]) : void
+    public CompletionSimple(curPos : int, textPos : int, record : ParseRecord.Simple, recordsToComplete : SCG.IEnumerable[ParseRecord]) : void
     {
       foreach (x when !x.IsComplete in recordsToComplete)
         when (x.CurSubrule is SimpleCall as rule when rule.RuleParser : object == record.Sequence.Parser)
-          AddRecord(textPos, textPos, x.Next());
+          AddRecord(curPos, textPos, x.Next());
     }
 
-    public CompletionExtension(textPos : int, record : ParseRecord.Extension, recordsToComplete : SCG.IEnumerable[ParseRecord]) : void
+    public CompletionExtension(curPos : int, textPos : int, record : ParseRecord.Extension, recordsToComplete : SCG.IEnumerable[ParseRecord]) : void
     {
       def extensibleParser = record.RuleParser;
       foreach (x when !x.IsComplete in recordsToComplete)
         when (x.CurSubrule is ExtensibleCall as rule when rule.RuleParser : object == extensibleParser)
-          AddRecord(textPos, textPos, x.Next());
+          AddRecord(curPos, textPos, x.Next());
     }
 
     public Completion(textPos : int, record : ParseRecord) : void
@@ -160,38 +175,38 @@ namespace Nitra.Internal
       match (record)
       {
         | Simple as record =>
-          if (record.StartPos == textPos)
+          if (record.SequenceStartPos == textPos)
           {
             def records = SCG.List();
             do
             {
               records.Clear();
-              records.AddRange(Records[record.StartPos]);
-              CompletionSimple(textPos, record, records);
+              records.AddRange(Records[record.SequenceStartPos]);
+              CompletionSimple(record.SequenceStartPos, textPos, record, records);
             }
-            while(records.Count != Records[record.StartPos].Count);
+            while(records.Count != Records[record.SequenceStartPos].Count);
           }
           else
           {
-            CompletionSimple(textPos, record, Records[record.StartPos]);
+            CompletionSimple(record.SequenceStartPos, textPos, record, Records[record.SequenceStartPos]);
           }
 
         | Extension as record =>
           def extensibleParser = record.RuleParser;
-          if (record.StartPos == textPos)
+          if (record.ExtensibleStartPos == textPos)
           {
             def records = SCG.List();
             do
             {
               records.Clear();
               records.AddRange(Records[record.ExtensibleStartPos]);
-              CompletionExtension(textPos, record, records);
+              CompletionExtension(record.ExtensibleStartPos, textPos, record, records);
             }
-            while(records.Count != Records[record.StartPos].Count);
+            while(records.Count != Records[record.ExtensibleStartPos].Count);
           }
           else
           {
-            CompletionExtension(textPos, record, Records[record.ExtensibleStartPos]);
+            CompletionExtension(record.ExtensibleStartPos, textPos, record, Records[record.ExtensibleStartPos]);
           }
           foreach (postfixRule in record.RuleParser.PostfixRules)
             when (extensibleParser.FirstPostfixRuleId <= postfixRule.RuleId)
@@ -248,7 +263,7 @@ namespace Nitra.Internal
 
         | SimpleCall        as rule =>
           def endPos = rule.RuleParser.Parse(textPos, text, ParseResult);
-          if (endPos >= 0)
+          if (false)//endPos >= 0)
             AddRecord(textPos, endPos, record.Next());
           else
           {
@@ -278,6 +293,81 @@ namespace Nitra.Internal
     private static CounterLessThanMax(counter: int, max : Nullable[int]) : bool
     {
       !max.HasValue || counter < max.GetValueOrDefault()
+    }
+
+    public ToDot() : string
+    {
+      def escape(x : string) : string
+      {
+        x.Replace(<#\#>, <#\\#>).Replace(<#"#>, <#\"#>)
+      }
+      def clusters = SCG.List();
+      def clusterEdges = SCG.List.[string]();
+      def makeClusterName(pos : int, sequence : SequenceInfo) { $"cluster_$(pos)_$(sequence.Id)" }
+      def makeNodeName(clusterName : string, pos : int, index : int) { $"$(clusterName)_$(pos)_$(index)" }
+
+      foreach ((sequenceStart, subrules) in Ast.KeyValuePairs)
+      {
+        def clusterName = makeClusterName(sequenceStart.Pos, sequenceStart.Sequence);
+        def edges = SCG.List.[string]();
+        def nodes = SCG.List();
+        def label = $"$(sequenceStart.Pos) $(escape(sequenceStart.Sequence.Description))";
+        nodes.Add($<# $clusterName [label="#"]; #>);
+        foreach (parseRecordStart in subrules)
+        {
+          def nodeName = makeNodeName(clusterName, parseRecordStart.Pos, parseRecordStart.Record.Index);
+          when (parseRecordStart.Record.Index > 0)
+          {
+            def prevNodeName = makeNodeName(clusterName, parseRecordStart.PrevPos, parseRecordStart.Record.Index - 1);
+            edges.Add($<# $prevNodeName -> $nodeName; #>);
+          }
+          def label = $"$(parseRecordStart.Pos) $(escape(parseRecordStart.Record.ToString()))";
+          nodes.Add($<# $nodeName [label="$label"]; #>);
+          when (!parseRecordStart.Record.IsComplete)
+          match (parseRecordStart.Record.CurSubrule)
+          {
+            | SimpleCall as subrule =>
+              def targetClusterName = makeClusterName(parseRecordStart.Pos, subrule.RuleParser.Reflection(subrule.RuleParser.RuleId));
+              clusterEdges.Add($<# $nodeName -> $targetClusterName [lhead=$targetClusterName]; #>);
+
+            | ExtensibleCall as subrule =>
+              foreach (prefixRule in subrule.RuleParser.PrefixRules)
+              {
+                def targetClusterName = makeClusterName(parseRecordStart.Pos, prefixRule.Reflection(prefixRule.RuleId));
+                clusterEdges.Add($<# $nodeName -> $targetClusterName [lhead=$targetClusterName]; #>);
+              }
+
+            | Option as subrule =>
+              def targetClusterName = makeClusterName(parseRecordStart.Pos, subrule.Rule);
+              clusterEdges.Add($<# $nodeName -> $targetClusterName [lhead=$targetClusterName]; #>);
+
+            | List as subrule =>
+              def targetClusterName = makeClusterName(parseRecordStart.Pos, subrule.Rule);
+              clusterEdges.Add($<# $nodeName -> $targetClusterName [lhead=$targetClusterName]; #>);
+
+            | ListWithSeparator as subrule =>
+              def targetClusterName = makeClusterName(parseRecordStart.Pos, subrule.Rule);
+              clusterEdges.Add($<# $nodeName -> $targetClusterName [lhead=$targetClusterName]; #>);
+
+            | _ => ()
+          }
+        }
+        clusters.Add($<#
+          subgraph $clusterName
+          {
+            label="$label";
+            ..$(nodes; "\n            ")
+            ..$(edges; "\n            ")
+          }
+        #>);
+      }
+$<#
+  digraph ParseAlternativeNode
+  {
+    compound=true;
+    ..$(clusters; "\n    ")
+    ..$(clusterEdges; "\n    ")
+  }#>
     }
   }
 }
