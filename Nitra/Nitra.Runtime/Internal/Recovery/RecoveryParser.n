@@ -327,22 +327,23 @@ namespace Nitra.Internal
       !max.HasValue || counter < max.GetValueOrDefault()
     }
 
-    public ToDot() : string
+    public ToDot() : SCG.Dictionary[string, string]
     {
+      def files = SCG.Dictionary();
+      //def makeShortLabel(str : string ) : string { if (str.Length > 20) str.Substring(20) + "..." else str }
       def escape(x : string) : string
       {
         x.Replace("\\", <#\\#>).Replace(<#"#>, <#\"#>)
       }
-      def clusters = SCG.List();
-      def clusterEdges = SCG.List.[string]();
+      def makeTooltip(str : string ) : string { if (str.Length > 0) escape(str) else "<EMPTY>" }
       def makeClusterName(pos : int, sequence : SequenceInfo) { $"cluster_$(pos)_$(sequence.Id)" }
       def makeExtensibleClusterName(pos : int, parserData : ExtensibleRuleParserData) { $"cluster_extensible_$(pos)_$(parserData.PrefixId)" }
       def makeExtensionClusterName(extensibleClusterName : string,  pos : int) { $"cluster_extenson_$(pos)_$(extensibleClusterName)" }
       def makeNodeName(clusterName : string, pos : int, index : int) { $"$(clusterName)_$(pos)_$(index)" }
       def makeClusterNode(clusterName : string) : string { $<# $clusterName [label="#" style="invis"]; #> }
-      def makeClusterEdge(source : string, target : string) : string { $<# $source -> $target [lhead=$target]; #> }
-      def renderCluster(sequenceStart : SequenceStart, subrules : SCG.IEnumerable[ParseRecordStart]) : string
+      def renderCluster(sequenceStart : SequenceStart, subrules : SCG.IEnumerable[ParseRecordStart]) : string * string
       {
+        def makeClusterRef(target : string) : string { $<#URL="$(escape(target)).svg"#> }
         def clusterName = makeClusterName(sequenceStart.Pos, sequenceStart.Sequence);
         def edges = SCG.List();
         def nodes = SCG.List();
@@ -354,41 +355,38 @@ namespace Nitra.Internal
           when (parseRecordStart.Record.Index > 0)
           {
             def prevNodeName = makeNodeName(clusterName, parseRecordStart.PrevPos, parseRecordStart.Record.Index - 1);
-            edges.Add($<# $prevNodeName -> $nodeName; #>);
+            def text = makeTooltip(ParseResult.Text.Substring(parseRecordStart.PrevPos, parseRecordStart.Pos - parseRecordStart.PrevPos));
+            edges.Add($<# $prevNodeName -> $nodeName [edgetooltip="$text"]; #>);
           }
           def labelText = if (parseRecordStart.Record.IsComplete) "#COMPLETE#" else parseRecordStart.Record.CurSubrule.ToString();
           def label = escape($"$(parseRecordStart.Pos) $(labelText)");
-          nodes.Add($<# $nodeName [label="$label" shape=box]; #>);
-          when (!parseRecordStart.Record.IsComplete)
-          match (parseRecordStart.Record.CurSubrule)
-          {
-            | SimpleCall as subrule =>
-              def targetClusterKey = SequenceStart(parseRecordStart.Pos, subrule.RuleParser.Reflection(subrule.RuleParser.RuleId));
-              when (Ast.ContainsKey(targetClusterKey))
-              {
-                def targetClusterName = makeClusterName(targetClusterKey.Pos, targetClusterKey.Sequence);
-                clusterEdges.Add(makeClusterEdge(nodeName, targetClusterName));
-              }
+          mutable url = "";
+          unless (parseRecordStart.Record.IsComplete)
+            match (parseRecordStart.Record.CurSubrule)
+            {
+              | SimpleCall as subrule =>
+                def targetClusterKey = SequenceStart(parseRecordStart.Pos, subrule.RuleParser.Reflection(subrule.RuleParser.RuleId));
+                when (Ast.ContainsKey(targetClusterKey))
+                  url = makeClusterRef(makeClusterName(targetClusterKey.Pos, targetClusterKey.Sequence));
 
-            | ExtensibleCall as subrule =>
-              def targetClusterName = makeExtensibleClusterName(parseRecordStart.Pos, subrule.RuleParser.ParserData);
-              clusterEdges.Add(makeClusterEdge(nodeName, targetClusterName));
+              | ExtensibleCall as subrule =>
+                url = makeClusterRef(makeExtensibleClusterName(parseRecordStart.Pos, subrule.RuleParser.ParserData));
 
-            | Option as subrule =>
-              def targetClusterName = makeClusterName(parseRecordStart.Pos, subrule.Rule);
-              clusterEdges.Add(makeClusterEdge(nodeName, targetClusterName));
+              | Option as subrule =>
+                url = makeClusterRef(makeClusterName(parseRecordStart.Pos, subrule.Rule));
 
-            | List as subrule =>
-              def targetClusterName = makeClusterName(parseRecordStart.Pos, subrule.Rule);
-              clusterEdges.Add(makeClusterEdge(nodeName, targetClusterName));
+              | List as subrule =>
+                url = makeClusterRef(makeClusterName(parseRecordStart.Pos, subrule.Rule));
 
-            | ListWithSeparator as subrule =>
-              def targetClusterName = makeClusterName(parseRecordStart.Pos, subrule.Rule);
-              clusterEdges.Add(makeClusterEdge(nodeName, targetClusterName));
+              | ListWithSeparator as subrule =>
+                url = makeClusterRef(makeClusterName(parseRecordStart.Pos, subrule.Rule));
 
-            | _ => ()
-          }
+              | _ => ()
+            }
+          def color = if (string.IsNullOrEmpty(url)) "ghostwhite" else "honeydew";
+          nodes.Add($<# $nodeName [label="$label" shape=box style=filled color=black fillcolor=$color $url]; #>);
         }
+        def subgraph =
         $<#
           subgraph $clusterName
           {
@@ -397,13 +395,25 @@ namespace Nitra.Internal
             ..$(nodes; "\n            ")
             ..$(edges; "\n            ")
           }
+        #>;
+        (clusterName, subgraph)
+      }
+      def renderGraph(body : string) : string
+      {
+        $<#
+digraph RecoveryParser
+{
+  rankdir=LR;
+  compound=true;
+  $body
+}
         #>
       }
 
       foreach ((sequenceStart, subrules) when !sequenceStart.Sequence.IsExtension in Ast.KeyValuePairs)
       {
-        def c = renderCluster(sequenceStart, subrules);
-        clusters.Add(c);
+        def (name, c) = renderCluster(sequenceStart, subrules);
+        files.Add(name, renderGraph(c));
       }
 
       foreach ((extensionStart, subrules) in ExtensionsAst.KeyValuePairs)
@@ -418,38 +428,30 @@ namespace Nitra.Internal
           def extensionClusters = SCG.List();
           foreach ((sequence, subCluster) in cluster.Grouping(c => (c.Record.Sequence, c)).KeyValuePairs)
           {
-            def c = renderCluster(SequenceStart(pos, sequence), subCluster);
+            def (_, c) = renderCluster(SequenceStart(pos, sequence), subCluster);
             extensionClusters.Add(c);
           }
           extensibleClusterSubclusters.Add($<#
             subgraph $extensionClusterName
             {
-              bgcolor=moccasin;
+              bgcolor=cornsilk;
               label="";
               $(makeClusterNode(extensionClusterName))
               ..$(extensionClusters; "\n              ")
             }
           #>);
         }
-        clusters.Add($<#
+        files.Add(extensibleClusterName, renderGraph($<#
           subgraph $extensibleClusterName
           {
-            bgcolor=honeydew;
+            bgcolor=ivory;
             label="$label";
             $(makeClusterNode(extensibleClusterName))
             ..$(extensibleClusterSubclusters; "\n            ")
           }
-        #>);
+        #>));
       }
-$<#
-  digraph RecoveryParser
-  {
-    rankdir=LR;
-    compound=true;
-    
-    ..$(clusters; "\n    ")
-    ..$(clusterEdges; "\n    ")
-  }#>
+      files
     }
   }
 }
