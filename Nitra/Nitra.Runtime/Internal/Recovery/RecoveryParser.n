@@ -327,9 +327,12 @@ namespace Nitra.Internal
       !max.HasValue || counter < max.GetValueOrDefault()
     }
 
-    public ToDot() : SCG.Dictionary[string, string]
+    public ToDot(startPos : int) : SCG.List[string] * SCG.Dictionary[string, string]
     {
+      def filesToOpen = SCG.List();
       def files = SCG.Dictionary();
+      def callTable = Hashtable.[string, SCG.HashSet[SequenceStart]]();
+
       //def makeShortLabel(str : string ) : string { if (str.Length > 20) str.Substring(20) + "..." else str }
       def escape(x : string) : string
       {
@@ -341,12 +344,13 @@ namespace Nitra.Internal
       def makeExtensionClusterName(extensibleClusterName : string,  pos : int) { $"cluster_extenson_$(pos)_$(extensibleClusterName)" }
       def makeNodeName(clusterName : string, pos : int, index : int) { $"$(clusterName)_$(pos)_$(index)" }
       def makeClusterNode(clusterName : string) : string { $<# $clusterName [label="#" style="invis"]; #> }
+      def makeClusterRef(target : string) : string { $<#URL="$(escape(target)).svg"#> }
       def renderCluster(sequenceStart : SequenceStart, subrules : SCG.IEnumerable[ParseRecordStart]) : string * string
       {
-        def makeClusterRef(target : string) : string { $<#URL="$(escape(target)).svg"#> }
         def clusterName = makeClusterName(sequenceStart.Pos, sequenceStart.Sequence);
         def edges = SCG.List();
         def nodes = SCG.List();
+        def callerNodes = SCG.List();
         def label = escape(sequenceStart.ToString());
         nodes.Add(makeClusterNode(clusterName));
         foreach (parseRecordStart in subrules)
@@ -385,6 +389,19 @@ namespace Nitra.Internal
             }
           def color = if (string.IsNullOrEmpty(url)) "ghostwhite" else "honeydew";
           nodes.Add($<# $nodeName [label="$label" shape=box style=filled color=black fillcolor=$color $url]; #>);
+
+          mutable callers;
+          when (callTable.TryGetValue(clusterName, out callers))
+          {
+            foreach (caller in callers)
+            {
+              def callerClusterName = makeClusterName(caller.Pos, caller.Sequence);
+              def callerLabel = escape(caller.ToString());
+              def clusterRef = makeClusterRef(callerClusterName);
+              callerNodes.Add($<# $callerClusterName [label="$callerLabel" shape=box style=filled color=black fillcolor=moccasin $clusterRef]; #>);
+              callerNodes.Add($<# $callerClusterName -> $clusterName [lhead = $clusterName]; #>);
+            }
+          }
         }
         def subgraph =
         $<#
@@ -395,6 +412,7 @@ namespace Nitra.Internal
             ..$(nodes; "\n            ")
             ..$(edges; "\n            ")
           }
+          ..$(callerNodes; "\n            ")
         #>;
         (clusterName, subgraph)
       }
@@ -409,6 +427,45 @@ digraph RecoveryParser
 }
         #>
       }
+
+      def addCall(from, to)
+      {
+        mutable set;
+        unless (callTable.TryGetValue(to, out set))
+        {
+          set = SCG.HashSet();
+          callTable[to] = set;
+        }
+        _ = set.Add(from);
+      }
+      foreach ((sequenceStart, subrules) in Ast.KeyValuePairs)
+        foreach (parseRecordStart when !parseRecordStart.Record.IsComplete in subrules)
+        {
+          mutable to;
+          match (parseRecordStart.Record.CurSubrule)
+          {
+            | SimpleCall as subrule =>
+              def targetClusterKey = SequenceStart(parseRecordStart.Pos, subrule.RuleParser.Reflection(subrule.RuleParser.RuleId));
+              when (Ast.ContainsKey(targetClusterKey))
+                to = makeClusterName(targetClusterKey.Pos, targetClusterKey.Sequence)
+
+            | ExtensibleCall as subrule =>
+              to = makeExtensibleClusterName(parseRecordStart.Pos, subrule.RuleParser.ParserData)
+
+            | Option as subrule =>
+              to = makeClusterName(parseRecordStart.Pos, subrule.Rule)
+
+            | List as subrule =>
+              to = makeClusterName(parseRecordStart.Pos, subrule.Rule)
+
+            | ListWithSeparator as subrule =>
+              to = makeClusterName(parseRecordStart.Pos, subrule.Rule)
+
+            | _ => ()
+          }
+          unless (string.IsNullOrEmpty(to))
+            addCall(sequenceStart, to);
+        }
 
       foreach ((sequenceStart, subrules) when !sequenceStart.Sequence.IsExtension in Ast.KeyValuePairs)
       {
@@ -451,7 +508,9 @@ digraph RecoveryParser
           }
         #>));
       }
-      files
+
+      filesToOpen.Add(files.Keys.First());
+      (filesToOpen, files)
     }
   }
 }
