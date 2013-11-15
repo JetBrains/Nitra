@@ -94,8 +94,32 @@ namespace Nitra.Internal
       public Record  : ParseRecord;
     }
 
-    private Ast           : Hashtable[SequenceStart,  SCG.HashSet[ParseRecordStart]] = Hashtable();
-    private ExtensionsAst : Hashtable[ExtensionStart, SCG.HashSet[ParseRecordStart]] = Hashtable();
+    private class ParsedSequence
+    {
+      public Start   : SequenceStart;
+      public Records : SCG.HashSet[ParseRecordStart];
+
+      public this(start : SequenceStart)
+      {
+        Start = start;
+        Records = SCG.HashSet();
+      }
+    }
+
+    private class ParsedExtensions
+    {
+      public Start     : ExtensionStart;
+      public Sequences : SCG.List[ParsedSequence];
+
+      public this(start : ExtensionStart)
+      {
+        Start = start;
+        Sequences = SCG.List();
+      }
+    }
+
+    private Ast           : Hashtable[SequenceStart,  ParsedSequence] = Hashtable();
+    private ExtensionsAst : Hashtable[ExtensionStart, ParsedExtensions] = Hashtable();
 
     public this(parseResult : ParseResult)
     {
@@ -120,26 +144,26 @@ namespace Nitra.Internal
       def newRecord = set.Add(record);
       when (newRecord)
       {
-        def key = SequenceStart(record.SequenceStartPos, record.Sequence);
-        mutable astSet;
-        unless (Ast.TryGetValue(key, out astSet))
+        def sequenceStart = SequenceStart(record.SequenceStartPos, record.Sequence);
+        mutable parsedSequence;
+        unless (Ast.TryGetValue(sequenceStart, out parsedSequence))
         {
-          astSet = SCG.HashSet();
-          Ast[key] = astSet;
-        }
-        _ = astSet.Add(ParseRecordStart(prevPos, nextPos, record));
+          parsedSequence = ParsedSequence(sequenceStart);
+          Ast[sequenceStart] = parsedSequence;
 
-        when (record is ParseRecord.Extension(extensibleStartPos, ruleParser))
-        {
-          def key = ExtensionStart(extensibleStartPos, ruleParser.ParserData);
-          mutable extSet;
-          unless (ExtensionsAst.TryGetValue(key, out extSet))
+          when (record is ParseRecord.Extension(extensibleStartPos, ruleParser))
           {
-            extSet = SCG.HashSet();
-            ExtensionsAst[key] = extSet;
+            def extensionStart = ExtensionStart(extensibleStartPos, ruleParser.ParserData);
+            mutable extSet;
+            unless (ExtensionsAst.TryGetValue(extensionStart, out extSet))
+            {
+              extSet = ParsedExtensions(extensionStart);
+              ExtensionsAst[extensionStart] = extSet;
+            }
+            _ = extSet.Sequences.Add(parsedSequence);
           }
-          _ = extSet.Add(ParseRecordStart(prevPos, nextPos, record));
         }
+        _ = parsedSequence.Records.Add(ParseRecordStart(prevPos, nextPos, record));
       }
       when (newRecord && curPos == nextPos)
         Stack.Push(record);
@@ -439,7 +463,7 @@ digraph RecoveryParser
         _ = set.Add(from);
       }
       foreach ((sequenceStart, subrules) in Ast.KeyValuePairs)
-        foreach (parseRecordStart when !parseRecordStart.Record.IsComplete in subrules)
+        foreach (parseRecordStart when !parseRecordStart.Record.IsComplete in subrules.Records)
         {
           mutable to;
           match (parseRecordStart.Record.CurSubrule)
@@ -469,23 +493,23 @@ digraph RecoveryParser
 
       foreach ((sequenceStart, subrules) when !sequenceStart.Sequence.IsExtension in Ast.KeyValuePairs)
       {
-        def (name, c) = renderCluster(sequenceStart, subrules);
+        def (name, c) = renderCluster(sequenceStart, subrules.Records);
         files.Add(name, renderGraph(c));
       }
 
       foreach ((extensionStart, subrules) in ExtensionsAst.KeyValuePairs)
       {
-        def groupBySequenceStartPos = subrules.Grouping(s => (s.Record.SequenceStartPos, s));
+        def groupBySequenceStartPos = subrules.Sequences.Grouping(s => (s.Start.Pos, s));
         def extensibleClusterName = makeExtensibleClusterName(extensionStart.Pos, extensionStart.ParserData);
         def label = escape($"$(extensionStart.Pos) $(extensionStart.ParserData.Descriptor.Name)");
         def extensibleClusterSubclusters = SCG.List();
-        foreach ((pos, cluster) in groupBySequenceStartPos.KeyValuePairs)
+        foreach ((pos, clusters) in groupBySequenceStartPos.KeyValuePairs)
         {
           def extensionClusterName = makeExtensionClusterName(extensibleClusterName, pos);
           def extensionClusters = SCG.List();
-          foreach ((sequence, subCluster) in cluster.Grouping(c => (c.Record.Sequence, c)).KeyValuePairs)
+          foreach (subCluster in clusters)
           {
-            def (_, c) = renderCluster(SequenceStart(pos, sequence), subCluster);
+            def (_, c) = renderCluster(subCluster.Start, subCluster.Records);
             extensionClusters.Add(c);
           }
           extensibleClusterSubclusters.Add($<#
