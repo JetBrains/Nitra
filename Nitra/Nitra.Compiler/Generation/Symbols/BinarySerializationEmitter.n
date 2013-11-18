@@ -146,6 +146,12 @@ namespace Nitra.Compiler
       def typeCode = GetTypeTag(memberType) :> TypeTag;
       if (typeCode == TypeTag.Object || typeCode == TypeTag.Variant || typeCode :> int >= TypeTag.FirstCustom :> int)
         MakeUserDefinedTypeWriteCode(type, member, objExpr)
+      else if (IsEnum(memberType.TypeInfo))
+        <[
+          writer.Write($(GetTypeTag(memberType)));
+          writer.Write($(GetMemberName(member)));
+          writer.Write($objExpr.$(member.Name : usesite) :> $(GetEnumUnderlyingType(memberType.TypeInfo).GetMemType() : typed));
+        ]>
       else
         <[
           writer.Write($(GetTypeTag(memberType)));
@@ -207,6 +213,16 @@ namespace Nitra.Compiler
       }
     }
 
+    IsEnum(ti : TypeInfo) : bool
+    {
+      match (ti?.GetTydecl())
+      {
+        | TypeDeclaration.Alias(type) => IsEnum(type.TypeInfo)
+        | TypeDeclaration.Enum        => true
+        | _                           => false
+      }
+    }
+
     MakeUserDefinedTypeWriteCode(type : FixedType, member : IMember, objExpr : PExpr) : PExpr
     {
       def ti = type.TypeOfMember(member).Fix();
@@ -237,6 +253,16 @@ namespace Nitra.Compiler
         | TypeDeclaration.Alias(type)      => GetVariantOptions(type)
         | TypeDeclaration.Variant(options) => options.Map(makeOptionType)
         | _                                => Message.FatalError("Type must be 'variant'.");
+      }
+    }
+
+    GetEnumUnderlyingType(ti : TypeInfo) : TypeInfo
+    {
+      match (ti?.GetTydecl())
+      {
+        | TypeDeclaration.Alias(type) => GetEnumUnderlyingType(type.TypeInfo)
+        | TypeDeclaration.Enum        => ti.UnderlyingType
+        | _                           => Message.FatalError("Type must be 'enum'.")
       }
     }
 
@@ -317,7 +343,7 @@ namespace Nitra.Compiler
         | TypeTag.Boolean | TypeTag.Char   | TypeTag.SByte  | TypeTag.Byte
         | TypeTag.Int16   | TypeTag.UInt16 | TypeTag.Int32  | TypeTag.UInt32  | TypeTag.Int64
         | TypeTag.UInt64  | TypeTag.Single | TypeTag.Double | TypeTag.Decimal | TypeTag.String =>
-          writerCode = null; // чтение примитивных типов производится инлайн
+          writerCode = null; // запись примитивных типов производится инлайн
 
           def cnvFuncName = <[ $("To" + typeCode.ToString() : usesite) ]>;
           readerCode = <[
@@ -344,6 +370,9 @@ namespace Nitra.Compiler
                 | _                    => assert3(false)
               }
             ]>;
+          when (ty is FixedType.Class(TypeInfo(IsEnum = true), []))
+            readerCode = <[ $readerCode :> $(ty : typed) ]>;
+
         | tag when (tag :> byte) < 0 => assert3(false)
         | tag =>
           def serializerId = tag :> int - TypeTag.FirstCustom :> int;
@@ -417,7 +446,9 @@ namespace Nitra.Compiler
       match (type)
       {
         | FixedType.Class(ti, _) =>
-          if (ti.IsPrimitive || ti.Equals(_manager.InternalType.String_tc))
+          if (IsEnum(ti))
+            Type.GetTypeCode(GetEnumUnderlyingType(ti).SystemType) :> byte
+          else if (ti.IsPrimitive || ti.Equals(_manager.InternalType.String_tc))
             Type.GetTypeCode(ti.SystemType) :> byte
           else if (IsVariant(ti))
             TypeTag.Variant :> byte // пока используем Variant для указания, что значение это variant
