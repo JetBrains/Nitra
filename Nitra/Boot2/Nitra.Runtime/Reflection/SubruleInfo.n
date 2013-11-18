@@ -1,0 +1,198 @@
+﻿using Nitra.Internal;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Linq;
+
+namespace Nitra.Runtime.Reflection
+{
+  [Record]
+  public variant SubruleInfo
+  {
+    [RecordIgnore]
+    public Sequence             : SequenceInfo { get; internal set; }
+
+    public Offset               : int          { get; }
+    public Description          : string       { get; }
+    public State                : int          { get; }
+    public CanParseEmptyString  : bool         { get; }
+
+    public IsVoid               : bool         { get { Sequence.Parser.IsVoidState(State) } }
+    public IsStart              : bool         { get { Sequence.Subrules[0] : object == this } }
+    public Code                 : string       { get { Sequence.Parser.CodeForState(State) } }
+    public MandatoryTokenCount  : int          { get { Sequence.Parser.GetMandatoryTokensForState(State) } }
+    public IsLoopSeparatorStart : bool         { get { IsStart && IsLoopSeparator } }
+    public IsLoopSeparator      : bool         { get { Sequence is SequenceInfo.ListWithSeparatorSeparator } }
+    public IsLoopBody           : bool         { get { Sequence is SequenceInfo.ListWithSeparatorRule } }
+
+    | Empty
+    | RegularCall                { Descriptor : RegularRuleDescriptor; }
+    | ExtensibleCall             { RuleParser : ExtensibleRuleParser; }
+    | SimpleCall                 { RuleParser : SimpleRuleParser; }
+    | Option                     { Rule : SequenceInfo.Option; }
+    | List                       { Rule : SequenceInfo.List; Min : int; Max : int?; IsOptimized : bool; }
+    | ListWithSeparator          { Rule : SequenceInfo.ListWithSeparatorRule; Separator : SequenceInfo.ListWithSeparatorSeparator; Min : int; Max : int?; HangingSeparator : bool; }
+    | TokenString
+      {
+        Str : string;
+        IsKeyToken : bool;
+
+        public Parse(pos : int, text : string) : int
+        {
+          if (pos + Str.Length <= text.Length)
+          {
+            for (mutable i = 0; i < Str.Length; ++i)
+               when (text[pos + i] != Str[i])
+                return -1;
+            pos + Str.Length
+          }
+          else -1
+        }
+      }
+    | Marker                     { Name : string; }
+
+    public Parse(pos : int, text : string, parseResult : ParseResult) : int
+    {
+      def praseSubrules(subrules, mutable pos : int, text : string, parseResult : ParseResult)
+      {
+        res:
+        {
+          for (mutable i = 0; i < subrules.Length; ++i)
+          {
+            when (pos < 0)
+              res(-1);
+            pos = subrules[i].Parse(pos, text, parseResult);
+          }
+          pos
+        }
+      }
+      match (this)
+      {
+        | Empty                     => if (pos < text.Length) pos else -1
+        | Marker                    => if (pos < text.Length) pos else -1
+        | RegularCall       as rule => rule.Descriptor.Parse(pos, text);
+        | ExtensibleCall    as rule => rule.RuleParser.Parse(pos, text, parseResult)
+        | SimpleCall        as rule => rule.RuleParser.Parse(pos, text, parseResult)
+        | Option            as rule =>
+          def newPos = praseSubrules(rule.Rule.Subrules, pos, text, parseResult);
+          if (newPos < 0) pos else newPos
+
+        | List              as rule =>
+          mutable curPos = pos;
+          mutable counter = 0;
+          while (true)
+          {
+            def newPos = praseSubrules(rule.Rule.Subrules, curPos, text, parseResult);
+            if (newPos < 0)
+              break;
+            else
+              curPos = newPos;
+            ++counter;
+            when (counter == rule.Max)
+              break;
+          }
+          if (counter < rule.Min) -1 else curPos
+
+        | ListWithSeparator as rule =>
+          mutable curPos = pos;
+          mutable endPos = pos;
+          mutable counter = 0;
+          while (true)
+          {
+            def newPos = praseSubrules(rule.Rule.Subrules, curPos, text, parseResult);
+            if (newPos < 0)
+              break;
+            else
+              curPos = newPos;
+            ++counter;
+            endPos = curPos;
+            when (counter == rule.Max)
+              break;
+
+            def newPos = praseSubrules(rule.Separator.Subrules, curPos, text, parseResult);
+            if (newPos < 0)
+              break;
+            else
+              curPos = newPos;
+            when (rule.HangingSeparator)
+              endPos = curPos;
+          }
+          if (counter < rule.Min) -1 else endPos
+
+        | TokenString       as rule =>
+          def str = rule.Str;
+          if (pos + str.Length < text.Length)
+          {
+            for (mutable i = 0; i < str.Length; ++i)
+              when (text[pos + i] != str[i])
+                return -1;
+            pos
+          }
+          else
+            -1
+      }
+    }
+
+    /*
+    public VisitVoid(
+      regularCall       : Action[RegularCallDelegate, RegularRuleDescriptor] = null,
+      extensibleCall    : Action[ExtensibleRuleParser] = null,
+      simpleCall        : Action[SimpleRuleParser] = null,
+      option            : Action[SequenceInfo.Option] = null,
+      aList             : Action[SequenceInfo.List] = null,
+      listWithSeparator : Action[SequenceInfo.ListWithSeparatorRule, SequenceInfo.ListWithSeparatorSeparator] = null,
+      predicate         : Action[SequenceInfo.Predicate] = null,
+      tokenString       : Action[string, bool] = null,
+      noMatch           : Action = null) : void
+    {
+      match (this)
+      {
+        | RegularCall      (call, descriptor) when regularCall       != null => regularCall(call, descriptor)
+        | ExtensibleCall   (ruleParser)       when extensibleCall    != null => extensibleCall(ruleParser)
+        | SimpleCall       (ruleParser)       when simpleCall        != null => simpleCall(ruleParser)
+        | Option           (rule)             when option            != null => option(rule)
+        | List             (rule)             when aList             != null => aList(rule)
+        | ListWithSeparator(rule, sep)        when listWithSeparator != null => listWithSeparator(rule, sep)
+        | Predicate        (rule)             when predicate         != null => predicate(rule)
+        | TokenString      (str, isKeyToken)  when tokenString       != null => tokenString(str, isKeyToken)
+        | _                                                                  => noMatch()
+      }
+    }
+
+    public Visit[T](
+      regularCall       : Func[RegularCallDelegate, RegularRuleDescriptor, T] = null,
+      extensibleCall    : Func[ExtensibleRuleParser, T] = null,
+      simpleCall        : Func[SimpleRuleParser, T] = null,
+      option            : Func[SequenceInfo.Option, T] = null,
+      aList             : Func[SequenceInfo.List, T] = null,
+      listWithSeparator : Func[SequenceInfo.ListWithSeparatorRule, SequenceInfo.ListWithSeparatorSeparator, T] = null,
+      predicate         : Func[SequenceInfo.Predicate, T] = null,
+      tokenString       : Func[string, bool, T] = null,
+      noMatch           : Func[T] = null) : T
+    {
+      match (this)
+      {
+        | RegularCall      (call, descriptor) when regularCall       != null => regularCall(call, descriptor)
+        | ExtensibleCall   (ruleParser)       when extensibleCall    != null => extensibleCall(ruleParser)
+        | SimpleCall       (ruleParser)       when simpleCall        != null => simpleCall(ruleParser)
+        | Option           (rule)             when option            != null => option(rule)
+        | List             (rule)             when aList             != null => aList(rule)
+        | ListWithSeparator(rule, sep)        when listWithSeparator != null => listWithSeparator(rule, sep)
+        | Predicate        (rule)             when predicate         != null => predicate(rule)
+        | TokenString      (str, isKeyToken)  when tokenString       != null => tokenString(str, isKeyToken)
+        | _                                                                  => noMatch()
+      }
+    }
+*/
+    public override ToString() : string
+    {
+      Description
+    }
+  }
+}

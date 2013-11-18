@@ -91,13 +91,6 @@ namespace Nitra
         Compiler.Location.Default
     }
 
-    public NitraLocation(this location : Compiler.Location) : Nitra.Location
-    {
-      def source = SourceSnapshot("", "", location.FileIndex, location.File, array(0), 0);
-      def tok = NSpan(0, 0);
-      Nitra.Location(source, tok)
-    }
-
     [DebuggerStepThroughAttribute]
     private HexDigit(c : char) : int
     {
@@ -368,9 +361,103 @@ namespace Nitra
       }
     }
 
-    public EnsureSequence(rule : Rule) : Rule.Sequence
+    public EnsureSequence(options : RuleDefinitionOptions, context : Context, rule : Rule) : Rule.Sequence
     {
-      def createUniqueFieldNames(rules : list[Rule]) : list[Rule]
+      def insertWhitespaceRules() : List[Rule]
+      {
+        def keywordContext = context.TryGetContext.[KeywordRegexContext]();
+        def moduleContext  = context.GetContext.[SyntaxModuleBodyContext]();
+        def makeCall(loc, sSymbol) { Rule.Call(loc, sSymbol.Type, sSymbol.Name, RuleRef.Some(loc, true, sSymbol), 0); }
+        def transform(_ : Rule) : Rule * option[Rule]
+        {
+          | Repeat              as rule when rule.IsSkipAnyPattern =>
+            def loc = rule.Location.FromEnd();
+            match (moduleContext.GetSpaceRule(context, "s", loc))
+            {
+              | None          => (rule, None())
+              | Some(sSymbol) => (rule, Some(makeCall(loc, sSymbol)))
+            }
+
+          | Repeat              as rule => (Rule.Repeat(rule, rule.MinCount, rule.MaxCount, transformToSequence(rule.Rule)), None())
+          | RepeatWithSeparator as rule => (Rule.RepeatWithSeparator(rule, rule.MinCount, rule.MaxCount, transformToSequence(rule.Rule), transformToSequence(rule.Separator), rule.HangingSeparator), None())
+          | Not                 as rule => (Rule.Not(rule, transformToSequence(rule.Rule)), None())
+          | And                 as rule => (Rule.And(rule, transformToSequence(rule.Rule)), None())
+          | Sequence            as rule => 
+            def buffer = List();
+            foreach (r in rule.Rules)
+              transformToBuffer(r, buffer);
+            (Rule.Sequence(rule, buffer.ToNList()), None())
+
+          | String              as rule =>
+            def loc = rule.Location.FromEnd();
+            def findResult =
+              if (keywordContext?.FindRule(rule.Str) is Some as sym)
+                sym : option[_]
+              else
+                moduleContext.GetSpaceRule(context, "s", loc);
+            match (findResult)
+            {
+              | None          => (rule, None())
+              | Some(sSymbol) => (rule, Some(makeCall(loc, sSymbol)))
+            }
+
+          | Call                as rule =>
+            def calleeOptions =
+              if (rule.RuleRef is RuleRef.Some(RuleDefSymbol as ruleSymbol))
+                ruleSymbol.Options
+              else
+                RuleDefinitionOptions();
+            match (rule.Type)
+            {
+              // Whitespace rule is NOT inserted after 'syntax' rules marked with 'SuppressTrailingSpaces' attribute
+              | _ when calleeOptions.IsSuppressTrailingSpaces => (rule, None())
+
+              // Whitespace rule is inserted after 'syntax' rules marked with 'ExplicitSpaces' attribute
+              | _ when calleeOptions.IsExplicitSpaces
+              | Chars => // Whitespace rule is inserted after all 'token' rules
+                def loc = rule.Location.FromEnd();
+                match (moduleContext.GetSpaceRule(context, "s", loc))
+                {
+                  | None          => (rule, None())
+                  | Some(sSymbol) => (rule, Some(makeCall(loc, sSymbol)))
+                }
+
+              | _ => (rule, None())
+            }
+        }
+        and transformToSequence(rule : Rule) : Rule
+        {
+          match (transform(rule))
+          {
+            | (rule, Some(s)) => Rule.Sequence(rule, [rule, s])
+            | (rule, None)    => rule
+          }
+        }
+        and transformToBuffer(rule : Rule, buffer : List[Rule]) : void
+        {
+          match (transform(rule))
+          {
+            | (rule, Some(s)) => buffer.Add(rule); buffer.Add(s);
+            | (rule, None)    => buffer.Add(rule);
+          }
+        }
+
+        def buffer = List();
+        when (options.IsStart)
+        {
+          def loc = rule.Location.FromStart();
+          when (moduleContext.GetSpaceRule(context, "s", loc) is Some(sSymbol))
+            buffer.Add(makeCall(loc, sSymbol));
+        }
+        match (rule)
+        {
+          | Sequence(rules) => foreach (r in rules) transformToBuffer(r, buffer);
+          | _               => transformToBuffer(rule, buffer);
+        }
+        buffer
+      }
+
+      def createUniqueFieldNames(rules : IEnumerable[Rule]) : list[Rule]
       {
         def fieldNameUniqueness = Dictionary();
         def plainAstFields = List();
@@ -408,11 +495,18 @@ namespace Nitra
         }
         finalRules.ToNList();
       }
-      match (rule)
-      {
-        | Rule.Sequence(rules) => Rule.Sequence(rule, createUniqueFieldNames(rules))
-        | _ => Rule.Sequence(rule.Location, rule.Type, "", createUniqueFieldNames([rule]));
-      }
+
+      def rules =
+        if (options.IsExplicitSpaces)
+          match (rule)
+          {
+            | Sequence(rules) => rules
+            | _               => [rule]
+          }
+        else
+          insertWhitespaceRules();
+
+      Rule.Sequence(rule.Location, rule.Type, "", createUniqueFieldNames(rules))
     }
 
     internal BindImpl[T](result : BindingResult[T]) : option[T]
@@ -569,31 +663,30 @@ namespace Nitra
         return alias.Rule.Typing(baseRule, _precedence, Some(newFieldName), context, options);
 
       def ruleRef = RuleRef.Create(QualifiedName, Bind(context, QualifiedName));
-      def (type, callRuleOptions) =
+      def type =
         if (ruleRef is RuleRef.Some(RuleDefSymbol as ruleSymbol))
         {
           when (ruleSymbol is ExtensionRuleSymbol)
             Project.CurrentProject.Error(QualifiedName,
               "You can't use directly reference an extension rule. Use reference to extensible rule instead or make a separate rule.", -1);
-              
+
           def declarationSiteContext = context.GetContext.[RuleDeclarationSiteContext]();
           match (declarationSiteContext.DeclarationSite)
           {
             | declarationSite is ExtendSyntaxSymbol =>
               when (declarationSite.Extend is Some(declaration) when declaration.IsToken)
-                Project.CurrentProject.Error(ruleRef.Location, "Can't refer to a syntax rule from token.", -1);            
-              
+                Project.CurrentProject.Error(ruleRef.Location, "Can't refer to a syntax rule from token.", -1);
+
             | declarationSite is RuleDefSymbol =>
               when (declarationSite.IsToken && !ruleSymbol.IsToken)
-                Project.CurrentProject.Error(ruleRef.Location, "Can't refer to a syntax rule from token.", -1);            
-            
+                Project.CurrentProject.Error(ruleRef.Location, "Can't refer to a syntax rule from token.", -1);
+
             | _                  => ()
           }
-              
-          (ruleSymbol.Type, ruleSymbol.Options)
+
+          ruleSymbol.Type
         }
-        else
-          (RuleType.Void(), RuleDefinitionOptions());
+        else RuleType.Void();
 
       def bp =
         match (BindingPower)
@@ -612,35 +705,17 @@ namespace Nitra
             num.Value()
         };
 
-      def callRule = Rule.Call(QualifiedName.Location, type, newFieldName, ruleRef, bp);
-
-      // Подставляем s-ки...
-
-      match (type)
-      {
-        // Whitespace rule is inserted after 'syntax' rules marked with 'ExplicitSpaces' attribute
-        // Whitespace rule is NOT inserted after 'syntax' rules marked with 'SuppressTrailingSpaces' attribute
-        | _ when options.IsExplicitSpaces || callRuleOptions.IsSuppressTrailingSpaces => callRule
-        | _ when callRuleOptions.IsExplicitSpaces
-        | Chars => // Whitespace rule is inserted after all 'token' rules
-          def moduleContext = context.GetContext.[SyntaxModuleBodyContext]();
-          def loc           = callRule.Location.FromEnd();
-          match (moduleContext.GetSpaceRule(context, "s", loc))
-          {
-            | None          => callRule
-            | Some(sSymbol) =>
-              def ruleRef = RuleRef.Some(loc, true, sSymbol);
-              def s       = Rule.Call(loc, RuleType.Void(), "", ruleRef, 0);
-              Rule.Sequence(callRule.Location, type, newFieldName, [callRule : Rule, s])
-          }
-
-        | _ => callRule
-      }
+      Rule.Call(QualifiedName.Location, type, newFieldName, ruleRef, bp);
     }
 
     public FromEnd(this loc : Location) : Location
     {
       Location(loc.Source, NSpan(loc.EndPos, loc.EndPos))
+    }
+
+    public FromStart(this loc : Location) : Location
+    {
+      Location(loc.Source, NSpan(loc.StartPos, loc.StartPos))
     }
 
     public RegisterGlobalSpanClassSymbols(syntaxModuleSymbol : ParsedSyntaxModuleSymbol, context : Context) : void
@@ -718,29 +793,13 @@ namespace Nitra
       Rule.Sequence(self.Location, type, MakeName(fieldName, rules, context), rules);
     }
     
-    public StringRuleTyping(loc : Location, value : string, fieldName : option[string], context : Context, options : RuleDefinitionOptions) : Rule
+    public StringRuleTyping(loc : Location, value : string, fieldName : option[string], context : Context) : Rule
     {
       def keywordContext = context.TryGetContext.[KeywordRegexContext]();
       def newFieldName   = MakeLiteralName(fieldName, value, context);
       def type           = RuleType.Chars();
       def loc            = loc.FromEnd();
-
-      if (options.IsExplicitSpaces)
-        Rule.String(loc, type, newFieldName, value, context, keywordContext?.FindRule(value)?.IsSome)
-      else
-      {
-        def (symbol, isKeyToken) =
-          if (keywordContext?.FindRule(value) is Some as sym)
-            (sym : option[_], true)
-          else
-          {
-            def moduleContext = context.GetContext.[SyntaxModuleBodyContext]();
-            (moduleContext.GetSpaceRule(context, "s", loc), false)
-          };
-        def ruleRef = RuleRef.Create(loc, symbol, true);
-        def S = Rule.Call(loc, RuleType.Void(), "", ruleRef, 0);
-        Rule.Sequence(loc, type, newFieldName, [Rule.String(loc, type, newFieldName, value, context, isKeyToken), S])
-      }
+      Rule.String(loc, type, newFieldName, value, context, keywordContext?.FindRule(value)?.IsSome)
     }
 
     public MakeNamespaceSymbol(currentNs : NamespaceSymbol, path : list[Nitra.Location]) : NamespaceSymbol
@@ -827,31 +886,36 @@ namespace Nitra
       loop(context)
     }
 
-    public CalcType(rule : Rule) : RuleType
+    public EvaluateListRuleType(rule : Rule) : RuleType
     {
-      def defaultType(rule : Rule) { if (rule.Type is RuleType.Void) RuleType.Void() else RuleType.List(rule.Type) }
-      
-      match (rule)
+      // match list of predicates (flattening nested sequences)
+      def isOnlyPredicatesPattern(_)
       {
-        | Rule.Sequence(elems) => 
-          def (predicates, any) = elems.DivideLast();
-          match (any)
-          {
-            | Rule.Call(RuleRef.Some(anyRule is RegularRuleSymbol), 0) => //when anyRule.Name == "Any" =>
-              //assert2(false);
-              def isAllPredicates = predicates.ForAll(p => p is Rule.Not || p is Rule.And);
-              def isAny           = RegularRuleExtensions.IsAnyDfa(anyRule.Fsm);
-
-              if (isAllPredicates && isAny)
-                RuleType.Chars()
-              else
-                defaultType(rule)
-
-            | _ => defaultType(rule)
-          }
-
-        | _ => defaultType(rule)
+        | [] => true
+        | Rule.Not :: tail
+        | Rule.And :: tail => isOnlyPredicatesPattern(tail)
+        | Rule.Sequence(rules) :: tail => isOnlyPredicatesPattern(rules) && isOnlyPredicatesPattern(tail)
+        | _ => false
       }
+      // match list of predicates ended with regular rule 'Any' call (flattening nested sequences)
+      def isSkipAnyPattern(_)
+      {
+        | Rule.Not :: tail
+        | Rule.And :: tail => isSkipAnyPattern(tail)
+        | Rule.Call(RuleRef.Some(anyRule is RegularRuleSymbol), 0) :: [] when RegularRuleExtensions.IsAnyDfa(anyRule.Fsm) =>
+          true
+
+        | Rule.Sequence(rules) :: []   => isSkipAnyPattern(rules)
+        | Rule.Sequence(rules) :: tail => isOnlyPredicatesPattern(rules) && isSkipAnyPattern(tail)
+        | _ => false
+      }
+
+      if (isSkipAnyPattern([rule]))
+        RuleType.Chars()
+      else if (rule.Type is RuleType.Void)
+        RuleType.Void()
+      else
+        RuleType.List(rule.Type)
     }
   } // module
 } // ns
