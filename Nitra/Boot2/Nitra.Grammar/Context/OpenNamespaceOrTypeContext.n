@@ -16,23 +16,44 @@ namespace Nitra.Typing
 {
   public class OpenNamespaceOrTypeContext : Context, INemerleEnvironmentContext
   {
-    public OpenPath   : G.QualifiedIdentifier  { get; }
-    public OpenSymbol : option[Symbol] { get; }
+    public OpenPath      : G.QualifiedIdentifier { get; }
+    public OpenSymbol    : option[Symbol]        { get; }
+    public IsAlreadyOpen : bool                  { get; }
 
     public this(parent : Context, path : G.QualifiedIdentifier)
     {
       base(parent);
       OpenPath   = path;
-      def parent = GetParent.[EnteredScopeContext]();
-      // FIXME: we should check existence of namespace or type
-      OpenSymbol = parent.TryBind(path);
+      def scopeContext = GetParent.[EnteredScopeContext]();
+      (OpenSymbol, IsAlreadyOpen) = match (scopeContext.TryBind(path))
+      {
+        | Some(symbol) as result =>
+          def checkAlreadyOpen(_ : OpenNamespaceOrTypeContext)
+          {
+            | null => (result, false)
+            | OpenNamespaceOrTypeContext(OpenSymbol = Some(other)) as context when symbol : object == other =>
+              using(rootMsg = NitraProject.CurrentProject.RootWarning(path.Location, $"Symbol '$(symbol.FullName)' is already open (see related messages)", -1))
+                rootMsg.Hint(context.OpenPath.Location, "Previous definition.");
+              (None(), true)
+
+            | context => checkAlreadyOpen(context.TryGetParent.[OpenNamespaceOrTypeContext]())
+          }
+          checkAlreadyOpen(parent.TryGetContext.[OpenNamespaceOrTypeContext]())
+
+        | None() as result =>
+          // FIXME: we can't determine if that namespace actualy does not exists
+          (result, false)
+      }
     }
 
     [Memoize]
     GetNemerleEnvironment() : GlobalEnv implements INemerleEnvironmentContext.GetNemerleEnvironment
     {
       def parentEnv = Parent.GetNemerleEnvironment();
-      parentEnv.AddOpenNamespace(OpenPath.Parts(), OpenPath.NLocation())
+      if (IsAlreadyOpen)
+        parentEnv
+      else
+        parentEnv.AddOpenNamespace(OpenPath.Parts(), OpenPath.NLocation())
     }
 
     public override ToString() : string

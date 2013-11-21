@@ -1,0 +1,142 @@
+﻿using Nitra.Typing;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Model
+{
+  [Record]
+  public variant SubruleCompileInfo
+  {
+                   public         SrcRule             : Nitra.Model.Rule;
+                   public         HeadPredicates      : array[SequenceCompileInfo.Predicate];
+    [RecordIgnore] public mutable Owner               : SequenceCompileInfo;
+    [RecordIgnore] public mutable State               : int;
+    [RecordIgnore] public mutable EndState            : int;
+    [RecordIgnore] public mutable SequenceLevel       : int;
+    [RecordIgnore] public mutable Size                : int;
+    [RecordIgnore] public mutable Offset              : int;
+    [RecordIgnore] public mutable NextSibling         : SubruleCompileInfo;
+    [RecordIgnore] public mutable PrevSibling         : SubruleCompileInfo;
+    [RecordIgnore] public mutable AllocateAst         : bool;
+    [RecordIgnore] public mutable IsPredicate         : bool;
+    [RecordIgnore] public mutable CanParseEmptyString : bool;
+
+    | Empty
+    | TokenString       { String : string; }
+    | RegularCall       { Symbol : RegularRuleSymbol; }
+    | ExtensibleCall    { Symbol : ExtensibleRuleSymbol; BindingPower : int; }
+    | SimpleCall        { Symbol : SimpleRuleSymbol; }
+    | Option            { Rule   : SequenceCompileInfo.Option; }
+    | List              {
+                          Rule   : SequenceCompileInfo.List; MinCount : int; MaxCount : option[int];
+                          public UseCounter : bool { get MinCount > 0 || MaxCount is Some(_) }
+                          public IsSkipAnyPattern : bool { get { this.SrcRule.Type is RuleType.Chars } }
+                        }
+    | ListWithSeparator { Rule   : SequenceCompileInfo.ListWithSeparatorRule; Separator : SequenceCompileInfo.ListWithSeparatorSeparator; MinCount : int; MaxCount : option[int]; HangingSeparator : bool; public UseCounter : bool { get MinCount > 0 || MaxCount is Some(_) } }
+    | Marker            { Symbol : MarkerSymbol; }
+
+    public SequenceIndex : int
+    {
+      [Memoize] get { Array.IndexOf(Owner.NonMarkerSubrules, this) }
+    }
+    
+    public IsLoopSeparatorStart : bool
+    {
+      [Memoize]
+      get
+      {
+        match (Owner)
+        {
+          | ListWithSeparatorSeparator as owner =>
+            owner.NonMarkerSubrules.SkipWhile(f => f.CanParseEmptyString && f : object != this).FirstOrDefault() : object == this
+
+          | _ => false
+        }
+      }
+    }
+
+    public IsLoopSeparator : bool { get { Owner is SequenceCompileInfo.ListWithSeparatorSeparator } }
+    public IsLoopBody      : bool { get { Owner is SequenceCompileInfo.ListWithSeparatorRule } }
+
+    public IsStart : bool
+    {
+      get { Owner.NonMarkerSubrules[0] : object == this }
+    }
+
+    public NextField : option[SubruleCompileInfo]//TODO: Remove?
+    {
+      get
+      {
+        def nextField(subrule)
+        {
+          assert(subrule != null);
+
+          if (subrule.NextSibling != null)
+            Some(subrule.NextSibling)
+          else if (subrule.Owner is SequenceCompileInfo.Ast)
+            None()
+          else
+            nextField(subrule.Owner.Owner)
+        }
+        nextField(this)
+      }
+    }
+
+    public override ToString() : string
+    {
+      ToStringWithIndex(SequenceLevel)
+    }
+    
+    public ToStringWithIndex(sequenceLevel : int) : string
+    {
+      // Show index only for sequenceLevel!
+      def prefix = if (sequenceLevel == SequenceLevel) SequenceIndex + ":" else null;
+      match (this)
+      {
+        | Empty                                           => $"$prefix<empty>"
+        | TokenString                                     => $"$prefix$SrcRule"
+        | RegularCall                                     => $"$prefix$SrcRule"
+        | ExtensibleCall                                  => $"$prefix$SrcRule"
+        | SimpleCall                                      => $"$prefix$SrcRule"
+        | Option           (rule)                         => $"$prefix($(rule.ToStringWithIndex(sequenceLevel)))?"
+        | List             (rule, 0, _)                   => $"$prefix($(rule.ToStringWithIndex(sequenceLevel)))*"
+        | List             (rule, 1, _)                   => $"$prefix($(rule.ToStringWithIndex(sequenceLevel)))+"
+        | ListWithSeparator(rule, separator, 0, _, false) => $"$prefix($(rule.ToStringWithIndex(sequenceLevel)); $(separator.ToStringWithIndex(sequenceLevel)))*"
+        | ListWithSeparator(rule, separator, 1, _, false) => $"$prefix($(rule.ToStringWithIndex(sequenceLevel)); $(separator.ToStringWithIndex(sequenceLevel)))+"
+        | ListWithSeparator(rule, separator, 0, _, true)  => $"$prefix($(rule.ToStringWithIndex(sequenceLevel)); $(separator.ToStringWithIndex(sequenceLevel)); ?)*"
+        | ListWithSeparator(rule, separator, 1, _, true)  => $"$prefix($(rule.ToStringWithIndex(sequenceLevel)); $(separator.ToStringWithIndex(sequenceLevel)); ?)+"
+        | List             (_rule, _minCount, _)          => assert(false)
+        | ListWithSeparator                               => assert(false)
+        | Marker                                          => ""
+      }
+    }
+
+    public ToStringWithState() : string
+    {
+      match (this)
+      {
+        | Empty                                           => $"$State:<empty>"
+        | TokenString                                     => $"$State:$SrcRule"
+        | RegularCall                                     => $"$State:$SrcRule"
+        | ExtensibleCall                                  => $"$State:$SrcRule"
+        | SimpleCall                                      => $"$State:$SrcRule"
+        | Option           (rule)                         => $"$State:($(rule.ToStringWithState()))?"
+        | List             (rule, 0, _)                   => $"$State:($(rule.ToStringWithState()))*"
+        | List             (rule, 1, _)                   => $"$State:($(rule.ToStringWithState()))+"
+        | ListWithSeparator(rule, separator, 0, _, false) => $"$State:($(rule.ToStringWithState()); $(separator.ToStringWithState()))*"
+        | ListWithSeparator(rule, separator, 1, _, false) => $"$State:($(rule.ToStringWithState()); $(separator.ToStringWithState()))+"
+        | ListWithSeparator(rule, separator, 0, _, true)  => $"$State:($(rule.ToStringWithState()); $(separator.ToStringWithState()); ?)*"
+        | ListWithSeparator(rule, separator, 1, _, true)  => $"$State:($(rule.ToStringWithState()); $(separator.ToStringWithState()); ?)+"
+        | List             (_rule, _minCount, _)          => assert(false)
+        | ListWithSeparator                               => assert(false)
+        | Marker                                          => ""
+      }
+    }
+  }
+}

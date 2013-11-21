@@ -1,0 +1,312 @@
+﻿using Nitra.Typing;
+using Nitra.Model;
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Model
+{
+  [Record]
+  public variant SequenceCompileInfo
+  {
+                   public         SrcRule          : Nitra.Model.Rule;
+                   public         Subrules           : array[SubruleCompileInfo];
+    [RecordIgnore] public mutable Owner            : SubruleCompileInfo;
+    [RecordIgnore] public mutable Header           : array[SequenceHeaderCompileInfo];
+    [RecordIgnore] public mutable AstId            : string;
+    [RecordIgnore] public mutable Level            : int;
+    [RecordIgnore] public mutable AllocateState    : int;
+                   public         SizesStart       : int   { get { Subrules[0].Offset } }
+                   public         SizesEnd         : int   { get { Subrules[Subrules.Length - 1].Offset + Subrules[Subrules.Length - 1].Size } }
+                   public         Size             : int   { get { SizesEnd } }
+                   public         HeaderId         : SequenceHeaderCompileInfo { get { Header[0] } }
+                   public         HeaderNext       : SequenceHeaderCompileInfo { get { Header[1] } }
+                   public         HeaderState      : SequenceHeaderCompileInfo { get { Header[2] } }
+
+    | Ast
+      {
+                               Symbol           : SyntaxRuleSymbol;
+        [RecordIgnore] mutable NestedSequencies : array[SequenceCompileInfo];
+        [RecordIgnore] mutable AllSubrules      : array[SubruleCompileInfo];
+        [RecordIgnore] mutable StateCount       : int;
+
+        public AllNonMarkerSubrules : array[SubruleCompileInfo] { [Memoize] get { AllSubrules.FilterToArray(f => !(f is SubruleCompileInfo.Marker)) } }
+
+        public CodeForStates(startState : int, mutable endState : int, skipOptionalStates : bool) : array[string]
+        {
+          _ = skipOptionalStates;
+
+          def subrule1 = AllNonMarkerSubrules[startState];
+          def owner1 = subrule1.Owner;
+
+          when (endState < 0)
+            endState = 0;
+
+          def subrule2 = 
+            if  (endState < 0)
+              owner1.NonMarkerSubrules.Last()
+            else
+              AllNonMarkerSubrules[endState];
+          def owner2 = subrule2.Owner;
+          assert3(owner1 : object == owner2);
+          mutable i = Array.IndexOf(owner1.Subrules, subrule1);
+          def endIndex = Array.IndexOf(owner2.Subrules, subrule2);
+          def result = array(endIndex - i);
+          for (mutable k = 0; i <= endIndex; i++)
+          {
+            def subrule = owner1.Subrules[i];
+
+            when (subrule is SubruleCompileInfo.Marker)
+              continue;
+
+            result[k] = subrule.SrcRule.ToString();
+
+            k++;
+          }
+
+          result
+        }
+
+        public CodeForState(state : int) : string
+        {
+          assert(state >= 0);
+          assert(state < StateCount);
+
+          def toString(i : int, subrules : array[SubruleCompileInfo]) : string
+          {
+            assert2(i < subrules.Length);
+            assert2(i >= 0);
+
+            def subrule = subrules[i];
+
+            def collectSignificantStatesStrings(k : int, subrules : array[SubruleCompileInfo]) : list[string]
+            {
+              when (k >= subrules.Length)
+                return [];
+
+              def subrule = subrules[k];
+
+              if (subrule is SubruleCompileInfo.Marker)
+                collectSignificantStatesStrings(k + 1, subrules)
+              else if (subrule.CanParseEmptyString)
+                subrule.SrcRule.ToString() :: collectSignificantStatesStrings(k + 1, subrules)
+              else
+                [subrule.SrcRule.ToString()]
+            }
+
+            if (subrule.State == state)
+              $<#..$(collectSignificantStatesStrings(i, subrules); " ")#>
+            else if (subrule.State < StateCount || subrule.State == int.MaxValue - 1)
+              toString(i + 1, subrules)
+            else
+            {
+              assert3(false);
+            }
+          }
+
+          toString(state, AllSubrules)
+        }
+      }
+
+    | Option
+    | List                       { public UseCounter : bool { get { (Owner :> SubruleCompileInfo.List).UseCounter } } }
+    | ListWithSeparatorRule      { public UseCounter : bool { get { (Owner :> SubruleCompileInfo.ListWithSeparator).UseCounter } } }
+    | ListWithSeparatorSeparator { public UseCounter : bool { get { (Owner :> SubruleCompileInfo.ListWithSeparator).UseCounter } } }
+    | Predicate { IsAnd : bool }
+
+    public NonMarkerSubrules    : array[SubruleCompileInfo] { [Memoize] get { Subrules.FilterToArray(f => !(f is SubruleCompileInfo.Marker)) } }
+    internal static MakeSequenceCompileInfo(ruleSymbol : SyntaxRuleSymbol) : SequenceCompileInfo.Ast
+    {
+      def nestedSequencies = SCG.List();
+      def allSubrules = SCG.List();
+
+      mutable predicates = SCG.List();
+      def takePredicates() : array[SequenceCompileInfo.Predicate]
+      {
+        def result = predicates.ToArray();
+        predicates.Clear();
+        result
+      }
+      def convAndAppendPredicates(rule)
+      {
+        def rules = conv(rule);
+        def tailPredicates = takePredicates();
+        if (tailPredicates.Length > 0)
+          rules.Append(SubruleCompileInfo.Empty(Rule.String(Nitra.Location(rule.Location.Source, rule.Location.EndPos, rule.Location.EndPos), RuleType.Chars(), "", ""), tailPredicates));
+        else
+          rules;
+      }
+      and conv(rule : Rule) : array[SubruleCompileInfo]
+      {
+        def predicate(rule, isAnd)
+        {
+          def externalPredicates = predicates;
+          predicates = SCG.List();
+          externalPredicates.Add(SequenceCompileInfo.Predicate(rule, convAndAppendPredicates(rule), isAnd));
+          predicates = externalPredicates;
+          array[]
+        }
+        match (rule)
+        {
+          | And                   as rule => predicate(rule.Rule, true)
+          | Not                   as rule => predicate(rule.Rule, false)
+          | Repeat(0, Some(1), _) as rule => array[SubruleCompileInfo.Option           (rule, takePredicates(), SequenceCompileInfo.Option(rule.Rule, convAndAppendPredicates(rule.Rule)))]
+          | Repeat                as rule => array[SubruleCompileInfo.List             (rule, takePredicates(), SequenceCompileInfo.List(rule.Rule, convAndAppendPredicates(rule.Rule)), rule.MinCount, rule.MaxCount)]
+          | RepeatWithSeparator   as rule => array[SubruleCompileInfo.ListWithSeparator(rule, takePredicates(), SequenceCompileInfo.ListWithSeparatorRule(rule.Rule, convAndAppendPredicates(rule.Rule)), SequenceCompileInfo.ListWithSeparatorSeparator(rule.Separator, convAndAppendPredicates(rule.Separator)), rule.MinCount, rule.MaxCount, rule.HangingSeparator)]
+          | String                as rule => array[SubruleCompileInfo.TokenString      (rule, takePredicates(), rule.Str)]
+          | Sequence              as rule => rule.Rules.Map(conv(_)).Flatten().NToArray();
+          | Call(RuleRef.Some(ruleSymbol) as ruleRef, bindingPower) =>
+            match (ruleSymbol)
+            {
+              | ExtensibleRuleSymbol as rs => array[SubruleCompileInfo.ExtensibleCall(rule, takePredicates(), rs, bindingPower)]
+              | SimpleRuleSymbol     as rs => array[SubruleCompileInfo.SimpleCall    (rule, takePredicates(), rs)]
+              | RegularRuleSymbol    as rs => array[SubruleCompileInfo.RegularCall   (rule, takePredicates(), rs)]
+              | MarkerSymbol         as rs => array[SubruleCompileInfo.Marker        (rule,          array[], rs)]
+              | _                          => Message.FatalError(ruleRef.NLocation(), $"ICE! Nitra typing bug: invalid symbol bound. $(ruleSymbol.GetType().Name)");
+            }
+          | Call(RuleRef.None as ruleRef, _) => Message.FatalError(ruleRef.NLocation(), "ICE! Nitra typing bug: not bound symbol.");
+          //| Choice(rules)                 => assert3(false, "Надо реализовать");
+          //| Chars(chars)                  => assert3(false, "Надо реализовать");
+        }
+      }
+      def rule = match (ruleSymbol)
+      {
+        | ExtensionRuleSymbol(ExtensionType = Postfix(_, rule)) => rule
+        | _ => ruleSymbol.Rule
+      }
+      def ast = SequenceCompileInfo.Ast(rule, convAndAppendPredicates(rule), ruleSymbol);
+      mutable state = 0;
+      def initSequence(sequence : SequenceCompileInfo, owner : SubruleCompileInfo, level : int, isPredicate : bool) : void
+      {
+        sequence.Level           = level;
+        sequence.Owner           = owner;
+        match (sequence )
+        {
+          | SequenceCompileInfo.Ast =>
+            assert(owner == null);
+            sequence.Header    = array[SequenceHeaderCompileInfo.Id(sequence, 0), SequenceHeaderCompileInfo.Next(sequence, 1), SequenceHeaderCompileInfo.State(sequence, 2)];
+            sequence.AstId     = "RuleId";
+
+          | SequenceCompileInfo.Predicate =>
+            assert(owner == null);
+            sequence.Header    = array[SequenceHeaderCompileInfo.Id(sequence, 0)];
+            sequence.AstId     = $"RuleId$(nestedSequencies.Count)";
+            nestedSequencies.Add(sequence);
+
+          | _ =>
+            assert(owner != null);
+            sequence.Header    = array[SequenceHeaderCompileInfo.Id(sequence, 0), SequenceHeaderCompileInfo.Next(sequence, 1), SequenceHeaderCompileInfo.State(sequence, 2)];
+            sequence.AstId     = $"RuleId$(nestedSequencies.Count)";
+            nestedSequencies.Add(sequence);
+        }
+
+        def subrules = sequence.Subrules;
+        def notMarkerSubrules = sequence.NonMarkerSubrules;
+        for (mutable i = 0; i < notMarkerSubrules.Length - 1; ++i)
+          notMarkerSubrules[i].NextSibling = notMarkerSubrules[i + 1];
+        for (mutable i = 1; i < notMarkerSubrules.Length; ++i)
+          notMarkerSubrules[i].PrevSibling = notMarkerSubrules[i - 1];
+
+        for (mutable i = 0; i < subrules.Length; ++i)
+          subrules[i].Owner = sequence;
+
+        for (mutable i = 0; i < subrules.Length; ++i)
+        {
+          initSubrule(subrules[i], level, isPredicate);
+          subrules[i].EndState = state;
+        }
+
+        subrules[0].Offset = sequence.Header.Length;
+        for (mutable i = 1; i < subrules.Length; ++i)
+          subrules[i].Offset = subrules[i - 1].Offset + subrules[i - 1].Size;
+
+        match (subrules.Find(subrule => !(subrule is SubruleCompileInfo.Marker)))
+        {
+          | Some(subrule) =>
+            subrule.AllocateAst = true;
+            sequence.AllocateState = subrule.State;
+
+          | None()      => assert(false);
+        }
+      }
+      and initSubrule(subrule : SubruleCompileInfo, level : int, isPredicate : bool) : void
+      {
+        foreach (predicate in subrule.HeadPredicates)
+          initSequence(predicate, null, level + 1, true);
+
+        allSubrules.Add(subrule);
+
+        subrule.SequenceLevel    = level;
+        subrule.IsPredicate      = isPredicate;
+
+        if (subrule is SubruleCompileInfo.Marker)
+          subrule.State = int.MaxValue - 1;
+        else
+        {
+          subrule.State = state;
+          ++state;
+        }
+
+        match (subrule)
+        {
+          | Empty                                         => subrule.Size = 1; subrule.CanParseEmptyString = true;
+          | TokenString(str)                              => subrule.Size = 1; subrule.CanParseEmptyString = str == "";
+          | RegularCall(sym)                              => subrule.Size = 1; subrule.CanParseEmptyString = sym.CanParseEmptyString;
+          | SimpleCall(sym)                               => subrule.Size = 1; subrule.CanParseEmptyString = sym.CanParseEmptyString;
+          | ExtensibleCall                                => subrule.Size = 1; subrule.CanParseEmptyString = false;
+          | Option           (rule)                       => subrule.Size = 1; subrule.CanParseEmptyString = true;     initSequence(rule, subrule, level + 1, isPredicate);
+          | List             (rule, min, _)               => subrule.Size = 1; subrule.CanParseEmptyString = min == 0; initSequence(rule, subrule, level + 1, isPredicate);
+          | ListWithSeparator(rule, separator, min, _, _) => subrule.Size = 1; subrule.CanParseEmptyString = min == 0; initSequence(rule, subrule, level + 1, isPredicate); initSequence(separator, subrule, level + 1, isPredicate);
+          | Marker                                        => subrule.Size = 0; subrule.CanParseEmptyString = true;
+        }
+      }
+      initSequence(ast, null, 0, false);
+      ast.NestedSequencies = nestedSequencies.ToArray();
+      ast.AllSubrules      = allSubrules.ToArray();
+      ast.StateCount       = state;
+      ast
+    }
+
+    public FunctionNamePostfix : string
+    {
+      get
+      {
+        match (this)
+        {
+          | Ast                        => ""
+          | Predicate                  => $"_$(Owner.State)_Predicate"
+          | ListWithSeparatorSeparator => $"_$(Owner.State)_Separator"
+          | ListWithSeparatorRule      => $"_$(Owner.State)_Body"
+          | List                       => $"_$(Owner.State)_Body"
+          | Option                     => $"_$(Owner.State)_Body"
+        }
+      }
+    }
+
+    public ParseFunctionName                : string { get { $"Parse$FunctionNamePostfix" } }
+    public FindRecoveryPositionFunctionName : string { get { $"FindRecoveryPosition$FunctionNamePostfix" } }
+
+    public ToStringWithIndex(sequenceLevel : int) : string
+    {
+      $<#..$(Subrules; "  "; _.ToStringWithIndex(sequenceLevel))#>
+    }
+    
+    public ToStringWithState() : string
+    {
+      $<#..$(Subrules; "  "; _.ToStringWithState())#>
+    }
+
+    public override ToString() : string
+    {
+      $<#..$(Subrules; "  ")#>
+    }
+  }
+}
