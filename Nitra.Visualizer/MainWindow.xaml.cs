@@ -17,7 +17,7 @@ using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.SharpDevelop.Editor;
 using Microsoft.Win32;
 using Nitra.DebugStrategies;
-using Nitra.Internal;
+using Nitra.Internal.Recovery;
 using Nitra.Runtime.Reflection;
 using Nitra.Visualizer.Properties;
 using System.Diagnostics;

@@ -21,7 +21,7 @@ namespace Nitra.Visualizer
       assemblyFilePath = UpdatePathForConfig(assemblyFilePath);
 
       var assembly = Assembly.ReflectionOnlyLoadFrom(assemblyFilePath);
-      var runtime = typeof(Nitra.Internal.ParseResult).Assembly.GetName();
+      var runtime = typeof(Nitra.ParseResult).Assembly.GetName();
       foreach (var reference in assembly.GetReferencedAssemblies())
       {
         if (reference.Name == runtime.Name)
