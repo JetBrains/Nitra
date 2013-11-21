@@ -44,7 +44,7 @@ namespace Nitra.DebugStrategies
       Debug.Assert(parseResult.RecoveryStacks.Count > 0);
 
       var rp = new RecoveryParser(parseResult);
-      rp.StartParse(parseResult.RuleParser);
+      rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
 
       while (parseResult.RecoveryStacks.Count > 0)
       {
