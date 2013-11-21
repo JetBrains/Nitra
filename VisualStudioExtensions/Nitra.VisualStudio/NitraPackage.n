@@ -1,4 +1,6 @@
-﻿using Nemerle;
+﻿using Nitra.VisualStudio.Parsing;
+
+using Nemerle;
 using Nemerle.Late;
 using Nemerle.Collections;
 using Nemerle.Text;
@@ -20,8 +22,10 @@ using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Data.Core;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Adornments;
+using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+
 
 namespace Nitra.VisualStudio
 {
@@ -47,57 +51,21 @@ namespace Nitra.VisualStudio
     {
       base.Initialize();
       _logger.Trace("Initialize");
-      
 
       Instance = this;
       DataHostService = GetService(typeof(IVsDataHostService)) :> IVsDataHostService;
 
-      def subscribeTextDocumentCreated() : bool
-      {
-        def config = GetServiceFromServiceModel.[INitraGlobalConfig]();
-        when (config != null)
-        {
-          def isNitraSyntaxDefined = config.Languages.Where(lang => lang.Grammar == "NitraSyntax");
-          AppDomain.CurrentDomain.SetData("NitraForVisualStudio", isNitraSyntaxDefined);
-        }
-        def errorProvider = GetServiceFromServiceModel.[IErrorProviderFactory]();
-        def documentFactoryService = GetServiceFromServiceModel.[ITextDocumentFactoryService]();
-        if (config != null && errorProvider != null && documentFactoryService != null)
-        {
-          documentFactoryService.TextDocumentCreated += fun(_, args)
-          {
-            def textDocument = args.TextDocument;
-            def buffer       = textDocument.TextBuffer;
-            def ext          = Path.GetExtension(args.TextDocument.FilePath);
-            unless (string.IsNullOrEmpty(ext))
-            when (config.GetLanguageByExtension(ext) is VSome(language))
-            {
-              unless (buffer.ContentType.Equals(language.ContentType))
-                buffer.ChangeContentType(language.ContentType, null);
-              _ = Utils.CreateErrorListManager(errorProvider, buffer);
-              _ = Utils.CreateParseAgent(language, buffer);
-            }
-          };
-          documentFactoryService.TextDocumentDisposed += fun(_, args)
-          {
-            Utils.DisposeErrorListManager(args.TextDocument.TextBuffer);
-          };
-          true
-        }
-        else false
-      }
-
-      if (subscribeTextDocumentCreated())
-        _logger.Trace("TextDocumentCreated event subscribed from Initialize method");
+      if (SubscribeServiceEvents())
+        _logger.Trace("SubscribeServiceEvents succeeded from Initialize method");
       else
       {
         _dteEvents = (GetService(typeof(DTE)) :> DTE).Events.DTEEvents;
         _dteEvents.OnStartupComplete += _ =>
         {
-          if (subscribeTextDocumentCreated())
-            _logger.Trace("TextDocumentCreated event subscribed from OnStartupComplete event");
+          if (SubscribeServiceEvents())
+            _logger.Trace("SubscribeServiceEvents succeeded from OnStartupComplete event");
           else
-            _logger.Trace("Failed to subscribe TextDocumentCreated event");
+            _logger.Trace("SubscribeServiceEvents failed");
         };
       }
       _menuService = GetService(typeof(IMenuCommandService)) :> OleMenuCommandService;
@@ -108,6 +76,51 @@ namespace Nitra.VisualStudio
         // Add the handler for the persisted window with selection tracking
         _menuService.AddCommand(OleMenuCommand(EventHandler(this.ShowPersistedWindow), id));
       }
+    }
+
+    private SubscribeServiceEvents() : bool
+    {
+      def config = GetServiceFromServiceModel.[INitraGlobalConfig]();
+      when (config != null)
+      {
+        def isNitraSyntaxDefined = config.Languages.Where(lang => lang.Grammar == "NitraSyntax");
+        AppDomain.CurrentDomain.SetData("NitraForVisualStudio", isNitraSyntaxDefined);
+      }
+      def errorProviderFactory = GetServiceFromServiceModel.[IErrorProviderFactory]();
+      def documentFactoryService = GetServiceFromServiceModel.[ITextDocumentFactoryService]();
+      if (config != null && errorProviderFactory != null && documentFactoryService != null)
+      {
+        documentFactoryService.TextDocumentCreated += fun(_, args)
+        {
+          def document = args.TextDocument;
+          def buffer   = document.TextBuffer;
+          def ext      = Path.GetExtension(document.FilePath);
+          unless (string.IsNullOrEmpty(ext))
+          when (config.GetLanguageByExtension(ext) is VSome(language))
+          {
+            _logger.Trace("Detected language {0} for document {1}", language.Name, document.FilePath);
+            unless (buffer.ContentType.Equals(language.ContentType))
+              buffer.ChangeContentType(language.ContentType, null);
+            buffer.Properties.AddProperty(TextBufferProperties.Language, language);
+
+            def errorListManager = ErrorListManager(errorProviderFactory, buffer);
+            buffer.Properties.AddProperty(TextBufferProperties.ErrorListManager, errorListManager);
+          }
+        };
+        documentFactoryService.TextDocumentDisposed += fun (_, args)
+        {
+          def buffer = args.TextDocument.TextBuffer;
+          mutable parseAgent : ParseAgent;
+          when (buffer.Properties.TryGetProperty(TextBufferProperties.ParseAgent, out parseAgent))
+            parseAgent.Cancel();
+
+          mutable errorListManager : ErrorListManager;
+          when (buffer.Properties.TryGetProperty(TextBufferProperties.ErrorListManager, out errorListManager))
+            errorListManager.Dispose();
+        };
+        true
+      }
+      else false
     }
 
     private ShowPersistedWindow(_ : object, _ : EventArgs) : void
