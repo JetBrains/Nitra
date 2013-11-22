@@ -29,7 +29,7 @@ namespace Nitra.Internal.Recovery
         def result = array(Records.Length);
         
         foreach (x when x != null in Records with i)
-          result[i] = x.OrderBy(r => r.Sequence.ToString()).ThenBy(r => r.Index).Select(r => r.ToString(i)).ToArray();
+          result[i] = x.Select(r => r.ToString(i)).OrderBy(r => r).ToArray();
           
         result
       }
@@ -106,7 +106,10 @@ namespace Nitra.Internal.Recovery
       while (RecordsToProcess.Count > 0 || RecordsToComplete.Count > 0)
       {
         while (RecordsToProcess.Count > 0)
-          PredictionOrScanning(RecordsToProcess.Pop());
+        {
+          def (pos, record) = RecordsToProcess.Pop();
+          PredictionOrScanning(pos, record, true);
+        }
         while (RecordsToComplete.Count > 0)
           Completion(RecordsToComplete.Pop());
       }
@@ -143,9 +146,20 @@ namespace Nitra.Internal.Recovery
       }
     }
 
-    public PredictionOrScanning(textPos : int, record : ParseRecord) : void
+    public PredictionOrScanning(textPos : int, record : ParseRecord, optimize : bool) : void
     {
-      def text = ParseResult.Text;
+      def parseSubruleAndAddNextRecord(textPos : int, record : ParseRecord) : bool
+      {
+        def endPos = record.CurSubrule.Parse(textPos, ParseResult.Text, ParseResult);
+        if (endPos >= 0)
+        {
+          AddNextRecord(textPos, endPos, record);
+          true;
+        }
+        else
+          false
+      }
+
       if (record.Sequence is ParsedSequence.Extensible as sequence)
       {
         match (record.Index)
@@ -171,35 +185,44 @@ namespace Nitra.Internal.Recovery
       else
       {
         def rule = record.CurSubrule;
-        def endPos = rule.Parse(textPos, text, ParseResult);
-        if (endPos >= 0)
-          AddNextRecord(textPos, endPos, record);
-        else match (rule)
+        match (rule)
         {
-          | Empty                     => ()
-          | Marker                    => ()
-          | RegularCall               => ()
-          | TokenString               => ()
+          | Empty | Marker | RegularCall | TokenString =>
+            _ = parseSubruleAndAddNextRecord(textPos, record)
+
           | ExtensibleCall    as rule =>
-            AddSequence(record, ParsedSequence.Extensible(this, textPos, rule.RuleParser));
+            unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
+              AddSequence(record, ParsedSequence.Extensible(this, textPos, rule.RuleParser));
 
           | SimpleCall        as rule =>
-            def sequence = rule.RuleParser.Reflection(rule.RuleParser.RuleId);
-            AddSequence(record, ParsedSequence.Simple(this, textPos, sequence));
+            unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
+            {
+              def sequence = rule.RuleParser.Reflection(rule.RuleParser.RuleId);
+              AddSequence(record, ParsedSequence.Simple(this, textPos, sequence));
+            }
 
           | Option            as rule =>
-            AddSequence(record, ParsedSequence.Option(this, textPos, rule));
-            AddNextRecord(textPos, textPos, record);
+            unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
+            {
+              AddSequence(record, ParsedSequence.Option(this, textPos, rule));
+              AddNextRecord(textPos, textPos, record);
+            }
 
           | List              as rule =>
-            AddSequence(record, ParsedSequence.List(this, textPos, rule, textPos, 0));
-            when (rule.Min == 0)
-              AddNextRecord(textPos, textPos, record);
+            unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
+            {
+              AddSequence(record, ParsedSequence.List(this, textPos, rule, textPos, 1));
+              when (rule.Min == 0)
+                AddNextRecord(textPos, textPos, record);
+            }
 
           | ListWithSeparator as rule =>
-            AddSequence(record, ParsedSequence.ListWithSeparatorRule(this, textPos, rule, textPos, 0));
-            when (rule.Min == 0)
-              AddNextRecord(textPos, textPos, record);
+            unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
+            {
+              AddSequence(record, ParsedSequence.ListWithSeparatorRule(this, textPos, rule, textPos, 1));
+              when (rule.Min == 0)
+                AddNextRecord(textPos, textPos, record);
+            }
         }
       }
     }
