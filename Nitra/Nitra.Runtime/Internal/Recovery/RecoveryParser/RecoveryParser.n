@@ -22,6 +22,7 @@ namespace Nitra.Internal.Recovery
     public Records           : array[SCG.HashSet[ParseRecord]];
     public RecordsToProcess  : SCG.Stack[int * ParseRecord] = SCG.Stack(50);
     public RecordsToComplete : SCG.Stack[int * ParseRecord * ParsedSequence] = SCG.Stack(50);
+    public mutable MaxPos    : int = -1;
 
     public Records2           : array[array[string]]
     {
@@ -69,6 +70,7 @@ namespace Nitra.Internal.Recovery
         {
           set = SCG.HashSet();
           Records[pos] = set;
+          MaxPos = Math.Max(MaxPos, pos);
         }
         record.ParsePos = pos;
         def newRecord = set.Add(record);
@@ -107,11 +109,35 @@ namespace Nitra.Internal.Recovery
         while (RecordsToProcess.Count > 0)
         {
           def (pos, record) = RecordsToProcess.Pop();
-          PredictionOrScanning(pos, record, false);
+          PredictionOrScanning(pos, record, true);
         }
         while (RecordsToComplete.Count > 0)
           Completion(RecordsToComplete.Pop());
       }
+    }
+
+    public FindNextError() : void
+    {
+      mutable lastMaxPos;
+      mutable lastRecordsCount;
+      do
+      {
+        lastMaxPos = MaxPos;
+        lastRecordsCount = Records[MaxPos].Count;
+        def sequences = Records[MaxPos].Grouping(record => (record.Sequence, record));
+        foreach ((sequence, records) in sequences.KeyValuePairs)
+        {
+          foreach (record in records)
+            PredictionOrScanning(MaxPos, record, false);
+
+          def minIndex = records.Min(record => record.Index) - 1;
+          when (minIndex >= 0)
+            foreach (begin in SCG.HashSet(sequence.ParsedSubrules.Where(subrule => subrule.Index == minIndex).Select(subrule => subrule.Begin)))
+              PredictionOrScanning(begin, ParseRecord(sequence, minIndex, begin), false);
+        }
+        Parse();
+      }
+      while (lastMaxPos != MaxPos || lastRecordsCount != Records[MaxPos].Count);
     }
 
     public Completion(pos : int, caller : ParseRecord, sequence : ParsedSequence) : void
@@ -133,13 +159,14 @@ namespace Nitra.Internal.Recovery
             AddNextRecord(sequence.ListStart, pos, caller);
 
         | ListWithSeparatorRule      as sequence =>
-          AddSequence(caller, ParsedSequence.ListWithSeparatorSeparator(this, pos, sequence.Subrule, sequence.ListStart, sequence.Counter + 1));
+          when (sequence.Subrule.HangingSeparator || CounterLessThanMax(sequence.Counter, sequence.Subrule.Max))
+            AddSequence(caller, ParsedSequence.ListWithSeparatorSeparator(this, pos, sequence.Subrule, sequence.ListStart, sequence.Counter));
           when (sequence.Counter >= sequence.Subrule.Min)
             AddNextRecord(sequence.ListStart, pos, caller);
 
         | ListWithSeparatorSeparator as sequence =>
           when (CounterLessThanMax(sequence.Counter, sequence.Subrule.Max))
-            AddSequence(caller, ParsedSequence.ListWithSeparatorRule(this, pos, sequence.Subrule, sequence.ListStart, sequence.Counter));
+            AddSequence(caller, ParsedSequence.ListWithSeparatorRule(this, pos, sequence.Subrule, sequence.ListStart, sequence.Counter + 1));
           when (sequence.Subrule.HangingSeparator && sequence.Counter >= sequence.Subrule.Min)
             AddNextRecord(sequence.ListStart, pos, caller);
       }
