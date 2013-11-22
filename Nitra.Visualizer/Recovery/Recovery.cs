@@ -46,6 +46,9 @@ namespace Nitra.DebugStrategies
       var rp = new RecoveryParser(parseResult);
       rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
 
+      var last = FindLast(rp);
+      var records = rp.Records[last];
+
       while (parseResult.RecoveryStacks.Count > 0)
       {
         var failPos = parseResult.MaxFailPos;
@@ -55,6 +58,11 @@ namespace Nitra.DebugStrategies
       }
 
       return parseResult.Text.Length;
+    }
+
+    private static int FindLast(RecoveryParser rp)
+    {
+      return Array.FindLastIndex(rp.Records, x => x != null);
     }
 
     private List<ParseAlternativeNode> CollectBestFrames(int failPos, ref int skipCount, ParseResult parseResult)
