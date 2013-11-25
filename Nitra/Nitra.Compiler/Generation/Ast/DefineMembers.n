@@ -48,18 +48,77 @@ namespace Nitra.Compiler
 
     private DefineAstCtorAndFields() : void
     {
-      def args = SCG.List();
-      args.Add(<[ parameter: location : Nitra.Location ]>);
-      def init = SCG.List();
-      init.Add(<[ base(location) ]>);
+      def parameterNames = SCG.Dictionary();
+
+      // создаем поля AST
       foreach (rule in this.RuleSymbol.NonVoidSubRules)
       {
+        parameterNames.Add(rule, rule.FieldName);
+
         def fieldType = Environment.GetAstType(rule.Type);
         _astTb.DefineConditional(<[decl: public new $(rule.FieldName : usesite) : $(fieldType : typed) ]>);
-        args.Add(<[ parameter: $(rule.FieldName : usesite) : $(fieldType : typed)  ]>);
-        init.Add(<[ this.$(rule.FieldName : usesite) = $(rule.FieldName : usesite) ]>);
       }
-      _astTb.DefineConditional(<[decl: public this(..$(args.ToNList())) { ..$(init.ToNList()) } ]>);
+
+      def parameters = SCG.List();
+      parameters.Add(<[ parameter: location : Nitra.Location ]>);
+
+      when (this.RuleSymbol is ExtensionRuleSymbol(ExtensionType = Postfix(call, _)))
+      {
+        def parameterName = call.FieldName;
+        def parameterType = Environment.GetAstType(call.Type);
+        parameters.Add(<[ parameter: $(parameterName : usesite) : $(parameterType : typed) ]>);
+      }
+
+      foreach (subrule when IsSubruleAcceptedForAst(subrule) in this.RuleSymbol.Sequence.Subrules)
+      {
+        mutable parameterName;
+        unless (parameterNames.TryGetValue(subrule.SrcRule, out parameterName))
+        {
+          parameterName = "__" + parameterNames.Count.ToString();
+          parameterNames.Add(subrule.SrcRule, parameterName);
+        }
+
+        def parameterType = Environment.GetAstType(subrule.SrcRule.Type);
+        parameters.Add(<[ parameter: $(parameterName : usesite) : $(parameterType : typed) ]>);
+      }
+
+      def foldParameters(rule : Rule) : PExpr
+      {
+        if (rule is Rule.Sequence(Rules = rules, Type = RuleType.Tuple))
+        {
+          def members = SCG.List();
+          foreach (rule when !(rule.Type is RuleType.Void) in rules)
+            members.Add(foldParameters(rule));
+
+          if(members.Count == 1)
+            members[0]
+          else
+            <[ (..$members) ]>
+        }
+        else
+        {
+          mutable parameterName;
+          unless (parameterNames.TryGetValue(rule, out parameterName))
+            assert3(false);
+          <[ $(parameterName : usesite) ]>
+        }
+      }
+
+      def init = SCG.List();
+      init.Add(<[ base(location); ]>);
+      foreach (rule in this.RuleSymbol.NonVoidSubRules)
+        init.Add(<[ this.$(rule.FieldName : usesite) = $(foldParameters(rule)) ]>);
+
+      _astTb.DefineConditional(<[decl: public this(..$parameters) { ..$init; } ]>);
+    }
+
+    public static IsSubruleAcceptedForAst(subrule : SubruleCompileInfo) : bool
+    {
+      | SubruleCompileInfo.SimpleCall(symbol)        when symbol.Type is RuleType.Void
+      | SubruleCompileInfo.ExtensibleCall(symbol, _) when symbol.Type is RuleType.Void
+      | SubruleCompileInfo.Empty
+      | SubruleCompileInfo.Marker => false
+      | _ => true
     }
   }
 }
