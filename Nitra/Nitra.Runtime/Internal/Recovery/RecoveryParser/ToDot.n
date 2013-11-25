@@ -42,46 +42,62 @@ namespace Nitra.Internal.Recovery
       {
         Path.Combine(dir, getFileName(sequence))
       }
-      def isContinuationOf(subrule1 : ParsedSubrule, subrule2 : ParsedSubrule) : bool
+      def isContinuationOf(sequence : ParsedSequence, subrule1 : ParsedSubrule, subrule2 : ParsedSubrule) : bool
       {
-        subrule2.Index + 1 == subrule1.Index && subrule2.End == subrule1.Begin
+        def isPrevSubrule = subrule2.Index + 1 == subrule1.Index || sequence.CanContinueFromSameSubrule && subrule2.Index == subrule1.Index;
+        
+        isPrevSubrule && subrule2.End == subrule1.Begin
       }
       def hasContinuation(sequence : ParsedSequence, subrule : ParsedSubrule) : bool
       {
-        subrule.Index == sequence.SubruleCount - 1 || sequence.ParsedSubrules.Any(s => isContinuationOf(s, subrule))
+        subrule.Index == sequence.SubruleCount - 1 || sequence.ParsedSubrules.Any(s => isContinuationOf(sequence, s, subrule))
+      }
+      def hasExtensibleContinuation(sequence : ParsedSequence, subrule : ParsedSubrule) : bool
+      {
+        sequence.ParsedSubrules.Any(s => isContinuationOf(sequence, s, subrule))
       }
       
       foreach (sequence in Sequences)
       {
         def text = ParseResult.Text;
         def fileName = getFilePath(dir, sequence);
+        def isExtensible =  sequence is ParsedSequence.Extensible;
         
         when (fileName == @"c:\Users\Vlad.Chistyakov\AppData\Local\Temp\tmp2079\269_UsingDirective_0")
         {
           assert2(true);
         }
-        when (fileName == @"c:\Users\Vlad.Chistyakov\AppData\Local\Temp\tmp2079\180_")
-        {
-          assert2(true);
-        }        
+
         
         when (sequence is ParsedSequence.Extensible as ext)
         {
-          def prefixesFileName = getFilePath(dir, sequence) + "_Prefixes";
+          def sequence = sequence;
+          def postfixStarts = sequence.ParsedSubrules.Select(s => s.End).Distinct().ToArray();
+          def prefixesFileName = getFilePath(dir, sequence) + "_Extentions";
+          def makeName(seq : ParsedSequence, startPos : int, isPrefix : bool) : string
+          {
+            seq.Name + (if (isPrefix) "_Prefix_" else "_Postfix_") + startPos
+          }
           def nodes = SCG.List();
           def edges = SCG.List();
           
           //nodes.Add(<#Complete [label=">>"]#>);
           nodes.Add(<#Start [label=">"]#>);
+
+          def getSequence(parser : ExtensionRuleParser, startPos : int)
+          {
+            def id = parser.RuleId;
+            def seq = Sequences.FindObject(s => s.StartPos == startPos && s.Id == id);
+            //assert2(seq != null);
+            seq
+          }
           
           foreach (prefix in ext.RuleParser.PrefixRules)
           {
             def startPos = sequence.StartPos;
-            def id = prefix.RuleId;
-            def prefixSeq = Sequences.FindObject(s => s.StartPos == startPos && s.Id == id);
-            assert2(prefixSeq != null);
+            def prefixSeq = getSequence(prefix, startPos);
             def prefixFileName = getFileName(prefixSeq) + ".svg";
-            def name = prefixSeq.Name;
+            def name = makeName(prefixSeq, startPos, isPrefix=true);
             def style = if (prefixSeq.Ends.Count == 0) "fontcolor=red" else "peripheries=2 color=blue";
             def label = $<#..$(prefixSeq.Ends; "; "; e => $"$startPos, $e")\n$name#>;
             def node = $<#$name [label="$label" $style shape=box URL="$prefixFileName"]#>;
@@ -89,13 +105,50 @@ namespace Nitra.Internal.Recovery
             edges.Add($<#Start -> $name#>);
           }
           
+          def addEdges(ext : ParsedSequence.Extensible, parsers : array[ExtensionRuleParser])
+          {
+            def postfixStarts = postfixStarts;
+            foreach (parser in parsers)
+            {
+              foreach (startPos in postfixStarts)
+              {
+                def rightSeq = getSequence(parser, startPos);
+                when (rightSeq == null)
+                  continue;
+                def name = makeName(rightSeq, startPos, isPrefix=false);
+                def prefixFileName = getFileName(rightSeq) + ".svg";
+                def style = if (rightSeq.Ends.Count == 0) "" else "peripheries=2 color=blue";
+                def label = $<#..$(rightSeq.Ends; "; "; e => $"$startPos, $e")\n$name#>;
+                def node = $<#$name [label="$label" $style shape=box URL="$prefixFileName"]#>;
+                nodes.Add(node);
+                foreach (postfix in ext.RuleParser.PostfixRules)
+                {
+                  def leftSeq = getSequence(postfix, startPos);
+                  when (leftSeq == null)
+                    continue;
+                  def startPos = startPos;
+                  def presPess = leftSeq.ParsedSubrules.Filter(s => s.End == startPos);
+                  foreach (prevPos in presPess)
+                  {
+                    def node1 = makeName(leftSeq, prevPos.Begin, isPrefix=false);
+                    edges.Add($<#$node1 -> $name#>);
+                  }
+                }
+              }
+            }
+          }
+          
+          addEdges(ext, ext.RuleParser.PrefixRules);
+          addEdges(ext, ext.RuleParser.PostfixRules);
+          
+          def graphLabel = escape(sequence.ToString());
           def content = 
 $<#
   digraph RecoveryParser
   {
     rankdir=LR;
     compound=true;
-    label="$sequence";
+    label="$graphLabel";
     
     ..$(nodes; "\r\n    ")
     
@@ -106,17 +159,18 @@ $<#
           files.Add(prefixesFileName);
         }
 
-        def failedSubrules = SCG.List();
+        def failedSubrules = SCG.HashSet();
         
         def subruleNode(sequence : ParsedSequence, subrule : ParsedSubrule, isFailed = false, needLabel : bool = false) : string
         {
+          def failedSubrules = failedSubrules;
           def makeUrl(id : int, name : string, startPos : int, sufix : string = null) : string
           {
             <#URL="#> + id + "_" + name + "_" + startPos + sufix + <#.svg"#>
           }
           def getUrl(sequence : ParsedSequence) : string
           {
-            | ParsedSequence.Extensible as ex => makeUrl(ex.RuleParser.PrefixId, ex.Name, subrule.Begin, "_Prefixes")
+            | ParsedSequence.Extensible as ex => makeUrl(ex.RuleParser.PrefixId, ex.Name, subrule.Begin, "_Extentions")
             | _ => 
               def x = sequence.GetSubrule(subrule.Index);
               match (x)
@@ -138,15 +192,17 @@ $<#
           def url        = getUrl(sequence);
           def color = if (isFailed) "fontcolor=red" else "";
           when (!isFailed && needLabel && !hasContinuation(sequence, subrule))
-            failedSubrules.Add(ParsedSubrule(subrule.End, subrule.End, subrule.Index + 1));
+            _ = failedSubrules.Add(ParsedSubrule(subrule.End, subrule.End, subrule.Index + 1));
           def bkColor    = if (subrule.End > subrule.Begin) "peripheries=2 color=blue" else "";
           def textLen    = subrule.End - subrule.Begin;
           def ellipsis   = if (textLen > maxDisplyString) "…" else "";
           def parsedText = "\n'" + escape(text.Substring(subrule.Begin, Math.Min(textLen, maxDisplyString)) ) + ellipsis + "'\n";
           def label      = escape(subrule.Begin + ":" + subrule.End + "\n" + getName(sequence)) + parsedText;
           
-          "Seq_" + sequence.Id + "_subrule_" + subrule.Index + "_B" + subrule.Begin + "_E" + subrule.End
-          + if (needLabel) $<# [label="$label" $color $bkColor $url shape=box] #> else null
+          def result =
+            "Seq_" + sequence.Id + "_subrule_" + subrule.Index + "_B" + subrule.Begin + "_E" + subrule.End
+            + if (needLabel) $<# [label="$label" $color $bkColor $url shape=box] #> else null;
+          result
         }
         def nodes = SCG.List();
         def edges = SCG.List();
@@ -160,43 +216,59 @@ $<#
         foreach (subrule in sequence.ParsedSubrules)
           nodes.Add(subruleNode(sequence, subrule, needLabel=true));
         
-        foreach (subrule when subrule.Index == 0 in sequence.ParsedSubrules)
+        foreach (subrule when subrule.Index == 0 in sequence.ParsedSubrules) // draw edges from Start
           edges.Add("Start -> " + subruleNode(sequence, subrule));
 
         nodes.Add(<#Start [label=">"]#>);
 
         when (sequence.ParsedSubrules.Count == 0)
-          failedSubrules.Add(ParsedSubrule(sequence.StartPos, sequence.StartPos, 0));
+          _ = failedSubrules.Add(ParsedSubrule(sequence.StartPos, sequence.StartPos, 0));
         
-        foreach (subrule in sequence.ParsedSubrules)
+        foreach (subrule in sequence.ParsedSubrules) // draw edges
         {
+          def subrule = subrule;
+          def sequence = sequence;
           def node         = subruleNode(sequence, subrule);
-          def nextSubrules = sequence.ParsedSubrules.Where(s => isContinuationOf(s, subrule));
+          def nextSubrules = sequence.ParsedSubrules.Where(s => isContinuationOf(sequence, s, subrule));
           foreach (nextSubrule in nextSubrules)
             edges.Add(node + " -> " + subruleNode(sequence, nextSubrule));
         }
-          
-        foreach (subrule when subrule.Index == lastIndex in sequence.ParsedSubrules)
+
+        when (isExtensible)
+        foreach (subrule in sequence.ParsedSubrules)
+        {
+          unless (hasExtensibleContinuation(sequence, subrule))
+            _ = failedSubrules.Add(ParsedSubrule(subrule.End, subrule.End, 1));
+        }
+        
+        foreach (subrule when subrule.Index == lastIndex in sequence.ParsedSubrules)//isExtensible || 
           edges.Add(subruleNode(sequence, subrule) + " -> Complete");
 
         foreach (subrule2 in failedSubrules)
         {
-          def subrule2 = subrule2;
           nodes.Add(subruleNode(sequence, subrule2, isFailed=true, needLabel=true));
-          def prevSubrule = sequence.ParsedSubrules.FindValue(x => x.Index == subrule2.Index - 1 && x.End == subrule2.Begin);
-          if (prevSubrule == null)
-            edges.Add("Start -> " + subruleNode(sequence, subrule2, isFailed=true));
-          else
-            edges.Add(subruleNode(sequence, prevSubrule.Value) + " -> " + subruleNode(sequence, subrule2, isFailed=true));
+          def prevSubrule = sequence.ParsedSubrules.FindValue(
+            x => (x.Index == subrule2.Index - 1 || isExtensible && x.Index == subrule2.Index) && x.End == subrule2.Begin);
+          def edge =
+            if (prevSubrule == null)
+              "Start -> " + subruleNode(sequence, subrule2, isFailed=true);
+            else
+              subruleNode(sequence, prevSubrule.Value) + " -> " + subruleNode(sequence, subrule2, isFailed=true);
+              
+          edges.Add(edge);
+          
+          when (edge == "Seq_1_subrule_0_B30_E31->Seq_1_subrule_1_B31_E31")
+            assert2(true);
         }
           
+        def graphLabel = escape(sequence.ToString());
         def content = 
 $<#
   digraph RecoveryParser
   {
     rankdir=LR;
     compound=true;
-    label="$sequence";
+    label="$graphLabel";
     
     ..$(nodes; "\r\n    ")
     
