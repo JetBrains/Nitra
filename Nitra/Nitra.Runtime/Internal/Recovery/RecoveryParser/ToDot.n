@@ -22,6 +22,7 @@ namespace Nitra.Internal.Recovery
     private class ToDotImpl
     {
       private static MaxDisplyString : int = 60;
+      private static NotEmptyParseStile = "peripheries=2 color=blue";
       private dir : string;
       private recoveryParser : RecoveryParser;
 
@@ -77,6 +78,42 @@ namespace Nitra.Internal.Recovery
         "Seq_" + sequence.Id + "_subrule_" + subrule.Index + "_B" + subrule.Begin + "_E" + subrule.End
       }
 
+      private ExtensionNodeName(sequence : ParsedSequence.Extension) : string
+      {
+        "Extension_" + sequence.Id + "_" + sequence.Sequence.Parser.RuleName + "_" + sequence.StartPos
+      }
+      
+      private ExtensionNode(sequence : ParsedSequence.Extension) : string
+      {
+        def start = sequence.StartPos;
+        def parses = sequence.ParsedSubrules.Select(x => x.End).Distinct().OrderBy(x => x).MapToArray(e => GetParsedText(start, e));
+        def strs = 
+          if (parses.Length > 0)
+          {
+            "\n" + $<#..$(parses; "\n")#>
+          }
+          else
+            null;
+        def label = Escape($<#[..$(sequence.ParsedSubrules)] $sequence$strs#>);
+        def url = MakeUrl(sequence);
+        def style = if (GetMaxParsedSubrules(sequence) > sequence.StartPos) NotEmptyParseStile else "";
+        ExtensionNodeName(sequence) + $<#[label="$label" $url $style shape=box]#>
+      }
+      
+      GetMaxParsedSubrules(s : ParsedSequence) : int
+      {
+        if (s.ParsedSubrules.Count == 0) s.StartPos
+        else s.ParsedSubrules.Select(_.End).Max()
+      }
+        
+      GetParsedText(startPos : int, endPos : int) : string
+      {
+        def textLen    = endPos - startPos;
+        def ellipsis   = if (textLen > MaxDisplyString) "…" else "";
+        def parsedText = "'" + Escape(recoveryParser.ParseResult.Text.Substring(startPos, Math.Min(textLen, MaxDisplyString)) ) + ellipsis + "'";
+        parsedText
+      }
+      
       private SubruleNode(sequence : ParsedSequence, subrule : ParsedSubrule, isFailed = false) : string
       {
         def getUrl() : string
@@ -95,10 +132,8 @@ namespace Nitra.Internal.Recovery
         }
         def url        = getUrl();
         def color      = if (isFailed) "fontcolor=red" else "";
-        def bkColor    = if (subrule.End > subrule.Begin) "peripheries=2 color=blue" else "";
-        def textLen    = subrule.End - subrule.Begin;
-        def ellipsis   = if (textLen > MaxDisplyString) "…" else "";
-        def parsedText = "\n'" + Escape(recoveryParser.ParseResult.Text.Substring(subrule.Begin, Math.Min(textLen, MaxDisplyString)) ) + ellipsis + "'\n";
+        def bkColor    = if (subrule.End > subrule.Begin) NotEmptyParseStile else "";
+        def parsedText = "\n" + GetParsedText(subrule.Begin, subrule.End) + "\n";
         def label      = Escape(subrule.Begin + ":" + subrule.End + "\n" + getName(sequence)) + parsedText;
 
         def result     = SubruleNodeName(sequence, subrule) + $<# [label="$label" $color $bkColor $url shape=box] #>;
@@ -127,15 +162,15 @@ namespace Nitra.Internal.Recovery
                 unless (files.Add(extentionsfileName))
                   return;
 
-                def check(s : ParsedSequence) : bool
+                def check(s : ParsedSequence.Extension) : bool
                 {
-                  | ParsedSequence.Extension as extension => ((extension.Sequence.Parser :> ExtensionRuleParser).Descriptor :> ExtensionRuleDescriptor).BaseRule : object == extensible.RuleParser.Descriptor
-                  | _ =>  false
+                  ((s.Sequence.Parser :> ExtensionRuleParser).Descriptor :> ExtensionRuleDescriptor).BaseRule : object == extensible.RuleParser.Descriptor
                 }
-                def extensions = recoveryParser.Sequences.Filter(s => s.StartPos == subrule.Begin && check(s));
-                def extNodes = extensions.Map(s => SubruleNode(s, ParsedSubrule(s.StartPos, s.StartPos, 0), false));
-                def graphLabel = Escape(subrule.ToString());
-                def content = $<#
+                def begin      = subrule.Begin;
+                def extensions = recoveryParser.Sequences.OfType.[ParsedSequence.Extension]().Filter(s => s.StartPos == begin && check(s));
+                def extNodes   = extensions.OrderBy(s => GetMaxParsedSubrules(s)).ThenBy(s => s.Name).MapToArray(s => ExtensionNode(s));
+                def graphLabel = Escape(sequence.ToString());
+                def content    = $<#
                   digraph RecoveryParser
                   {
                     rankdir=LR;
@@ -143,7 +178,6 @@ namespace Nitra.Internal.Recovery
                     label="$graphLabel";
     
                     ..$(extNodes; "\r\n    ")
-    
                   }
                 #>;
                 File.WriteAllText(extentionsfileName, content);

@@ -45,6 +45,7 @@ namespace Nitra.DebugStrategies
 
       var rp = new RecoveryParser(parseResult);
       rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
+      rp.FindNextError();
 
       var last = FindLast(rp);
       var records = rp.Records[last];
