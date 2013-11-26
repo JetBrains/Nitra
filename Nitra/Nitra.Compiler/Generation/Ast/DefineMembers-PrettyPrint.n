@@ -22,14 +22,8 @@ namespace Nitra.Compiler
   {
     private DefineAstPrettyPrint() : void
     {
-      def isNoNeedVar(rule : Rule) { rule.Type is RuleType.Void }
-      def isVoid(ruleType : RuleType)
-      {
-        | Void
-        | Tuple(types) when types.ForAll(isVoid)
-        | Option(type) when isVoid(type)         => true
-        | _                                      => false
-      }
+      def isVoid(rule : Rule) { rule.Type is RuleType.Void }
+
       def isRecursiveCallFromPostfixRule(calleeRef)
       {
         match (this.RuleSymbol, calleeRef)
@@ -48,8 +42,8 @@ namespace Nitra.Compiler
               | String(str)                                     => <[ writer.String(source, $expr, $str); ]>
               | And | Not                                       => <[ () ]>
               | Sequence(rules)                                 =>
-                def members2 = rules.MapI((i, r) => if (isNoNeedVar(r)) (<[ _ ]>, r), else (<[ $($"_item$i" : usesite) ]>, r));
-                def noNeedVars = members2.ForAll((_, r) => isNoNeedVar(r));
+                def members2 = rules.MapI((i, r) => if (isVoid(r)) (<[ _ ]>, r), else (<[ $($"_item$i" : usesite) ]>, r));
+                def noNeedVars = members2.ForAll((_, r) => isVoid(r));
                 def varNames = $[ n | (n, r) in members2, !(r.Type is RuleType.Void) ]; // make list of names for not void rules
                 def lines = members2.Map(loop);
                 match (varNames)
@@ -82,24 +76,38 @@ namespace Nitra.Compiler
               | Call when rule.Type is RuleType.Chars                          => <[ writer.Token(source, $expr); ]>
               | Call(ruleRef, bp) when isRecursiveCallFromPostfixRule(ruleRef) => <[ $expr.PrettyPrint(writer, $bp); ]>
               | Call                                                           => <[ $expr.PrettyPrint(writer, 0); ]>
-              | Repeat(_, _, rule) when isVoid(rule.Type)                      => <[ writer.Whitespace(); ]>
+              | Repeat(_, _, rule) when isVoid(rule)                           => <[ writer.Whitespace(); ]>
               | Repeat(0, Some(1), rule)                                       => <[ when ($expr is Some(_x)) $(loop(<[ _x ]>, rule)) ]>
               | Repeat(_, _, rule)                                             => <[ foreach (_elem in $expr) $(loop(<[ _elem ]>, rule)); ]>
               | RepeatWithSeparator(_, _, rule, separator, _) =>
-                if (isNoNeedVar(separator) || separator.SubRules.ForAll(isNoNeedVar))
-                  <[  def (elems, separators) = $expr;
-                      assert2(elems.IsEmpty || elems.Length >= separators.Length);
-                      def endIndex = separators.Length;
-
-                      foreach (elem in elems with i)
+                match (rule.Type, separator.Type)
+                {
+                  | (Void, Void) => <[ writer.Whitespace(); ]>
+                  | (_, Void) =>
+                    <[
+                      foreach (_elem in $expr with i)
                       {
-                        $(loop(<[ elem ]>, rule));
+                        when (i > 0)
+                          $(loop(<[ _ ]>, separator));
+                        $(loop(<[ _elem ]>, rule));
+                      }
+                    ]>
 
-                        when (endIndex != i)
-                          $(loop(<[ separator ]>, separator));
-                      } ]>
-                else
-                  <[  def (elems, separators) = $expr;
+                  | (Void, _) =>
+                    <[
+                      def separators = $expr;
+                      foreach (_separator in separators with i)
+                      {
+                        $(loop(<[ _ ]>, rule));
+                        $(loop(<[ _separator ]>, separator));
+                      }
+                      unless (separators.IsEmpty)
+                        $(loop(<[ _ ]>, rule));
+                    ]>
+
+                  | _ =>
+                    <[
+                      def (elems, separators) = $expr;
                       assert2(elems.IsEmpty || elems.Length >= separators.Length);
                       mutable separatorRest = separators;
 
@@ -113,7 +121,9 @@ namespace Nitra.Compiler
                           $(loop(<[ separator ]>, separator));
                           separatorRest = separatorRest.Tail;
                         }
-                      } ]>
+                      }
+                    ]>
+                }
             };
           result
         }
