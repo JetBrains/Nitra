@@ -47,8 +47,33 @@ namespace Nitra.DebugStrategies
       rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
       rp.FindNextError();
 
-      var last = FindLast(rp);
-      var records = rp.Records[last];
+      var maxPos = rp.MaxPos;
+      var records = new List<ParseRecord>(rp.Records[maxPos]);
+
+      rp.Parse();
+
+      var newRecords = new List<ParseRecord>();
+
+      do
+      {
+        foreach (var record in records)
+        {
+          if (record.IsComplete)
+            continue;
+
+          var newRecord = record.Next();
+          newRecords.Add(newRecord);
+          rp.StartParseSubrule(maxPos, newRecord);
+        }
+
+        rp.Parse();
+
+        records.Clear();
+        records.AddRange(newRecords);
+        newRecords.Clear();
+      }
+      while (records.Count > 0);
+
 
       while (parseResult.RecoveryStacks.Count > 0)
       {
@@ -59,6 +84,11 @@ namespace Nitra.DebugStrategies
       }
 
       return parseResult.Text.Length;
+    }
+
+    private bool IsUncomplate(ParseRecord obj)
+    {
+      return obj.IsComplete;
     }
 
     private static int FindLast(RecoveryParser rp)
