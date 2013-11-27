@@ -48,29 +48,31 @@ namespace Nitra.DebugStrategies
       rp.FindNextError();
 
       var maxPos = rp.MaxPos;
-      var records = new List<ParseRecord>(rp.Records[maxPos]);
+      var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
 
       rp.Parse();
 
-      var newRecords = new List<ParseRecord>();
-
       do
       {
-        foreach (var record in records)
+        rp.AddedSequences.Clear();
+
+        while (records.Count > 0)
         {
+          var record = records.Dequeue();
+
           if (record.IsComplete)
             continue;
 
           var newRecord = record.Next();
-          newRecords.Add(newRecord);
-          rp.StartParseSubrule(maxPos, newRecord);
+          records.Enqueue(newRecord);
+          rp.SubruleParsed(maxPos, maxPos, record);
         }
 
         rp.Parse();
 
-        records.Clear();
-        records.AddRange(newRecords);
-        newRecords.Clear();
+        foreach (var parsedSequence in rp.AddedSequences)
+          if (parsedSequence.StartPos == maxPos)
+            records.Enqueue(new ParseRecord(parsedSequence, MaxSubruleIndex(parsedSequence.ParsedSubrules), maxPos));
       }
       while (records.Count > 0);
 
@@ -84,6 +86,14 @@ namespace Nitra.DebugStrategies
       }
 
       return parseResult.Text.Length;
+    }
+
+    private int MaxSubruleIndex(HashSet<ParsedSubrule> parsedSubrules)
+    {
+      //if (parsedSubrules.Count == 0)
+        return 0;
+
+      //return parsedSubrules.Max(x => x.Index);
     }
 
     private bool IsUncomplate(ParseRecord obj)
