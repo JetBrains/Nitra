@@ -1,6 +1,7 @@
 ﻿//#region Пролог
 #define DebugOutput
 using System.Globalization;
+using JetBrains.Util;
 using Nitra.Internal;
 using Nitra.Internal.Recovery;
 using Nitra.Runtime.Errors;
@@ -43,38 +44,53 @@ namespace Nitra.DebugStrategies
     {
       Debug.Assert(parseResult.RecoveryStacks.Count > 0);
 
+      var textLen = parseResult.Text.Length;
       var rp = new RecoveryParser(parseResult);
       rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
       rp.FindNextError();
 
-      var maxPos = rp.MaxPos;
-      var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
 
-      rp.Parse();
+      int maxPos;
 
       do
       {
-        rp.AddedSequences.Clear();
+        maxPos = rp.MaxPos;
+        var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
 
-        while (records.Count > 0)
+        do
         {
-          var record = records.Dequeue();
+          rp.AddedSequences.Clear();
 
-          if (record.IsComplete)
-            continue;
+          while (records.Count > 0)
+          {
+            var record = records.Dequeue();
 
-          var newRecord = record.Next();
-          records.Enqueue(newRecord);
-          rp.SubruleParsed(maxPos, maxPos, record);
-        }
+            if (record.IsComplete)
+              continue;
 
-        rp.Parse();
+            var newRecord = record.Next();
+            records.Enqueue(newRecord);
+            rp.SubruleParsed(maxPos, maxPos, record);
+          }
 
-        foreach (var parsedSequence in rp.AddedSequences)
-          if (parsedSequence.StartPos == maxPos)
-            records.Enqueue(new ParseRecord(parsedSequence, MaxSubruleIndex(parsedSequence.ParsedSubrules), maxPos));
-      }
-      while (records.Count > 0);
+          rp.Parse();
+
+          foreach (var parsedSequence in rp.AddedSequences)
+          {
+            if (parsedSequence.Name == "Identifier")
+            {
+              if (parsedSequence.StartPos == 21)
+              {
+              }
+            }
+            if (parsedSequence.StartPos == maxPos && !parsedSequence.IsToken)
+              records.Enqueue(new ParseRecord(parsedSequence, MaxSubruleIndex(parsedSequence.ParsedSubrules), maxPos));
+          }
+        } while (records.Count > 0);
+
+        //maxPos = Array.FindIndex(rp.Records, maxPos + 1, IsNotNull);
+
+      } while (rp.MaxPos > maxPos); //while (maxPos >= 0 && maxPos < textLen);
 
 
       while (parseResult.RecoveryStacks.Count > 0)
@@ -86,6 +102,11 @@ namespace Nitra.DebugStrategies
       }
 
       return parseResult.Text.Length;
+    }
+
+    private bool IsNotNull(HashSet<ParseRecord> x)
+    {
+      return x != null;
     }
 
     private int MaxSubruleIndex(HashSet<ParsedSubrule> parsedSubrules)
@@ -541,7 +562,7 @@ namespace Nitra.DebugStrategies
           foreach (var end in childEnds)
             curentEnds.Add(ParseNonTopFrame(parseResult, frame, end));
 
-          var parseAlternatives = curentEnds.ToArray();
+          var parseAlternatives = Enumerable.ToArray(curentEnds);
           frame.ParseAlternatives = parseAlternatives;
         }
       }
