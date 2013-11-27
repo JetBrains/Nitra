@@ -48,47 +48,47 @@ namespace Nitra.Compiler
 
     private DefineAstCtorAndFields() : void
     {
-      def parameterNames = SCG.Dictionary();
+      def sequence = this.RuleSymbol.Sequence;
+      def astPtr = AstPointer.Existing(sequence, this, "astPtr");
+      def endPos = SumSubruleSize(astPtr, sequence.NonMarkerSubrules, <[ pos ]>);
 
-      // создаем поля AST
-      foreach (rule in this.RuleSymbol.NonVoidSubRules)
-      {
-        parameterNames.Add(rule, rule.FieldName);
+      _astTb.DefineConditional(<[decl:
+        public this(astPtr : int, pos : int, parseResult : Nitra.Internal.ParseResult)
+        {
+          unchecked
+          {
+            base(Nitra.Location(parseResult, pos, $endPos));
+            this.astPtr = astPtr;
+          }
+        }
+      ]>);
 
-        def fieldType = Environment.GetAstType(rule.Type);
-        _astTb.DefineConditional(<[decl: public new $(rule.FieldName : usesite) : $(fieldType : typed) ]>);
-      }
+      _astTb.DefineConditional(<[ decl: private astPtr : int; ]>);
 
-      def parameters = SCG.List();
-      parameters.Add(<[ parameter: location : Nitra.Location ]>);
+      _astTb.DefineConditional(<[ decl:
+        private parseResult : Nitra.Internal.ParseResult { get { this.Location.Source :> Nitra.Internal.ParseResult } }
+      ]>);
+
+      def ruleExprs = SCG.Dictionary.[Rule, PExpr]();
 
       when (this.RuleSymbol is ExtensionRuleSymbol(ExtensionType = Postfix(call, _)))
+        ruleExprs.Add(call, <[ Fake() ]>);
+
+      def prevSubrules = SCG.List();
+      foreach (subrule in this.RuleSymbol.Sequence.NonMarkerSubrules)
       {
-        def parameterName = call.FieldName;
-        def parameterType = Environment.GetAstType(call.Type);
-        parameters.Add(<[ parameter: $(parameterName : usesite) : $(parameterType : typed) ]>);
+        when (IsSubruleAcceptedForAst(subrule))
+          ruleExprs.Add(subrule.SrcRule, MakeSubruleExpr(astPtr, subrule, prevSubrules));
+        prevSubrules.Add(subrule);
       }
 
-      foreach (subrule when IsSubruleAcceptedForAst(subrule) in this.RuleSymbol.Sequence.Subrules)
-      {
-        mutable parameterName;
-        unless (parameterNames.TryGetValue(subrule.SrcRule, out parameterName))
-        {
-          parameterName = "__" + parameterNames.Count.ToString();
-          parameterNames.Add(subrule.SrcRule, parameterName);
-        }
-
-        def parameterType = Environment.GetAstType(subrule.SrcRule.Type);
-        parameters.Add(<[ parameter: $(parameterName : usesite) : $(parameterType : typed) ]>);
-      }
-
-      def foldParameters(rule : Rule) : PExpr
+      def makeFieldExpr(rule : Rule) : PExpr
       {
         if (rule is Rule.Sequence(Rules = rules, Type = RuleType.Tuple))
         {
           def members = SCG.List();
           foreach (rule when !(rule.Type is RuleType.Void) in rules)
-            members.Add(foldParameters(rule));
+            members.Add(makeFieldExpr(rule));
 
           if(members.Count == 1)
             members[0]
@@ -97,19 +97,89 @@ namespace Nitra.Compiler
         }
         else
         {
-          mutable parameterName;
-          unless (parameterNames.TryGetValue(rule, out parameterName))
+          mutable expr;
+          unless (ruleExprs.TryGetValue(rule, out expr))
             assert3(false);
-          <[ $(parameterName : usesite) ]>
+          expr
         }
       }
 
-      def init = SCG.List();
-      init.Add(<[ base(location); ]>);
       foreach (rule in this.RuleSymbol.NonVoidSubRules)
-        init.Add(<[ this.$(rule.FieldName : usesite) = $(foldParameters(rule)) ]>);
+      {
+        def propertyType = Environment.GetAstType(rule.Type);
+        def body         = makeFieldExpr(rule);
+        def memoizedBody = MemoizeFieldExpr(rule, propertyType, body);
+        _astTb.DefineConditional(<[decl:
+          public new $(rule.FieldName : usesite) : $(propertyType : typed)
+          {
+            get { unchecked { $memoizedBody } }
+          }
+        ]>);
+      }
 
-      _astTb.DefineConditional(<[decl: public this(..$parameters) { ..$init; } ]>);
+      _astTb.DefineConditional(<[ decl: private static Fake[T]() : T { throw System.NotImplementedException() } ]>);
+    }
+
+    private static SumSubruleSize(astPtr : AstPointer, subrules : SCG.IEnumerable[SubruleCompileInfo], init : PExpr) : PExpr
+    {
+      def buffer = SCG.List();
+      buffer.Add(<[ mutable acc = $init; ]>);
+      foreach (subrule in subrules)
+        buffer.Add(<[ acc += $(astPtr.GetSize(subrule)) ]>);
+      buffer.Add(<[ acc ]>);
+      <[ { ..$buffer } ]>
+    }
+
+    private MemoizeFieldExpr(rule : Rule, fieldType : FixedType, body : PExpr) : PExpr
+    {
+      if (Environment.NSpanTypeVar.Equals(fieldType))
+        body
+      else
+      {
+        def backingFieldName = Util.tmpname(rule.FieldName);
+        _astTb.DefineConditional(<[ decl: private mutable $(backingFieldName : usesite) : $(fieldType : typed); ]>);
+        if (fieldType.IsValueType)
+        {
+          def loadedBit = _astTb.GetBitFieldManager().Allocate();
+          <[
+            unless ($(loadedBit.Read()))
+            {
+              $(backingFieldName : usesite) = $body;
+              $(loadedBit.Set());
+            }
+            $(backingFieldName : usesite)
+          ]>
+        }
+        else
+        {
+          <[
+            when ($(backingFieldName : usesite) : object == null)
+            {
+              $(backingFieldName : usesite) = $body;
+            }
+            $(backingFieldName : usesite)
+          ]>
+        }
+      }
+    }
+
+    private MakeSubruleExpr(astPtr : AstPointer, subrule : SubruleCompileInfo, prevSubrules : SCG.IEnumerable[SubruleCompileInfo]) : PExpr
+    {
+      match (subrule)
+      {
+        | RegularCall
+        | List as lst when lst.IsSkipAnyPattern
+        | TokenString =>
+          def startPos = SumSubruleSize(astPtr, prevSubrules, <[ this.Location.StartPos ]>);
+          <[
+            mutable pos = $startPos;
+            def (skip, size) = $(astPtr.GetSkipAndSize(subrule));
+            pos += skip;
+            Nitra.NSpan(pos, pos + size)
+          ]>
+
+        | _ => <[ Fake() ]>
+      }
     }
 
     public static IsSubruleAcceptedForAst(subrule : SubruleCompileInfo) : bool
