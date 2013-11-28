@@ -71,6 +71,7 @@ namespace Nitra.DebugStrategies
             var newRecord = record.Next();
             records.Enqueue(newRecord);
             rp.SubruleParsed(maxPos, maxPos, record);
+            rp.PredictionOrScanning(maxPos, record, false);
           }
 
           rp.Parse();
