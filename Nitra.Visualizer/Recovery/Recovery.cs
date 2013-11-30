@@ -68,6 +68,8 @@ namespace Nitra.DebugStrategies
 
       var subrulesParses = GetValidParses(new[] { textLen }, startSeq);
 
+      _count = 0;
+
       foreach (var subrule in subrulesParses[0])
       {
         Test(subrule, subrulesParses, startSeq); 
@@ -86,32 +88,57 @@ namespace Nitra.DebugStrategies
       return parseResult.Text.Length;
     }
 
+    static int _count;
+
     private static void Test(ParsedSubrule subrule, List<ParsedSubrule>[] parsedSubrules, ParsedSequence seq)
     {
+      _count++;
       Debug.Write(subrule + "  ");
 
+      if (_count > 300)
+      {}
+
       var subSeqs  = seq.GetSequencesForSubrule(subrule);
+      var hasElements = false;
       foreach (var subSeq in subSeqs)
       {
-        Debug.WriteLine(subSeq);
+        if (subrule.Begin == 30 && subSeq.Name == "Ctor")
+        { }
+
+        if (!subrule.IsEmpty)
+        {
+          // если элементы есть, то нам н ужно  зайти внутрь и рекурсивно просчитать все пути.
+          hasElements = true;
+          var subrulesParses = GetValidParses(new[] { subrule.End }, subSeq);
+          foreach (var subruleParse in subrulesParses[0])
+            Test(subruleParse, subrulesParses, subSeq);
+          Debug.WriteLine(subSeq);
+        }
+      }
+
+      if (!hasElements) // Если элементов нет, то нужно посчитать количество токенво в бинарном АСТ.
+      {
+        
       }
 
       Debug.WriteLine("  ");
 
       var index = subrule.Index + 1;
 
-      if (index >= seq.SubruleCount)
-        return;
-
-      var end = subrule.End;
-
-      foreach (var nextSubrule in parsedSubrules[index])
+      if (index < seq.SubruleCount)
       {
-        if (nextSubrule.Begin == end)
+        var end = subrule.End;
+
+        foreach (var nextSubrule in parsedSubrules[index])
         {
-          Test(nextSubrule, parsedSubrules, seq);
+          if (nextSubrule.Begin == end)
+          {
+            Test(nextSubrule, parsedSubrules, seq);
+          }
         }
       }
+
+      _count--;
     }
 
     private static List<ParsedSubrule>[] GetValidParses(IEnumerable<int> ends, ParsedSequence seq)
@@ -150,12 +177,23 @@ namespace Nitra.DebugStrategies
 
         if (subruleParses == null)
         {
-          // что-то не слажалось
+          if (seq is ParsedSequence.Extensible)
+          {
+            Debug.Assert(i == 1);
+            subrulesParses = new List<ParsedSubrule>[1];
+            continue;
+          }
+
+          Debug.Assert(false); // что-то не слажалось
           break;
         }
-        prevBegins.Clear();
-        foreach (var subruleParse in subruleParses)
-          prevBegins.Add(subruleParse.Begin);
+
+        if (i > 0)
+        {
+          prevBegins.Clear();
+          foreach (var subruleParse in subruleParses)
+            prevBegins.Add(subruleParse.Begin);
+        }
       }
 
       return subrulesParses;
