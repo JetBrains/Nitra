@@ -5,8 +5,6 @@ using JetBrains.Util;
 using Nitra.Internal;
 using Nitra.Internal.Recovery;
 using Nitra.Runtime.Errors;
-using NB = Nemerle.Builtins;
-using IntRuleCallKey = Nemerle.Builtins.Tuple<int, Nitra.Internal.Recovery.RuleCallKey>;
 
 using System;
 using System.IO;
@@ -14,6 +12,11 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Xml.Linq;
+
+using ParsedNode = Nemerle.Builtins.Tuple<Nitra.Internal.Recovery.ParsedSequence, Nitra.Internal.Recovery.ParsedSubrule>;
+
+using NB = Nemerle.Builtins;
+using IntRuleCallKey = Nemerle.Builtins.Tuple<int, Nitra.Internal.Recovery.RuleCallKey>;
 using SCG = System.Collections.Generic;
 
 #if NITRA_RUNTIME
@@ -26,6 +29,8 @@ namespace Nitra.DebugStrategies
   using ParserData = Tuple<int, int, List<ParsedStateInfo>>;
   using ReportData = Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>>;
   using ParseAlternativeNodes = Nemerle.Core.list<ParseAlternativeNode>;
+
+  using ParsedList = Nemerle.Core.list<ParsedNode>;
   
 //#endregion
 
@@ -42,14 +47,122 @@ namespace Nitra.DebugStrategies
 
     public virtual int Strategy(ParseResult parseResult)
     {
-      Debug.Assert(parseResult.RecoveryStacks.Count > 0);
+      //Debug.Assert(parseResult.RecoveryStacks.Count > 0);
+
+      var timer = Stopwatch.StartNew();
 
       var textLen = parseResult.Text.Length;
       var rp = new RecoveryParser(parseResult);
       rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
+      var startSeq = rp.Sequences.First();
       rp.FindNextError();
 
+      timer.Stop();
+      Debug.WriteLine("FindNextError took: " + timer.Elapsed);
+      timer.Restart();
 
+      RecoverAllWays(rp);
+
+      timer.Stop();
+      Debug.WriteLine("RecoverAllWays took: " + timer.Elapsed);
+
+      var subrulesParses = GetValidParses(new[] { textLen }, startSeq);
+
+      foreach (var subrule in subrulesParses[0])
+      {
+        Test(subrule, subrulesParses, startSeq); 
+      }
+
+      var _ = subrulesParses;
+
+      //while (parseResult.RecoveryStacks.Count > 0)
+      //{
+      //  var failPos = parseResult.MaxFailPos;
+      //  var skipCount = 0;
+      //  var bestFrames = CollectBestFrames(failPos, ref skipCount, parseResult);
+      //  FixAst(bestFrames, failPos, skipCount, parseResult);
+      //}
+
+      return parseResult.Text.Length;
+    }
+
+    private static void Test(ParsedSubrule subrule, List<ParsedSubrule>[] parsedSubrules, ParsedSequence seq)
+    {
+      Debug.Write(subrule + "  ");
+
+      var subSeqs  = seq.GetSequencesForSubrule(subrule);
+      foreach (var subSeq in subSeqs)
+      {
+        Debug.WriteLine(subSeq);
+      }
+
+      Debug.WriteLine("  ");
+
+      var index = subrule.Index + 1;
+
+      if (index >= seq.SubruleCount)
+        return;
+
+      var end = subrule.End;
+
+      foreach (var nextSubrule in parsedSubrules[index])
+      {
+        if (nextSubrule.Begin == end)
+        {
+          Test(nextSubrule, parsedSubrules, seq);
+        }
+      }
+    }
+
+    private static List<ParsedSubrule>[] GetValidParses(IEnumerable<int> ends, ParsedSequence seq)
+    {
+      var subrulesParses = new List<ParsedSubrule>[seq.SubruleCount];
+      var prevBegins = new HashSet<int>(ends);
+
+      for (int i = seq.SubruleCount - 1; i >= 0; i--)
+      {
+        var subruleParses = subrulesParses[i];
+
+        foreach (var s in seq.ParsedSubrules)
+        {
+          if (s.Index != i)
+            continue;
+
+          var found = false;
+          foreach (var end in prevBegins)
+            if (end == s.End)
+            {
+              found = true;
+              break;
+            }
+
+          if (!found)
+            continue;
+
+          if (subruleParses == null)
+          {
+            subruleParses = new List<ParsedSubrule>();
+            subrulesParses[i] = subruleParses;
+          }
+
+          subruleParses.Add(s);
+        }
+
+        if (subruleParses == null)
+        {
+          // что-то не слажалось
+          break;
+        }
+        prevBegins.Clear();
+        foreach (var subruleParse in subruleParses)
+          prevBegins.Add(subruleParse.Begin);
+      }
+
+      return subrulesParses;
+    }
+
+    private void RecoverAllWays(RecoveryParser rp)
+    {
       int maxPos;
 
       do
@@ -92,18 +205,35 @@ namespace Nitra.DebugStrategies
         //maxPos = Array.FindIndex(rp.Records, maxPos + 1, IsNotNull);
 
       } while (rp.MaxPos > maxPos); //while (maxPos >= 0 && maxPos < textLen);
-
-
-      while (parseResult.RecoveryStacks.Count > 0)
-      {
-        var failPos = parseResult.MaxFailPos;
-        var skipCount = 0;
-        var bestFrames = CollectBestFrames(failPos, ref skipCount, parseResult);
-        FixAst(bestFrames, failPos, skipCount, parseResult);
-      }
-
-      return parseResult.Text.Length;
     }
+
+    //private static List<ParsedList> GetValidParses2(IEnumerable<int> ends, ParsedSequence seq)
+    //{
+    //  var total = new List<ParsedList>();
+    //  var validParses = GetValidParses(ends, seq);
+    //  for (int i = 0; i < seq.SubruleCount; i++)
+    //  {
+    //    var validParse = validParses[i];
+    //    var subRule    = seq.GetSubrule(i);
+
+    //    var ends = new HashSet<int>(ends);
+    //    foreach (var p in validParse)
+    //      ends.Add(p.End);
+
+
+    //    var results = GetValidParses2(ends, subRule);
+        
+    //    foreach (var result in results)
+    //    new ParsedList.Cons(new ParsedNode(seq, subRule), prefix);
+
+    //    if (total.Count == 0)
+    //      total.Add([this]);
+
+    //    total.AddRange(results);
+    //  }
+
+    //  return total;
+    //}
 
     private bool IsNotNull(HashSet<ParseRecord> x)
     {
