@@ -94,7 +94,8 @@ namespace Nitra.DebugStrategies
     private static void Test(ParsedSubrule subrule, List<ParsedSubrule>[] parsedSubrules, ParsedSequence seq)
     {
       _count++;
-      Debug.Write(subrule + "  ");
+      var text = seq.RecoveryParser.ParseResult.Text.Substring(subrule.Begin, subrule.End - subrule.Begin);
+      Debug.Write(subrule + "  '" + text + "'   ");
 
       if (_count > 300)
       {}
@@ -116,13 +117,14 @@ namespace Nitra.DebugStrategies
             var subrulesParses = GetValidParses(new[] { subrule.End }, subSeq);
             foreach (var subruleParse in subrulesParses[0])
               Test(subruleParse, subrulesParses, subSeq);
-            Debug.WriteLine(subSeq);
+            //Debug.WriteLine(subSeq);
           }
         }
 
         if (!hasElements) // Если элементов нет, то нужно посчитать количество токенво в бинарном АСТ.
         {
           var subruleInfo = seq.GetSubrule(subrule.Index);
+          Debug.Write(subruleInfo);
 
           if (!subruleInfo.IsVoid)
           {
@@ -130,13 +132,17 @@ namespace Nitra.DebugStrategies
             {
               var skipedTokens = subruleInfo.MandatoryTokenCount;
               if (skipedTokens > 0)
-              { }
+              {
+                Debug.Write("  ST: " + skipedTokens);
+              }
             }
             else
             {
               var tokenCounter = TokenCount.CreateFromSubruleInfo(subruleInfo, subrule.Begin, subrule.End, seq.RecoveryParser.ParseResult);
               var allTokens = tokenCounter.AllTokens;
               var keyTokens = tokenCounter.KeyTokens;
+              Debug.Write("  PT: " + allTokens + " PKT: " + keyTokens);
+              
             }
           }
         }
@@ -146,7 +152,7 @@ namespace Nitra.DebugStrategies
 
       var index = subrule.Index + 1;
 
-      if (index < seq.SubruleCount)
+      if (index < parsedSubrules.Length)
       {
         var end = subrule.End;
 
