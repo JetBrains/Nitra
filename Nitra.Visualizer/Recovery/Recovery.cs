@@ -31,6 +31,7 @@ namespace Nitra.DebugStrategies
   using ParseAlternativeNodes = Nemerle.Core.list<ParseAlternativeNode>;
 
   using ParsedList = Nemerle.Core.list<ParsedNode>;
+  using Nitra.Runtime;
   
 //#endregion
 
@@ -118,7 +119,19 @@ namespace Nitra.DebugStrategies
 
       if (!hasElements) // Если элементов нет, то нужно посчитать количество токенво в бинарном АСТ.
       {
-        
+        var subruleInfo = seq.GetSubrule(subrule.Index);
+        if (subrule.IsEmpty)
+        {
+          var skipedTokens = subruleInfo.MandatoryTokenCount;
+          if (skipedTokens > 0)
+          { }
+        }
+        else
+        {
+          var tokenCounter = TokenCount.CreateFromSubruleInfo(subruleInfo, subrule.Begin, subrule.End, seq.RecoveryParser.ParseResult);
+          var allTokens = tokenCounter.AllTokens;
+          var keyTokens = tokenCounter.KeyTokens;
+        }
       }
 
       Debug.WriteLine("  ");
