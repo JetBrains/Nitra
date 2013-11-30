@@ -99,38 +99,46 @@ namespace Nitra.DebugStrategies
       if (_count > 300)
       {}
 
-      var subSeqs  = seq.GetSequencesForSubrule(subrule);
-      var hasElements = false;
-      foreach (var subSeq in subSeqs)
+      if (!seq.IsSubruleVoid(subrule.Index))
       {
-        if (subrule.Begin == 30 && subSeq.Name == "Ctor")
-        { }
-
-        if (!subrule.IsEmpty)
+        var subSeqs = seq.GetSequencesForSubrule(subrule);
+        var hasElements = false;
+        foreach (var subSeq in subSeqs)
         {
           // если элементы есть, то нам н ужно  зайти внутрь и рекурсивно просчитать все пути.
           hasElements = true;
-          var subrulesParses = GetValidParses(new[] { subrule.End }, subSeq);
-          foreach (var subruleParse in subrulesParses[0])
-            Test(subruleParse, subrulesParses, subSeq);
-          Debug.WriteLine(subSeq);
-        }
-      }
 
-      if (!hasElements) // Если элементов нет, то нужно посчитать количество токенво в бинарном АСТ.
-      {
-        var subruleInfo = seq.GetSubrule(subrule.Index);
-        if (subrule.IsEmpty)
-        {
-          var skipedTokens = subruleInfo.MandatoryTokenCount;
-          if (skipedTokens > 0)
+          if (subrule.Begin == 30 && subSeq.Name == "Ctor")
           { }
+
+          if (!subrule.IsEmpty)
+          {
+            var subrulesParses = GetValidParses(new[] { subrule.End }, subSeq);
+            foreach (var subruleParse in subrulesParses[0])
+              Test(subruleParse, subrulesParses, subSeq);
+            Debug.WriteLine(subSeq);
+          }
         }
-        else
+
+        if (!hasElements) // Если элементов нет, то нужно посчитать количество токенво в бинарном АСТ.
         {
-          var tokenCounter = TokenCount.CreateFromSubruleInfo(subruleInfo, subrule.Begin, subrule.End, seq.RecoveryParser.ParseResult);
-          var allTokens = tokenCounter.AllTokens;
-          var keyTokens = tokenCounter.KeyTokens;
+          var subruleInfo = seq.GetSubrule(subrule.Index);
+
+          if (!subruleInfo.IsVoid)
+          {
+            if (subrule.IsEmpty)
+            {
+              var skipedTokens = subruleInfo.MandatoryTokenCount;
+              if (skipedTokens > 0)
+              { }
+            }
+            else
+            {
+              var tokenCounter = TokenCount.CreateFromSubruleInfo(subruleInfo, subrule.Begin, subrule.End, seq.RecoveryParser.ParseResult);
+              var allTokens = tokenCounter.AllTokens;
+              var keyTokens = tokenCounter.KeyTokens;
+            }
+          }
         }
       }
 
