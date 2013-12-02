@@ -13,6 +13,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Xml.Linq;
 
+using ParsedSeqKey = Nemerle.Builtins.Tuple<Nitra.Internal.Recovery.ParsedSequence, int>;
 using ParsedNode = Nemerle.Builtins.Tuple<Nitra.Internal.Recovery.ParsedSequence, Nitra.Internal.Recovery.ParsedSubrule>;
 
 using NB = Nemerle.Builtins;
@@ -71,10 +72,12 @@ namespace Nitra.DebugStrategies
 
       _count = 0;
 
-      foreach (var subrule in subrulesParses[0])
-      {
-        Test(subrule, subrulesParses, startSeq); 
-      }
+      var memiozation = new Dictionary<ParsedSeqKey, int>();
+      Test2(startSeq, parseResult.Text.Length, memiozation, "ROOT");
+      //foreach (var subrule in subrulesParses[0])
+      //{
+      //  Test(subrule, subrulesParses, startSeq); 
+      //}
 
       var _ = subrulesParses;
 
@@ -90,6 +93,84 @@ namespace Nitra.DebugStrategies
     }
 
     static int _count;
+
+    private static int Test2(ParsedSequence seq, int end, Dictionary<ParsedSeqKey, int> memiozation, string seqName)
+    {
+      int result;
+      var key = new ParsedSeqKey(seq, end);
+
+      if (memiozation.TryGetValue(key, out result))
+        return result;
+
+      memiozation.Add(key, int.MaxValue);
+
+      var prevResults = new Dictionary<ParsedSubrule, int>();
+
+      foreach (var subrule in seq.GetValidSubrules(end))
+      {
+        int res = 0;
+        if (!seq.IsSubruleVoid(subrule.Index))
+        {
+          var subSeqs = seq.GetSequencesForSubrule(subrule);
+          var hasElements = false;
+
+          var localMin = int.MaxValue;
+
+          foreach (var subSeq in subSeqs)
+          {
+            // если элементы есть, то нам н ужно  зайти внутрь и рекурсивно просчитать все пути.
+            hasElements = true;
+
+            if (subrule.Begin == 21 && subSeq.Name == "Ctor")
+            { }
+
+            var localRes = Test2(subSeq, subrule.End, memiozation, subSeq.Name);
+            if (localRes < localMin)
+              localMin = localRes;
+          }
+
+          if (hasElements && localMin > 1 && localMin != int.MaxValue)
+          {
+          }
+
+          if (!hasElements) // Если элементов нет, то нужно посчитать количество токенво в бинарном АСТ.
+          {
+            var subruleInfo = seq.GetSubrule(subrule.Index);
+            Debug.Write(subruleInfo);
+
+            if (!subruleInfo.IsVoid)
+            {
+              if (subrule.IsEmpty)
+              {
+                var skipedTokens = subruleInfo.MandatoryTokenCount;
+                if (skipedTokens > 0)
+                {
+                  Debug.Write("  ST: " + skipedTokens);
+                }
+                res += skipedTokens;
+              }
+              else
+              {
+                var tokenCounter = TokenCount.CreateFromSubruleInfo(subruleInfo, subrule.Begin, subrule.End, seq.RecoveryParser.ParseResult);
+                var allTokens = tokenCounter.AllTokens;
+                var keyTokens = tokenCounter.KeyTokens;
+                Debug.Write("  PT: " + allTokens + " PKT: " + keyTokens);
+              }
+            }
+          }
+          else
+            res += localMin;
+        }
+        var min = seq.GetPrevSubrules(subrule).MinOrZero(prev => prevResults[prev], 0);
+        prevResults[subrule] = res + min;
+      }
+
+      result = seq.GetLastSubrules(end).MinOrZero(prev => prevResults[prev], 0);
+
+      memiozation[key] = result;
+      
+      return result;
+    }
 
     private static void Test(ParsedSubrule subrule, List<ParsedSubrule>[] parsedSubrules, ParsedSequence seq)
     {
@@ -1088,6 +1169,27 @@ namespace Nitra.DebugStrategies
 
   public static class RecoveryUtils
   {
+    public static int MinOrZero<T>(this IEnumerable<T> seq, Func<T, int> selector, int defaultValue)
+    {
+      using (var enumerable = seq.GetEnumerator())
+      {
+        if (enumerable.MoveNext())
+        {
+          var min = selector(enumerable.Current);
+
+          while (enumerable.MoveNext())
+          {
+            var cur = selector(enumerable.Current);
+            if (cur < min)
+              min = cur;
+          }
+          return min;
+        }
+
+        return defaultValue;
+      }
+    }
+
     public static List<T> FilterMax<T>(this SCG.ICollection<T> candidates, Func<T, int> selector)
     {
       var count = candidates.Count;
