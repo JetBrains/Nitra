@@ -7,7 +7,8 @@ using Nemerle.Imperative;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Linq.Expressions;
+using System.Reflection;
+using System.Reflection.Emit;
 
 namespace Nitra.Internal
 {
@@ -96,10 +97,7 @@ namespace Nitra.Internal
       def ambiguousAstType = typeof(T).GetNestedType("AmbiguousAst");
       assert2(ambiguousAstType != null);
 
-      def ambiguousAstCtor = ambiguousAstType.GetConstructor(array[typeof(Location), typeof(array[T])]);
-      assert2(ambiguousAstCtor != null);
-
-      MakeDelegate(ambiguousAstCtor)
+      MakeConstructorDelegate(ambiguousAstType, array[typeof(Location), typeof(array[T])])
     };
 
     private CreateMissing : Func[Location, T] =
@@ -107,10 +105,7 @@ namespace Nitra.Internal
       def missingAstType = typeof(T).GetNestedType("MissingAst");
       assert2(missingAstType != null);
 
-      def missingAstCtor = missingAstType.GetConstructor(array[typeof(Location)]);
-      assert2(missingAstCtor != null);
-
-      MakeDelegate(missingAstCtor)
+      MakeConstructorDelegate(missingAstType, array[typeof(Location)])
     };
 
     private CreatePrefix(pos : ref int, astPtr : int, parseResult : ParseResult, ruleParser : ExtensionRuleParser) : T
@@ -131,8 +126,7 @@ namespace Nitra.Internal
     [Memoize]
     private GetPrefixConstructor(ruleDescriptor : RuleDescriptor) : PrefixAstCtor
     {
-      def astTypeCtor = GetAstConstructor(ruleDescriptor, PrefixAstCtorSignature);
-      MakeDelegate(astTypeCtor)
+      MakeConstructorDelegate(GetAstType(ruleDescriptor), PrefixAstCtorSignature);
     }
 
     private delegate PostfixAstCtor(prefix : T, prefixStartPos : int, pos : ref int, astPtr : int, parseResult : ParseResult) : T;
@@ -141,31 +135,30 @@ namespace Nitra.Internal
     [Memoize]
     private GetPostfixConstructor(ruleDescriptor : RuleDescriptor) : PostfixAstCtor
     {
-      def astTypeCtor = GetAstConstructor(ruleDescriptor, PostfixAstCtorSignature);
-      MakeDelegate(astTypeCtor)
+      MakeConstructorDelegate(GetAstType(ruleDescriptor), PostfixAstCtorSignature)
     }
 
-    private GetAstConstructor(ruleDescriptor : RuleDescriptor, signature : array[Type]) : System.Reflection.ConstructorInfo
+    private GetAstType(ruleDescriptor : RuleDescriptor) : Type
     {
       def astTypeName = ruleDescriptor.Grammar.FullName + "Ast+" + ruleDescriptor.Name.Replace('.', '+');
       def astType     = ruleDescriptor.Grammar.GetType().Assembly.GetType(astTypeName);
       assert2(astType != null);
 
-      def astTypeCtor = astType.GetConstructor(signature);
-      assert2(astTypeCtor != null);
-
-      astTypeCtor
+      astType
     }
 
-    private MakeDelegate[TDelegate](constructorInfo : System.Reflection.ConstructorInfo) : TDelegate
+    private MakeConstructorDelegate[TDelegate](type : Type, signature : array[Type]) : TDelegate
     {
-      def parameters = List();
-      foreach (p in constructorInfo.GetParameters())
-        parameters.Add(Expression.Parameter(p.ParameterType, p.Name));
-      def parameters = parameters.ToArray();
+      def ctor = type.GetConstructor(signature);
+      assert2(ctor != null);
 
-      def call = Expression.New(constructorInfo, parameters :> array[Expression]);
-      Expression.Lambda.[TDelegate](call, parameters).Compile()
+      def dm = DynamicMethod("", typeof(T), signature);
+      def il = dm.GetILGenerator();
+      for (mutable index = 0; index < signature.Length; ++index)
+        il.Emit(OpCodes.Ldarg, index);
+      il.Emit(OpCodes.Newobj, ctor);
+      il.Emit(OpCodes.Ret);
+      dm.CreateDelegate(typeof(TDelegate)) :> TDelegate
     }
   }
 }
