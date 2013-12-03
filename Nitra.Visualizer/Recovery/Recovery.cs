@@ -20,6 +20,8 @@ using NB = Nemerle.Builtins;
 using IntRuleCallKey = Nemerle.Builtins.Tuple<int, Nitra.Internal.Recovery.RuleCallKey>;
 using SCG = System.Collections.Generic;
 
+using SubruleParses = System.Collections.Generic.Dictionary<Nitra.Internal.Recovery.ParsedSubrule, int>;
+
 #if NITRA_RUNTIME
 namespace Nitra.Strategies
 #else
@@ -27,6 +29,7 @@ namespace Nitra.Strategies
 namespace Nitra.DebugStrategies
 #endif
 {
+  using SubruleParsesAndEnd = Nemerle.Builtins.Tuple<SubruleParses, int>;
   using ParserData = Tuple<int, int, List<ParsedStateInfo>>;
   using ReportData = Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>>;
   using ParseAlternativeNodes = Nemerle.Core.list<ParseAlternativeNode>;
@@ -68,43 +71,29 @@ namespace Nitra.DebugStrategies
       timer.Stop();
       Debug.WriteLine("RecoverAllWays took: " + timer.Elapsed);
 
-      var subrulesParses = GetValidParses(new[] { textLen }, startSeq);
-
-      _count = 0;
-
-      var memiozation = new Dictionary<ParsedSeqKey, int>();
-      Test2(startSeq, parseResult.Text.Length, memiozation, "ROOT");
-      //foreach (var subrule in subrulesParses[0])
-      //{
-      //  Test(subrule, subrulesParses, startSeq); 
-      //}
-
-      var _ = subrulesParses;
-
-      //while (parseResult.RecoveryStacks.Count > 0)
-      //{
-      //  var failPos = parseResult.MaxFailPos;
-      //  var skipCount = 0;
-      //  var bestFrames = CollectBestFrames(failPos, ref skipCount, parseResult);
-      //  FixAst(bestFrames, failPos, skipCount, parseResult);
-      //}
+      var memiozation = new Dictionary<ParsedSeqKey, SubruleParsesAndEnd>();
+      FindBestPath(startSeq, parseResult.Text.Length, memiozation, "ROOT");
 
       return parseResult.Text.Length;
     }
 
-    static int _count;
-
-    private static int Test2(ParsedSequence seq, int end, Dictionary<ParsedSeqKey, int> memiozation, string seqName)
+    private static int FindBestPath(ParsedSequence seq, int end, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation, string seqName)
     {
-      int result;
+      SubruleParsesAndEnd result;
+
       var key = new ParsedSeqKey(seq, end);
 
       if (memiozation.TryGetValue(key, out result))
-        return result;
-
-      memiozation.Add(key, int.MaxValue);
+      {
+        if (result.Field1 == int.MaxValue)
+        {
+        }
+        return result.Field1;
+      }
 
       var prevResults = new Dictionary<ParsedSubrule, int>();
+      memiozation.Add(key, new SubruleParsesAndEnd(prevResults, int.MaxValue));
+
 
       foreach (var subrule in seq.GetValidSubrules(end))
       {
@@ -124,12 +113,25 @@ namespace Nitra.DebugStrategies
             if (subrule.Begin == 21 && subSeq.Name == "Ctor")
             { }
 
-            var localRes = Test2(subSeq, subrule.End, memiozation, subSeq.Name);
+            if (subrule.IsEmpty)
+            {
+              localMin = seq.SubruleMandatoryTokenCount(subrule.Index);
+              break;
+            }
+
+            var localRes = FindBestPath(subSeq, subrule.End, memiozation, subSeq.Name);
+
+            if (localRes == int.MaxValue)
+            {
+              localMin = seq.SubruleMandatoryTokenCount(subrule.Index);
+              break;
+            }
+
             if (localRes < localMin)
               localMin = localRes;
           }
 
-          if (hasElements && localMin > 1 && localMin != int.MaxValue)
+          if (hasElements && localMin == int.MaxValue)
           {
           }
 
@@ -145,7 +147,7 @@ namespace Nitra.DebugStrategies
                 var skipedTokens = subruleInfo.MandatoryTokenCount;
                 if (skipedTokens > 0)
                 {
-                  Debug.Write("  ST: " + skipedTokens);
+                  Debug.WriteLine("  ST: " + skipedTokens + "   ->> " + seq);
                 }
                 res += skipedTokens;
               }
@@ -154,157 +156,27 @@ namespace Nitra.DebugStrategies
                 var tokenCounter = TokenCount.CreateFromSubruleInfo(subruleInfo, subrule.Begin, subrule.End, seq.RecoveryParser.ParseResult);
                 var allTokens = tokenCounter.AllTokens;
                 var keyTokens = tokenCounter.KeyTokens;
-                Debug.Write("  PT: " + allTokens + " PKT: " + keyTokens);
+                //Debug.Write("  PT: " + allTokens + " PKT: " + keyTokens);
               }
             }
           }
-          else
+          else if (localMin != int.MaxValue)
             res += localMin;
+          else
+          { }
         }
         var min = seq.GetPrevSubrules(subrule).MinOrZero(prev => prevResults[prev], 0);
         prevResults[subrule] = res + min;
       }
 
-      result = seq.GetLastSubrules(end).MinOrZero(prev => prevResults[prev], 0);
+      var minResult = seq.GetLastSubrules(end).MinOrZero(prev => prevResults[prev], 0);
+      var result2 =  new SubruleParsesAndEnd(prevResults, minResult);
+      memiozation[key] = result2;
 
-      memiozation[key] = result;
-      
-      return result;
-    }
+      if (result2.Field1 == int.MaxValue)
+        Debug.Assert(false);
 
-    private static void Test(ParsedSubrule subrule, List<ParsedSubrule>[] parsedSubrules, ParsedSequence seq)
-    {
-      _count++;
-      var text = seq.RecoveryParser.ParseResult.Text.Substring(subrule.Begin, subrule.End - subrule.Begin);
-      Debug.Write(subrule + "  '" + text + "'   ");
-
-      if (_count > 300)
-      {}
-
-      if (!seq.IsSubruleVoid(subrule.Index))
-      {
-        var subSeqs = seq.GetSequencesForSubrule(subrule);
-        var hasElements = false;
-        foreach (var subSeq in subSeqs)
-        {
-          // если элементы есть, то нам н ужно  зайти внутрь и рекурсивно просчитать все пути.
-          hasElements = true;
-
-          if (subrule.Begin == 30 && subSeq.Name == "Ctor")
-          { }
-
-          if (!subrule.IsEmpty)
-          {
-            var subrulesParses = GetValidParses(new[] { subrule.End }, subSeq);
-            foreach (var subruleParse in subrulesParses[0])
-              Test(subruleParse, subrulesParses, subSeq);
-            //Debug.WriteLine(subSeq);
-          }
-        }
-
-        if (!hasElements) // Если элементов нет, то нужно посчитать количество токенво в бинарном АСТ.
-        {
-          var subruleInfo = seq.GetSubrule(subrule.Index);
-          Debug.Write(subruleInfo);
-
-          if (!subruleInfo.IsVoid)
-          {
-            if (subrule.IsEmpty)
-            {
-              var skipedTokens = subruleInfo.MandatoryTokenCount;
-              if (skipedTokens > 0)
-              {
-                Debug.Write("  ST: " + skipedTokens);
-              }
-            }
-            else
-            {
-              var tokenCounter = TokenCount.CreateFromSubruleInfo(subruleInfo, subrule.Begin, subrule.End, seq.RecoveryParser.ParseResult);
-              var allTokens = tokenCounter.AllTokens;
-              var keyTokens = tokenCounter.KeyTokens;
-              Debug.Write("  PT: " + allTokens + " PKT: " + keyTokens);
-              
-            }
-          }
-        }
-      }
-
-      Debug.WriteLine("  ");
-
-      var index = subrule.Index + 1;
-
-      if (index < parsedSubrules.Length)
-      {
-        var end = subrule.End;
-
-        foreach (var nextSubrule in parsedSubrules[index])
-        {
-          if (nextSubrule.Begin == end)
-          {
-            Test(nextSubrule, parsedSubrules, seq);
-          }
-        }
-      }
-
-      _count--;
-    }
-
-    private static List<ParsedSubrule>[] GetValidParses(IEnumerable<int> ends, ParsedSequence seq)
-    {
-      var subrulesParses = new List<ParsedSubrule>[seq.SubruleCount];
-      var prevBegins = new HashSet<int>(ends);
-
-      for (int i = seq.SubruleCount - 1; i >= 0; i--)
-      {
-        var subruleParses = subrulesParses[i];
-
-        foreach (var s in seq.ParsedSubrules)
-        {
-          if (s.Index != i)
-            continue;
-
-          var found = false;
-          foreach (var end in prevBegins)
-            if (end == s.End)
-            {
-              found = true;
-              break;
-            }
-
-          if (!found)
-            continue;
-
-          if (subruleParses == null)
-          {
-            subruleParses = new List<ParsedSubrule>();
-            subrulesParses[i] = subruleParses;
-          }
-
-          subruleParses.Add(s);
-        }
-
-        if (subruleParses == null)
-        {
-          if (seq is ParsedSequence.Extensible)
-          {
-            Debug.Assert(i == 1);
-            subrulesParses = new List<ParsedSubrule>[1];
-            continue;
-          }
-
-          Debug.Assert(false); // что-то не слажалось
-          break;
-        }
-
-        if (i > 0)
-        {
-          prevBegins.Clear();
-          foreach (var subruleParse in subruleParses)
-            prevBegins.Add(subruleParse.Begin);
-        }
-      }
-
-      return subrulesParses;
+      return result2.Field1;
     }
 
     private void RecoverAllWays(RecoveryParser rp)
