@@ -41,6 +41,7 @@ namespace Nitra.DebugStrategies
 
   public class Recovery
   {
+    public const int Fail = int.MaxValue;
     public ReportData ReportResult;
 
     #region Инициализация и старт
@@ -85,25 +86,26 @@ namespace Nitra.DebugStrategies
 
       if (memiozation.TryGetValue(key, out result))
       {
-        if (result.Field1 == int.MaxValue)
+        if (result.Field1 == Fail)
         {
         }
         return result.Field1;
       }
 
       var prevResults = new Dictionary<ParsedSubrule, int>();
-      memiozation.Add(key, new SubruleParsesAndEnd(prevResults, int.MaxValue));
+      memiozation.Add(key, new SubruleParsesAndEnd(prevResults, Fail));
 
 
       foreach (var subrule in seq.GetValidSubrules(end))
       {
         int res = 0;
+
         if (!seq.IsSubruleVoid(subrule.Index))
         {
           var subSeqs = seq.GetSequencesForSubrule(subrule);
           var hasElements = false;
 
-          var localMin = int.MaxValue;
+          var localMin = Fail;
 
           foreach (var subSeq in subSeqs)
           {
@@ -121,17 +123,11 @@ namespace Nitra.DebugStrategies
 
             var localRes = FindBestPath(subSeq, subrule.End, memiozation, subSeq.Name);
 
-            if (localRes == int.MaxValue)
-            {
-              localMin = seq.SubruleMandatoryTokenCount(subrule.Index);
-              break;
-            }
-
             if (localRes < localMin)
               localMin = localRes;
           }
 
-          if (hasElements && localMin == int.MaxValue)
+          if (hasElements && localMin == Fail)
           {
           }
 
@@ -149,39 +145,44 @@ namespace Nitra.DebugStrategies
                 {
                   Debug.WriteLine("  ST: " + skipedTokens + "   ->> " + seq);
                 }
-                res += skipedTokens;
+                res = AddOrFail(res, skipedTokens);
               }
-              else
-              {
-                var tokenCounter = TokenCount.CreateFromSubruleInfo(subruleInfo, subrule.Begin, subrule.End, seq.RecoveryParser.ParseResult);
-                var allTokens = tokenCounter.AllTokens;
-                var keyTokens = tokenCounter.KeyTokens;
-                //Debug.Write("  PT: " + allTokens + " PKT: " + keyTokens);
-              }
+              //else
+              //{
+              //  //var tokenCounter = TokenCount.CreateFromSubruleInfo(subruleInfo, subrule.Begin, subrule.End, seq.RecoveryParser.ParseResult);
+              //  //var allTokens = tokenCounter.AllTokens;
+              //  //var keyTokens = tokenCounter.KeyTokens;
+              //  //Debug.Write("  PT: " + allTokens + " PKT: " + keyTokens);
+              //}
             }
           }
-          else if (localMin != int.MaxValue)
-            res += localMin;
           else
-          { }
+            res = AddOrFail(res, localMin);
+          
         }
         var min = seq.GetPrevSubrules(subrule).MinOrZero(prev => prevResults[prev], 0);
-        prevResults[subrule] = res + min;
+        prevResults[subrule] = AddOrFail(res, min);
       }
 
       var minResult = seq.GetLastSubrules(end).MinOrZero(prev => prevResults[prev], 0);
       var result2 =  new SubruleParsesAndEnd(prevResults, minResult);
       memiozation[key] = result2;
 
-      if (result2.Field1 == int.MaxValue)
-        Debug.Assert(false);
+      //if (result2.Field1 == Fail)
+      //  Debug.Assert(false);
 
       return result2.Field1;
     }
 
+    private static int AddOrFail(int source, int addition)
+    {
+      return source == Fail || addition == Fail ? Fail : source + addition;
+    }
+
     private void RecoverAllWays(RecoveryParser rp)
     {
-      int maxPos;
+// ReSharper disable once RedundantAssignment
+      int maxPos = rp.MaxPos;
 
       do
       {
@@ -196,8 +197,15 @@ namespace Nitra.DebugStrategies
           {
             var record = records.Dequeue();
 
-            if (record.IsComplete)
+            if (record.IsComplete || record.Sequence.IsToken)
               continue;
+
+            if (record.Sequence.Name == "TypeParameterConstraintsClause")
+            { }
+            if (record.Sequence.Name == "TypeParameterConstraints")
+            { }
+            if (record.Sequence.Name == "TypeParameterConstraint")
+            { }
 
             var newRecord = record.Next();
             records.Enqueue(newRecord);
@@ -224,34 +232,6 @@ namespace Nitra.DebugStrategies
 
       } while (rp.MaxPos > maxPos); //while (maxPos >= 0 && maxPos < textLen);
     }
-
-    //private static List<ParsedList> GetValidParses2(IEnumerable<int> ends, ParsedSequence seq)
-    //{
-    //  var total = new List<ParsedList>();
-    //  var validParses = GetValidParses(ends, seq);
-    //  for (int i = 0; i < seq.SubruleCount; i++)
-    //  {
-    //    var validParse = validParses[i];
-    //    var subRule    = seq.GetSubrule(i);
-
-    //    var ends = new HashSet<int>(ends);
-    //    foreach (var p in validParse)
-    //      ends.Add(p.End);
-
-
-    //    var results = GetValidParses2(ends, subRule);
-        
-    //    foreach (var result in results)
-    //    new ParsedList.Cons(new ParsedNode(seq, subRule), prefix);
-
-    //    if (total.Count == 0)
-    //      total.Add([this]);
-
-    //    total.AddRange(results);
-    //  }
-
-    //  return total;
-    //}
 
     private bool IsNotNull(HashSet<ParseRecord> x)
     {
