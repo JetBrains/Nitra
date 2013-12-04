@@ -194,7 +194,7 @@ namespace Sample.Json.Cs
       var parseResult = JsonParser.Start(source, parserHost);
       if (parseResult.IsSuccess)
       {
-        var ast = JsonParserAstWalkers.Start(parseResult);
+        var ast = JsonParserAst.Start.Create(parseResult);
         Console.WriteLine("Pretty print: " + ast);
       }
       else
