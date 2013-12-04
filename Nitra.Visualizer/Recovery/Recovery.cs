@@ -53,6 +53,7 @@ namespace Nitra.DebugStrategies
 
     public virtual int Strategy(ParseResult parseResult)
     {
+      Debug.IndentSize = 1;
       //Debug.Assert(parseResult.RecoveryStacks.Count > 0);
 
       var timer = Stopwatch.StartNew();
@@ -73,9 +74,43 @@ namespace Nitra.DebugStrategies
       Debug.WriteLine("RecoverAllWays took: " + timer.Elapsed);
 
       var memiozation = new Dictionary<ParsedSeqKey, SubruleParsesAndEnd>();
-      FindBestPath(startSeq, parseResult.Text.Length, memiozation, "ROOT");
+      FindBestPath(startSeq, textLen, memiozation, "ROOT");
+      Print(parseResult, startSeq, textLen, memiozation);
 
       return parseResult.Text.Length;
+    }
+
+    private void Print(ParseResult parseResult, ParsedSequence seq, int end, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
+    {
+      var first = memiozation[new ParsedSeqKey(seq, end)];
+      var parses = first.Field0;
+      Debug.WriteLine("(");
+      Debug.Indent();
+      
+      foreach (var parse in parses)
+      {
+        var subrule = parse.Key;
+        //var result = new List<Dictionary<ParsedSubrule, int>();
+        var sequences = seq.GetSequencesForSubrule(subrule).ToArray();
+        var subruledDesc = seq.GetSubruleDescription(subrule.Index);
+        if (sequences.Length == 0)
+        {
+          Debug.WriteLine(subruledDesc + "('" + parseResult.Text.Substring(subrule.Begin, subrule.End - subrule.Begin) + "') " + subrule.Begin + ":" + subrule.End);
+        }
+        else foreach (var s in sequences)
+        {
+          //var x = memiozation[new ParsedSeqKey(s, subrule.End)].Field0;
+          //result.Add(x);
+          Debug.WriteLine(subruledDesc);
+          Print(parseResult, s, subrule.End, memiozation);
+        }
+
+        //foreach (var y in result)
+        //  Print(parseResult, s, subrule.End, memiozation);
+      }
+
+      Debug.Unindent();
+      Debug.WriteLine(")");
     }
 
     private static int FindBestPath(ParsedSequence seq, int end, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation, string seqName)
@@ -210,7 +245,8 @@ namespace Nitra.DebugStrategies
             var newRecord = record.Next();
             records.Enqueue(newRecord);
             rp.SubruleParsed(maxPos, maxPos, record);
-            rp.PredictionOrScanning(maxPos, record, false);
+            if (rp.ParseResult.Text.Length != maxPos)
+              rp.PredictionOrScanning(maxPos, record, false);
           }
 
           rp.Parse();
@@ -225,6 +261,8 @@ namespace Nitra.DebugStrategies
             }
             if (parsedSequence.StartPos == maxPos && !parsedSequence.IsToken)
               records.Enqueue(new ParseRecord(parsedSequence, MaxSubruleIndex(parsedSequence.ParsedSubrules), maxPos));
+            else
+            { }
           }
         } while (records.Count > 0);
 
