@@ -82,29 +82,42 @@ namespace Nitra.DebugStrategies
 
     private void Print(ParseResult parseResult, ParsedSequence seq, int end, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
-      var first = memiozation[new ParsedSeqKey(seq, end)];
+      SubruleParsesAndEnd first;
+      var key = new ParsedSeqKey(seq, end);
+      if (!memiozation.TryGetValue(key, out first))
+      {
+        Debug.Assert(false);
+      }
       var parses = first.Field0;
+      var insertedTokens = first.Field1;
       Debug.WriteLine("(");
       Debug.Indent();
+      var prevSubruleInsertedTokens = 0;
       
       foreach (var parse in parses)
       {
         var subrule = parse.Key;
-        //var result = new List<Dictionary<ParsedSubrule, int>();
-        var sequences = seq.GetSequencesForSubrule(subrule).ToArray();
-        var subruledDesc = seq.GetSubruleDescription(subrule.Index);
-        if (sequences.Length == 0)
-        {
-          Debug.WriteLine(subruledDesc + "('" + parseResult.Text.Substring(subrule.Begin, subrule.End - subrule.Begin) + "') " + subrule.Begin + ":" + subrule.End);
-        }
-        else foreach (var s in sequences)
-        {
-          //var x = memiozation[new ParsedSeqKey(s, subrule.End)].Field0;
-          //result.Add(x);
-          Debug.WriteLine(subruledDesc);
-          Print(parseResult, s, subrule.End, memiozation);
-        }
+        var subruleInsertedTokens = parse.Value;
 
+        //var result = new List<Dictionary<ParsedSubrule, int>();
+        var subruledDesc = seq.GetSubruleDescription(subrule.Index);
+        if (subrule.IsEmpty || seq.IsSubruleVoid(subrule.Index))
+        {
+          Debug.WriteLine(subruledDesc + "('" + parseResult.Text.Substring(subrule.Begin, subrule.End - subrule.Begin) + "') " + subrule.Begin + ":" +
+                          subrule.End);
+        }
+        else
+        {
+          var sequences = seq.GetSequencesForSubrule(subrule).ToArray();
+
+          foreach (var s in sequences)
+          {
+            //var x = memiozation[new ParsedSeqKey(s, subrule.End)].Field0;
+            //result.Add(x);
+            Debug.WriteLine(subruledDesc);
+            Print(parseResult, s, subrule.End, memiozation);
+          }
+        }
         //foreach (var y in result)
         //  Print(parseResult, s, subrule.End, memiozation);
       }
@@ -122,8 +135,7 @@ namespace Nitra.DebugStrategies
       if (memiozation.TryGetValue(key, out result))
       {
         if (result.Field1 == Fail)
-        {
-        }
+        { }
         return result.Field1;
       }
 
@@ -163,8 +175,7 @@ namespace Nitra.DebugStrategies
           }
 
           if (hasElements && localMin == Fail)
-          {
-          }
+          { }
 
           if (!hasElements) // Если элементов нет, то нужно посчитать количество токенво в бинарном АСТ.
           {
@@ -177,18 +188,10 @@ namespace Nitra.DebugStrategies
               {
                 var skipedTokens = subruleInfo.MandatoryTokenCount;
                 if (skipedTokens > 0)
-                {
                   Debug.WriteLine("  ST: " + skipedTokens + "   ->> " + seq);
-                }
+
                 res = AddOrFail(res, skipedTokens);
               }
-              //else
-              //{
-              //  //var tokenCounter = TokenCount.CreateFromSubruleInfo(subruleInfo, subrule.Begin, subrule.End, seq.RecoveryParser.ParseResult);
-              //  //var allTokens = tokenCounter.AllTokens;
-              //  //var keyTokens = tokenCounter.KeyTokens;
-              //  //Debug.Write("  PT: " + allTokens + " PKT: " + keyTokens);
-              //}
             }
           }
           else
