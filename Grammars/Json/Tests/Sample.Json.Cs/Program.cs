@@ -17,7 +17,7 @@ namespace Sample.Json.Cs
 
       if (parseResult.IsSuccess)
       {
-        var ast = JsonParserAstWalkers.Start(parseResult);
+        var ast = JsonParserAst.Start.Create(parseResult);
         Console.WriteLine("Pretty print: " + ast);
         Console.WriteLine();
       }
