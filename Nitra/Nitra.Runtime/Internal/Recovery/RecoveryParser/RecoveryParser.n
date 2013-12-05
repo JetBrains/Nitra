@@ -175,20 +175,28 @@ namespace Nitra.Internal.Recovery
           StartParseSubrule(pos, ParseRecord(caller.Sequence, 2, pos));
 
         | List                       as sequence =>
+          _ = caller.Sequence.ParsedSubrules.Add(ParsedSubrule(sequence.StartPos, pos, caller.Index));
+          StartParseSubrule(pos, caller.Next());
+
+        | ListRule                   as sequence =>
           when (CounterLessThanMax(sequence.Counter, sequence.Subrule.Max))
             StartParseSequence(caller, sequence.NextSequence(pos));
           when (sequence.Counter >= sequence.Subrule.Min)
           {
-            _ = caller.Sequence.ParsedSubrules.Add(ParsedSubrule(sequence.ListStart, pos, caller.Index));
+            _ = caller.Sequence.ParsedSubrules.Add(ParsedSubrule(sequence.StartPos, pos, caller.Index));
             StartParseSubrule(pos, caller.Next());
           }
+
+        | ListWithSeparator          as sequence =>
+          _ = caller.Sequence.ParsedSubrules.Add(ParsedSubrule(sequence.StartPos, pos, caller.Index));
+          StartParseSubrule(pos, caller.Next());
 
         | ListWithSeparatorRule      as sequence =>
           when (sequence.Subrule.HangingSeparator || CounterLessThanMax(sequence.Counter, sequence.Subrule.Max))
             StartParseSequence(caller, sequence.NextSequence(pos));
           when (sequence.Counter >= sequence.Subrule.Min)
           {
-            _ = caller.Sequence.ParsedSubrules.Add(ParsedSubrule(sequence.ListStart, pos, caller.Index));
+            _ = caller.Sequence.ParsedSubrules.Add(ParsedSubrule(sequence.StartPos, pos, caller.Index));
             StartParseSubrule(pos, caller.Next());
           }
 
@@ -197,7 +205,7 @@ namespace Nitra.Internal.Recovery
             StartParseSequence(caller, sequence.NextSequence(pos));
           when (sequence.Subrule.HangingSeparator && sequence.Counter >= sequence.Subrule.Min)
           {
-            _ = caller.Sequence.ParsedSubrules.Add(ParsedSubrule(sequence.ListStart, pos, caller.Index));
+            _ = caller.Sequence.ParsedSubrules.Add(ParsedSubrule(sequence.StartPos, pos, caller.Index));
             StartParseSubrule(pos, caller.Next());
           }
       }
@@ -217,7 +225,7 @@ namespace Nitra.Internal.Recovery
           false
       }
 
-      if (record.Sequence is ParsedSequence.Extensible as sequence)
+      when (record.Sequence is ParsedSequence.Extensible as sequence)
       {
         match (record.Index)
         {
@@ -237,54 +245,64 @@ namespace Nitra.Internal.Recovery
 
           | _ => assert3(false)
         }
+        return;
       }
-      else
+
+      when (record.Sequence is ParsedSequence.List as sequence)
       {
-        def rule = record.CurSubrule;
-        match (rule)
-        {
-          | Empty | Marker | RegularCall | TokenString =>
-            _ = parseSubruleAndAddNextRecord(textPos, record)
+        StartParseSequence(record, ParsedSequence.ListRule(this, textPos, sequence.Subrule, 1));
+        return;
+      }
 
-          | ExtensibleCall    as rule =>
-            unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
-            when (rule.HeadPredicate == null || rule.HeadPredicate(textPos, ParseResult.Text, ParseResult))
-              StartParseSequence(record, ParsedSequence.Extensible(this, textPos, rule.RuleParser));
+      when (record.Sequence is ParsedSequence.ListWithSeparator as sequence)
+      {
+        StartParseSequence(record, ParsedSequence.ListWithSeparatorRule(this, textPos, sequence.Subrule, 1));
+        return;
+      }
 
-          | SimpleCall        as rule =>
-            unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
-            when (rule.HeadPredicate == null || rule.HeadPredicate(textPos, ParseResult.Text, ParseResult))
-            {
-              def sequence = rule.RuleParser.Reflection(rule.RuleParser.RuleId);
-              StartParseSequence(record, ParsedSequence.Simple(this, textPos, sequence));
-            }
+      match (record.CurSubrule)
+      {
+        | Empty | Marker | RegularCall | TokenString =>
+          _ = parseSubruleAndAddNextRecord(textPos, record)
 
-          | Option            as rule =>
-            unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
-            when (rule.HeadPredicate == null || rule.HeadPredicate(textPos, ParseResult.Text, ParseResult))
-            {
-              StartParseSequence(record, ParsedSequence.Option(this, textPos, rule));
+        | ExtensibleCall    as rule =>
+          unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
+          when (rule.HeadPredicate == null || rule.HeadPredicate(textPos, ParseResult.Text, ParseResult))
+            StartParseSequence(record, ParsedSequence.Extensible(this, textPos, rule.RuleParser));
+
+        | SimpleCall        as rule =>
+          unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
+          when (rule.HeadPredicate == null || rule.HeadPredicate(textPos, ParseResult.Text, ParseResult))
+          {
+            def sequence = rule.RuleParser.Reflection(rule.RuleParser.RuleId);
+            StartParseSequence(record, ParsedSequence.Simple(this, textPos, sequence));
+          }
+
+        | Option            as rule =>
+          unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
+          when (rule.HeadPredicate == null || rule.HeadPredicate(textPos, ParseResult.Text, ParseResult))
+          {
+            StartParseSequence(record, ParsedSequence.Option(this, textPos, rule));
+            SubruleParsed(textPos, textPos, record);
+          }
+
+        | List              as rule =>
+          unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
+          when (rule.HeadPredicate == null || rule.HeadPredicate(textPos, ParseResult.Text, ParseResult))
+          {
+            StartParseSequence(record, ParsedSequence.List(this, textPos, rule));
+            when (rule.Min == 0)
               SubruleParsed(textPos, textPos, record);
-            }
+          }
 
-          | List              as rule =>
-            unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
-            when (rule.HeadPredicate == null || rule.HeadPredicate(textPos, ParseResult.Text, ParseResult))
-            {
-              StartParseSequence(record, ParsedSequence.List(this, textPos, rule, textPos, 1));
-              when (rule.Min == 0)
-                SubruleParsed(textPos, textPos, record);
-            }
-
-          | ListWithSeparator as rule =>
-            unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
-            when (rule.HeadPredicate == null || rule.HeadPredicate(textPos, ParseResult.Text, ParseResult))
-            {
-              StartParseSequence(record, ParsedSequence.ListWithSeparatorRule(this, textPos, rule, textPos, 1));
-              when (rule.Min == 0)
-                SubruleParsed(textPos, textPos, record);
-            }
-        }
+        | ListWithSeparator as rule =>
+          unless (optimize && parseSubruleAndAddNextRecord(textPos, record))
+          when (rule.HeadPredicate == null || rule.HeadPredicate(textPos, ParseResult.Text, ParseResult))
+          {
+            StartParseSequence(record, ParsedSequence.ListWithSeparator(this, textPos, rule));
+            when (rule.Min == 0)
+              SubruleParsed(textPos, textPos, record);
+          }
       }
     }
 

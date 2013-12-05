@@ -22,13 +22,19 @@ namespace Nitra.Internal.Recovery
     public StartPos : int;
     
     | Root
+    | Simple                     { Sequence   : SequenceInfo; }
+
     | Extensible                 { RuleParser : ExtensibleRuleParser; }
-    | Simple                     { Sequence : SequenceInfo; }
-    | Extension                  { Sequence : SequenceInfo; }
-    | Option                     { Subrule  : SubruleInfo.Option; }
-    | List                       { Subrule  : SubruleInfo.List;              ListStart : int; Counter : int; }
-    | ListWithSeparatorRule      { Subrule  : SubruleInfo.ListWithSeparator; ListStart : int; Counter : int; }
-    | ListWithSeparatorSeparator { Subrule  : SubruleInfo.ListWithSeparator; ListStart : int; Counter : int; }
+    | Extension                  { Sequence   : SequenceInfo; }
+
+    | Option                     { Subrule    : SubruleInfo.Option; }
+
+    | List                       { Subrule    : SubruleInfo.List; }
+    | ListRule                   { Subrule    : SubruleInfo.List;              Counter : int; }
+
+    | ListWithSeparator          { Subrule    : SubruleInfo.ListWithSeparator; }
+    | ListWithSeparatorRule      { Subrule    : SubruleInfo.ListWithSeparator; Counter : int; }
+    | ListWithSeparatorSeparator { Subrule    : SubruleInfo.ListWithSeparator; Counter : int; }
 
     [RecordIgnore, EqualsIgnore] public Callers        : SCG.HashSet[ParseRecord]   = SCG.HashSet();
     [RecordIgnore, EqualsIgnore] public ParsedSubrules : SCG.HashSet[ParsedSubrule] = SCG.HashSet();
@@ -49,19 +55,19 @@ namespace Nitra.Internal.Recovery
         counter
     }
 
-    public static NextSequence(this sequence : ParsedSequence.List, pos : int) : ParsedSequence.List
+    public static NextSequence(this sequence : ParsedSequence.ListRule, pos : int) : ParsedSequence.ListRule
     {
-      ParsedSequence.List(sequence.RecoveryParser, pos, sequence.Subrule, sequence.ListStart, IncrementCounter(sequence.Counter, sequence.Subrule.Min, sequence.Subrule.Max))
+      ParsedSequence.ListRule(sequence.RecoveryParser, pos, sequence.Subrule, IncrementCounter(sequence.Counter, sequence.Subrule.Min, sequence.Subrule.Max))
     }
 
     public static NextSequence(this sequence : ParsedSequence.ListWithSeparatorRule, pos : int) : ParsedSequence.ListWithSeparatorSeparator
     {
-      ParsedSequence.ListWithSeparatorSeparator(sequence.RecoveryParser, pos, sequence.Subrule, sequence.ListStart, sequence.Counter)
+      ParsedSequence.ListWithSeparatorSeparator(sequence.RecoveryParser, pos, sequence.Subrule, sequence.Counter)
     }
 
     public static NextSequence(this sequence : ParsedSequence.ListWithSeparatorSeparator, pos : int) : ParsedSequence.ListWithSeparatorRule
     {
-      ParsedSequence.ListWithSeparatorRule(sequence.RecoveryParser, pos, sequence.Subrule, sequence.ListStart, IncrementCounter(sequence.Counter, sequence.Subrule.Min, sequence.Subrule.Max))
+      ParsedSequence.ListWithSeparatorRule(sequence.RecoveryParser, pos, sequence.Subrule, IncrementCounter(sequence.Counter, sequence.Subrule.Min, sequence.Subrule.Max))
     }
 
     public static TryGetFromCache[T](this sequence : T) : T
@@ -161,7 +167,9 @@ namespace Nitra.Internal.Recovery
         | Simple                     as seq => seq.Sequence.Subrules[index].IsVoid
         | Extension                  as seq => seq.Sequence.Subrules[index].IsVoid
         | Option                     as seq => seq.Subrule.Rule.Subrules[index].IsVoid
-        | List                       as seq => seq.Subrule.Rule.Subrules[index].IsVoid
+        | List                              => false
+        | ListRule                   as seq => seq.Subrule.Rule.Subrules[index].IsVoid
+        | ListWithSeparator                 => false
         | ListWithSeparatorRule      as seq => seq.Subrule.Rule.Subrules[index].IsVoid
         | ListWithSeparatorSeparator as seq => seq.Subrule.Separator.Subrules[index].IsVoid
       }
@@ -179,6 +187,8 @@ namespace Nitra.Internal.Recovery
           | Extension                  as sequence => sequence.Sequence.Id
           | Option                     as sequence => sequence.Subrule.Rule.Id
           | List                       as sequence => sequence.Subrule.Rule.Id
+          | ListRule                   as sequence => sequence.Subrule.Rule.Id
+          | ListWithSeparator          as sequence => sequence.Subrule.Rule.Id
           | ListWithSeparatorRule      as sequence => sequence.Subrule.Rule.Id
           | ListWithSeparatorSeparator as sequence => sequence.Subrule.Separator.Id
         }
@@ -196,7 +206,9 @@ namespace Nitra.Internal.Recovery
           | Extension                  => false
           | Option                     => false
           | Extensible                 => true
-          | List                       => true
+          | List                       => false
+          | ListRule                   => true
+          | ListWithSeparator          => false
           | ListWithSeparatorRule      => true
           | ListWithSeparatorSeparator => true
         }
@@ -228,49 +240,13 @@ namespace Nitra.Internal.Recovery
           | Extension                  => "Extension"
           | Option                     => "Option"
           | List                       => "List"
-          | ListWithSeparatorRule      => "ListRule"
-          | ListWithSeparatorSeparator => "ListSep"
+          | ListRule                   => "ListRule"
+          | ListWithSeparator          => "ListWS"
+          | ListWithSeparatorRule      => "ListWSRule"
+          | ListWithSeparatorSeparator => "ListWSSep"
           | Root                       => "Root"
           | Extensible                 => "Extensible"
         }
-      }
-    }
-
-    public GetSequenceForSubrule(parsedSubrule : ParsedSubrule) : option[ParsedSequence]
-    {
-      mutable sequence;
-      match (GetSubrule(parsedSubrule.Index))
-      {
-        | Empty | Marker | RegularCall | TokenString => None()
-        | ExtensibleCall    as rule =>
-          if (RecoveryParser.Sequences.TryGetFirstAddedItem(ParsedSequence.Extensible(RecoveryParser, parsedSubrule.Begin, rule.RuleParser), out sequence))
-            Some(sequence)
-          else
-            None()
-
-        | SimpleCall        as rule =>
-          if (RecoveryParser.Sequences.TryGetFirstAddedItem(ParsedSequence.Simple(RecoveryParser, parsedSubrule.Begin, rule.RuleParser.Reflection(rule.RuleParser.RuleId)), out sequence))
-            Some(sequence)
-          else
-            None()
-
-        | Option            as rule =>
-          if (RecoveryParser.Sequences.TryGetFirstAddedItem(ParsedSequence.Option(RecoveryParser, parsedSubrule.Begin, rule), out sequence))
-            Some(sequence)
-          else
-            None()
-
-        | List              as rule =>
-          if (RecoveryParser.Sequences.TryGetFirstAddedItem(ParsedSequence.List(RecoveryParser, parsedSubrule.Begin, rule, parsedSubrule.Begin, 1), out sequence))
-            Some(sequence)
-          else
-            None()
-
-        | ListWithSeparator as rule =>
-          if (RecoveryParser.Sequences.TryGetFirstAddedItem(ParsedSequence.ListWithSeparatorRule(RecoveryParser, parsedSubrule.Begin, rule, parsedSubrule.Begin, 1), out sequence))
-            Some(sequence)
-          else
-            None()
       }
     }
 
@@ -291,7 +267,36 @@ namespace Nitra.Internal.Recovery
             
         return res;
       }
-      
+
+      when (this is List as lst)
+      {
+        foreach (record in RecoveryParser.Records[begin])
+          when (record.Sequence.StartPos == begin)
+          when (record.Sequence.Ends.Contains(end))
+          when (record.Sequence is ParsedSequence.ListRule as sequence)
+          when (sequence.Subrule.Rule : object == lst.Subrule.Rule)
+            _ = res.Add(sequence);
+        return res;
+      }
+
+      when (this is ListWithSeparator as lst)
+      {
+        foreach (record in RecoveryParser.Records[begin])
+          when (record.Sequence.StartPos == begin)
+          when (record.Sequence.Ends.Contains(end))
+          {
+            when (parsedSubrule.Index == 0)
+            when (record.Sequence is ParsedSequence.ListWithSeparatorRule as sequence)
+            when (sequence.Subrule.Rule : object == lst.Subrule.Rule)
+              _ = res.Add(sequence);
+            when (parsedSubrule.Index == 1)
+            when (record.Sequence is ParsedSequence.ListWithSeparatorSeparator as sequence)
+            when (sequence.Subrule.Separator : object == lst.Subrule.Separator)
+              _ = res.Add(sequence);
+          }
+        return res;
+      }
+
       match (GetSubrule(parsedSubrule.Index))
       {
         | Empty | Marker | RegularCall | TokenString => ()
@@ -324,21 +329,16 @@ namespace Nitra.Internal.Recovery
             when (record.Sequence.StartPos == begin)
             when (record.Sequence.Ends.Contains(end))
             when (record.Sequence is ParsedSequence.List as sequence)
-            when (sequence.Subrule.Rule : object == rule.Rule)
+            when (sequence.Subrule : object == rule)
               _ = res.Add(sequence);
 
         | ListWithSeparator as rule =>
           foreach (record in RecoveryParser.Records[begin])
             when (record.Sequence.StartPos == begin)
             when (record.Sequence.Ends.Contains(end))
-            {
-              when (record.Sequence is ParsedSequence.ListWithSeparatorRule as sequence)
-              when (sequence.Subrule.Rule : object == rule.Rule)
-                _ = res.Add(sequence);
-              when (record.Sequence is ParsedSequence.ListWithSeparatorSeparator as sequence)
-              when (sequence.Subrule.Separator : object == rule.Separator)
-                _ = res.Add(sequence);
-            }
+            when (record.Sequence is ParsedSequence.ListWithSeparator as sequence)
+            when (sequence.Subrule : object == rule)
+              _ = res.Add(sequence);
       }
       res
     }
@@ -357,7 +357,9 @@ namespace Nitra.Internal.Recovery
         | Simple                     as seq => seq.Sequence.Subrules[index].MandatoryTokenCount
         | Extension                  as seq => seq.Sequence.Subrules[index].MandatoryTokenCount
         | Option                     as seq => seq.Subrule.Rule.Subrules[index].MandatoryTokenCount
-        | List                       as seq => seq.Subrule.Rule.Subrules[index].MandatoryTokenCount
+        | List                       as seq => seq.Subrule.MandatoryTokenCount
+        | ListRule                   as seq => seq.Subrule.Rule.Subrules[index].MandatoryTokenCount
+        | ListWithSeparator          as seq => seq.Subrule.MandatoryTokenCount
         | ListWithSeparatorRule      as seq => seq.Subrule.Rule.Subrules[index].MandatoryTokenCount
         | ListWithSeparatorSeparator as seq => seq.Subrule.Separator.Subrules[index].MandatoryTokenCount
       }
@@ -372,7 +374,9 @@ namespace Nitra.Internal.Recovery
         | Simple                     as seq => seq.Sequence.Subrules[index].Description
         | Extension                  as seq => seq.Sequence.Subrules[index].Description
         | Option                     as seq => seq.Subrule.Rule.Subrules[index].Description
-        | List                       as seq => seq.Subrule.Rule.Subrules[index].Description
+        | List                       as seq => seq.Subrule.Description
+        | ListRule                   as seq => seq.Subrule.Rule.Subrules[index].Description
+        | ListWithSeparator          as seq => seq.Subrule.Description
         | ListWithSeparatorRule      as seq => seq.Subrule.Rule.Subrules[index].Description
         | ListWithSeparatorSeparator as seq => seq.Subrule.Separator.Subrules[index].Description
       }
@@ -387,7 +391,9 @@ namespace Nitra.Internal.Recovery
         | Simple                     as seq => seq.Sequence.Subrules[index]
         | Extension                  as seq => seq.Sequence.Subrules[index]
         | Option                     as seq => seq.Subrule.Rule.Subrules[index]
-        | List                       as seq => seq.Subrule.Rule.Subrules[index]
+        | List                       as seq => seq.Subrule
+        | ListRule                   as seq => seq.Subrule.Rule.Subrules[index]
+        | ListWithSeparator          as seq => seq.Subrule
         | ListWithSeparatorRule      as seq => seq.Subrule.Rule.Subrules[index]
         | ListWithSeparatorSeparator as seq => seq.Subrule.Separator.Subrules[index]
       }
@@ -404,7 +410,9 @@ namespace Nitra.Internal.Recovery
           | Simple                     as seq => seq.Sequence.Subrules.Length
           | Extension                  as seq => seq.Sequence.Subrules.Length
           | Option                     as seq => seq.Subrule.Rule.Subrules.Length
-          | List                       as seq => seq.Subrule.Rule.Subrules.Length
+          | List                              => 1
+          | ListRule                   as seq => seq.Subrule.Rule.Subrules.Length
+          | ListWithSeparator                 => 2
           | ListWithSeparatorRule      as seq => seq.Subrule.Rule.Subrules.Length
           | ListWithSeparatorSeparator as seq => seq.Subrule.Separator.Subrules.Length
         }
@@ -423,8 +431,10 @@ namespace Nitra.Internal.Recovery
           | Extension                  => "Extension  "
           | Option                     => "Option     "
           | List                       => "List       "
-          | ListWithSeparatorRule      => "ListRule   "
-          | ListWithSeparatorSeparator => "ListSep    "
+          | ListRule                   => "ListRule   "
+          | ListWithSeparator          => "ListWS     "
+          | ListWithSeparatorRule      => "ListWSRule "
+          | ListWithSeparatorSeparator => "ListWSSep  "
           | Root                       => "Root       "
           | Extensible                 => "Extensible "
         };
