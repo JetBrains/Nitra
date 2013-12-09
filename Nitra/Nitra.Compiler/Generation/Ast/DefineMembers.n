@@ -97,12 +97,6 @@ namespace Nitra.Compiler
 
     private DefineAstCtorAndFields(fields : SCG.List[FieldInfo]) : void
     {
-      _astTb.DefineConditional(<[ decl:
-        protected this(location : Location)
-        {
-          base(location);
-        }
-      ]>);
       foreach (field in fields)
       {
         _astTb.DefineConditional(<[ decl:
@@ -116,11 +110,21 @@ namespace Nitra.Compiler
 
     private DefineParsedAstCtorAndFields(fields : SCG.List[FieldInfo]) : void
     {
+      _parsedAstTb.DefineConditional(<[ decl: private parseResult : Nitra.Internal.ParseResult; ]>);
+      _parsedAstTb.DefineConditional(<[ decl: private startPos    : int; ]>);
+      _parsedAstTb.DefineConditional(<[ decl: private endPos      : int; ]>);
+      _parsedAstTb.DefineConditional(<[ decl: private astPtr      : int; ]>);
+
+      _parsedAstTb.DefineConditional(<[ decl:
+        public override Location : Nitra.Location
+        {
+          get { Nitra.Location(this.parseResult.OriginalSource, this.startPos, this.endPos) }
+        }
+      ]>);
+
       def astPtr = AstPointer.Existing(this.RuleSymbol.Sequence, this, "astPtr");
 
-      def endPosStatements = SCG.List();
-      foreach (subrule in this.RuleSymbol.Sequence.NonMarkerSubrules)
-        endPosStatements.Add(<[ endPos += $(astPtr.GetSize(subrule)) ]>);
+      def endPosExpr = this.RuleSymbol.Sequence.NonMarkerSubrules.Fold(<[ pos ]>, (subrule, acc) => <[ $acc + $(astPtr.GetSize(subrule)) ]>);
 
       match (this.RuleSymbol)
       {
@@ -131,70 +135,68 @@ namespace Nitra.Compiler
             {
               unchecked
               {
-                mutable endPos = pos;
-                { ..$endPosStatements }
-                base(Nitra.Location(parseResult, pos, endPos));
-                this.astPtr     = astPtr;
-                pos = endPos;
+                this.parseResult = parseResult;
+                this.startPos    = pos;
+                this.endPos      = $endPosExpr;
+                this.astPtr      = astPtr;
+                pos              = this.endPos;
               }
             }
           ]>);
 
         | ExtensionRuleSymbol(ExtensionType = Postfix) as symbol =>
-          _parsedAstTb.DefineConditional(<[decl:
+          _parsedAstTb.DefineConditional(<[ decl: private astStartPos : int; ]>);
+          _parsedAstTb.DefineConditional(<[ decl: private prefix      : $(Environment.GetAstType(symbol.BaseRule.Value) : typed); ]>);
+          _parsedAstTb.DefineConditional(<[ decl:
             public this(prefix : $(Environment.GetAstType(symbol.BaseRule.Value) : typed), prefixStartPos : int, pos : ref int, astPtr : int, parseResult : Nitra.Internal.ParseResult)
             {
               unchecked
               {
-                mutable endPos = pos;
-                { ..$endPosStatements }
-                base(Nitra.Location(parseResult, prefixStartPos, endPos));
-                this.startPos   = pos;
-                this.astPtr     = astPtr;
-                this.prefix     = prefix;
-                pos = endPos;
+                this.parseResult = parseResult;
+                this.startPos    = prefixStartPos;
+                this.endPos      = $endPosExpr;
+                this.astPtr      = astPtr;
+                this.astStartPos = pos;
+                this.prefix      = prefix;
+                pos              = this.endPos;
               }
             }
           ]>);
-          _parsedAstTb.DefineConditional(<[ decl: private startPos : int; ]>);
-          _parsedAstTb.DefineConditional(<[ decl: private prefix : $(Environment.GetAstType(symbol.BaseRule.Value) : typed); ]>);
 
         | _ => assert(false)
       }
-
-      _parsedAstTb.DefineConditional(<[ decl: private astPtr      : int; ]>);
 
       foreach (field in fields)
       {
         def statements = SCG.List();
 
-        mutable needParseResult : bool;
         mutable needRuleParser  : bool;
         mutable needCaching     : bool;
 
         def analyze(_ : FieldExpr) : void
         {
-          | Prefix         => ()
-          | Tuple(items)   => foreach (expr in items) analyze(expr);
-          | NSpan(_, true) => needParseResult = true; needRuleParser = true;
-          | NSpan          => needParseResult = true;
-          | Other(_, true) => needParseResult = true; needRuleParser = true; needCaching = true;
-          | Other          => needParseResult = true;                        needCaching = true;
+          | Prefix             => ()
+          | Tuple(items)       => foreach (expr in items) analyze(expr);
+          | Regex(_, true)     => needRuleParser = true;
+          | Regex              => ()
+          | String(_, _, true) => needRuleParser = true;
+          | String             => ()
+          | Other(_, true)     => needRuleParser = true; needCaching = true;
+          | Other              =>                        needCaching = true;
         }
 
         analyze(field.Expr);
 
-        when (needParseResult)
-          statements.Add(<[ def parseResult = this.GetParseResultFromLocation(); ]>);
         when (needRuleParser)
           statements.Add(<[ def ruleParser = parseResult.GetRuleParser(astPtr) :> $(this.RuleSymbol.GetParserClassRef()) ]>);
 
         def compile(_ : FieldExpr) : PExpr
         {
           | Prefix(expr)
-          | NSpan(expr, _)
-          | Other(expr, _) => expr
-          | Tuple(items)   => <[ (..$(items.Map(compile))) ]>
+          | Regex(expr, _)
+          | String(expr, _, _)
+          | Other(expr, _)     => expr
+          | Tuple(items)       => <[ (..$(items.Map(compile))) ]>
         }
 
         statements.Add(compile(field.Expr));
@@ -244,8 +246,11 @@ namespace Nitra.Compiler
       _chemicalAstTb.DefineConditional(<[ decl:
         public this(location : Location)
         {
-          base(location);
+          this.Location = location;
         }
+      ]>);
+      _chemicalAstTb.DefineConditional(<[ decl:
+        public override Location : Nitra.Location { get; }
       ]>);
       foreach (field in fields)
       {
