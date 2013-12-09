@@ -29,7 +29,10 @@ namespace Nitra.Compiler
       }
       when (_astTb != null)
       {
-        DefineAstCtorAndFields();
+        def fields = GetFields();
+        DefineAstCtorAndFields(fields);
+        DefineParsedAstCtorAndFields(fields);
+        DefineChemicalAstCtorAndFields(fields);
         DefineAstPrettyPrint();
         DefineAstRuleMethods();
       }
@@ -59,9 +62,9 @@ namespace Nitra.Compiler
             def ruleParser = parseResult.RuleParser.Grammar.GetSimpleRuleParser($(this.RuleSymbol.GetRuleDescriptorRef()));
             def astPtr = parseResult.TryGetAst(pos, ruleParser.RuleId);
             if (astPtr > 0)
-              $(_baseTb.GetMemType() : typed).Ast(ref pos, astPtr, parseResult)
+              $(_baseTb.GetMemType() : typed).__Parsed__Ast(ref pos, astPtr, parseResult)
             else
-              $(_baseTb.GetMemType() : typed).MissingAst(Nitra.Location(parseResult, pos, pos))
+              $(_baseTb.GetMemType() : typed).MissingAst(Nitra.Location(parseResult.OriginalSource, pos, pos))
           }
         ]>);
       }
@@ -92,342 +95,179 @@ namespace Nitra.Compiler
       }
     }
 
-    private DefineAstCtorAndFields() : void
+    private DefineAstCtorAndFields(fields : SCG.List[FieldInfo]) : void
     {
-      def sequence = this.RuleSymbol.Sequence;
-      def astPtr = AstPointer.Existing(sequence, this, "astPtr");
+      foreach (field in fields)
+      {
+        _astTb.DefineConditional(<[ decl:
+          public new abstract $(field.Name : usesite) : $(field.Type : typed)
+          {
+            get;
+          }
+        ]>);
+      }
+    }
 
-      def endPosStatements = SCG.List();
-      foreach (subrule in sequence.NonMarkerSubrules)
-        endPosStatements.Add(<[ endPos += $(astPtr.GetSize(subrule)) ]>);
+    private DefineParsedAstCtorAndFields(fields : SCG.List[FieldInfo]) : void
+    {
+      _parsedAstTb.DefineConditional(<[ decl: private parseResult : Nitra.Internal.ParseResult; ]>);
+      _parsedAstTb.DefineConditional(<[ decl: private startPos    : int; ]>);
+      _parsedAstTb.DefineConditional(<[ decl: private endPos      : int; ]>);
+      _parsedAstTb.DefineConditional(<[ decl: private astPtr      : int; ]>);
+
+      _parsedAstTb.DefineConditional(<[ decl:
+        public override Location : Nitra.Location
+        {
+          get { Nitra.Location(this.parseResult.OriginalSource, this.startPos, this.endPos) }
+        }
+      ]>);
+
+      _parsedAstTb.DefineConditional(<[ decl:
+        protected override PrettyPrintSource : Nitra.IPrettyPrintSource
+        {
+          get { this.parseResult }
+        }
+      ]>);
+
+      def astPtr = AstPointer.Existing(this.RuleSymbol.Sequence, this, "astPtr");
+
+      def endPosExpr = this.RuleSymbol.Sequence.NonMarkerSubrules.Fold(<[ pos ]>, (subrule, acc) => <[ $acc + $(astPtr.GetSize(subrule)) ]>);
 
       match (this.RuleSymbol)
       {
         | SimpleRuleSymbol
         | ExtensionRuleSymbol(ExtensionType = Prefix) =>
-          _astTb.DefineConditional(<[decl:
+          _parsedAstTb.DefineConditional(<[decl:
             public this(pos : ref int, astPtr : int, parseResult : Nitra.Internal.ParseResult)
             {
               unchecked
               {
-                mutable endPos = pos;
-                { ..$endPosStatements }
-                base(Nitra.Location(parseResult, pos, endPos));
-                this.astPtr     = astPtr;
-                pos = endPos;
+                this.parseResult = parseResult;
+                this.startPos    = pos;
+                this.endPos      = $endPosExpr;
+                this.astPtr      = astPtr;
+                pos              = this.endPos;
               }
             }
           ]>);
 
         | ExtensionRuleSymbol(ExtensionType = Postfix) as symbol =>
-          _astTb.DefineConditional(<[decl:
+          _parsedAstTb.DefineConditional(<[ decl: private astStartPos : int; ]>);
+          _parsedAstTb.DefineConditional(<[ decl: private prefix      : $(Environment.GetAstType(symbol.BaseRule.Value) : typed); ]>);
+          _parsedAstTb.DefineConditional(<[ decl:
             public this(prefix : $(Environment.GetAstType(symbol.BaseRule.Value) : typed), prefixStartPos : int, pos : ref int, astPtr : int, parseResult : Nitra.Internal.ParseResult)
             {
               unchecked
               {
-                mutable endPos = pos;
-                { ..$endPosStatements }
-                base(Nitra.Location(parseResult, prefixStartPos, endPos));
-                this.startPos   = pos;
-                this.astPtr     = astPtr;
-                this.prefix     = prefix;
-                pos = endPos;
+                this.parseResult = parseResult;
+                this.startPos    = prefixStartPos;
+                this.endPos      = $endPosExpr;
+                this.astPtr      = astPtr;
+                this.astStartPos = pos;
+                this.prefix      = prefix;
+                pos              = this.endPos;
               }
             }
           ]>);
-          _astTb.DefineConditional(<[ decl: private startPos : int; ]>);
-          _astTb.DefineConditional(<[ decl: private prefix : $(Environment.GetAstType(symbol.BaseRule.Value) : typed); ]>);
 
         | _ => assert(false)
       }
 
-      _astTb.DefineConditional(<[ decl: private astPtr      : int; ]>);
-
-      def ruleExprs = SCG.Dictionary.[Rule, FieldExpr]();
-
-      when (this.RuleSymbol is ExtensionRuleSymbol(ExtensionType = Postfix(call, _)))
-        ruleExprs.Add(call, FieldExpr.Prefix(<[ this.prefix ]>));
-
-      def prevSubrules = SCG.List();
-      foreach (subrule in this.RuleSymbol.Sequence.NonMarkerSubrules)
+      foreach (field in fields)
       {
-        when (IsSubruleAcceptedForAst(subrule))
+        def statements = SCG.List();
+
+        mutable needRuleParser  : bool;
+        mutable needCaching     : bool;
+
+        def analyze(_ : FieldExpr) : void
         {
-          def parentAstPtr = AstPointerScope(astPtr);
-          mutable needRuleParser;
-          def valueExpr = GetSubruleValue(subrule, parentAstPtr, ref needRuleParser);
+          | Prefix             => ()
+          | Tuple(items)       => foreach (expr in items) analyze(expr);
+          | Regex(_, true)     => needRuleParser = true;
+          | Regex              => ()
+          | String(_, _, true) => needRuleParser = true;
+          | String             => ()
+          | Other(_, true)     => needRuleParser = true; needCaching = true;
+          | Other              =>                        needCaching = true;
+        }
 
-          def statements = SCG.List();
-          statements.Add(<[ mutable pos = $(GetAstStartPos()); ]>);
-          foreach (subrule in prevSubrules)
-            statements.Add(WalkerGenerator.Skip(subrule, parentAstPtr));
-          statements.Add(valueExpr);
+        analyze(field.Expr);
 
-          def expr =
-            if (subrule.SrcRule.Type is RuleType.Chars)
-              FieldExpr.NSpan(<[ { ..$statements } ]>, needRuleParser)
+        when (needRuleParser)
+          statements.Add(<[ def ruleParser = parseResult.GetRuleParser(astPtr) :> $(this.RuleSymbol.GetParserClassRef()) ]>);
+
+        def compile(_ : FieldExpr) : PExpr
+        {
+          | Prefix(expr)
+          | Regex(expr, _)
+          | String(expr, _, _)
+          | Other(expr, _)     => expr
+          | Tuple(items)       => <[ (..$(items.Map(compile))) ]>
+        }
+
+        statements.Add(compile(field.Expr));
+
+        def code =
+          if (needCaching)
+          {
+            def backingFieldName = Util.tmpname(field.Name);
+            _parsedAstTb.DefineConditional(<[ decl: private mutable $(backingFieldName : usesite) : $(field.Type : typed); ]>);
+            if (field.Type.IsValueType)
+            {
+              def loadedBit = _parsedAstTb.GetBitFieldManager().Allocate();
+              <[
+                unless ($(loadedBit.Read()))
+                {
+                  $(backingFieldName : usesite) = { ..$statements };
+                  $(loadedBit.Set());
+                }
+                $(backingFieldName : usesite)
+              ]>
+            }
             else
-              FieldExpr.Other(<[ { ..$statements } ]>, needRuleParser);
-
-          ruleExprs.Add(subrule.SrcRule, expr);
-        }
-        prevSubrules.Add(subrule);
-      }
-
-      def makeFieldExpr(rule : Rule) : FieldExpr
-      {
-        if (rule is Rule.Sequence(Rules = rules))
-        {
-          def members = SCG.List();
-          foreach (rule when !(rule.Type is RuleType.Void) in rules)
-            members.Add(makeFieldExpr(rule));
-
-          if(members.Count == 1)
-            members[0]
-          else
-            FieldExpr.Tuple(members.ToNList())
-        }
-        else
-        {
-          mutable expr;
-          unless (ruleExprs.TryGetValue(rule, out expr))
-            assert3(false);
-          expr
-        }
-      }
-
-      foreach (rule in this.RuleSymbol.NonVoidSubRules)
-        CreateField(rule, makeFieldExpr(rule))
-    }
-
-    private GetAstStartPos() : PExpr
-    {
-      match (this.RuleSymbol)
-      {
-        | SimpleRuleSymbol
-        | ExtensionRuleSymbol(ExtensionType = Prefix)  => <[ this.Location.StartPos ]>
-        | ExtensionRuleSymbol(ExtensionType = Postfix) => <[ this.startPos ]>
-        | _ => assert(false)
-      }
-    }
-
-    private variant FieldExpr
-    {
-      | NSpan  { Expr  : PExpr; NeedRuleParser : bool }
-      | Tuple  { Items : list[FieldExpr] }
-      | Prefix { Expr  : PExpr }
-      | Other  { Expr  : PExpr; NeedRuleParser : bool }
-    }
-
-    private CreateField(rule : Rule, body : FieldExpr) : void
-    {
-      def statements = SCG.List();
-
-      mutable needParseResult : bool;
-      mutable needRuleParser  : bool;
-      mutable needCaching     : bool;
-
-      def analyzeFieldExpr(_ : FieldExpr) : void
-      {
-        | Prefix         => ()
-        | Tuple(items)   => foreach (expr in items) analyzeFieldExpr(expr);
-        | NSpan(_, true) => needParseResult = true; needRuleParser = true;
-        | NSpan          => needParseResult = true;
-        | Other(_, true) => needParseResult = true; needRuleParser = true; needCaching = true;
-        | Other          => needParseResult = true;                        needCaching = true;
-      }
-
-      analyzeFieldExpr(body);
-
-      when (needParseResult)
-        statements.Add(<[ def parseResult = this.GetParseResultFromLocation(); ]>);
-      when (needRuleParser)
-        statements.Add(<[ def ruleParser = parseResult.GetRuleParser(astPtr) :> $(this.RuleSymbol.GetParserClassRef()) ]>);
-
-      def compileFieldExpr(_ : FieldExpr) : PExpr
-      {
-        | Prefix(expr)
-        | NSpan(expr, _)
-        | Other(expr, _) => expr
-        | Tuple(items)   => <[ (..$(items.Map(compileFieldExpr))) ]>
-      }
-
-      statements.Add(compileFieldExpr(body));
-
-      def propertyType = Environment.GetAstType(rule.Type);
-      def propertyCode =
-        if (needCaching)
-        {
-          def backingFieldName = Util.tmpname(rule.FieldName);
-          _astTb.DefineConditional(<[ decl: private mutable $(backingFieldName : usesite) : $(propertyType : typed); ]>);
-          if (propertyType.IsValueType)
-          {
-            def loadedBit = _astTb.GetBitFieldManager().Allocate();
-            <[
-              unless ($(loadedBit.Read()))
-              {
-                $(backingFieldName : usesite) = { ..$statements };
-                $(loadedBit.Set());
-              }
-              $(backingFieldName : usesite)
-            ]>
+            {
+              <[
+                when ($(backingFieldName : usesite) : object == null)
+                {
+                  $(backingFieldName : usesite) = { ..$statements };
+                }
+                $(backingFieldName : usesite)
+              ]>
+            }
           }
           else
-          {
-            <[
-              when ($(backingFieldName : usesite) : object == null)
-              {
-                $(backingFieldName : usesite) = { ..$statements };
-              }
-              $(backingFieldName : usesite)
-            ]>
-          }
-        }
-        else
-          <[ { ..$statements } ]>;
+            <[ { ..$statements } ]>;
 
-      _astTb.DefineConditional(<[decl:
-        public new $(rule.FieldName : usesite) : $(propertyType : typed)
+        _parsedAstTb.DefineConditional(<[ decl:
+          public override $(field.Name : usesite) : $(field.Type : typed)
+          {
+            get { unchecked ($code) }
+          }
+        ]>);
+      }
+    }
+
+    private DefineChemicalAstCtorAndFields(fields : SCG.List[FieldInfo]) : void
+    {
+      _chemicalAstTb.DefineConditional(<[ decl:
+        public this(location : Location)
         {
-          get { unchecked($propertyCode) }
+          this.Location = location;
         }
       ]>);
-    }
-
-    private GetSequenceValue(sequence : SequenceCompileInfo, name : string, ruleParserRequired : ref bool) : PExpr
-    {
-      def astPointer    = AstPointerScope(sequence, name, this);
-      def statements    = SCG.List();
-      def subruleValues = SCG.List();
-
-      foreach (subrule in sequence.NonMarkerSubrules)
+      _chemicalAstTb.DefineConditional(<[ decl:
+        public override Location : Nitra.Location { get; }
+      ]>);
+      foreach (field in fields)
       {
-        if (IsSubruleAcceptedForAst(subrule))
-        {
-          def varName = subrule.MakeVariableName("ast");
-          statements.Add(<[ def $(varName : usesite) = $(GetSubruleValue(subrule, astPointer, ref ruleParserRequired)) ]>);
-          subruleValues.Add(<[ $(varName : usesite) ]>);
-        }
-        else
-          statements.Add(WalkerGenerator.Skip(subrule, astPointer));
-      }
-
-      match (subruleValues.Count)
-      {
-        | 0 => ()
-        | 1 => statements.Add(subruleValues[0]);
-        | _ => statements.Add(<[ (..$subruleValues)]>);
-      }
-
-      ruleParserRequired = astPointer.IsAccessed();
-      astPointer.Compile(<[ { ..$statements } ]>)
-    }
-
-    private GetSubruleValue(subrule : SubruleCompileInfo, parentAstPointer : AstPointerScope, ruleParserRequired : ref bool) : PExpr
-    {
-      match (subrule)
-      {
-        | Empty      as subrule => WalkerGenerator.Skip(subrule, parentAstPointer)
-        | SimpleCall as subrule =>
-          if (subrule.Symbol.Type is RuleType.Void)
-            WalkerGenerator.Skip(subrule, parentAstPointer)
-          else if (subrule.CanParseEmptyString)
-            <[
-              pos += $(parentAstPointer.Access().GetSkip(subrule));
-              $(Environment.GetAstType(subrule.Symbol) : typed).Create(ref pos, parseResult);
-            ]>
-          else
-            <[
-              pos += $(parentAstPointer.Access().GetSkip(subrule));
-              if ($(parentAstPointer.Access().GetSize(subrule)) > 0)
-                $(Environment.GetAstType(subrule.Symbol) : typed).Create(ref pos, parseResult);
-              else
-                $(Environment.GetAstType(subrule.Symbol) : typed).MissingAst(Nitra.Location(parseResult, pos, pos));
-            ]>
-
-        | ExtensibleCall as subrule =>
-          if (subrule.Symbol.Type is RuleType.Void)
-            WalkerGenerator.Skip(subrule, parentAstPointer)
-          else
-            <[
-              pos += $(parentAstPointer.Access().GetSkip(subrule));
-              if ($(parentAstPointer.Access().GetSize(subrule)) > 0)
-                Nitra.Internal.ExtensibleRuleAstConstructor.[$(Environment.GetAstType(subrule.Symbol) : typed)].Create(ref pos, parseResult, $(subrule.BindingPower : int), $(subrule.Symbol.GetRuleDescriptorRef()));
-              else
-                $(Environment.GetAstType(subrule.Symbol) : typed).MissingAst(Nitra.Location(parseResult, pos, pos)); // No prefix
-            ]>
-
-        | RegularCall
-        | List as lst when lst.IsSkipAnyPattern
-        | TokenString => WalkerGenerator.GetTokenValue(subrule, parentAstPointer, <[ Nitra.NSpan(tokenPos, pos) ]>)
-        | Option as subrule =>
-          if (subrule.SrcRule.Type is RuleType.Void)
-            WalkerGenerator.Skip(subrule, parentAstPointer)
-          else
-            WalkerGenerator.GetOptionValue(
-              subrule          = subrule,
-              parentAstPointer = parentAstPointer,
-              hasValue         = <[ Some($(GetSequenceValue(subrule.Rule, "valuePointer", ref ruleParserRequired))) ]>,
-              noValue          = <[ None() ]>)
-
-        | List as lst =>
-          if (subrule.SrcRule.Type is RuleType.Void)
-            WalkerGenerator.Skip(subrule, parentAstPointer)
-          else
-            WalkerGenerator.GetListValue(
-              subrule          = lst,
-              parentAstPointer = parentAstPointer,
-              init             = <[ def itemBuffer = System.Collections.Generic.List(16) ]>,
-              item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer", ref ruleParserRequired))) ]>,
-              returnCode       = <[ Nemerle.Collections.NList.ToList(itemBuffer) ]>,
-              emptyCode        = <[ [] ]>);
-
-        | ListWithSeparator as lst=>
-          match (lst.Rule.SrcRule.Type, lst.Separator.SrcRule.Type)
+        _chemicalAstTb.DefineConditional(<[ decl:
+          public override $(field.Name : usesite) : $(field.Type : typed)
           {
-            | (Void, Void) => WalkerGenerator.Skip(subrule, parentAstPointer)
-            | (_, Void) =>
-                WalkerGenerator.GetListWithSeparatorValue(
-                  subrule          = lst,
-                  parentAstPointer = parentAstPointer,
-                  init             = <[ def itemBuffer = System.Collections.Generic.List(16) ]>,
-                  item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer", ref ruleParserRequired))) ]>,
-                  separator        = <[ _ = $(GetSequenceValue(lst.Separator, "separatorPointer", ref ruleParserRequired)) ]>,
-                  returnCode       = <[ Nemerle.Collections.NList.ToList(itemBuffer) ]>,
-                  emptyCode        = <[ [] ]>);
-
-            | (Void, _) =>
-                WalkerGenerator.GetListWithSeparatorValue(
-                  subrule          = lst,
-                  parentAstPointer = parentAstPointer,
-                  init             = <[ def separatorBuffer = System.Collections.Generic.List(16) ]>,
-                  item             = <[ _ = $(GetSequenceValue(lst.Rule, "itemPointer", ref ruleParserRequired)) ]>,
-                  separator        = <[ separatorBuffer.Add($(GetSequenceValue(lst.Separator, "separatorPointer", ref ruleParserRequired))) ]>,
-                  returnCode       = <[ Nemerle.Collections.NList.ToList(separatorBuffer) ]>,
-                  emptyCode        = <[ [] ]>);
-
-            | _ =>
-              WalkerGenerator.GetListWithSeparatorValue(
-                subrule          = lst,
-                parentAstPointer = parentAstPointer,
-                init             = <[ def itemBuffer = System.Collections.Generic.List(16); def separatorBuffer = System.Collections.Generic.List(16); ]>,
-                item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer", ref ruleParserRequired))) ]>,
-                separator        = <[ separatorBuffer.Add($(GetSequenceValue(lst.Separator, "separatorPointer", ref ruleParserRequired))) ]>,
-                returnCode       = <[ (Nemerle.Collections.NList.ToList(itemBuffer), Nemerle.Collections.NList.ToList(separatorBuffer)) ]>,
-                emptyCode        = <[ ([], []) ]>);
+            get { throw System.NotImplementedException(); }
           }
-
-        | Marker => <[ () ]>
+        ]>);
       }
-    }
-
-    public static IsSubruleAcceptedForAst(subrule : SubruleCompileInfo) : bool
-    {
-      | SubruleCompileInfo.SimpleCall(symbol)        when symbol.Type is RuleType.Void
-      | SubruleCompileInfo.ExtensibleCall(symbol, _) when symbol.Type is RuleType.Void
-      | SubruleCompileInfo.Empty
-      | SubruleCompileInfo.Marker => false
-      | _ => !(subrule.SrcRule.Type is RuleType.Void)
     }
   }
 }
