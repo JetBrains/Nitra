@@ -23,10 +23,16 @@ namespace Nitra.Compiler
     public DefineMembers() : void
     {
       when (_baseTb != null)
+      {
+        DefineBaseAstCreateMethod();
         DefineBaseAstRuleMethods();
+      }
       when (_astTb != null)
       {
-        DefineAstCtorAndFields();
+        def fields = GetFields();
+        DefineAstCtorAndFields(fields);
+        DefineParsedAstCtorAndFields(fields);
+        DefineChemicalAstCtorAndFields(fields);
         DefineAstPrettyPrint();
         DefineAstRuleMethods();
       }
@@ -46,20 +52,210 @@ namespace Nitra.Compiler
       }
     }
 
-    private DefineAstCtorAndFields() : void
+    private DefineBaseAstCreateMethod() : void
     {
-      def args = SCG.List();
-      args.Add(<[ parameter: location : Nitra.Location ]>);
-      def init = SCG.List();
-      init.Add(<[ base(location) ]>);
-      foreach (rule in this.RuleSymbol.NonVoidSubRules)
+      when (this.RuleSymbol is SimpleRuleSymbol)
       {
-        def fieldType = Environment.GetAstType(rule.Type);
-        _astTb.DefineConditional(<[decl: public new $(rule.FieldName : usesite) : $(fieldType : typed) ]>);
-        args.Add(<[ parameter: $(rule.FieldName : usesite) : $(fieldType : typed)  ]>);
-        init.Add(<[ this.$(rule.FieldName : usesite) = $(rule.FieldName : usesite) ]>);
+        _baseTb.DefineConditional(<[ decl:
+          public static Create(pos : ref int, parseResult : Nitra.ParseResult) : $(_baseTb.GetMemType() : typed)
+          {
+            def ruleParser = parseResult.RuleParser.Grammar.GetSimpleRuleParser($(this.RuleSymbol.GetRuleDescriptorRef()));
+            def astPtr = parseResult.TryGetAst(pos, ruleParser.RuleId);
+            if (astPtr > 0)
+              $(_baseTb.GetMemType() : typed).__Parsed__Ast(ref pos, astPtr, parseResult)
+            else
+              $(_baseTb.GetMemType() : typed).MissingAst(Nitra.Location(parseResult, pos, pos))
+          }
+        ]>);
       }
-      _astTb.DefineConditional(<[decl: public this(..$(args.ToNList())) { ..$(init.ToNList()) } ]>);
+      when (this.RuleSymbol.Options.IsStart)
+      {
+        match (this.RuleSymbol)
+        {
+          | SimpleRuleSymbol =>
+            _baseTb.DefineConditional(<[ decl:
+              public static Create(parseResult : Nitra.ParseResult) : $(_baseTb.GetMemType() : typed)
+              {
+                mutable pos = parseResult.StartPos;
+                Create(ref pos, parseResult);
+              }
+            ]>);
+
+          | ExtensibleRuleSymbol =>
+            _baseTb.DefineConditional(<[ decl:
+              public static Create(parseResult : Nitra.ParseResult) : $(_baseTb.GetMemType() : typed)
+              {
+                mutable pos = parseResult.StartPos;
+                Nitra.Internal.ExtensibleRuleAstConstructor.Create(ref pos, parseResult, 0, $(this.RuleSymbol.GetRuleDescriptorRef()));
+              }
+            ]>);
+
+          | _ => assert2(false);
+        }
+      }
+    }
+
+    private DefineAstCtorAndFields(fields : SCG.List[FieldInfo]) : void
+    {
+      _astTb.DefineConditional(<[ decl:
+        protected this(location : Location)
+        {
+          base(location);
+        }
+      ]>);
+      foreach (field in fields)
+      {
+        _astTb.DefineConditional(<[ decl:
+          public new abstract $(field.Name : usesite) : $(field.Type : typed)
+          {
+            get;
+          }
+        ]>);
+      }
+    }
+
+    private DefineParsedAstCtorAndFields(fields : SCG.List[FieldInfo]) : void
+    {
+      def astPtr = AstPointer.Existing(this.RuleSymbol.Sequence, this, "astPtr");
+
+      def endPosStatements = SCG.List();
+      foreach (subrule in this.RuleSymbol.Sequence.NonMarkerSubrules)
+        endPosStatements.Add(<[ endPos += $(astPtr.GetSize(subrule)) ]>);
+
+      match (this.RuleSymbol)
+      {
+        | SimpleRuleSymbol
+        | ExtensionRuleSymbol(ExtensionType = Prefix) =>
+          _parsedAstTb.DefineConditional(<[decl:
+            public this(pos : ref int, astPtr : int, parseResult : Nitra.ParseResult)
+            {
+              unchecked
+              {
+                mutable endPos = pos;
+                { ..$endPosStatements }
+                base(Nitra.Location(parseResult, pos, endPos));
+                this.astPtr     = astPtr;
+                pos = endPos;
+              }
+            }
+          ]>);
+
+        | ExtensionRuleSymbol(ExtensionType = Postfix) as symbol =>
+          _parsedAstTb.DefineConditional(<[decl:
+            public this(prefix : $(Environment.GetAstType(symbol.BaseRule.Value) : typed), prefixStartPos : int, pos : ref int, astPtr : int, parseResult : Nitra.ParseResult)
+            {
+              unchecked
+              {
+                mutable endPos = pos;
+                { ..$endPosStatements }
+                base(Nitra.Location(parseResult, prefixStartPos, endPos));
+                this.startPos   = pos;
+                this.astPtr     = astPtr;
+                this.prefix     = prefix;
+                pos = endPos;
+              }
+            }
+          ]>);
+          _parsedAstTb.DefineConditional(<[ decl: private startPos : int; ]>);
+          _parsedAstTb.DefineConditional(<[ decl: private prefix : $(Environment.GetAstType(symbol.BaseRule.Value) : typed); ]>);
+
+        | _ => assert(false)
+      }
+
+      _parsedAstTb.DefineConditional(<[ decl: private astPtr      : int; ]>);
+
+      foreach (field in fields)
+      {
+        def statements = SCG.List();
+
+        mutable needParseResult : bool;
+        mutable needRuleParser  : bool;
+        mutable needCaching     : bool;
+
+        def analyze(_ : FieldExpr) : void
+        {
+          | Prefix         => ()
+          | Tuple(items)   => foreach (expr in items) analyze(expr);
+          | NSpan(_, true) => needParseResult = true; needRuleParser = true;
+          | NSpan          => needParseResult = true;
+          | Other(_, true) => needParseResult = true; needRuleParser = true; needCaching = true;
+          | Other          => needParseResult = true;                        needCaching = true;
+        }
+
+        analyze(field.Expr);
+
+        when (needParseResult)
+          statements.Add(<[ def parseResult = this.GetParseResultFromLocation(); ]>);
+        when (needRuleParser)
+          statements.Add(<[ def ruleParser = parseResult.GetRuleParser(astPtr) :> $(this.RuleSymbol.GetParserClassRef()) ]>);
+
+        def compile(_ : FieldExpr) : PExpr
+        {
+          | Prefix(expr)
+          | NSpan(expr, _)
+          | Other(expr, _) => expr
+          | Tuple(items)   => <[ (..$(items.Map(compile))) ]>
+        }
+
+        statements.Add(compile(field.Expr));
+
+        def code =
+          if (needCaching)
+          {
+            def backingFieldName = Util.tmpname(field.Name);
+            _parsedAstTb.DefineConditional(<[ decl: private mutable $(backingFieldName : usesite) : $(field.Type : typed); ]>);
+            if (field.Type.IsValueType)
+            {
+              def loadedBit = _parsedAstTb.GetBitFieldManager().Allocate();
+              <[
+                unless ($(loadedBit.Read()))
+                {
+                  $(backingFieldName : usesite) = { ..$statements };
+                  $(loadedBit.Set());
+                }
+                $(backingFieldName : usesite)
+              ]>
+            }
+            else
+            {
+              <[
+                when ($(backingFieldName : usesite) : object == null)
+                {
+                  $(backingFieldName : usesite) = { ..$statements };
+                }
+                $(backingFieldName : usesite)
+              ]>
+            }
+          }
+          else
+            <[ { ..$statements } ]>;
+
+        _parsedAstTb.DefineConditional(<[ decl:
+          public override $(field.Name : usesite) : $(field.Type : typed)
+          {
+            get { unchecked ($code) }
+          }
+        ]>);
+      }
+    }
+
+    private DefineChemicalAstCtorAndFields(fields : SCG.List[FieldInfo]) : void
+    {
+      _chemicalAstTb.DefineConditional(<[ decl:
+        public this(location : Location)
+        {
+          base(location);
+        }
+      ]>);
+      foreach (field in fields)
+      {
+        _chemicalAstTb.DefineConditional(<[ decl:
+          public override $(field.Name : usesite) : $(field.Type : typed)
+          {
+            get { throw System.NotImplementedException(); }
+          }
+        ]>);
+      }
     }
   }
 }

@@ -28,7 +28,7 @@ namespace Nitra.Compiler
       WalkerSignature([], <[ $(Environment.GetAstType(rule) : typed) ]>);
     }
 
-    protected override GetRuleValue(subrule : SubruleCompileInfo, parentAstPointer : AstPointerScope) : PExpr
+    protected override GetSubruleValue(subrule : SubruleCompileInfo, parentAstPointer : AstPointerScope) : PExpr
     {
       match (subrule)
       {
@@ -49,29 +49,61 @@ namespace Nitra.Compiler
         | List as lst when lst.IsSkipAnyPattern
         | TokenString => GetTokenValue(subrule, parentAstPointer, <[ Nitra.NSpan(tokenPos, pos) ]>)
         | Option as subrule =>
-          GetOptionValue(
-            subrule            = subrule,
-            parentAstPointer = parentAstPointer,
-            hasValue         = <[ Some($(GetRuleValue(subrule.Rule, "valuePointer"))) ]>,
-            noValue          = <[ None() ]>)
+          if (subrule.SrcRule.Type is RuleType.Void)
+            Skip(subrule, parentAstPointer)
+          else
+            GetOptionValue(
+              subrule          = subrule,
+              parentAstPointer = parentAstPointer,
+              hasValue         = <[ Some($(GetSequenceValue(subrule.Rule, "valuePointer"))) ]>,
+              noValue          = <[ None() ]>)
 
         | List as lst =>
-          GetListValue(subrule            = lst,
-            parentAstPointer = parentAstPointer,
-            init             = <[ def astBuffer = System.Collections.Generic.List(16); ]>,
-            item             = <[ astBuffer.Add($(GetRuleValue(lst.Rule, "itemPointer"))) ]>,
-            returnCode       = <[ Nemerle.Collections.NList.ToList(astBuffer) ]>,
-            emptyCode        = <[ [] ]>);
+          if (subrule.SrcRule.Type is RuleType.Void)
+            Skip(subrule, parentAstPointer)
+          else
+            GetListValue(
+              subrule          = lst,
+              parentAstPointer = parentAstPointer,
+              init             = <[ def itemBuffer = System.Collections.Generic.List(16) ]>,
+              item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
+              returnCode       = <[ Nemerle.Collections.NList.ToList(itemBuffer) ]>,
+              emptyCode        = <[ [] ]>);
 
         | ListWithSeparator as lst=>
-          GetListWithSeparatorValue(
-            subrule            = lst,
-            parentAstPointer = parentAstPointer,
-            init             = <[ def astBuffer = System.Collections.Generic.List(16); def separatorBuffer = System.Collections.Generic.List(16); ]>,
-            item             = <[ astBuffer.Add($(GetRuleValue(lst.Rule, "itemPointer"))) ]>,
-            separator        = <[ separatorBuffer.Add($(GetRuleValue(lst.Separator, "separatorPointer"))) ]>,
-            returnCode       = <[ (Nemerle.Collections.NList.ToList(astBuffer), Nemerle.Collections.NList.ToList(separatorBuffer)) ]>,
-            emptyCode        = <[ ([], []) ]>);
+          match (lst.Rule.SrcRule.Type, lst.Separator.SrcRule.Type)
+          {
+            | (Void, Void) => Skip(subrule, parentAstPointer)
+            | (_, Void) =>
+                GetListWithSeparatorValue(
+                  subrule          = lst,
+                  parentAstPointer = parentAstPointer,
+                  init             = <[ def itemBuffer = System.Collections.Generic.List(16) ]>,
+                  item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
+                  separator        = <[ _ = $(GetSequenceValue(lst.Separator, "separatorPointer")) ]>,
+                  returnCode       = <[ Nemerle.Collections.NList.ToList(itemBuffer) ]>,
+                  emptyCode        = <[ [] ]>);
+
+            | (Void, _) =>
+                GetListWithSeparatorValue(
+                  subrule          = lst,
+                  parentAstPointer = parentAstPointer,
+                  init             = <[ def separatorBuffer = System.Collections.Generic.List(16) ]>,
+                  item             = <[ _ = $(GetSequenceValue(lst.Rule, "itemPointer")) ]>,
+                  separator        = <[ separatorBuffer.Add($(GetSequenceValue(lst.Separator, "separatorPointer"))) ]>,
+                  returnCode       = <[ Nemerle.Collections.NList.ToList(separatorBuffer) ]>,
+                  emptyCode        = <[ [] ]>);
+
+            | _ =>
+              GetListWithSeparatorValue(
+                subrule          = lst,
+                parentAstPointer = parentAstPointer,
+                init             = <[ def itemBuffer = System.Collections.Generic.List(16); def separatorBuffer = System.Collections.Generic.List(16); ]>,
+                item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
+                separator        = <[ separatorBuffer.Add($(GetSequenceValue(lst.Separator, "separatorPointer"))) ]>,
+                returnCode       = <[ (Nemerle.Collections.NList.ToList(itemBuffer), Nemerle.Collections.NList.ToList(separatorBuffer)) ]>,
+                emptyCode        = <[ ([], []) ]>);
+          }
 
         | Marker => <[ () ]>
       }
@@ -81,7 +113,7 @@ namespace Nitra.Compiler
     {
       match (arguments)
       {
-        | []   => assert(false)
+        | []   => <[ () ]> //assert3(false, "Void values not allowed for AST")
         | [x]  => x
         | many => <[ (..$many) ]>
       }
@@ -99,15 +131,14 @@ namespace Nitra.Compiler
 
       foreach (subrule in sequence.NonMarkerSubrules)
       {
-        | SubruleCompileInfo.SimpleCall(symbol)        when symbol.Type is RuleType.Void
-        | SubruleCompileInfo.ExtensibleCall(symbol, _) when symbol.Type is RuleType.Void
-        | SubruleCompileInfo.Empty =>
-          statements.Add(GetRuleValue(subrule, astPointer));
-
-        | _                =>
+        if (RuleAstEmitter.IsSubruleAcceptedForAst(subrule))
+        {
           def varName = subrule.MakeVariableName("ast");
-          statements.Add(<[ def $(varName : usesite) = $(GetRuleValue(subrule, astPointer)) ]>);
+          statements.Add(<[ def $(varName : usesite) = $(GetSubruleValue(subrule, astPointer)) ]>);
           arguments.Add(<[ $(varName : usesite) ]>);
+        }
+        else
+          statements.Add(GetSubruleValue(subrule, astPointer));
       }
 
       def ctor =

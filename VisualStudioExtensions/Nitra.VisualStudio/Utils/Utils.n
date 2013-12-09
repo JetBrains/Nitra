@@ -19,6 +19,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Collections.Generic;
+using System.Threading;
 using System.Linq;
 
 namespace Nitra.VisualStudio
@@ -98,41 +99,47 @@ namespace Nitra.VisualStudio
       _ = VsShellUtilities.ShowMessageBox(serviceProvider, message, Constants.ProductName, icon, buttons, defaultButton);
     }
 
-    public CreateParseAgent(language : Language, buffer : ITextBuffer) : ParseAgent
+    public TryGetOrCreateParseAgent(buffer : ITextBuffer, parseAgent : out ParseAgent) : bool
     {
-      def parseAgent = ParseAgent(language) <-
+      mutable language : Language;
+      if (buffer.Properties.TryGetProperty(TextBufferProperties.ParseAgent, out parseAgent))
+        true
+      else if (buffer.Properties.TryGetProperty(TextBufferProperties.Language, out language))
       {
-        ParseFailed   += (_, a) => TryErrorListManager(buffer)?.ReportParseExeption(a.Exception);
-        ParseComplete += (_, a) => TryErrorListManager(buffer)?.ReportParseErrors(a.Result);
-      };
-      buffer.Properties.AddProperty(TextBufferProperties.ParseAgent, parseAgent);
-      buffer.Changed += (_, a) => parseAgent.EnqueueParse(a.After, buffer.GetFilePath());
-      parseAgent.EnqueueParse(buffer.CurrentSnapshot, buffer.GetFilePath());
-      parseAgent
-    }
+        def newParseAgent = ParseAgent(language);
+        newParseAgent.ParseFailed   += fun (_, a)
+        {
+          mutable errorListManager : ErrorListManager;
+          when (buffer.Properties.TryGetProperty(TextBufferProperties.ErrorListManager, out errorListManager))
+          {
+            if (Thread.CurrentThread == NitraPackage.Instance.DataHostService.UIThread : object)
+              errorListManager.ReportParseException(a.FileName, a.Exception);
+            else
+              _ = NitraPackage.Instance.DataHostService.BeginInvokeOnUIThread(Action.[_, _](errorListManager.ReportParseException), a.FileName, a.Exception);
+          }
+        };
+        newParseAgent.ParseComplete += fun (_, a)
+        {
+          mutable errorListManager : ErrorListManager;
+          when (buffer.Properties.TryGetProperty(TextBufferProperties.ErrorListManager, out errorListManager))
+          {
+            if (Thread.CurrentThread == NitraPackage.Instance.DataHostService.UIThread : object)
+              errorListManager.ReportParseErrors(a.Result);
+            else
+              _ = NitraPackage.Instance.DataHostService.BeginInvokeOnUIThread(Action.[_](errorListManager.ReportParseErrors), a.Result);
+          }
+        };
+        buffer.Properties.AddProperty(TextBufferProperties.ParseAgent, newParseAgent);
+        buffer.Changed += (_, a) => newParseAgent.EnqueueParse(a.After, buffer.GetFilePath());
+        newParseAgent.EnqueueParse(buffer.CurrentSnapshot, buffer.GetFilePath());
 
-    public CreateErrorListManager(errorProviderFactory : IErrorProviderFactory, buffer : ITextBuffer) : ErrorListManager
-    {
-      def errorListManager = ErrorListManager(errorProviderFactory, buffer);
-      buffer.Properties.AddProperty(TextBufferProperties.ErrorListManager, errorListManager);
-      errorListManager
-    }
-
-    public TryErrorListManager(buffer : ITextBuffer) : ErrorListManager
-    {
-      if (buffer.Properties.ContainsProperty(TextBufferProperties.ErrorListManager))
-        buffer.Properties[TextBufferProperties.ErrorListManager] :> ErrorListManager
+        parseAgent = newParseAgent;
+        true
+      }
       else
-        null
-    }
-
-    public DisposeErrorListManager(buffer : ITextBuffer) : void
-    {
-      when (buffer.Properties.ContainsProperty(TextBufferProperties.ErrorListManager))
       {
-        def errorListManager = buffer.Properties[TextBufferProperties.ErrorListManager] :> ErrorListManager;
-        errorListManager.Dispose();
-        _ = buffer.Properties.RemoveProperty(TextBufferProperties.ErrorListManager);
+        parseAgent = null;
+        false
       }
     }
   }
