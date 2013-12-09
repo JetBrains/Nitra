@@ -78,23 +78,37 @@ namespace Nitra.DebugStrategies
       return parseResult.Text.Length;
     }
 
-    void FlattenSubrule(ParseResult parseResult, ParsedSequence seq, SubruleParses parses, ParsedSubrule subrule, int subruleCumulativeInsertedTokens, int prevSubruleCumulativeInsertedTokens, int sequenceInsertedTokens, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
+    void FlattenSubrule(
+      ParseResult                                   parseResult,
+      ParsedSequence                                seq,
+      SubruleParses                                 parses,
+      ParsedSubrule                                 subrule,
+      int                                           subruleCumulativeInsertedTokens,
+      int                                           prevSubruleCumulativeInsertedTokens,
+      int                                           sequenceInsertedTokens,
+      Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
-      if (subruleCumulativeInsertedTokens == int.MaxValue && prevSubruleCumulativeInsertedTokens == int.MaxValue)
+      if (subruleCumulativeInsertedTokens == Fail && prevSubruleCumulativeInsertedTokens == Fail)
         Debug.Assert(false);
 
       var subruleInsertedTokens = SubOrFail(subruleCumulativeInsertedTokens, prevSubruleCumulativeInsertedTokens);
 
       var subruledDesc = seq.GetSubruleDescription(subrule.Index);
       if (subrule.IsEmpty || seq.IsSubruleVoid(subrule.Index))
-        Debug.WriteLine(subruledDesc + "('" + parseResult.Text.Substring(subrule.Begin, subrule.End - subrule.Begin) + "') " + subrule.Begin + ":" + subrule.End);
+      {
+        if (subruleInsertedTokens > 0)
+        {
+          Debug.WriteLine("Inserted = " + subruleInsertedTokens + "  -  " + subruledDesc + "  Seq: " + seq);
+        }
+        //Debug.WriteLine(subruledDesc + "('" + parseResult.Text.Substring(subrule.Begin, subrule.End - subrule.Begin) + "') " + subrule.Begin + ":" + subrule.End);
+      }
       else
       {
         var sequences = seq.GetSequencesForSubrule(subrule).ToArray();
 
         foreach (var subSequences in sequences)
         {
-          Debug.WriteLine(subruledDesc);
+          //Debug.WriteLine(subruledDesc);
           FlattenSequence(parseResult, subSequences, subrule.End, subruleInsertedTokens, memiozation);
         }
       }
@@ -110,7 +124,12 @@ namespace Nitra.DebugStrategies
       }
     }
 
-    private void FlattenSequence(ParseResult parseResult, ParsedSequence seq, int end, int sequenceInsertedTokens, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
+    private void FlattenSequence(
+      ParseResult                                   parseResult,
+      ParsedSequence                                seq,
+      int                                           end,
+      int                                           sequenceInsertedTokens,
+      Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
       SubruleParsesAndEnd first;
       var key = new ParsedSeqKey(seq, end);
@@ -119,11 +138,11 @@ namespace Nitra.DebugStrategies
 
       var parses = first.Field0;
 
-      if (sequenceInsertedTokens != first.Field1)
+      if (sequenceInsertedTokens != first.Field1 || first.Field1 == Fail)
         return;
 
-      Debug.WriteLine("(");
-      Debug.Indent();
+      //Debug.WriteLine("(");
+      //Debug.Indent();
       
       var startPos = seq.StartPos;
       var firstSubrules = parses.GetFirstSubrules(startPos).ToArray();
@@ -136,8 +155,8 @@ namespace Nitra.DebugStrategies
         FlattenSubrule(parseResult, seq, parses, parse.Key, parse.Value, 0, sequenceInsertedTokens, memiozation);
       }
 
-      Debug.Unindent();
-      Debug.WriteLine(")");
+      //Debug.Unindent();
+      //Debug.WriteLine(")");
     }
 
     private static int FindBestPath(ParsedSequence seq, int end, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation, string seqName)
@@ -151,7 +170,6 @@ namespace Nitra.DebugStrategies
 
       var prevResults = new Dictionary<ParsedSubrule, int>();
       memiozation.Add(key, new SubruleParsesAndEnd(prevResults, Fail));
-
 
       foreach (var subrule in seq.GetValidSubrules(end))
       {
@@ -205,15 +223,34 @@ namespace Nitra.DebugStrategies
             res = AddOrFail(res, localMin);
           
         }
-        var min = seq.GetPrevSubrules(subrule).MinOrZero(prev => prevResults[prev], 0);
+        var min = seq.GetPrevSubrules(subrule).MinOrDefault(prev => prevResults[prev], 0);
         prevResults[subrule] = AddOrFail(res, min);
       }
 
-      var minResult = seq.GetLastSubrules(end).MinOrZero(prev => prevResults[prev], 0);
-      var result2 =  new SubruleParsesAndEnd(prevResults, minResult);
+      var minResult = seq.GetLastSubrules(end).MinOrDefault(prev => prevResults[prev], 0);
+      var result2 = new SubruleParsesAndEnd(RemoveWorstPaths(seq, end, prevResults, minResult), minResult);
       memiozation[key] = result2;
 
       return result2.Field1;
+    }
+
+    private static SubruleParses RemoveWorstPaths(ParsedSequence seq, int end, SubruleParses parses, int minResult)
+    {
+      var good = new SubruleParses();
+      var ends = new Stack<ParsedSubrule>(seq.GetLastSubrules(parses.Keys, end).Where(e => parses[e] == minResult));
+
+      while (ends.Count != 0)
+      {
+        var curEnd = ends.Pop();
+        good.Add(curEnd, parses[curEnd]);
+        var min = seq.GetPrevSubrules(curEnd).MinOrDefault(e => parses[e], 0);
+
+        foreach (var subrule in seq.GetPrevSubrules(curEnd))
+          if (!good.ContainsKey(subrule) && parses[subrule] == min)
+            ends.Push(subrule);
+      }
+
+      return good;
     }
 
     private static int AddOrFail(int source, int addition)
@@ -304,7 +341,7 @@ namespace Nitra.DebugStrategies
 
   public static class RecoveryUtils
   {
-    public static int MinOrZero<T>(this IEnumerable<T> seq, Func<T, int> selector, int defaultValue)
+    public static int MinOrDefault<T>(this IEnumerable<T> seq, Func<T, int> selector, int defaultValue)
     {
       using (var enumerable = seq.GetEnumerator())
       {
