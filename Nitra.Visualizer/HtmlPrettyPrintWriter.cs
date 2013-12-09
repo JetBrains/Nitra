@@ -28,20 +28,20 @@ namespace Nitra.Visualizer
       _garbageClass = garbageClass;
     }
 
-    protected override void Garbage(SourceSnapshot source, NSpan skip)
+    protected override void Garbage(IPrettyPrintSource source, NSpan skip)
     {
       var text = source.Text.Substring(skip.StartPos, skip.Length);
       WriteSpan(_garbageClass, text);
     }
 
-    protected override void FormatToken(SourceSnapshot source, NSpan token)
+    protected override void FormatToken(IPrettyPrintSource source, NSpan token)
     {
       TryPrintGarbage(source, token);
       var text = source.Text.Substring(token.StartPos, token.Length);
       WebUtility.HtmlEncode(text, _writer);
     }
 
-    protected override void FormatString(SourceSnapshot source, NSpan token, string text)
+    protected override void FormatString(IPrettyPrintSource source, NSpan token, string text)
     {
       if (token.IsEmpty)
       {
