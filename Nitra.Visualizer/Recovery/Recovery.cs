@@ -66,18 +66,18 @@ namespace Nitra.DebugStrategies
       Debug.WriteLine("FindNextError took: " + timer.Elapsed);
       timer.Restart();
 
-      RecoverAllWays(rp);
+      //RecoverAllWays(rp);
 
       timer.Stop();
       Debug.WriteLine("RecoverAllWays took: " + timer.Elapsed);
 
-      var memiozation = new Dictionary<ParsedSeqKey, SubruleParsesAndEnd>();
-      FindBestPath(startSeq, textLen, memiozation, "ROOT");
-      FlattenSequence(parseResult, startSeq, textLen, memiozation[new ParsedSeqKey(startSeq, textLen)].Field1, memiozation);
+      //var memiozation = new Dictionary<ParsedSeqKey, SubruleParsesAndEnd>();
+      //FindBestPath(startSeq, textLen, memiozation, "ROOT");
+      //FlattenSequence(parseResult, startSeq, textLen, memiozation[new ParsedSeqKey(startSeq, textLen)].Field1, memiozation);
 
       return parseResult.Text.Length;
     }
-
+    /*
     void FlattenSubrule(
       ParseResult                                   parseResult,
       ParsedSequence                                seq,
@@ -334,6 +334,7 @@ namespace Nitra.DebugStrategies
     {
       return Array.FindLastIndex(rp.Records, x => x != null);
     }
+    */
 
   }
 
@@ -1284,10 +1285,10 @@ pre
       return new XAttribute("title", node);
     }
 
-    public static IEnumerable<KeyValuePair<ParsedSubrule, int>> GetFirstSubrules(this SubruleParses parses, int startPos)
-    {
-      return parses.Where(p => p.Key.Begin == startPos && p.Key.Index == 0);
-    }
+    //public static IEnumerable<KeyValuePair<ParsedSubrule, int>> GetFirstSubrules(this SubruleParses parses, int startPos)
+    //{
+    //  return parses.Where(p => p.Key.Begin == startPos && p.Key.Index == 0);
+    //}
   }
 
 #endregion

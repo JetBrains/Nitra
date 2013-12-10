@@ -15,85 +15,16 @@ using SCG = System.Collections.Generic;
 namespace Nitra.Internal.Recovery
 {
   [Record, StructuralEquality]
-  public variant ParsedSequence
+  public class ParsedSequence
   {
     [EqualsIgnore]
     public RecoveryParser : RecoveryParser;
     public StartPos : int;
-    
-    | Root
-    | Simple                     { Sequence   : SequenceInfo; }
-
-    | Extensible                 { RuleParser : ExtensibleRuleParser; }
-    | Extension                  { Sequence   : SequenceInfo; }
-
-    | Option                     { Subrule    : SubruleInfo.Option; }
-
-    | List                       { Subrule    : SubruleInfo.List; }
-    | ListRule                   { Subrule    : SubruleInfo.List;              Counter : int; }
-
-    | ListWithSeparator          { Subrule    : SubruleInfo.ListWithSeparator; }
-    | ListWithSeparatorRule      { Subrule    : SubruleInfo.ListWithSeparator; Counter : int; }
-    | ListWithSeparatorSeparator { Subrule    : SubruleInfo.ListWithSeparator; Counter : int; }
+    public ParsingSequence : ParsingSequence;
 
     [RecordIgnore, EqualsIgnore] public Callers        : SCG.HashSet[ParseRecord]   = SCG.HashSet();
     [RecordIgnore, EqualsIgnore] public ParsedSubrules : SCG.HashSet[ParsedSubrule] = SCG.HashSet();
     [RecordIgnore, EqualsIgnore] public Ends           : SCG.HashSet[int]           = SCG.HashSet();
-    
-    public IsLoop : bool
-    {
-      get
-      {
-        match (this)
-        {
-          | List              => true
-          | ListWithSeparator => true
-          | _                 => false
-        }
-      }
-    }
-
-    public IsExtensible : bool
-    {
-      get
-      {
-        match (this)
-        {
-          | Extensible => true
-          | _          => false
-        }
-      }
-    }
-
-    private static IncrementCounter(counter : int, min : int, max : int?) : int
-    {
-      if (counter <= min)
-        counter + 1
-      else if (max.HasValue)
-      {
-        if (counter <= max.Value)
-          counter + 1
-        else
-          counter
-      }
-      else
-        counter
-    }
-
-    public static NextSequence(this sequence : ParsedSequence.ListRule, pos : int) : ParsedSequence.ListRule
-    {
-      ParsedSequence.ListRule(sequence.RecoveryParser, pos, sequence.Subrule, IncrementCounter(sequence.Counter, sequence.Subrule.Min, sequence.Subrule.Max))
-    }
-
-    public static NextSequence(this sequence : ParsedSequence.ListWithSeparatorRule, pos : int) : ParsedSequence.ListWithSeparatorSeparator
-    {
-      ParsedSequence.ListWithSeparatorSeparator(sequence.RecoveryParser, pos, sequence.Subrule, sequence.Counter)
-    }
-
-    public static NextSequence(this sequence : ParsedSequence.ListWithSeparatorSeparator, pos : int) : ParsedSequence.ListWithSeparatorRule
-    {
-      ParsedSequence.ListWithSeparatorRule(sequence.RecoveryParser, pos, sequence.Subrule, IncrementCounter(sequence.Counter, sequence.Subrule.Min, sequence.Subrule.Max))
-    }
 
     public AddCaller(caller : ParseRecord) : void
     {
@@ -109,19 +40,6 @@ namespace Nitra.Internal.Recovery
           RecoveryParser.RecordsToComplete.Push(end, caller, this);
     }
 
-    public static TryGetFromCache[T](this sequence : T) : T
-      where T : ParsedSequence
-    {
-      when (sequence == null)
-        return null;
-
-      mutable old;
-      if (sequence.RecoveryParser.Sequences.TryGetFirstAddedItem(sequence, out old))
-        old :> T;
-      else
-        null;
-    }
-
     public GetNextSubrules(subrule : ParsedSubrule) : Seq[ParsedSubrule]
     {
       GetNextSubrules(subrule, ParsedSubrules)
@@ -129,40 +47,29 @@ namespace Nitra.Internal.Recovery
 
     public GetNextSubrules(subrule : ParsedSubrule, parsedSubrules : Seq[ParsedSubrule]) : Seq[ParsedSubrule]
     {
-      match (this)
-      {
-        | List              => parsedSubrules.Where(next => subrule.End == next.Begin && !next.IsEmpty)
-        | ListWithSeparator => parsedSubrules.Where(next => subrule.End == next.Begin && !next.IsEmpty)
-        | Extensible        => parsedSubrules.Where(next => subrule.End == next.Begin && !next.IsEmpty)
-        | _                 => parsedSubrules.Where(next => subrule.End == next.Begin && subrule.Index == next.Index - 1)
-      }
+      def state = ParsingSequence.States[subrule.State];
+      parsedSubrules.Where(next => subrule.End == next.Begin && state.Next.Exists(_ == next.State))
     }
-    
+
     public GetPrevSubrules(subrule : ParsedSubrule) : Seq[ParsedSubrule]
     {
-      match (this)
-      {
-        | Extensible        => ParsedSubrules.Where(p => p.End == subrule.Begin && (!p.IsEmpty || subrule.Index == 1 && p.Index == 0))
-        | List              => ParsedSubrules.Where(p => p.End == subrule.Begin && (!p.IsEmpty || subrule.Index == 1 && p.Index == 0))
-        | ListWithSeparator => ParsedSubrules.Where(p => p.End == subrule.Begin && (!p.IsEmpty || subrule.Index == 1 && p.Index == 0))
-        | _                 => ParsedSubrules.Where(p => p.End == subrule.Begin && p.Index == subrule.Index - 1)
-      }
+      GetPrevSubrules(subrule, ParsedSubrules)
+    }
+
+    public GetPrevSubrules(subrule : ParsedSubrule, parsedSubrules : Seq[ParsedSubrule]) : Seq[ParsedSubrule]
+    {
+      def state = ParsingSequence.States[subrule.State];
+      parsedSubrules.Where(prev => prev.End == subrule.Begin && state.Prev.Exists(_ == prev.State))
     }
 
     public GetFirstSubrules() : Seq[ParsedSubrule]
     {
-      ParsedSubrules.Where(p => p.Begin == StartPos)
+      ParsedSubrules.Where(p => p.Begin == StartPos && ParsingSequence.StartStates.Exists(_ == p.State))
     }
 
     public GetLastSubrules() : Seq[ParsedSubrule]
     {
-      match (this)
-      {
-        | Extensible        => ParsedSubrules.Where(p => Ends.Contains(p.End) && !p.IsEmpty);
-        | List              => ParsedSubrules.Where(p => Ends.Contains(p.End) && !p.IsEmpty);
-        | ListWithSeparator => ParsedSubrules.Where(p => Ends.Contains(p.End) && !p.IsEmpty);
-        | _                 => ParsedSubrules.Where(p => p.Index == SubruleCount - 1 && Ends.Contains(p.End));
-      }
+      ParsedSubrules.Where(p => Ends.Contains(p.End) && ParsingSequence.States[p.State].Next.Exists(_ == -1));
     }
 
     public GetLastSubrules(end : int) : Seq[ParsedSubrule]
@@ -172,13 +79,7 @@ namespace Nitra.Internal.Recovery
 
     public GetLastSubrules(parsedSubrules : Seq[ParsedSubrule], end : int) : Seq[ParsedSubrule]
     {
-      match (this)
-      {
-        | Extensible        => parsedSubrules.Where(p => p.End == end && !p.IsEmpty);
-        | List              => parsedSubrules.Where(p => p.End == end && !p.IsEmpty);
-        | ListWithSeparator => parsedSubrules.Where(p => p.End == end && !p.IsEmpty);
-        | _                 => parsedSubrules.Where(p => p.End == end && p.Index == SubruleCount - 1);
-      }
+      parsedSubrules.Where(p => p.End == end && !p.IsEmpty);
     }
 
     public GetValidSubrules() : SCG.SortedSet[ParsedSubrule]
@@ -193,296 +94,23 @@ namespace Nitra.Internal.Recovery
 
     private GetValidSubrulesImpl(ends : Seq[ParsedSubrule]) : SCG.SortedSet[ParsedSubrule]
     {
-      def cmp  = ParsedSubrule.ComparerEndBeginIndex();
-      def res  = SCG.SortedSet(cmp);
-      def ends = SCG.SortedSet(ends, cmp);
-      while (ends.Count > 0)
-      {
-        def end = ends.Max;
-        _ = ends.Remove(end);
-        when (res.Add(end))
-          foreach (prev in GetPrevSubrules(end))
-            _ = ends.Add(prev);
-      }
-      when (this is Extensible)
-        _ = res.RemoveWhere(p => p.Index == 1 && p.Begin == p.End);
-      res
+      assert3(false);
+      //def cmp  = ParsedSubrule.ComparerEndBeginIndex();
+      //def res  = SCG.SortedSet(cmp);
+      //def ends = SCG.SortedSet(ends, cmp);
+      //while (ends.Count > 0)
+      //{
+      //  def end = ends.Max;
+      //  _ = ends.Remove(end);
+      //  when (res.Add(end))
+      //    foreach (prev in GetPrevSubrules(end))
+      //      _ = ends.Add(prev);
+      //}
+      //when (this is Extensible)
+      //  _ = res.RemoveWhere(p => p.Index == 1 && p.Begin == p.End);
+      //res
     }
-
-    public IsToken : bool
-    {
-      get
-      {
-        match (this)
-        {
-          | Extensible as seq => seq.RuleParser.IsTokenRule
-          | Simple     as seq => seq.Sequence.Parser.IsTokenRule
-          | _                 => false
-        }
-      }
-    }
-
-    public IsSubruleVoid(index : int) : bool
-    {
-      match (this)
-      {
-        | Root                              => false
-        | Extensible                        => false
-        | Simple                     as seq => seq.Sequence.Subrules[index].IsVoid
-        | Extension                  as seq => seq.Sequence.Subrules[index].IsVoid
-        | Option                     as seq => seq.Subrule.Rule.Subrules[index].IsVoid
-        | List                              => false
-        | ListRule                   as seq => seq.Subrule.Rule.Subrules[index].IsVoid
-        | ListWithSeparator                 => false
-        | ListWithSeparatorRule      as seq => seq.Subrule.Rule.Subrules[index].IsVoid
-        | ListWithSeparatorSeparator as seq => seq.Subrule.Separator.Subrules[index].IsVoid
-      }
-    }
-
-    public Id : int
-    {
-      get
-      {
-        match (this)
-        {
-          | Root                                   =>  -1
-          | Extensible                 as sequence => sequence.RuleParser.PrefixId
-          | Simple                     as sequence => sequence.Sequence.Id
-          | Extension                  as sequence => sequence.Sequence.Id
-          | Option                     as sequence => sequence.Subrule.Rule.Id
-          | List                       as sequence => sequence.Subrule.Rule.Id
-          | ListRule                   as sequence => sequence.Subrule.Rule.Id
-          | ListWithSeparator          as sequence => sequence.Subrule.Rule.Id
-          | ListWithSeparatorRule      as sequence => sequence.Subrule.Rule.Id
-          | ListWithSeparatorSeparator as sequence => sequence.Subrule.Separator.Id
-        }
-      }
-    }
-
-    public CanContinueFromSameSubrule : bool
-    {
-      get
-      {
-        match (this)
-        {
-          | Root                       => false
-          | Simple                     => false
-          | Extension                  => false
-          | Option                     => false
-          | Extensible                 => true
-          | List                       => false
-          | ListRule                   => true
-          | ListWithSeparator          => false
-          | ListWithSeparatorRule      => true
-          | ListWithSeparatorSeparator => true
-        }
-      }
-    }
-
-    public HasName : bool   { get { this is Extension || this is Simple || this is Extensible } }
-    public Name    : string
-    {
-      get
-      {
-        match (this)
-        {
-          | Extensible as x => x.RuleParser.RuleName
-          | Extension  as x => x.Sequence.Parser.RuleName
-          | Simple     as x => x.Sequence.Parser.RuleName
-          | _ => null
-        }
-      }
-    }
-
-    public Kind : string
-    {
-      get
-      {
-        match (this)
-        {
-          | Simple                     => "Simple"
-          | Extension                  => "Extension"
-          | Option                     => "Option"
-          | List                       => "List"
-          | ListRule                   => "ListRule"
-          | ListWithSeparator          => "ListWS"
-          | ListWithSeparatorRule      => "ListWSRule"
-          | ListWithSeparatorSeparator => "ListWSSep"
-          | Root                       => "Root"
-          | Extensible                 => "Extensible"
-        }
-      }
-    }
-
-    public GetSequencesForSubrule(parsedSubrule : ParsedSubrule) : Seq[ParsedSequence]
-    {
-      def res = SCG.HashSet();
-      def begin = parsedSubrule.Begin;
-      def end   = parsedSubrule.End;
-      
-      when (this is Extensible as ext)
-      {
-        foreach (record in RecoveryParser.Records[begin])
-          when (record.Sequence.StartPos == begin)
-          when (record.Sequence.Ends.Contains(end))
-          when (record.Sequence is ParsedSequence.Extension as sequence)
-          when (ext.RuleParser.IsExtension(sequence.Sequence.Parser))
-            _ = res.Add(sequence);
-            
-        return res;
-      }
-
-      when (this is List as lst)
-      {
-        foreach (record in RecoveryParser.Records[begin])
-          when (record.Sequence.StartPos == begin)
-          when (record.Sequence.Ends.Contains(end))
-          when (record.Sequence is ParsedSequence.ListRule as sequence)
-          when (sequence.Subrule.Rule : object == lst.Subrule.Rule)
-            _ = res.Add(sequence);
-        return res;
-      }
-
-      when (this is ListWithSeparator as lst)
-      {
-        foreach (record in RecoveryParser.Records[begin])
-          when (record.Sequence.StartPos == begin)
-          when (record.Sequence.Ends.Contains(end))
-          {
-            when (parsedSubrule.Index == 0)
-            when (record.Sequence is ParsedSequence.ListWithSeparatorRule as sequence)
-            when (sequence.Subrule.Rule : object == lst.Subrule.Rule)
-              _ = res.Add(sequence);
-            when (parsedSubrule.Index == 1)
-            when (record.Sequence is ParsedSequence.ListWithSeparatorSeparator as sequence)
-            when (sequence.Subrule.Separator : object == lst.Subrule.Separator)
-              _ = res.Add(sequence);
-          }
-        return res;
-      }
-
-      match (GetSubrule(parsedSubrule.Index))
-      {
-        | Empty | Marker | RegularCall | TokenString => ()
-        | ExtensibleCall    as rule =>
-          foreach (record in RecoveryParser.Records[begin])
-            when (record.Sequence.StartPos == begin)
-            when (record.Sequence.Ends.Contains(end))
-            when (record.Sequence is ParsedSequence.Extensible as sequence)
-            when (sequence.RuleParser : object == rule.RuleParser)
-              _ = res.Add(sequence);
-
-        | SimpleCall        as rule =>
-          foreach (record in RecoveryParser.Records[begin])
-            when (record.Sequence.StartPos == begin)
-            when (record.Sequence.Ends.Contains(end))
-            when (record.Sequence is ParsedSequence.Simple as sequence)
-            when (sequence.Sequence.Parser : object == rule.RuleParser)
-              _ = res.Add(sequence);
-
-        | Option            as rule =>
-          foreach (record in RecoveryParser.Records[begin])
-            when (record.Sequence.StartPos == begin)
-            when (record.Sequence.Ends.Contains(end))
-            when (record.Sequence is ParsedSequence.Option as sequence)
-            when (sequence.Subrule.Rule : object == rule.Rule)
-              _ = res.Add(sequence);
-
-        | List              as rule =>
-          foreach (record in RecoveryParser.Records[begin])
-            when (record.Sequence.StartPos == begin)
-            when (record.Sequence.Ends.Contains(end))
-            when (record.Sequence is ParsedSequence.List as sequence)
-            when (sequence.Subrule : object == rule)
-              _ = res.Add(sequence);
-
-        | ListWithSeparator as rule =>
-          foreach (record in RecoveryParser.Records[begin])
-            when (record.Sequence.StartPos == begin)
-            when (record.Sequence.Ends.Contains(end))
-            when (record.Sequence is ParsedSequence.ListWithSeparator as sequence)
-            when (sequence.Subrule : object == rule)
-              _ = res.Add(sequence);
-      }
-      res
-    }
-
-    public CanSubruleParseEmptyString(index : int) : bool
-    {
-      SubruleMandatoryTokenCount(index) == 0
-    }
-
-    public SubruleMandatoryTokenCount(index : int) : int
-    {
-      match (this)
-      {
-        | Root                              => assert3(false)
-        | Extensible                 as seq => if (index == 1) seq.RuleParser.MandatoryTokens else 0
-        | Simple                     as seq => seq.Sequence.Subrules[index].MandatoryTokenCount
-        | Extension                  as seq => seq.Sequence.Subrules[index].MandatoryTokenCount
-        | Option                     as seq => seq.Subrule.Rule.Subrules[index].MandatoryTokenCount
-        | List                       as seq => seq.Subrule.MandatoryTokenCount
-        | ListRule                   as seq => seq.Subrule.Rule.Subrules[index].MandatoryTokenCount
-        | ListWithSeparator          as seq => seq.Subrule.MandatoryTokenCount
-        | ListWithSeparatorRule      as seq => seq.Subrule.Rule.Subrules[index].MandatoryTokenCount
-        | ListWithSeparatorSeparator as seq => seq.Subrule.Separator.Subrules[index].MandatoryTokenCount
-      }
-    }
-
-    public GetSubruleDescription(index : int) : string
-    {
-      match (this)
-      {
-        | Root                              => "Root"
-        | Extensible                 as seq => seq.RuleParser.RuleName + if (index == 0) ":Prefix" else ":Postfix"
-        | Simple                     as seq => seq.Sequence.Subrules[index].Description
-        | Extension                  as seq => seq.Sequence.Subrules[index].Description
-        | Option                     as seq => seq.Subrule.Rule.Subrules[index].Description
-        | List                       as seq => seq.Subrule.Description
-        | ListRule                   as seq => seq.Subrule.Rule.Subrules[index].Description
-        | ListWithSeparator          as seq => seq.Subrule.Description
-        | ListWithSeparatorRule      as seq => seq.Subrule.Rule.Subrules[index].Description
-        | ListWithSeparatorSeparator as seq => seq.Subrule.Separator.Subrules[index].Description
-      }
-    }
-
-    public GetSubrule(index : int) : SubruleInfo
-    {
-      match (this)
-      {
-        | Root                              => assert3(false)
-        | Extensible                        => assert3(false)
-        | Simple                     as seq => seq.Sequence.Subrules[index]
-        | Extension                  as seq => seq.Sequence.Subrules[index]
-        | Option                     as seq => seq.Subrule.Rule.Subrules[index]
-        | List                       as seq => seq.Subrule
-        | ListRule                   as seq => seq.Subrule.Rule.Subrules[index]
-        | ListWithSeparator          as seq => seq.Subrule
-        | ListWithSeparatorRule      as seq => seq.Subrule.Rule.Subrules[index]
-        | ListWithSeparatorSeparator as seq => seq.Subrule.Separator.Subrules[index]
-      }
-    }
-
-    public SubruleCount : int
-    {
-      get
-      {
-        match (this)
-        {
-          | Root                              => 1
-          | Extensible                        => 2
-          | Simple                     as seq => seq.Sequence.Subrules.Length
-          | Extension                  as seq => seq.Sequence.Subrules.Length
-          | Option                     as seq => seq.Subrule.Rule.Subrules.Length
-          | List                              => 1
-          | ListRule                   as seq => seq.Subrule.Rule.Subrules.Length
-          | ListWithSeparator                 => 2
-          | ListWithSeparatorRule      as seq => seq.Subrule.Rule.Subrules.Length
-          | ListWithSeparatorSeparator as seq => seq.Subrule.Separator.Subrules.Length
-        }
-      }
-    }
-
+/*
     public override ToString() : string
     {
       def sb = Text.StringBuilder();
@@ -560,5 +188,6 @@ namespace Nitra.Internal.Recovery
         
       sb.ToString()
     }
+    */
   }
 }
