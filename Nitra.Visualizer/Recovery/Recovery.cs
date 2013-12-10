@@ -92,8 +92,8 @@ namespace Nitra.DebugStrategies
         var subruleInsertedTokens = SubOrFail(subruleCumulativeInsertedTokens, prevSubruleCumulativeInsertedTokens);
 
         var currentNodes = new FlattenSequences();
-        var subruledDesc = seq.GetSubruleDescription(subrule.Index);
-        if (subrule.IsEmpty || seq.IsSubruleVoid(subrule.Index))
+        var subruledDesc = seq.GetSubruleDescription(subrule.State);
+        if (subrule.IsEmpty || seq.IsSubruleVoid(subrule))
         {
           if (subruleInsertedTokens > 0)
             Debug.WriteLine("Inserted = " + subruleInsertedTokens + "  -  " + subruledDesc + "  Seq: " + seq);
@@ -213,7 +213,7 @@ namespace Nitra.DebugStrategies
       {
         int res = 0;
 
-        if (!seq.IsSubruleVoid(subrule.Index))
+        if (!seq.IsSubruleVoid(subrule))
         {
           var subSeqs = seq.GetSequencesForSubrule(subrule);
           var hasElements = false;
