@@ -182,14 +182,12 @@ namespace Nitra.Compiler
 
         def analyze(_ : FieldExpr) : void
         {
-          | Prefix             => ()
-          | Tuple(items)       => foreach (expr in items) analyze(expr);
-          | Regex(_, true)     => needRuleParser = true;
-          | Regex              => ()
-          | String(_, _, true) => needRuleParser = true;
-          | String             => ()
-          | Other(_, true)     => needRuleParser = true; needCaching = true;
-          | Other              =>                        needCaching = true;
+          | Prefix         => ()
+          | Tuple(items)   => foreach (expr in items) analyze(expr);
+          | Chars(_, true) => needRuleParser = true;
+          | Chars          => ()
+          | Other(_, true) => needRuleParser = true; needCaching = true;
+          | Other          =>                        needCaching = true;
         }
 
         analyze(field.Expr);
@@ -200,10 +198,9 @@ namespace Nitra.Compiler
         def compile(_ : FieldExpr) : PExpr
         {
           | Prefix(expr)
-          | Regex(expr, _)
-          | String(expr, _, _)
-          | Other(expr, _)     => expr
-          | Tuple(items)       => <[ (..$(items.Map(compile))) ]>
+          | Chars(expr, _)
+          | Other(expr, _) => expr
+          | Tuple(items)   => <[ (..$(items.Map(compile))) ]>
         }
 
         statements.Add(compile(field.Expr));
@@ -250,23 +247,137 @@ namespace Nitra.Compiler
 
     private DefineChemicalAstCtorAndFields(fields : SCG.List[FieldInfo]) : void
     {
-      _chemicalAstTb.DefineConditional(<[ decl:
-        public this(location : Location)
+      def traverse(ruleType : RuleType, variable : string) : FixedType * bool * PExpr
+      {
+        match (ruleType)
         {
-          this.Location = location;
+          | Void                 => assert3(false)
+          | Ref(symbol)          => (Environment.GetAstType(symbol), true,  <[ $(variable : usesite) ]>)
+          | Chars(Some(keyword)) => (FixedType.Void(),               false, <[ context.GetKeywordSpan($(keyword : string)) ]>)
+          | Chars(None)          => (Environment.StringTypeVar,      false, <[ context.GetSpan($(variable : usesite)) ]>)
+          | Option(type) =>
+            def itemVariable = Util.tmpname("item");
+            def (itemInputType, isUnchanged, itemExpr) = traverse(type, itemVariable);
+            if (isUnchanged)
+              (FixedType.Class(Environment.OptionTypeInfo, [itemInputType]), true, <[ $(variable : usesite) ]>);
+            else if (itemInputType is FixedType.Void)
+              (Environment.BooleanTypeVar, false, <[ if ($(variable : usesite)) Some($itemExpr) else None(); ]>)
+            else
+            {
+              def expr =
+              <[
+                match ($(variable : usesite))
+                {
+                  | Some($(itemVariable : usesite)) => Some($itemExpr)
+                  | None                            => None()
+                }
+              ]>;
+              (FixedType.Class(Environment.OptionTypeInfo, [itemInputType]), false, expr)
+            }
+
+          | List(type) =>
+            def itemVariable = Util.tmpname("item");
+            def (itemInputType, isUnchanged, itemExpr) = traverse(type, itemVariable);
+            if (isUnchanged)
+              (FixedType.Class(Environment.ListTypeInfo, [itemInputType]), true, <[ $(variable : usesite) ]>);
+            else if (itemInputType is FixedType.Void)
+            {
+              def expr =
+              <[
+                def items = array($(variable : usesite));
+                for (mutable i = 0; i < items.Length; ++i)
+                  items[i] = $itemExpr;
+                Nemerle.Collections.NList.ToList(items);
+              ]>;
+              (Environment.Int32TypeVar, false, expr)
+            }
+            else
+            {
+              def expr =
+              <[
+                def items = System.Collections.Generic.List();
+                foreach ($(itemVariable : usesite) in $(variable : usesite))
+                  items.Add($itemExpr);
+                Nemerle.Collections.NList.ToList(items);
+              ]>;
+              (FixedType.Class(Environment.ListTypeInfo, [itemInputType]), false, expr)
+            }
+
+          | Tuple(types) =>
+            def memberInputTypes   = SCG.List();
+            def patternVariables   = SCG.List();
+            def exprs              = SCG.List();
+            mutable isAllUnchanged = true;
+
+            foreach(t in types)
+            {
+              def memberVariable = Util.tmpname("member");
+              def (memberType, isUnchanged, memberExpr) = traverse(t, memberVariable);
+              isAllUnchanged &= isUnchanged;
+              unless (memberType is FixedType.Void)
+              {
+                memberInputTypes.Add(memberType);
+                patternVariables.Add(memberVariable);
+              }
+              exprs.Add(memberExpr);
+            }
+
+            if (isAllUnchanged)
+              (FixedType.Tuple(memberInputTypes.MapToList(x => x)), true, <[ $(variable : usesite) ]>)
+            else
+              match (memberInputTypes.Count)
+              {
+                | 0 => (FixedType.Void(), false, <[ (..$exprs) ]>)
+                | 1 => (memberInputTypes[0], false, <[ def $(patternVariables[0] : usesite) = $(variable : usesite); (..$exprs) ]>)
+                | _ => (FixedType.Tuple(memberInputTypes.MapToList(x => x)), false, <[ def (..$(patternVariables.MapToList(name => <[ $(name : usesite) ]>))) = $(variable : usesite); (..$exprs) ]>)
+              }
+        }
+      }
+
+      _chemicalAstTb.DefineConditional(<[ decl:
+        private context : Nitra.Runtime.ChemicalAstContext;
+      ]>);
+      _chemicalAstTb.DefineConditional(<[ decl:
+        public override Location : Nitra.Location
+        {
+          get { Nitra.Location(context.GetSource(), 0, 0) }
         }
       ]>);
-      _chemicalAstTb.DefineConditional(<[ decl:
-        public override Location : Nitra.Location { get; }
-      ]>);
+
+      def parameters = SCG.List();
+      parameters.Add(<[ parameter: context : Nitra.Runtime.ChemicalAstContext ]>);
+
+      def statements = SCG.List();
+      statements.Add(<[ this.context = context; ]>);
+
       foreach (field in fields)
       {
         _chemicalAstTb.DefineConditional(<[ decl:
-          public override $(field.Name : usesite) : $(field.Type : typed)
-          {
-            get { throw System.NotImplementedException(); }
-          }
+          public override $(field.Name : usesite) : $(field.Type : typed) { get; }
         ]>);
+
+        def (parameterType, _, expr) = traverse(field.Rule.Type, field.Name);
+        unless (parameterType is FixedType.Void)
+          parameters.Add(<[ parameter: $(field.Name : usesite) : $(parameterType : typed) ]>);
+        statements.Add(<[ this.$(field.Name : usesite) = $expr ]>);
+      }
+
+      _chemicalAstTb.DefineConditional(<[ decl:
+        public this(..$parameters) { unchecked { ..$statements } }
+      ]>);
+
+      match (this.RuleSymbol)
+      {
+        | SimpleRuleSymbol    with tb = _baseTb
+        | ExtensionRuleSymbol with tb = _astTb =>
+          tb.DefineConditional(<[ decl:
+            public static Create(..$parameters) : $(_astTb.GetMemType() : typed)
+            {
+              $(_chemicalAstTb.GetMemType() : typed)(..$(parameters.Map(_.ReferencingExpr)));
+            }
+          ]>);
+
+        | _ => assert3(false)
       }
     }
   }
