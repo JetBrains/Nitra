@@ -283,11 +283,14 @@ namespace Nitra.DebugStrategies
       while (ends.Count != 0)
       {
         var curEnd = ends.Pop();
-        good.Add(curEnd, parses[curEnd]);
-        var min = seq.GetPrevSubrules(curEnd).MinOrDefault(e => parses[e], 0);
+        if (good.ContainsKey(curEnd))
+          continue;
 
+        good.Add(curEnd, parses[curEnd]);
+
+        var min = seq.GetPrevSubrules(curEnd).MinOrDefault(e => parses[e], 0);
         foreach (var subrule in seq.GetPrevSubrules(curEnd))
-          if (!good.ContainsKey(subrule) && parses[subrule] == min)
+          if (parses[subrule] == min)
             ends.Push(subrule);
       }
 
