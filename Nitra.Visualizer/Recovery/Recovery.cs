@@ -75,7 +75,7 @@ namespace Nitra.DebugStrategies
       Debug.WriteLine("RecoverAllWays took: " + timer.Elapsed);
 
       var memiozation = new Dictionary<ParsedSeqKey, SubruleParsesAndEnd>();
-      FindBestPath(startSeq, textLen, memiozation, "ROOT");
+      FindBestPath(startSeq, textLen, memiozation);
       var results = FlattenSequence(new FlattenSequences() { ParsedSequenceAndSubrules.Nil._N_constant_object }, 
         parseResult, startSeq, textLen, memiozation[new ParsedSeqKey(startSeq, textLen)].Field1, memiozation);
 
@@ -84,78 +84,76 @@ namespace Nitra.DebugStrategies
 
     private FlattenSequences FlattenSubrule(FlattenSequences prevs, ParseResult parseResult, ParsedSequence seq, SubruleParses parses, ParsedSubrule subrule, int subruleCumulativeInsertedTokens, int prevSubruleCumulativeInsertedTokens, int sequenceInsertedTokens, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
-      while (true)
+      Begin:
+
+      if (subruleCumulativeInsertedTokens == Fail && prevSubruleCumulativeInsertedTokens == Fail)
+        Debug.Assert(false);
+
+      var subruleInsertedTokens = SubOrFail(subruleCumulativeInsertedTokens, prevSubruleCumulativeInsertedTokens);
+
+      var currentNodes = new FlattenSequences();
+      //var subruledDesc = seq.GetSubruleDescription(subrule.State);
+      if (subrule.IsEmpty || seq.IsSubruleVoid(subrule))
       {
-        if (subruleCumulativeInsertedTokens == Fail && prevSubruleCumulativeInsertedTokens == Fail)
-          Debug.Assert(false);
+        //if (subruleInsertedTokens > 0)
+        //  Debug.WriteLine("Inserted = " + subruleInsertedTokens + "  -  " + subruledDesc + "  Seq: " + seq);
+      }
+      else
+      {
+        var sequences = seq.GetSequencesForSubrule(subrule).ToArray();
 
-        var subruleInsertedTokens = SubOrFail(subruleCumulativeInsertedTokens, prevSubruleCumulativeInsertedTokens);
-
-        var currentNodes = new FlattenSequences();
-        var subruledDesc = seq.GetSubruleDescription(subrule.State);
-        if (subrule.IsEmpty || seq.IsSubruleVoid(subrule))
+        if (sequences.Length > 1)
         {
-          if (subruleInsertedTokens > 0)
-            Debug.WriteLine("Inserted = " + subruleInsertedTokens + "  -  " + subruledDesc + "  Seq: " + seq);
-          //Debug.WriteLine(subruledDesc + "('" + parseResult.Text.Substring(subrule.Begin, subrule.End - subrule.Begin) + "') " + subrule.Begin + ":" + subrule.End);
-        }
-        else
-        {
-          var sequences = seq.GetSequencesForSubrule(subrule).ToArray();
-
-          if (sequences.Length > 1)
-          {
-          }
-
-          foreach (var subSequences in sequences)
-          {
-            //Debug.WriteLine(subruledDesc);
-            var result = FlattenSequence(prevs, parseResult, subSequences, subrule.End, subruleInsertedTokens, memiozation);
-            currentNodes.AddRange(result);
-          }
         }
 
-        if (currentNodes.Count == 0) // если не было сабсиквенсов, надо создать продолжения из текущего сабруля
+        foreach (var subSequences in sequences)
         {
-          foreach (var prev in prevs)
-            currentNodes.Add(new ParsedSequenceAndSubrules.Cons(new ParsedSequenceAndSubrule(subrule, subruleInsertedTokens, seq), prev));
+          //Debug.WriteLine(subruledDesc);
+          var result = FlattenSequence(prevs, parseResult, subSequences, subrule.End, subruleInsertedTokens, memiozation);
+          currentNodes.AddRange(result);
         }
+      }
 
-        var nextSubrules = seq.GetNextSubrules(subrule, parses.Keys).ToArray();
-        switch (nextSubrules.Length)
+      if (currentNodes.Count == 0) // если не было сабсиквенсов, надо создать продолжения из текущего сабруля
+      {
+        foreach (var prev in prevs)
+          currentNodes.Add(new ParsedSequenceAndSubrules.Cons(new ParsedSequenceAndSubrule(subrule, subruleInsertedTokens, seq), prev));
+      }
+
+      var nextSubrules = seq.GetNextSubrules(subrule, parses.Keys).ToArray();
+      switch (nextSubrules.Length)
+      {
+        case 0:
+          return currentNodes;
+        case 1:
         {
-          case 0:
+          var nextSubrule = nextSubrules[0];
+          var newSubruleCumulativeInsertedTokens = parses[nextSubrule];
+          if (newSubruleCumulativeInsertedTokens == Fail)
             return currentNodes;
-          case 1:
+          // recursive self call...
+          prevs = currentNodes;
+          subrule = nextSubrule;
+          prevSubruleCumulativeInsertedTokens = subruleCumulativeInsertedTokens;
+          subruleCumulativeInsertedTokens = newSubruleCumulativeInsertedTokens;
+          goto Begin;
+        }
+        default:
+        {
+          var resultNodes = new FlattenSequences();
+
+          foreach (var nextSubrule in nextSubrules)
           {
-            var nextSubrule = nextSubrules[0];
             var newSubruleCumulativeInsertedTokens = parses[nextSubrule];
             if (newSubruleCumulativeInsertedTokens == Fail)
-              return currentNodes;
-            prevs = currentNodes;
-            subrule = nextSubrule;
-            prevSubruleCumulativeInsertedTokens = subruleCumulativeInsertedTokens;
-            subruleCumulativeInsertedTokens = newSubruleCumulativeInsertedTokens;
-            continue;
+              continue;
+
+            var result = FlattenSubrule(currentNodes, parseResult, seq, parses, nextSubrule, newSubruleCumulativeInsertedTokens, subruleCumulativeInsertedTokens, sequenceInsertedTokens, memiozation);
+            resultNodes.AddRange(result);
           }
-          default:
-          {
-            var resultNodes = new FlattenSequences();
 
-            foreach (var nextSubrule in nextSubrules)
-            {
-              var newSubruleCumulativeInsertedTokens = parses[nextSubrule];
-              if (newSubruleCumulativeInsertedTokens == Fail)
-                continue;
-
-              var result = FlattenSubrule(currentNodes, parseResult, seq, parses, nextSubrule, newSubruleCumulativeInsertedTokens, subruleCumulativeInsertedTokens, sequenceInsertedTokens, memiozation);
-              resultNodes.AddRange(result);
-            }
-
-            return resultNodes;
-          }
+          return resultNodes;
         }
-        break;
       }
     }
 
@@ -177,27 +175,27 @@ namespace Nitra.DebugStrategies
       if (sequenceInsertedTokens != first.Field1 || first.Field1 == Fail)
         return new FlattenSequences();
 
-      var startPos = seq.StartPos;
-      var firstSubrules = parses.GetFirstSubrules(startPos).ToArray();
+      var firstSubrules = seq.GetFirstSubrules(parses.Keys).ToArray();
 
       if (firstSubrules.Length > 1)
       { }
 
       var total = new FlattenSequences();
 
-      foreach (var parse in firstSubrules)
+      foreach (var firstSubrule in firstSubrules)
       {
-        if (parse.Value == Fail)
+        var insertedTokens = parses[firstSubrule];
+        if (insertedTokens == Fail)
           continue;
 
-        var result = FlattenSubrule(prevs, parseResult, seq, parses, parse.Key, parse.Value, 0, sequenceInsertedTokens, memiozation);
+        var result = FlattenSubrule(prevs, parseResult, seq, parses, firstSubrule, insertedTokens, 0, sequenceInsertedTokens, memiozation);
         total.AddRange(result);
       }
 
       return total;
     }
 
-    private static int FindBestPath(ParsedSequence seq, int end, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation, string seqName)
+    private static int FindBestPath(ParsedSequence seq, int end, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
       SubruleParsesAndEnd result;
 
@@ -227,11 +225,11 @@ namespace Nitra.DebugStrategies
 
             if (subrule.IsEmpty)
             {
-              localMin = seq.SubruleMandatoryTokenCount(subrule.Index);
+              localMin = seq.SubruleMandatoryTokenCount(subrule);
               break;
             }
 
-            var localRes = FindBestPath(subSeq, subrule.End, memiozation, subSeq.Name);
+            var localRes = FindBestPath(subSeq, subrule.End, memiozation);
 
             if (localRes < localMin)
               localMin = localRes;
@@ -242,14 +240,11 @@ namespace Nitra.DebugStrategies
 
           if (!hasElements) // Если элементов нет, то нужно посчитать количество токенво в бинарном АСТ.
           {
-            var subruleInfo = seq.GetSubrule(subrule.Index);
-            Debug.Write(subruleInfo);
-
-            if (!subruleInfo.IsVoid)
+            if (!seq.IsSubruleVoid(subrule))
             {
               if (subrule.IsEmpty)
               {
-                var skipedTokens = subruleInfo.MandatoryTokenCount;
+                var skipedTokens = seq.SubruleMandatoryTokenCount(subrule);
                 if (skipedTokens > 0)
                   Debug.WriteLine("  ST: " + skipedTokens + "   ->> " + seq);
 
@@ -261,7 +256,7 @@ namespace Nitra.DebugStrategies
             res = AddOrFail(res, localMin);
           
         }
-        var min = seq.GetPrevSubrules(subrule).MinOrDefault(prev => prevResults[prev], 0);
+        var min = seq.GetPrevSubrules(subrule).MinOrDefault(prev => GrtPrev(prevResults, prev), 0);
         prevResults[subrule] = AddOrFail(res, min);
       }
 
@@ -270,6 +265,14 @@ namespace Nitra.DebugStrategies
       memiozation[key] = result2;
 
       return result2.Field1;
+    }
+
+    private static int GrtPrev(Dictionary<ParsedSubrule, int> prevResults, ParsedSubrule prev)
+    {
+      int value;
+      if (!prevResults.TryGetValue(prev, out value))
+      {}
+      return value;
     }
 
     private static SubruleParses RemoveWorstPaths(ParsedSequence seq, int end, SubruleParses parses, int minResult)
@@ -322,16 +325,15 @@ namespace Nitra.DebugStrategies
             if (record.IsComplete || record.Sequence.IsToken)
               continue;
 
-            if (record.Sequence.Name == "TypeParameterConstraintsClause")
-            { }
-            if (record.Sequence.Name == "TypeParameterConstraints")
-            { }
-            if (record.Sequence.Name == "TypeParameterConstraint")
-            { }
+            foreach (var state in record.ParsingState.Next)
+            {
+              var newRecord = new ParseRecord(record.Sequence, state, maxPos);
+              if (!rp.Records[maxPos].Contains(newRecord))
+                records.Enqueue(newRecord);
+            }
 
-            var newRecord = record.Next();
-            records.Enqueue(newRecord);
             rp.SubruleParsed(maxPos, maxPos, record);
+            
             if (rp.ParseResult.Text.Length != maxPos)
               rp.PredictionOrScanning(maxPos, record, false);
           }
@@ -1320,11 +1322,6 @@ pre
     private static XAttribute MakeTitle(ParseAlternativeNode node)
     {
       return new XAttribute("title", node);
-    }
-
-    public static IEnumerable<KeyValuePair<ParsedSubrule, int>> GetFirstSubrules(this SubruleParses parses, int startPos)
-    {
-      return parses.Where(p => p.Key.Begin == startPos && p.Key.Index == 0);
     }
   }
 
