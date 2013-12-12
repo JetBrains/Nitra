@@ -39,7 +39,7 @@ namespace Nitra.DebugStrategies
 
   using ParsedList = Nemerle.Core.list<ParsedNode>;
   using Nitra.Runtime;
-  
+
 //#endregion
 
   public class Recovery
@@ -204,8 +204,8 @@ namespace Nitra.DebugStrategies
       if (memiozation.TryGetValue(key, out result))
         return result.Field1;
 
-      var prevResults = new Dictionary<ParsedSubrule, int>();
-      memiozation.Add(key, new SubruleParsesAndEnd(prevResults, Fail));
+      var results = new Dictionary<ParsedSubrule, int>();
+      memiozation.Add(key, new SubruleParsesAndEnd(results, Fail));
 
       foreach (var subrule in seq.GetValidSubrules(end))
       {
@@ -256,12 +256,13 @@ namespace Nitra.DebugStrategies
             res = AddOrFail(res, localMin);
           
         }
-        var min = seq.GetPrevSubrules(subrule).MinOrDefault(prev => GrtPrev(prevResults, prev), 0);
-        prevResults[subrule] = AddOrFail(res, min);
+
+        results[subrule] = res;
       }
 
-      var minResult = seq.GetLastSubrules(end).MinOrDefault(prev => prevResults[prev], 0);
-      var result2 = new SubruleParsesAndEnd(RemoveWorstPaths(seq, end, prevResults, minResult), minResult);
+      var bestResults = RemoveWorstPaths(seq, end, results);
+      var min = Min(seq, end, bestResults);// seq.GetLastSubrules(end).MinOrDefault(prev => prevResults[prev], 0);
+      var result2 = new SubruleParsesAndEnd(bestResults, min);
       memiozation[key] = result2;
 
       return result2.Field1;
@@ -275,23 +276,62 @@ namespace Nitra.DebugStrategies
       return value;
     }
 
-    private static SubruleParses RemoveWorstPaths(ParsedSequence seq, int end, SubruleParses parses, int minResult)
+    private static int Min(ParsedSequence seq, int end, SubruleParses parses)
     {
-      var good = new SubruleParses();
-      var ends = new Stack<ParsedSubrule>(seq.GetLastSubrules(parses.Keys, end).Where(e => parses[e] == minResult));
+      if (parses.Count <= 1)
+        return parses.First().Value;
+      return 42;
+    }
 
-      while (ends.Count != 0)
+    static IEnumerable<KeyValuePair<ParsedSubrule, int>> GetEdges(SubruleParses parses, int state)
+    {
+      return parses.Where(p => p.Key.State == state);
+    }
+
+    private static SubruleParses RemoveWorstPaths(ParsedSequence seq, int end, SubruleParses parses)
+    {
+      //if (parses.Count <= 1)
+      //  return parses;
+
+      var x     = seq.ParsingSequence;
+      var nodes = new int[x.States.Length];
+
+      for (int i = 0; i < nodes.Length; i++)
+        nodes[i] = int.MaxValue;
+
+      //foreach (var startState in x.StartStates)
+      //  nodes[startState] = 0;
+
+      var min   = int.MaxValue;
+      var good  = new SubruleParses();
+      var currs = new SCG.Queue<ParsedSubrule>(seq.GetFirstSubrules(parses.Keys));
+
+      foreach (var curr in currs)
+        nodes[curr.State] = 0;
+
+      while (currs.Count > 0)
       {
-        var curEnd = ends.Pop();
-        if (good.ContainsKey(curEnd))
+        var curr = currs.Dequeue();
+        var state = x.States[curr.State];
+        var value = nodes[curr.State];
+        var delta = parses[curr];
+        if (delta == int.MaxValue)
           continue;
+        var nextValue = delta + value;
 
-        good.Add(curEnd, parses[curEnd]);
-
-        var min = seq.GetPrevSubrules(curEnd).MinOrDefault(e => parses[e], 0);
-        foreach (var subrule in seq.GetPrevSubrules(curEnd))
-          if (parses[subrule] == min)
-            ends.Push(subrule);
+        foreach (var next in state.Next)
+        {
+          if (next == -1 && min > nextValue)
+          {
+            min = nextValue;
+          }
+          else if (nodes[next] > nextValue)
+          {
+            nodes[next] = nextValue;
+            foreach (var nextSubrule in seq.GetNextSubrules(curr, parses.Keys).Where(s => s.State == next))
+              currs.Enqueue(nextSubrule);
+          }
+        }
       }
 
       return good;
