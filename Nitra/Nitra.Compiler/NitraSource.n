@@ -32,6 +32,34 @@ namespace Nitra
     private ParserHost    : ParserHost;
     private IsUnderNitraForVisualStudio : bool;
 
+    private static RestrictedNames : SCG.HashSet[string] = SCG.HashSet(array[
+      // AST classes
+      "Located",
+      "Ast",
+      "MissingAst",
+      "SpliceAst",
+      "AmbiguousAst",
+      "Nested",
+
+      // AST Methods
+      "Equals",
+      "GetHashCode",
+      "GetType",
+      "ReferenceEquals",
+      "MemberwiseClone",
+      "Finalize",
+      "ToString",
+      "PrettyPrint",
+      "GetText",
+      "FirstChar",
+      "IntersectsWith",
+      "Intersection",
+      "Create",
+
+      // AST Properties
+      "Location",
+      "PrettyPrintSource"
+    ]);
     public this(path : string, manager : ManagerClass)
     {
       Path    = path;
@@ -197,6 +225,41 @@ namespace Nitra
       // HACK: force FSM build for each regular rule symbol (shall we make new pass in regular rule typing process?)
       foreach (symbol in project.Environment.Root.GetDescendants.[ParsedRegularRuleSymbol]())
         _ = symbol.Fsm;
+
+      project.ErrorCount == errorCount
+    }
+
+    private CheckRestrictedNames(project : CompilingNitraProject) : bool
+    {
+      def errorCount   = project.ErrorCount;
+
+      def check(loc : Location, name : string) : void
+      {
+        when (RestrictedNames.Contains(name))
+          project.Error(loc, $"Name '$name' is restricted due to internal use", 0);
+      }
+
+      foreach (syntaxModule in project.Environment.Root.GetDescendants.[ParsedSyntaxModuleSymbol]())
+      {
+        foreach (ruleSymbol in syntaxModule.Node.GetDescendants.[RuleSymbol]())
+        {
+          check(ruleSymbol.FirstLocation, ruleSymbol.Name);
+
+          when (ruleSymbol is SyntaxRuleSymbol as s)
+            foreach (ruleMethodSymbol in s.RuleMethods)
+              check(ruleMethodSymbol.FirstLocation, ruleMethodSymbol.Name);
+
+          match (ruleSymbol)
+          {
+            | SimpleRuleSymbol    as s with seq = s.NonVoidSubRules
+            | ExtensionRuleSymbol as s with seq = s.NonVoidSubRules =>
+              foreach (r in seq)
+                check(r.Location, r.FieldName);
+
+            | _ => ()
+          }
+        }
+      }
 
       project.ErrorCount == errorCount
     }
@@ -377,6 +440,8 @@ namespace Nitra
           unless (LoadParsedSymbols(project, fileAsts))
             throw Recovery();
           unless (TypeSyntaxModules(project, fileAsts))
+            throw Recovery();
+          unless (CheckRestrictedNames(project))
             throw Recovery();
 
           MakeEmitters(project);
