@@ -63,7 +63,6 @@ namespace Nitra.DebugStrategies
       var rp = new RecoveryParser(parseResult);
       rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
       var startSeq = rp.Sequences.First();
-      rp.FindNextError();
 
       timer.Stop();
       Debug.WriteLine("FindNextError took: " + timer.Elapsed);
