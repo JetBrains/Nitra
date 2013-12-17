@@ -81,14 +81,9 @@ namespace Nitra.DebugStrategies
       return parseResult.Text.Length;
     }
 
-    private FlattenSequences FlattenSubrule(FlattenSequences prevs, ParseResult parseResult, ParsedSequence seq, SubruleParses parses, ParsedSubrule subrule, int subruleCumulativeInsertedTokens, int prevSubruleCumulativeInsertedTokens, int sequenceInsertedTokens, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
+    private FlattenSequences FlattenSubrule(FlattenSequences prevs, ParseResult parseResult, ParsedSequence seq, SubruleParses parses, ParsedSubrule subrule, int subruleInsertedTokens, int sequenceInsertedTokens, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
       Begin:
-
-      if (subruleCumulativeInsertedTokens == Fail && prevSubruleCumulativeInsertedTokens == Fail)
-        Debug.Assert(false);
-
-      var subruleInsertedTokens = SubOrFail(subruleCumulativeInsertedTokens, prevSubruleCumulativeInsertedTokens);
 
       var currentNodes = new FlattenSequences();
       //var subruledDesc = seq.GetSubruleDescription(subrule.State);
@@ -133,8 +128,7 @@ namespace Nitra.DebugStrategies
           // recursive self call...
           prevs = currentNodes;
           subrule = nextSubrule;
-          prevSubruleCumulativeInsertedTokens = subruleCumulativeInsertedTokens;
-          subruleCumulativeInsertedTokens = newSubruleCumulativeInsertedTokens;
+          subruleInsertedTokens = newSubruleCumulativeInsertedTokens;
           goto Begin;
         }
         default:
@@ -143,11 +137,11 @@ namespace Nitra.DebugStrategies
 
           foreach (var nextSubrule in nextSubrules)
           {
-            var newSubruleCumulativeInsertedTokens = parses[nextSubrule];
-            if (newSubruleCumulativeInsertedTokens == Fail)
+            var newSubruleInsertedTokens = parses[nextSubrule];
+            if (newSubruleInsertedTokens == Fail)
               continue;
 
-            var result = FlattenSubrule(currentNodes, parseResult, seq, parses, nextSubrule, newSubruleCumulativeInsertedTokens, subruleCumulativeInsertedTokens, sequenceInsertedTokens, memiozation);
+            var result = FlattenSubrule(currentNodes, parseResult, seq, parses, nextSubrule, newSubruleInsertedTokens, sequenceInsertedTokens, memiozation);
             resultNodes.AddRange(result);
           }
 
@@ -187,7 +181,7 @@ namespace Nitra.DebugStrategies
         if (insertedTokens == Fail)
           continue;
 
-        var result = FlattenSubrule(prevs, parseResult, seq, parses, firstSubrule, insertedTokens, 0, sequenceInsertedTokens, memiozation);
+        var result = FlattenSubrule(prevs, parseResult, seq, parses, firstSubrule, insertedTokens, sequenceInsertedTokens, memiozation);
         total.AddRange(result);
       }
 
@@ -299,7 +293,11 @@ namespace Nitra.DebugStrategies
         var prev = seq.GetPrevSubrules(subrule, parses.Keys).ToList();
         if (prev.Count > 0)
         {
-          var min = prev.Min(s => comulativeCost[s]);
+          int min;
+          if (seq.StartPos == subrule.Begin && seq.ParsingSequence.StartStates.Contains(subrule.State))
+            min = 0;
+          else
+            min = prev.Min(s => comulativeCost[s]);
           foreach (var prevSubrule in prev)
             if (comulativeCost[prevSubrule] == min)
               toProcess.Enqueue(prevSubrule);
@@ -381,13 +379,18 @@ namespace Nitra.DebugStrategies
           {
             var record = records.Dequeue();
 
-            if (record.IsComplete || record.Sequence.IsToken)
+            if (record.IsComplete)
+            {
+              rp.StartParseSubrule(maxPos, record);
+              continue;
+            }
+            if (record.Sequence.IsToken)
               continue;
 
-            var predicate = record.ParsingState as ParsingState.Predicate;
-            if (predicate != null)
-              if (!predicate.HeadPredicate.apply(maxPos, rp.ParseResult.Text, rp.ParseResult))
-                continue;
+            //var predicate = record.ParsingState as ParsingState.Predicate;
+            //if (predicate != null)
+            //  if (!predicate.HeadPredicate.apply(maxPos, rp.ParseResult.Text, rp.ParseResult))
+            //    continue;
 
             foreach (var state in record.ParsingState.Next)
             {
@@ -398,7 +401,7 @@ namespace Nitra.DebugStrategies
 
             rp.SubruleParsed(maxPos, maxPos, record);
             
-            if (rp.ParseResult.Text.Length != maxPos)
+            //if (rp.ParseResult.Text.Length != maxPos)
               rp.PredictionOrScanning(maxPos, record, false);
           }
 
