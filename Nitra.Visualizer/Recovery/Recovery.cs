@@ -204,7 +204,7 @@ namespace Nitra.DebugStrategies
         memiozation.Add(key, new SubruleParsesAndEnd(results, 0));
         return 0;
       }
-      memiozation.Add(key, new SubruleParsesAndEnd(results, Fail));
+      memiozation.Add(key, new SubruleParsesAndEnd(results, seq.ParsingSequence.MandatoryTokenCount));
 
       foreach (var subrule in validSubrules)
       {
@@ -370,6 +370,7 @@ namespace Nitra.DebugStrategies
       {
         maxPos = rp.MaxPos;
         var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
+        var prevRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
 
         do
         {
@@ -396,7 +397,10 @@ namespace Nitra.DebugStrategies
             {
               var newRecord = new ParseRecord(record.Sequence, state, maxPos);
               if (!rp.Records[maxPos].Contains(newRecord))
+              {
                 records.Enqueue(newRecord);
+                prevRecords.Add(newRecord);
+              }
             }
 
             rp.SubruleParsed(maxPos, maxPos, record);
@@ -407,11 +411,16 @@ namespace Nitra.DebugStrategies
 
           rp.Parse();
 
-          foreach (var parsedSequence in rp.AddedSequences)
-          {
-            if (parsedSequence.StartPos == maxPos && !parsedSequence.IsToken)
-              records.Enqueue(new ParseRecord(parsedSequence, MaxSubruleIndex(parsedSequence.ParsedSubrules), maxPos));
-          }
+          foreach (var record in rp.Records[maxPos])
+            if (!prevRecords.Contains(record))
+              records.Enqueue(record);
+          prevRecords.UnionWith(rp.Records[maxPos]);
+
+          //foreach (var parsedSequence in rp.AddedSequences)
+          //{
+          //  if (parsedSequence.StartPos == maxPos && !parsedSequence.IsToken)
+          //    records.Enqueue(new ParseRecord(parsedSequence, MaxSubruleIndex(parsedSequence.ParsedSubrules), maxPos));
+          //}
         } while (records.Count > 0);
 
         //maxPos = Array.FindIndex(rp.Records, maxPos + 1, IsNotNull);
