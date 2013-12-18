@@ -368,9 +368,9 @@ namespace Nitra.DebugStrategies
 
       do
       {
+        maxPos = rp.MaxPos;
         var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
         var prevRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
-        maxPos = rp.MaxPos;
 
         do
         {
@@ -430,12 +430,14 @@ namespace Nitra.DebugStrategies
               var nextRecords = rp.Records[i];
               if (nextRecords == null)
                 continue;
+              prevRecords.Clear();
               foreach (var record in nextRecords)
               {
                 if (record.Sequence.StartPos == maxPos && !record.IsComplete)
                 {
                   count++;
                   records.Enqueue(record);
+                  prevRecords.Add(record);
                 }
               }
               maxPos = i;
