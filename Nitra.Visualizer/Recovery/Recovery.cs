@@ -62,7 +62,7 @@ namespace Nitra.DebugStrategies
       var textLen = parseResult.Text.Length;
       var rp = new RecoveryParser(parseResult);
       rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
-      var startSeq = rp.Sequences.First();
+      var startSeq = rp.Sequences.First().Value;
 
       timer.Stop();
       Debug.WriteLine("FindNextError took: " + timer.Elapsed);
@@ -374,8 +374,6 @@ namespace Nitra.DebugStrategies
 
         do
         {
-          rp.AddedSequences.Clear();
-
           while (records.Count > 0)
           {
             var record = records.Dequeue();
