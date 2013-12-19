@@ -24,7 +24,7 @@ namespace Nitra
     public ParserHost               : ParserHost;
     public SimpleRuleParsers        : Hashtable[SimpleRuleDescriptor, SimpleRuleParser];
     public ExtensibleRules          : Hashtable[ExtensibleRuleDescriptor, ExtensibleRuleParserData] = Hashtable();
-    public Tokens                   : SCG.HashSet[TokenParser] = SCG.HashSet();
+    public Tokens                   : SCG.Dictionary[object, TokenParser] = SCG.Dictionary();
 
     public StartID                  : int;
     public RuleParserMap            : SCG.List[object] = SCG.List();
@@ -82,8 +82,8 @@ namespace Nitra
       foreach (extensibleRule in ExtensibleRules)
         _ = GetExtensibleRuleParser(extensibleRule.Key, 0);
 
-      InitMandatoryTokenCount();
       InitTokens();
+      InitMandatoryTokenCount();
     }
 
     private InitMandatoryTokenCount() : void
@@ -112,6 +112,37 @@ namespace Nitra
       foreach (ruleParser in prefix)     ruleParser.ParsingSequence = ParsingSequence.CreateExtension(ruleParser);
       foreach (ruleParser in postfix)    ruleParser.ParsingSequence = ParsingSequence.CreateExtension(ruleParser);
       foreach (ruleParser in extensible) ruleParser.ParsingSequence = ParsingSequence.CreateExtensible(ruleParser);
+
+      def updateTokens(parsingSequence)
+      {
+        def addToken(state, key : object)
+        {
+          mutable token;
+          when (Tokens.TryGetValue(key, out token))
+            _ = token.Callers.Add(state.Id, parsingSequence)
+        }
+        foreach (state in parsingSequence.States)
+        {
+          | Predicate                 => ()
+          | Simple           as state => _ = state.RuleParser.ParsingSequence.Callers.Add(state.Id, parsingSequence); when (state.RuleParser.IsTokenRule) addToken(state, state.RuleParser)
+          | Extensible       as state => _ = state.RuleParser.ParsingSequence.Callers.Add(state.Id, parsingSequence); when (state.RuleParser.IsTokenRule) addToken(state, state.RuleParser)
+          | ExtensionPrefix  as state => _ = state.RuleParser.ParsingSequence.Callers.Add(state.Id, parsingSequence)
+          | ExtensionPostfix as state => _ = state.RuleParser.ParsingSequence.Callers.Add(state.Id, parsingSequence)
+          | Subsequence      as state => _ = state.Sequence.Callers.Add(state.Id, parsingSequence)
+          | Scan             as state =>
+            match (state.Subrule)
+            {
+              | RegularCall as subrule => addToken(state, subrule.Descriptor)
+              | TokenString as subrule => addToken(state, subrule.Str)
+              | Empty                  => ()
+              | _                      => assert3(false)
+            }
+        }
+      }
+      foreach (ruleParser in simple)     updateTokens(ruleParser.ParsingSequence);
+      foreach (ruleParser in prefix)     updateTokens(ruleParser.ParsingSequence);
+      foreach (ruleParser in postfix)    updateTokens(ruleParser.ParsingSequence);
+      foreach (ruleParser in extensible) updateTokens(ruleParser.ParsingSequence);
     }
 
     private InitTokens() : void
@@ -127,15 +158,15 @@ namespace Nitra
           | ListWithSeparator as subrule => visit(subrule.Rule);  visit(subrule.Separator);
           | ExtensibleCall    as subrule => visitExtensible(subrule.RuleParser);
           | SimpleCall        as subrule => visitSimple(subrule.RuleParser);
-          | RegularCall       as subrule => _ = Tokens.Add(TokenParser.RegularCall(subrule.Descriptor));
-          | TokenString       as subrule => _ = Tokens.Add(TokenParser.TokenString(subrule.Str));
+          | RegularCall       as subrule => Tokens[subrule.Descriptor] = TokenParser.RegularCall(subrule.Descriptor);
+          | TokenString       as subrule => Tokens[subrule.Str]        = TokenParser.TokenString(subrule.Str);
           | Empty | Marker => ()
         }
       }
       and visitSimple(parser)
       {
         if (parser.IsTokenRule)
-          _ = Tokens.Add(TokenParser.SimpleCall(parser));
+          Tokens[parser] = TokenParser.SimpleCall(parser);
         else
           when (simpleVisited.Add(parser))
             visit(parser.Reflection(parser.RuleId));
@@ -143,7 +174,7 @@ namespace Nitra
       and visitExtensible(parser)
       {
         if (parser.IsTokenRule)
-          _ = Tokens.Add(TokenParser.ExtensibleCall(parser));
+          Tokens[parser] = TokenParser.ExtensibleCall(parser);
         else
           when (extensibleVisited.Add(parser))
           {
@@ -179,7 +210,7 @@ namespace Nitra
       def text = parseResult.Text;
       def results = SCG.HashSet.[int]();
 
-      foreach (token in Tokens)
+      foreach (token in Tokens.Values)
         _ = results.Add(token.Parse(pos, text, parseResult));
 
       results
