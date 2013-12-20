@@ -1,0 +1,164 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+
+namespace Nitra.Serialization
+{
+  internal enum AstKind : byte
+  {
+    | Ast
+    | MissingAst
+    | AmbiguousAst
+  }
+
+  public sealed class BinaryAstWriter : IAstWriter
+  {
+    public this()
+    {
+      _stringTable   = Dictionary();
+      _grammarTable  = Dictionary();
+      _assemblyTable = Dictionary();
+      _stream        = MemoryStream();
+      _writer        = BinaryWriter(_stream);
+    }
+
+    private _stringTable   : Dictionary[string, int];
+    private _grammarTable  : Dictionary[GrammarDescriptor, GrammarRecord];
+    private _assemblyTable : Dictionary[AssemblyName, AssemblyRecord];
+    private _stream        : MemoryStream;
+    private _writer        : BinaryWriter;
+
+    [Record]
+    private sealed class GrammarRecord
+    {
+      public Handle         : int;
+      public NameHandle     : int;
+      public AssemblyHandle : int;
+    }
+
+    [Record]
+    private sealed class AssemblyRecord
+    {
+      public Handle     : int;
+      public NameHandle : int;
+    }
+
+    public BeginWriteOption(hasValue : bool, _isOptimized : bool) : void
+    {
+      _writer.Write(hasValue);
+    }
+
+    public BeginWriteList(count : int, _isOptimized : bool) : void
+    {
+      _writer.Write(count);
+    }
+
+    public BeginWriteTuple(count : int) : void
+    {
+      _writer.Write(count);
+    }
+
+    public WriteText(text : string) : void
+    {
+      def index = GetStringHandle(text);
+      _writer.Write(index);
+    }
+
+    public BeginWriteAst(ruleDescriptor : RuleDescriptor) : void
+    {
+      _writer.Write(AstKind.Ast :> byte);
+      _writer.Write(GetGrammarHandle(ruleDescriptor.Grammar));
+      _writer.Write(GetStringHandle(ruleDescriptor.Name));
+    }
+
+    public WriteMissingAst(ruleDescriptor : RuleDescriptor) : void
+    {
+      _writer.Write(AstKind.MissingAst :> byte);
+      _writer.Write(GetGrammarHandle(ruleDescriptor.Grammar));
+      _writer.Write(GetStringHandle(ruleDescriptor.Name));
+    }
+
+    public BeginWriteAmbiguousAst(ruleDescriptor : RuleDescriptor, count : int) : void
+    {
+      _writer.Write(AstKind.AmbiguousAst :> byte);
+      _writer.Write(GetGrammarHandle(ruleDescriptor.Grammar));
+      _writer.Write(GetStringHandle(ruleDescriptor.Name));
+      _writer.Write(count);
+    }
+
+    public EndWrite() : void { }
+
+    public WriteTo(output : BinaryWriter) : void
+    {
+      output.Write(_stringTable.Count);
+      foreach (pair in _stringTable.OrderBy(_.Value))
+        output.Write(pair.Key);
+
+      output.Write(_assemblyTable.Count);
+      foreach (record in _assemblyTable.Values.OrderBy(_.Handle))
+        output.Write(record.NameHandle);
+
+      output.Write(_grammarTable.Count);
+      foreach (record in _grammarTable.Values.OrderBy(_.Handle))
+      {
+        output.Write(record.NameHandle);
+        output.Write(record.AssemblyHandle);
+      }
+
+      output.Write(_stream.GetBuffer(), 0, _stream.Length :> int);
+    }
+
+    private GetStringHandle(s : string) : int
+    {
+      mutable handle;
+      unless (_stringTable.TryGetValue(s, out handle))
+      {
+        handle = _stringTable.Count;
+        _stringTable.Add(s, handle);
+      }
+      handle
+    }
+
+    private GetGrammarHandle(g : GrammarDescriptor) : int
+    {
+      mutable record;
+      unless (_grammarTable.TryGetValue(g, out record))
+      {
+        foreach (dependency in g.Dependencies)
+          _ = GetGrammarHandle(dependency);
+
+        def nameHandle     = GetStringHandle(g.Name);
+        def assemblyHandle = GetAssemblyHandle(GetAssemblyName(g));
+
+        record = GrammarRecord(_grammarTable.Count, nameHandle, assemblyHandle);
+        _grammarTable.Add(g, record);
+      }
+      record.Handle
+    }
+
+    private GetAssemblyHandle(a : AssemblyName) : int
+    {
+      mutable record;
+      unless (_assemblyTable.TryGetValue(a, out record))
+      {
+        def nameHandle = GetStringHandle(a.ToString());
+
+        record = AssemblyRecord(_assemblyTable.Count, nameHandle);
+        _assemblyTable.Add(a, record);
+      }
+      record.Handle
+    }
+
+    private static GetAssemblyName(g : GrammarDescriptor) : AssemblyName
+    {
+      g.GetType().Assembly.GetName()
+    }
+  }
+}
