@@ -370,6 +370,69 @@ namespace Nitra.Compiler
         public this(..$parameters) { unchecked { ..$statements } }
       ]>);
 
+      def makeReadCode(ruleType : RuleType) : bool * PExpr
+      {
+        match (ruleType)
+        {
+          | Void             => assert(false)
+          | Chars(Some(_))   => (true, <[ () ]>)
+          | Chars(None)      => (false, <[ astReader.ReadText() ]>)
+          | Ref(symbol)      => (false, <[ astReader.ReadAst() :> $(Environment.GetAstType(symbol) : typed) ]>)
+          | Option(itemType) =>
+            def (isOptimized, itemExpr) = makeReadCode(itemType);
+            def code = 
+              if (isOptimized)
+                <[ astReader.ReadOptionHeader() ]>
+              else
+              <[
+                if (astReader.ReadOptionHeader())
+                  Some($itemExpr)
+                else
+                  None()
+              ]>;
+            (false, code)
+
+          | List(itemType) =>
+            def (isOptimized, itemExpr) = makeReadCode(itemType);
+            def code =
+              if (isOptimized)
+                <[ astReader.ReadListHeader() ]>
+              else
+              <[
+                def buffer = array(astReader.ReadListHeader());
+                for (mutable i = 0; i < buffer.Length; ++i)
+                  buffer[i] = $itemExpr;
+                Nemerle.Collections.NList.ToList(buffer)
+              ]>;
+            (false, code)
+
+          | Tuple(memberTypes) =>
+            def memberExprs = SCG.List();
+            foreach (memberType in memberTypes)
+            {
+              def (isOptimized, memberExpr) = makeReadCode(memberType);
+              unless (isOptimized)
+                memberExprs.Add(memberExpr);
+            }
+            match (memberExprs.Count)
+            {
+              | 0 => (true, <[ () ]>)
+              | 1 => (false, memberExprs[0])
+              | _ => (false, <[ (..$memberExprs) ]>)
+            }
+        }
+      }
+
+      def createArguments = SCG.List();
+      createArguments.Add(<[ astReader.Context ]>);
+
+      foreach (field in fields)
+      {
+        def (isOptimized, expr) = makeReadCode(field.Rule.Type);
+        unless (isOptimized)
+          createArguments.Add(expr);
+      }
+
       match (this.RuleSymbol)
       {
         | SimpleRuleSymbol    with tb = _baseTb
@@ -378,6 +441,12 @@ namespace Nitra.Compiler
             public static Create(..$parameters) : $(_astTb.GetMemType() : typed)
             {
               $(_chemicalAstTb.GetMemType() : typed)(..$(parameters.Map(_.ReferencingExpr)));
+            }
+          ]>);
+          tb.DefineConditional(<[ decl: 
+            public static Create(astReader : Nitra.Serialization.IAstReader) : $(_astTb.GetMemType() : typed)
+            {
+              $(_chemicalAstTb.GetMemType() : typed)(..$createArguments)
             }
           ]>);
 
