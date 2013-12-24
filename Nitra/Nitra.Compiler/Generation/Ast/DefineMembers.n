@@ -26,6 +26,7 @@ namespace Nitra.Compiler
       {
         DefineBaseAstCreateMethod();
         DefineBaseAstRuleMethods();
+        DefineExtensibleAstReadMethod();
       }
       when (_astTb != null)
       {
@@ -34,6 +35,7 @@ namespace Nitra.Compiler
         DefineParsedAstCtorAndFields(fields);
         DefineChemicalAstCtorAndFields(fields);
         DefineAstWriteTo(fields);
+        DefineAstReadMethod(fields);
         DefineAstPrettyPrint();
         DefineAstRuleMethods();
       }
@@ -370,6 +372,23 @@ namespace Nitra.Compiler
         public this(..$parameters) { unchecked { ..$statements } }
       ]>);
 
+      match (this.RuleSymbol)
+      {
+        | SimpleRuleSymbol    with tb = _baseTb
+        | ExtensionRuleSymbol with tb = _astTb =>
+          tb.DefineConditional(<[ decl:
+            public static Create(..$parameters) : $(_astTb.GetMemType() : typed)
+            {
+              $(_chemicalAstTb.GetMemType() : typed)(..$(parameters.Map(_.ReferencingExpr)));
+            }
+          ]>);
+
+        | _ => assert3(false)
+      }
+    }
+
+    private DefineAstReadMethod(fields : SCG.List[FieldInfo]) : void
+    {
       def makeReadCode(ruleType : RuleType) : bool * PExpr
       {
         match (ruleType)
@@ -377,7 +396,7 @@ namespace Nitra.Compiler
           | Void             => assert(false)
           | Chars(Some(_))   => (true, <[ () ]>)
           | Chars(None)      => (false, <[ astReader.ReadText() ]>)
-          | Ref(symbol)      => (false, <[ astReader.ReadAst() :> $(Environment.GetAstType(symbol) : typed) ]>)
+          | Ref(symbol)      => (false, <[ $(Environment.GetAstType(symbol) : typed).Read(astReader) ]>)
           | Option(itemType) =>
             def (isOptimized, itemExpr) = makeReadCode(itemType);
             def code = 
@@ -435,22 +454,46 @@ namespace Nitra.Compiler
 
       match (this.RuleSymbol)
       {
-        | SimpleRuleSymbol    with tb = _baseTb
-        | ExtensionRuleSymbol with tb = _astTb =>
-          tb.DefineConditional(<[ decl:
-            public static Create(..$parameters) : $(_astTb.GetMemType() : typed)
+        | SimpleRuleSymbol =>
+          _baseTb.DefineConditional(<[ decl:
+            public static Read(astReader : Nitra.Serialization.IAstReader) : $(_baseTb.GetMemType() : typed)
             {
-              $(_chemicalAstTb.GetMemType() : typed)(..$(parameters.Map(_.ReferencingExpr)));
+              match (astReader.ReadAstHeader())
+              {
+                | Ast          => Create(..$createArguments)
+                | MissingAst   => $(_missingTb.GetMemType() : typed)(astReader.Context, 0)
+                | AmbiguousAst => assert(false)
+              }
             }
           ]>);
-          tb.DefineConditional(<[ decl: 
-            public static Create(astReader : Nitra.Serialization.IAstReader) : $(_astTb.GetMemType() : typed)
+
+        | ExtensionRuleSymbol =>
+          _astTb.DefineConditional(<[ decl:
+            public static new Read(astReader : Nitra.Serialization.IAstReader) : $(_astTb.GetMemType() : typed)
             {
-              $(_chemicalAstTb.GetMemType() : typed)(..$createArguments)
+              Create(..$createArguments)
             }
           ]>);
 
         | _ => assert3(false)
+      }
+    }
+
+    private DefineExtensibleAstReadMethod() : void
+    {
+      when (this.RuleSymbol is ExtensibleRuleSymbol)
+      {
+        _baseTb.DefineConditional(<[ decl:
+          public static Read(astReader : Nitra.Serialization.IAstReader) : $(_baseTb.GetMemType() : typed)
+          {
+            match (astReader.ReadAstHeader())
+            {
+              | Ast          => astReader.ReadExtension()
+              | MissingAst   => $(_missingTb.GetMemType() : typed)(astReader.Context, 0)
+              | AmbiguousAst => $(_ambiguousTb.GetMemType() : typed)(astReader.Context, 0, 0, astReader.ReadAmbiguities())
+            }
+          }
+        ]>);
       }
     }
   }

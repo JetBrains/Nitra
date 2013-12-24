@@ -1,4 +1,7 @@
-﻿using Nemerle;
+﻿using Nitra.Internal;
+using Nitra.Runtime;
+
+using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -16,6 +19,12 @@ namespace Nitra.Serialization
   {
     public this(reader : BinaryReader, resolveAssembly : AssemblyName -> Assembly)
     {
+      this(reader, ChemicalAstContext(), resolveAssembly)
+    }
+
+    public this(reader : BinaryReader, context : ChemicalAstContext, resolveAssembly : AssemblyName -> Assembly)
+    {
+      Context = context;
       _reader = reader;
 
       def stringTableSize = reader.ReadInt32();
@@ -57,6 +66,44 @@ namespace Nitra.Serialization
       null
     }
 
+    public Context : ChemicalAstContext { get; }
+
+    public ReadListHeader() : int { _reader.ReadInt32() }
+
+    public ReadOptionHeader() : bool { _reader.ReadBoolean() }
+
+    public ReadText() : string { _reader.ReadString() }
+
+    public ReadTupleHeader() : int { _reader.ReadInt32() }
+
+    public ReadAstHeader() : AstKind { _reader.ReadByte() :> AstKind }
+
+    public ReadExtension[T]() : T where T : Ast
+    {
+      def grammarHandle  = _reader.ReadInt32();
+      def ruleHandle     = _reader.ReadInt32();
+      def ruleDescriptor = GetRuleDescriptor(grammarHandle, ruleHandle);
+      def ctor           = GetConstructor(ruleDescriptor);
+      ctor(this) :> T
+    }
+
+    public ReadAmbiguities[T]() : array[T] where T : Ast
+    {
+      def ambiguities = array(_reader.ReadInt32());
+      for (mutable i = 0; i < ambiguities.Length; ++i)
+        ambiguities[i] = ReadExtension();
+      ambiguities
+    }
+
+    public ReadAst() : Ast
+    {
+      def grammarHandle  = _reader.ReadInt32();
+      def ruleHandle     = _reader.ReadInt32();
+      def ruleDescriptor = GetRuleDescriptor(grammarHandle, ruleHandle);
+      def ctor           = GetConstructor(ruleDescriptor);
+      ctor(this)
+    }
+
     [Memoize]
     private GetRuleDescriptor(grammarHandle : int, ruleHandle : int) : RuleDescriptor
     {
@@ -67,26 +114,18 @@ namespace Nitra.Serialization
       null
     }
 
-    public ReadListHeader() : int { _reader.ReadInt32() }
-
-    public ReadOptionHeader() : bool { _reader.ReadBoolean() }
-
-    public ReadText() : string { _reader.ReadString() }
-
-    public ReadTupleHeader() : int { _reader.ReadInt32() }
-
-    public ReadAst() : Ast
+    [Memoize]
+    private static GetConstructor(ruleDescriptor : RuleDescriptor) : Func[IAstReader, Ast]
     {
-      def astKind       = _reader.ReadByte() :> AstKind;
-      def grammarHandle = _reader.ReadInt32();
-      def ruleHandle    = _reader.ReadInt32();
-      def ruleDescriptor = GetRuleDescriptor(grammarHandle, ruleHandle);
-      match (astKind)
-      {
-        | Ast          =>
-        | MissingAst   =>
-        | AmbiguousAst =>
-      }
+      def type =
+        if (ruleDescriptor is ExtensionRuleDescriptor as rd)
+          ReflectionHelper.GetExtensionAstType(rd)
+        else
+          ReflectionHelper.GetBaseAstType(ruleDescriptor);
+
+      def createMethod = type.GetMethod("Create", array[typeof(IAstReader)]);
+      assert2(createMethod != null);
+      Delegate.CreateDelegate(typeof(Func[IAstReader, Ast]), createMethod) :> Func[IAstReader, Ast]
     }
   }
 }
