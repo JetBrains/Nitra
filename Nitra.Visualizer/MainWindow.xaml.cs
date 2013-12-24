@@ -1326,5 +1326,19 @@ namespace Nitra.Visualizer
         _doTreeOperation = false;
       }
     }
+
+    private void OnShowGrammar(object sender, ExecutedRoutedEventArgs e)
+    {
+      if (_currentTestSuit == null)
+        return;
+
+      _currentTestSuit.ShowGrammar();
+    }
+
+    private void CommandBinding_CanShowGrammar(object sender, CanExecuteRoutedEventArgs e)
+    {
+      e.CanExecute = _currentTestSuit != null;
+      e.Handled = true;
+    }
   }
 }

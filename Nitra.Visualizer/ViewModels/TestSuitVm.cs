@@ -1,6 +1,7 @@
 ﻿using System;
 using Nitra.DebugStrategies;
 using Nitra.Internal;
+using Nitra.Runtime.Reflection;
 using Nitra.Visualizer.Annotations;
 
 using System.Collections.ObjectModel;
@@ -8,6 +9,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
+using Nitra.Visualizer.Rendering;
 
 namespace Nitra.Visualizer.ViewModels
 {
@@ -149,6 +151,14 @@ namespace Nitra.Visualizer.ViewModels
         return null;
 
       return _parserHost.DoParsing(source, _compositeGrammar, StartRule, recoveryStrategy);
+    }
+
+    public void ShowGrammar()
+    {
+      var xtml = _compositeGrammar.ToHtml();
+      var filePath = Path.ChangeExtension(Path.GetTempFileName(), ".html");
+      xtml.Save(filePath);
+      Process.Start(filePath);
     }
   }
 }

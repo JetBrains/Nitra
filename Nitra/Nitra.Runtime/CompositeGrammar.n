@@ -1,6 +1,7 @@
 ﻿using Nitra.Internal;
 using Nitra.Internal.Recovery;
 using Nitra.Runtime;
+using Nitra.Runtime.Reflection;
 
 using Nemerle;
 using Nemerle.Collections;
@@ -11,6 +12,7 @@ using System;
 using System.Diagnostics;
 using System.Linq;
 
+using System.Xml.Linq;
 using SCG = System.Collections.Generic;
 
 namespace Nitra
@@ -28,6 +30,11 @@ namespace Nitra
 
     public StartID                  : int;
     public RuleParserMap            : SCG.List[object] = SCG.List();
+    
+    public Simple     : Seq[SimpleRuleParser];
+    public Prefix     : Seq[ExtensionRuleParser];
+    public Postfix    : Seq[ExtensionRuleParser];
+    public Extensible : Seq[ExtensibleRuleParser];
 
     public NewRuleId(ruleParser : object) : int
     {
@@ -83,15 +90,21 @@ namespace Nitra
         _ = GetExtensibleRuleParser(extensibleRule.Key, 0);
 
       InitTokens();
+
+      Simple     = SimpleRuleParsers.Values.ToArray();
+      Prefix     = ExtensibleRules.Values.Map(data => data.PrefixParsers).Flatten().ToArray();
+      Postfix    = ExtensibleRules.Values.Map(data => data.PostfixParsers).Flatten().ToArray();
+      Extensible = ExtensibleRules.Values.Map(data => data.Parsers.Filter(_ != null)).Flatten().ToArray();
+
       InitMandatoryTokenCount();
     }
 
     private InitMandatoryTokenCount() : void
     {
-      def simple = SCG.List(SimpleRuleParsers.Values);
-      def prefix = SCG.List(ExtensibleRules.Values.Map(data => data.PrefixParsers).Flatten());
-      def postfix = SCG.List(ExtensibleRules.Values.Map(data => data.PostfixParsers).Flatten());
-      def extensible = SCG.List(ExtensibleRules.Values.Map(data => data.Parsers.Filter(_ != null)).Flatten());
+      def simple     = Simple     :> array[SimpleRuleParser];
+      def prefix     = Prefix     :> array[ExtensionRuleParser];
+      def postfix    = Postfix    :> array[ExtensionRuleParser];
+      def extensible = Extensible :> array[ExtensibleRuleParser];
 
       foreach (ruleParser in simple)     ruleParser.MandatoryTokens = ~0;
       foreach (ruleParser in prefix)     ruleParser.MandatoryTokens = ~0;
@@ -214,6 +227,187 @@ namespace Nitra
         _ = results.Add(token.Parse(pos, text, parseResult));
 
       results
+    }
+    
+    private static HtmlTemplate = @"
+<html>
+<head>
+    <title>Pretty Print</title>
+    <meta http-equiv='Content-Type' content='text/html;charset=utf-8'/>
+    <style type='text/css'>
+pre
+{
+  color: black;
+  font-weight: normal;
+  font-size: 12pt;
+  font-family: Consolas, Courier New, Monospace;
+}
+
+.default
+{
+  color: black;
+  background: white;
+}
+
+.keyword
+{
+  color: Blue;
+}
+
+.string
+{
+  color: Red;
+}
+
+.marker
+{
+  color: LightGray;
+}
+</style>
+</head>
+<body>
+<pre>
+<content/>
+</pre>
+</body>
+</html>
+"; 
+    
+    public ToHtml() : XElement
+    {
+      def root       = XElement("span");
+      def keywordCss = XAttribute("class", "keyword");
+      def stringCss  = XAttribute("class", "string");
+      def markerCss  = XAttribute("class", "marker");
+      def seqInfoToLabelMap = Hashtable.[RuleParser, string]();
+      mutable id = 0;
+      def getId()    : int    { id++; id }
+      def getLabel(parser : RuleParser) : string
+      {
+        mutable label;
+        unless (seqInfoToLabelMap.TryGetValue(parser, out label))
+        {
+          label = "Ref_" + getId();
+          seqInfoToLabelMap.Add(parser, label);
+        }
+        
+        label
+      }
+      def renderA(attrName : string, parser : RuleParser, text : string = null) : XElement
+      {
+        XElement("a", XAttribute(attrName, "#" + getLabel(parser)), text)
+      }
+      def convertSubrule(parent : XElement, subrule : SubruleInfo) : void
+      {
+        match (subrule)
+        {
+          | Empty                  => parent.Add(XElement("span", stringCss, <#""#>));
+          | RegularCall       as r => parent.Add(r.Code); // TODO: надо как-то реализовать регексы
+          | ExtensibleCall    as r =>
+            def parser = r.RuleParser;
+            def name   = parser.RuleName;
+            def bp     = parser.BindingPower;
+            def text   = if (bp != 0) $"$name : $bp" else name;
+            parent.Add(renderA("ref", parser, text));
+          
+          | SimpleCall        as r =>
+            def parser = r.RuleParser;
+            def text   = parser.RuleName;
+            parent.Add(renderA("ref", parser, text));
+          
+          | Option            as r => renderSubSequence(parent, r.Rule, false); parent.Add("?");
+          | List              as r => renderSubSequence(parent, r.Rule, false); parent.Add(if (r.Min > 0) "+" else "*");
+          | ListWithSeparator as r =>
+            parent.Add("(");
+            renderSubSequence(parent, r.Rule, false);
+            parent.Add(";");
+            renderSubSequence(parent, r.Separator, false);
+            when (r.HangingSeparator)
+              parent.Add("; ?");
+            parent.Add(if (r.Min > 0) ")+" else ")*");
+
+          | TokenString       as r => parent.Add(XElement("span", stringCss, "\"" + r.Str + "\""));
+          | Marker            as r => parent.Add(XElement("span", markerCss, r.Name));
+        }
+      }
+      and renderSubSequence(result : XElement, info : SequenceInfo, suppressParentheses : bool) : void
+      {
+        def needParentheses = !suppressParentheses && info.Subrules.Length != 1;
+        when (needParentheses)
+          result.Add("(");
+        convertSubrules(result, info.Subrules);
+        when (needParentheses)
+          result.Add(")");
+      }
+      and convertSubrules(parent : XElement, subrules : array[SubruleInfo]) : void
+      {
+        foreach (subrule in subrules)
+        {
+          parent.Add(" ");
+          convertSubrule(parent, subrule);
+        }
+      }
+      def getType(parser : RuleParser) : XElement
+      {
+        XElement("span", keywordCss, if (parser.IsVoid) "  void " else if (parser.IsTokenRule) "  token " else "  syntax ")
+      }
+      def ruleHeader(prefix : XElement, parser : RuleParser, name : string) : XElement
+      {
+        def result = XElement("span", renderA("name", parser, null));
+        result.Add(prefix);
+        result.Add(XElement("span", name));
+        result
+      }
+      def renderPrefix(parser : ExtensionRuleParser) : void
+      {
+        def (bp, baseRuleDescriptor) = if (parser.Descriptor is PostfixRuleDescriptor as postfix) (postfix.BindingPower, postfix.BaseRule) else (-1, null);
+        def info   = parser.Reflection(parser.RuleId) :> SequenceInfo.Ast;
+        def result = ruleHeader(XElement("span", "    |"), parser, parser.RuleName);
+        result.Add(" =");
+        when (bp >= 0)
+        {
+          def baseRule = this.ExtensibleRules[baseRuleDescriptor].GetParser(bp);
+          result.Add(XElement("span", " " + baseRule.RuleName));
+          when (bp > 0)
+            result.Add(" : " + bp);
+        }
+        convertSubrules(result, info.Subrules);
+        result.Add(";\r\n");
+        root.Add(result);
+      }
+      
+      foreach (parser in Simple)
+      {
+        when (parser.Reflection(parser.RuleId) is SequenceInfo.Ast as info)
+        {
+          def result = ruleHeader(getType(parser), parser, info.Parser.RuleName);
+          result.Add(" =");
+          convertSubrules(result, info.Subrules);
+          result.Add(";\r\n");
+          root.Add(result);
+        }
+      }
+      
+      foreach (parser in Extensible)
+      {
+        def result = ruleHeader(getType(parser), parser, parser.RuleName);
+        root.Add("\r\n  {\r\n");
+        
+        foreach(subParser in parser.PrefixRules)
+          renderPrefix(subParser);
+
+        foreach(subParser in parser.PostfixRules)
+          renderPrefix(subParser);
+          
+        root.Add(result);
+        root.Add("\r\n  }\r\n");
+      }
+      
+      def template = XElement.Parse(HtmlTemplate);
+      def content = template.Descendants("content").First();
+      Debug.Assert(content.Parent != null);
+      content.Parent.ReplaceAll(root);
+      template
     }
   }
 }
