@@ -263,6 +263,34 @@ pre
 {
   color: LightGray;
 }
+
+a:hover
+{
+  color: DarkBlue;
+  font-weight: bold;
+  text-decoration: none;
+}
+
+
+.simpleRuleCall
+{
+  color: DarkBlue;
+}
+
+.extensibleRuleCall
+{
+  color: DarkCyan;
+}
+
+.regexRuleCall
+{
+  color: DarkMagenta;
+}
+
+a:visited, a:link, a:active
+{
+  text-decoration: none;
+}
 </style>
 </head>
 <body>
@@ -279,54 +307,65 @@ pre
       def keywordCss = XAttribute("class", "keyword");
       def stringCss  = XAttribute("class", "string");
       def markerCss  = XAttribute("class", "marker");
-      def seqInfoToLabelMap = Hashtable.[RuleParser, string]();
+      def seqInfoToLabelMap = Hashtable.[RuleDescriptor, string]();
       mutable id = 0;
       def getId()    : int    { id++; id }
-      def getLabel(parser : RuleParser) : string
+      def getLabel(descriptor : RuleDescriptor) : string
       {
         mutable label;
-        unless (seqInfoToLabelMap.TryGetValue(parser, out label))
+        unless (seqInfoToLabelMap.TryGetValue(descriptor, out label))
         {
           label = "Ref_" + getId();
-          seqInfoToLabelMap.Add(parser, label);
+          seqInfoToLabelMap.Add(descriptor, label);
         }
         
         label
       }
-      def renderA(attrName : string, parser : RuleParser, text : string = null) : XElement
+      def renderAHref(descriptor : RuleDescriptor, text : string) : XElement
       {
-        XElement("a", XAttribute(attrName, "#" + getLabel(parser)), text)
+        def cssClass =
+          match (descriptor)
+          {
+            | SimpleRuleDescriptor     => "simpleRuleCall"
+            | ExtensibleRuleDescriptor => "extensibleRuleCall"
+            | RegularRuleDescriptor    => "regexRuleCall"
+            | _                        => assert3(false);
+          };
+        
+        XElement("a", XAttribute("href", "#" + getLabel(descriptor)), XAttribute("class", cssClass), text)
       }
       def convertSubrule(parent : XElement, subrule : SubruleInfo) : void
       {
         match (subrule)
         {
           | Empty                  => parent.Add(XElement("span", stringCss, <#""#>));
-          | RegularCall       as r => parent.Add(r.Code); // TODO: надо как-то реализовать регексы
+          | RegularCall       as r =>
+            def descriptor = r.Descriptor;
+            parent.Add(renderAHref(descriptor, descriptor.Name));
+            
           | ExtensibleCall    as r =>
             def parser = r.RuleParser;
-            def name   = parser.RuleName;
             def bp     = parser.BindingPower;
-            def text   = if (bp != 0) $"$name : $bp" else name;
-            parent.Add(renderA("ref", parser, text));
+            parent.Add(renderAHref(parser.Descriptor, parser.RuleName));
+            when (bp != 0)
+              parent.Add(" : " + bp);
           
           | SimpleCall        as r =>
             def parser = r.RuleParser;
-            def text   = parser.RuleName;
-            parent.Add(renderA("ref", parser, text));
+            parent.Add(renderAHref(parser.Descriptor, parser.RuleName));
           
-          | Option            as r => renderSubSequence(parent, r.Rule, false); parent.Add("?");
-          | List              as r => renderSubSequence(parent, r.Rule, false); parent.Add(if (r.Min > 0) "+" else "*");
+          | Option            as r => renderSubSequence(parent, r.Rule, suppressParentheses=false); parent.Add("?");
+          | List              as r => renderSubSequence(parent, r.Rule, suppressParentheses=false); parent.Add(if (r.Min > 0) "+" else "*");
           | ListWithSeparator as r =>
             parent.Add("(");
-            renderSubSequence(parent, r.Rule, false);
-            parent.Add(";");
-            renderSubSequence(parent, r.Separator, false);
+            renderSubSequence(parent, r.Rule, suppressParentheses=true);
+            parent.Add("; ");
+            renderSubSequence(parent, r.Separator, suppressParentheses=true);
             when (r.HangingSeparator)
               parent.Add("; ?");
             parent.Add(if (r.Min > 0) ")+" else ")*");
 
-          | TokenString       as r => parent.Add(XElement("span", stringCss, "\"" + r.Str + "\""));
+          | TokenString       as r => parent.Add(XElement("span", stringCss, "\"" + X.EscapeString(r.Str) + "\""));
           | Marker            as r => parent.Add(XElement("span", markerCss, r.Name));
         }
       }
@@ -341,67 +380,85 @@ pre
       }
       and convertSubrules(parent : XElement, subrules : array[SubruleInfo]) : void
       {
-        foreach (subrule in subrules)
+        foreach (subrule in subrules with i)
         {
-          parent.Add(" ");
+          when (i != 0)
+            parent.Add(" ");
           convertSubrule(parent, subrule);
         }
       }
       def getType(parser : RuleParser) : XElement
       {
-        XElement("span", keywordCss, if (parser.IsVoid) "  void " else if (parser.IsTokenRule) "  token " else "  syntax ")
+        XElement("span", keywordCss, if (parser.IsVoid) "void " else if (parser.IsTokenRule) "token " else "syntax ")
       }
-      def ruleHeader(prefix : XElement, parser : RuleParser, name : string) : XElement
+      def ruleHeader(prefix : XElement, parser : RuleParser, name : string, maxNameLen : int = 0) : XElement
       {
-        def result = XElement("span", renderA("name", parser, null));
+        def nameLen = name.Length;
+        def result = XElement("span", XAttribute("id", getLabel(parser.Descriptor)));
         result.Add(prefix);
         result.Add(XElement("span", name));
+        when (nameLen < maxNameLen)
+          result.Add(string(' ', maxNameLen - nameLen));
         result
       }
-      def renderPrefix(parser : ExtensionRuleParser) : void
+      def renderPrefix(parser : ExtensionRuleParser, maxNameLen : int) : void
       {
         def (bp, baseRuleDescriptor) = if (parser.Descriptor is PostfixRuleDescriptor as postfix) (postfix.BindingPower, postfix.BaseRule) else (-1, null);
         def info   = parser.Reflection(parser.RuleId) :> SequenceInfo.Ast;
-        def result = ruleHeader(XElement("span", "    |"), parser, parser.RuleName);
-        result.Add(" =");
+        def result = ruleHeader(XElement("span", "  | "), parser, parser.RuleName, maxNameLen);
+        result.Add(" = ");
         when (bp >= 0)
         {
-          def baseRule = this.ExtensibleRules[baseRuleDescriptor].GetParser(bp);
-          result.Add(XElement("span", " " + baseRule.RuleName));
+          def baseRule = this.ExtensibleRules[baseRuleDescriptor].GetParser(0);
+          result.Add(XElement("span", " ", renderAHref(baseRule.Descriptor, baseRule.RuleName)));
           when (bp > 0)
-            result.Add(" : " + bp);
+            result.Add(" : " + bp + " ");
         }
         convertSubrules(result, info.Subrules);
         result.Add(";\r\n");
         root.Add(result);
       }
-      
-      foreach (parser in Simple)
-      {
-        when (parser.Reflection(parser.RuleId) is SequenceInfo.Ast as info)
-        {
-          def result = ruleHeader(getType(parser), parser, info.Parser.RuleName);
-          result.Add(" =");
-          convertSubrules(result, info.Subrules);
-          result.Add(";\r\n");
-          root.Add(result);
-        }
-      }
-      
-      foreach (parser in Extensible)
-      {
-        def result = ruleHeader(getType(parser), parser, parser.RuleName);
-        root.Add("\r\n  {\r\n");
-        
-        foreach(subParser in parser.PrefixRules)
-          renderPrefix(subParser);
 
-        foreach(subParser in parser.PostfixRules)
-          renderPrefix(subParser);
+      
+      def parsers = SCG.List.[StartRuleParser](Simple);
+      parsers.AddRange(Extensible);
+      def parsers2 = parsers.OrderByDescending(_.IsTokenRule).ThenBy(_.RuleName).ToArray();
+      
+      foreach (parser in parsers2)
+      {
+        | SimpleRuleParser as parser =>
+          when (parser.Reflection(parser.RuleId) is SequenceInfo.Ast as info)
+          {
+            def result = ruleHeader(getType(parser), parser, info.Parser.RuleName);
+            result.Add(" = ");
+            convertSubrules(result, info.Subrules);
+            result.Add(";\r\n");
+            root.Add(result);
+          }
+        
+        | ExtensibleRuleParser as parser =>
+          def result = ruleHeader(getType(parser), parser, parser.RuleName);
+          root.Add(result);
+          root.Add("\r\n{\r\n");
+        
+          def extensionRules = SCG.List(parser.PrefixRules.OrderBy(r => r.Descriptor.Name));
+          extensionRules.AddRange(parser.PostfixRules.OrderBy(r => r.Descriptor.Name));
           
-        root.Add(result);
-        root.Add("\r\n  }\r\n");
+          when (extensionRules.Count > 0)
+          {
+            def maxNameLen = extensionRules.Max(r => r.Descriptor.Name.Length);
+            foreach(subParser in extensionRules)
+              renderPrefix(subParser, maxNameLen);
+          }
+          
+          root.Add("}\r\n");
+          
+        | _ => assert3(false);
       }
+
+      foreach (descriptor is RegularRuleDescriptor in seqInfoToLabelMap.Keys.OrderByDescending(_.Name))
+        root.AddFirst(XElement("span", XAttribute("id", getLabel(descriptor)), XElement("span", keywordCss, "regex"), " ", descriptor.Name, " = ", descriptor.RegexText, ";\r\n"));
+      
       
       def template = XElement.Parse(HtmlTemplate);
       def content = template.Descendants("content").First();

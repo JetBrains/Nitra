@@ -157,7 +157,7 @@ namespace Nitra.Visualizer.ViewModels
     {
       var xtml = _compositeGrammar.ToHtml();
       var filePath = Path.ChangeExtension(Path.GetTempFileName(), ".html");
-      xtml.Save(filePath);
+      xtml.Save(filePath, SaveOptions.DisableFormatting);
       Process.Start(filePath);
     }
   }
