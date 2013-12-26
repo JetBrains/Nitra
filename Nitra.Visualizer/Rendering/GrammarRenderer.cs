@@ -19,7 +19,7 @@ namespace Nitra.Visualizer.Rendering
 
     public void Render()
     {
-      foreach (var rule in _compositeGrammar.Simple)
+      foreach (var rule in _compositeGrammar.Simples)
       {
         Debug.WriteLine(rule.RuleName);
         var reflection = rule.Reflection(rule.RuleId);
