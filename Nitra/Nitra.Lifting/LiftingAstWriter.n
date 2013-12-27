@@ -1,0 +1,117 @@
+﻿using Nitra.Runtime;
+using Nitra.Serialization;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Lifting
+{
+  public sealed class LiftingAstWriter : IAstWriter
+  {
+    variant Operation
+    {
+      | Tuple        { MemberCount : int }
+      | SimpleAst    { RuleDescriptor : SimpleRuleDescriptor;     ArgumentCount    : int }
+      | ExtensionAst { RuleDescriptor : ExtensionRuleDescriptor;  ArgumentCount    : int }
+      | AmbiguousAst { RuleDescriptor : ExtensibleRuleDescriptor; AmbiguitiesCount : int }
+      | List         { ItemCount : int;  IsOptimized : bool }
+      | Option       { HasValue  : bool; IsOptimized : bool }
+    }
+
+    _values     : SCG.Stack[PExpr]     = Stack();
+    _operations : SCG.Stack[Operation] = Stack();
+
+    public BeginWriteSimpleAst(ruleDescriptor : SimpleRuleDescriptor, argumentCount : int) : void
+    {
+      _operations.Push(Operation.SimpleAst(ruleDescriptor, argumentCount));
+    }
+
+    public BeginWriteExtensionAst(ruleDescriptor : ExtensionRuleDescriptor, argumentCount : int) : void
+    {
+      _operations.Push(Operation.ExtensionAst(ruleDescriptor, argumentCount));
+    }
+
+    public BeginWriteAmbiguousAst(ruleDescriptor : ExtensibleRuleDescriptor, count : int) : void
+    {
+      _operations.Push(Operation.AmbiguousAst(ruleDescriptor, count));
+    }
+
+    public WriteMissingAst(ruleDescriptor : RuleDescriptor) : void
+    {
+      _values.Push(<[ $(GetAstName(ruleDescriptor)).MissingAst(context, 0) ]>);
+    }
+
+    public BeginWriteList(count : int, isOptimized : bool) : void
+    {
+      _operations.Push(Operation.List(count, isOptimized));
+    }
+
+    public BeginWriteOption(hasValue : bool, isOptimized : bool) : void
+    {
+      _operations.Push(Operation.Option(hasValue, isOptimized));
+    }
+
+    public BeginWriteTuple(count : int) : void
+    {
+      _operations.Push(Operation.Tuple(count));
+    }
+
+    public WriteText(text : string) : void
+    {
+      _values.Push(<[ $text ]>);
+    }
+
+    public EndWrite() : void
+    {
+      def takeValues(count) : list[PExpr]
+      {
+        | 0 => []
+        | _ =>
+          def tail = takeValues(count - 1);
+          def item = _values.Pop();
+          item :: tail;
+      }
+
+      def newValue = match (_operations.Pop())
+      {
+        | SimpleAst(rd, count)
+        | ExtensionAst(rd, count) => <[ $(GetAstName(rd)).Create(context, ..$(takeValues(count))) ]>
+        | AmbiguousAst(rd, count) => <[ $(GetAstName(rd)).AmbiguousAst(context, 0, 0, array[..$(takeValues(count))]) ]>
+        | Tuple(count)            => <[ (..$(takeValues(count))) ]>
+        | List(count, true)       => <[ $count ]>
+        | List(count, false)      => <[ [..$(takeValues(count))] ]>
+        | Option(hasValue, true)  => <[ $hasValue ]>
+        | Option(true, false)     => <[ Some(..$(takeValues(1))) ]>
+        | Option(false, false)    => <[ None() ]>
+      };
+
+      _values.Push(newValue)
+    }
+
+    public GetLiftingCode() : PExpr
+    {
+      assert(_operations.Count == 0);
+      assert(_values.Count == 1);
+      _values.Pop()
+    }
+
+    private static GetAstName(ruleDescriptor : RuleDescriptor) : PExpr
+    {
+      FromQualifiedIdentifier(NString.Split(ruleDescriptor.Grammar.FullName + "." + ruleDescriptor.Name, '.'))
+    }
+
+    private static FromQualifiedIdentifier(qid : list[string]) : PExpr
+    {
+      | []            => throw ArgumentOutOfRangeException("qid", "Non empty list required");
+      | first :: tail => tail.FoldLeft(<[ $(first : usesite) ]>, (item, acc) => <[ $acc.$(item : usesite) ]>)
+    }
+  }
+}
