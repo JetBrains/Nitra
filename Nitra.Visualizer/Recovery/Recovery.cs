@@ -356,6 +356,23 @@ namespace Nitra.DebugStrategies
 // ReSharper disable once RedundantAssignment
       int maxPos = rp.MaxPos;
 
+      SCG.HashSet<ParseRecord> failRecords;
+      do
+      {
+        failRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
+        foreach (var failRecord in failRecords)
+        {
+          if (failRecord.IsComplete)
+            continue;
+
+          foreach (var parsedSubrule in failRecord.Sequence.GetPrevSubrules(new ParsedSubrule(maxPos, maxPos, failRecord.State)))
+          {
+            rp.PredictionOrScanning(parsedSubrule.Begin, new ParseRecord(failRecord.Sequence, parsedSubrule.State, parsedSubrule.Begin), false);
+          }
+        }
+        rp.Parse();
+      } while (!failRecords.SetEquals(rp.Records[maxPos])); 
+
       do
       {
         maxPos = rp.MaxPos;
@@ -404,34 +421,28 @@ namespace Nitra.DebugStrategies
               records.Enqueue(record);
           prevRecords.UnionWith(rp.Records[maxPos]);
 
-          //foreach (var parsedSequence in rp.AddedSequences)
+          //if (records.Count == 0)
           //{
-          //  if (parsedSequence.StartPos == maxPos && !parsedSequence.IsToken)
-          //    records.Enqueue(new ParseRecord(parsedSequence, MaxSubruleIndex(parsedSequence.ParsedSubrules), maxPos));
+          //  var count = 0;
+          //  for (int i = maxPos + 1; i < rp.MaxPos; i++)
+          //  {
+          //    var nextRecords = rp.Records[i];
+          //    if (nextRecords == null)
+          //      continue;
+          //    prevRecords.Clear();
+          //    foreach (var record in nextRecords)
+          //    {
+          //      if (record.Sequence.StartPos == maxPos && !record.IsComplete)
+          //      {
+          //        count++;
+          //        records.Enqueue(record);
+          //        prevRecords.Add(record);
+          //      }
+          //    }
+          //    maxPos = i;
+          //    break;
+          //  }
           //}
-
-          if (records.Count == 0)
-          {
-            var count = 0;
-            for (int i = maxPos + 1; i < rp.MaxPos; i++)
-            {
-              var nextRecords = rp.Records[i];
-              if (nextRecords == null)
-                continue;
-              prevRecords.Clear();
-              foreach (var record in nextRecords)
-              {
-                if (record.Sequence.StartPos == maxPos && !record.IsComplete)
-                {
-                  count++;
-                  records.Enqueue(record);
-                  prevRecords.Add(record);
-                }
-              }
-              maxPos = i;
-              break;
-            }
-          }
         } while (records.Count > 0);
 
         //maxPos = Array.FindIndex(rp.Records, maxPos + 1, IsNotNull);
