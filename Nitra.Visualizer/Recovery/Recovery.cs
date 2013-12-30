@@ -356,22 +356,7 @@ namespace Nitra.DebugStrategies
 // ReSharper disable once RedundantAssignment
       int maxPos = rp.MaxPos;
 
-      SCG.HashSet<ParseRecord> failRecords;
-      do
-      {
-        failRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
-        foreach (var failRecord in failRecords)
-        {
-          if (failRecord.IsComplete)
-            continue;
-
-          foreach (var parsedSubrule in failRecord.Sequence.GetPrevSubrules(new ParsedSubrule(maxPos, maxPos, failRecord.State)))
-          {
-            rp.PredictionOrScanning(parsedSubrule.Begin, new ParseRecord(failRecord.Sequence, parsedSubrule.State, parsedSubrule.Begin), false);
-          }
-        }
-        rp.Parse();
-      } while (!failRecords.SetEquals(rp.Records[maxPos])); 
+      SpeculatePrevRecords(rp, maxPos);
 
       do
       {
@@ -448,6 +433,31 @@ namespace Nitra.DebugStrategies
         //maxPos = Array.FindIndex(rp.Records, maxPos + 1, IsNotNull);
 
       } while (rp.MaxPos > maxPos); //while (maxPos >= 0 && maxPos < textLen);
+    }
+
+    private static void SpeculatePrevRecords(RecoveryParser rp, int maxPos)
+    {
+      SCG.HashSet<ParseRecord> failRecords;
+      do
+      {
+        failRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
+        foreach (var failRecord in failRecords)
+        {
+          if (failRecord.Sequence.IsToken)
+            continue;
+          var prevSubrules = failRecord.IsComplete
+            ? failRecord.Sequence.GetLastSubrules(maxPos)
+            : failRecord.Sequence.GetPrevSubrules(new ParsedSubrule(maxPos, maxPos, failRecord.State));
+          foreach (var parsedSubrule in prevSubrules)
+          {
+            if (failRecord.Sequence.ParsingSequence.States[parsedSubrule.State].IsToken)
+              continue;
+
+            rp.PredictionOrScanning(parsedSubrule.Begin, new ParseRecord(failRecord.Sequence, parsedSubrule.State, parsedSubrule.Begin), false);
+          }
+        }
+        rp.Parse();
+      } while (!failRecords.SetEquals(rp.Records[maxPos]));
     }
   }
 
