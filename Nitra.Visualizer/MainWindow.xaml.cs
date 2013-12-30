@@ -17,7 +17,7 @@ using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.SharpDevelop.Editor;
 using Microsoft.Win32;
 using Nitra.DebugStrategies;
-using Nitra.Internal;
+using Nitra.Internal.Recovery;
 using Nitra.Runtime.Reflection;
 using Nitra.Visualizer.Properties;
 using System.Diagnostics;
@@ -1325,6 +1325,20 @@ namespace Nitra.Visualizer
       {
         _doTreeOperation = false;
       }
+    }
+
+    private void OnShowGrammar(object sender, ExecutedRoutedEventArgs e)
+    {
+      if (_currentTestSuit == null)
+        return;
+
+      _currentTestSuit.ShowGrammar();
+    }
+
+    private void CommandBinding_CanShowGrammar(object sender, CanExecuteRoutedEventArgs e)
+    {
+      e.CanExecute = _currentTestSuit != null;
+      e.Handled = true;
     }
   }
 }

@@ -1,0 +1,219 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+using Nemerle.Extensions;
+
+using Nitra.Runtime.Reflection;
+
+using System;
+using System.Linq;
+
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Internal.Recovery
+{
+  [Record]
+  public class ParsingSequence
+  {
+    public RuleName            : string;
+    public RuleDesc            : string;
+    public IsToken             : bool;
+    public MandatoryTokenCount : int;
+    public StartStates         : array[int];
+    public States              : array[ParsingState];
+
+    [RecordIgnore]
+    public Callers             : SCG.HashSet[int * ParsingSequence] = SCG.HashSet();
+
+    public IsStartState(state : int) : bool
+    {
+      foreach (startState in StartStates)
+        when (state == startState)
+          return true;
+      false
+    }
+
+    public IsNullable : bool
+    {
+      get
+      {
+        foreach (startState in StartStates)
+          when (startState == -1)
+            return true;
+        false
+      }
+    }
+
+    public static CreateSimple(ruleParser : SimpleRuleParser) : ParsingSequence
+    {
+      CreateSequence(ruleParser.Reflection(ruleParser.RuleId), ruleParser.IsTokenRule)
+    }
+
+    public static CreateExtension(ruleParser : ExtensionRuleParser) : ParsingSequence
+    {
+      CreateSequence(ruleParser.Reflection(ruleParser.RuleId), ruleParser.IsTokenRule)
+    }
+
+    public static CreateExtensible(ruleParser : ExtensibleRuleParser) : ParsingSequence
+    {
+      ParsingSequence(
+          ruleParser.RuleName,
+          "Extensible: " + ruleParser.RuleName,
+          ruleParser.IsTokenRule,
+          ruleParser.MandatoryTokens,
+          array[0],
+          array[
+            ParsingState.ExtensionPrefix (0, array[1, -1], array[],     ruleParser),
+            ParsingState.ExtensionPostfix(1, array[1, -1], array[0, 1], ruleParser)
+          ]
+        )
+    }
+
+    public static CreateRoot() : ParsingSequence
+    {
+      ParsingSequence("Root", "Root", false, 1, array[0], array[ParsingState.Scan(0, array[-1], array[], null)])
+    }
+
+    private static CreateSequence(sequence : SequenceInfo, isToken : bool) : ParsingSequence
+    {
+      def transitions = SCG.HashSet();
+      def states = SCG.List();
+      def add(state)
+      {
+        state.Id = states.Count;
+        states.Add(state);
+      }
+
+      def prevStates = SCG.List();
+      prevStates.Add(-1);
+      _ = transitions.Add((-1, 0));
+      foreach (subrule in sequence.Subrules)
+      {
+        def listStates(subrule) : void
+        {
+          def rule = CreateSequence(subrule.Rule, false);
+          def startState = states.Count;
+          mutable state = startState;
+          if (subrule.Max.HasValue)
+          {
+            def endState = startState + subrule.Max.Value;
+            for (mutable i = 0; i < subrule.Max.Value; ++i)
+            {
+              add(ParsingState.Subsequence(0, null, null, rule, subrule.Rule));
+              _ = transitions.Add((state, state + 1));
+              when (i >= subrule.Min)
+                _ = transitions.Add((state, endState));
+              ++state;
+            }
+          }
+          else
+          {
+            for (mutable i = 0; i < if (subrule.Min == 0) 1 else subrule.Min; ++i)
+            {
+              add(ParsingState.Subsequence(0, null, null, rule, subrule.Rule));
+              _ = transitions.Add((state, state + 1));
+              ++state;
+            }
+            _ = transitions.Add((state - 1, state - 1));
+          }
+        }
+        def listWithSeparatorStates(subrule) : void
+        {
+          def rule = CreateSequence(subrule.Rule, false);
+          def separator = CreateSequence(subrule.Separator, false);
+          def startState = states.Count;
+          if (subrule.Max.HasValue)
+          {
+            def endState = startState + subrule.Max.Value * 2 - if (subrule.HangingSeparator) 0 else 1;
+            for (mutable state = startState; state < endState; ++state)
+            {
+              def i = (state - startState) / 2;
+              if ((state - startState) % 2 == 0)
+              {
+                add(ParsingState.Subsequence(0, null, null, rule, subrule.Rule));
+                _ = transitions.Add((state, state + 1));
+                when (i >= subrule.Min)
+                  _ = transitions.Add((state, endState));
+              }
+              else
+              {
+                add(ParsingState.Subsequence(0, null, null, separator, subrule.Separator));
+                _ = transitions.Add((state, state + 1));
+                when (i >= subrule.Min && subrule.HangingSeparator)
+                  _ = transitions.Add((state, endState));
+              }
+            }
+          }
+          else
+          {
+            mutable state = startState;
+            def count = if (subrule.Min == 0) 1 else subrule.Min;
+            for (mutable i = 0; i < count; ++i)
+            {
+              add(ParsingState.Subsequence(0, null, null, rule, subrule.Rule));
+              _ = transitions.Add((state, state + 1));
+              ++state;
+              add(ParsingState.Subsequence(0, null, null, separator, subrule.Separator));
+              when (i < count - 1 || subrule.HangingSeparator)
+              _ = transitions.Add((state, state + 1));
+              ++state;
+            }
+            _ = transitions.Add((state - 1, state - 2));
+            _ = transitions.Add((state - 2, state));
+          }
+        }
+
+        when (subrule.HeadPredicate != null)
+        {
+          def startState = states.Count;
+          _ = transitions.Add((startState, startState + 1));
+          add(ParsingState.Predicate(0, null, null, subrule.HeadPredicate));
+          prevStates.Clear();
+          prevStates.Add(startState);
+        }
+
+        def startState = states.Count;
+        match (subrule)
+        {
+          | Marker                       => assert3(false)
+          | ExtensibleCall    as subrule => _ = transitions.Add((startState, startState + 1)); add(ParsingState.Extensible (0, null, null, subrule.RuleParser))
+          | SimpleCall        as subrule => _ = transitions.Add((startState, startState + 1)); add(ParsingState.Simple     (0, null, null, subrule.RuleParser))
+          | Empty             as subrule => _ = transitions.Add((startState, startState + 1)); add(ParsingState.Scan       (0, null, null, subrule))
+          | RegularCall       as subrule => _ = transitions.Add((startState, startState + 1)); add(ParsingState.Scan       (0, null, null, subrule))
+          | TokenString       as subrule => _ = transitions.Add((startState, startState + 1)); add(ParsingState.Scan       (0, null, null, subrule))
+          | Option            as subrule => _ = transitions.Add((startState, startState + 1)); add(ParsingState.Subsequence(0, null, null, CreateSequence(subrule.Rule, false), subrule.Rule))
+          | List              as subrule => listStates(subrule)
+          | ListWithSeparator as subrule => listWithSeparatorStates(subrule)
+        }
+        def endState = states.Count;
+        if (subrule.CanParseEmptyString)
+        {
+          prevStates.Add(startState);
+          foreach (prevState in prevStates)
+            _ = transitions.Add((prevState, endState));
+        }
+        else
+        {
+          prevStates.Clear();
+          prevStates.Add(startState);
+        }
+      }
+      foreach (state in states)
+      {
+        state.Next = transitions.Where(t => t[0] == state.Id).Select(t => if (t[1] == states.Count) -1 else t[1]).ToArray().SortInplace(_.CompareTo(_));
+        state.Prev = transitions.Where(t => t[1] == state.Id).Select(t => t[0]).Where(s => s != -1).ToArray().SortInplace(_.CompareTo(_));
+      }
+      def startStates = transitions.Where(t => t[0] == -1).Select(t => if (t[1] == states.Count) -1 else t[1]).ToArray().SortInplace(_.CompareTo(_));
+      def states = states;
+      def res = ParsingSequence(sequence.Parser.RuleName, sequence.Description, isToken, sequence.MandatoryTokenCount, startStates, states.ToArray());
+      res
+    }
+    
+    public override ToString() : string
+    {
+      $"$RuleName[..$StartStates]"
+    }
+  }
+}

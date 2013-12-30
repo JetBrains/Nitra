@@ -1,7 +1,8 @@
-﻿using System.Reflection;
-using Nitra.Internal;
+﻿using Nitra.Internal.Recovery;
+
 using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -10,6 +11,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+
+using SCG = System.Collections.Generic;
 
 public module X
 {
@@ -20,13 +24,13 @@ public module X
 
   public VisualizeFrames(stacks : Seq[RecoveryStackFrame]) : void
   {
-    def dot = Nitra.Internal.RecoveryStackFrame.DotStacks(stacks);
+    def dot = RecoveryStackFrame.DotStacks(stacks);
     ExecuteDot(dot);
   }
 
   public VisualizeFrames(stacks : Seq[ParseAlternativeNode]) : void
   {
-    def dot = Nitra.Internal.ParseAlternativeNode.DotNodes(stacks);
+    def dot = ParseAlternativeNode.DotNodes(stacks);
     ExecuteDot(dot);
   }
 
@@ -37,37 +41,28 @@ public module X
 
   public VisualizeRecoveryParser(recoveryParser : RecoveryParser) : void
   {
-    def (toOpen, sources) = recoveryParser.ToDot(0);
-    when (sources.Count > 0)
-      ExecuteDot(toOpen, sources);
+    def _toOpen = recoveryParser.ToDot(0);
+    //when (sources.Count > 0)
+    //  ExecuteDot(toOpen, sources);
   }
 
   static ToolsDir = "ExternalTools";
 
-  private ExecuteDot(source : string) : void
+  public ConvertToDot(sourcePath : string) : void
   {
-    def dotFileName = Path.ChangeExtension(Path.GetTempFileName(), "dot");
-    File.WriteAllText(dotFileName, source);
-    def svgFileName = Path.ChangeExtension(dotFileName, "svg");
-    def process = Process.Start(FindDotExe(), $<#$dotFileName -o $svgFileName -Tsvg#>);
+    def svgFileName = Path.ChangeExtension(sourcePath, "svg");
+    def process = Process.Start(FindDotExe(), $<#$sourcePath -o $svgFileName -Tsvg#>);
     process.WaitForExit();
     _ = Process.Start(svgFileName);
   }
 
-  private ExecuteDot(filesToOpen : List[string], sources : Dictionary[string, string]) : void
+  public ConvertToDot(sourcePaths : Seq[string]) : void
   {
-    def sourcesDir = Directory.CreateDirectory(Path.ChangeExtension(Path.GetTempFileName(), null));
-    def sourceFileNames = System.Collections.Generic.Queue();
-    foreach (p with (name = p.Key, text = p.Value) in sources)
-    {
-      def fileName = Path.Combine(sourcesDir.FullName, name);
-      File.WriteAllText(fileName, text);
-      sourceFileNames.Enqueue(fileName);
-    }
-
+    def sourceFileNames = SCG.Queue(sourcePaths);
+    
     while (sourceFileNames.Count > 0)
     {
-      def batchSize = 20;
+      def batchSize = 200;
       def sourceFileNamesBatch = List(batchSize);
       for (mutable i; i < batchSize && sourceFileNames.Count > 0; ++i)
         sourceFileNamesBatch.Add(sourceFileNames.Dequeue());
@@ -79,12 +74,16 @@ public module X
       using (process = Process.Start(si))
         process.WaitForExit();
     }
+  }
 
-    foreach (name in filesToOpen)
-    {
-      def fileName = Path.Combine(sourcesDir.FullName, name + ".svg");
-      Process.Start(fileName).Dispose();
-    }
+  private ExecuteDot(source : string) : void
+  {
+    def dotFileName = Path.ChangeExtension(Path.GetTempFileName(), "dot");
+    File.WriteAllText(dotFileName, source);
+    def svgFileName = Path.ChangeExtension(dotFileName, "svg");
+    def process = Process.Start(FindDotExe(), $<#$dotFileName -o $svgFileName -Tsvg#>);
+    process.WaitForExit();
+    _ = Process.Start(svgFileName);
   }
 
   private FindDotExe() : string
@@ -105,5 +104,81 @@ public module X
     }
     
     findDot(dir)
+  }
+  
+  public static SafeLeftSubstring(this str : string, pos : int, len : int) : string
+  {
+    assert3(pos >= 0);
+    when (pos == 0)
+      return "";
+      
+    // "1234■12345
+    if (pos <= len)
+      str.Substring(0, pos)
+    else
+      str.Substring(pos - len, if (pos > str.Length) str.Length - (pos - len) else len)
+  }
+
+  public static SafeRightSubstring(this str : string, pos : int, len : int) : string
+  {
+    str.Substring(pos, if (pos + len > str.Length) str.Length - pos else len)
+  }
+
+  [DebuggerStepThroughAttribute]
+  public static EscapeSequence(c : char) : char
+  {
+    | '\'' => '\'' | '\"' => '\"' | '\\' => '\\' | '0'  => '\0'
+    | 'a'  => '\a' | 'b'  => '\b' | 'f'  => '\f' | 'n'  => '\n'
+    | 'r'  => '\r' | 't'  => '\t' | 'v'  => '\v' | c    => c
+  }
+
+  [DebuggerStepThroughAttribute]
+  public EscapeChar(ch : char) : string
+  {
+    | '\0' => @"'\0'"
+    | '\t' => @"'\t'"
+    | '\n' => @"'\n'"
+    | '\r' => @"'\r'"
+    | '\\' => @"'\\'"
+    | '\'' => @"'\''"
+    | x when x == char.MaxValue  => @" char.MaxValue"
+    | c when char.IsLetter(c)
+    | c when char.IsDigit(c)
+    | c when char.IsPunctuation(c)
+    | c when char.IsSeparator(c)
+    | c when char.IsSymbol(c)      => $"'$c'"
+    | c =>
+      def c = c : uint;
+      string.Format(<#'\u{0,4:X}'#>, c).Replace(' ', '0');
+  }
+
+  [DebuggerStepThroughAttribute]
+  public EscapeStringChar(ch : char) : string
+  {
+    | '\0' => @"\0"
+    | '\t' => @"\t"
+    | '\n' => @"\n"
+    | '\r' => @"\r"
+    | '\\' => @"\\"
+    | '\'' => @"\'"
+    | c when char.IsLetter(c)
+    | c when char.IsDigit(c)
+    | c when char.IsPunctuation(c)
+    | c when char.IsSeparator(c)
+    | c when char.IsSymbol(c)      => $"$c"
+    | c =>
+      def c = c : uint;
+      string.Format(<#\u{0,4:X}#>, c).Replace(' ', '0');
+  }
+
+  [DebuggerStepThroughAttribute]
+  public EscapeString(str : string) : string
+  {
+    def sb = Text.StringBuilder(str.Length);
+
+    foreach (ch in str)
+      _ = sb.Append(EscapeStringChar(ch));
+      
+    sb.ToString()
   }
 }

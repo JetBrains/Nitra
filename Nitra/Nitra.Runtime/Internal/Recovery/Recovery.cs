@@ -2,9 +2,10 @@
 #define DebugOutput
 using System.Globalization;
 using Nitra.Internal;
+using Nitra.Internal.Recovery;
 using Nitra.Runtime.Errors;
 using NB = Nemerle.Builtins;
-using IntRuleCallKey = Nemerle.Builtins.Tuple<int, Nitra.Internal.RuleCallKey>;
+using IntRuleCallKey = Nemerle.Builtins.Tuple<int, Nitra.Internal.Recovery.RuleCallKey>;
 
 using System;
 using System.IO;
