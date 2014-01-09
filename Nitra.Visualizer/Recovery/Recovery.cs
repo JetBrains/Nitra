@@ -81,9 +81,12 @@ namespace Nitra.DebugStrategies
       return parseResult.Text.Length;
     }
 
-    private FlattenSequences FlattenSubrule(FlattenSequences prevs, ParseResult parseResult, ParsedSequence seq, SubruleParses parses, ParsedSubrule subrule, int subruleInsertedTokens, int sequenceInsertedTokens, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
+    private FlattenSequences FlattenSubrule(FlattenSequences prevs, ParseResult parseResult, ParsedSequence seq, SubruleParses parses, ParsedSubrule subrule, int subruleInsertedTokens, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
       Begin:
+
+      if (subrule.State == 9 && subrule.Begin == 8 && subrule.End == 15)
+      {}
 
       var currentNodes = new FlattenSequences();
       //var subruledDesc = seq.GetSubruleDescription(subrule.State);
@@ -122,13 +125,12 @@ namespace Nitra.DebugStrategies
         case 1:
         {
           var nextSubrule = nextSubrules[0];
-          var newSubruleCumulativeInsertedTokens = parses[nextSubrule];
-          if (newSubruleCumulativeInsertedTokens == Fail)
+          subruleInsertedTokens = parses[nextSubrule];
+          if (subruleInsertedTokens == Fail)
             return currentNodes;
           // recursive self call...
           prevs = currentNodes;
           subrule = nextSubrule;
-          subruleInsertedTokens = newSubruleCumulativeInsertedTokens;
           goto Begin;
         }
         default:
@@ -141,7 +143,7 @@ namespace Nitra.DebugStrategies
             if (newSubruleInsertedTokens == Fail)
               continue;
 
-            var result = FlattenSubrule(currentNodes, parseResult, seq, parses, nextSubrule, newSubruleInsertedTokens, sequenceInsertedTokens, memiozation);
+            var result = FlattenSubrule(currentNodes, parseResult, seq, parses, nextSubrule, newSubruleInsertedTokens, memiozation);
             resultNodes.AddRange(result);
           }
 
@@ -165,8 +167,14 @@ namespace Nitra.DebugStrategies
 
       var parses = first.Field0;
 
-      if (sequenceInsertedTokens != first.Field1 || first.Field1 == Fail)
+      if (first.Field1 == Fail)
         return new FlattenSequences();
+
+      if (sequenceInsertedTokens != first.Field1)
+      {
+        //Debug.Assert(false);
+        return new FlattenSequences();
+      }
 
       var firstSubrules = seq.GetFirstSubrules(parses.Keys).ToArray();
 
@@ -181,7 +189,7 @@ namespace Nitra.DebugStrategies
         if (insertedTokens == Fail)
           continue;
 
-        var result = FlattenSubrule(prevs, parseResult, seq, parses, firstSubrule, insertedTokens, sequenceInsertedTokens, memiozation);
+        var result = FlattenSubrule(prevs, parseResult, seq, parses, firstSubrule, insertedTokens, memiozation);
         total.AddRange(result);
       }
 
@@ -616,6 +624,8 @@ pre
         var desc = seq.ParsingSequence.States[subrule.State].Description;
         if (insertedTokens > 0)
         {
+          if (!subrule.IsEmpty)
+          { }
           var title = new XAttribute("title", "Inserted tokens: " + insertedTokens + ";  Subrule: " + subrule + ";  Sequence: " + seq + ";");
           results.Add(new XElement("span", _skipedStateClass, title, isPrevInsertion ? " " + desc : desc));
           isPrevInsertion = true;
