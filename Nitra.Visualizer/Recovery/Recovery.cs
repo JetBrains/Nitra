@@ -125,6 +125,9 @@ namespace Nitra.DebugStrategies
         case 1:
         {
           var nextSubrule = nextSubrules[0];
+          if (nextSubrule.State == 9 && nextSubrule.Begin == 8 && nextSubrule.End == 15)
+          { }
+
           subruleInsertedTokens = parses[nextSubrule];
           if (subruleInsertedTokens == Fail)
             return currentNodes;
@@ -160,6 +163,9 @@ namespace Nitra.DebugStrategies
       int                                           sequenceInsertedTokens,
       Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
+      if (seq.StartPos == 8 && end == 15)
+        Debug.Assert(true);
+
       SubruleParsesAndEnd first;
       var key = new ParsedSeqKey(seq, end);
       if (!memiozation.TryGetValue(key, out first))
@@ -205,6 +211,12 @@ namespace Nitra.DebugStrategies
       if (memiozation.TryGetValue(key, out result))
         return result.Field1;
 
+      if (seq.StartPos == end)
+      {
+        memiozation.Add(key, new SubruleParsesAndEnd(new Dictionary<ParsedSubrule, int>(), seq.ParsingSequence.MandatoryTokenCount));
+        return seq.ParsingSequence.MandatoryTokenCount;
+      }
+
       var results = new Dictionary<ParsedSubrule, int>();
       var validSubrules = seq.GetValidSubrules(end).ToList();
       if (validSubrules.Count == 0)
@@ -212,12 +224,10 @@ namespace Nitra.DebugStrategies
         memiozation.Add(key, new SubruleParsesAndEnd(results, 0));
         return 0;
       }
-      memiozation.Add(key, new SubruleParsesAndEnd(results, seq.ParsingSequence.MandatoryTokenCount));
+      memiozation.Add(key, new SubruleParsesAndEnd(results, Fail));
 
       foreach (var subrule in validSubrules)
       {
-        if (subrule.State == 4 && subrule.Begin == 0 && subrule.End == 29)
-        { }
         var localMin = Fail;
 
         if (seq.IsSubruleVoid(subrule))
@@ -268,7 +278,7 @@ namespace Nitra.DebugStrategies
 
     private static SubruleParses RemoveWorstPaths2(ParsedSequence seq, int end, SubruleParses parses, out int comulativeMin)
     {
-      var comulativeCost = new SubruleParses(parses);
+      var comulativeCost = new SubruleParses();
       bool updated = true;
       while (updated)
       {
@@ -276,17 +286,26 @@ namespace Nitra.DebugStrategies
         foreach (var parse in parses)
         {
           var subrule = parse.Key;
-          var oldCount = comulativeCost[subrule];
+          int oldCount;
+          if (!comulativeCost.TryGetValue(subrule, out oldCount))
+            updated = true;
           int min;
           if (seq.StartPos == subrule.Begin && seq.ParsingSequence.StartStates.Contains(subrule.State))
             min = 0;
           else
-            min = seq.GetPrevSubrules(subrule, parses.Keys).Min(s => comulativeCost[s]);
+          {
+            min = Fail;
+            int prevCount;
+            foreach (var prevSubrule in seq.GetPrevSubrules(subrule, parses.Keys))
+              if (comulativeCost.TryGetValue(prevSubrule, out prevCount))
+                min = Math.Min(min, prevCount);
+          }
           var newCount = AddOrFail(min, parses[subrule]);
           comulativeCost[subrule] = newCount;
           updated = updated || oldCount != newCount;
         }
       }
+
       var toProcess = new SCG.Queue<ParsedSubrule>(seq.GetLastSubrules(parses.Keys, end));
       var comulativeMin2 = toProcess.Min(s => comulativeCost[s]);
       comulativeMin = comulativeMin2;
