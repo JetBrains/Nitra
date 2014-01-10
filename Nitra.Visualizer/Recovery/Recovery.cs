@@ -378,15 +378,39 @@ namespace Nitra.DebugStrategies
       return source == Fail || addition == Fail ? Fail : source + addition;
     }
 
+    private void FindMaxFailPos(RecoveryParser rp)
+    {
+      int maxPos;
+      do
+      {
+        maxPos = rp.MaxPos;
+        int count;
+        do
+        {
+          count = rp.Records[maxPos].Count;
+          foreach (var sequence in rp.Records[maxPos].Select(r => r.Sequence).Distinct())
+          {
+            if (sequence.IsToken)
+              continue;
+            foreach (var subrule in sequence.ParsedSubrules)
+              if (subrule.End == maxPos && !sequence.ParsingSequence.States[subrule.State].IsToken)
+                rp.PredictionOrScanning(subrule.Begin, new ParseRecord(sequence, subrule.State, subrule.Begin), false);
+          }
+          rp.Parse();
+        }
+        while (count < rp.Records[maxPos].Count);
+      }
+      while (maxPos < rp.MaxPos);
+    }
+
     private void RecoverAllWays(RecoveryParser rp)
     {
 // ReSharper disable once RedundantAssignment
       int maxPos = rp.MaxPos;
 
-      SpeculatePrevRecords(rp, maxPos);
-
       do
       {
+        FindMaxFailPos(rp);
         maxPos = rp.MaxPos;
         var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
         var prevRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
@@ -460,31 +484,6 @@ namespace Nitra.DebugStrategies
         //maxPos = Array.FindIndex(rp.Records, maxPos + 1, IsNotNull);
 
       } while (rp.MaxPos > maxPos); //while (maxPos >= 0 && maxPos < textLen);
-    }
-
-    private static void SpeculatePrevRecords(RecoveryParser rp, int maxPos)
-    {
-      SCG.HashSet<ParseRecord> failRecords;
-      do
-      {
-        failRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
-        foreach (var failRecord in failRecords)
-        {
-          if (failRecord.Sequence.IsToken)
-            continue;
-          var prevSubrules = failRecord.IsComplete
-            ? failRecord.Sequence.GetLastSubrules(maxPos)
-            : failRecord.Sequence.GetPrevSubrules(new ParsedSubrule(maxPos, maxPos, failRecord.State));
-          foreach (var parsedSubrule in prevSubrules)
-          {
-            if (failRecord.Sequence.ParsingSequence.States[parsedSubrule.State].IsToken)
-              continue;
-
-            rp.PredictionOrScanning(parsedSubrule.Begin, new ParseRecord(failRecord.Sequence, parsedSubrule.State, parsedSubrule.Begin), false);
-          }
-        }
-        rp.Parse();
-      } while (!failRecords.SetEquals(rp.Records[maxPos]));
     }
   }
 
