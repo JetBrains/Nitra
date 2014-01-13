@@ -412,8 +412,32 @@ namespace Nitra.DebugStrategies
       {
         FindMaxFailPos(rp);
         maxPos = rp.MaxPos;
+        var parseResult = rp.ParseResult;
+        var grammar = parseResult.RuleParser.Grammar;
+
         var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
         var prevRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
+
+        var res = grammar.ParseAllGrammarTokens(maxPos, parseResult);
+        RemoveEmpty(res, maxPos);
+        if (res.Count > 0)
+        {
+          foreach (var nextPos in res)
+          {
+            foreach (var record in records)
+              if (!record.IsComplete)
+                rp.PredictionOrScanning(nextPos, record, false);
+
+            var res2 = grammar.ParseAllVoidGrammarTokens(nextPos, parseResult);
+            RemoveEmpty(res2, nextPos);
+
+
+            foreach (var nextPos2 in res2)
+              foreach (var record in records)
+                if (!record.IsComplete)
+                  rp.PredictionOrScanning(nextPos2, record, false);
+          }
+        }
 
         do
         {
@@ -447,7 +471,7 @@ namespace Nitra.DebugStrategies
             rp.SubruleParsed(maxPos, maxPos, record);
             
             //if (rp.ParseResult.Text.Length != maxPos)
-              rp.PredictionOrScanning(maxPos, record, false);
+            rp.PredictionOrScanning(maxPos, record, false);
           }
 
           rp.Parse();
@@ -484,6 +508,11 @@ namespace Nitra.DebugStrategies
         //maxPos = Array.FindIndex(rp.Records, maxPos + 1, IsNotNull);
 
       } while (rp.MaxPos > maxPos); //while (maxPos >= 0 && maxPos < textLen);
+    }
+
+    private static int RemoveEmpty(HashSet<int> res, int maxPos)
+    {
+      return res.RemoveWhere(x => x <= maxPos);
     }
   }
 
