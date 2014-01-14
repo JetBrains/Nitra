@@ -420,22 +420,34 @@ namespace Nitra.DebugStrategies
 
         var res = grammar.ParseAllGrammarTokens(maxPos, parseResult);
         RemoveEmpty(res, maxPos);
+
         if (res.Count > 0)
         {
           foreach (var nextPos in res)
           {
+            var skipToken = new ParsedSubrule(maxPos, nextPos, ParsedSequence.SkipTokenState);
             foreach (var record in records)
               if (!record.IsComplete)
+              {
+                record.Sequence.ParsedSubrules.Add(skipToken);
                 rp.PredictionOrScanning(nextPos, record, false);
+              }
 
             var res2 = grammar.ParseAllVoidGrammarTokens(nextPos, parseResult);
             RemoveEmpty(res2, nextPos);
 
 
             foreach (var nextPos2 in res2)
+            {
+              skipToken = new ParsedSubrule(nextPos, nextPos2, ParsedSequence.SkipTokenState);
+
               foreach (var record in records)
                 if (!record.IsComplete)
+                {
+                  record.Sequence.ParsedSubrules.Add(skipToken);
                   rp.PredictionOrScanning(nextPos2, record, false);
+                }
+            }
           }
         }
 
@@ -668,22 +680,30 @@ pre
         var subrule = node.Field0;
         var insertedTokens = node.Field1;
         var seq = node.Field2;
-        var desc = seq.ParsingSequence.States[subrule.State].Description;
+
         if (insertedTokens > 0)
         {
+          var desc = seq.ParsingSequence.States[subrule.State].Description;
           if (!subrule.IsEmpty)
           { }
           var title = new XAttribute("title", "Inserted tokens: " + insertedTokens + ";  Subrule: " + subrule + ";  Sequence: " + seq + ";");
           results.Add(new XElement("span", _skipedStateClass, title, isPrevInsertion ? " " + desc : desc));
           isPrevInsertion = true;
         }
+        else if (subrule.State == ParsedSequence.SkipTokenState)
+        {
+          isPrevInsertion = false;
+          var title = new XAttribute("title", "Deleted token;  Subrule: " + subrule + ";  Sequence: " + seq + ";");
+          results.Add(new XElement("span", _garbageClass, title, text.Substring(subrule.Begin, subrule.End - subrule.Begin)));
+        }
         else
         {
+          var desc = seq.ParsingSequence.States[subrule.State].Description;
           var title = new XAttribute("title", "Description: " + desc + ";  Subrule: " + subrule + ";  Sequence: " + seq + ";");
           //if (subrule.IsEmpty)
           //  results.Add(new XElement("span", title, "▴"));
           //else
-            results.Add(new XElement("span", title, text.Substring(subrule.Begin, subrule.End - subrule.Begin)));
+          results.Add(new XElement("span", title, text.Substring(subrule.Begin, subrule.End - subrule.Begin)));
 
           isPrevInsertion = false;
         }
