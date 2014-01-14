@@ -251,13 +251,10 @@ namespace Nitra.DebugStrategies
 
           if (!hasSequence)
           {
-            if (subrule.State == ParsedSequence.SkipTokenState)
-            {
-              if (seq.SubruleMandatoryTokenCount(subrule) != 2)
-                localMin = seq.SubruleMandatoryTokenCount(subrule);
-              else
-                localMin = 3; // оцениваем удаление на треть дороже вставки
-            }
+            if (subrule.State == ParsedSequence.DeletedTokenState)
+              localMin = 3; // оцениваем удаление на треть дороже вставки
+            if (subrule.State == ParsedSequence.DeletedGarbageState)
+              localMin = 0; // грязь не оценивается
             else if (subrule.IsEmpty)
               localMin = seq.SubruleMandatoryTokenCount(subrule) * 2;
             else
@@ -404,7 +401,7 @@ namespace Nitra.DebugStrategies
             if (sequence.IsToken)
               continue;
             foreach (var subrule in sequence.ParsedSubrules)
-              if (subrule.State != ParsedSequence.SkipTokenState && subrule.End == maxPos && !sequence.ParsingSequence.States[subrule.State].IsToken)
+              if (subrule.State > ParsedSequence.DeletedTokenState && subrule.End == maxPos && !sequence.ParsingSequence.States[subrule.State].IsToken)
                 rp.PredictionOrScanning(subrule.Begin, new ParseRecord(sequence, subrule.State, subrule.Begin), false);
           }
           rp.Parse();
@@ -430,7 +427,7 @@ namespace Nitra.DebugStrategies
 
         if (garbage > 0)
         {
-          maxPos = rp.MaxPos;
+          //maxPos = rp.MaxPos;
           continue;
         }
 
@@ -522,7 +519,7 @@ namespace Nitra.DebugStrategies
 
           if (res2.Count == 0)
           {
-            var skipToken = new ParsedSubrule(maxPos, nextPos, ParsedSequence.SkipTokenState);
+            var skipToken = new ParsedSubrule(maxPos, nextPos, ParsedSequence.DeletedTokenState);
             foreach (var record in records)
               if (!record.IsComplete)
               {
@@ -533,7 +530,7 @@ namespace Nitra.DebugStrategies
           else
             foreach (var nextPos2 in res2)
             {
-              var skipToken = new ParsedSubrule(maxPos, nextPos2, ParsedSequence.SkipTokenState);
+              var skipToken = new ParsedSubrule(maxPos, nextPos2, ParsedSequence.DeletedTokenState);
 
               foreach (var record in records)
                 if (!record.IsComplete)
@@ -555,7 +552,7 @@ namespace Nitra.DebugStrategies
             break;
         }
 
-        var skipToken = new ParsedSubrule(maxPos, i, ParsedSequence.SkipTokenState); // сабруль пропускающий грязь
+        var skipToken = new ParsedSubrule(maxPos, i, ParsedSequence.DeletedGarbageState); // сабруль пропускающий грязь
         foreach (var record in records)
           if (!record.IsComplete)
           {
@@ -654,6 +651,11 @@ pre
   background: lightpink;
 }
 
+.deleted
+{
+  background: lightpink;
+}
+
 .parsed
 {
   color: Green;
@@ -694,7 +696,8 @@ pre
 "; 
     #endregion
 
-    static readonly XAttribute _garbageClass      = new XAttribute("class", "garbage");
+    static readonly XAttribute _garbageClass = new XAttribute("class", "garbage");
+    static readonly XAttribute _deletedClass = new XAttribute("class", "deleted");
     static readonly XAttribute _topClass          = new XAttribute("class", "parsed");
     static readonly XAttribute _prefixClass       = new XAttribute("class", "prefix");
     static readonly XAttribute _postfixClass      = new XAttribute("class", "postfix");
@@ -730,11 +733,12 @@ pre
         var insertedTokens = node.Field1;
         var seq = node.Field2;
 
-        if (subrule.State == ParsedSequence.SkipTokenState)
+        if (subrule.State <= ParsedSequence.DeletedTokenState)
         {
           isPrevInsertion = false;
           var title = new XAttribute("title", "Deleted token;  Subrule: " + subrule + ";  Sequence: " + seq + ";");
-          results.Add(new XElement("span", _garbageClass, title, text.Substring(subrule.Begin, subrule.End - subrule.Begin)));
+          results.Add(new XElement("span", subrule.State == ParsedSequence.DeletedTokenState ? _deletedClass : _garbageClass, 
+            title, text.Substring(subrule.Begin, subrule.End - subrule.Begin)));
         }
         else if (insertedTokens > 0)
         {
