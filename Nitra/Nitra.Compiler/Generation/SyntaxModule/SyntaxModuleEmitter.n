@@ -16,9 +16,10 @@ namespace Nitra.Compiler
 {
   internal partial class SyntaxModuleEmitter
   {
-    public Environment  : EmitterEnvironment { get; }
-    public Env          : GlobalEnv          { get; }
-    public SyntaxModule : SyntaxModuleSymbol { get; }
+    public Environment   : EmitterEnvironment { get; }
+    public Env           : GlobalEnv          { get; }
+    public SyntaxModule  : SyntaxModuleSymbol { get; }
+    public IsGenerateAst : bool               { get; }
 
     public GrammarTB               : TypeBuilder { get; }
     public GrammarImplTB           : TypeBuilder { get; }
@@ -33,11 +34,12 @@ namespace Nitra.Compiler
     private _extensionAstEmitters          : List[IAstEmitter] = List();
     private _astEmitterDefineTypeFunctions : Hashtable[IRuleDeclarationSite, ClassMember.TypeDeclaration -> TypeBuilder] = Hashtable();
 
-    public this(environment : EmitterEnvironment, syntaxModule : SyntaxModuleSymbol)
+    public this(environment : EmitterEnvironment, syntaxModule : SyntaxModuleSymbol, isGenerateAst : bool)
     {
-      Environment  = environment;
-      SyntaxModule = syntaxModule;
-      Env          = Environment.NamespaceOfSymbol(syntaxModule);
+      Environment       = environment;
+      SyntaxModule      = syntaxModule;
+      Env               = Environment.NamespaceOfSymbol(syntaxModule);
+      IsGenerateAst     = isGenerateAst;
       _externalGrammars = HashSet(syntaxModule.ExternalImports);
 
       GrammarTB               = Env.Define(<[ decl: public partial module $(syntaxModule.Name : usesite) { } ]>);
@@ -55,7 +57,8 @@ namespace Nitra.Compiler
       GrammarDescriptorImplTB.DefineConditional(<[ decl: public static StaticDescriptor : this { get { _staticDescriptor } } ]>);
       GrammarTB.DefineConditional(<[ decl: public static StaticDescriptor : Nitra.GrammarDescriptor { get { $(GrammarDescriptorImplTB.GetMemType() : typed).StaticDescriptor } } ]>);
 
-      GrammarAstTB            = Env.Define(<[ decl: public partial module $(syntaxModule.Name + "Ast" : usesite) {} ]>);
+      when (IsGenerateAst)
+        GrammarAstTB            = Env.Define(<[ decl: public partial module $(syntaxModule.Name + "Ast" : usesite) {} ]>);
 
       _ruleParserEmitters = SyntaxModule.Node.GetDescendants.[RuleDefSymbol]().FoldLeft([],
         fun(rs : RuleDefSymbol, acc)
@@ -112,32 +115,35 @@ namespace Nitra.Compiler
         | _                          => false
       }
 
-      foreach (ruleSymbol when isAst(ruleSymbol) in SyntaxModule.Node.GetDescendants.[SyntaxRuleSymbol]())
+      when (IsGenerateAst)
       {
-        def emitter = RuleAstEmitter(Environment, ruleSymbol);
-        if (ruleSymbol is ExtensionRuleSymbol)
-          _extensionAstEmitters.Add(emitter);
-        else
+        foreach (ruleSymbol when isAst(ruleSymbol) in SyntaxModule.Node.GetDescendants.[SyntaxRuleSymbol]())
+        {
+          def emitter = RuleAstEmitter(Environment, ruleSymbol);
+          if (ruleSymbol is ExtensionRuleSymbol)
+            _extensionAstEmitters.Add(emitter);
+          else
+            _simpleAstEmitters.Add(emitter);
+          _allAstEmitters.Add(emitter);
+        }
+
+        foreach (extendSyntaxSymbol in SyntaxModule.Node.GetDescendants.[ExtendSyntaxSymbol]())
+        {
+          def emitter = ExtendSyntaxAstEmitter(extendSyntaxSymbol);
           _simpleAstEmitters.Add(emitter);
-        _allAstEmitters.Add(emitter);
-      }
+          _allAstEmitters.Add(emitter);
+        }
 
-      foreach (extendSyntaxSymbol in SyntaxModule.Node.GetDescendants.[ExtendSyntaxSymbol]())
-      {
-        def emitter = ExtendSyntaxAstEmitter(extendSyntaxSymbol);
-        _simpleAstEmitters.Add(emitter);
-        _allAstEmitters.Add(emitter);
-      }
-
-      _astEmitterDefineTypeFunctions[SyntaxModule] = GrammarAstTB.DefineNestedType;
-      foreach (emitter when emitter.Symbol is IRuleDeclarationSite in _allAstEmitters)
-      {
-        _astEmitterDefineTypeFunctions[emitter.Symbol :> IRuleDeclarationSite] =
-          fun (decl)
-          {
-            DefineAstTypes(emitter);
-            emitter.DefineNestedType(decl)
-          };
+        _astEmitterDefineTypeFunctions[SyntaxModule] = GrammarAstTB.DefineNestedType;
+        foreach (emitter when emitter.Symbol is IRuleDeclarationSite in _allAstEmitters)
+        {
+          _astEmitterDefineTypeFunctions[emitter.Symbol :> IRuleDeclarationSite] =
+            fun (decl)
+            {
+              DefineAstTypes(emitter);
+              emitter.DefineNestedType(decl)
+            };
+        }
       }
 
       foreach (spanClass in SyntaxModule.Node.GetDescendants.[SpanClassSymbol]())
@@ -213,7 +219,8 @@ namespace Nitra.Compiler
       foreach (emitter in _allAstEmitters)
         emitter.Emit();
 
-      GrammarAstTB.Compile();
+      when (IsGenerateAst)
+        GrammarAstTB.Compile();
       GrammarDescriptorImplTB.Compile();
       GrammarImplTB.Compile();
       GrammarTB.Compile();
