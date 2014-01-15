@@ -1,0 +1,127 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Imperative;
+using Nemerle.Utility;
+
+using Nitra.Serialization;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Compiler
+{
+  internal sealed class ChemicalSymbolEmitter
+  {
+    public Environment        : EmitterEnvironment { get; }
+    public TargetSymbolType   : TypeBuilder        { get; }
+    public ChemicalSymbolType : TypeBuilder        { get; }
+
+    public this (environment : EmitterEnvironment, symbolType : TypeBuilder, chemicalSymbolType : option[TypeBuilder])
+    {
+      Environment      = environment;
+      TargetSymbolType = symbolType;
+      match (chemicalSymbolType)
+      {
+        | None =>
+          ChemicalSymbolType = TargetSymbolType.GlobalEnv.Define(<[ decl:
+            public sealed class $("Chemical" + symbolType.Name : usesite) : $(symbolType.GetMemType() : typed)
+            {
+            }
+          ]>);
+          ChemicalSymbolType.DisableImplicitConstructor();
+
+        | Some(tb) =>
+          ChemicalSymbolType = tb;
+      }
+    }
+
+    public DefineMembers() : void
+    {
+      def symbolProperties = SymbolEmitterUtils.GetSymbolProperties(TargetSymbolType);
+
+      foreach (prop in symbolProperties)
+        DefineSymbolProperty(prop);
+
+      ChemicalSymbolType.Define(<[ decl:
+        public override Description : string { get { $(SymbolEmitterUtils.MakeDescriptionText(ChemicalSymbolType.Name) : string) } }
+      ]>);
+
+      foreach (ctor when !ctor.IsStatic in TargetSymbolType.GetConstructors())
+        match (ctor.GetParameters())
+        {
+          | [p1, p2] when p1.Type.Equals(Environment.LocationTypeVar) && p2.Type.Equals(Environment.StringTypeVar) =>
+            ChemicalSymbolType.Define(<[ decl:
+              public this(definition : Nitra.Location, name : string)
+              {
+                base(definition, name);
+              }
+            ]>);
+            break;
+
+          | [p1] when p1.Type.Equals(Environment.StringTypeVar) =>
+            ChemicalSymbolType.Define(<[ decl:
+              public this(definition : Nitra.Location, name : string)
+              {
+                base(name);
+                _definition = definition;
+              }
+            ]>);
+            ChemicalSymbolType.Define(<[ decl: private          _definition   : Nitra.Location                                 ]>);
+            ChemicalSymbolType.Define(<[ decl: public  override Locations     : list[Nitra.Location] { get { [_definition] } } ]>);
+            ChemicalSymbolType.Define(<[ decl: public  override FirstLocation : Nitra.Location       { get {  _definition  } } ]>);
+            break;
+
+          | _ => ()
+        }
+    }
+
+    public Emit() : void
+    {
+      ChemicalSymbolType.Compile();
+    }
+
+    private DefineSymbolProperty(property : SymbolProperty) : void
+    {
+      def hasValueBit = ChemicalSymbolType.GetBitFieldManager().Allocate();
+
+      def backingFieldName = Util.tmpname(property.Property.Name);
+      ChemicalSymbolType.Define(<[ decl:
+        private mutable $(backingFieldName : usesite) : $(property.Property.GetMemType() : typed);
+      ]>);
+
+      def notSetMessage     = $"Property '$(property.Property.Name)' is not set";
+      def alreadySetMessage = $"Property '$(property.Property.Name)' is already set";
+
+      property.OverriddenProperty = ChemicalSymbolType.DefineAndReturn(<[ decl:
+        public override $(property.Property.Name : usesite) : $(property.Property.GetMemType() : typed)
+        {
+          get
+          {
+            unless ($(hasValueBit.Read()))
+              throw System.InvalidOperationException($notSetMessage);
+            this.$(backingFieldName : usesite);
+          }
+          private set
+          {
+            when ($(hasValueBit.Read()))
+              throw System.InvalidOperationException($alreadySetMessage);
+            this.$(backingFieldName : usesite) = value;
+            $(hasValueBit.Set());
+          }
+        }
+      ]>) :> IProperty;
+
+      ChemicalSymbolType.Define(<[ decl:
+        public $("Set" + property.Property.Name : usesite)(value : $(property.Property.GetMemType() : typed)) : $(ChemicalSymbolType.GetMemType() : typed)
+        {
+          this.$(property.Property.Name : usesite) = value;
+          this
+        }
+      ]>);
+    }
+  }
+}
