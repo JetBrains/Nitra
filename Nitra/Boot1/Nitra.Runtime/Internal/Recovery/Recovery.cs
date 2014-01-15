@@ -724,7 +724,7 @@ namespace Nitra.DebugStrategies
 
       // формируем ошибки начало
       var totalSkip = skipCount + bestNodes[0].ParseAlternative.Skip;
-      var loc = new Location(parseResult, new NSpan(failPos, failPos + totalSkip));
+      var loc = new Location(parseResult.OriginalSource, new NSpan(failPos, failPos + totalSkip));
       if (totalSkip > 0)
         parseResult.ReportError(new UnexpectedTokenError(loc));
       TryAddErrorsForMissedSeparators(parseResult, loc, allNodes);
