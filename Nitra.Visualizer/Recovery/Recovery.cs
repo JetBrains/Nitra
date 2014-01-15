@@ -85,6 +85,10 @@ namespace Nitra.DebugStrategies
     {
       Begin:
 
+      var txt = parseResult.Text.Substring(subrule.Begin, subrule.End - subrule.Begin);
+      var stateIndex = subrule.State;
+      var state = stateIndex < 0 ? null : seq.ParsingSequence.States[stateIndex];
+
       if (subrule.State == 9 && subrule.Begin == 8 && subrule.End == 15)
       {}
 
@@ -163,6 +167,8 @@ namespace Nitra.DebugStrategies
       int                                           sequenceInsertedTokens,
       Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
+      var seqTxt = parseResult.Text.Substring(seq.StartPos, end - seq.StartPos);
+
       if (seq.StartPos == 8 && end == 15)
         Debug.Assert(true);
 
@@ -184,13 +190,17 @@ namespace Nitra.DebugStrategies
 
       var firstSubrules = seq.GetFirstSubrules(parses.Keys).ToArray();
 
-      if (firstSubrules.Length > 1)
-      { }
+      //if (firstSubrules.Length > 1)
+      //{ }
 
       var total = new FlattenSequences();
 
       foreach (var firstSubrule in firstSubrules)
       {
+        var txt = parseResult.Text.Substring(firstSubrule.Begin, firstSubrule.End - firstSubrule.Begin);
+        var stateIndex = firstSubrule.State;
+        var state = stateIndex < 0 ? null : seq.ParsingSequence.States[stateIndex];
+
         var insertedTokens = parses[firstSubrule];
         if (insertedTokens == Fail)
           continue;
@@ -232,6 +242,9 @@ namespace Nitra.DebugStrategies
 
       foreach (var subrule in validSubrules)
       {
+        if (subrule.State < -1)
+        {}
+
         var localMin = Fail;
 
         if (seq.IsSubruleVoid(subrule))
@@ -252,11 +265,11 @@ namespace Nitra.DebugStrategies
           if (!hasSequence)
           {
             if (subrule.State == ParsedSequence.DeletedTokenState)
-              localMin = 3; // оцениваем удаление на треть дороже вставки
-            if (subrule.State == ParsedSequence.DeletedGarbageState)
+              localMin = 1; // оцениваем удаление на треть дороже вставки
+            else if (subrule.State == ParsedSequence.DeletedGarbageState)
               localMin = 0; // грязь не оценивается
             else if (subrule.IsEmpty)
-              localMin = seq.SubruleMandatoryTokenCount(subrule) * 2;
+              localMin = seq.SubruleMandatoryTokenCount(subrule);
             else
               localMin = 0;
           }
