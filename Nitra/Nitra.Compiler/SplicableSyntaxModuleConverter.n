@@ -15,16 +15,17 @@ using System.Linq;
 
 namespace Nitra.Compiler
 {
-  public module SplicableSyntaxModuleConverter
+  public sealed class SplicableSyntaxModuleConverter
   {
-    public Convert(syntaxModule : ParsedSyntaxModuleSymbol) : void
+    _rewriteOperations : SCG.Queue[Rule.Sequence * Func[Rule.Sequence, RuleDefSymbol]] = SCG.Queue();
+    _ruleMapTable      : SCG.Dictionary[RuleDefSymbol, RuleDefSymbol]                  = SCG.Dictionary();
+
+    public CreateSymbols(syntaxModule : ParsedSyntaxModuleSymbol) : void
     {
       def splicableSyntaxModule = ChemicalSyntaxModuleSymbol(syntaxModule.FirstLocation, syntaxModule.Name)
         .SetExternalImports([])
         .SetTokenLiterals([]);
       _ = syntaxModule.Node.Parent.AddAndReport(["Splicable"], splicableSyntaxModule, splicableSyntaxModule.FirstLocation);
-
-      def pairs = SCG.List();
 
       def enumerateRules(sourceNode, targetNode, declarationSite : IRuleDeclarationSite)
       {
@@ -33,24 +34,63 @@ namespace Nitra.Compiler
           match (symbol)
           {
             | ExtensibleRuleSymbol(IsToken = false) as ruleSymbol =>
-              def splicableRuleSymbol = ChemicalExtensibleRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name)
+              def splicableRuleSymbol = ChemicalBaseExtensibleRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name)
                 .SetDeclarationSite(declarationSite)
-                .SetIdInGrammar(splicableSyntaxModule.GetNewRuleId())
-                .SetOptions(RuleDefinitionOptions.Empty)
-                .SetCanParseEmptyString(ruleSymbol.CanParseEmptyString)
-                .SetFirstCharLowerBound(char.MinValue)
-                .SetFirstCharUpperBound(char.MaxValue);
+                .SetOptions(RuleDefinitionOptions.Empty);
+
               _ = targetNode.AddAndReport(splicableRuleSymbol, splicableRuleSymbol.FirstLocation);
-
-              pairs.Add(ruleSymbol, splicableRuleSymbol);
-
+              _ruleMapTable.Add(ruleSymbol, splicableRuleSymbol);
               enumerateRules(ruleSymbol.Node, splicableRuleSymbol.Node, splicableRuleSymbol);
+
+            | SimpleRuleSymbol(IsToken = false) as ruleSymbol when !(ruleSymbol.Type is RuleType.Void) =>
+              def splicableRuleSymbol = ChemicalBaseSimpleRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name);
+              _ = splicableRuleSymbol
+                .SetDeclarationSite(declarationSite)
+                .SetOptions(RuleDefinitionOptions.Empty)
+                .SetKind(SimpleRuleKind.Normal)
+                .SetType(RuleType.Ref(splicableRuleSymbol));
+
+              _ = targetNode.AddAndReport(splicableRuleSymbol, splicableRuleSymbol.FirstLocation);
+              _ruleMapTable.Add(ruleSymbol, splicableRuleSymbol);
+              _rewriteOperations.Enqueue(ruleSymbol.Rule, Func.[_, _](splicableRuleSymbol.SetRule));
+              enumerateRules(ruleSymbol.Node, splicableRuleSymbol.Node, splicableRuleSymbol);
+
+            | ExtensionRuleSymbol(IsToken = false) as ruleSymbol =>
+              ()
 
             | _ => ()
           }
         }
       }
       enumerateRules(syntaxModule.Node, splicableSyntaxModule.Node, splicableSyntaxModule)
+    }
+
+    public ConvertRules() : void
+    {
+      while (_rewriteOperations.Count > 0)
+      {
+        def (seq, setter) = _rewriteOperations.Dequeue();
+        def newSeq = RewriteSequence(seq);
+        _ = setter(newSeq);
+      }
+    }
+
+    private RewriteSequence(seq : Rule.Sequence) : Rule.Sequence
+    {
+      def rewrite(_ : Rule) : Rule
+      {
+        | RepeatWithSeparator(minCount, maxCount, item, separator, hangingSeparator) as rule => Rule.RepeatWithSeparator(rule, minCount, maxCount, rewrite(item), rewrite(separator), hangingSeparator)
+        | Repeat(minCount, maxCount, item) as rule => Rule.Repeat(rule, minCount, maxCount, rewrite(item))
+        | Sequence(rules)                  as rule => Rule.Sequence(rule, rules.Map(rewrite))
+        | String                           as rule => rule
+        | Not(item)                        as rule => Rule.Not(rule, rewrite(item))
+        | And(item)                        as rule => Rule.And(rule, rewrite(item))
+        | Call(RuleRef.Some(RuleDefSymbol(IsToken = false) as ruleSymbol), bp) as rule when !(ruleSymbol.Type is RuleType.Void) =>
+          
+
+        | Call as rule => rule
+      }
+      rewrite(seq) :> Rule.Sequence
     }
   }
 }
