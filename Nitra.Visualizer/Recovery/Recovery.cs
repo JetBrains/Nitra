@@ -411,10 +411,10 @@ namespace Nitra.DebugStrategies
           count = rp.Records[maxPos].Count;
           foreach (var sequence in new SCG.HashSet<ParsedSequence>(rp.Records[maxPos].Select(r => r.Sequence)))
           {
-            if (sequence.IsToken)
-              continue;
+            //if (sequence.IsToken)
+            //  continue;
             foreach (var subrule in sequence.ParsedSubrules)
-              if (subrule.State > ParsedSequence.DeletedTokenState && subrule.End == maxPos && !sequence.ParsingSequence.States[subrule.State].IsToken)
+              if (subrule.State > ParsedSequence.DeletedTokenState && subrule.End == maxPos && sequence.ParsingSequence.SequenceInfo != null/*&& !sequence.ParsingSequence.States[subrule.State].IsToken*/)
                 rp.PredictionOrScanning(subrule.Begin, new ParseRecord(sequence, subrule.State, subrule.Begin), false);
           }
           rp.Parse();
