@@ -409,7 +409,7 @@ namespace Nitra.DebugStrategies
         do
         {
           count = rp.Records[maxPos].Count;
-          foreach (var sequence in rp.Records[maxPos].Select(r => r.Sequence).Distinct())
+          foreach (var sequence in new SCG.HashSet<ParsedSequence>(rp.Records[maxPos].Select(r => r.Sequence)))
           {
             if (sequence.IsToken)
               continue;
