@@ -411,17 +411,81 @@ namespace Nitra.DebugStrategies
           count = rp.Records[maxPos].Count;
           foreach (var sequence in new SCG.HashSet<ParsedSequence>(rp.Records[maxPos].Select(r => r.Sequence)))
           {
-            //if (sequence.IsToken)
-            //  continue;
+            if (sequence.IsToken)
+            {
+              if (sequence.ParsingSequence.RuleName == "s")
+              {
+                DeleteTokens(rp, maxPos, sequence, 1);
+                continue;
+              }
+
+              if (sequence.ParsingSequence.RuleName != "S")
+                continue;
+            }
             foreach (var subrule in sequence.ParsedSubrules)
-              if (subrule.State > ParsedSequence.DeletedTokenState && subrule.End == maxPos && sequence.ParsingSequence.SequenceInfo != null/*&& !sequence.ParsingSequence.States[subrule.State].IsToken*/)
+              if (subrule.State > ParsedSequence.DeletedTokenState && subrule.End == maxPos && sequence.ParsingSequence.SequenceInfo != null)
+              {
+                var state = sequence.ParsingSequence.States[subrule.State];
+                if (state.IsToken)
+                {
+                  var simple = state as ParsingState.Simple;
+                  if (simple == null || simple.RuleParser.RuleName != "S" && simple.RuleParser.RuleName != "s")
+                    continue;
+                }
                 rp.PredictionOrScanning(subrule.Begin, new ParseRecord(sequence, subrule.State, subrule.Begin), false);
+              }
           }
           rp.Parse();
         }
         while (count < rp.Records[maxPos].Count);
       }
       while (maxPos < rp.MaxPos);
+    }
+
+    private static void DeleteTokens(RecoveryParser rp, int maxPos, ParsedSequence sequence, int tokensToDelete)
+    {
+      var records = rp.Records[maxPos].ToArray();
+      var text = rp.ParseResult.Text;
+      var parseResult = rp.ParseResult;
+      var grammar = parseResult.RuleParser.Grammar;
+      var res = grammar.ParseAllGrammarTokens(maxPos, parseResult);
+      RemoveEmpty(res, maxPos);
+
+      if (res.Count > 0)
+      {
+        foreach (var nextPos in res)
+        {
+          var res2 = grammar.ParseAllVoidGrammarTokens(nextPos, parseResult);
+          RemoveEmpty(res2, nextPos);
+
+          if (res2.Count == 0)
+          {
+            var skipToken = new ParsedSubrule(maxPos, nextPos, ParsedSequence.DeletedTokenState);
+            rp.SubruleParsed(maxPos, nextPos, new ParseRecord(sequence, 0, maxPos));
+          }
+          else
+            foreach (var nextPos2 in res2)
+            {
+              rp.SubruleParsed(maxPos, nextPos2, new ParseRecord(sequence, 0, maxPos));
+            }
+        }
+      }
+      else if (text.Length != maxPos) // грязь
+      {
+        var i = maxPos + 1;
+        for (; i < text.Length; i++) // крутимся пока не будет распознан токен или достигнут конец строки
+        {
+          var res2 = grammar.ParseAllGrammarTokens(i, parseResult);
+          RemoveEmpty(res2, i);
+          if (res2.Count > 0)
+            break;
+        }
+
+        var skipToken = new ParsedSubrule(maxPos, i, ParsedSequence.DeletedGarbageState); // сабруль пропускающий грязь
+        rp.SubruleParsed(maxPos, i, new ParseRecord(sequence, 0, maxPos));
+
+        rp.Parse();
+      }
     }
 
     private void RecoverAllWays(RecoveryParser rp)
@@ -435,14 +499,6 @@ namespace Nitra.DebugStrategies
         maxPos = rp.MaxPos;
         var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
         var prevRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
-
-        var garbage = TryDeleteTokens(rp, maxPos, records);
-
-        if (garbage > 0)
-        {
-          //maxPos = rp.MaxPos;
-          continue;
-        }
 
         do
         {
