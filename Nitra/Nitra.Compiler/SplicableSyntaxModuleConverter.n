@@ -17,8 +17,8 @@ namespace Nitra.Compiler
 {
   public sealed class SplicableSyntaxModuleConverter
   {
-    _rewriteOperations : SCG.Queue[RuleDefSymbol * Rule.Sequence] = SCG.Queue();
-    _ruleMapTable      : SCG.Dictionary[RuleDefSymbol, RuleDefSymbol]                  = SCG.Dictionary();
+    _rewriteOperations : SCG.List[SyntaxRuleSymbol * SyntaxRuleSymbol]      = SCG.List();
+    _ruleMapTable      : SCG.Dictionary[SyntaxRuleSymbol, SyntaxRuleSymbol] = SCG.Dictionary();
 
     public CreateSymbols(syntaxModule : ParsedSyntaxModuleSymbol) : void
     {
@@ -52,7 +52,7 @@ namespace Nitra.Compiler
 
               _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
               _ruleMapTable.Add(ruleSymbol, rewrittenRuleSymbol);
-              _rewriteOperations.Enqueue(rewrittenRuleSymbol, ruleSymbol.Rule);
+              _rewriteOperations.Add(ruleSymbol, rewrittenRuleSymbol);
               enumerateRules(ruleSymbol.Node, rewrittenRuleSymbol.Node, rewrittenRuleSymbol);
 
             | ExtensionRuleSymbol as ruleSymbol =>
@@ -64,7 +64,7 @@ namespace Nitra.Compiler
                 .SetBaseRule(SymbolRef.Some(Location.Default, true, rewrittenBaseRule));
 
               _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
-              _rewriteOperations.Enqueue(rewrittenRuleSymbol, ruleSymbol.Rule);
+              _rewriteOperations.Add(ruleSymbol, rewrittenRuleSymbol);
               enumerateRules(ruleSymbol.Node, rewrittenRuleSymbol.Node, rewrittenRuleSymbol);
 
             | ExtendSyntaxSymbol as extendSymbol =>
@@ -84,15 +84,30 @@ namespace Nitra.Compiler
       enumerateRules(syntaxModule.Node, splicableSyntaxModule.Node, splicableSyntaxModule)
     }
 
-    public ConvertRules() : void
+    public RewriteRules() : void
     {
-      while (_rewriteOperations.Count > 0)
+      foreach ((sourceRuleSymbol, rewrittenRuleSymbol) in _rewriteOperations)
       {
-        def (ruleSymbol, seq) = _rewriteOperations.Dequeue();
-        def newSeq = RewriteSequence(ruleSymbol, seq);
-        match (ruleSymbol)
+        def newRules = SCG.List();
+        foreach (rule in sourceRuleSymbol.Rule.Rules)
         {
-          | ChemicalBaseSimpleRuleSymbol as s => _ = s.SetRule(newSeq);
+          if (rule.Type is RuleType.Void
+              || rule.Type is RuleType.Chars
+              || rule.Type is RuleType.Ref(RuleDefSymbol(IsToken = true)))
+            newRules.Add(rule)
+          else
+          {
+            def ruleSymbol = MakeSplicableRuleSymbol(rewrittenRuleSymbol.DeclaringModule, rule);
+            newRules.Add(Rule.Call(Location.Default, ruleSymbol.Type, rule.FieldName, SymbolRef.Some(Location.Default, true, ruleSymbol), 0))
+          }
+        }
+
+        def newSeq = Rule.Sequence(Location.Default, Utils.EvaluateSequenceRuleType(newRules), "", newRules.ToNList());
+
+        match (rewrittenRuleSymbol)
+        {
+          | ChemicalBaseSimpleRuleSymbol    as s => _ = s.SetRule(newSeq);
+          | ChemicalBaseExtensionRuleSymbol as s => _ = s.SetRule(newSeq);
           | _ => assert(false)
         }
       }
@@ -112,25 +127,6 @@ namespace Nitra.Compiler
         else
           assert3(false, "cant find rewritten rule")
       }
-    }
-
-    private RewriteSequence(ruleSymbol : RuleDefSymbol, seq : Rule.Sequence) : Rule.Sequence
-    {
-      def newRules = SCG.List();
-      foreach (rule in seq.Rules)
-      {
-        if (rule.Type is RuleType.Void
-            || rule.Type is RuleType.Chars
-            || rule.Type is RuleType.Ref(RuleDefSymbol(IsToken = true)))
-          newRules.Add(rule)
-        else
-        {
-          def ruleSymbol = MakeSplicableRuleSymbol(ruleSymbol.DeclaringModule, rule);
-          newRules.Add(Rule.Call(Location.Default, ruleSymbol.Type, rule.FieldName, SymbolRef.Some(Location.Default, true, ruleSymbol), 0))
-        }
-      }
-
-      Rule.Sequence(seq.Location, Utils.EvaluateSequenceRuleType(newRules), "", newRules.ToNList())
     }
 
     [Memoize]
