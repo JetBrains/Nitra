@@ -34,29 +34,48 @@ namespace Nitra.Compiler
           match (symbol)
           {
             | ExtensibleRuleSymbol(IsToken = false) as ruleSymbol =>
-              def splicableRuleSymbol = ChemicalBaseExtensibleRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name)
+              def rewrittenRuleSymbol = ChemicalBaseExtensibleRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name)
                 .SetDeclarationSite(declarationSite)
                 .SetOptions(RuleDefinitionOptions.Empty);
 
-              _ = targetNode.AddAndReport(splicableRuleSymbol, splicableRuleSymbol.FirstLocation);
-              _ruleMapTable.Add(ruleSymbol, splicableRuleSymbol);
-              enumerateRules(ruleSymbol.Node, splicableRuleSymbol.Node, splicableRuleSymbol);
+              _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
+              _ruleMapTable.Add(ruleSymbol, rewrittenRuleSymbol);
+              enumerateRules(ruleSymbol.Node, rewrittenRuleSymbol.Node, rewrittenRuleSymbol);
 
             | SimpleRuleSymbol(IsToken = false) as ruleSymbol when !(ruleSymbol.Type is RuleType.Void) =>
-              def splicableRuleSymbol = ChemicalBaseSimpleRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name);
-              _ = splicableRuleSymbol
+              def rewrittenRuleSymbol = ChemicalBaseSimpleRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name);
+              _ = rewrittenRuleSymbol
                 .SetDeclarationSite(declarationSite)
                 .SetOptions(RuleDefinitionOptions.Empty)
                 .SetKind(SimpleRuleKind.Normal)
-                .SetType(RuleType.Ref(splicableRuleSymbol));
+                .SetType(RuleType.Ref(rewrittenRuleSymbol));
 
-              _ = targetNode.AddAndReport(splicableRuleSymbol, splicableRuleSymbol.FirstLocation);
-              _ruleMapTable.Add(ruleSymbol, splicableRuleSymbol);
-              _rewriteOperations.Enqueue(splicableRuleSymbol, ruleSymbol.Rule);
-              enumerateRules(ruleSymbol.Node, splicableRuleSymbol.Node, splicableRuleSymbol);
+              _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
+              _ruleMapTable.Add(ruleSymbol, rewrittenRuleSymbol);
+              _rewriteOperations.Enqueue(rewrittenRuleSymbol, ruleSymbol.Rule);
+              enumerateRules(ruleSymbol.Node, rewrittenRuleSymbol.Node, rewrittenRuleSymbol);
 
-            | ExtensionRuleSymbol(IsToken = false) as ruleSymbol =>
-              ()
+            | ExtensionRuleSymbol as ruleSymbol =>
+              def rewrittenBaseRule = GetRewrittenRuleSymbol(ruleSymbol.BaseRule.Value);
+
+              def rewrittenRuleSymbol = ChemicalBaseExtensionRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name)
+                .SetDeclarationSite(declarationSite)
+                .SetOptions(RuleDefinitionOptions.Empty)
+                .SetBaseRule(SymbolRef.Some(Location.Default, true, rewrittenBaseRule));
+
+              _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
+              _rewriteOperations.Enqueue(rewrittenRuleSymbol, ruleSymbol.Rule);
+              enumerateRules(ruleSymbol.Node, rewrittenRuleSymbol.Node, rewrittenRuleSymbol);
+
+            | ExtendSyntaxSymbol as extendSymbol =>
+              def rewrittenBaseRule = GetRewrittenRuleSymbol(extendSymbol.Extend.Value);
+
+              def rewrittenExtendSymbol = ChemicalExtendSyntaxSymbol(extendSymbol.FirstLocation, extendSymbol.Name)
+                .SetDeclarationSite(declarationSite)
+                .SetExtend(SymbolRef.Some(Location.Default, true, rewrittenBaseRule));
+
+              _ = targetNode.AddAndReport(rewrittenExtendSymbol, rewrittenExtendSymbol.FirstLocation);
+              enumerateRules(extendSymbol.Node, rewrittenExtendSymbol.Node, rewrittenExtendSymbol);
 
             | _ => ()
           }
@@ -76,6 +95,22 @@ namespace Nitra.Compiler
           | ChemicalBaseSimpleRuleSymbol as s => _ = s.SetRule(newSeq);
           | _ => assert(false)
         }
+      }
+    }
+
+    private GetRewrittenRuleSymbol[TSymbol](ruleSymbol : TSymbol) : TSymbol
+      where TSymbol : SyntaxRuleSymbol
+    {
+      mutable rewrittenRuleSymbol;
+      if (_ruleMapTable.TryGetValue(ruleSymbol, out rewrittenRuleSymbol))
+        rewrittenRuleSymbol :> TSymbol
+      else
+      {
+        def syntaxModule = ruleSymbol.DeclaringModule;
+        if (syntaxModule.Node.Parent.BindMany.[TSymbol]("Splicable" :: syntaxModule.Name :: ruleSymbol.ModuleRelativeName) is [r])
+          r
+        else
+          assert3(false, "cant find rewritten rule")
       }
     }
 
@@ -101,22 +136,6 @@ namespace Nitra.Compiler
     [Memoize]
     private MakeSplicableRuleSymbol(syntaxModule : SyntaxModuleSymbol, rule : Rule) : ExtensibleRuleSymbol
     {
-      def makeCall[TSymbol](ruleSymbol : TSymbol, bindingPower : int) : Rule.Call
-        where TSymbol : SyntaxRuleSymbol
-      {
-        mutable splicableRuleSymbol;
-        if (_ruleMapTable.TryGetValue(ruleSymbol, out splicableRuleSymbol))
-          Rule.Call(Location.Default, splicableRuleSymbol.Type, "", SymbolRef.Some(Location.Default, true, splicableRuleSymbol), bindingPower)
-        else
-        {
-          def syntaxModule = ruleSymbol.DeclaringModule;
-          if (syntaxModule.Node.Parent.BindMany.[TSymbol]("Splicable" :: syntaxModule.Name :: ruleSymbol.ModuleRelativeName) is [r])
-            Rule.Call(Location.Default, r.Type, "", SymbolRef.Some(Location.Default, true, r), bindingPower)
-          else
-            assert3(false, "cant find splicable rule to call")
-        }
-      }
-
       def rewrite(_ : Rule) : Rule
       {
         | RepeatWithSeparator(minCount, maxCount, item, separator, hangingSeparator) as rule => Rule.RepeatWithSeparator(rule, minCount, maxCount, rewrite(item), rewrite(separator), hangingSeparator)
@@ -125,8 +144,14 @@ namespace Nitra.Compiler
         | String                               as rule => rule
         | Not(item)                            as rule => Rule.Not(rule, rewrite(item))
         | And(item)                            as rule => Rule.And(rule, rewrite(item))
-        | Call(SymbolRef.Some(SimpleRuleSymbol(IsToken = false) as ruleSymbol), bp)     => makeCall(ruleSymbol, bp)
-        | Call(SymbolRef.Some(ExtensibleRuleSymbol(IsToken = false) as ruleSymbol), bp) => makeCall(ruleSymbol, bp)
+        | Call(SymbolRef.Some(SimpleRuleSymbol(IsToken = false) as ruleSymbol), bp)     =>
+          def r = GetRewrittenRuleSymbol(ruleSymbol);
+          Rule.Call(Location.Default, r.Type, "", SymbolRef.Some(Location.Default, true, r), bp)
+
+        | Call(SymbolRef.Some(ExtensibleRuleSymbol(IsToken = false) as ruleSymbol), bp) =>
+          def r = GetRewrittenRuleSymbol(ruleSymbol);
+          Rule.Call(Location.Default, r.Type, "", SymbolRef.Some(Location.Default, true, r), bp)
+
         | Call                                 as rule => rule
       }
 
