@@ -425,8 +425,9 @@ namespace Nitra.DebugStrategies
       return source == Fail || addition == Fail ? Fail : source + addition;
     }
 
-    private void FindMaxFailPos(RecoveryParser rp)
+    private List<ParsedSequence> FindMaxFailPos(RecoveryParser rp)
     {
+      var result = new List<ParsedSequence>(3);
       int maxPos;
       do
       {
@@ -442,7 +443,7 @@ namespace Nitra.DebugStrategies
             {
               if (sequence.ParsingSequence.RuleName == "s")
               {
-                DeleteTokens(rp, maxPos, sequence, 1);
+                result.Add(sequence);
                 continue;
               }
 
@@ -467,6 +468,8 @@ namespace Nitra.DebugStrategies
         while (count < rp.Records[maxPos].Count);
       }
       while (maxPos < rp.MaxPos);
+
+      return result;
     }
 
     private static HashSet<ParsedSequence> GetSequences(RecoveryParser rp, int maxPos)
@@ -534,10 +537,13 @@ namespace Nitra.DebugStrategies
       do
       {
         _failPositions.Add(maxPos);
-        FindMaxFailPos(rp);
+        var deleted = FindMaxFailPos(rp);
         if (maxPos != rp.MaxPos)
           _failPositions.Add(rp.MaxPos);
         maxPos = rp.MaxPos;
+        foreach (var seq in deleted)
+          DeleteTokens(rp, maxPos, seq, 1);
+
         var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
         var prevRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
 
