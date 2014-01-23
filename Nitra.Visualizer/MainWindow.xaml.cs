@@ -489,6 +489,8 @@ namespace Nitra.Visualizer
         _reflectionTreeView.ItemsSource = null;
         var timer = Stopwatch.StartNew();
 
+        RecoveryDebug.CurrentTestName = null;
+
         _parseResult = _currentTestSuit.Run(_text.Text, null, recovery.Strategy);
 
         _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();

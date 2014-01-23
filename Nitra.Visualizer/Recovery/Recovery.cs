@@ -28,6 +28,11 @@ namespace Nitra.Strategies
 #else
 // ReSharper disable once CheckNamespace
 
+static class RecoveryDebug
+{
+  public static string CurrentTestName;
+}
+
 namespace Nitra.DebugStrategies
 #endif
 {
@@ -218,10 +223,10 @@ namespace Nitra.DebugStrategies
 
     private int FindBestPath(ParsedSequence seq, int end, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
-      if (end == 39)
+      if (seq.StartPos == 16)
       { }
-      if (end == 86)
-      { }
+      //if (end == 86)
+      //{ }
       SubruleParsesAndEnd result;
 
       var key = new ParsedSeqKey(seq, end);
@@ -765,7 +770,7 @@ pre
 
     public static void PrintPaths(ParseResult parseResult, HashSet<ParsedNode> deletedToken, FlattenSequences paths)
     {
-      var results = new List<XNode> { new XText(parseResult.DebugText + "\r\n\r\n") };
+      var results = new List<XNode> { new XText(RecoveryDebug.CurrentTestName + "\r\n" + parseResult.DebugText + "\r\n\r\n") };
 
       foreach (var path in paths)
         PrintPath(results, parseResult.Text, deletedToken, path);
