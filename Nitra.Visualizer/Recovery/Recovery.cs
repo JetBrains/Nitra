@@ -574,8 +574,8 @@ namespace Nitra.DebugStrategies
 
       do
       {
-        maxPos = rp.MaxPos;
         deleted.AddRange(FindMaxFailPos(rp));
+        maxPos = rp.MaxPos;
         failPositions.Add(maxPos);
 
         var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
@@ -624,7 +624,7 @@ namespace Nitra.DebugStrategies
       _failPositions.Sort();
 
       foreach (var del in deleted)
-        DeleteTokens(rp, del.Item1, del.Item2, 2);
+        DeleteTokens(rp, del.Item1, del.Item2, 3);
       rp.Parse();
     }
 
