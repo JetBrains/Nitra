@@ -455,9 +455,9 @@ namespace Nitra.DebugStrategies
       return source == Fail || addition == Fail ? Fail : source + addition;
     }
 
-    private List<ParsedSequence> FindMaxFailPos(RecoveryParser rp)
+    private List<Tuple<int, ParsedSequence>> FindMaxFailPos(RecoveryParser rp)
     {
-      var result = new List<ParsedSequence>(3);
+      var result = new List<Tuple<int, ParsedSequence>>(3);
       int maxPos;
       do
       {
@@ -473,7 +473,7 @@ namespace Nitra.DebugStrategies
             {
               if (sequence.ParsingSequence.RuleName == "s")
               {
-                result.Add(sequence);
+                result.Add(Tuple.Create(maxPos, sequence));
                 continue;
               }
 
@@ -570,12 +570,12 @@ namespace Nitra.DebugStrategies
 // ReSharper disable once RedundantAssignment
       int maxPos = rp.MaxPos;
       var failPositions = new HashSet<int>();
-      var deleted = new List<ParsedSequence>();
+      var deleted = new List<Tuple<int, ParsedSequence>>();
 
       do
       {
-        deleted.AddRange(FindMaxFailPos(rp));
         maxPos = rp.MaxPos;
+        deleted.AddRange(FindMaxFailPos(rp));
         failPositions.Add(maxPos);
 
         var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
@@ -623,11 +623,8 @@ namespace Nitra.DebugStrategies
       _failPositions = failPositions.ToList();
       _failPositions.Sort();
 
-      foreach (var fp in _failPositions)
-      {
-        foreach (var seq in deleted)
-          DeleteTokens(rp, maxPos, seq, 2);
-      }
+      foreach (var del in deleted)
+        DeleteTokens(rp, del.Item1, del.Item2, 2);
       rp.Parse();
     }
 
