@@ -549,11 +549,9 @@ namespace Nitra.DebugStrategies
 
       do
       {
-        failPositions.Add(maxPos);
         var deleted = FindMaxFailPos(rp);
-        if (maxPos != rp.MaxPos)
-          failPositions.Add(rp.MaxPos);
         maxPos = rp.MaxPos;
+        failPositions.Add(maxPos);
         foreach (var seq in deleted)
           DeleteTokens(rp, maxPos, seq, 2);
 
