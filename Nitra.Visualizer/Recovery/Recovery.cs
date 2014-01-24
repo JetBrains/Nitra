@@ -86,9 +86,33 @@ namespace Nitra.DebugStrategies
       FindBestPath(startSeq, textLen, memiozation);
       var results = FlattenSequence(new FlattenSequences() { ParsedSequenceAndSubrules.Nil._N_constant_object }, 
         parseResult, startSeq, textLen, memiozation[new ParsedSeqKey(startSeq, textLen)].Field1, memiozation);
+      CollectError(rp, results);
       ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
       _failPositions = null;
       return parseResult.Text.Length;
+    }
+
+    private void CollectError(RecoveryParser rp, FlattenSequences results)
+    {
+      var text = rp.ParseResult.Text;
+
+      foreach (var failPosition in _failPositions)
+      {
+        if (failPosition == text.Length)
+          continue;
+
+        foreach (var result in results)
+        {
+          foreach (var x in result.ToArray().Reverse())
+          {
+            if (x.Field1.Begin < failPosition)
+              continue;
+
+            Debug.WriteLine(x);
+            break;
+          }
+        }
+      }
     }
 
     private FlattenSequences FlattenSubrule(FlattenSequences prevs, ParseResult parseResult, ParsedSequence seq, SubruleParses parses, ParsedSubrule subrule, int subruleInsertedTokens, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
@@ -546,14 +570,13 @@ namespace Nitra.DebugStrategies
 // ReSharper disable once RedundantAssignment
       int maxPos = rp.MaxPos;
       var failPositions = new HashSet<int>();
+      var deleted = new List<ParsedSequence>();
 
       do
       {
-        var deleted = FindMaxFailPos(rp);
+        deleted.AddRange(FindMaxFailPos(rp));
         maxPos = rp.MaxPos;
         failPositions.Add(maxPos);
-        foreach (var seq in deleted)
-          DeleteTokens(rp, maxPos, seq, 2);
 
         var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
         var prevRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
@@ -572,11 +595,6 @@ namespace Nitra.DebugStrategies
             if (record.Sequence.IsToken)
               continue;
 
-            //var predicate = record.ParsingState as ParsingState.Predicate;
-            //if (predicate != null)
-            //  if (!predicate.HeadPredicate.apply(maxPos, rp.ParseResult.Text, rp.ParseResult))
-            //    continue;
-
             foreach (var state in record.ParsingState.Next)
             {
               var newRecord = new ParseRecord(record.Sequence, state, maxPos);
@@ -588,8 +606,6 @@ namespace Nitra.DebugStrategies
             }
 
             rp.SubruleParsed(maxPos, maxPos, record);
-            
-            //if (rp.ParseResult.Text.Length != maxPos)
             rp.PredictionOrScanning(maxPos, record, false);
           }
 
@@ -599,35 +615,20 @@ namespace Nitra.DebugStrategies
             if (!prevRecords.Contains(record))
               records.Enqueue(record);
           prevRecords.UnionWith(rp.Records[maxPos]);
-
-          //if (records.Count == 0)
-          //{
-          //  var count = 0;
-          //  for (int i = maxPos + 1; i < rp.MaxPos; i++)
-          //  {
-          //    var nextRecords = rp.Records[i];
-          //    if (nextRecords == null)
-          //      continue;
-          //    prevRecords.Clear();
-          //    foreach (var record in nextRecords)
-          //    {
-          //      if (record.Sequence.StartPos == maxPos && !record.IsComplete)
-          //      {
-          //        count++;
-          //        records.Enqueue(record);
-          //        prevRecords.Add(record);
-          //      }
-          //    }
-          //    maxPos = i;
-          //    break;
-          //  }
-          //}
-        } while (records.Count > 0);
-        //maxPos = Array.FindIndex(rp.Records, maxPos + 1, IsNotNull);
-      } while (rp.MaxPos > maxPos); //while (maxPos >= 0 && maxPos < textLen);
+        }
+        while (records.Count > 0);
+      }
+      while (rp.MaxPos > maxPos); //while (maxPos >= 0 && maxPos < textLen);
 
       _failPositions = failPositions.ToList();
       _failPositions.Sort();
+
+      foreach (var fp in _failPositions)
+      {
+        foreach (var seq in deleted)
+          DeleteTokens(rp, maxPos, seq, 2);
+      }
+      rp.Parse();
     }
 
     private static void RemoveEmpty(HashSet<int> res, int maxPos)
