@@ -53,7 +53,7 @@ namespace Nitra.DebugStrategies
     public const int Fail = int.MaxValue;
     public ReportData ReportResult;
     private HashSet<ParsedNode> _deletedToken = new HashSet<ParsedNode>();
-    private List<int> _failPositions = new List<int>();
+    private List<int> _failPositions;
 
     public Recovery(ReportData reportResult)
     {
@@ -67,7 +67,7 @@ namespace Nitra.DebugStrategies
 
       var timer = Stopwatch.StartNew();
       _deletedToken.Clear();
-      _failPositions.Clear();
+      _failPositions = null;
       var textLen = parseResult.Text.Length;
       var rp = new RecoveryParser(parseResult);
       rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
@@ -87,6 +87,7 @@ namespace Nitra.DebugStrategies
       var results = FlattenSequence(new FlattenSequences() { ParsedSequenceAndSubrules.Nil._N_constant_object }, 
         parseResult, startSeq, textLen, memiozation[new ParsedSeqKey(startSeq, textLen)].Field1, memiozation);
       ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
+      _failPositions = null;
       return parseResult.Text.Length;
     }
 
@@ -544,13 +545,14 @@ namespace Nitra.DebugStrategies
     {
 // ReSharper disable once RedundantAssignment
       int maxPos = rp.MaxPos;
+      var failPositions = new HashSet<int>();
 
       do
       {
-        _failPositions.Add(maxPos);
+        failPositions.Add(maxPos);
         var deleted = FindMaxFailPos(rp);
         if (maxPos != rp.MaxPos)
-          _failPositions.Add(rp.MaxPos);
+          failPositions.Add(rp.MaxPos);
         maxPos = rp.MaxPos;
         foreach (var seq in deleted)
           DeleteTokens(rp, maxPos, seq, 2);
@@ -623,10 +625,11 @@ namespace Nitra.DebugStrategies
           //  }
           //}
         } while (records.Count > 0);
-
         //maxPos = Array.FindIndex(rp.Records, maxPos + 1, IsNotNull);
-
       } while (rp.MaxPos > maxPos); //while (maxPos >= 0 && maxPos < textLen);
+
+      _failPositions = failPositions.ToList();
+      _failPositions.Sort();
     }
 
     private static void RemoveEmpty(HashSet<int> res, int maxPos)
