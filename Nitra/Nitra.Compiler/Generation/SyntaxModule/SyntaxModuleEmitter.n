@@ -19,7 +19,6 @@ namespace Nitra.Compiler
     public Environment   : EmitterEnvironment { get; }
     public Env           : GlobalEnv          { get; }
     public SyntaxModule  : SyntaxModuleSymbol { get; }
-    public IsGenerateAst : bool               { get { !SyntaxModule.IsSplicable } }
 
     public GrammarTB               : TypeBuilder { get; }
     public GrammarImplTB           : TypeBuilder { get; }
@@ -32,6 +31,7 @@ namespace Nitra.Compiler
     private _allAstEmitters                : List[IAstEmitter] = List();
     private _simpleAstEmitters             : List[IAstEmitter] = List();
     private _extensionAstEmitters          : List[IAstEmitter] = List();
+    private _splicableAstWalkerEmitter     : SplicableAstWalkerEmitter;
     private _astEmitterDefineTypeFunctions : Hashtable[IRuleDeclarationSite, ClassMember.TypeDeclaration -> TypeBuilder] = Hashtable();
 
     public this(environment : EmitterEnvironment, syntaxModule : SyntaxModuleSymbol)
@@ -56,8 +56,10 @@ namespace Nitra.Compiler
       GrammarDescriptorImplTB.DefineConditional(<[ decl: public static StaticDescriptor : this { get { _staticDescriptor } } ]>);
       GrammarTB.DefineConditional(<[ decl: public static StaticDescriptor : Nitra.GrammarDescriptor { get { $(GrammarDescriptorImplTB.GetMemType() : typed).StaticDescriptor } } ]>);
 
-      when (IsGenerateAst)
-        GrammarAstTB            = Env.Define(<[ decl: public partial module $(syntaxModule.Name + "Ast" : usesite) {} ]>);
+      if (SyntaxModule.IsSplicable)
+        _splicableAstWalkerEmitter = SplicableAstWalkerEmitter(Environment, SyntaxModule);
+      else
+        GrammarAstTB = Env.Define(<[ decl: public partial module $(syntaxModule.Name + "Ast" : usesite) {} ]>);
 
       _ruleParserEmitters = SyntaxModule.Node.GetDescendants.[RuleDefSymbol]().FoldLeft([],
         fun(rs : RuleDefSymbol, acc)
@@ -106,17 +108,9 @@ namespace Nitra.Compiler
       unless (prefixRuleSymbols.IsEmpty)     _ruleDescriptorEmitters.Add(PrefixRuleDescriptorEmitter(this, prefixRuleSymbols));
       unless (postfixRuleSymbols.IsEmpty)    _ruleDescriptorEmitters.Add(PostfixRuleDescriptorEmitter(this, postfixRuleSymbols));
 
-      def isAst(symbol) : bool
+      when (GrammarAstTB != null)
       {
-        | SimpleRuleSymbol as symbol => !(symbol.Type is RuleType.Void)
-        | ExtensibleRuleSymbol       => true
-        | ExtensionRuleSymbol        => true
-        | _                          => false
-      }
-
-      when (IsGenerateAst)
-      {
-        foreach (ruleSymbol when isAst(ruleSymbol) in SyntaxModule.Node.GetDescendants.[SyntaxRuleSymbol]())
+        foreach (ruleSymbol when ruleSymbol.Type is RuleType.Ref in SyntaxModule.Node.GetDescendants.[SyntaxRuleSymbol]())
         {
           def emitter = RuleAstEmitter(Environment, ruleSymbol);
           if (ruleSymbol is ExtensionRuleSymbol)
@@ -217,8 +211,9 @@ namespace Nitra.Compiler
         emitter.Emit();
       foreach (emitter in _allAstEmitters)
         emitter.Emit();
-
-      when (IsGenerateAst)
+      when (_splicableAstWalkerEmitter != null)
+        _splicableAstWalkerEmitter.Emit();
+      when (GrammarAstTB != null)
         GrammarAstTB.Compile();
       GrammarDescriptorImplTB.Compile();
       GrammarImplTB.Compile();

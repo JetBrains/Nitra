@@ -34,21 +34,29 @@ namespace Nitra.Compiler
         {
           match (symbol)
           {
-            | ExtensibleRuleSymbol(IsToken = false) as ruleSymbol =>
+            | ExtensibleRuleSymbol as ruleSymbol =>
+              mutable options = RuleDefinitionOptions.Empty;
+              when (ruleSymbol.IsToken)
+                options = options.SetTokenRule(true);
+
               def rewrittenRuleSymbol = ChemicalBaseExtensibleRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name)
                 .SetDeclarationSite(declarationSite)
-                .SetOptions(RuleDefinitionOptions.Empty)
+                .SetOptions(options)
                 .SetIsSplicable(false);
 
               _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
               _ruleMapTable.Add(ruleSymbol, rewrittenRuleSymbol);
               enumerateRules(ruleSymbol.Node, rewrittenRuleSymbol.Node, rewrittenRuleSymbol);
 
-            | SimpleRuleSymbol(IsToken = false) as ruleSymbol when !(ruleSymbol.Type is RuleType.Void) =>
+            | SimpleRuleSymbol as ruleSymbol when !(ruleSymbol.Type is RuleType.Void) =>
+              mutable options = RuleDefinitionOptions.Empty;
+              when (ruleSymbol.IsToken)
+                options = options.SetTokenRule(true);
+
               def rewrittenRuleSymbol = ChemicalBaseSimpleRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name);
               _ = rewrittenRuleSymbol
                 .SetDeclarationSite(declarationSite)
-                .SetOptions(RuleDefinitionOptions.Empty)
+                .SetOptions(options)
                 .SetKind(SimpleRuleKind.Normal)
                 .SetType(RuleType.Ref(rewrittenRuleSymbol));
 
@@ -58,18 +66,22 @@ namespace Nitra.Compiler
               enumerateRules(ruleSymbol.Node, rewrittenRuleSymbol.Node, rewrittenRuleSymbol);
 
             | ExtensionRuleSymbol as ruleSymbol =>
+              mutable options = RuleDefinitionOptions.Empty;
+              when (ruleSymbol.IsToken)
+                options = options.SetTokenRule(true);
+
               def rewrittenBaseRule = GetRewrittenRuleSymbol(ruleSymbol.BaseRule.Value);
 
               def rewrittenRuleSymbol = ChemicalBaseExtensionRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name)
                 .SetDeclarationSite(declarationSite)
-                .SetOptions(RuleDefinitionOptions.Empty)
+                .SetOptions(options)
                 .SetBaseRule(SymbolRef.Some(Location.Default, true, rewrittenBaseRule));
 
               _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
               _rewriteOperations.Add(ruleSymbol, rewrittenRuleSymbol);
               enumerateRules(ruleSymbol.Node, rewrittenRuleSymbol.Node, rewrittenRuleSymbol);
 
-            | ExtendSyntaxSymbol(Extend = SymbolRef.Some(extendingRuleSymbol)) as extendSymbol when !extendingRuleSymbol.IsToken =>
+            | ExtendSyntaxSymbol(Extend = SymbolRef.Some(extendingRuleSymbol)) as extendSymbol =>
               def rewrittenBaseRule = GetRewrittenRuleSymbol(extendingRuleSymbol);
 
               def rewrittenExtendSymbol = ChemicalExtendSyntaxSymbol(extendSymbol.FirstLocation, extendSymbol.Name)
@@ -90,21 +102,16 @@ namespace Nitra.Compiler
     {
       foreach ((sourceRuleSymbol, rewrittenRuleSymbol) in _rewriteOperations)
       {
-        def newRules = SCG.List();
-        foreach (rule in sourceRuleSymbol.Rule.Rules)
-        {
-          if (rule.Type is RuleType.Void
-              || rule.Type is RuleType.Chars
-              || rule.Type is RuleType.Ref(RuleDefSymbol(IsToken = true)))
-            newRules.Add(rule)
-          else
+        def newRules = sourceRuleSymbol.Rule.Rules.Map(rule =>
+          match (rule.Type : RuleType)
           {
-            def ruleSymbol = MakeSplicableRuleSymbol(rewrittenRuleSymbol.DeclaringModule, rule);
-            newRules.Add(Rule.Call(Location.Default, ruleSymbol.Type, rule.FieldName, SymbolRef.Some(Location.Default, true, ruleSymbol), 0))
-          }
-        }
+            | Void | Chars => rule
+            | _ =>
+              def ruleSymbol = MakeSplicableRuleSymbol(rewrittenRuleSymbol.DeclaringModule, rule, rewrittenRuleSymbol.IsToken);
+              Rule.Call(Location.Default, ruleSymbol.Type, rule.FieldName, SymbolRef.Some(Location.Default, true, ruleSymbol), 0)
+          });
 
-        def newSeq = Rule.Sequence(Location.Default, Utils.EvaluateSequenceRuleType(newRules), "", newRules.ToNList());
+        def newSeq = Rule.Sequence(Location.Default, Utils.EvaluateSequenceRuleType(newRules), "", newRules);
 
         match (rewrittenRuleSymbol)
         {
@@ -132,7 +139,7 @@ namespace Nitra.Compiler
     }
 
     [Memoize]
-    private MakeSplicableRuleSymbol(syntaxModule : SyntaxModuleSymbol, rule : Rule) : ExtensibleRuleSymbol
+    private MakeSplicableRuleSymbol(syntaxModule : SyntaxModuleSymbol, rule : Rule, isToken : bool) : ExtensibleRuleSymbol
     {
       def rewrite(_ : Rule) : Rule
       {
@@ -142,20 +149,24 @@ namespace Nitra.Compiler
         | String                               as rule => rule
         | Not(item)                            as rule => Rule.Not(rule, rewrite(item))
         | And(item)                            as rule => Rule.And(rule, rewrite(item))
-        | Call(SymbolRef.Some(SimpleRuleSymbol(IsToken = false) as ruleSymbol), bp)     =>
+        | Call(SymbolRef.Some(SimpleRuleSymbol as ruleSymbol), bp) when !(ruleSymbol.Type is RuleType.Void) =>
           def r = GetRewrittenRuleSymbol(ruleSymbol);
           Rule.Call(Location.Default, r.Type, "", SymbolRef.Some(Location.Default, true, r), bp)
 
-        | Call(SymbolRef.Some(ExtensibleRuleSymbol(IsToken = false) as ruleSymbol), bp) =>
+        | Call(SymbolRef.Some(ExtensibleRuleSymbol as ruleSymbol), bp) =>
           def r = GetRewrittenRuleSymbol(ruleSymbol);
           Rule.Call(Location.Default, r.Type, "", SymbolRef.Some(Location.Default, true, r), bp)
 
         | Call                                 as rule => rule
       }
 
+      mutable options = RuleDefinitionOptions.Empty;
+      when (isToken)
+        options = options.SetTokenRule(true);
+
       def rootSymbol = ChemicalBaseExtensibleRuleSymbol(Location.Default, Nemerle.Compiler.Util.tmpname(rule.FieldName))
         .SetDeclarationSite(syntaxModule)
-        .SetOptions(RuleDefinitionOptions.Empty)
+        .SetOptions(options)
         .SetIsSplicable(true);
       _ = syntaxModule.Node.AddAndReport(rootSymbol, rootSymbol.FirstLocation);
 
@@ -172,7 +183,7 @@ namespace Nitra.Compiler
       def spliceRuleSymbol = ChemicalBaseExtensionRuleSymbol(Location.Default, "Splice")
         .SetDeclarationSite(rootSymbol)
         .SetBaseRule(SymbolRef.Some(Location.Default, true, rootSymbol))
-        .SetOptions(RuleDefinitionOptions.Empty)
+        .SetOptions(options)
         .SetRule(spliceRule);
       _ = rootSymbol.Node.AddAndReport(spliceRuleSymbol, spliceRuleSymbol.FirstLocation);
 
@@ -185,7 +196,7 @@ namespace Nitra.Compiler
       def quoteRuleSymbol = ChemicalBaseExtensionRuleSymbol(Location.Default, "Quote")
         .SetDeclarationSite(rootSymbol)
         .SetBaseRule(SymbolRef.Some(Location.Default, true, rootSymbol))
-        .SetOptions(RuleDefinitionOptions.Empty)
+        .SetOptions(options)
         .SetRule(quoteRule);
       _ = rootSymbol.Node.AddAndReport(quoteRuleSymbol, quoteRuleSymbol.FirstLocation);
 
