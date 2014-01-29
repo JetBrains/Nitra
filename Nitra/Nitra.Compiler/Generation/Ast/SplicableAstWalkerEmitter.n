@@ -13,36 +13,84 @@ using SCG = System.Collections.Generic;
 
 namespace Nitra.Compiler
 {
-  public class SplicableAstWalkerEmitter
+  public class SplicableAstWalkerEmitter : IConstantEmitter
   {
-    _environment        : EmitterEnvironment;
+    public Environment  : EmitterEnvironment { get; }
     _syntaxModuleSymbol : SyntaxModuleSymbol;
     _tb                 : TypeBuilder;
 
     public this(environment : EmitterEnvironment, syntaxModuleSymbol : SyntaxModuleSymbol)
     {
-      _environment        = environment;
+      Environment         = environment;
       _syntaxModuleSymbol = syntaxModuleSymbol;
-      _tb                 = _environment
+      _tb                 = Environment
         .NamespaceOfSymbol(syntaxModuleSymbol)
         .Define(<[ decl: public partial module $(_syntaxModuleSymbol.Name + "AstWalker" : usesite) {} ]>);
+    }
+
+    [Memoize]
+    public CreateConstant(name : string, value : int) : string
+    {
+      Util.CreateConstant(_tb, name, value)
     }
 
     public DefineMembers() : void
     {
       foreach (ruleSymbol when ruleSymbol.Type is RuleType.Ref in _syntaxModuleSymbol.Node.GetDescendants.[SyntaxRuleSymbol]())
       {
-        def body = SCG.List();
-        foreach (subrule when RuleAstEmitter.IsSubruleAcceptedForAst(subrule) in ruleSymbol.Sequence.NonMarkerSubrules)
+        def astPtr = AstPointer.Existing(ruleSymbol.Sequence, this, "astPtr");
+
+        def subruleValues = SCG.List();
+        when (ruleSymbol is ExtensionRuleSymbol(ExtensionType = Postfix))
+          subruleValues.Add(<[ prefix ]>);
+
+        def statements    = SCG.List();
+        foreach (subrule in ruleSymbol.Sequence.NonMarkerSubrules)
         {
-          
-        }
-        _tb.DefineConditional(<[ decl:
-          public $(MakeRuleWalkMethodName(ruleSymbol) : usesite)() : void
+          def parentAstPointer = AstPointerScope(astPtr);
+          if (RuleAstEmitter.IsSubruleAcceptedForAst(subrule))
           {
-            ..$body
+            def varName = subrule.MakeVariableName("ast");
+            statements.Add(<[ def $(varName : usesite) = $(GetSubruleValue(subrule, parentAstPointer)) ]>);
+            subruleValues.Add(<[ $(varName : usesite) ]>);
           }
-        ]>)
+          else
+            statements.Add(WalkerGenerator.Skip(subrule, parentAstPointer));
+        }
+        statements.Add(<[ builder.Syntax($(ruleSymbol.GetRuleDescriptorRef()), startPos, pos, array[..$subruleValues]) ]>);
+
+        match (ruleSymbol)
+        {
+          | SimpleRuleSymbol =>
+            _tb.DefineConditional(<[ decl:
+              public $(MakeRuleWalkMethodName(ruleSymbol) : usesite)[TAst](pos : ref int, parseResult : Nitra.ParseResult, builder : Nitra.ISplicableAstBuilder[TAst]) : TAst
+              {
+                def startPos   = pos;
+                def ruleParser = parseResult.RuleParser.Grammar.GetSimpleRuleParser($(ruleSymbol.GetRuleDescriptorRef()));
+                def astPtr     = parseResult.TryGetAst(pos, ruleParser.RuleId);
+                if (astPtr > 0)
+                {
+                  ..$statements
+                }
+                else
+                  builder.Missing(startPos)
+              }
+            ]>)
+
+          | ExtensionRuleSymbol(ExtensionType = Prefix) =>
+            
+
+          | ExtensionRuleSymbol(ExtensionType = Postfix) =>
+            _tb.DefineConditional(<[ decl:
+              public $(MakeRuleWalkMethodName(ruleSymbol) : usesite)[TAst](pos : ref int, parseResult : Nitra.ParseResult, startPos : int, prefix : TAst, builder : Nitra.ISplicableAstBuilder[TAst]) : TAst
+              {
+                ..$body
+              }
+            ]>)
+
+          | ExtensibleRuleSymbol => ()
+          | _ => assert(false)
+        }
       }
     }
 
@@ -50,7 +98,134 @@ namespace Nitra.Compiler
     {
       _tb.Compile();
     }
-    
+
+    private GetSubruleValue(subrule : SubruleCompileInfo, parentAstPointer : AstPointerScope) : PExpr
+    {
+      match (subrule)
+      {
+        | Empty      as subrule => WalkerGenerator.Skip(subrule, parentAstPointer)
+        | SimpleCall as subrule =>
+          if (subrule.Symbol.Type is RuleType.Void)
+            WalkerGenerator.Skip(subrule, parentAstPointer)
+          else if (subrule.CanParseEmptyString)
+            <[
+              pos += $(parentAstPointer.Access().GetSkip(subrule));
+              $(GetRuleWalkMethodRef(subrule.Symbol))(builder, parseResult, ref pos)
+            ]>
+          else
+            <[
+              pos += $(parentAstPointer.Access().GetSkip(subrule));
+              if ($(parentAstPointer.Access().GetSize(subrule)) > 0)
+                $(GetRuleWalkMethodRef(subrule.Symbol))(builder, parseResult, ref pos)
+              else
+                builder.Missing($(subrule.Symbol.GetRuleDescriptorRef()), pos);
+            ]>
+
+        | ExtensibleCall as subrule =>
+          if (subrule.Symbol.Type is RuleType.Void)
+            WalkerGenerator.Skip(subrule, parentAstPointer)
+          else
+            <[
+              pos += $(parentAstPointer.Access().GetSkip(subrule));
+              if ($(parentAstPointer.Access().GetSize(subrule)) > 0)
+                Nitra.Internal.ExtensibleRuleAstConstructor.[$(Environment.GetAstType(subrule.Symbol) : typed)].Create(ref pos, parseResult, $(subrule.BindingPower : int), $(subrule.Symbol.GetRuleDescriptorRef()));
+              else
+                builder.Missing($(subrule.Symbol.GetRuleDescriptorRef()), pos); // No prefix
+            ]>
+
+        | RegularCall as subrule                => WalkerGenerator.GetTokenValue(subrule, parentAstPointer, <[ builder.Regular($(subrule.Symbol.GetRuleDescriptorRef()), tokenPos, pos) ]>)
+        | List as lst when lst.IsSkipAnyPattern => WalkerGenerator.GetTokenValue(subrule, parentAstPointer, <[ builder.SkipAny(tokenPos, pos) ]>)
+        | TokenString as subrule                => WalkerGenerator.GetTokenValue(subrule, parentAstPointer, <[ builder.Text($(subrule.String : string), tokenPos, pos) ]>)
+        | Option as subrule =>
+          if (subrule.SrcRule.Type is RuleType.Void)
+            WalkerGenerator.Skip(subrule, parentAstPointer)
+          else
+            WalkerGenerator.GetOptionValue(
+              subrule          = subrule,
+              parentAstPointer = parentAstPointer,
+              hasValue         = <[ builder.Some($(GetSequenceValue(subrule.Rule, "valuePointer"))) ]>,
+              noValue          = <[ builder.None(pos) ]>)
+
+        | List as lst =>
+          if (subrule.SrcRule.Type is RuleType.Void)
+            WalkerGenerator.Skip(subrule, parentAstPointer)
+          else
+            WalkerGenerator.GetListValue(
+              subrule          = lst,
+              parentAstPointer = parentAstPointer,
+              init             = <[ def itemBuffer = System.Collections.Generic.List(16) ]>,
+              item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
+              returnCode       = <[ builder.List(itemBuffer) ]>,
+              emptyCode        = <[ builder.EmptyList(pos) ]>);
+
+        | ListWithSeparator as lst=>
+          match (lst.Rule.SrcRule.Type, lst.Separator.SrcRule.Type)
+          {
+            | (Void, Void) => WalkerGenerator.Skip(subrule, parentAstPointer)
+            | (_, Void) =>
+                WalkerGenerator.GetListWithSeparatorValue(
+                  subrule          = lst,
+                  parentAstPointer = parentAstPointer,
+                  init             = <[ def itemBuffer = System.Collections.Generic.List(16) ]>,
+                  item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
+                  separator        = <[ _ = $(GetSequenceValue(lst.Separator, "separatorPointer")) ]>,
+                  returnCode       = <[ builder.List(itemBuffer) ]>,
+                  emptyCode        = <[ builder.EmptyList(pos) ]>);
+
+            | (Void, _) =>
+                WalkerGenerator.GetListWithSeparatorValue(
+                  subrule          = lst,
+                  parentAstPointer = parentAstPointer,
+                  init             = <[ def separatorBuffer = System.Collections.Generic.List(16) ]>,
+                  item             = <[ _ = $(GetSequenceValue(lst.Rule, "itemPointer")) ]>,
+                  separator        = <[ separatorBuffer.Add($(GetSequenceValue(lst.Separator, "separatorPointer"))) ]>,
+                  returnCode       = <[ builder.List(separatorBuffer) ]>,
+                  emptyCode        = <[ builder.EmptyList(pos) ]>);
+
+            | _ =>
+              WalkerGenerator.GetListWithSeparatorValue(
+                subrule          = lst,
+                parentAstPointer = parentAstPointer,
+                init             = <[ def itemBuffer = System.Collections.Generic.List(16); def separatorBuffer = System.Collections.Generic.List(16); ]>,
+                item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
+                separator        = <[ separatorBuffer.Add($(GetSequenceValue(lst.Separator, "separatorPointer"))) ]>,
+                returnCode       = <[ builder.Tuple(builder.List(itemBuffer), builder.List(separatorBuffer)) ]>,
+                emptyCode        = <[ builder.Tuple(builder.EmptyList(pos), builder.EmptyList(pos)) ]>);
+          }
+
+        | Marker => <[ () ]>
+      }
+    }
+
+    private GetSequenceValue(sequence : SequenceCompileInfo, name : string) : PExpr
+    {
+      def astPointer    = AstPointerScope(sequence, name, this);
+      def statements    = SCG.List();
+      def subruleValues = SCG.List();
+
+      foreach (subrule in sequence.NonMarkerSubrules)
+      {
+        if (RuleAstEmitter.IsSubruleAcceptedForAst(subrule))
+        {
+          def varName = subrule.MakeVariableName("ast");
+          statements.Add(<[ def $(varName : usesite) = $(GetSubruleValue(subrule, astPointer)) ]>);
+          subruleValues.Add(<[ $(varName : usesite) ]>);
+        }
+        else
+          statements.Add(WalkerGenerator.Skip(subrule, astPointer));
+      }
+
+      match (subruleValues.Count)
+      {
+        | 0 => ()
+        | 1 => statements.Add(subruleValues[0]);
+        | _ => statements.Add(<[ builder.Tuple(..$subruleValues)]>);
+      }
+
+      astPointer.Compile(<[ { ..$statements } ]>)
+    }
+
+
     private static MakeRuleWalkMethodName(ruleSymbol : SyntaxRuleSymbol) : string
     {
       $<#..$(ruleSymbol.ModuleRelativeName; "_")#>
@@ -58,8 +233,9 @@ namespace Nitra.Compiler
 
     private static GetRuleWalkMethodRef(ruleSymbol : SyntaxRuleSymbol) : PExpr
     {
-      def moduleRef = PExprUtils.FromQualifiedIdentifier(ruleSymbol.DeclaringModule.Node.FullNameParts);
-      <[ $moduleRef.$(MakeRuleWalkMethodName(ruleSymbol) : usesite) ]>
+      def syntaxModule = ruleSymbol.DeclaringModule;
+      def fullName     = syntaxModule.Node.Parent.FullNameParts + [syntaxModule.Name + "AstWalker", MakeRuleWalkMethodName(ruleSymbol)];
+      PExprUtils.FromQualifiedIdentifier(fullName);
     }
   }
 }
