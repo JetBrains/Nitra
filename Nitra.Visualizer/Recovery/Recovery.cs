@@ -52,7 +52,7 @@ namespace Nitra.DebugStrategies
   {
     public const int Fail = int.MaxValue;
     public ReportData ReportResult;
-    private HashSet<ParsedNode> _deletedToken = new HashSet<ParsedNode>();
+    private readonly Dictionary<ParsedNode, bool> _deletedToken = new Dictionary<ParsedNode, bool>();
     private List<int> _failPositions;
 
     public Recovery(ReportData reportResult)
@@ -128,7 +128,7 @@ namespace Nitra.DebugStrategies
 
       var currentNodes = new FlattenSequences();
       //var subruledDesc = seq.GetSubruleDescription(subrule.State);
-      if (subrule.IsEmpty || CanSkipSubrule(seq, subrule))
+      if (subrule.IsEmpty)
       {
         //if (subruleInsertedTokens > 0)
         //  Debug.WriteLine("Inserted = " + subruleInsertedTokens + "  -  " + subruledDesc + "  Seq: " + seq);
@@ -138,8 +138,7 @@ namespace Nitra.DebugStrategies
         var sequences = seq.GetSequencesForSubrule(subrule).ToArray();
 
         if (sequences.Length > 1)
-        {
-        }
+        { }
 
         foreach (var subSequences in sequences)
         {
@@ -277,11 +276,8 @@ namespace Nitra.DebugStrategies
       foreach (var subrule in validSubrules)
       {
         var localMin = Fail;
-
-        if (_deletedToken.Contains(new ParsedNode(seq, subrule)))
+        if (_deletedToken.ContainsKey(new ParsedNode(seq, subrule)))
           localMin = 1; // оцениваем удаление как одну вставку
-        else if (CanSkipSubrule(seq, subrule))
-          localMin = 0;
         else
           localMin = LocalMinForSubSequence(seq, memiozation, subrule, localMin);
  
@@ -321,6 +317,7 @@ namespace Nitra.DebugStrategies
     {
       var subSeqs = seq.GetSequencesForSubrule(subrule).ToArray();
       var hasSequence = false;
+
       foreach (var subSeq in subSeqs)
       {
         hasSequence = true;
@@ -332,11 +329,7 @@ namespace Nitra.DebugStrategies
 
       if (!hasSequence)
       {
-        if (subrule.State == ParsedSequence.DeletedTokenState)
-          localMin = 1; // оцениваем удаление на треть дороже вставки
-        else if (subrule.State == ParsedSequence.DeletedGarbageState)
-          localMin = 0; // грязь не оценивается
-        else if (subrule.IsEmpty)
+        if (subrule.IsEmpty)
           localMin = seq.SubruleMandatoryTokenCount(subrule);
         else
           localMin = 0;
@@ -457,6 +450,7 @@ namespace Nitra.DebugStrategies
 
     private List<Tuple<int, ParsedSequence>> FindMaxFailPos(RecoveryParser rp)
     {
+      // В следстии особенностей работы основного парсере некоторые правила могут с
       var result = new List<Tuple<int, ParsedSequence>>(3);
       int maxPos;
       do
@@ -465,14 +459,33 @@ namespace Nitra.DebugStrategies
         int count;
         do
         {
-          count = rp.Records[maxPos].Count;
+          var records = rp.Records[maxPos].ToArray(); // to materialize collection
+
+          // Среди текущих состояний могут быть эски. Находим их и засовываем их кишки в Эрли.
+          foreach (var record in records)
+            if (record.State >= 0)
+            {
+              var state = record.ParsingState;
+              if (state.IsToken)
+              {
+                var simple = state as ParsingState.Simple;
+                if (simple == null || simple.RuleParser.RuleName != "S" && simple.RuleParser.RuleName != "s")
+                  continue;
+                rp.PredictionOrScanning(maxPos, record, false);
+              }
+            }
+
+          count = records.Length;
           var sequences = GetSequences(rp, maxPos).ToArray();
           foreach (var sequence in sequences)
           {
             if (sequence.IsToken)
             {
+              // если последовательность - это эска, пробуем удалить за ней грязь или добавить ее в result для дальнешей попытки удаления токенов.
               if (sequence.ParsingSequence.RuleName == "s")
               {
+                if (TryDeleteGarbage(rp, maxPos, sequence))
+                  continue;
                 result.Add(Tuple.Create(maxPos, sequence));
                 continue;
               }
@@ -480,8 +493,10 @@ namespace Nitra.DebugStrategies
               if (sequence.ParsingSequence.RuleName != "S")
                 continue;
             }
+            // Если в последовательнсости есть пропарсивания оканчивающиеся на место падения, добавляем кишки этого состояния в Эрли.
+            // Это позволит, на следующем шаге, поискать в них эски.
             foreach (var subrule in sequence.ParsedSubrules)
-              if (subrule.State > ParsedSequence.DeletedTokenState && subrule.End == maxPos && sequence.ParsingSequence.SequenceInfo != null)
+              if (subrule.State >= 0 && subrule.End == maxPos && sequence.ParsingSequence.SequenceInfo != null)
               {
                 var state = sequence.ParsingSequence.States[subrule.State];
                 if (state.IsToken)
@@ -507,12 +522,44 @@ namespace Nitra.DebugStrategies
       return new SCG.HashSet<ParsedSequence>(rp.Records[maxPos].Select(r => r.Sequence));
     }
 
-    //private struct DeleteInfo
-    //{
-    //  maxPos, nextPos, new ParseRecord(sequence, 0, maxPos)
-    //}
-
     const int s_loopState = 0;
+
+
+
+    /// <summary>
+    /// В позиции облома может находиться "грязь", т.е. набор символов которые не удается разобрать ни одним правилом токена
+    /// доступным в CompositeGrammar в данном месте. Ни одно правило не сможет спарсить этот код, так что просто ищем 
+    /// следующий корректный токе и пропускаем все что идет до него (грязь).
+    /// </summary>
+    /// <returns>true - если грязь была удалена</returns>
+    private bool TryDeleteGarbage(RecoveryParser rp, int maxPos, ParsedSequence sequence)
+    {
+      var text = rp.ParseResult.Text;
+      if (maxPos >= text.Length)
+        return false;
+      var parseResult = rp.ParseResult;
+      var grammar = parseResult.RuleParser.Grammar;
+      var res = grammar.ParseAllGrammarTokens(maxPos, parseResult);
+      RemoveEmpty(res, maxPos);
+
+      if (res.Count == 0)
+      {
+        var i = maxPos + 1;
+        for (; i < text.Length; i++) // крутимся пока не будет распознан токен или достигнут конец строки
+        {
+          var res2 = grammar.ParseAllGrammarTokens(i, parseResult);
+          RemoveEmpty(res2, i);
+          if (res2.Count > 0)
+            break;
+        }
+
+        _deletedToken[new ParsedNode(sequence, new ParsedSubrule(maxPos, i, s_loopState))] = true;
+        rp.SubruleParsed(maxPos, i, new ParseRecord(sequence, 0, maxPos));
+        return true;
+      }
+
+      return false;
+    }
 
     private void DeleteTokens(RecoveryParser rp, int maxPos, ParsedSequence sequence, int tokensToDelete)
     {
@@ -525,29 +572,16 @@ namespace Nitra.DebugStrategies
       var res = grammar.ParseAllGrammarTokens(maxPos, parseResult);
       RemoveEmpty(res, maxPos);
 
-      if (!res.IsEmpty())
-      {
-        foreach (var nextPos in res)
-          ContinueDeleteTokens(rp, sequence, maxPos, nextPos, tokensToDelete);
-      }
-      else if (text.Length != maxPos) // грязь
-      {
-        var i = maxPos + 1;
-        for (; i < text.Length; i++) // крутимся пока не будет распознан токен или достигнут конец строки
-        {
-          var res2 = grammar.ParseAllGrammarTokens(i, parseResult);
-          RemoveEmpty(res2, i);
-          if (res2.Count > 0)
-            break;
-        }
+      if (res.Count == 0)
+        return;
 
-        ContinueDeleteTokens(rp, sequence, maxPos, i, tokensToDelete);
-      }
+      foreach (var nextPos in res)
+        ContinueDeleteTokens(rp, sequence, maxPos, nextPos, tokensToDelete);
     }
 
     private void ContinueDeleteTokens(RecoveryParser rp, ParsedSequence sequence, int maxPos, int nextPos, int tokensToDelete)
     {
-      _deletedToken.Add(new ParsedNode(sequence, new ParsedSubrule(maxPos, nextPos, s_loopState)));
+      _deletedToken[new ParsedNode(sequence, new ParsedSubrule(maxPos, nextPos, s_loopState))] = false;
       rp.SubruleParsed(maxPos, nextPos, new ParseRecord(sequence, 0, maxPos));
 
       var parseResult = rp.ParseResult;
@@ -559,7 +593,7 @@ namespace Nitra.DebugStrategies
         DeleteTokens(rp, nextPos, sequence, tokensToDelete - 1);
       foreach (var nextPos2 in res2)
       {
-        _deletedToken.Add(new ParsedNode(sequence, new ParsedSubrule(maxPos, nextPos2, s_loopState)));
+        _deletedToken[new ParsedNode(sequence, new ParsedSubrule(maxPos, nextPos2, s_loopState))] = false;
         rp.SubruleParsed(nextPos, nextPos2, new ParseRecord(sequence, s_loopState, maxPos));
         DeleteTokens(rp, nextPos2, sequence, tokensToDelete - 1);
       }
@@ -707,8 +741,8 @@ pre
 
 .garbage
 {
-  color: red;
-  background: lightpink;
+  color: rgb(243, 212, 166);
+  background: rgb(170, 134, 80);
 }
 
 .deleted
@@ -767,7 +801,7 @@ pre
     static readonly XElement  _start              = new XElement("span", _default, "▸");
     static readonly XElement  _end                = new XElement("span", _default, "◂");
 
-    public static void PrintPaths(ParseResult parseResult, HashSet<ParsedNode> deletedToken, FlattenSequences paths)
+    public static void PrintPaths(ParseResult parseResult, Dictionary<ParsedNode, bool> deletedToken, FlattenSequences paths)
     {
       var results = new List<XNode> { new XText(RecoveryDebug.CurrentTestName + "\r\n" + parseResult.DebugText + "\r\n\r\n") };
 
@@ -783,7 +817,7 @@ pre
       Process.Start(filePath);
     }
 
-    public static void PrintPath(List<XNode> results, string text, HashSet<ParsedNode> deletedToken, ParsedSequenceAndSubrules path)
+    public static void PrintPath(List<XNode> results, string text, Dictionary<ParsedNode, bool> deletedToken, ParsedSequenceAndSubrules path)
     {
       var isPrevInsertion = false;
 
@@ -794,11 +828,12 @@ pre
         var insertedTokens = node.Field2;
         var seq = node.Field3;
 
-        if (deletedToken.Contains(new ParsedNode(seq, subrule)))
+        bool isGarbage;
+        if (deletedToken.TryGetValue(new ParsedNode(seq, subrule), out isGarbage))
         {
           isPrevInsertion = false;
           var title = new XAttribute("title", "Deleted token;  Subrule: " + subrule + ";  Sequence: " + seq + ";");
-          results.Add(new XElement("span", subrule.State == ParsedSequence.DeletedTokenState ? _deletedClass : _garbageClass, 
+          results.Add(new XElement("span", isGarbage ? _garbageClass : _deletedClass, 
             title, text.Substring(subrule.Begin, subrule.End - subrule.Begin)));
         }
         else if (insertedTokens > 0)
