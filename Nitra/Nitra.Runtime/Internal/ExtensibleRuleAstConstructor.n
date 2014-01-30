@@ -1,5 +1,4 @@
 ﻿using Nitra;
-using Nitra.Runtime;
 
 using Nemerle;
 using Nemerle.Collections;
@@ -9,95 +8,12 @@ using Nemerle.Imperative;
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
-using System.Reflection.Emit;
 
 namespace Nitra.Internal
 {
-  public sealed class ExtensibleRuleAstConstructor : ExtensibleRuleAstConstructorBase
+  public module ExtensibleRuleAstConstructor
   {
-    public static Instance : ExtensibleRuleAstConstructor = ExtensibleRuleAstConstructor();
-
-    private this() {}
-
-    protected override CreateAmbiguous[T](sourceSnapshot : ISourceSnapshotProvider, prefixStartPos : int, pos : int, ambiguilitys : array[T]) : T
-    {
-      Constructors.CreateAmbiguous(sourceSnapshot, prefixStartPos, pos, ambiguilitys)
-    }
-
-    protected override CreateMissing[T](sourceSnapshot : ISourceSnapshotProvider, pos : int) : T
-    {
-      Constructors.CreateMissing(sourceSnapshot, pos)
-    }
-
-    protected override CreatePrefix[T](pos : ref int, astPtr : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult) : T
-    {
-      def astCtor = Constructors.GetPrefixConstructor(ruleParser.Descriptor);
-      astCtor(ref pos, astPtr, parseResult)
-    }
-
-    protected override CreatePostfix[T](prefix : T, prefixStartPos : int, pos : ref int, astPtr : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult) : T
-    {
-      def astCtor = Constructors.GetPostfixConstructor(ruleParser.Descriptor);
-      astCtor(prefix, prefixStartPos, ref pos, astPtr, parseResult)
-    }
-
-    private module Constructors[T]
-    {
-      public CreateAmbiguous : Func[ISourceSnapshotProvider, int, int, array[T], T] =
-      {
-        def ambiguousAstType = typeof(T).GetNestedType("AmbiguousAst");
-        assert2(ambiguousAstType != null);
-
-        MakeConstructorDelegate(ambiguousAstType, array[typeof(ISourceSnapshotProvider), typeof(int), typeof(int), typeof(array[T])])
-      };
-
-      public CreateMissing : Func[ISourceSnapshotProvider, int, T] =
-      {
-        def missingAstType = typeof(T).GetNestedType("MissingAst");
-        assert2(missingAstType != null);
-
-        MakeConstructorDelegate(missingAstType, array[typeof(ISourceSnapshotProvider), typeof(int)])
-      };
-
-      public delegate PrefixAstCtor(pos : ref int, astPtr : int, parseResult : ParseResult) : T;
-      public PrefixAstCtorSignature : array[Type] = array[typeof(int).MakeByRefType(), typeof(int), typeof(ParseResult)];
-
-      [Memoize]
-      public GetPrefixConstructor(ruleDescriptor : RuleDescriptor) : PrefixAstCtor
-      {
-        MakeConstructorDelegate(ReflectionHelper.GetParsedAstType(ruleDescriptor), PrefixAstCtorSignature);
-      }
-
-      public delegate PostfixAstCtor(prefix : T, prefixStartPos : int, pos : ref int, astPtr : int, parseResult : ParseResult) : T;
-      public PostfixAstCtorSignature : array[Type] = array[typeof(T), typeof(int), typeof(int).MakeByRefType(), typeof(int), typeof(ParseResult)];
-
-      [Memoize]
-      public GetPostfixConstructor(ruleDescriptor : RuleDescriptor) : PostfixAstCtor
-      {
-        MakeConstructorDelegate(ReflectionHelper.GetParsedAstType(ruleDescriptor), PostfixAstCtorSignature)
-      }
-
-      private MakeConstructorDelegate[TDelegate](type : Type, signature : array[Type]) : TDelegate
-      {
-        def ctor = type.GetConstructor(signature);
-        assert2(ctor != null);
-
-        def dm = DynamicMethod("", typeof(T), signature, true);
-        def il = dm.GetILGenerator();
-        for (mutable index = 0; index < signature.Length; ++index)
-          il.Emit(OpCodes.Ldarg, index);
-        il.Emit(OpCodes.Newobj, ctor);
-        il.Emit(OpCodes.Ret);
-        dm.CreateDelegate(typeof(TDelegate)) :> TDelegate
-      }
-    }
-  }
-
-  public abstract class ExtensibleRuleAstConstructorBase
-  {
-    public Create[T](pos : ref int, parseResult : ParseResult, bindingPower : int, ruleDescriptor : ExtensibleRuleDescriptor) : T
+    public Create[T](pos : ref int, parseResult : ParseResult, bindingPower : int, ruleDescriptor : ExtensibleRuleDescriptor, astFactory : IExtensibleRuleAstFactory[T]) : T
     {
       def ruleParser = parseResult.RuleParser.Grammar.GetExtensibleRuleParser(ruleDescriptor, bindingPower);
 
@@ -112,7 +28,7 @@ namespace Nitra.Internal
       {
         mutable extensionParser = ruleParser.ParserData.PrefixParsers[(parseResult.ast[ast + ExtensibleRuleParser.AstOfs.Id] & ExtensibleRuleParser.AstMask.Id) - prefixWalkersOffset];
         newPos = pos;
-        prefixValue = CreatePrefix(ref newPos, ast, extensionParser, parseResult);
+        prefixValue = astFactory.CreatePrefix(ref newPos, ast, extensionParser, parseResult);
         ast = ruleParser.FindNextPrefix(ast, parseResult);
         when (ast > 0)
         {
@@ -123,21 +39,21 @@ namespace Nitra.Internal
           {
             def nextExtensionParser = ruleParser.ParserData.PrefixParsers[(parseResult.ast[ast + ExtensibleRuleParser.AstOfs.Id] & ExtensibleRuleParser.AstMask.Id) - prefixWalkersOffset];
             newPos = pos;
-            def _nextValue = CreatePrefix(ref newPos, ast, nextExtensionParser, parseResult);
+            def _nextValue = astFactory.CreatePrefix(ref newPos, ast, nextExtensionParser, parseResult);
             assert(newPos == firstNewPos);
             ambiguilitys.Add(_nextValue);
             extensionParser = nextExtensionParser;
             ast = ruleParser.FindNextPrefix(ast, parseResult);
           }
           // prefix ambiguity
-          prefixValue = CreateAmbiguous(parseResult, prefixStartPos, firstNewPos, ambiguilitys.ToArray());
+          prefixValue = astFactory.CreateAmbiguous(parseResult, prefixStartPos, firstNewPos, ambiguilitys.ToArray());
         }
         pos = newPos;
       }
       else
       {
         // missing prefix
-        prefixValue = CreateMissing(parseResult, prefixStartPos);
+        prefixValue = astFactory.CreateMissing(parseResult, prefixStartPos);
       }
 
       mutable extensionParser;
@@ -146,7 +62,7 @@ namespace Nitra.Internal
       {
         extensionParser = ruleParser.ParserData.PostfixParsers[(parseResult.ast[ast + ExtensibleRuleParser.AstOfs.Id] & ExtensibleRuleParser.AstMask.Id) - postfixWalkersOffset];
         newPos = pos;
-        postfixValue = CreatePostfix(prefixValue, prefixStartPos, ref newPos, ast, extensionParser, parseResult);
+        postfixValue = astFactory.CreatePostfix(prefixValue, prefixStartPos, ref newPos, ast, extensionParser, parseResult);
         when (newPos == pos)
           break;
         ast = ruleParser.FindNextPostfix(ast, parseResult);
@@ -159,14 +75,14 @@ namespace Nitra.Internal
           {
             def nextExtensionParser = ruleParser.ParserData.PostfixParsers[(parseResult.ast[ast + ExtensibleRuleParser.AstOfs.Id] & ExtensibleRuleParser.AstMask.Id) - postfixWalkersOffset];
             newPos = pos;
-            def _nextValue = CreatePostfix(prefixValue, prefixStartPos, ref newPos, ast, nextExtensionParser, parseResult);
+            def _nextValue = astFactory.CreatePostfix(prefixValue, prefixStartPos, ref newPos, ast, nextExtensionParser, parseResult);
             assert(newPos == firstNewPos);
             ambiguilitys.Add(_nextValue);
             extensionParser = nextExtensionParser;
             ast = ruleParser.FindNextPostfix(ast, parseResult);
           }
           // postfix ambiguity
-          postfixValue = CreateAmbiguous(parseResult, pos, firstNewPos, ambiguilitys.ToArray());
+          postfixValue = astFactory.CreateAmbiguous(parseResult, pos, firstNewPos, ambiguilitys.ToArray());
         }
         prefixValue = postfixValue;
         pos = newPos;
@@ -174,13 +90,5 @@ namespace Nitra.Internal
 
       prefixValue
     }
-
-    protected abstract CreateAmbiguous[T](sourceSnapshot : ISourceSnapshotProvider, prefixStartPos : int, pos : int, ambiguilitys : array[T]) : T;
-
-    protected abstract CreateMissing[T](sourceSnapshot : ISourceSnapshotProvider, pos : int) : T;
-
-    protected abstract CreatePrefix[T](pos : ref int, astPtr : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult) : T;
-
-    protected abstract CreatePostfix[T](prefix : T, prefixStartPos : int, pos : ref int, astPtr : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult) : T;
   }
 }
