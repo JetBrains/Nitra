@@ -34,6 +34,73 @@ namespace Nitra.Compiler
       Util.CreateConstant(_tb, name, value)
     }
 
+    private variant ChemicalRuleType
+    {
+      | Void
+      | Ast
+      | Tuple { members : list[ChemicalRuleType] }
+      | StaticString
+      | String
+      | Bool
+      | Option { item : ChemicalRuleType }
+      | Int
+      | List   { item : ChemicalRuleType }
+    }
+
+    private static GetChemicalRuleType(ruleType : RuleType) : ChemicalRuleType
+    {
+      | Void        => ChemicalRuleType.Void()
+      | Chars(Some) => ChemicalRuleType.StaticString()
+      | Chars(None) => ChemicalRuleType.String()
+      | Ref         => ChemicalRuleType.Ast()
+      | List(t) =>
+        match (GetChemicalRuleType(t))
+        {
+          | Void             => ChemicalRuleType.Void()
+          | StaticString     => ChemicalRuleType.Int()
+          | any              => ChemicalRuleType.List(any)
+        }
+
+      | Option(t)   =>
+        match (GetChemicalRuleType(t))
+        {
+          | Void             => ChemicalRuleType.Void()
+          | StaticString     => ChemicalRuleType.Bool()
+          | any              => ChemicalRuleType.Option(any)
+        }
+
+      | Tuple(ts) =>
+        def members = SCG.List();
+        mutable hasStaticString;
+        foreach (t in ts)
+          match (GetChemicalRuleType(t))
+          {
+            | Void          => ()
+            | StaticString  => hasStaticString = true;
+            | any           => members.Add(any);
+          }
+        match (members.Count)
+        {
+          | 0 => 
+            if (hasStaticString)
+              ChemicalRuleType.StaticString()
+            else
+              ChemicalRuleType.Void()
+
+          | 1 => members[0]
+          | _ => ChemicalRuleType.Tuple(members.ToNList())
+        }
+    }
+
+    private static IsSubruleAcceptedForAst(subrule : SubruleCompileInfo) : bool
+    {
+      match (GetChemicalRuleType(subrule.SrcRule.Type))
+      {
+        | Void | StaticString => false
+        | _                   => true
+      }
+    }
+
     public DefineMembers() : void
     {
       def compileRule(ruleSymbol : SyntaxRuleSymbol)
@@ -48,7 +115,7 @@ namespace Nitra.Compiler
         foreach (subrule in ruleSymbol.Sequence.NonMarkerSubrules)
         {
           def parentAstPointer = AstPointerScope(astPtr);
-          if (RuleAstEmitter.IsSubruleAcceptedForAst(subrule))
+          if (IsSubruleAcceptedForAst(subrule))
           {
             def varName = subrule.MakeVariableName("ast");
             statements.Add(<[ def $(varName : usesite) = $(GetSubruleValue(subrule, parentAstPointer)) ]>);
@@ -66,7 +133,7 @@ namespace Nitra.Compiler
         | SimpleRuleSymbol when ruleSymbol.Type is RuleType.Ref =>
           def statements = compileRule(ruleSymbol);
           _tb.DefineConditional(<[ decl:
-            public $(MakeRuleWalkMethodName(ruleSymbol) : usesite)[TAst](pos : ref int, parseResult : Nitra.ParseResult, builder : Nitra.ISplicableAstBuilder[TAst]) : TAst
+            public $(MakeRuleWalkMethodName(ruleSymbol) : usesite)[TAst](pos : ref int, parseResult : Nitra.ParseResult, builder : Nitra.Internal.ISplicableAstBuilder[TAst]) : TAst
             {
               unchecked
               {
@@ -87,7 +154,7 @@ namespace Nitra.Compiler
         | ExtensionRuleSymbol(ExtensionType = Prefix) =>
           def statements = compileRule(ruleSymbol);
           _tb.DefineConditional(<[ decl:
-            public $(MakeRuleWalkMethodName(ruleSymbol) : usesite)[TAst](pos : ref int, astPtr : int, ruleParser : Nitra.Internal.ExtensionRuleParser, parseResult : ParseResult, builder : Nitra.ISplicableAstBuilder[TAst]) : TAst
+            public $(MakeRuleWalkMethodName(ruleSymbol) : usesite)[TAst](pos : ref int, astPtr : int, ruleParser : Nitra.Internal.ExtensionRuleParser, parseResult : ParseResult, builder : Nitra.Internal.ISplicableAstBuilder[TAst]) : TAst
             {
               unchecked
               {
@@ -102,7 +169,7 @@ namespace Nitra.Compiler
         | ExtensionRuleSymbol(ExtensionType = Postfix) =>
           def statements = compileRule(ruleSymbol);
           _tb.DefineConditional(<[ decl:
-            public $(MakeRuleWalkMethodName(ruleSymbol) : usesite)[TAst](prefix : T, prefixStartPos : int, pos : ref int, astPtr : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult, builder : Nitra.ISplicableAstBuilder[TAst]) : TAst
+            public $(MakeRuleWalkMethodName(ruleSymbol) : usesite)[TAst](prefix : T, prefixStartPos : int, pos : ref int, astPtr : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult, builder : Nitra.Internal.ISplicableAstBuilder[TAst]) : TAst
             {
               unchecked
               {
@@ -159,66 +226,145 @@ namespace Nitra.Compiler
 
         | RegularCall as subrule                => WalkerGenerator.GetTokenValue(subrule, parentAstPointer, <[ builder.Regular($(subrule.Symbol.GetRuleDescriptorRef()), tokenPos, pos) ]>)
         | List as lst when lst.IsSkipAnyPattern => WalkerGenerator.GetTokenValue(subrule, parentAstPointer, <[ builder.SkipAny(tokenPos, pos) ]>)
-        | TokenString as subrule                => WalkerGenerator.GetTokenValue(subrule, parentAstPointer, <[ builder.Text($(subrule.String : string), tokenPos, pos) ]>)
+        | TokenString as subrule                => WalkerGenerator.Skip(subrule, parentAstPointer)
         | Option as subrule =>
-          if (subrule.SrcRule.Type is RuleType.Void)
-            WalkerGenerator.Skip(subrule, parentAstPointer)
-          else
-            WalkerGenerator.GetOptionValue(
-              subrule          = subrule,
-              parentAstPointer = parentAstPointer,
-              hasValue         = <[ builder.Some($(GetSequenceValue(subrule.Rule, "valuePointer"))) ]>,
-              noValue          = <[ builder.None(pos) ]>)
+          match (GetChemicalRuleType(subrule.SrcRule.Type))
+          {
+            | Option =>
+              WalkerGenerator.GetOptionValue(
+                subrule          = subrule,
+                parentAstPointer = parentAstPointer,
+                hasValue         = <[ builder.OptionSome($(GetSequenceValue(subrule.Rule, "valuePointer"))) ]>,
+                noValue          = <[ builder.OptionNone(pos) ]>)
+
+            | Bool =>
+              WalkerGenerator.GetOptionValue(
+                subrule          = subrule,
+                parentAstPointer = parentAstPointer,
+                hasValue         = <[ $(SkipSequence(subrule.Rule, "valuePointer")); builder.OptimizedOption(true) ]>,
+                noValue          = <[ builder.OptimizedOption(false) ]>)
+
+            | _ => WalkerGenerator.Skip(subrule, parentAstPointer)
+          }
 
         | List as lst =>
-          if (subrule.SrcRule.Type is RuleType.Void)
-            WalkerGenerator.Skip(subrule, parentAstPointer)
-          else
-            WalkerGenerator.GetListValue(
-              subrule          = lst,
-              parentAstPointer = parentAstPointer,
-              init             = <[ def itemBuffer = System.Collections.Generic.List(16) ]>,
-              item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
-              returnCode       = <[ builder.List(itemBuffer) ]>,
-              emptyCode        = <[ builder.EmptyList(pos) ]>);
-
-        | ListWithSeparator as lst=>
-          match (lst.Rule.SrcRule.Type, lst.Separator.SrcRule.Type)
+          match (GetChemicalRuleType(subrule.SrcRule.Type))
           {
-            | (Void, Void) => WalkerGenerator.Skip(subrule, parentAstPointer)
-            | (_, Void) =>
-                WalkerGenerator.GetListWithSeparatorValue(
-                  subrule          = lst,
-                  parentAstPointer = parentAstPointer,
-                  init             = <[ def itemBuffer = System.Collections.Generic.List(16) ]>,
-                  item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
-                  separator        = <[ _ = $(GetSequenceValue(lst.Separator, "separatorPointer")) ]>,
-                  returnCode       = <[ builder.List(itemBuffer) ]>,
-                  emptyCode        = <[ builder.EmptyList(pos) ]>);
+            | List =>
+              WalkerGenerator.GetListValue(
+                subrule          = lst,
+                parentAstPointer = parentAstPointer,
+                init             = <[ def itemBuffer = System.Collections.Generic.List(16) ]>,
+                item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
+                returnCode       = <[ builder.List(itemBuffer) ]>,
+                emptyCode        = <[ builder.EmptyList(pos) ]>)
 
-            | (Void, _) =>
-                WalkerGenerator.GetListWithSeparatorValue(
-                  subrule          = lst,
-                  parentAstPointer = parentAstPointer,
-                  init             = <[ def separatorBuffer = System.Collections.Generic.List(16) ]>,
-                  item             = <[ _ = $(GetSequenceValue(lst.Rule, "itemPointer")) ]>,
-                  separator        = <[ separatorBuffer.Add($(GetSequenceValue(lst.Separator, "separatorPointer"))) ]>,
-                  returnCode       = <[ builder.List(separatorBuffer) ]>,
-                  emptyCode        = <[ builder.EmptyList(pos) ]>);
+            | Int =>
+              WalkerGenerator.GetListValue(
+                subrule          = lst,
+                parentAstPointer = parentAstPointer,
+                init             = <[ mutable itemCount; ]>,
+                item             = <[ $(SkipSequence(lst.Rule, "itemPointer")); itemCount += 1 ]>,
+                returnCode       = <[ builder.OptimizedList(itemCount) ]>,
+                emptyCode        = <[ builder.OptimizedList(0) ]>)
 
-            | _ =>
+            | _ => WalkerGenerator.Skip(subrule, parentAstPointer)
+          }
+
+        | ListWithSeparator as lst =>
+          def (itemIsVoid, itemInit, itemBody, itemReturn, itemEmpty) =
+            match (GetChemicalRuleType(lst.Rule.SrcRule.Type))
+            {
+              | Void         => (true, <[ () ]>, <[ () ]>, <[ () ]>, <[ () ]>)
+              | StaticString =>
+                (
+                  false,
+                  <[ mutable itemCount ]>,
+                  <[ $(SkipSequence(lst.Separator, "itemPointer")); itemCount += 1 ]>,
+                  <[ builder.OptimizedList(itemCount) ]>,
+                  <[ builder.OptimizedList(0) ]>
+                )
+
+              | _ =>
+                (
+                  false,
+                  <[ def itemBuffer = System.Collections.Generic.List(16); ]>,
+                  <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
+                  <[ builder.List(itemBuffer) ]>,
+                  <[ builder.EmptyList(pos) ]>
+                )
+            };
+
+          def (separatorIsVoid, separatorInit, separatorBody, separatorReturn, separatorEmpty) =
+            match (GetChemicalRuleType(lst.Separator.SrcRule.Type))
+            {
+              | Void         => (true, <[ () ]>, <[ () ]>, <[ () ]>, <[ () ]>)
+              | StaticString =>
+                (
+                  false,
+                  <[ mutable separatorCount ]>,
+                  <[ $(SkipSequence(lst.Separator, "separatorPointer")); separatorCount += 1 ]>,
+                  <[ builder.OptimizedList(separatorCount) ]>,
+                  <[ builder.OptimizedList(0) ]>
+                )
+
+              | _ =>
+                (
+                  false,
+                  <[ def separatorBuffer = System.Collections.Generic.List(16) ]>,
+                  <[ separatorBuffer.Add($(GetSequenceValue(lst.Separator, "separatorPointer"))) ]>,
+                  <[ builder.List(separatorBuffer) ]>,
+                  <[ builder.EmptyList(pos) ]>
+                )
+            };
+
+          match (itemIsVoid, separatorIsVoid)
+          {
+            | (true,  true) => WalkerGenerator.Skip(subrule, parentAstPointer)
+            | (false, true) =>
               WalkerGenerator.GetListWithSeparatorValue(
                 subrule          = lst,
                 parentAstPointer = parentAstPointer,
-                init             = <[ def itemBuffer = System.Collections.Generic.List(16); def separatorBuffer = System.Collections.Generic.List(16); ]>,
-                item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
-                separator        = <[ separatorBuffer.Add($(GetSequenceValue(lst.Separator, "separatorPointer"))) ]>,
-                returnCode       = <[ builder.Tuple(builder.List(itemBuffer), builder.List(separatorBuffer)) ]>,
-                emptyCode        = <[ builder.Tuple(builder.EmptyList(pos), builder.EmptyList(pos)) ]>);
+                init             = itemInit,
+                item             = itemBody,
+                separator        = SkipSequence(lst.Separator, "separatorPointer"),
+                returnCode       = itemReturn,
+                emptyCode        = itemEmpty);
+
+            | (true, false) =>
+              WalkerGenerator.GetListWithSeparatorValue(
+                subrule          = lst,
+                parentAstPointer = parentAstPointer,
+                init             = separatorInit,
+                item             = separatorBody,
+                separator        = SkipSequence(lst.Rule, "itemPointer"),
+                returnCode       = separatorReturn,
+                emptyCode        = separatorEmpty);
+
+            | (false, false) =>
+              WalkerGenerator.GetListWithSeparatorValue(
+                subrule          = lst,
+                parentAstPointer = parentAstPointer,
+                init             = <[ $itemInit; $separatorInit; ]>,
+                item             = itemBody,
+                separator        = separatorBody,
+                returnCode       = <[ builder.Tuple($itemReturn, $separatorReturn) ]>,
+                emptyCode        = <[ builder.Tuple($itemEmpty, $separatorEmpty) ]>);
           }
 
         | Marker => <[ () ]>
       }
+    }
+
+    private SkipSequence(sequence : SequenceCompileInfo, name : string) : PExpr
+    {
+      def astPointer    = AstPointerScope(sequence, name, this);
+      def statements    = SCG.List();
+
+      foreach (subrule in sequence.NonMarkerSubrules)
+        statements.Add(WalkerGenerator.Skip(subrule, astPointer));
+
+      astPointer.Compile(<[ { ..$statements } ]>)
     }
 
     private GetSequenceValue(sequence : SequenceCompileInfo, name : string) : PExpr
@@ -229,7 +375,7 @@ namespace Nitra.Compiler
 
       foreach (subrule in sequence.NonMarkerSubrules)
       {
-        if (RuleAstEmitter.IsSubruleAcceptedForAst(subrule))
+        if (IsSubruleAcceptedForAst(subrule))
         {
           def varName = subrule.MakeVariableName("ast");
           statements.Add(<[ def $(varName : usesite) = $(GetSubruleValue(subrule, astPointer)) ]>);
