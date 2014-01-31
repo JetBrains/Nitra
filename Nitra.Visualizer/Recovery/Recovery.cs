@@ -247,7 +247,7 @@ namespace Nitra.DebugStrategies
 
     private int FindBestPath(ParsedSequence seq, int end, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
-      if (seq.StartPos == 16)
+      if (seq.StartPos == 23 && end == 24)// && seq.ParsingSequence.RuleName == "Expression")
       { }
       //if (end == 86)
       //{ }
@@ -265,6 +265,8 @@ namespace Nitra.DebugStrategies
       }
 
       var results = new Dictionary<ParsedSubrule, int>();
+      if (seq.ParsedSubrules.Contains(new ParsedSubrule(23, 24, 1)) && seq.ToString().Contains("0:'('  1:s  2:ArgumentList  3:')'  4:s, StartPos=23"))
+      { }
       var validSubrules = seq.GetValidSubrules(end).ToList();
       if (validSubrules.Count == 0)
       {
@@ -277,10 +279,12 @@ namespace Nitra.DebugStrategies
       {
         var localMin = Fail;
         if (_deletedToken.ContainsKey(new ParsedNode(seq, subrule)))
-          localMin = 1; // оцениваем удаление как одну вставку
+          localMin = 2; // оцениваем удаление как одну вставку
         else
           localMin = LocalMinForSubSequence(seq, memiozation, subrule, localMin);
- 
+
+        //Debug.WriteLine(subrule + " = " + localMin);
+
         results[subrule] = localMin;
       }
 
@@ -620,6 +624,14 @@ namespace Nitra.DebugStrategies
           while (records.Count > 0)
           {
             var record = records.Dequeue();
+            if (record.State == 0)
+            {
+              switch (record.ParsingState.ToString())
+	            {
+		            case "0 [1, 2, 3] [] '('":        break;
+                case "3 [-1, 4] [0, 1, 2] ')'":   break;
+	            }
+            }
 
             if (record.IsComplete)
             {
