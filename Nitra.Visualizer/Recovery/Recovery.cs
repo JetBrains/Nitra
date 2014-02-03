@@ -50,6 +50,7 @@ namespace Nitra.DebugStrategies
 
   public class Recovery
   {
+    public const int NumberOfTokensForSpeculativeDeleting = int.MaxValue;
     public const int Fail = int.MaxValue;
     public ReportData ReportResult;
     private readonly Dictionary<ParsedNode, bool> _deletedToken = new Dictionary<ParsedNode, bool>();
@@ -670,7 +671,7 @@ namespace Nitra.DebugStrategies
       _failPositions.Sort();
 
       foreach (var del in deleted)
-        DeleteTokens(rp, del.Item1, del.Item2, 3);
+        DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
     }
 
