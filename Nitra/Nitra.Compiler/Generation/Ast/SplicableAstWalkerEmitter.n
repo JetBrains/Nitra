@@ -92,9 +92,14 @@ namespace Nitra.Compiler
         }
     }
 
-    private static IsSubruleAcceptedForAst(subrule : SubruleCompileInfo) : bool
+    private static IsAcceptedForAst(subrule : SubruleCompileInfo) : bool
     {
-      match (GetChemicalRuleType(subrule.SrcRule.Type))
+      IsAcceptedForAst(subrule.SrcRule)
+    }
+
+    private static IsAcceptedForAst(rule : Rule) : bool
+    {
+      match (GetChemicalRuleType(rule.Type))
       {
         | Void | StaticString => false
         | _                   => true
@@ -103,35 +108,10 @@ namespace Nitra.Compiler
 
     public DefineMembers() : void
     {
-      def compileRule(ruleSymbol : SyntaxRuleSymbol)
-      {
-        def astPtr = AstPointer.Existing(ruleSymbol.Sequence, this, "astPtr");
-
-        def subruleValues = SCG.List();
-        when (ruleSymbol is ExtensionRuleSymbol(ExtensionType = Postfix))
-          subruleValues.Add(<[ prefix ]>);
-
-        def statements    = SCG.List();
-        foreach (subrule in ruleSymbol.Sequence.NonMarkerSubrules)
-        {
-          def parentAstPointer = AstPointerScope(astPtr);
-          if (IsSubruleAcceptedForAst(subrule))
-          {
-            def varName = subrule.MakeVariableName("ast");
-            statements.Add(<[ def $(varName : usesite) = $(GetSubruleValue(subrule, parentAstPointer)) ]>);
-            subruleValues.Add(<[ $(varName : usesite) ]>);
-          }
-          else
-            statements.Add(WalkerGenerator.Skip(subrule, parentAstPointer));
-        }
-        statements.Add(<[ builder.Syntax($(ruleSymbol.GetRuleDescriptorRef()), startPos, pos, array[..$subruleValues]) ]>);
-        statements
-      }
-
       foreach (ruleSymbol in _syntaxModuleSymbol.Node.GetDescendants.[SyntaxRuleSymbol]())
       {
         | SimpleRuleSymbol when ruleSymbol.Type is RuleType.Ref =>
-          def statements = compileRule(ruleSymbol);
+          def statements = CompileRule(ruleSymbol);
           _tb.DefineConditional(<[ decl:
             public $(MakeRuleWalkMethodName(ruleSymbol) : usesite)[TAst](pos : ref int, parseResult : Nitra.ParseResult, builder : Nitra.Internal.ISplicableAstBuilder[TAst]) : TAst
             {
@@ -152,7 +132,7 @@ namespace Nitra.Compiler
           ]>)
 
         | ExtensionRuleSymbol(ExtensionType = Prefix) =>
-          def statements = compileRule(ruleSymbol);
+          def statements = CompileRule(ruleSymbol);
           _tb.DefineConditional(<[ decl:
             public $(MakeRuleWalkMethodName(ruleSymbol) : usesite)[TAst](pos : ref int, astPtr : int, ruleParser : Nitra.Internal.ExtensionRuleParser, parseResult : ParseResult, builder : Nitra.Internal.ISplicableAstBuilder[TAst]) : TAst
             {
@@ -167,7 +147,7 @@ namespace Nitra.Compiler
           ]>)
 
         | ExtensionRuleSymbol(ExtensionType = Postfix) =>
-          def statements = compileRule(ruleSymbol);
+          def statements = CompileRule(ruleSymbol);
           _tb.DefineConditional(<[ decl:
             public $(MakeRuleWalkMethodName(ruleSymbol) : usesite)[TAst](prefix : T, prefixStartPos : int, pos : ref int, astPtr : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult, builder : Nitra.Internal.ISplicableAstBuilder[TAst]) : TAst
             {
@@ -188,6 +168,61 @@ namespace Nitra.Compiler
     public Emit() : void
     {
       _tb.Compile();
+    }
+
+    private CompileRule(ruleSymbol : SyntaxRuleSymbol) : SCG.List[PExpr]
+    {
+      def variableNames = SCG.Dictionary();
+
+      when (ruleSymbol is ExtensionRuleSymbol(ExtensionType = Postfix(call, _)))
+        variableNames.Add(call, "prefix");
+
+      def astPtr = AstPointer.Existing(ruleSymbol.Sequence, this, "astPtr");
+
+      def statements = SCG.List();
+      foreach (subrule in ruleSymbol.Sequence.NonMarkerSubrules)
+      {
+        def parentAstPointer = AstPointerScope(astPtr);
+        if (IsAcceptedForAst(subrule))
+        {
+          def varName = subrule.MakeVariableName("ast");
+          statements.Add(<[ def $(varName : usesite) = $(GetSubruleValue(subrule, parentAstPointer)) ]>);
+          variableNames.Add(subrule.SrcRule, varName);
+        }
+        else
+          statements.Add(WalkerGenerator.Skip(subrule, parentAstPointer));
+      }
+
+      def foldVariables(rule : Rule) : PExpr
+      {
+        if (rule is Rule.Sequence(Rules = rules))
+        {
+          def members = SCG.List();
+          foreach (rule when IsAcceptedForAst(rule) in rules)
+            members.Add(foldVariables(rule));
+
+          match (members.Count)
+          {
+            | 0 => assert3(false)
+            | 1 => members[0]
+            | _ => <[ builder.Tuple(..$members) ]>
+          }
+        }
+        else
+        {
+          mutable variableName;
+          unless (variableNames.TryGetValue(rule, out variableName))
+            assert3(false);
+          <[ $(variableName : usesite) ]>
+        }
+      }
+
+      def values = SCG.List();
+      foreach (rule when IsAcceptedForAst(rule) in ruleSymbol.SubRules)
+        values.Add(foldVariables(rule));
+
+      statements.Add(<[ builder.Syntax($(ruleSymbol.GetRuleDescriptorRef()), startPos, pos, array[..$values]) ]>);
+      statements
     }
 
     private GetSubruleValue(subrule : SubruleCompileInfo, parentAstPointer : AstPointerScope) : PExpr
@@ -375,7 +410,7 @@ namespace Nitra.Compiler
 
       foreach (subrule in sequence.NonMarkerSubrules)
       {
-        if (IsSubruleAcceptedForAst(subrule))
+        if (IsAcceptedForAst(subrule))
         {
           def varName = subrule.MakeVariableName("ast");
           statements.Add(<[ def $(varName : usesite) = $(GetSubruleValue(subrule, astPointer)) ]>);
@@ -394,7 +429,6 @@ namespace Nitra.Compiler
 
       astPointer.Compile(<[ { ..$statements } ]>)
     }
-
 
     private static MakeRuleWalkMethodName(ruleSymbol : SyntaxRuleSymbol) : string
     {
