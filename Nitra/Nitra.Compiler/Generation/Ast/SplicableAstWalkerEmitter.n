@@ -126,7 +126,7 @@ namespace Nitra.Compiler
                   ..$statements
                 }
                 else
-                  builder.Missing($(ruleSymbol.GetRuleDescriptorRef()), startPos)
+                  builder.CreateMissing(parseResult, $(ruleSymbol.GetRuleDescriptorRef()), startPos)
               }
             }
           ]>)
@@ -205,7 +205,7 @@ namespace Nitra.Compiler
           {
             | 0 => assert3(false)
             | 1 => members[0]
-            | _ => <[ builder.Tuple(..$members) ]>
+            | _ => <[ builder.Tuple(parseResult, 0, 0, ..$members) ]> //TODO: set correct location
           }
         }
         else
@@ -221,7 +221,7 @@ namespace Nitra.Compiler
       foreach (rule when IsAcceptedForAst(rule) in ruleSymbol.SubRules)
         values.Add(foldVariables(rule));
 
-      statements.Add(<[ builder.Syntax($(ruleSymbol.GetRuleDescriptorRef()), startPos, pos, array[..$values]) ]>);
+      statements.Add(<[ builder.Syntax(parseResult, $(ruleSymbol.GetRuleDescriptorRef()), startPos, pos, array[..$values]) ]>);
       statements
     }
 
@@ -244,7 +244,7 @@ namespace Nitra.Compiler
               if ($(parentAstPointer.Access().GetSize(subrule)) > 0)
                 $(GetRuleWalkMethodRef(subrule.Symbol))(ref pos, parseResult, builder)
               else
-                builder.Missing($(subrule.Symbol.GetRuleDescriptorRef()), pos);
+                builder.CreateMissing(parseResult, $(subrule.Symbol.GetRuleDescriptorRef()), pos);
             ]>
 
         | ExtensibleCall as subrule =>
@@ -256,34 +256,35 @@ namespace Nitra.Compiler
               if ($(parentAstPointer.Access().GetSize(subrule)) > 0)
                 Nitra.Internal.ExtensibleRuleAstConstructor.Create(ref pos, parseResult, $(subrule.BindingPower : int), $(subrule.Symbol.GetRuleDescriptorRef()), builder);
               else
-                builder.Missing($(subrule.Symbol.GetRuleDescriptorRef()), pos); // No prefix
+                builder.CreateMissing(parseResult, $(subrule.Symbol.GetRuleDescriptorRef()), pos); // No prefix
             ]>
 
-        | RegularCall as subrule                => WalkerGenerator.GetTokenValue(subrule, parentAstPointer, <[ builder.Regular($(subrule.Symbol.GetRuleDescriptorRef()), tokenPos, pos) ]>)
-        | List as lst when lst.IsSkipAnyPattern => WalkerGenerator.GetTokenValue(subrule, parentAstPointer, <[ builder.SkipAny(tokenPos, pos) ]>)
+        | RegularCall as subrule                => WalkerGenerator.GetTokenValue(subrule, parentAstPointer, <[ builder.Regular(parseResult, $(subrule.Symbol.GetRuleDescriptorRef()), tokenPos, pos) ]>)
+        | List as lst when lst.IsSkipAnyPattern => WalkerGenerator.GetTokenValue(subrule, parentAstPointer, <[ builder.SkipAny(parseResult, tokenPos, pos) ]>)
         | TokenString as subrule                => WalkerGenerator.Skip(subrule, parentAstPointer)
         | Option as subrule =>
-          match (GetChemicalRuleType(subrule.SrcRule.Type))
+          def expr = match (GetChemicalRuleType(subrule.SrcRule.Type))
           {
             | Option =>
               WalkerGenerator.GetOptionValue(
                 subrule          = subrule,
                 parentAstPointer = parentAstPointer,
-                hasValue         = <[ builder.OptionSome($(GetSequenceValue(subrule.Rule, "valuePointer"))) ]>,
-                noValue          = <[ builder.OptionNone(pos) ]>)
+                hasValue         = <[ builder.OptionSome(parseResult, optionPos, pos, $(GetSequenceValue(subrule.Rule, "valuePointer"))) ]>,
+                noValue          = <[ builder.OptionNone(parseResult, optionPos, pos) ]>)
 
             | Bool =>
               WalkerGenerator.GetOptionValue(
                 subrule          = subrule,
                 parentAstPointer = parentAstPointer,
-                hasValue         = <[ $(SkipSequence(subrule.Rule, "valuePointer")); builder.OptimizedOption(true) ]>,
-                noValue          = <[ builder.OptimizedOption(false) ]>)
+                hasValue         = <[ $(SkipSequence(subrule.Rule, "valuePointer")); builder.OptimizedOption(parseResult, optionPos, pos, true) ]>,
+                noValue          = <[ builder.OptimizedOption(parseResult, optionPos, pos, false) ]>)
 
             | _ => WalkerGenerator.Skip(subrule, parentAstPointer)
-          }
+          };
+          <[ def optionPos = pos; $expr ]>
 
         | List as lst =>
-          match (GetChemicalRuleType(subrule.SrcRule.Type))
+          def expr = match (GetChemicalRuleType(subrule.SrcRule.Type))
           {
             | List =>
               WalkerGenerator.GetListValue(
@@ -291,8 +292,8 @@ namespace Nitra.Compiler
                 parentAstPointer = parentAstPointer,
                 init             = <[ def itemBuffer = System.Collections.Generic.List(16) ]>,
                 item             = <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
-                returnCode       = <[ builder.List(itemBuffer) ]>,
-                emptyCode        = <[ builder.EmptyList(pos) ]>)
+                returnCode       = <[ builder.List(parseResult, listPos, pos, itemBuffer) ]>,
+                emptyCode        = <[ builder.EmptyList(parseResult, pos, pos) ]>)
 
             | Int =>
               WalkerGenerator.GetListValue(
@@ -300,11 +301,12 @@ namespace Nitra.Compiler
                 parentAstPointer = parentAstPointer,
                 init             = <[ mutable itemCount; ]>,
                 item             = <[ $(SkipSequence(lst.Rule, "itemPointer")); itemCount += 1 ]>,
-                returnCode       = <[ builder.OptimizedList(itemCount) ]>,
-                emptyCode        = <[ builder.OptimizedList(0) ]>)
+                returnCode       = <[ builder.OptimizedList(parseResult, listPos, pos, itemCount) ]>,
+                emptyCode        = <[ builder.OptimizedList(parseResult, pos, pos, 0) ]>)
 
             | _ => WalkerGenerator.Skip(subrule, parentAstPointer)
-          }
+          };
+          <[ def listPos = pos; $expr ]>
 
         | ListWithSeparator as lst =>
           def (itemIsVoid, itemInit, itemBody, itemReturn, itemEmpty) =
@@ -314,19 +316,19 @@ namespace Nitra.Compiler
               | StaticString =>
                 (
                   false,
-                  <[ mutable itemCount ]>,
+                  <[ def itemListPos = pos; mutable itemCount; ]>,
                   <[ $(SkipSequence(lst.Separator, "itemPointer")); itemCount += 1 ]>,
-                  <[ builder.OptimizedList(itemCount) ]>,
-                  <[ builder.OptimizedList(0) ]>
+                  <[ builder.OptimizedList(parseResult, itemListPos, pos, itemCount) ]>,
+                  <[ builder.OptimizedList(parseResult, pos, pos, 0) ]>
                 )
 
               | _ =>
                 (
                   false,
-                  <[ def itemBuffer = System.Collections.Generic.List(16); ]>,
+                  <[ def itemListPos = pos; def itemBuffer = System.Collections.Generic.List(16); ]>,
                   <[ itemBuffer.Add($(GetSequenceValue(lst.Rule, "itemPointer"))) ]>,
-                  <[ builder.List(itemBuffer) ]>,
-                  <[ builder.EmptyList(pos) ]>
+                  <[ builder.List     (parseResult, itemListPos, pos, itemBuffer) ]>,
+                  <[ builder.EmptyList(parseResult, pos, pos) ]>
                 )
             };
 
@@ -337,23 +339,23 @@ namespace Nitra.Compiler
               | StaticString =>
                 (
                   false,
-                  <[ mutable separatorCount ]>,
+                  <[ def separatorListPos = pos; mutable separatorCount ]>,
                   <[ $(SkipSequence(lst.Separator, "separatorPointer")); separatorCount += 1 ]>,
-                  <[ builder.OptimizedList(separatorCount) ]>,
-                  <[ builder.OptimizedList(0) ]>
+                  <[ builder.OptimizedList(parseResult, separatorListPos, pos, separatorCount) ]>,
+                  <[ builder.OptimizedList(parseResult, pos, pos, 0) ]>
                 )
 
               | _ =>
                 (
                   false,
-                  <[ def separatorBuffer = System.Collections.Generic.List(16) ]>,
+                  <[ def separatorListPos = pos; def separatorBuffer = System.Collections.Generic.List(16) ]>,
                   <[ separatorBuffer.Add($(GetSequenceValue(lst.Separator, "separatorPointer"))) ]>,
-                  <[ builder.List(separatorBuffer) ]>,
-                  <[ builder.EmptyList(pos) ]>
+                  <[ builder.List     (parseResult, separatorListPos, pos, separatorBuffer) ]>,
+                  <[ builder.EmptyList(parseResult, pos, pos) ]>
                 )
             };
 
-          match (itemIsVoid, separatorIsVoid)
+          def expr = match (itemIsVoid, separatorIsVoid)
           {
             | (true,  true) => WalkerGenerator.Skip(subrule, parentAstPointer)
             | (false, true) =>
@@ -383,9 +385,10 @@ namespace Nitra.Compiler
                 init             = <[ $itemInit; $separatorInit; ]>,
                 item             = itemBody,
                 separator        = separatorBody,
-                returnCode       = <[ builder.Tuple($itemReturn, $separatorReturn) ]>,
-                emptyCode        = <[ builder.Tuple($itemEmpty, $separatorEmpty) ]>);
-          }
+                returnCode       = <[ builder.Tuple(parseResult, listPos, pos, $itemReturn, $separatorReturn) ]>,
+                emptyCode        = <[ builder.Tuple(parseResult, listPos, pos, $itemEmpty, $separatorEmpty) ]>);
+          };
+          <[ def listPos = pos; $expr ]>
 
         | Marker => <[ () ]>
       }
@@ -424,7 +427,9 @@ namespace Nitra.Compiler
       {
         | 0 => ()
         | 1 => statements.Add(subruleValues[0]);
-        | _ => statements.Add(<[ builder.Tuple(..$subruleValues)]>);
+        | _ =>
+          statements.Insert(0, <[ def seqPos = pos ]>);
+          statements.Add(<[ builder.Tuple(parseResult, seqPos, pos, ..$subruleValues)]>);
       }
 
       astPointer.Compile(<[ { ..$statements } ]>)
