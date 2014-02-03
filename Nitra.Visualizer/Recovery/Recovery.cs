@@ -96,7 +96,7 @@ namespace Nitra.DebugStrategies
     private void CollectError(RecoveryParser rp, FlattenSequences results)
     {
       var text         = rp.ParseResult.Text;
-      var expected     = new Dictionary<int, HashSet<ParsedNode>>();
+      var expected     = new Dictionary<NSpan, HashSet<ParsedNode>>();
       var failSeq      = default(ParsedSequence);
       var failSubrule  = default(ParsedSubrule);
       var skipRecovery = false;
@@ -106,9 +106,9 @@ namespace Nitra.DebugStrategies
         var reverse = result.ToArray().Reverse();
         for (int i = 0; i < reverse.Count; i++)
         {
-          var x = reverse[i];
-          var ins = x.Field2;
-          var seq = x.Field3;
+          var x       = reverse[i];
+          var ins     = x.Field2;
+          var seq     = x.Field3;
           var subrule = x.Field1;
 
           if (skipRecovery)
@@ -118,10 +118,11 @@ namespace Nitra.DebugStrategies
               skipRecovery = false;
               //Debug.WriteLine(x);
               HashSet<ParsedNode> parsedNodes;
-              if (!expected.TryGetValue(failSubrule.Begin, out parsedNodes))
+              var span = new NSpan(failSubrule.Begin, subrule.Begin);
+              if (!expected.TryGetValue(span, out parsedNodes))
               {
                 parsedNodes = new HashSet<ParsedNode>();
-                expected[failSubrule.Begin] = parsedNodes;
+                expected[span] = parsedNodes;
               }
 
               if (failSubrule.IsEmpty)
@@ -144,12 +145,7 @@ namespace Nitra.DebugStrategies
 
       var parseResult = rp.ParseResult;
       foreach (var e in expected)
-        parseResult.ReportError(new ExpectedSubrulesError(new Location(parseResult.OriginalSource, e.Key, e.Key), e.Value));
-
-      //rp.ParseResult.ReportError(new ParseError());
-      //foreach (var e in expected)
-      //  Debug.WriteLine(e.Key + " Expected: " + string.Join(", ", SubruleToString(e.Value, text)));
-
+        parseResult.ReportError(new ExpectedSubrulesError(new Location(parseResult.OriginalSource, e.Key.StartPos, e.Key.EndPos), e.Value));
     }
 
     private static IEnumerable<string> SubruleToString(IEnumerable<ParsedNode> e, string text)
