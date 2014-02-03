@@ -95,25 +95,68 @@ namespace Nitra.DebugStrategies
 
     private void CollectError(RecoveryParser rp, FlattenSequences results)
     {
-      var text = rp.ParseResult.Text;
+      var text         = rp.ParseResult.Text;
+      var expected     = new Dictionary<int, HashSet<ParsedNode>>();
+      var failSeq      = default(ParsedSequence);
+      var failSubrule  = default(ParsedSubrule);
+      var skipRecovery = false;
 
-      foreach (var failPosition in _failPositions)
+      foreach (var result in results)
       {
-        if (failPosition == text.Length)
-          continue;
-
-        foreach (var result in results)
+        var reverse = result.ToArray().Reverse();
+        for (int i = 0; i < reverse.Count; i++)
         {
-          foreach (var x in result.ToArray().Reverse())
-          {
-            if (x.Field1.Begin < failPosition)
-              continue;
+          var x = reverse[i];
+          var ins = x.Field2;
+          var seq = x.Field3;
+          var subrule = x.Field1;
 
-            Debug.WriteLine(x);
-            break;
+          if (skipRecovery)
+          {
+            if (ins == 0 && seq.ParsingSequence.RuleName != "s")
+            {
+              skipRecovery = false;
+              //Debug.WriteLine(x);
+              HashSet<ParsedNode> parsedNodes;
+              if (!expected.TryGetValue(failSubrule.Begin, out parsedNodes))
+              {
+                parsedNodes = new HashSet<ParsedNode>();
+                expected[failSubrule.Begin] = parsedNodes;
+              }
+
+              if (failSubrule.IsEmpty)
+                parsedNodes.Add(new ParsedNode(failSeq, failSubrule));
+              else
+                parsedNodes.Add(new ParsedNode(seq, subrule));
+            }
+          }
+          else
+          {
+            if (ins != 0)
+            {
+              failSeq      = seq;
+              failSubrule  = subrule;
+              skipRecovery = true;
+            }
           }
         }
       }
+
+      var parseResult = rp.ParseResult;
+      foreach (var e in expected)
+        parseResult.ReportError(new ExpectedSubrulesError(new Location(parseResult.OriginalSource, e.Key, e.Key), e.Value));
+
+      //rp.ParseResult.ReportError(new ParseError());
+      //foreach (var e in expected)
+      //  Debug.WriteLine(e.Key + " Expected: " + string.Join(", ", SubruleToString(e.Value, text)));
+
+    }
+
+    private static IEnumerable<string> SubruleToString(IEnumerable<ParsedNode> e, string text)
+    {
+      return e.Select(x => x.Field1.IsEmpty 
+        ? x.Field0.ParsingSequence.States[x.Field1.State].Description
+        : ("'" + text.Substring(x.Field1.Begin, x.Field1.Length)) + "'");
     }
 
     private FlattenSequences FlattenSubrule(FlattenSequences prevs, ParseResult parseResult, ParsedSequence seq, SubruleParses parses, ParsedSubrule subrule, int subruleInsertedTokens, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)

@@ -251,14 +251,17 @@ namespace Nitra.Visualizer
 
       if (_parseResult == null)
         _status.Text = "Not parsed!";
-      else if (_parseResult.IsSuccess)
-      {
-        _status.Text = "OK";
-      }
       else
       {
         var errors = _parseResult.GetErrors();
         var errorNodes = _errorsTreeView.Items;
+
+        if (errors.Length == 0)
+        {
+          _status.Text = "OK";
+          return;
+        }
+
 
         foreach (ParseError error in errors)
         {
