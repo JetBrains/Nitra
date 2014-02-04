@@ -38,7 +38,6 @@ namespace Nitra.DebugStrategies
   using SubruleParsesAndEnd = Nemerle.Builtins.Tuple<SubruleParses, int>;
   using ParserData = Tuple<int, int, List<ParsedStateInfo>>;
   using ReportData = Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>>;
-  using ParseAlternativeNodes = Nemerle.Core.list<ParseAlternativeNode>;
 
   using ParsedList = Nemerle.Core.list<ParsedNode>;
   using Nitra.Runtime;
