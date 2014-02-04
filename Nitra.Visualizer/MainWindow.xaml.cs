@@ -279,7 +279,7 @@ namespace Nitra.Visualizer
           errorNodes.Add(errorNode);
         }
 
-        _status.Text = "Parsing completed with " + errors.Length + "error[s]";
+        _status.Text = "Parsing completed with " + errors.Length + " error[s]";
       }
     }
 
