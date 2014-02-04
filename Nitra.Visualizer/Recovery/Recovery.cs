@@ -1,6 +1,5 @@
 ﻿//#region Пролог
 #define DebugOutput
-using JetBrains.Util;
 using Nitra.Internal.Recovery;
 using Nitra.Runtime.Errors;
 
@@ -97,7 +96,7 @@ namespace Nitra.DebugStrategies
       timer.Restart();
 #endif
 
-      var results = FlattenSequence(new FlattenSequences() { ParsedSequenceAndSubrules.Nil._N_constant_object }, 
+      var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new ParsedSequenceAndSubrule[0]) }, 
       parseResult, startSeq, textLen, memiozation[new ParsedSeqKey(startSeq, textLen)].Field1, memiozation);
 
 #if DebugOutput
@@ -120,9 +119,8 @@ namespace Nitra.DebugStrategies
       foreach (var result in results)
       {
         var reverse = result.ToArray().Reverse();
-        for (int i = 0; i < reverse.Count; i++)
+        foreach (var x in reverse)
         {
-          var x       = reverse[i];
           var ins     = x.Field2;
           var seq     = x.Field3;
           var subrule = x.Field1;
@@ -426,46 +424,6 @@ namespace Nitra.DebugStrategies
       return good;
     }
 
-    private static SubruleParses RemoveWorstPaths(ParsedSequence seq, int end, SubruleParses parses)
-    {
-      //if (parses.Count <= 1)
-      //  return parses;
-
-      var prevCumulativeMinMap = new Dictionary<ParsedSubrule, int>(); // ParsedSubrule -> CumulativeMin
-      var subrules = parses.Keys.ToList();
-      subrules.Add(new ParsedSubrule(end, end, -1));
-      var currs = new SCG.Queue<ParsedSubrule>(seq.GetFirstSubrules(subrules));
-      foreach (var startSubrule in currs)
-        prevCumulativeMinMap.Add(startSubrule, 0);
-
-      var good  = new SubruleParses();
-
-      while (currs.Count > 0)
-      {
-        var curr = currs.Dequeue();
-
-        if (curr.State == -1)
-          continue;
-
-        var prevCumulativeMin = prevCumulativeMinMap[curr];
-        var nexts = seq.GetNextSubrules(curr, subrules).ToArray();
-        var delta = parses[curr];
-        var currCumulativeMin = delta + prevCumulativeMin;
-
-        foreach (var next in nexts)
-        {
-          var cumulativeMin = GetNodeWeight(prevCumulativeMinMap, next);
-          if (currCumulativeMin < cumulativeMin)
-          {
-            prevCumulativeMinMap[next] = currCumulativeMin;
-            currs.Enqueue(next);
-          }
-        }
-      }
-
-      return good;
-    }
-
     private static int AddOrFail(int source, int addition)
     {
       return source == Fail || addition == Fail ? Fail : source + addition;
@@ -624,7 +582,7 @@ namespace Nitra.DebugStrategies
       var res2 = grammar.ParseAllVoidGrammarTokens(nextPos, parseResult);
       RemoveEmpty(res2, nextPos);
 
-      if (res2.IsEmpty())
+      if (res2.Count == 0)
         DeleteTokens(rp, nextPos, sequence, tokensToDelete - 1);
       foreach (var nextPos2 in res2)
       {
