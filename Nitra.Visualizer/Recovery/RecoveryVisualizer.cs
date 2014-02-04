@@ -40,12 +40,17 @@ namespace Nitra.DebugStrategies
     public override int Strategy(ParseResult parseResult)
     {
       _recoveryPerformanceData.Timer.Start();
-      _recoveryPerformanceData.Count++;
 
       var res = base.Strategy(parseResult);
 
       _recoveryPerformanceData.Timer.Stop();
       return res;
     }
+
+    protected override void UpdateEarleyParseTime()     { _recoveryPerformanceData.EarleyParseTime    = _recoveryPerformanceData.NextTime(); }
+    protected override void UpdateRecoverAllWaysTime()  { _recoveryPerformanceData.RecoverAllWaysTime = _recoveryPerformanceData.NextTime(); }
+    protected override void UpdateFindBestPathTime()    { _recoveryPerformanceData.FindBestPathTime   = _recoveryPerformanceData.NextTime(); }
+    protected override void UpdateFlattenSequenceTime() { _recoveryPerformanceData.EarleyParseTime    = _recoveryPerformanceData.NextTime(); }
+    protected override void UpdateParseErrorCount()     { _recoveryPerformanceData.ParseErrorCount++; }
   }
 }

@@ -1,5 +1,5 @@
 ﻿//#region Пролог
-#define DebugOutput
+//#define DebugOutput
 using Nitra.Internal.Recovery;
 using Nitra.Runtime.Errors;
 
@@ -17,7 +17,8 @@ using NB = Nemerle.Builtins;
 using SCG = System.Collections.Generic;
 
 using SubruleParses = System.Collections.Generic.Dictionary<Nitra.Internal.Recovery.ParsedSubrule, int>;
-using ParsedSequenceAndSubrule = Nemerle.Builtins.Tuple<string, Nitra.Internal.Recovery.ParsedSubrule, /*Inserted tokens*/int, Nitra.Internal.Recovery.ParsedSequence>;
+using ParsedSequenceAndSubrule = Nemerle.Builtins.Tuple</*Inserted tokens*/int, Nitra.Internal.Recovery.ParsedSequence, Nitra.Internal.Recovery.ParsedSubrule>;
+using ParsedSequenceAndSubrule2 = Nemerle.Builtins.Tuple<string, Nitra.Internal.Recovery.ParsedSubrule, /*Inserted tokens*/int, Nitra.Internal.Recovery.ParsedSequence>;
 
 #if NITRA_RUNTIME
 namespace Nitra.Strategies
@@ -47,10 +48,6 @@ namespace Nitra.DebugStrategies
     public const int Fail = int.MaxValue;
     private readonly Dictionary<ParsedNode, bool> _deletedToken = new Dictionary<ParsedNode, bool>();
 
-    public Recovery()
-    {
-    }
-
     public virtual int Strategy(ParseResult parseResult)
     {
       //Debug.Assert(parseResult.RecoveryStacks.Count > 0);
@@ -67,6 +64,7 @@ namespace Nitra.DebugStrategies
       rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
       var startSeq = rp.Sequences.First().Value;
 
+      UpdateEarleyParseTime();
 #if DebugOutput
       timer.Stop();
       Debug.WriteLine("Earley parse took: " + timer.Elapsed);
@@ -75,6 +73,7 @@ namespace Nitra.DebugStrategies
 
       RecoverAllWays(rp);
 
+      UpdateRecoverAllWaysTime();
 #if DebugOutput
       timer.Stop();
       Debug.WriteLine("RecoverAllWays took: " + timer.Elapsed);
@@ -84,6 +83,7 @@ namespace Nitra.DebugStrategies
       var memiozation = new Dictionary<ParsedSeqKey, SubruleParsesAndEnd>();
       FindBestPath(startSeq, textLen, memiozation);
 
+      UpdateFindBestPathTime();
 #if DebugOutput
       timer.Stop();
       Debug.WriteLine("FindBestPath took: " + timer.Elapsed);
@@ -93,6 +93,7 @@ namespace Nitra.DebugStrategies
       var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new ParsedSequenceAndSubrule[0]) }, 
       parseResult, startSeq, textLen, memiozation[new ParsedSeqKey(startSeq, textLen)].Field1, memiozation);
 
+      UpdateFlattenSequenceTime();
 #if DebugOutput
       timer.Stop();
       Debug.WriteLine("FlattenSequence took: " + timer.Elapsed);
@@ -115,9 +116,9 @@ namespace Nitra.DebugStrategies
         var reverse = result.ToArray().Reverse();
         foreach (var x in reverse)
         {
-          var ins     = x.Field2;
-          var seq     = x.Field3;
-          var subrule = x.Field1;
+          var ins     = x.Field0;
+          var seq     = x.Field1;
+          var subrule = x.Field2;
 
           if (skipRecovery)
           {
@@ -192,7 +193,7 @@ namespace Nitra.DebugStrategies
       if (currentNodes.Count == 0) // если не было сабсиквенсов, надо создать продолжения из текущего сабруля
       {
         foreach (var prev in prevs)
-          currentNodes.Add(new ParsedSequenceAndSubrules.Cons(new ParsedSequenceAndSubrule(parseResult.Text.Substring(subrule.Begin, subrule.Length), subrule, subruleInsertedTokens, seq), prev));
+          currentNodes.Add(new ParsedSequenceAndSubrules.Cons(new ParsedSequenceAndSubrule(subruleInsertedTokens, seq, subrule), prev));
       }
 
       var nextSubrules = seq.GetNextSubrules(subrule, parses.Keys).ToArray();
@@ -499,8 +500,6 @@ namespace Nitra.DebugStrategies
 
     const int s_loopState = 0;
 
-
-
     /// <summary>
     /// В позиции облома может находиться "грязь", т.е. набор символов которые не удается разобрать ни одним правилом токена
     /// доступным в CompositeGrammar в данном месте. Ни одно правило не сможет спарсить этот код, так что просто ищем 
@@ -557,10 +556,10 @@ namespace Nitra.DebugStrategies
 
     private bool CanDelete(string text, int pos, int nextPos)
     {
+      // TODO: Надо неализовать эту функцию на базе метаинформации из грамматик.
       switch (text.Substring(pos, nextPos - pos))
       {
         case ",":
-        //case ":":
         case ";": return false;
         default: return true;
       }
@@ -596,6 +595,8 @@ namespace Nitra.DebugStrategies
       do
       {
         deleted.AddRange(FindMaxFailPos(rp));
+        if (rp.MaxPos != rp.ParseResult.Text.Length)
+          UpdateParseErrorCount();
         maxPos = rp.MaxPos;
         failPositions.Add(maxPos);
 
@@ -607,14 +608,6 @@ namespace Nitra.DebugStrategies
           while (records.Count > 0)
           {
             var record = records.Dequeue();
-            if (record.State == 0)
-            {
-              switch (record.ParsingState.ToString())
-	            {
-		            case "0 [1, 2, 3] [] '('":        break;
-                case "3 [-1, 4] [0, 1, 2] ')'":   break;
-	            }
-            }
 
             if (record.IsComplete)
             {
@@ -647,7 +640,7 @@ namespace Nitra.DebugStrategies
         }
         while (records.Count > 0);
       }
-      while (rp.MaxPos > maxPos); //while (maxPos >= 0 && maxPos < textLen);
+      while (rp.MaxPos > maxPos);
 
       foreach (var del in deleted)
         DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
@@ -658,6 +651,12 @@ namespace Nitra.DebugStrategies
     {
       res.RemoveWhere(x => x <= maxPos);
     }
+
+    protected virtual void UpdateEarleyParseTime() { }
+    protected virtual void UpdateRecoverAllWaysTime() { }
+    protected virtual void UpdateFindBestPathTime() { }
+    protected virtual void UpdateFlattenSequenceTime() { }
+    protected virtual void UpdateParseErrorCount() { }
   }
 
 #region Utility methods
@@ -763,10 +762,10 @@ pre
 
       foreach (var node in path.Reverse())
       {
-        var str = node.Field0;
-        var subrule = node.Field1;
-        var insertedTokens = node.Field2;
-        var seq = node.Field3;
+        //var str = node.Field0;
+        var insertedTokens = node.Field0;
+        var seq            = node.Field1;
+        var subrule        = node.Field2;
 
         bool isGarbage;
         if (deletedToken.TryGetValue(new ParsedNode(seq, subrule), out isGarbage))

@@ -497,18 +497,13 @@ namespace Nitra.Visualizer
 
         _outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
 
-        _recoveryTime.Text = recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
-        _recoveryCount.Text = recovery.RecoveryPerformanceData.Count.ToString(CultureInfo.InvariantCulture);
-
-        _continueParseTime.Text = recovery.RecoveryPerformanceData.ContinueParseTime.ToString();
-        _continueParseCount.Text = recovery.RecoveryPerformanceData.ContinueParseCount.ToString(CultureInfo.InvariantCulture);
-
-        _tryParseSubrulesTime.Text = recovery.RecoveryPerformanceData.TryParseSubrulesTime.ToString();
-        _tryParseSubrulesCount.Text = recovery.RecoveryPerformanceData.TryParseSubrulesCount.ToString(CultureInfo.InvariantCulture);
-
-        _tryParseTime.Text = recovery.RecoveryPerformanceData.TryParseTime.ToString();
-        _tryParseCount.Text = recovery.RecoveryPerformanceData.TryParseCount.ToString(CultureInfo.InvariantCulture);
-
+        _recoveryTime.Text        = recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
+        _earleyParseTime.Text     = recovery.RecoveryPerformanceData.EarleyParseTime.ToString();
+        _recoverAllWaysTime.Text  = recovery.RecoveryPerformanceData.RecoverAllWaysTime.ToString();
+        _findBestPathTime.Text    = recovery.RecoveryPerformanceData.FindBestPathTime.ToString();
+        _flattenSequenceTime.Text = recovery.RecoveryPerformanceData.FlattenSequenceTime.ToString();
+        _parseErrorCount.Text     = recovery.RecoveryPerformanceData.ParseErrorCount.ToString(CultureInfo.InvariantCulture);
+        
         TryReportError();
         ShowInfo();
       }
