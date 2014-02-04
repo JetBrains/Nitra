@@ -14,7 +14,6 @@ using ParsedSeqKey = Nemerle.Builtins.Tuple<Nitra.Internal.Recovery.ParsedSequen
 using ParsedNode = Nemerle.Builtins.Tuple<Nitra.Internal.Recovery.ParsedSequence, Nitra.Internal.Recovery.ParsedSubrule>;
 
 using NB = Nemerle.Builtins;
-using IntRuleCallKey = Nemerle.Builtins.Tuple<int, Nitra.Internal.Recovery.RuleCallKey>;
 using SCG = System.Collections.Generic;
 
 using SubruleParses = System.Collections.Generic.Dictionary<Nitra.Internal.Recovery.ParsedSubrule, int>;
@@ -36,8 +35,6 @@ namespace Nitra.DebugStrategies
   using ParsedSequenceAndSubrules = Nemerle.Core.list<ParsedSequenceAndSubrule>;
   using FlattenSequences = List<Nemerle.Core.list<ParsedSequenceAndSubrule>>;
   using SubruleParsesAndEnd = Nemerle.Builtins.Tuple<SubruleParses, int>;
-  using ParserData = Tuple<int, int, List<ParsedStateInfo>>;
-  using ReportData = Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>>;
 
   using ParsedList = Nemerle.Core.list<ParsedNode>;
   using Nitra.Runtime;
@@ -48,12 +45,10 @@ namespace Nitra.DebugStrategies
   {
     public const int NumberOfTokensForSpeculativeDeleting = int.MaxValue;
     public const int Fail = int.MaxValue;
-    public ReportData ReportResult;
     private readonly Dictionary<ParsedNode, bool> _deletedToken = new Dictionary<ParsedNode, bool>();
 
-    public Recovery(ReportData reportResult)
+    public Recovery()
     {
-      ReportResult = reportResult;
     }
 
     public virtual int Strategy(ParseResult parseResult)

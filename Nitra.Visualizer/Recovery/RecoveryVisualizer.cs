@@ -13,9 +13,6 @@ namespace Nitra.Strategies
 namespace Nitra.DebugStrategies
 #endif
 {
-  using PrseData = Tuple<int, int, List<ParsedStateInfo>>;
-  using ReortData = Action<RecoveryResult, List<RecoveryResult>, List<RecoveryResult>, List<RecoveryStackFrame>>;
-
   sealed class RecoveryVisualizer : Recovery
   {
     private readonly RecoveryPerformanceData _recoveryPerformanceData;
@@ -25,12 +22,12 @@ namespace Nitra.DebugStrategies
       get { return _recoveryPerformanceData; }
     }
 
-    public RecoveryVisualizer(ReortData reportResult) : base(reportResult)
+    public RecoveryVisualizer() : base()
     {
       _recoveryPerformanceData = new RecoveryPerformanceData();
     }
 
-    public RecoveryVisualizer(RecoveryVisualizer other) : base(other.ReportResult)
+    public RecoveryVisualizer(RecoveryVisualizer other) : base()
     {
       _recoveryPerformanceData = other._recoveryPerformanceData;
     }
@@ -50,24 +47,5 @@ namespace Nitra.DebugStrategies
       _recoveryPerformanceData.Timer.Stop();
       return res;
     }
-
-    //protected override void TryParseSubrules(List<RecoveryStackFrame> newFrames, int startTextPos, ParseResult parseResult, RecoveryStackFrame frame, int curTextPos, string text, int subruleLevel, int state)
-    //{
-    //  if (_nestedLevel > 20) // ловим зацикленную рекурсию для целей отладки
-    //    return;
-
-    //  _recoveryPerformanceData.TryParseSubrulesCount++;
-    //  var time = _recoveryPerformanceData.Timer.Elapsed;
-
-    //  base.TryParseSubrules(newFrames, startTextPos, parseResult, frame, curTextPos, text, subruleLevel, state);
-
-    //  if (_nestedLevel == 0)
-    //    _recoveryPerformanceData.TryParseSubrulesTime += _recoveryPerformanceData.Timer.Elapsed - time;
-    //}
-
-    //protected override Recovery CreateSubRecovery()
-    //{
-    //  return new RecoveryVisualizer(this);
-    //}
   }
 }
