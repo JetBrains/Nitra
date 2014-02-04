@@ -322,7 +322,7 @@ namespace Nitra.DebugStrategies
       int comulativeMin;
       if (results.Count == 0)
       {}
-      var bestResults = RemoveWorstPaths2(seq, end, results, out comulativeMin);
+      var bestResults = RemoveWorstPaths(seq, end, results, out comulativeMin);
       var result2 = new SubruleParsesAndEnd(bestResults, comulativeMin);
       memiozation[key] = result2;
 
@@ -362,7 +362,7 @@ namespace Nitra.DebugStrategies
       return int.MaxValue;
     }
 
-    private static SubruleParses RemoveWorstPaths2(ParsedSequence seq, int end, SubruleParses parses, out int comulativeMin)
+    private static SubruleParses RemoveWorstPaths(ParsedSequence seq, int end, SubruleParses parses, out int comulativeMin)
     {
       var comulativeCost = new SubruleParses();
       bool updated = true;
