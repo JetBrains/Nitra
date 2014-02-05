@@ -43,7 +43,7 @@ namespace Nitra.Visualizer.ViewModels
       if (TestSuit.TestState == TestState.Ignored)
         return null;
 
-      RecoveryDebug.CurrentTestName = Name;
+      Nitra.DebugStrategies.RecoveryDebug.CurrentTestName = Name;
 
       var result = TestSuit.Run(Code, Gold, recoveryStrategy);
       if (result == null)
