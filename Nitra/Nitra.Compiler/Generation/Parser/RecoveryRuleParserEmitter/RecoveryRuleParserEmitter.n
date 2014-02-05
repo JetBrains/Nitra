@@ -16,32 +16,23 @@ using System.Linq;
 
 namespace Nitra.Compiler
 {
-  internal sealed partial class TryParseMethodEmitter : MethodEmitter
+  internal sealed class RecoveryRuleParserEmitter
   {
-    private          _endLabel       : PExprLabel;
+    public Owner               : RuleParserEmitter  { get; }
+    public SequenceCompileInfo : SequenceCompileInfo.Ast  { get; }
+    public Environment         : EmitterEnvironment { get { Owner.Environment } }
+    public TypeBuilder         : TypeBuilder        { get; }
+    
 
     public this(owner : RuleParserEmitter, tb : TypeBuilder, sequence : SequenceCompileInfo.Ast)
     {
-      base(owner, sequence, tb);
-      _data         = SequenceDataContainer(sequence, this, SequenceData, SubruleData);
-      _endLabel     = Environment.MakeLabel("EndParse");
+      this.Owner               = owner;
+      this.TypeBuilder         = tb;
+      this.SequenceCompileInfo = sequence;
     }
 
     public Emit() : void
     {
-      TypeBuilder.DefineConditional(<[decl:
-        public override TryParse(frame : Nitra.Internal.Recovery.RecoveryStackFrame, startState : int, mutable curTextPos : int, continueList : bool, parsedStates : SCG.List[Nitra.Internal.Recovery.ParsedStateInfo], parseResult : Nitra.ParseResult) : int
-        {
-          def text = parseResult.Text;
-          mutable startLevel;
-          parsedStates.Clear();
-          $(if (Environment.IsIdeMode)
-            <[ ignore(recoveryStack, startState, curTextPos, parseResult, text, startLevel); -1 ]>
-          else
-            CompileAst(SequenceCompileInfo))
-        }
-      ]>);
-      //TODO: Move this methods outside TryParseMethodEmitter
       DefineStateMapMethod("IsStateCanParseEmptyString", _.CanParseEmptyString);
       DefineStateMapMethod("IsVoidState",                subrule => subrule.SrcRule.Type is RuleType.Void);
       DefineStateMapMethod("IsStartState",               _.IsStart);
@@ -51,16 +42,14 @@ namespace Nitra.Compiler
       DefineStateMapMethod("GetStartState",               subrule : SubruleCompileInfo => subrule.Owner.NonMarkerSubrules[0].State);
       DefineStateMapMethod("GetOffsetForState",           subrule : SubruleCompileInfo => subrule.Offset);
       
-      TypeBuilder.DefineConditional(<[decl: public override GetLoopBodyForSeparator(separatorId : int, bodyId : out int, firstState : out int) : bool { $(Compile_GetLoopBodyForSeparator(SequenceCompileInfo)) } ]>);
-      TypeBuilder.DefineConditional(<[decl: public override GetRuleParserForState(state : int) : Nitra.Internal.Recovery.IRecoveryRuleParser * int { $(Compile_GetRuleParserForState(SequenceCompileInfo)) } ]>);
-      TypeBuilder.DefineConditional(<[decl: public override CodeForState(state : int) : string { $(Compile_CodeForState(SequenceCompileInfo)) } ]>);
-      TypeBuilder.DefineConditional(<[decl: public override CodeForStates(startState : int, endState : int, skipOptionalStates : bool) : array[string] { $(Compile_CodeForStates(SequenceCompileInfo)) } ]>);
-      TypeBuilder.DefineConditional(<[decl: public override IsTokenRule    : bool   { get { $(SequenceCompileInfo.Symbol.Options.IsTokenRule) } } ]>);
-      TypeBuilder.DefineConditional(<[decl: public override Code           : string { get { $(SequenceCompileInfo.SrcRule.ToString()) } } ]>);
-      TypeBuilder.DefineConditional(<[decl: public override CodeWithStates : string { get { $(SequenceCompileInfo.ToString()) } } ]>);
-      TypeBuilder.DefineConditional(<[decl: public override RuleName       : string { get { $(SequenceCompileInfo.Symbol.Name) } } ]>);
-
-      TypeBuilder.DefineConditional(<[decl: private static EmptyArray : array[Nitra.Internal.Recovery.RecoveryStackFrame] = array(0) ]>);
+      this.TypeBuilder.DefineConditional(<[decl: public override GetLoopBodyForSeparator(separatorId : int, bodyId : out int, firstState : out int) : bool { $(Compile_GetLoopBodyForSeparator(SequenceCompileInfo)) } ]>);
+      this.TypeBuilder.DefineConditional(<[decl: public override GetRuleParserForState(state : int) : Nitra.Internal.Recovery.IRecoveryRuleParser * int { $(Compile_GetRuleParserForState(SequenceCompileInfo)) } ]>);
+      this.TypeBuilder.DefineConditional(<[decl: public override CodeForState(state : int) : string { $(Compile_CodeForState(SequenceCompileInfo)) } ]>);
+      this.TypeBuilder.DefineConditional(<[decl: public override CodeForStates(startState : int, endState : int, skipOptionalStates : bool) : array[string] { $(Compile_CodeForStates(SequenceCompileInfo)) } ]>);
+      this.TypeBuilder.DefineConditional(<[decl: public override IsTokenRule    : bool   { get { $(SequenceCompileInfo.Symbol.Options.IsTokenRule) } } ]>);
+      this.TypeBuilder.DefineConditional(<[decl: public override Code           : string { get { $(SequenceCompileInfo.SrcRule.ToString()) } } ]>);
+      this.TypeBuilder.DefineConditional(<[decl: public override CodeWithStates : string { get { $(SequenceCompileInfo.ToString()) } } ]>);
+      this.TypeBuilder.DefineConditional(<[decl: public override RuleName       : string { get { $(SequenceCompileInfo.Symbol.Name) } } ]>);
     }
 
     public CurTextPos : PExpr { get { <[ curTextPos ]> } }
@@ -204,6 +193,65 @@ namespace Nitra.Compiler
         when (parseResult.MaxFailPos < curTextPos)
           parseResult.MaxFailPos = curTextPos;
       ]>
+    }
+
+    public DefineStateMapMethod(name : string, predicate : SubruleCompileInfo -> bool) : void
+    {
+      def compile() : PExpr
+      {
+        def cases = SCG.List();
+        def (forTrue, forFalse) = SequenceCompileInfo.AllNonMarkerSubrules.ToNList().Partition(predicate);
+
+        def truePatterns  = forTrue. Map(subrule => <[ $(subrule.State) ]>);
+        def falsePatterns = forFalse.Map(subrule => <[ $(subrule.State) ]>);
+
+        unless (truePatterns.IsEmpty)
+          cases.Add(MatchCase(truePatterns,  <[ true ]>));
+        unless (falsePatterns.IsEmpty)
+          cases.Add(MatchCase(falsePatterns, <[ false ]>));
+
+        cases.Add(<[ case: | x => assert(false, $"Unknown parse state '$x'.") ]>);
+
+        <[ match (state) { ..$cases } ]>
+      }
+
+      TypeBuilder.DefineConditional(<[decl:
+        public override $(name : global)(state : int) : bool
+        {
+          $(if (Environment.IsIdeMode)
+            <[ IgnoreParams(); assert(false); ]>
+          else
+            compile())
+        }
+      ]>);
+    }
+
+    public DefineStateMapMethod(name : string, predicate : SubruleCompileInfo -> int) : void
+    {
+      DefineStateMapMethod(name, predicate, <[ $_ ]>)
+    }
+
+    public DefineStateMapMethod[T](name : string, map : SubruleCompileInfo -> T, toPExpr : T -> PExpr) : void
+    {
+      def compile() : PExpr
+      {
+        def cases = SCG.List();
+        foreach (subrule in SequenceCompileInfo.AllNonMarkerSubrules)
+          cases.Add(<[ case: | $(subrule.State) => $(toPExpr(map(subrule))) ]>);
+
+        cases.Add(<[ case: | x => assert(false, $"Unknown parse state '$x'.") ]>);
+
+        <[ match (state) { ..$cases } ]>
+      }
+      TypeBuilder.DefineConditional(<[decl:
+        public override $(name : global)(state : int) : int
+        {
+          $(if (Environment.IsIdeMode)
+            <[ IgnoreParams(); assert(false); ]>
+          else
+            compile())
+        }
+      ]>);
     }
   }
 }

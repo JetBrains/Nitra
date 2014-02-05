@@ -27,7 +27,6 @@ using Nemerle.Diff;
 
 namespace Nitra.Visualizer
 {
-  using RecoveryInfo = Tuple<RecoveryResult, RecoveryResult[], RecoveryResult[], RecoveryStackFrame[]>;
   using System.Windows.Documents;
 
   /// <summary>
@@ -53,7 +52,6 @@ namespace Nitra.Visualizer
     TimeSpan _parseTimeSpan;
     TimeSpan _astTimeSpan;
     TimeSpan _highlightingTimeSpan;
-    readonly List<RecoveryInfo> _recoveryResults = new List<RecoveryInfo>();
     readonly Settings _settings;
     private TestSuitVm _currentTestSuit;
 
@@ -170,11 +168,6 @@ namespace Nitra.Visualizer
       _testsTreeView.ItemsSource = testSuits;
     }
 
-    private void ReportRecoveryResult(RecoveryResult bestResult, List<RecoveryResult> bestResults, List<RecoveryResult> candidats, List<RecoveryStackFrame> stacks)
-    {
-      _recoveryResults.Add(Tuple.Create(bestResult, bestResults.ToArray(), candidats.ToArray(), stacks.ToArray()));
-    }
-
     private void textBox1_GotFocus(object sender, RoutedEventArgs e)
     {
       ShowNodeForCaret();
@@ -251,14 +244,17 @@ namespace Nitra.Visualizer
 
       if (_parseResult == null)
         _status.Text = "Not parsed!";
-      else if (_parseResult.IsSuccess)
-      {
-        _status.Text = "OK";
-      }
       else
       {
         var errors = _parseResult.GetErrors();
         var errorNodes = _errorsTreeView.Items;
+
+        if (errors.Length == 0)
+        {
+          _status.Text = "OK";
+          return;
+        }
+
 
         foreach (ParseError error in errors)
         {
@@ -283,7 +279,7 @@ namespace Nitra.Visualizer
           errorNodes.Add(errorNode);
         }
 
-        _status.Text = "Parsing completed with " + errors.Length + "error[s]";
+        _status.Text = "Parsing completed with " + errors.Length + " error[s]";
       }
     }
 
@@ -482,12 +478,13 @@ namespace Nitra.Visualizer
 
       try
       {
-        var recovery = new RecoveryVisualizer(ReportRecoveryResult);
-        _recoveryResults.Clear();
+        var recovery = new RecoveryVisualizer();
         _recoveryTreeView.Items.Clear();
         _errorsTreeView.Items.Clear();
         _reflectionTreeView.ItemsSource = null;
         var timer = Stopwatch.StartNew();
+
+        RecoveryDebug.CurrentTestName = null;
 
         _parseResult = _currentTestSuit.Run(_text.Text, null, recovery.Strategy);
 
@@ -500,119 +497,21 @@ namespace Nitra.Visualizer
 
         _outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
 
-        _recoveryTime.Text = recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
-        _recoveryCount.Text = recovery.RecoveryPerformanceData.Count.ToString(CultureInfo.InvariantCulture);
-
-        _continueParseTime.Text = recovery.RecoveryPerformanceData.ContinueParseTime.ToString();
-        _continueParseCount.Text = recovery.RecoveryPerformanceData.ContinueParseCount.ToString(CultureInfo.InvariantCulture);
-
-        _tryParseSubrulesTime.Text = recovery.RecoveryPerformanceData.TryParseSubrulesTime.ToString();
-        _tryParseSubrulesCount.Text = recovery.RecoveryPerformanceData.TryParseSubrulesCount.ToString(CultureInfo.InvariantCulture);
-
-        _tryParseTime.Text = recovery.RecoveryPerformanceData.TryParseTime.ToString();
-        _tryParseCount.Text = recovery.RecoveryPerformanceData.TryParseCount.ToString(CultureInfo.InvariantCulture);
-
-        ShowRecoveryResults();
+        _recoveryTime.Text        = recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
+        _earleyParseTime.Text     = recovery.RecoveryPerformanceData.EarleyParseTime.ToString();
+        _recoverAllWaysTime.Text  = recovery.RecoveryPerformanceData.RecoverAllWaysTime.ToString();
+        _findBestPathTime.Text    = recovery.RecoveryPerformanceData.FindBestPathTime.ToString();
+        _flattenSequenceTime.Text = recovery.RecoveryPerformanceData.FlattenSequenceTime.ToString();
+        _parseErrorCount.Text     = recovery.RecoveryPerformanceData.ParseErrorCount.ToString(CultureInfo.InvariantCulture);
+        
         TryReportError();
         ShowInfo();
-        
-        recovery.ReportResult = null;
       }
       catch (Exception ex)
       {
         ClearMarkers();
         MessageBox.Show(this, ex.Message);
         Debug.WriteLine(ex.ToString());
-      }
-    }
-
-    private void ShowRecoveryResults()
-    {
-      foreach (var recoveryResult in _recoveryResults)
-      {
-        var node = new TreeViewItem();
-        node.Header = recoveryResult.Item1;
-        node.Tag = recoveryResult;
-        node.MouseDoubleClick += RecoveryNode_MouseDoubleClick;
-
-        var stackNode = new TreeViewItem();
-        stackNode.Header = "Stacks...";
-        stackNode.Tag = recoveryResult.Item4;
-        stackNode.Expanded += RecoveryNode_Expanded;
-        stackNode.Items.Add(new TreeViewItem());
-        node.Items.Add(stackNode);
-
-        var bestResultsNode = new TreeViewItem();
-        bestResultsNode.Header = "Other best results...";
-        bestResultsNode.Tag = recoveryResult.Item2;
-        bestResultsNode.Expanded += RecoveryNode_Expanded;
-        bestResultsNode.Items.Add(new TreeViewItem());
-        node.Items.Add(bestResultsNode);
-
-        var candidatsNode = new TreeViewItem();
-        candidatsNode.Header = "All candidats...";
-        candidatsNode.Tag = recoveryResult.Item3;
-        candidatsNode.Expanded += RecoveryNode_Expanded;
-        candidatsNode.Items.Add(new TreeViewItem());
-        node.Items.Add(candidatsNode);
-
-        _recoveryTreeView.Items.Add(node);
-      }
-    }
-
-    void RecoveryNode_MouseDoubleClick(object sender, MouseButtonEventArgs e)
-    {
-      var recovery = ((RecoveryInfo)((TreeViewItem)e.Source).Tag).Item1;
-      _text.Select(recovery.FailPos, recovery.SkipedCount);
-      e.Handled = true;
-      _text.Focus();
-    }
-
-    void RecoveryNode_Expanded(object sender, RoutedEventArgs e)
-    {
-      var treeNode = (TreeViewItem)e.Source;
-      if (treeNode.Items.Count == 1 && ((TreeViewItem)treeNode.Items[0]).Header == null)
-      {
-        treeNode.Items.Clear();
-        var recoveryResults = treeNode.Tag as RecoveryResult[];
-
-        if (recoveryResults != null)
-        {
-          foreach (var recoveryResult in recoveryResults)
-          {
-            var node = new TreeViewItem();
-            node.Header = recoveryResult;
-
-            //foreach (var frame in recoveryResult.Stack)
-            //{
-            //  var frameNode = new TreeViewItem();
-            //  frameNode.Header = frame;
-            //  node.Items.Add(frameNode);
-            //}
-
-            treeNode.Items.Add(node);
-          }
-        }
-
-        var stacks = treeNode.Tag as RecoveryStackFrame[];
-
-        if (stacks != null)
-        {
-          foreach (var stack in stacks)
-          {
-            var node = new TreeViewItem();
-            node.Header = stack;
-
-            //foreach (var frame in stack)
-            //{
-            //  var frameNode = new TreeViewItem();
-            //  frameNode.Header = frame;
-            //  node.Items.Add(frameNode);
-            //}
-
-            treeNode.Items.Add(node);
-          }
-        }
       }
     }
 
@@ -995,7 +894,7 @@ namespace Nitra.Visualizer
     private void OnRunTests(object sender, ExecutedRoutedEventArgs e)
     {
       if (CheckTestFolder())
-        RunTests(new Recovery(null).Strategy);
+        RunTests(new Recovery().Strategy);
       else
         MessageBox.Show(this, "Can't run tests.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
     }
@@ -1208,7 +1107,7 @@ namespace Nitra.Visualizer
 
     private void OnRunTest(object sender, ExecutedRoutedEventArgs e)
     {
-      RunTest(new Recovery(null).Strategy);
+      RunTest(new Recovery().Strategy);
     }
 
     private void RunTest(RecoveryStrategy recoveryStrategy)
@@ -1252,7 +1151,7 @@ namespace Nitra.Visualizer
 
     private void _testsTreeView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-      RunTest(new Recovery(null).Strategy);
+      RunTest(new Recovery().Strategy);
       e.Handled = true;
     }
 

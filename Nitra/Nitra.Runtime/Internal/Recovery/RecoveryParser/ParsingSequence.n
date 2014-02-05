@@ -15,8 +15,9 @@ using SCG = System.Collections.Generic;
 namespace Nitra.Internal.Recovery
 {
   [Record]
-  public class ParsingSequence
+  public partial class ParsingSequence
   {
+    public SequenceInfo        : SequenceInfo;
     public RuleName            : string;
     public RuleDesc            : string;
     public IsToken             : bool;
@@ -34,7 +35,7 @@ namespace Nitra.Internal.Recovery
           return true;
       false
     }
-
+    
     public IsNullable : bool
     {
       get
@@ -59,21 +60,22 @@ namespace Nitra.Internal.Recovery
     public static CreateExtensible(ruleParser : ExtensibleRuleParser) : ParsingSequence
     {
       ParsingSequence(
-          ruleParser.RuleName,
-          "Extensible: " + ruleParser.RuleName,
-          ruleParser.IsTokenRule,
-          ruleParser.MandatoryTokens,
-          array[0],
-          array[
-            ParsingState.ExtensionPrefix (0, array[1, -1], array[],     ruleParser),
-            ParsingState.ExtensionPostfix(1, array[1, -1], array[0, 1], ruleParser)
-          ]
-        )
+        null,
+        ruleParser.RuleName,
+        "Extensible: " + ruleParser.RuleName,
+        ruleParser.IsTokenRule,
+        ruleParser.MandatoryTokens,
+        array[0],
+        array[
+          ParsingState.ExtensionPrefix (0, array[1, -1], array[],     ruleParser),
+          ParsingState.ExtensionPostfix(1, array[1, -1], array[0, 1], ruleParser)
+        ]
+      )
     }
 
     public static CreateRoot() : ParsingSequence
     {
-      ParsingSequence("Root", "Root", false, 1, array[0], array[ParsingState.Scan(0, array[-1], array[], null)])
+      ParsingSequence(null, "Root", "Root", false, 1, array[0], array[ParsingState.Scan(0, array[-1], array[], null)])
     }
 
     private static CreateSequence(sequence : SequenceInfo, isToken : bool) : ParsingSequence
@@ -207,13 +209,94 @@ namespace Nitra.Internal.Recovery
       }
       def startStates = transitions.Where(t => t[0] == -1).Select(t => if (t[1] == states.Count) -1 else t[1]).ToArray().SortInplace(_.CompareTo(_));
       def states = states;
-      def res = ParsingSequence(sequence.Parser.RuleName, sequence.Description, isToken, sequence.MandatoryTokenCount, startStates, states.ToArray());
+      def res = ParsingSequence(sequence, sequence.Parser.RuleName, sequence.Description, isToken, sequence.MandatoryTokenCount, startStates, states.ToArray());
       res
     }
     
     public override ToString() : string
     {
-      $"$RuleName[..$StartStates]"
+      def invalidState = -100;
+      def sb = Text.StringBuilder();
+      ToString(sb, invalidState);
+      sb.ToString()
+    }
+    
+    public ToString(sb : Text.StringBuilder, beforeState : int) : void
+    {
+      def contains[T](ary : array[T], value : T) : bool
+      {
+        Array.IndexOf(ary, value) >= 0
+      }
+      def isNullableLoop(state : ParsingState, seq : ParsingSequence, withSeparator : bool) : bool
+      {
+        def nextIndex = if (withSeparator) state.Id + 2 else state.Id + 1;
+        seq.IsNullable 
+          || contains(seq.StartStates, state.Id) && contains(seq.StartStates, nextIndex) 
+          || state.Prev.Any(s => s < state.Id && (contains(seq.States[s].Next, nextIndex) || contains(seq.States[s].Next, -1)))
+      }
+      def printState(sb : Text.StringBuilder, state : ParsingState) : void
+      {
+        _ = sb.Append(state.Id).Append(":").Append(state.Description);
+      }
+      def seq      = this;
+      def bp       = if (seq.SequenceInfo?.Parser is ExtensibleRuleParser as p) p.BindingPower else 0;
+
+      mutable skip = false;
+      foreach (state in seq.States)
+      {
+        when (skip)
+        {
+          skip = false;
+          continue;
+        }
+        
+        if (contains(state.Next, state.Id)) // loop
+        {
+          _ = sb.Append("(");
+          when (beforeState == state.Id)
+            _ = sb.Append("●  ");
+          printState(sb, state);
+          _ = sb.Append(")");
+          if (isNullableLoop(state, seq, withSeparator=false))
+            _ = sb.Append("*");
+          else
+            _ = sb.Append("+");
+        }
+        else if (contains(state.Next, state.Id + 1) && contains(seq.States[state.Id + 1].Next, state.Id)) // loop with separator
+        {
+          _ = sb.Append("(");
+          when (beforeState == state.Id)
+            _ = sb.Append("●  ");
+          printState(sb, state);
+          _ = sb.Append("; ");
+          def sepState = seq.States[state.Id + 1];
+          when (beforeState == sepState.Id)
+            _ = sb.Append("●  ");
+          printState(sb, sepState);
+          when (sepState.Next.Length > 1)
+            _ = sb.Append("; ?");
+          _ = sb.Append(")");
+          if (isNullableLoop(state, seq, withSeparator=true))
+            _ = sb.Append("*");
+          else
+            _ = sb.Append("+");
+          skip = true;
+        }
+        else
+        {
+          when (state.Id > 0)
+            _ = sb.Append("  ");
+          when (beforeState == state.Id)
+            _ = sb.Append("●  ");
+          printState(sb, state);
+        }
+      }
+        
+      when (beforeState == -1)
+          _ = sb.Append(" ♦");
+        
+      when (bp > 0)
+        _ = sb.Append(" ^ " + bp);
     }
   }
 }

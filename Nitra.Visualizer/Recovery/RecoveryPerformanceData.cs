@@ -11,13 +11,13 @@ namespace Nitra.DebugStrategies
   sealed class RecoveryPerformanceData
   {
     public Stopwatch Timer = new Stopwatch();
-    public TimeSpan  TryParseTime;
-    public int       Count;
-    public TimeSpan  ContinueParseTime;
-    public int       ContinueParseCount;
-    public TimeSpan  TryParseSubrulesTime;
-    public int       TryParseSubrulesCount;
-    public int       TryParseCount;
+    public TimeSpan  EarleyParseTime;
+    public TimeSpan  RecoverAllWaysTime;
+    public TimeSpan  FindBestPathTime;
+    public TimeSpan  FlattenSequenceTime;
+    public int       ParseErrorCount;
+
+    public TimeSpan  Previous;
 
     public RecoveryPerformanceData()
     {
@@ -26,14 +26,20 @@ namespace Nitra.DebugStrategies
 
     public void Init()
     {
-      ContinueParseTime = TimeSpan.Zero;
-      ContinueParseCount = 0;
-      TryParseSubrulesTime = TimeSpan.Zero;
-      TryParseSubrulesCount = 0;
-      TryParseTime = TimeSpan.Zero;
-      TryParseCount = 0;
       Timer.Reset();
-      Count = 0;
+      EarleyParseTime = TimeSpan.Zero;
+      RecoverAllWaysTime = TimeSpan.Zero;
+      FindBestPathTime = TimeSpan.Zero;
+      FlattenSequenceTime = TimeSpan.Zero;
+      ParseErrorCount = 0;
+    }
+
+    public TimeSpan NextTime()
+    {
+      var cur = Timer.Elapsed;
+      var previous = Previous;
+      Previous = cur;
+      return cur - previous;
     }
   }
 }

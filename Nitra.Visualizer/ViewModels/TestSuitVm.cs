@@ -24,7 +24,7 @@ namespace Nitra.Visualizer.ViewModels
     public string _hint;
     public override string Hint { get { return _hint; } }
 
-    public readonly Recovery Recovery = new Recovery(null);
+    public readonly Recovery Recovery = new Recovery();
 
     readonly string _rootPath;
     ParserHost _parserHost;
