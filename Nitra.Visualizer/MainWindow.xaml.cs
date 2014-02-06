@@ -894,7 +894,7 @@ namespace Nitra.Visualizer
     private void OnRunTests(object sender, ExecutedRoutedEventArgs e)
     {
       if (CheckTestFolder())
-        RunTests(new Recovery().Strategy);
+        RunTests(parseResult => new Recovery().Strategy(parseResult));
       else
         MessageBox.Show(this, "Can't run tests.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
     }
@@ -1107,7 +1107,7 @@ namespace Nitra.Visualizer
 
     private void OnRunTest(object sender, ExecutedRoutedEventArgs e)
     {
-      RunTest(new Recovery().Strategy);
+      RunTest(parseResult => new Recovery().Strategy(parseResult));
     }
 
     private void RunTest(RecoveryStrategy recoveryStrategy)
@@ -1151,7 +1151,7 @@ namespace Nitra.Visualizer
 
     private void _testsTreeView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-      RunTest(new Recovery().Strategy);
+      RunTest(parseResult => new Recovery().Strategy(parseResult));
       e.Handled = true;
     }
 

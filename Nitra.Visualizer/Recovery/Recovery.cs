@@ -42,13 +42,15 @@ namespace Nitra.DebugStrategies
 
   public class Recovery
   {
-    public const int NumberOfTokensForSpeculativeDeleting = int.MaxValue;
+    public const int NumberOfTokensForSpeculativeDeleting = 4;
     public const int Fail = int.MaxValue;
     private readonly Dictionary<ParsedSequenceAndSubrule, bool> _deletedToken = new Dictionary<ParsedSequenceAndSubrule, bool>();
     private ParseResult _parseResult;
 
     public virtual int Strategy(ParseResult parseResult)
     {
+      var timeStemp = Stopwatch.StartNew().Elapsed;
+      Debug.WriteLine(">>>> Strategy " + timeStemp);
       //Debug.Assert(parseResult.RecoveryStacks.Count > 0);
 
       _parseResult = parseResult;
@@ -101,6 +103,7 @@ namespace Nitra.DebugStrategies
 #endif
 
       CollectError(rp, results);
+      Debug.WriteLine("<<<< Strategy " + timeStemp);
       return parseResult.Text.Length;
     }
 
@@ -290,8 +293,8 @@ namespace Nitra.DebugStrategies
 
     private int FindBestPath(ParsedSequence seq, int end, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
-      if (_parseResult.TerminateParsing)
-        throw new Exception("Canceled");
+      //if (_parseResult.TerminateParsing)
+      //  throw new Exception("Canceled");
 
       SubruleParsesAndEnd result;
 
@@ -612,8 +615,8 @@ namespace Nitra.DebugStrategies
 
         do
         {
-          if (_parseResult.TerminateParsing)
-            throw new Exception("Canceled");
+          //if (_parseResult.TerminateParsing)
+          //  throw new Exception("Canceled");
 
           while (records.Count > 0)
           {
