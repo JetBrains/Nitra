@@ -289,6 +289,7 @@ namespace Nitra.Visualizer
       var error = (ParseError)node.Tag;
       _text.CaretOffset = error.Location.StartPos;
       _text.Select(error.Location.StartPos, error.Location.Length);
+      _text.ScrollToLine(error.Location.StartLineColumn.Line);
       e.Handled = true;
       _text.Focus();
     }
