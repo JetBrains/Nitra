@@ -1,5 +1,6 @@
 ﻿//#region Пролог
 //#define DebugOutput
+//#define DebugThreading
 using Nitra.Internal.Recovery;
 using Nitra.Runtime.Errors;
 
@@ -46,11 +47,25 @@ namespace Nitra.DebugStrategies
     public const int Fail = int.MaxValue;
     private readonly Dictionary<ParsedSequenceAndSubrule, bool> _deletedToken = new Dictionary<ParsedSequenceAndSubrule, bool>();
     private ParseResult _parseResult;
+#if DebugThreading
+    private static int _counter = 0;
+    private int _id;
+    public int ThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+
+    public Recovery()
+    {
+      _id = System.Threading.Interlocked.Increment(ref _counter);
+      Debug.WriteLine("Recovery() " + _id + " ThreadId=" + System.Threading.Thread.CurrentThread.ManagedThreadId);
+    }
+#endif
 
     public virtual int Strategy(ParseResult parseResult)
     {
-      var timeStemp = Stopwatch.StartNew().Elapsed;
-      Debug.WriteLine(">>>> Strategy " + timeStemp);
+#if DebugThreading
+      if (ThreadId != System.Threading.Thread.CurrentThread.ManagedThreadId)
+        Debug.Assert(false);
+      Debug.WriteLine(">>>> Strategy " + _id + " ThreadId=" + System.Threading.Thread.CurrentThread.ManagedThreadId);
+#endif
       //Debug.Assert(parseResult.RecoveryStacks.Count > 0);
 
       _parseResult = parseResult;
@@ -83,6 +98,9 @@ namespace Nitra.DebugStrategies
       timer.Restart();
 #endif
 
+      if (parseResult.TerminateParsing)
+        throw new OperationCanceledException();
+
       var memiozation = new Dictionary<ParsedSeqKey, SubruleParsesAndEnd>();
       FindBestPath(startSeq, textLen, memiozation);
 
@@ -93,8 +111,14 @@ namespace Nitra.DebugStrategies
       timer.Restart();
 #endif
 
+      if (parseResult.TerminateParsing)
+        throw new OperationCanceledException();
+
       var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new ParsedSequenceAndSubrule2[0]) },
       parseResult, startSeq, textLen, memiozation[new ParsedSeqKey(startSeq, textLen)].Field1, memiozation);
+
+      if (parseResult.TerminateParsing)
+        throw new OperationCanceledException();
 
       UpdateFlattenSequenceTime();
 #if DebugOutput
@@ -103,7 +127,15 @@ namespace Nitra.DebugStrategies
 #endif
 
       CollectError(rp, results);
-      Debug.WriteLine("<<<< Strategy " + timeStemp);
+#if DebugThreading
+      Debug.WriteLine("<<<< Strategy " + _id + " ThreadId=" + System.Threading.Thread.CurrentThread.ManagedThreadId);
+#endif
+
+      if (parseResult.TerminateParsing)
+        throw new OperationCanceledException();
+
+      _parseResult = null;
+
       return parseResult.Text.Length;
     }
 
@@ -159,8 +191,6 @@ namespace Nitra.DebugStrategies
       var parseResult = rp.ParseResult;
       foreach (var e in expected)
         parseResult.ReportError(new ExpectedSubrulesError(new Location(parseResult.OriginalSource, e.Key.StartPos, e.Key.EndPos), e.Value));
-
-      _parseResult = null;
     }
 
     private FlattenSequences FlattenSubrule(FlattenSequences prevs, ParseResult parseResult, ParsedSequence seq, SubruleParses parses, ParsedSubrule subrule, int subruleInsertedTokens, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
@@ -293,8 +323,8 @@ namespace Nitra.DebugStrategies
 
     private int FindBestPath(ParsedSequence seq, int end, Dictionary<ParsedSeqKey, SubruleParsesAndEnd> memiozation)
     {
-      //if (_parseResult.TerminateParsing)
-      //  throw new Exception("Canceled");
+      if (_parseResult.TerminateParsing)
+        throw new OperationCanceledException();
 
       SubruleParsesAndEnd result;
 
@@ -615,8 +645,8 @@ namespace Nitra.DebugStrategies
 
         do
         {
-          //if (_parseResult.TerminateParsing)
-          //  throw new Exception("Canceled");
+          if (_parseResult.TerminateParsing)
+            throw new OperationCanceledException();
 
           while (records.Count > 0)
           {
