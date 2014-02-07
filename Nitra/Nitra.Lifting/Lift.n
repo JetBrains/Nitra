@@ -21,7 +21,8 @@ namespace Nitra.Lifting
   macro Lift(id : string, body : PExpr) : PExpr
     syntax("lift", "(", id, ")", body)
   {
-    LiftImpl.Lift(id, body)
+    def typer = Macros.ImplicitCTX();
+    LiftImpl.Lift(id, body, typer)
   }
 
   module LiftImpl
@@ -50,7 +51,7 @@ namespace Nitra.Lifting
       }
     }
 
-    public Lift(id : string, body : PExpr) : PExpr
+    public Lift(id : string, body : PExpr, typer : Typer) : PExpr
     {
       mutable parseCallback;
       if (Parsers.TryGetValue(id, out parseCallback))
@@ -60,29 +61,21 @@ namespace Nitra.Lifting
           | Literal(Literal.String(RawString = rawString)) when rawString.StartsWith("<#") =>
             def originalSource = SourceSnapshot(rawString, body.Location.FileIndex, Location.GetFileName(body.Location.FileIndex));
             def sourceToParse  = originalSource.WithTextSubstring(2, originalSource.Text.Length - 4); // cut string braces <# #>
-
-            def parseResult = parseCallback(sourceToParse);
+            def offset         = body.Location.Begin;
+            def parseResult    = parseCallback(sourceToParse);
             unless (parseResult.IsSuccess)
             {
-              def offset = body.Location.Begin;
-              def translateLineColumn(point : LineColumn) : TextPoint
-              {
-                if(point.Line == 1)
-                  TextPoint(offset.Line, offset.Column + point.Column)
-                else
-                  TextPoint(offset.Line + point.Line - 1, point.Column)
-              }
               foreach (e in parseResult.GetErrors())
               {
-                def begin = translateLineColumn(e.Location.StartLineColumn);
-                def end   = translateLineColumn(e.Location.EndLineColumn);
+                def begin = PExprSplicableAstBuilder.TranslateLineColumn(offset, e.Location.StartLineColumn);
+                def end   = PExprSplicableAstBuilder.TranslateLineColumn(offset, e.Location.EndLineColumn);
                 Message.Error(Nemerle.Compiler.Location(e.Location.Source.FileIndex, begin, end), e.Message);
               }
             }
 
             <[
               def context = Nitra.Runtime.ChemicalAstContext();
-              $(parseResult.CreateSplicableAst.[PExpr](PExprSplicableAstBuilder()))
+              $(parseResult.CreateSplicableAst.[PExpr](PExprSplicableAstBuilder(typer.Manager, typer.Env, offset)))
             ]>
 
           | _ => Message.FatalError(body.Location, "Recursive string literal <#...#> expected");

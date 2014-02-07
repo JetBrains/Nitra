@@ -16,6 +16,17 @@ namespace Nitra.Lifting
 {
   public class PExprSplicableAstBuilder : ISplicableAstBuilder[PExpr]
   {
+    private _manager : ManagerClass;
+    private _env     : GlobalEnv;
+    private _offset  : TextPoint;
+
+    public this(manager : ManagerClass, env : GlobalEnv, offset : TextPoint)
+    {
+      _manager = manager;
+      _env     = env;
+      _offset  = offset;
+    }
+
     public EmptyList(parseResult : ParseResult, startPos : int, endPos : int) : PExpr
     {
       locate (MakeLocation(parseResult, startPos, endPos))
@@ -55,11 +66,10 @@ namespace Nitra.Lifting
     public Regular(parseResult : ParseResult, ruleDescriptor : RegularRuleDescriptor, startPos : int, endPos : int) : PExpr
     {
       _ = ruleDescriptor;
-      def text = parseResult.OriginalSource.Text.Substring(startPos, endPos - startPos);
       locate (MakeLocation(parseResult, startPos, endPos))
-        <[ $(text : string) ]>
+        <[ $(GetText(parseResult, startPos, endPos) : string) ]>
     }
-    
+
     public SkipAny(parseResult : ParseResult, startPos : int, endPos : int) : PExpr
     {
       def text = parseResult.OriginalSource.Text.Substring(startPos, endPos - startPos);
@@ -91,7 +101,12 @@ namespace Nitra.Lifting
         <[ (..$items) ]>
     }
 
-    private static nsSuffix = "Splicable";
+    public Splice(parseResult : ParseResult, startPos : int, endPos : int) : PExpr
+    {
+      def loc  = MakeLocation(parseResult, startPos, endPos);
+      def text = GetText(parseResult, startPos, endPos);
+      _manager.MacroColors.InGlobalColor(() => MainParser.ParseExpr(_env, text, loc, true))
+    }
 
     public Syntax(parseResult : ParseResult, ruleDescriptor : RuleDescriptor, startPos : int, endPos : int, members : array[PExpr]) : PExpr
     {
@@ -100,7 +115,8 @@ namespace Nitra.Lifting
         match(ruleDescriptor)
         {
           | ExtensionRuleDescriptor(Name = name) when name.EndsWith("$") =>
-            <[ $($"!!!SPLICE!!! $name": string) ]>
+            assert(members.Length == 1);
+            members[0]
 
           | ExtensionRuleDescriptor(Name = name) when name.EndsWith("#") =>
             match (members.Length)
@@ -111,15 +127,11 @@ namespace Nitra.Lifting
             }
 
           | _ =>
-            def splicableNamespace = ruleDescriptor.Grammar.Namespace;
-            assert(splicableNamespace.EndsWith(nsSuffix));
-
-            def astFullName = Text.StringBuilder();
-            when (splicableNamespace != nsSuffix)
-              _ = astFullName.Append(splicableNamespace, 0, splicableNamespace.Length - nsSuffix.Length).Append('.');
-            _ = astFullName.Append(ruleDescriptor.Grammar.Name).Append("Ast.").Append(ruleDescriptor.Name);
-
-            def astTypeRef = PExpr.FromQualifiedIdentifier(ManagerClass.Instance, astFullName.ToString());
+            def namePrefix      = "Splicable";
+            def grammarFullName = ruleDescriptor.Grammar.FullName;
+            assert(grammarFullName.StartsWith(namePrefix));
+            def astFullName     = grammarFullName.Substring(namePrefix.Length) + "Ast." + ruleDescriptor.Name;
+            def astTypeRef      = PExpr.FromQualifiedIdentifier(ManagerClass.Instance, astFullName);
             <[ $astTypeRef.Create(context, ..$members) ]>
         }
       }
@@ -167,12 +179,25 @@ namespace Nitra.Lifting
       Delegate.CreateDelegate(typeof(TDelegate), walkMethod) :> TDelegate
     }
 
-    private static MakeLocation(parseResult : ParseResult, startPos : int, endPos : int) : Nemerle.Compiler.Location
+    private static GetText(parseResult : ParseResult, startPos : int, endPos : int) : string
+    {
+      parseResult.OriginalSource.Text.Substring(startPos, endPos - startPos);
+    }
+
+    private MakeLocation(parseResult : ParseResult, startPos : int, endPos : int) : Nemerle.Compiler.Location
     {
       def source                = parseResult.OriginalSource;
-      def (startLine, startCol) = source.PositionToLineColumn(startPos);
-      def (endLine, endCol)     = source.PositionToLineColumn(endPos);
+      def (startLine, startCol) = TranslateLineColumn(_offset, source.PositionToLineColumn(startPos));
+      def (endLine, endCol)     = TranslateLineColumn(_offset, source.PositionToLineColumn(endPos));
       Nemerle.Compiler.Location(source.FileIndex, startLine, startCol, endLine, endCol)
+    }
+
+    public static TranslateLineColumn(offset : TextPoint, point : LineColumn) : TextPoint
+    {
+      if(point.Line == 1)
+        TextPoint(offset.Line, offset.Column + point.Column)
+      else
+        TextPoint(offset.Line + point.Line - 1, point.Column)
     }
   }
 }
