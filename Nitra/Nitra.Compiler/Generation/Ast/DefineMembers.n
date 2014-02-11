@@ -98,6 +98,74 @@ namespace Nitra.Compiler
 
     private DefineAstCtorAndFields(fields : SCG.List[FieldInfo]) : void
     {
+      def expandSpansAndRemoveKeywords(expr : PExpr, ruleType : RuleType) : ValueOption[PExpr * RuleType * bool]
+      {
+        match (ruleType)
+        {
+          | Void        => assert(false)
+          | Ref         => VSome(expr, ruleType, false)
+          | Chars(Some) => VNone()
+          | Chars(None) => VSome(<[ this.GetText($expr) ]>, ruleType, true)
+          | List(item) =>
+            match (expandSpansAndRemoveKeywords(<[ item ]>, item))
+            {
+              | VNone => VNone()
+              | VSome((itemExpr, itemType, isGetTextUsed)) =>
+                def resultExpr =
+                <[
+                  def buffer = System.Collections.Generic.List();
+                  foreach (item in $expr)
+                    buffer.Add($itemExpr);
+                  Nemerle.Collections.NList.ToList(buffer);
+                ]>;
+                def resultType = RuleType.List(itemType);
+                VSome(resultExpr, resultType, isGetTextUsed)
+            }
+
+          | Option(item) =>
+            match (expandSpansAndRemoveKeywords(<[ item ]>, item))
+            {
+              | VNone => VNone()
+              | VSome((itemExpr, itemType, isGetTextUsed)) =>
+                def resultExpr =
+                <[
+                  match ($expr)
+                  {
+                    | Some(item) => Some($itemExpr)
+                    | None       => None()
+                  }
+                ]>;
+                def resultType = RuleType.Option(itemType);
+                VSome(resultExpr, resultType, isGetTextUsed)
+            }
+
+          | Tuple(items) =>
+            def patterns = SCG.List();
+            def exprs    = SCG.List();
+            def types    = SCG.List();
+            mutable isGetTextUsedInItems;
+            foreach (item in items)
+            {
+              def varName = Util.tmpname("item");
+              match (expandSpansAndRemoveKeywords(<[ $(varName : usesite) ]>, item))
+              {
+                | VNone => patterns.Add(<[ _ ]>)
+                | VSome((itemExpr, itemType, isGetTextUsed)) =>
+                  patterns.Add(<[ $(varName : usesite) ]>);
+                  types.Add(itemType);
+                  exprs.Add(itemExpr);
+                  isGetTextUsedInItems |= isGetTextUsed;
+              }
+            }
+            match (exprs.Count)
+            {
+              | 0 => VNone();
+              | 1 => VSome(exprs[0], types[0], isGetTextUsedInItems)
+              | _ => VSome(<[ def (..$patterns) = $expr; ..$exprs ]>, RuleType.Tuple(types.ToNList()), isGetTextUsedInItems)
+            }
+        }
+      }
+
       foreach (field in fields)
       {
         _astTb.DefineConditional(<[ decl:
@@ -106,6 +174,17 @@ namespace Nitra.Compiler
             get;
           }
         ]>);
+
+        when (expandSpansAndRemoveKeywords(<[ this.$(field.Name : usesite) ]>, field.Rule.Type) is VSome((resultExpr, resultType, true)))
+        {
+          def propertyType = Environment.GetAstType(resultType, Environment.StringTypeVar);
+          _astTb.DefineConditional(<[ decl:
+            public $(field.Name + "Text" : usesite) : $(propertyType : typed)
+            {
+              get { $resultExpr }
+            }
+          ]>);
+        }
       }
     }
 
