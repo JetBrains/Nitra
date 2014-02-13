@@ -51,12 +51,13 @@ namespace Nitra.Compiler
               def rewrittenRuleSymbol = ChemicalBaseExtensibleRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name)
                 .SetDeclarationSite(declarationSite)
                 .SetOptions(options)
-                .SetIsSplicable(false);
+                .SetIsSplicable(false)
+                .SetSpliceSource(Some(ruleSymbol));
 
               _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
               _ruleMapTable.Add(ruleSymbol, rewrittenRuleSymbol);
 
-              AddSpliceRule(rewrittenRuleSymbol, "", options);
+              AddSpliceRule(rewrittenRuleSymbol, syntaxModule, "", options);
 
               enumerateRules(ruleSymbol.Node, rewrittenRuleSymbol.Node, rewrittenRuleSymbol);
 
@@ -70,7 +71,8 @@ namespace Nitra.Compiler
                 .SetDeclarationSite(declarationSite)
                 .SetOptions(options)
                 .SetKind(SimpleRuleKind.Normal)
-                .SetType(RuleType.Ref(rewrittenRuleSymbol));
+                .SetType(RuleType.Ref(rewrittenRuleSymbol))
+                .SetSpliceSource(Some(ruleSymbol));
 
               _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
               _ruleMapTable.Add(ruleSymbol, rewrittenRuleSymbol);
@@ -88,7 +90,8 @@ namespace Nitra.Compiler
                 .SetDeclarationSite(declarationSite)
                 .SetOptions(options)
                 .SetBaseRule(SymbolRef.Some(Location.Default, true, rewrittenBaseRule))
-                .SetSplicableType(ExtensionRuleSymbol.SplicableRuleType.Normal);
+                .SetSplicableType(ExtensionRuleSymbol.SplicableRuleType.Normal())
+                .SetSpliceSource(Some(ruleSymbol));
 
               _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
               _rewriteOperations.Add(ruleSymbol, rewrittenRuleSymbol);
@@ -129,9 +132,9 @@ namespace Nitra.Compiler
     {
       def rewrite(rule : Rule, prefix : string) : Rule
       {
-        def makeSplicable(newRule : Rule) : Rule.Call
+        def makeSplicable(spliceSyntaxModule : SyntaxModuleSymbol, newRule : Rule) : Rule.Call
         {
-          def splicableSymbol = MakeSplicableRuleSymbol(targetSyntaxModule, prefix, newRule, isToken);
+          def splicableSymbol = MakeSplicableRuleSymbol(targetSyntaxModule, spliceSyntaxModule, prefix, newRule, isToken);
           Rule.Call(Location.Default, splicableSymbol.Type, newRule.FieldName, SymbolRef.Some(Location.Default, true, splicableSymbol), 0)
         }
         match (rule)
@@ -142,7 +145,7 @@ namespace Nitra.Compiler
             def type            = Utils.EvaluateListWithSeparatorRuleType(itemRule, separatorRule);
             def newRule         = Rule.RepeatWithSeparator(rule.Location, type, rule.FieldName, minCount, maxCount, itemRule, separatorRule, hangingSeparator);
             if (IsAcceptedForAst(rule))
-              makeSplicable(newRule)
+              makeSplicable(sourceRuleSybmol.DeclaringModule, newRule)
             else
               newRule
 
@@ -156,7 +159,7 @@ namespace Nitra.Compiler
             def type            = Utils.EvaluateListRuleType(itemRule);
             def newRule         = Rule.Repeat(rule.Location, type, rule.FieldName, minCount, maxCount, itemRule);
             if (IsAcceptedForAst(rule))
-              makeSplicable(newRule)
+              makeSplicable(sourceRuleSybmol.DeclaringModule, newRule)
             else
               newRule
 
@@ -182,7 +185,7 @@ namespace Nitra.Compiler
           | Call(SymbolRef.Some(SimpleRuleSymbol as ruleSymbol), bp) when !(ruleSymbol.Type is RuleType.Void) =>
             def target  = LookupRewrittenRuleSymbol(ruleSymbol);
             def newRule = Rule.Call(Location.Default, target.Type, rule.FieldName, SymbolRef.Some(Location.Default, true, target), bp);
-            makeSplicable(newRule)
+            makeSplicable(ruleSymbol.DeclaringModule, newRule)
 
           | Call(SymbolRef.Some(ExtensibleRuleSymbol as ruleSymbol), bp) =>
             def target  = LookupRewrittenRuleSymbol(ruleSymbol);
@@ -190,7 +193,7 @@ namespace Nitra.Compiler
             if (sourceRuleSybmol is ExtensionRuleSymbol(BaseRule = SymbolRef.Some(baseRuleSymbol)) when baseRuleSymbol == ruleSymbol)
               newRule
             else
-              makeSplicable(newRule)
+              makeSplicable(ruleSymbol.DeclaringModule, newRule)
 
           | Call => rule
         }
@@ -219,7 +222,7 @@ namespace Nitra.Compiler
     }
 
     [Memoize]
-    private MakeSplicableRuleSymbol(syntaxModule : SyntaxModuleSymbol, prefix : string, rule : Rule, isToken : bool) : ExtensibleRuleSymbol
+    private MakeSplicableRuleSymbol(syntaxModule : SyntaxModuleSymbol, spliceSyntaxModule : SyntaxModuleSymbol, prefix : string, rule : Rule, isToken : bool) : ExtensibleRuleSymbol
     {
       assert(!string.IsNullOrEmpty(prefix));
 
@@ -230,7 +233,8 @@ namespace Nitra.Compiler
       def rootSymbol = ChemicalBaseExtensibleRuleSymbol(Location.Default, Nemerle.Compiler.Util.tmpname(rule.FieldName))
         .SetDeclarationSite(syntaxModule)
         .SetOptions(options)
-        .SetIsSplicable(true);
+        .SetIsSplicable(true)
+        .SetSpliceSource(None());
       _ = syntaxModule.Node.AddAndReport(rootSymbol, rootSymbol.FirstLocation);
 
       def quoteRuleSymbol = ChemicalBaseExtensionRuleSymbol(Location.Default, "#")
@@ -238,15 +242,16 @@ namespace Nitra.Compiler
         .SetBaseRule(SymbolRef.Some(Location.Default, true, rootSymbol))
         .SetOptions(options)
         .SetRule(Rule.Sequence(Location.Default, rule.Type, "", [rule]))
-        .SetSplicableType(ExtensionRuleSymbol.SplicableRuleType.Quote);
+        .SetSplicableType(ExtensionRuleSymbol.SplicableRuleType.Quote())
+        .SetSpliceSource(None());
       _ = rootSymbol.Node.AddAndReport(quoteRuleSymbol, quoteRuleSymbol.FirstLocation);
 
-      AddSpliceRule(rootSymbol, prefix, options);
+      AddSpliceRule(rootSymbol, spliceSyntaxModule, prefix, options);
 
       rootSymbol
     }
 
-    private AddSpliceRule(baseSymbol : ChemicalBaseExtensibleRuleSymbol, prefix : string, options : RuleDefinitionOptions) : void
+    private AddSpliceRule(baseSymbol : ChemicalBaseExtensibleRuleSymbol, spliceSyntaxModule : SyntaxModuleSymbol, prefix : string, options : RuleDefinitionOptions) : void
     {
       def identifierEndRule = GetIdentifierEndRule();
       def spaceRule         = GetSpaceRule();
@@ -265,7 +270,8 @@ namespace Nitra.Compiler
         .SetDeclarationSite(baseSymbol)
         .SetBaseRule(SymbolRef.Some(Location.Default, true, baseSymbol))
         .SetOptions(options)
-        .SetSplicableType(ExtensionRuleSymbol.SplicableRuleType.Splice)
+        .SetSplicableType(ExtensionRuleSymbol.SplicableRuleType.Splice(spliceSyntaxModule))
+        .SetSpliceSource(None())
         .SetRule(Rule.Sequence(Location.Default, Utils.EvaluateSequenceRuleType(seq), "", seq));
 
       _ = baseSymbol.Node.AddAndReport(symbol, symbol.FirstLocation);
