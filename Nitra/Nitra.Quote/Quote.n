@@ -19,34 +19,14 @@ namespace Nitra.Quote
     QuotationImpl.QuotationRule(id, assemblyName, grammarName, ruleName)
   }
 
-  macro Quotation(body, params args : array[PExpr]) : PExpr
-    syntax ("quote", "(", args, ")", body)
+  macro Quotation(expr : PExpr) : PExpr
+    syntax ("quote", expr)
   {
-    match (args.ToNList())
+    match (expr)
     {
-      | [<[ $(id : string) ]>] =>
-        def typer = Macros.ImplicitCTX();
-        QuotationImpl.Quotation(id, <[ Nitra.Runtime.ChemicalAstContext() ]>, body, typer)
-
-      | [<[ $(id : string) ]>, context] =>
-        def typer = Macros.ImplicitCTX();
-        QuotationImpl.Quotation(id, context, body, typer)
-
-      | _ => Message.FatalError("Expected quotation rule id and optional ast context expression")
-    }
-  }
-
-  macro MatchQuotation(matchexpr) : PExpr
-    syntax ("quote", matchexpr)
-  {
-    match (matchexpr)
-    {
-      | <[ match ($(id : string), $astExpr) { ..$matchCases } ]> =>
-        def typer = Macros.ImplicitCTX();
-        QuotationImpl.MatchQuotation(id, astExpr, matchCases, typer)
-
-      | <[ match ($_) { ..$_ } ]> => Message.FatalError("Expected quotation rule id")
-      | _                         => Message.FatalError("Expected match expression with quotation rule id")
+      | <[ $(_ : string) ]>                      => QuotationImpl.MakeQuote(Macros.ImplicitCTX(), expr)
+      | <[ match ($astExpr) { ..$matchCases } ]> => QuotationImpl.MakeMatch(Macros.ImplicitCTX(), astExpr, matchCases)
+      | _                                        => Message.FatalError("Expected recursive string or match expression")
     }
   }
 
@@ -76,35 +56,28 @@ namespace Nitra.Quote
       }
     }
 
-    public Quotation(id : string, context : PExpr, body : PExpr, typer : Typer) : PExpr
+    public MakeQuote(typer : Typer, expr : PExpr) : PExpr
     {
-      def (parseResult, offset) = ParseQuotation(id, body);
-      match (context)
-      {
-        | <[ $(ctx : name) ]> =>
-          <[ $(parseResult.CreateSplicableAst.[PExpr](QuotationCodeAstBuilder(typer.Manager, typer.Env, offset, () => <[ $(ctx : name) ]>))) ]>
-
-        | expr =>
-          <[
-            def $("context" : dyn) = $expr;
-            $(parseResult.CreateSplicableAst.[PExpr](QuotationCodeAstBuilder(typer.Manager, typer.Env, offset, () => <[ $("context" : dyn) ]>)))
-          ]>
-      }
+      def (parseResult, offset) = ParseQuotation(expr);
+      <[
+        def $("context" : dyn) = Nitra.Runtime.ChemicalAstContext();
+        $(parseResult.CreateSplicableAst.[PExpr](QuotationCodeAstBuilder(typer.Manager, typer.Env, offset, () => <[ $("context" : dyn) ]>)))
+      ]>
     }
 
-    public MatchQuotation(id : string, astExpr : PExpr, matchCases : list[MatchCase], typer : Typer) : PExpr
+    public MakeMatch(typer : Typer, astExpr : PExpr, matchCases : list[MatchCase]) : PExpr
     {
       def convertPattern(pattern : PExpr) : PExpr
       {
         | <[ _ ]>
         | <[ _ when $_ ]> => pattern
         | <[ $p when $guard ]> =>
-          def (parseResult, offset) = ParseQuotation(id, p);
+          def (parseResult, offset) = ParseQuotation(p);
           def newPattern = parseResult.CreateSplicableAst.[PExpr](QuotationPatternAstBuilder(typer.Manager, typer.Env, offset));
           Util.locate(pattern.Location,  <[ $newPattern when $guard ]>)
 
         | _ =>
-          def (parseResult, offset) = ParseQuotation(id, pattern);
+          def (parseResult, offset) = ParseQuotation(pattern);
           parseResult.CreateSplicableAst.[PExpr](QuotationPatternAstBuilder(typer.Manager, typer.Env, offset))
       }
 
@@ -118,33 +91,35 @@ namespace Nitra.Quote
       <[ match ($astExpr) { ..$newMatchCases } ]>
     }
 
-    private ParseQuotation(id : string, expr : PExpr) : ParseResult * TextPoint
+    private ParseQuotation(expr : PExpr) : ParseResult * TextPoint
     {
-      mutable parseCallback;
-      if (Parsers.TryGetValue(id, out parseCallback))
-      {
-        match (expr)
+      | Literal(Literal.String(RawString = rawString)) when rawString.StartsWith("<#") =>
+        def (id, skip) = match (rawString.IndexOf(':'))
         {
-          | Literal(Literal.String(RawString = rawString)) when rawString.StartsWith("<#") =>
-            def originalSource = SourceSnapshot(rawString, expr.Location.FileIndex, Location.GetFileName(expr.Location.FileIndex));
-            def sourceToParse  = originalSource.WithTextSubstring(2, originalSource.Text.Length - 4); // cut string braces <# #>
-            def offset         = expr.Location.Begin;
-            def parseResult    = parseCallback(sourceToParse);
-            unless (parseResult.IsSuccess)
-            {
-              foreach (e in parseResult.GetErrors())
-              {
-                def begin = QuotationUtils.TranslateLineColumn(offset, e.Location.StartLineColumn);
-                def end   = QuotationUtils.TranslateLineColumn(offset, e.Location.EndLineColumn);
-                Message.Error(Nemerle.Compiler.Location(e.Location.Source.FileIndex, begin, end), e.Message);
-              }
-            }
-            (parseResult, offset)
+          | -1 => Message.FatalError(expr.Location, "String does not contain quotation rule id");
+          | pos => (rawString.Substring(2, pos - 2).Trim(), pos + 1);
+        };
 
-          | _ => Message.FatalError(expr.Location, "Recursive string literal <#...#> expected");
+        mutable parseCallback;
+        unless (Parsers.TryGetValue(id, out parseCallback))
+          Message.FatalError($"Quotation rule '$id' is not registered");
+
+        def originalSource = SourceSnapshot(rawString, expr.Location.FileIndex, Location.GetFileName(expr.Location.FileIndex));
+        def sourceToParse  = originalSource.WithTextSubstring(skip, originalSource.Text.Length - (skip + 2)); // cut string braces <# #>
+        def offset         = expr.Location.Begin;
+        def parseResult    = parseCallback(sourceToParse);
+        unless (parseResult.IsSuccess)
+        {
+          foreach (e in parseResult.GetErrors())
+          {
+            def begin = QuotationUtils.TranslateLineColumn(offset, e.Location.StartLineColumn);
+            def end   = QuotationUtils.TranslateLineColumn(offset, e.Location.EndLineColumn);
+            Message.Error(Nemerle.Compiler.Location(e.Location.Source.FileIndex, begin, end), e.Message);
+          }
         }
-      }
-      else Message.FatalError($"Quotation rule '$id' is not registered")
+        (parseResult, offset)
+
+      | _ => Message.FatalError(expr.Location, "Recursive string literal <#...#> expected");
     }
 
     private Parsers : Dictionary[string, SourceSnapshot -> Nitra.ParseResult]
