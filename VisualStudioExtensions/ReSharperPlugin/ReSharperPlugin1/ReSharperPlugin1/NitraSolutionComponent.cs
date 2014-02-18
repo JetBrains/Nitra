@@ -10,17 +10,27 @@ using JetBrains.DocumentManagers;
 using JetBrains.DocumentManagers.impl;
 using JetBrains.ProjectModel;
 using System.Diagnostics;
+using JetBrains.ReSharper.Psi;
+using JetBrains.ReSharper.Psi.Caches;
 
 namespace ReSharperPlugin1
 {
+  [PsiComponent]
   [SolutionComponent]
-  class NitraSolutionComponent : IChangeProvider
+  class NitraSolutionComponent : IChangeProvider, ICache
   {
     private ISolution _solution;
     private DocumentManager _documentManager;
+    private IShellLocks _locks;
+    private IPsiConfiguration _psiConfiguration;
+    private IPersistentIndexManager _persistentIndexManager;
 
-    public NitraSolutionComponent(Lifetime lifetime, ISolution solution, ChangeManager changeManager, DocumentManager documentManager)
+    public NitraSolutionComponent(Lifetime lifetime, ISolution solution, ChangeManager changeManager, DocumentManager documentManager,
+      IShellLocks locks, IPsiConfiguration psiConfiguration, IPersistentIndexManager persistentIndexManager)
     {
+      _persistentIndexManager = persistentIndexManager;
+      _psiConfiguration = psiConfiguration;
+      _locks = locks;
       _solution = solution;
       _documentManager = documentManager;
       //changeManager.Changed2.Advise(lifetime, OnChangeManagerChanged);
@@ -117,6 +127,65 @@ namespace ReSharperPlugin1
       //if (projectModelChange != null)
       //  OnProjectModelChanged(projectModelChange);
       return null;
+    }
+
+    #endregion
+
+    #region ICache Members
+
+    public object Build(IPsiSourceFile sourceFile, bool isStartup)
+    {
+      return false;
+    }
+
+    public void Drop(IPsiSourceFile sourceFile)
+    {
+    }
+
+    public bool HasDirtyFiles
+    {
+      get { return false; }
+    }
+
+    public object Load(JetBrains.Application.Progress.IProgressIndicator progress, bool enablePersistence)
+    {
+      return true;
+    }
+
+    public void MarkAsDirty(IPsiSourceFile sf)
+    {
+    }
+
+    public void Merge(IPsiSourceFile sourceFile, object builtPart)
+    {
+    }
+
+    public void MergeLoaded(object data)
+    {
+    }
+
+    public void OnDocumentChange(IPsiSourceFile sourceFile, ProjectFileDocumentCopyChange change)
+    {
+    }
+
+    public void OnPsiChange(JetBrains.ReSharper.Psi.Tree.ITreeNode elementContainingChanges, PsiChangedElementType type)
+    {
+      if (elementContainingChanges != null)
+      {
+      }
+    }
+
+    public void Save(JetBrains.Application.Progress.IProgressIndicator progress, bool enablePersistence)
+    {
+    }
+
+    public void SyncUpdate(bool underTransaction)
+    {
+    }
+
+    public bool UpToDate(IPsiSourceFile sourceFile)
+    {
+      return true;
     }
 
     #endregion
