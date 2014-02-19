@@ -47,7 +47,7 @@ namespace Nitra.Compiler
               def rewrittenRuleSymbol = ChemicalBaseExtensibleRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name)
                 .SetDeclarationSite(declarationSite)
                 .SetOptions(RuleDefinitionOptions.Empty)
-                .SetIsSplicable(false)
+                .SetSplicableType(ExtensibleRuleSymbol.SplicableRuleType.None())
                 .SetSpliceSource(SymbolRef.Some(Location.Default, true, ruleSymbol));
 
               _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
@@ -122,20 +122,36 @@ namespace Nitra.Compiler
     {
       def rewrite(rule : Rule, prefix : string) : Rule
       {
-        def makeSplicable(spliceSyntaxModule : SyntaxModuleSymbol, newRule : Rule) : Rule.Call
+        def makeSplicable(spliceSyntaxModule : SyntaxModuleSymbol, newRule : Rule, isLoop : bool) : Rule
         {
-          def splicableSymbol = MakeSplicableRuleSymbol(targetSyntaxModule, spliceSyntaxModule, prefix, newRule);
-          Rule.Call(Location.Default, splicableSymbol.Type, newRule.FieldName, SymbolRef.Some(Location.Default, true, splicableSymbol), 0)
+          def splicableSymbol = MakeSplicableRuleSymbol(targetSyntaxModule, spliceSyntaxModule, prefix, newRule, isLoop);
+          def call = Rule.Call(Location.Default, splicableSymbol.Type, newRule.FieldName, SymbolRef.Some(Location.Default, true, splicableSymbol), 0);
+          if (isLoop)
+            Rule.Repeat(rule.Location, Utils.EvaluateOptionRuleType(call), rule.FieldName, 0, Some(1), call)
+          else
+            call
         }
         match (rule)
         {
+          | RepeatWithSeparator(0, maxCount, item, separator, hangingSeparator) =>
+            def itemRule        = rewrite(item, prefix + "Item");
+            def separatorRule   = rewrite(separator, prefix + "Separator");
+            def type            = Utils.EvaluateListWithSeparatorRuleType(itemRule, separatorRule);
+            if (IsAcceptedForAst(rule))
+            {
+              def newRule = Rule.RepeatWithSeparator(rule.Location, type, rule.FieldName, 1, maxCount, itemRule, separatorRule, hangingSeparator);
+              makeSplicable(sourceRuleSybmol.DeclaringModule, newRule, true)
+            }
+            else
+              Rule.RepeatWithSeparator(rule.Location, type, rule.FieldName, 0, maxCount, itemRule, separatorRule, hangingSeparator);
+
           | RepeatWithSeparator(minCount, maxCount, item, separator, hangingSeparator) =>
             def itemRule        = rewrite(item, prefix + "Item");
             def separatorRule   = rewrite(separator, prefix + "Separator");
             def type            = Utils.EvaluateListWithSeparatorRuleType(itemRule, separatorRule);
             def newRule         = Rule.RepeatWithSeparator(rule.Location, type, rule.FieldName, minCount, maxCount, itemRule, separatorRule, hangingSeparator);
             if (IsAcceptedForAst(rule))
-              makeSplicable(sourceRuleSybmol.DeclaringModule, newRule)
+              makeSplicable(sourceRuleSybmol.DeclaringModule, newRule, false)
             else
               newRule
 
@@ -144,12 +160,23 @@ namespace Nitra.Compiler
             def type     = Utils.EvaluateOptionRuleType(itemRule);
             Rule.Repeat(rule.Location, type, rule.FieldName, 0, Some(1), itemRule)
 
+          | Repeat(0, maxCount, item) =>
+            def itemRule        = rewrite(item, prefix + "Item");
+            def type            = Utils.EvaluateListRuleType(itemRule);
+            if (IsAcceptedForAst(rule))
+            {
+              def newRule = Rule.Repeat(rule.Location, type, rule.FieldName, 1, maxCount, itemRule);
+              makeSplicable(sourceRuleSybmol.DeclaringModule, newRule, true)
+            }
+            else
+              Rule.Repeat(rule.Location, type, rule.FieldName, 0, maxCount, itemRule)
+
           | Repeat(minCount, maxCount, item) =>
             def itemRule        = rewrite(item, prefix + "Item");
             def type            = Utils.EvaluateListRuleType(itemRule);
             def newRule         = Rule.Repeat(rule.Location, type, rule.FieldName, minCount, maxCount, itemRule);
             if (IsAcceptedForAst(rule))
-              makeSplicable(sourceRuleSybmol.DeclaringModule, newRule)
+              makeSplicable(sourceRuleSybmol.DeclaringModule, newRule, false)
             else
               newRule
 
@@ -172,7 +199,7 @@ namespace Nitra.Compiler
           | Call(SymbolRef.Some(SimpleRuleSymbol as ruleSymbol), bp) when !(ruleSymbol.Type is RuleType.Void) =>
             def target  = if (ruleSymbol.IsToken) ruleSymbol else LookupRewrittenRuleSymbol(ruleSymbol);
             def newRule = Rule.Call(Location.Default, target.Type, rule.FieldName, SymbolRef.Some(Location.Default, true, target), bp);
-            makeSplicable(ruleSymbol.DeclaringModule, newRule)
+            makeSplicable(ruleSymbol.DeclaringModule, newRule, false)
 
           | Call(SymbolRef.Some(ExtensibleRuleSymbol as ruleSymbol), bp) =>
             def target  = if (ruleSymbol.IsToken) ruleSymbol else LookupRewrittenRuleSymbol(ruleSymbol);
@@ -180,7 +207,7 @@ namespace Nitra.Compiler
             if (sourceRuleSybmol is ExtensionRuleSymbol(BaseRule = SymbolRef.Some(baseRuleSymbol)) when baseRuleSymbol == ruleSymbol)
               newRule
             else
-              makeSplicable(ruleSymbol.DeclaringModule, newRule)
+              makeSplicable(ruleSymbol.DeclaringModule, newRule, false)
 
           | Call
           | String
@@ -212,14 +239,14 @@ namespace Nitra.Compiler
     }
 
     [Memoize]
-    private MakeSplicableRuleSymbol(syntaxModule : SyntaxModuleSymbol, spliceSyntaxModule : SyntaxModuleSymbol, prefix : string, rule : Rule) : ExtensibleRuleSymbol
+    private MakeSplicableRuleSymbol(syntaxModule : SyntaxModuleSymbol, spliceSyntaxModule : SyntaxModuleSymbol, prefix : string, rule : Rule, isLoop : bool) : ExtensibleRuleSymbol
     {
       assert(!string.IsNullOrEmpty(prefix));
 
       def rootSymbol = ChemicalBaseExtensibleRuleSymbol(Location.Default, Nemerle.Compiler.Util.tmpname(rule.FieldName))
         .SetDeclarationSite(syntaxModule)
         .SetOptions(RuleDefinitionOptions.Empty)
-        .SetIsSplicable(true)
+        .SetSplicableType(if (isLoop) ExtensibleRuleSymbol.SplicableRuleType.LoopSplice(rule.Type) else ExtensibleRuleSymbol.SplicableRuleType.Splice())
         .SetSpliceSource(SymbolRef.None(Location.Default, true));
       _ = syntaxModule.Node.AddAndReport(rootSymbol, rootSymbol.FirstLocation);
 
@@ -275,13 +302,15 @@ namespace Nitra.Compiler
         _project.FatalError(Location.Default, $<#Falied to lookup '..$(name; ", ")' rule#>, 0);
     }
 
+    private static IsAcceptedForAst(ruleType : ChemicalRuleType) : bool
+    {
+      | Void | StaticString => false
+      | _                   => true
+    }
+    
     private static IsAcceptedForAst(rule : Rule) : bool
     {
-      match (ChemicalRuleType.FromRuleType(rule.Type))
-      {
-        | Void | StaticString => false
-        | _                   => true
-      }
+      IsAcceptedForAst(ChemicalRuleType.FromRuleType(rule.Type))
     }
   }
 }
