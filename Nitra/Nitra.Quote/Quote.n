@@ -8,15 +8,14 @@ using Nemerle.Imperative;
 
 using System;
 using System.Reflection;
-using System.Collections.Generic;
-using System.Linq;
+using SCG = System.Collections.Generic;
 
 namespace Nitra.Quote
 {
   [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
-  macro QuotationRule(id : string, assemblyName : string, grammarName : string, ruleName : string)
+  macro QuotationRules(assemblyName : string, grammarName : string, params rules : list[PExpr])
   {
-    QuotationImpl.QuotationRule(id, assemblyName, grammarName, ruleName)
+    QuotationImpl.QuotationRules(assemblyName, grammarName, rules)
   }
 
   macro Quotation(expr : PExpr) : PExpr
@@ -32,28 +31,49 @@ namespace Nitra.Quote
 
   module QuotationImpl
   {
-    public QuotationRule(id : string, assemblyName : string, grammarName : string, ruleName : string) : void
+    public QuotationRules(assemblyName : string, grammarName : string, ruleList : list[PExpr]) : void
     {
-      def assemblies = ManagerClass.Instance.ReferencedAssemblies.Map(_.Assembly);
-      match (assemblies.Find(a => a.GetName().Name == assemblyName))
+      def rules = SCG.Dictionary();
+      foreach (p in ruleList)
       {
-        | Some(a) =>
-          foreach (g when g.FullName == grammarName in GrammarDescriptor.GetDescriptors(a))
-            foreach (r is StartRuleDescriptor when r.Name == ruleName in g.Rules)
+        | <[ $(ruleName : string) ]> with id = ruleName
+        | <[ ($(ruleName : string), $(id : string)) ]>
+        | <[ $(ruleName : string) = $(id : string) ]> =>
+          when (rules.ContainsKey(ruleName))
+            Message.Error(p.Location, $"Duplicated rule name '$ruleName'");
+          rules[ruleName] = (id, p.Location);
+
+        | _ => Message.FatalError(p.Location, "Expected rule name and id pair")
+      }
+
+      def assemblies = ManagerClass.Instance.ReferencedAssemblies.Map(_.Assembly);
+      if (assemblies.Find(a => a.GetName().Name == assemblyName) is Some(a))
+      {
+        foreach (g when g.FullName == grammarName in GrammarDescriptor.GetDescriptors(a))
+        {
+          foreach (r is StartRuleDescriptor in g.Rules)
+          {
+            mutable data;
+            when (rules.TryGetValue(r.Name, out data))
             {
+              def (id, loc) = data;
               if (Parsers.ContainsKey(id))
-                Message.FatalError($"Quotation rule '$id' already registered")
+                Message.Error(loc, $"Quotation rule '$id' already registered");
               else
               {
                 def parserHost = ParserHost(() => assemblies);
-                Parsers.Add(id, parserHost.DoParsing(_, r))
+                Parsers.Add(id, parserHost.DoParsing(_, r));
               }
+              _ = rules.Remove(r.Name);
             }
-            otherwise Message.FatalError($"Rule '$ruleName' not found in grammar '$grammarName' from assembly '$a'");
-          otherwise Message.FatalError($"Grammar '$grammarName' not found in assembly '$a'");
+          }
 
-        | None => Message.FatalError($"Assembly '$assemblyName' is not refrenced");
+          foreach (SCG.KeyValuePair(Key = ruleName, Value = (_, loc)) in rules)
+            Message.Error(loc, $"Rule '$ruleName' not found in grammar '$grammarName' from assembly '$a'");
+        }
+        otherwise Message.FatalError($"Grammar '$grammarName' not found in assembly '$a'");
       }
+      else Message.FatalError($"Assembly '$assemblyName' is not refrenced");
     }
 
     public MakeQuote(typer : Typer, expr : PExpr) : PExpr
@@ -132,16 +152,16 @@ namespace Nitra.Quote
       | _ => Message.FatalError(expr.Location, "Recursive string literal <#rule:...#> expected");
     }
 
-    private Parsers : Dictionary[string, SourceSnapshot -> Nitra.ParseResult]
+    private Parsers : SCG.Dictionary[string, SourceSnapshot -> Nitra.ParseResult]
     {
       mutable key : object = object();
       get
       {
         if (ManagerClass.Instance.UserData.Contains(key))
-          ManagerClass.Instance.UserData[key] :> Dictionary[_, _]
+          ManagerClass.Instance.UserData[key] :> SCG.Dictionary[_, _]
         else
         {
-          def table = Dictionary();
+          def table = SCG.Dictionary();
           ManagerClass.Instance.UserData.Add(key, table);
           table
         }
