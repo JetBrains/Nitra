@@ -11,9 +11,9 @@ namespace JetBrains.Test
   {
     private readonly string myText;
 
-    public NitraTokenElement(string text)
+    public NitraTokenElement(string name, int start, int len)
     {
-      this.myText = text;
+      this.myText = name;
     }
 
     public override int GetTextLength()
