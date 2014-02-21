@@ -1,0 +1,172 @@
+﻿using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.IO;
+using System.Console;
+using SCG = System.Collections.Generic;
+
+using Nitra;
+using Nitra.Runtime;
+using Nitra.Quote;
+
+[assembly: QuotationRules("CSharp.Grammar", "SplicableCSharp",
+  "CompilationUnit", "NamespaceMemberDeclaration", "TypeDeclaration", "TypeMemberDeclaration",
+  "Statement", "EmbeddedStatement", "IndentedEmbeddedStatement", "Expression")]
+
+module Program
+{
+  Main(fileMasks : array[string]) : int
+  {
+    def parserHost = ParserHost();
+    def fileNames = FileSearcher.Search(fileMasks, SearchOption.TopDirectoryOnly);
+    foreach (fileName in fileNames)
+    {
+      def text        = File.ReadAllText(fileName);
+      def source      = SourceSnapshot(text, 0, fileName);
+      def parseResult = CSharp.CompilationUnit(source, parserHost);
+      def ast         = CSharpAst.CompilationUnit.Create(parseResult);
+      def newAst      = ProcessCompilationUnit(ast);
+      def newFileName = Path.Combine(Path.GetDirectoryName(fileName), Path.GetFileNameWithoutExtension(fileName) + ".converted" + Path.GetExtension(fileName));
+      def newText     = newAst.ToString();
+      File.WriteAllText(newFileName, newText);
+    }
+    0
+  }
+
+  ProcessCompilationUnit(ast : CSharpAst.CompilationUnit) : CSharpAst.CompilationUnit
+  {
+    quote match (ast)
+    {
+      | <# CompilationUnit: $ExternAliasDirectives(externs) $UsingDirectives(usings) $GlobalAttributes(attrs) $NamespaceMemberDeclarations(members) #> =>
+        quote <# CompilationUnit: $ExternAliasDirectives(externs) $UsingDirectives(usings) $GlobalAttributes(attrs) $NamespaceMemberDeclarations(members.Map(ProcessNamespaceMemberDeclaration)) #>;
+
+      | x => x
+    }
+  }
+
+  ProcessNamespaceMemberDeclaration(ast : CSharpAst.NamespaceMemberDeclaration) : CSharpAst.NamespaceMemberDeclaration
+  {
+    quote match (ast)
+    {
+      | <# NamespaceMemberDeclaration: namespace $NamespaceName(name) { $ExternAliasDirectives(externs) $UsingDirectives(usings) $NamespaceMemberDeclarations(members) } #> =>
+        quote <# NamespaceMemberDeclaration: namespace $NamespaceName(name) { $ExternAliasDirectives(externs) $UsingDirectives(usings)  $NamespaceMemberDeclarations(members.Map(ProcessNamespaceMemberDeclaration)) } #>
+
+      | <# NamespaceMemberDeclaration: $TypeDeclaration(t) #> =>
+        quote <# NamespaceMemberDeclaration: $TypeDeclaration(ProcessTypeDeclaration(t)) #>
+
+      | x => x
+    }
+  }
+
+  ProcessTypeDeclaration(ast : CSharpAst.TypeDeclaration) : CSharpAst.TypeDeclaration
+  {
+    quote match (ast)
+    {
+      | <# TypeDeclaration: $Attributes(attrs) $Modifiers(mods) $PartialOpt(isPartial) class $Name(name) $TypeParametersOpt(tParams) $TypeBaseOpt(tBase) $TypeParameterConstraintsClauses(constraints) { $TypeMemberDeclarations(typeMembers) } $SemicolonOpt(isSemicolon)#> =>
+        quote <# TypeDeclaration: $Attributes(attrs) $Modifiers(mods) $PartialOpt(isPartial) class $Name(name) $TypeParametersOpt(tParams) $TypeBaseOpt(tBase) $TypeParameterConstraintsClauses(constraints) { $TypeMemberDeclarations(typeMembers.Map(ProcessTypeMemberDeclaration)) } $SemicolonOpt(isSemicolon.IsSome)#>;
+
+      | <# TypeDeclaration: $Attributes(attrs) $Modifiers(mods) $PartialOpt(isPartial) struct $Name(name) $TypeParametersOpt(tParams) $TypeBaseOpt(tBase) $TypeParameterConstraintsClauses(constraints) { $TypeMemberDeclarations(typeMembers) } $SemicolonOpt(isSemicolon)#> =>
+        quote <# TypeDeclaration: $Attributes(attrs) $Modifiers(mods) $PartialOpt(isPartial) struct $Name(name) $TypeParametersOpt(tParams) $TypeBaseOpt(tBase) $TypeParameterConstraintsClauses(constraints) { $TypeMemberDeclarations(typeMembers.Map(ProcessTypeMemberDeclaration)) } $SemicolonOpt(isSemicolon.IsSome)#>;
+
+      | x => x
+    }
+  }
+
+  ProcessTypeMemberDeclaration(ast : CSharpAst.TypeMemberDeclaration) : CSharpAst.TypeMemberDeclaration
+  {
+    quote match (ast)
+    {
+      | <# TypeMemberDeclaration: $TypeDeclaration(t) #> =>
+        quote <# TypeMemberDeclaration: $TypeDeclaration(ProcessTypeDeclaration(t)) #>
+
+      | <# TypeMemberDeclaration: $Attributes(attrs) $Modifiers(mods) $PartialOpt(isPartial) $MethodHeader(header) { $Statements(statements) } $SemicolonOpt(isSemicolon) #> =>
+        quote <# TypeMemberDeclaration: $Attributes(attrs) $Modifiers(mods) $PartialOpt(isPartial) $MethodHeader(header) { $Statements(statements.Map(ProcessStatement)) } $SemicolonOpt(isSemicolon.IsSome) #>
+
+      | x => x
+    }
+  }
+
+  ProcessStatement(ast : CSharpAst.Statement) : CSharpAst.Statement
+  {
+    quote match (ast)
+    {
+      | <# Statement: $Name(name) : $(stmt) #> =>
+        quote <# Statement: $Name(name) : $(ProcessStatement(stmt)) #>
+
+      | <# Statement: $EmbeddedStatement(stmt) #> =>
+        quote <# Statement: $EmbeddedStatement(ProcessEmbeddedStatement(stmt)) #>
+
+      | x => x
+    }
+  }
+
+  ProcessEmbeddedStatement(ast : CSharpAst.EmbeddedStatement) : CSharpAst.EmbeddedStatement
+  {
+    quote match (ast)
+    {
+      | <# EmbeddedStatement: { $Statements(stmts) } #> =>
+        quote <# EmbeddedStatement: { $Statements(stmts.Map(ProcessStatement)) } #>
+
+      | <# EmbeddedStatement: $Expression(expr); #> =>
+        quote <# EmbeddedStatement: $Expression(ProcessExpression(expr)); #>
+
+      | <# EmbeddedStatement: if ($BooleanExpression(expr)) $IndentedEmbeddedStatement(stmt) #> =>
+        quote <# EmbeddedStatement: if ($BooleanExpression(ProcessExpression(expr))) $IndentedEmbeddedStatement(ProcessIndentedEmbeddedStatement(stmt)) #>
+
+      | <# EmbeddedStatement: if ($BooleanExpression(expr)) $IndentedEmbeddedStatement(stmt) $IndentedEmbeddedStatementOpt(Some((_, elseStmt))) #> =>
+        quote <# EmbeddedStatement: if ($BooleanExpression(ProcessExpression(expr))) $IndentedEmbeddedStatement(ProcessIndentedEmbeddedStatement(stmt)) $IndentedEmbeddedStatementOpt(Some(ProcessIndentedEmbeddedStatement(elseStmt))) #>
+
+      | <# EmbeddedStatement: while ($BooleanExpression(expr)) $IndentedEmbeddedStatement(stmt) #> =>
+        quote <# EmbeddedStatement: while ($BooleanExpression(ProcessExpression(expr))) $IndentedEmbeddedStatement(ProcessIndentedEmbeddedStatement(stmt)) #>
+
+      | <# EmbeddedStatement: do $IndentedEmbeddedStatement(stmt) while ($BooleanExpression(expr)); #> =>
+        quote <# EmbeddedStatement: do $IndentedEmbeddedStatement(ProcessIndentedEmbeddedStatement(stmt)) while ($BooleanExpression(ProcessExpression(expr))); #>
+
+      | <# EmbeddedStatement: yield return $Expression(expr); #> =>
+        quote <# EmbeddedStatement: yield return $Expression(ProcessExpression(expr)); #>
+
+      | <# EmbeddedStatement: return $Expression(expr); #> =>
+        quote <# EmbeddedStatement: return $Expression(ProcessExpression(expr)); #>
+
+      | <# EmbeddedStatement: throw $ExpressionOpt(Some(expr)); #> =>
+        quote <# EmbeddedStatement: throw $ExpressionOpt(Some(ProcessExpression(expr))); #>
+
+      | <# EmbeddedStatement: unsafe { $Statements(stmts) } #> =>
+        quote <# EmbeddedStatement: unsafe { $Statements(stmts.Map(ProcessStatement)) } #>
+
+      | <# EmbeddedStatement: checked { $Statements(stmts) } #> =>
+        quote <# EmbeddedStatement: checked { $Statements(stmts.Map(ProcessStatement)) } #>
+
+      | <# EmbeddedStatement: unchecked { $Statements(stmts) } #> =>
+        quote <# EmbeddedStatement: unchecked { $Statements(stmts.Map(ProcessStatement)) } #>
+
+      | x => x
+    }
+  }
+
+  ProcessIndentedEmbeddedStatement(ast : CSharpAst.IndentedEmbeddedStatement) : CSharpAst.IndentedEmbeddedStatement
+  {
+    quote match (ast)
+    {
+      | <# IndentedEmbeddedStatement : { $Statements(stmts) } #> =>
+        quote <# IndentedEmbeddedStatement : { $Statements(stmts.Map(ProcessStatement)) } #>
+
+      | <# IndentedEmbeddedStatement : $EmbeddedStatement0(stmt) #> =>
+        quote <# IndentedEmbeddedStatement : $EmbeddedStatement0(ProcessEmbeddedStatement(stmt)) #>
+
+      | x => x
+    }
+  }
+
+  ProcessExpression(ast : CSharpAst.Expression) : CSharpAst.Expression
+  {
+    quote match (ast)
+    {
+      | <# Expression: 0 #> => quote <# Expression: -1 #>
+      | x => x
+    }
+  }
+}
