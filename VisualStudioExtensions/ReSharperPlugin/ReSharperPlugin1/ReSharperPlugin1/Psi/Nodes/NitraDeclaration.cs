@@ -17,7 +17,7 @@ namespace JetBrains.Test
       _sourceFile = sourceFile;
       var name = text.Substring(start, len);
       DeclaredName = name;
-      NameIdentifier = new NitraTokenElement(name, start, len);
+      NameIdentifier = new NitraIdentifier(sourceFile, name, start, len);
       NitraDeclaredElement = nitraDeclaredElement;
     }
 
@@ -49,7 +49,5 @@ namespace JetBrains.Test
     }
 
     public IDeclaredElement DeclaredElement { get { return NitraDeclaredElement;  } }
-
-    }
   }
 }

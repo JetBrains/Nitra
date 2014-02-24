@@ -12,41 +12,38 @@ namespace JetBrains.Test
   {
     private readonly Dictionary<string, NitraDeclaredElement>         _declaredElements = new Dictionary<string, NitraDeclaredElement>();
     private readonly Dictionary<IDeclaredElement, List<IDeclaration>> _declarations     = new Dictionary<IDeclaredElement, List<IDeclaration>>();
-    private readonly Dictionary<IDeclaredElement, List<IReference>>   _references       = new Dictionary<IDeclaredElement, List<IReference>>();
+    private readonly Dictionary<IDeclaredElement, List<NitraIdentifier>> _references = new Dictionary<IDeclaredElement, List<NitraIdentifier>>();
 
-    private void AddDecl(IPsiSourceFile sourceFile, string text, int start, int len)
+    public ITreeNode Add(IPsiSourceFile sourceFile, string text, int start, int len)
     {
       var name = text.Substring(start, len);
       NitraDeclaredElement declaredElement;
-      if (!_declaredElements.TryGetValue(name, out declaredElement))
+      if (!_declaredElements.TryGetValue(name.ToLower(), out declaredElement))
         declaredElement = new NitraDeclaredElement(sourceFile.GetSolution(), name);
 
-      if (char.IsUpper(name[0]))
-        declaredElement.AddDeclaration(new NitraDeclaration());
-       var declarations = declaredElement.GetDeclarations();
-    }
-
-    private void AddRef(TreeElement node)
-    {
-      List<TreeElement> refs;
-
-      if (_refs.TryGetValue(node.GetText(), out refs))
-        refs = new List<TreeElement>();
-
-      foreach (var element in refs)
+      if (name.Length > 0 && char.IsUpper(name[0]))
       {
-        if (node == element)
-          return;
+        var node = new NitraDeclaration(declaredElement, sourceFile, text, start, len);
+        declaredElement.AddDeclaration(node);
+        return node;
       }
+      else
+      {
+        List<NitraIdentifier> refs;
+        if (!_references.TryGetValue(declaredElement, out refs))
+          refs = new List<NitraIdentifier>();
 
-      refs.Add(node);
+        var node = new NitraIdentifier(sourceFile, name, start, len);
+        refs.Add(node);
+        return node;
+      }
     }
-
   }
 
   class NitraFile : FileElementBase
   {
     private readonly IPsiSourceFile _sourceFile;
+    private NitraProject _nitraProject = new NitraProject();
 
     public NitraFile()
     {
@@ -63,8 +60,7 @@ namespace JetBrains.Test
       var matchs = regex.Matches(text);
       foreach (Match match in matchs)
       {
-        var node = new NitraTokenElement(match.Value);
-        this.AddChild(node);
+        this.AddChild(_nitraProject.Add(sourceFile, text, match.Index, match.Length));
       }
     }
 

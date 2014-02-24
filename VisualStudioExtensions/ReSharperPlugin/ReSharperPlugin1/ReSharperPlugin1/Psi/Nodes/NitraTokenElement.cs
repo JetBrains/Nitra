@@ -7,13 +7,14 @@ using JetBrains.Text;
 
 namespace JetBrains.Test
 {
-  class NitraTokenElement : LeafElementBase, ITokenNode
+  abstract class NitraTokenElement : LeafElementBase, ITokenNode
   {
     private readonly string myText;
 
     public NitraTokenElement(string name, int start, int len)
     {
       this.myText = name;
+      myCachedOffsetData = start;
     }
 
     public override int GetTextLength()
@@ -35,11 +36,6 @@ namespace JetBrains.Test
     public override IBuffer GetTextAsBuffer()
     {
       return new StringBuffer(this.GetText());
-    }
-
-    public override NodeType NodeType
-    {
-      get { return NitraIdentifierNodeType.Instance; }
     }
 
     public override PsiLanguageType Language
