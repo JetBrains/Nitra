@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using JetBrains.ReSharper.Psi;
 using JetBrains.ReSharper.Psi.ExtensionsAPI.Tree;
@@ -9,20 +10,23 @@ namespace JetBrains.Test
 {
   abstract class NitraTokenElement : LeafElementBase, ITokenNode
   {
-    private readonly string myText;
+    protected readonly string myText;
 
-    public NitraTokenElement(string name, int start, int len)
+    protected NitraTokenElement(string name, int start, int len)
     {
       this.myText = name;
       myCachedOffsetData = start;
+      Debug.Assert(myCachedOffsetData == start);
+      Debug.Assert(GetText() == name);
+      Debug.Assert(GetTextLength() == len);
     }
 
-    public override int GetTextLength()
+    public override sealed int GetTextLength()
     {
       return this.myText.Length;
     }
 
-    public override string GetText()
+    public override sealed string GetText()
     {
       return this.myText;
     }

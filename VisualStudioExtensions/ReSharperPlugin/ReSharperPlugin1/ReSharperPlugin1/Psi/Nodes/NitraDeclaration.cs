@@ -12,12 +12,11 @@ namespace JetBrains.Test
     public string DeclaredName { get; private set; }
     public NitraTokenElement NameIdentifier { get; private set; }
 
-    public NitraDeclaration(NitraDeclaredElement nitraDeclaredElement, IPsiSourceFile sourceFile, string text, int start, int len)
+    public NitraDeclaration(NitraDeclaredElement nitraDeclaredElement, IPsiSourceFile sourceFile, string name, int start, int len)
     {
       _sourceFile = sourceFile;
-      var name = text.Substring(start, len);
       DeclaredName = name;
-      NameIdentifier = new NitraIdentifier(sourceFile, name, start, len);
+      NameIdentifier = new NitraNameDeclaration(sourceFile, name, start, len);
       NitraDeclaredElement = nitraDeclaredElement;
     }
 

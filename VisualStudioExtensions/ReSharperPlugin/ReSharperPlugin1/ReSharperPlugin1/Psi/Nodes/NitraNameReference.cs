@@ -9,26 +9,10 @@ using JetBrains.Util;
 
 namespace JetBrains.Test
 {
-  internal class NitraNameDeclaration : NitraTokenElement
+  internal class NitraNameReference : NitraTokenElement, IReference
   {
-    public NitraNameDeclaration(IPsiSourceFile sourceFile, string name, int start, int len) : base(name, start, len)
+    public NitraNameReference(IPsiSourceFile sourceFile, string name, int start, int len) : base(name, start, len)
     {
-      Debug.Assert(myCachedOffsetData == start);
-      Debug.Assert(GetText() == name);
-      Debug.Assert(GetTextLength() == len);
-    }
-
-    public override NodeType NodeType
-    {
-      get { return NitraIdentifierNodeType.Instance; }
-    }
-  }
-
-  internal class NitraNameReference : NitraCompositeElement, IReference
-  {
-    public NitraNameReference(IPsiSourceFile sourceFile, string name, int start, int len)
-    {
-      myCachedOffsetData = start;
     }
 
     public override NodeType NodeType
@@ -82,7 +66,7 @@ namespace JetBrains.Test
 
     public TreeTextRange GetTreeTextRange()
     {
-      return new TreeTextRange(myCachedOffsetData);
+      return new TreeTextRange(new TreeOffset(myCachedOffsetData), GetTextLength());
     }
 
     public IReference BindTo(IDeclaredElement element)

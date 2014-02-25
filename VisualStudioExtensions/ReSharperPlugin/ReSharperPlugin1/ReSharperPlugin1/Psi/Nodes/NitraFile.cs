@@ -12,7 +12,7 @@ namespace JetBrains.Test
   {
     private readonly Dictionary<string, NitraDeclaredElement>         _declaredElements = new Dictionary<string, NitraDeclaredElement>();
     private readonly Dictionary<IDeclaredElement, List<IDeclaration>> _declarations     = new Dictionary<IDeclaredElement, List<IDeclaration>>();
-    private readonly Dictionary<IDeclaredElement, List<NitraIdentifier>> _references = new Dictionary<IDeclaredElement, List<NitraIdentifier>>();
+    private readonly Dictionary<IDeclaredElement, List<NitraNameReference>> _references = new Dictionary<IDeclaredElement, List<NitraNameReference>>();
 
     public ITreeNode Add(IPsiSourceFile sourceFile, string text, int start, int len)
     {
@@ -23,17 +23,17 @@ namespace JetBrains.Test
 
       if (name.Length > 0 && char.IsUpper(name[0]))
       {
-        var node = new NitraDeclaration(declaredElement, sourceFile, text, start, len);
+        var node = new NitraDeclaration(declaredElement, sourceFile, name, start, len);
         declaredElement.AddDeclaration(node);
         return node;
       }
       else
       {
-        List<NitraIdentifier> refs;
+        List<NitraNameReference> refs;
         if (!_references.TryGetValue(declaredElement, out refs))
-          refs = new List<NitraIdentifier>();
+          refs = new List<NitraNameReference>();
 
-        var node = new NitraIdentifier(sourceFile, name, start, len);
+        var node = new NitraNameReference(sourceFile, name, start, len);
         refs.Add(node);
         return node;
       }
