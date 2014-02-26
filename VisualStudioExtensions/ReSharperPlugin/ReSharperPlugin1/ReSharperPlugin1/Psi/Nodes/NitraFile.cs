@@ -38,6 +38,10 @@ namespace JetBrains.Test
         return node;
       }
     }
+
+    public ITreeNode AddWhitespace(IPsiSourceFile sourceFile, string text, int start, int len)
+    {
+    }
   }
 
   class NitraFile : FileElementBase
@@ -58,9 +62,15 @@ namespace JetBrains.Test
       var regex = new Regex(@"(\w(\w|\d)+)");
       var text = sourceFile.Document.GetText();
       var matchs = regex.Matches(text);
+      var prev = 0;
       foreach (Match match in matchs)
       {
+        var spaceLen = match.Index - prev;
+        if (spaceLen > 0)
+          this.AddChild(_nitraProject.AddWhitespace(sourceFile, text, prev, spaceLen));
+
         this.AddChild(_nitraProject.Add(sourceFile, text, match.Index, match.Length));
+        prev = match.Index + match.Length;
       }
     }
 

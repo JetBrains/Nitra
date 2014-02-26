@@ -10,7 +10,7 @@ namespace JetBrains.Test
     private readonly IPsiSourceFile _sourceFile;
     public NitraDeclaredElement NitraDeclaredElement { get; private set; }
     public string DeclaredName { get; private set; }
-    public NitraTokenElement NameIdentifier { get; private set; }
+    public NitraWhitespaceElement NameIdentifier { get; private set; }
 
     public NitraDeclaration(NitraDeclaredElement nitraDeclaredElement, IPsiSourceFile sourceFile, string name, int start, int len)
     {
