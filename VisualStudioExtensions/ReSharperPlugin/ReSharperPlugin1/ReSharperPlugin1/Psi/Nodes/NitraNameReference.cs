@@ -9,7 +9,7 @@ using JetBrains.Util;
 
 namespace JetBrains.Test
 {
-  internal class NitraNameReference : NitraWhitespaceElement, IReference
+  internal class NitraNameReference : NitraTokenElement, IReference
   {
     public NitraNameReference(IPsiSourceFile sourceFile, string name, int start, int len) : base(name, start, len)
     {
@@ -61,7 +61,7 @@ namespace JetBrains.Test
 
     public ResolveResultWithInfo Resolve()
     {
-      throw new System.NotImplementedException();
+      return ResolveResultWithInfo.Unresolved;
     }
 
     public TreeTextRange GetTreeTextRange()
@@ -90,5 +90,10 @@ namespace JetBrains.Test
     }
 
     public ResolveResultWithInfo CurrentResolveResult { get; set; }
+
+    public override string ToString()
+    {
+      return "Reference " + myCachedOffsetData + ":" + GetText();
+    }
   }
 }

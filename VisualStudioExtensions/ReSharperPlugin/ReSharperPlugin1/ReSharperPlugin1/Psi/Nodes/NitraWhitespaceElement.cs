@@ -3,15 +3,20 @@ using JetBrains.ReSharper.Psi.Tree;
 
 namespace JetBrains.Test
 {
-  class NitraWhitespaceElement : NitraTokenElement, ITokenNode
+  class NitraWhitespaceElement : NitraTokenElement
   {
-    protected NitraWhitespaceElement(string name, int start, int len) : base(name, start, len)
+    public NitraWhitespaceElement(string name, int start, int len) : base(name, start, len)
     {
     }
 
     public override NodeType NodeType
     {
-      get { throw new System.NotImplementedException(); }
+      get { return NitraWhitespaceType.Instance; }
+    }
+
+    public override string ToString()
+    {
+      return "Whitespace " + myCachedOffsetData + ":" + GetText();
     }
   }
 }

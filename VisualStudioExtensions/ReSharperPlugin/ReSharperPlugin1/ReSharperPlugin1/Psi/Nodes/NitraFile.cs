@@ -41,6 +41,7 @@ namespace JetBrains.Test
 
     public ITreeNode AddWhitespace(IPsiSourceFile sourceFile, string text, int start, int len)
     {
+      return new NitraWhitespaceElement(text, start, len);
     }
   }
 

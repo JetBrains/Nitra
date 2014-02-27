@@ -5,7 +5,7 @@ using JetBrains.Text;
 
 namespace JetBrains.Test
 {
-  class NitraIdentifierNodeType : TokenNodeType
+  class NitraIdentifierNodeType : NitraTokenNodeType
   {
     public static NitraIdentifierNodeType Instance = new NitraIdentifierNodeType();
 
@@ -19,34 +19,9 @@ namespace JetBrains.Test
       throw new System.NotImplementedException();
     }
 
-    public override bool IsWhitespace
-    {
-      get { return false; }
-    }
-
-    public override bool IsComment
-    {
-      get { return false; }
-    }
-
-    public override bool IsStringLiteral
-    {
-      get { return false; }
-    }
-
-    public override bool IsConstantLiteral
-    {
-      get { return false; }
-    }
-
     public override bool IsIdentifier
     {
       get { return true; }
-    }
-
-    public override bool IsKeyword
-    {
-      get { return false; }
     }
 
     public override string TokenRepresentation
