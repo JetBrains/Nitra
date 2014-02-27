@@ -18,6 +18,7 @@ namespace JetBrains.Test
       DeclaredName = name;
       NameIdentifier = new NitraNameDeclaration(sourceFile, name, start, len);
       NitraDeclaredElement = nitraDeclaredElement;
+      this.AddChild(NameIdentifier);
     }
 
     public override NodeType NodeType

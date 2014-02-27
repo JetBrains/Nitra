@@ -41,7 +41,7 @@ namespace JetBrains.Test
 
     public ITreeNode AddWhitespace(IPsiSourceFile sourceFile, string text, int start, int len)
     {
-      return new NitraWhitespaceElement(text, start, len);
+      return new NitraWhitespaceElement(text.Substring(start, len), start, len);
     }
   }
 
@@ -73,6 +73,8 @@ namespace JetBrains.Test
         this.AddChild(_nitraProject.Add(sourceFile, text, match.Index, match.Length));
         prev = match.Index + match.Length;
       }
+      var len = this.GetTextLength();
+
     }
 
     public override NodeType NodeType
