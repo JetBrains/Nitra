@@ -61,7 +61,17 @@ namespace JetBrains.Test
 
     public ResolveResultWithInfo Resolve()
     {
-      return ResolveResultWithInfo.Unresolved;
+      var name = GetText();
+      var file = (NitraFile)this.GetContainingFile();
+
+      if (file == null)
+        return ResolveResultWithInfo.Unresolved;
+
+      var declaredElement = file.Project.LookupDeclaredElement(name);
+      if (declaredElement == null)
+        return ResolveResultWithInfo.Unresolved;
+      var resolveResult = ResolveResultFactory.CreateResolveResult(declaredElement);
+      return new ResolveResultWithInfo(resolveResult, ResolveErrorType.OK); ;
     }
 
     public TreeTextRange GetTreeTextRange()

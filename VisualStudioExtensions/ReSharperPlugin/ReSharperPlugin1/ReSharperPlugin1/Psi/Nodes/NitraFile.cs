@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.RegularExpressions;
+using JetBrains.ReSharper.Feature.Services.Lookup;
 using JetBrains.ReSharper.Psi;
 using JetBrains.ReSharper.Psi.ExtensionsAPI.Tree;
 using JetBrains.ReSharper.Psi.Resolve;
@@ -11,8 +13,33 @@ namespace JetBrains.Test
   internal class NitraProject
   {
     private readonly Dictionary<string, NitraDeclaredElement>         _declaredElements = new Dictionary<string, NitraDeclaredElement>();
-    private readonly Dictionary<IDeclaredElement, List<IDeclaration>> _declarations     = new Dictionary<IDeclaredElement, List<IDeclaration>>();
     private readonly Dictionary<IDeclaredElement, List<NitraNameReference>> _references = new Dictionary<IDeclaredElement, List<NitraNameReference>>();
+
+    public NitraDeclaredElement LookupDeclaredElement(string name)
+    {
+      NitraDeclaredElement result;
+      if (!_declaredElements.TryGetValue(name.ToUpperInvariant(), out result))
+        return null;
+
+      return result;
+    }
+
+    public List<NitraNameReference> LookupReferences(string name)
+    {
+      return LookupReferences(LookupDeclaredElement(name));
+    }
+
+    public List<NitraNameReference> LookupReferences(NitraDeclaredElement declaredElement)
+    {
+      if (declaredElement == null)
+        return new List<NitraNameReference>();
+
+      List<NitraNameReference> results;
+      if (!_references.TryGetValue(declaredElement, out results))
+        return new List<NitraNameReference>();
+
+      return results;
+    }
 
     public ITreeNode Add(IPsiSourceFile sourceFile, string text, int start, int len)
     {
@@ -25,6 +52,7 @@ namespace JetBrains.Test
       {
         var node = new NitraDeclaration(declaredElement, sourceFile, name, start, len);
         declaredElement.AddDeclaration(node);
+        _declaredElements.Add(name, declaredElement);
         return node;
       }
       else
@@ -48,7 +76,8 @@ namespace JetBrains.Test
   class NitraFile : FileElementBase
   {
     private readonly IPsiSourceFile _sourceFile;
-    private NitraProject _nitraProject = new NitraProject();
+    private readonly NitraProject _nitraProject = new NitraProject();
+    public NitraProject Project { get { return _nitraProject;  }}
 
     public NitraFile()
     {
