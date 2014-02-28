@@ -18,5 +18,10 @@ namespace JetBrains.Test
     {
       return "Whitespace " + myCachedOffsetData + ":" + GetText();
     }
+
+    public override bool IsFiltered()
+    {
+      return true;
+    }
   }
 }
