@@ -98,71 +98,83 @@ namespace Nitra.Compiler
 
     private DefineAstCtorAndFields(fields : SCG.List[FieldInfo]) : void
     {
-      def expandSpansAndRemoveKeywords(expr : PExpr, ruleType : RuleType) : ValueOption[PExpr * RuleType * bool]
+      def traverse(ruleType : RuleType, obj : PExpr) : ChemicalRuleType * bool * PExpr
       {
         match (ruleType)
         {
-          | Void        => assert(false)
-          | Ref         => VSome(expr, ruleType, false)
-          | Chars(Some) => VNone()
-          | Chars(None) => VSome(<[ this.GetText($expr) ]>, ruleType, true)
-          | List(item) =>
-            match (expandSpansAndRemoveKeywords(<[ item ]>, item))
+          | Void         => assert3(false)
+          | Ref(symbol)  => (ChemicalRuleType.Ast(symbol),    true,  obj)
+          | Chars(Some)  => (ChemicalRuleType.StaticString(), false, <[ () ]>)
+          | Chars(None)  => (ChemicalRuleType.String(),       false, <[ this.GetText($obj) ]>)
+          | Option(type) =>
+            def itemVariable = Util.tmpname("item");
+            def (itemType, isUnchanged, itemExpr) = traverse(type, <[ $(itemVariable : usesite) ]>);
+            if (isUnchanged)
+              (ChemicalRuleType.Option(itemType), true, obj);
+            else if (itemType is ChemicalRuleType.StaticString)
+              (ChemicalRuleType.Bool(), false, <[ $obj.IsSome ]>)
+            else
             {
-              | VNone => VNone()
-              | VSome((itemExpr, itemType, isGetTextUsed)) =>
-                def resultExpr =
-                <[
-                  def buffer = System.Collections.Generic.List();
-                  foreach (item in $expr)
-                    buffer.Add($itemExpr);
-                  Nemerle.Collections.NList.ToList(buffer);
-                ]>;
-                def resultType = RuleType.List(itemType);
-                VSome(resultExpr, resultType, isGetTextUsed)
+              def expr =
+              <[
+                match ($obj)
+                {
+                  | Some($(itemVariable : usesite)) => Some($itemExpr)
+                  | None                            => None()
+                }
+              ]>;
+              (ChemicalRuleType.Option(itemType), false, expr)
             }
 
-          | Option(item) =>
-            match (expandSpansAndRemoveKeywords(<[ item ]>, item))
+          | List(type) =>
+            def itemVariable = Util.tmpname("item");
+            def (itemType, isUnchanged, itemExpr) = traverse(type, <[ $(itemVariable : usesite) ]>);
+            if (isUnchanged)
+              (ChemicalRuleType.List(itemType), true, obj);
+            else if (itemType is ChemicalRuleType.StaticString)
+              (ChemicalRuleType.Int(), false, <[ $obj.Length ]>)
+            else
             {
-              | VNone => VNone()
-              | VSome((itemExpr, itemType, isGetTextUsed)) =>
-                def resultExpr =
-                <[
-                  match ($expr)
-                  {
-                    | Some(item) => Some($itemExpr)
-                    | None       => None()
-                  }
-                ]>;
-                def resultType = RuleType.Option(itemType);
-                VSome(resultExpr, resultType, isGetTextUsed)
+              def expr =
+              <[
+                def items = System.Collections.Generic.List();
+                foreach ($(itemVariable : usesite) in $obj)
+                  items.Add($itemExpr);
+                Nemerle.Collections.NList.ToList(items);
+              ]>;
+              (ChemicalRuleType.List(itemType), false, expr)
             }
 
-          | Tuple(items) =>
-            def patterns = SCG.List();
-            def exprs    = SCG.List();
-            def types    = SCG.List();
-            mutable isGetTextUsedInItems;
-            foreach (item in items)
+          | Tuple(types) =>
+            def memberTypes  = SCG.List();
+            def patterns     = SCG.List();
+            def exprs        = SCG.List();
+            mutable isAllUnchanged = true;
+
+            foreach(t in types)
             {
-              def varName = Util.tmpname("item");
-              match (expandSpansAndRemoveKeywords(<[ $(varName : usesite) ]>, item))
+              def memberVariable = Util.tmpname("member");
+              def (memberType, isUnchanged, memberExpr) = traverse(t, <[ $(memberVariable : usesite) ]>);
+              isAllUnchanged &= isUnchanged;
+              if (memberType is ChemicalRuleType.StaticString)
+                patterns.Add(<[ _ ]>)
+              else
               {
-                | VNone => patterns.Add(<[ _ ]>)
-                | VSome((itemExpr, itemType, isGetTextUsed)) =>
-                  patterns.Add(<[ $(varName : usesite) ]>);
-                  types.Add(itemType);
-                  exprs.Add(itemExpr);
-                  isGetTextUsedInItems |= isGetTextUsed;
+                memberTypes.Add(memberType);
+                patterns.Add(<[ $(memberVariable : usesite) ]>);
+                exprs.Add(memberExpr);
               }
             }
-            match (exprs.Count)
-            {
-              | 0 => VNone();
-              | 1 => VSome(exprs[0], types[0], isGetTextUsedInItems)
-              | _ => VSome(<[ def (..$patterns) = $expr; ..$exprs ]>, RuleType.Tuple(types.ToNList()), isGetTextUsedInItems)
-            }
+
+            if (isAllUnchanged)
+              (ChemicalRuleType.Tuple(memberTypes.NToList()), true, obj)
+            else
+              match (memberTypes.Count)
+              {
+                | 0 => (ChemicalRuleType.StaticString(),               false, <[ () ]>)
+                | 1 => (memberTypes[0],                                false, <[ def (..$patterns) = $obj; $(exprs[0]) ]>)
+                | _ => (ChemicalRuleType.Tuple(memberTypes.NToList()), false, <[ def (..$patterns) = $obj; (..$exprs) ]>)
+              }
         }
       }
 
@@ -175,13 +187,14 @@ namespace Nitra.Compiler
           }
         ]>);
 
-        when (expandSpansAndRemoveKeywords(<[ this.$(field.Name : usesite) ]>, field.Rule.Type) is VSome((resultExpr, resultType, true)))
+        def (propertyType, isUnchanged, expr) = traverse(field.Rule.Type, <[ this.$(field.Name : usesite) ]>);
+        unless (isUnchanged)
+        unless (propertyType is ChemicalRuleType.StaticString)
         {
-          def propertyType = Environment.GetAstType(resultType, Environment.StringTypeVar);
           _astTb.DefineConditional(<[ decl:
-            public $(field.Name + "Text" : usesite) : $(propertyType : typed)
+            public $(field.Name + "Data" : usesite) : $(Environment.GetAstType(propertyType) : typed)
             {
-              get { $resultExpr }
+              get { unchecked ($expr) }
             }
           ]>);
         }
@@ -327,64 +340,64 @@ namespace Nitra.Compiler
 
     private DefineChemicalAstCtorAndFields(fields : SCG.List[FieldInfo]) : void
     {
-      def traverse(ruleType : RuleType, variable : string) : FixedType * bool * PExpr
+      def traverse(ruleType : RuleType, obj : PExpr) : ChemicalRuleType * bool * PExpr
       {
         match (ruleType)
         {
           | Void                 => assert3(false)
-          | Ref(symbol)          => (Environment.GetAstType(symbol), true,  <[ $(variable : usesite) ]>)
-          | Chars(Some(keyword)) => (FixedType.Void(),               false, <[ context.GetKeywordSpan($(keyword : string)) ]>)
-          | Chars(None)          => (Environment.StringTypeVar,      false, <[ context.GetSpan($(variable : usesite)) ]>)
+          | Ref(symbol)          => (ChemicalRuleType.Ast(symbol),    true,  obj)
+          | Chars(Some(keyword)) => (ChemicalRuleType.StaticString(), false, <[ context.GetKeywordSpan($(keyword : string)) ]>)
+          | Chars(None)          => (ChemicalRuleType.String(),       false, <[ context.GetSpan($obj) ]>)
           | Option(type) =>
             def itemVariable = Util.tmpname("item");
-            def (itemInputType, isUnchanged, itemExpr) = traverse(type, itemVariable);
+            def (itemType, isUnchanged, itemExpr) = traverse(type, <[ $(itemVariable : usesite) ]>);
             if (isUnchanged)
-              (FixedType.Class(Environment.OptionTypeInfo, [itemInputType]), true, <[ $(variable : usesite) ]>);
-            else if (itemInputType is FixedType.Void)
-              (Environment.BooleanTypeVar, false, <[ if ($(variable : usesite)) Some($itemExpr) else None(); ]>)
+              (ChemicalRuleType.Option(itemType), true, obj);
+            else if (itemType is ChemicalRuleType.StaticString)
+              (ChemicalRuleType.Bool(), false, <[ if ($obj) Some($itemExpr) else None() ]>)
             else
             {
               def expr =
               <[
-                match ($(variable : usesite))
+                match ($obj)
                 {
                   | Some($(itemVariable : usesite)) => Some($itemExpr)
                   | None                            => None()
                 }
               ]>;
-              (FixedType.Class(Environment.OptionTypeInfo, [itemInputType]), false, expr)
+              (ChemicalRuleType.Option(itemType), false, expr)
             }
 
           | List(type) =>
             def itemVariable = Util.tmpname("item");
-            def (itemInputType, isUnchanged, itemExpr) = traverse(type, itemVariable);
+            def (itemType, isUnchanged, itemExpr) = traverse(type, <[ $(itemVariable : usesite) ]>);
             if (isUnchanged)
-              (FixedType.Class(Environment.ListTypeInfo, [itemInputType]), true, <[ $(variable : usesite) ]>);
-            else if (itemInputType is FixedType.Void)
+              (ChemicalRuleType.List(itemType), true, obj);
+            else if (itemType is ChemicalRuleType.StaticString)
             {
               def expr =
               <[
-                def items = array($(variable : usesite));
+                def items = array($obj);
                 for (mutable i = 0; i < items.Length; ++i)
                   items[i] = $itemExpr;
                 Nemerle.Collections.NList.ToList(items);
               ]>;
-              (Environment.Int32TypeVar, false, expr)
+              (ChemicalRuleType.Int(), false, expr)
             }
             else
             {
               def expr =
               <[
                 def items = System.Collections.Generic.List();
-                foreach ($(itemVariable : usesite) in $(variable : usesite))
+                foreach ($(itemVariable : usesite) in $obj)
                   items.Add($itemExpr);
                 Nemerle.Collections.NList.ToList(items);
               ]>;
-              (FixedType.Class(Environment.ListTypeInfo, [itemInputType]), false, expr)
+              (ChemicalRuleType.List(itemType), false, expr)
             }
 
           | Tuple(types) =>
-            def memberInputTypes   = SCG.List();
+            def memberTypes        = SCG.List();
             def patternVariables   = SCG.List();
             def exprs              = SCG.List();
             mutable isAllUnchanged = true;
@@ -392,24 +405,24 @@ namespace Nitra.Compiler
             foreach(t in types)
             {
               def memberVariable = Util.tmpname("member");
-              def (memberType, isUnchanged, memberExpr) = traverse(t, memberVariable);
+              def (memberType, isUnchanged, memberExpr) = traverse(t, <[ $(memberVariable : usesite) ]>);
               isAllUnchanged &= isUnchanged;
-              unless (memberType is FixedType.Void)
+              unless (memberType is ChemicalRuleType.StaticString)
               {
-                memberInputTypes.Add(memberType);
+                memberTypes.Add(memberType);
                 patternVariables.Add(memberVariable);
               }
               exprs.Add(memberExpr);
             }
 
             if (isAllUnchanged)
-              (FixedType.Tuple(memberInputTypes.MapToList(x => x)), true, <[ $(variable : usesite) ]>)
+              (ChemicalRuleType.Tuple(memberTypes.NToList()), true, obj)
             else
-              match (memberInputTypes.Count)
+              match (memberTypes.Count)
               {
-                | 0 => (FixedType.Void(), false, <[ (..$exprs) ]>)
-                | 1 => (memberInputTypes[0], false, <[ def $(patternVariables[0] : usesite) = $(variable : usesite); (..$exprs) ]>)
-                | _ => (FixedType.Tuple(memberInputTypes.MapToList(x => x)), false, <[ def (..$(patternVariables.MapToList(name => <[ $(name : usesite) ]>))) = $(variable : usesite); (..$exprs) ]>)
+                | 0 => (ChemicalRuleType.StaticString(),               false, <[ (..$exprs) ]>)
+                | 1 => (memberTypes[0],                                false, <[ def $(patternVariables[0] : usesite) = $obj; (..$exprs) ]>)
+                | _ => (ChemicalRuleType.Tuple(memberTypes.NToList()), false, <[ def (..$(patternVariables.MapToList(name => <[ $(name : usesite) ]>))) = $obj; (..$exprs) ]>)
               }
         }
       }
@@ -436,9 +449,9 @@ namespace Nitra.Compiler
           public override $(field.Name : usesite) : $(field.Type : typed) { get; }
         ]>);
 
-        def (parameterType, _, expr) = traverse(field.Rule.Type, field.Name);
-        unless (parameterType is FixedType.Void)
-          parameters.Add(<[ parameter: $(field.Name : usesite) : $(parameterType : typed) ]>);
+        def (parameterType, _, expr) = traverse(field.Rule.Type, <[ $(field.Name : usesite) ]>);
+        unless (parameterType is ChemicalRuleType.StaticString)
+          parameters.Add(<[ parameter: $(field.Name : usesite) : $(Environment.GetAstType(parameterType) : typed) ]>);
         statements.Add(<[ this.$(field.Name : usesite) = $expr ]>);
       }
 
