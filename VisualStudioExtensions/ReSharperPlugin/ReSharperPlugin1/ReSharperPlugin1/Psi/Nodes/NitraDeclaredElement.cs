@@ -28,7 +28,8 @@ namespace JetBrains.Test
 
     public void AddDeclaration(NitraDeclaration declaration)
     {
-      Debug.Assert(!declaration.Contains(declaration));
+      if (_declarations.Contains(declaration))
+        Debug.Assert(false);
       _declarations.Add(declaration);
     }
 
