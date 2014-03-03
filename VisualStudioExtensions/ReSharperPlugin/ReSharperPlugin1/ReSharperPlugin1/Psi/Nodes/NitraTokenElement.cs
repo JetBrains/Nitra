@@ -21,23 +21,23 @@ namespace JetBrains.Test
       Debug.Assert(GetTextLength() == len);
     }
 
-    public override sealed int GetTextLength()
+    public sealed override int GetTextLength()
     {
       return this.myText.Length;
     }
 
-    public override sealed string GetText()
+    public sealed override string GetText()
     {
       return this.myText;
     }
 
-    public override StringBuilder GetText(StringBuilder to)
+    public sealed override StringBuilder GetText(StringBuilder to)
     {
       to.Append(this.GetText());
       return to;
     }
 
-    public override IBuffer GetTextAsBuffer()
+    public sealed override IBuffer GetTextAsBuffer()
     {
       return new StringBuffer(this.GetText());
     }
