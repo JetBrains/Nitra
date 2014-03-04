@@ -30,7 +30,7 @@ namespace JetBrains.Test
 
     protected override IDeclaredElementPresenter DefaultPresenter
     {
-      get { throw new System.NotImplementedException(); }
+      get { return NitraDeclaredElementPresenter.Instance; }
     }
   }
 }

@@ -3,7 +3,7 @@ using JetBrains.ReSharper.Psi.ExtensionsAPI.Tree;
 
 namespace JetBrains.Test
 {
-  internal abstract class NitraCompositeElement : CompositeElement
+  internal abstract class NitraCompositeElement : CompositeElement, INitraAst
   {
     public override PsiLanguageType Language
     {

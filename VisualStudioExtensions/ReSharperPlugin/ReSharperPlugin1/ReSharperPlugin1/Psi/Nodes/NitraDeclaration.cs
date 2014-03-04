@@ -5,7 +5,7 @@ using JetBrains.ReSharper.Psi.Tree;
 
 namespace JetBrains.Test
 {
-  internal class NitraDeclaration : NitraCompositeElement, IDeclaration
+  internal class NitraDeclaration : NitraCompositeElement, IDeclaration, INitraAst
   {
     private readonly IPsiSourceFile _sourceFile;
     public NitraDeclaredElement NitraDeclaredElement { get; private set; }

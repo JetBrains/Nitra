@@ -9,7 +9,7 @@ using JetBrains.Util;
 
 namespace JetBrains.Test
 {
-  internal class NitraNameReference : NitraTokenElement, IReference
+  internal class NitraNameReference : NitraTokenElement, IReference, INitraAst
   {
     public NitraNameReference(IPsiSourceFile sourceFile, string name, int start, int len) : base(name, start, len)
     {

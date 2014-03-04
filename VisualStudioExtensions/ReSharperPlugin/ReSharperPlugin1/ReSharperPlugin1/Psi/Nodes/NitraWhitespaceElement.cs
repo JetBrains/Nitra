@@ -3,7 +3,7 @@ using JetBrains.ReSharper.Psi.Tree;
 
 namespace JetBrains.Test
 {
-  class NitraWhitespaceElement : NitraTokenElement
+  class NitraWhitespaceElement : NitraTokenElement, INitraAst
   {
     public NitraWhitespaceElement(string name, int start, int len) : base(name, start, len)
     {

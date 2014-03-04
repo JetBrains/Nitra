@@ -8,7 +8,7 @@ using JetBrains.Text;
 
 namespace JetBrains.Test
 {
-  abstract class NitraTokenElement : LeafElementBase, ITokenNode
+  abstract class NitraTokenElement : LeafElementBase, ITokenNode, INitraAst
   {
     protected readonly string myText;
 

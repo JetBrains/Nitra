@@ -35,6 +35,9 @@ namespace ReSharperPlugin1.Psi.References
 
     private IEnumerable<IReference> GetReferencesImpl(ITreeNode element)
     {
+      if (!(element is INitraAst))
+        yield break;
+
       var reference = element as IReference;
 
       if (reference != null)
