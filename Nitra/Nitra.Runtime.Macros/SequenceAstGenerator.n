@@ -1,0 +1,88 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Runtime
+{
+  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
+  public macro SequenceAstGenerator()
+  {
+    def astEnv = ManagerClass.Instance.CoreEnv.EnterIntoNamespace(["Nitra"]);
+    for (mutable memberCount = 2; memberCount <= 10; ++memberCount)
+      SequenceAstGeneratorImpl.GenerateType(astEnv, "SequenceAst", memberCount)
+  }
+
+  internal module SequenceAstGeneratorImpl
+  {
+    private GenerateType(env : GlobalEnv, name : string, memberCount : int) : void
+    {
+      def typeVariables = SCG.List();
+      def constraints   = SCG.List();
+      for (mutable i = 1; i <= memberCount; ++i)
+      {
+        def typeVariable = Splicable.Name(<[ $("T" + i.ToString() : usesite) ]>);
+        typeVariables.Add(typeVariable);
+        constraints.Add(Constraint(typeVariable, <[ Nitra.IAst ]>, false));
+      }
+
+      def tb = env.Define(<[ decl:
+        [Record]
+        public sealed class $(name : usesite)[..$(typeVariables.ToNList())] : Nitra.Ast where ..$(constraints.ToNList())
+        {
+          public override Location : Nitra.Location { get }
+
+          public override Write(astWriter : Nitra.Serialization.IAstWriter) : void
+          {
+            _ = astWriter;
+            throw System.NotImplementedException()
+          }
+        }
+      ]>);
+
+      def variableRefs = SCG.List();
+      def itemBlocks = SCG.List();
+
+      for (mutable i = 1; i <= memberCount; ++i)
+      {
+        def itemName = "Item" + i.ToString();
+        def itemType = "T" + i.ToString();
+        _ = tb.Define(<[ decl:
+          public $(itemName : usesite) : $(itemType : usesite);
+        ]>);
+
+        def mask = 1 << (i - 1);
+
+        def tempVarName = "newItem" + i.ToString();
+        variableRefs.Add(<[ $(tempVarName : usesite) ]>);
+        itemBlocks.Add(<[
+          mutable $(tempVarName : usesite) = this.$(itemName : usesite);
+          when (applyItem & $(mask : int) != 0)
+          {
+            $(tempVarName : usesite) = visitor.Visit(this.$(itemName : usesite) :> Ast) :> $(itemType : usesite);
+            isDirty |= !ReferenceEquals($(tempVarName : usesite), this.$(itemName : usesite));
+          }
+        ]>);
+      }
+
+      _ = tb.Define(<[ decl:
+        public override Apply(visitor : AstVisitor) : Ast
+        {
+          visitor.Enter(this);
+          mutable isDirty;
+          ..$itemBlocks;
+          def result = if (isDirty) $(name : usesite)(this.Location, ..$variableRefs) else this;
+          visitor.Leave(result, isDirty);
+          result
+        }
+      ]>);
+
+      tb.Compile();
+    }
+  }
+}
