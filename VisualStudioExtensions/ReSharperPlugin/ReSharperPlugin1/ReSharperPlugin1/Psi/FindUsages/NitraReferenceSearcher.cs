@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using JetBrains.ReSharper.Psi;
@@ -53,7 +54,7 @@ namespace JetBrains.Nitra.FindUsages
     {
       Assertion.Assert(element != null, "The condition (element != null) is false.");
 
-      var names = new JetHashSet<string>(myNames);
+      var names = new JetHashSet<string>(myNames, StringComparer.OrdinalIgnoreCase);
 
       NamedThingsSearchSourceFileProcessor processor;
 
