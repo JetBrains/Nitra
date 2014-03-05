@@ -53,7 +53,10 @@ namespace JetBrains.Test
       {
         List<NitraNameReference> refs;
         if (!_references.TryGetValue(declaredElement, out refs))
+        {
           refs = new List<NitraNameReference>();
+          _references.Add(declaredElement, refs);
+        }
 
         var node = new NitraNameReference(sourceFile, name, start, len);
         refs.Add(node);

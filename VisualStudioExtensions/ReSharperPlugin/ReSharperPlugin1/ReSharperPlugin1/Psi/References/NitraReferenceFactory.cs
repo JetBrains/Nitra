@@ -46,7 +46,7 @@ namespace ReSharperPlugin1.Psi.References
       if (element is ITokenNode)
         yield break;
 
-      foreach (var n in element.EnumerateSubTree())
+      foreach (var n in element.Children())
       {
         if (ReferenceEquals(n, element))
           continue;

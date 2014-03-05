@@ -11,8 +11,8 @@ using JetBrains.Util;
 
 namespace JetBrains.Nitra.FindUsages
 {
-  [PsiSharedComponent]
-  internal class NitraSearcherFactory : IDomainSpecificSearcherFactory
+  //[PsiSharedComponent]
+  internal class NitraSearcherFactory //: IDomainSpecificSearcherFactory
   {
     private readonly SearchDomainFactory mySearchDomainFactory;
 
