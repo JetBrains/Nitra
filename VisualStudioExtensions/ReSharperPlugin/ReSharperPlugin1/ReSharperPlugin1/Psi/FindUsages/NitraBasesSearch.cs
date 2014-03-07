@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using JetBrains.Application.ComponentModel;
 using JetBrains.Application.DataContext;
-using JetBrains.ReSharper.Feature.Services.ContextNavigation.ContextSearches.BaseSearches;
+using JetBrains.ReSharper.Feature.Services.Navigation.ContextNavigation;
 using JetBrains.ReSharper.Psi;
 using JetBrains.Test;
 
