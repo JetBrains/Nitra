@@ -15,7 +15,7 @@ namespace JetBrains.Nitra.FindUsages
       var rer = reference as INitraAst;
       if (rer != null)
       {
-        return EmptyList<IDeclaredElement>.InstanceList;
+        return new IDeclaredElement[] { reference.Resolve().Result.DeclaredElement };
       }
       return EmptyList<IDeclaredElement>.InstanceList;
     }
