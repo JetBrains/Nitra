@@ -20,7 +20,13 @@ namespace JetBrains.Nitra.FindUsages
 
     protected override IList<IDeclaredElement> GetCandidates(IDataContext context)
     {
-      return mySearch.GetCandidates(context).Where(element => !(element is NitraDeclaredElement)).ToList();
+      return mySearch.GetCandidates(context).Where(IsCandidate).ToList();
+    }
+
+    private static bool IsCandidate(IDeclaredElement element)
+    {
+      var result = element is NitraDeclaredElement;
+      return result;
     }
 
     public override bool IsContextApplicable(IDataContext dataContext)

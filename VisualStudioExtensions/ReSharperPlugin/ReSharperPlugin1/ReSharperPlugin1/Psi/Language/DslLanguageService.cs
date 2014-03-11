@@ -23,7 +23,7 @@ namespace JetBrains.Test
 
     public override bool IsCaseSensitive
     {
-      get { return true; }
+      get { return false; }
     }
 
     public override ILanguageCacheProvider CacheProvider
