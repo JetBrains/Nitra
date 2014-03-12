@@ -1246,5 +1246,13 @@ namespace Nitra.Visualizer
       e.CanExecute = _currentTestSuit != null;
       e.Handled = true;
     }
+
+    private void FindNext_Executed_Selected(object sender, ExecutedRoutedEventArgs e)
+    {
+      var line = _text.Document.Lines[_text.TextArea.Caret.Line];
+      var text = _text.Document.GetText(line.Offset, line.Length);
+      var ch   = _text.TextArea.Caret.Column - 1;
+      
+    }
   }
 }
