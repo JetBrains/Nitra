@@ -14,17 +14,30 @@ namespace JetBrains.Nitra.FindUsages
       var reference = context.GetData(DataConstants.REFERENCE);
       var rer = reference as INitraAst;
       if (rer != null)
-      {
         return new IDeclaredElement[] { reference.Resolve().Result.DeclaredElement };
-      }
+
+      var declaredElements = context.GetData(DataConstants.DECLARED_ELEMENTS);
+
+      if (declaredElements != null)
+        return declaredElements.ToArray();
+
       return EmptyList<IDeclaredElement>.InstanceList;
     }
 
-    public bool IsContextApplicable(IDataContext dataContext)
+    public bool IsContextApplicable(IDataContext context)
     {
-      var reference = dataContext.GetData(DataConstants.REFERENCE);
+      var reference = context.GetData(DataConstants.REFERENCE);
       if (reference == null)
+      {
+        var declaredElements = context.GetData(DataConstants.DECLARED_ELEMENTS);
+
+        if (declaredElements != null)
+          foreach (var element in declaredElements)
+            if (element is INitraAst)
+              return true;
+
         return false;
+      }
       var rer = reference as INitraAst;
       if (rer != null)
       {

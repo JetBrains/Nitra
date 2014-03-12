@@ -9,7 +9,7 @@ using JetBrains.Util.DataStructures;
 
 namespace JetBrains.Test
 {
-  internal class NitraDeclaredElement : IDeclaredElement
+  internal class NitraDeclaredElement : IDeclaredElement, INitraAst
   {
     public ISolution  Solution  { get; private set; }
     public string     ShortName { get; private set; }
