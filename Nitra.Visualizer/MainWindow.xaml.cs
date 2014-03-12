@@ -627,7 +627,10 @@ namespace Nitra.Visualizer
 
       var found = index >= 0;
       if (found)
+      {
         _text.Select(index, toFind.Length);
+        _text.ScrollToLine(_text.TextArea.Caret.Line);
+      }
       else
         _status.Text = "Can't find '" + toFind + "'.";
     }
@@ -650,7 +653,10 @@ namespace Nitra.Visualizer
       var found = index >= 0;
 
       if (found)
+      {
         _text.Select(index, toFind.Length);
+        _text.ScrollToLine(_text.TextArea.Caret.Line);
+      }
       else
         _status.Text = "Can't find '" + toFind + "'.";
     }
