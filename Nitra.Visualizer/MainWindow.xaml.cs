@@ -614,8 +614,8 @@ namespace Nitra.Visualizer
     {
       var option = GetMatchCaseOption();
       var toFind = _findText.Text;
-      var text = _text.Text;
-      var index = _text.SelectionStart + _text.SelectionLength - 1;
+      var text   = _text.Text;
+      var index  = _text.SelectionStart + _text.SelectionLength - 1;
 
       do
       {
@@ -1249,10 +1249,92 @@ namespace Nitra.Visualizer
 
     private void FindNext_Executed_Selected(object sender, ExecutedRoutedEventArgs e)
     {
-      var line = _text.Document.Lines[_text.TextArea.Caret.Line];
-      var text = _text.Document.GetText(line.Offset, line.Length);
-      var ch   = _text.TextArea.Caret.Column - 1;
-      
+      FindSelected(next: true);
+    }
+
+    private void FindPrev_Executed_Selected(object sender, ExecutedRoutedEventArgs e)
+    {
+      FindSelected(next: false);
+    }
+
+    private void FindSelected(bool next)
+    {
+      string searchPattren;
+
+      if (_text.SelectionLength > 0)
+      {
+        _findText.Text = _text.SelectedText;
+        
+        if (next)
+          FindNext();
+        else
+          FindPrev();
+      }
+      else
+      {
+        var line = _text.Document.Lines[_text.TextArea.Caret.Line - 1];
+        var text = _text.Document.GetText(line.Offset, line.Length);
+        var startIndex = Math.Min(_text.TextArea.Caret.Column - 1, text.Length - 1);
+        var firstCh = text[startIndex];
+        int patternStartIndex;
+        string searchPattern = IsIdentifier(firstCh)
+          ? ExtractIdentifier(text, startIndex, out patternStartIndex)
+          : ExtractNotEmpty(text, startIndex, out patternStartIndex);
+
+        if (!string.IsNullOrWhiteSpace(searchPattern))
+        {
+          _findText.Text = searchPattern;
+          _text.Select(line.Offset + patternStartIndex, searchPattern.Length);
+
+          if (next)
+            FindNext();
+          else
+          {
+            _text.TextArea.Caret.Column = patternStartIndex + 1;
+            FindPrev();
+          }
+        }
+      }
+    }
+
+    public static string ExtractNotEmpty(string text, int startIndex, out int patternStartIndex)
+    {
+      return ExtractString(text, startIndex, char.IsWhiteSpace, out patternStartIndex);
+    }
+
+    public static string ExtractIdentifier(string text, int startIndex, out int patternStartIndex)
+    {
+      return ExtractString(text, startIndex, ch => !IsIdentifier(ch), out patternStartIndex);
+    }
+
+    public static string ExtractString(string text, int startIndex, Func<char, bool> predicate, out int patternStartIndex)
+    {
+      int i = startIndex;
+      for (; i > 0; i--)
+      {
+        var ch = text[i];
+        if (predicate(ch))
+        {
+          i++;
+          break;
+        }
+      }
+
+      int j = startIndex;
+      for (; j < text.Length; j++)
+      {
+        var ch = text[j];
+        if (predicate(ch))
+          break;
+      }
+
+      patternStartIndex = i;
+      return text.Substring(i, j - i);
+    }
+
+    private static bool IsIdentifier(char ch)
+    {
+      return char.IsLetterOrDigit(ch) || ch == '_';
     }
   }
 }
