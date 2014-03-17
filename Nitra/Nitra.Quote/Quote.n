@@ -1,0 +1,172 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using System.Reflection;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Quote
+{
+  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
+  macro QuotationRules(assemblyName : string, grammarName : string, params rules : list[PExpr])
+  {
+    QuotationImpl.QuotationRules(assemblyName, grammarName, rules)
+  }
+
+  macro Quotation(expr : PExpr) : PExpr
+    syntax ("quote", expr)
+  {
+    match (expr)
+    {
+      | <[ $(_ : string) ]>                      => QuotationImpl.MakeQuote(Macros.ImplicitCTX(), expr)
+      | <[ match ($astExpr) { ..$matchCases } ]> => QuotationImpl.MakeMatch(Macros.ImplicitCTX(), astExpr, matchCases)
+      | _                                        => Message.FatalError("Expected recursive string or match expression")
+    }
+  }
+
+  module QuotationImpl
+  {
+    public QuotationRules(assemblyName : string, grammarName : string, ruleList : list[PExpr]) : void
+    {
+      def rules = SCG.Dictionary();
+      foreach (p in ruleList)
+      {
+        | <[ $(ruleName : string) ]> with id = ruleName
+        | <[ ($(ruleName : string), $(id : string)) ]>
+        | <[ $(ruleName : string) = $(id : string) ]> =>
+          when (rules.ContainsKey(ruleName))
+            Message.Error(p.Location, $"Duplicated rule name '$ruleName'");
+          rules[ruleName] = (id, p.Location);
+
+        | _ => Message.FatalError(p.Location, "Expected rule name and id pair")
+      }
+
+      def assemblies = ManagerClass.Instance.ReferencedAssemblies.Map(_.Assembly);
+      if (assemblies.Find(a => a.GetName().Name == assemblyName) is Some(a))
+      {
+        foreach (g when g.FullName == grammarName in GrammarDescriptor.GetDescriptors(a))
+        {
+          foreach (r is StartRuleDescriptor in g.Rules)
+          {
+            mutable data;
+            when (rules.TryGetValue(r.Name, out data))
+            {
+              def (id, loc) = data;
+              if (Parsers.ContainsKey(id))
+                Message.Error(loc, $"Quotation rule '$id' already registered");
+              else
+              {
+                def parserHost = ParserHost(() => assemblies);
+                Parsers.Add(id, parserHost.DoParsing(_, r));
+              }
+              _ = rules.Remove(r.Name);
+            }
+          }
+
+          foreach (SCG.KeyValuePair(Key = ruleName, Value = (_, loc)) in rules)
+            Message.Error(loc, $"Rule '$ruleName' not found in grammar '$grammarName' from assembly '$a'");
+        }
+        otherwise Message.FatalError($"Grammar '$grammarName' not found in assembly '$a'");
+      }
+      else Message.FatalError($"Assembly '$assemblyName' is not refrenced");
+    }
+
+    public MakeQuote(typer : Typer, expr : PExpr) : PExpr
+    {
+      def (parseResult, offset) = ParseQuotation(expr);
+      <[
+        def $("context" : dyn) = Nitra.Runtime.ChemicalAstContext();
+        $(parseResult.CreateSplicableAst.[PExpr](QuotationCodeAstBuilder(typer.Manager, typer.Env, offset, () => <[ $("context" : dyn) ]>)))
+      ]>
+    }
+
+    public MakeMatch(typer : Typer, astExpr : PExpr, matchCases : list[MatchCase]) : PExpr
+    {
+      def convertPattern(pattern : PExpr) : PExpr
+      {
+        | <[ $p with $withExpr ]> => Util.locate(pattern.Location, <[ $(convertPattern(p)) with $withExpr ]>)
+        | <[ $p when $whenExpr ]> => Util.locate(pattern.Location, <[ $(convertPattern(p)) when $whenExpr ]>)
+        | <[ $p as   $asExpr ]>   => Util.locate(pattern.Location, <[ $(convertPattern(p)) as   $asExpr ]>)
+        | <[ (..$ps) ]>           => Util.locate(pattern.Location, <[ (..$(ps.Map(convertPattern))) ]>)
+        | <[ $x(..$ps) ]>         => Util.locate(pattern.Location, <[ $x(..$(ps.Map(convertPattern))) ]>)
+        | <[ $x = $p ]>           => Util.locate(pattern.Location, <[ $x = $(convertPattern(p)) ]>)
+        | <[ $(_ : string) ]>     =>
+          def (parseResult, offset) = ParseQuotation(pattern);
+          parseResult.CreateSplicableAst.[PExpr](QuotationPatternAstBuilder(typer.Manager, typer.Env, offset))
+
+        | _ => pattern
+      }
+
+      def convertMatchCase(matchCase : MatchCase) : MatchCase
+      {
+        def newPatterns = matchCase.patterns.Map(convertPattern);
+        Util.locate(matchCase.Location, <[ case: | ..$newPatterns => $(matchCase.body) ]>)
+      }
+
+      def newMatchCases = matchCases.Map(convertMatchCase);
+      <[ match ($astExpr) { ..$newMatchCases } ]>
+    }
+
+    private ParseQuotation(expr : PExpr) : ParseResult * TextPoint
+    {
+      | Literal(Literal.String(RawString = rawString)) when rawString.StartsWith("<#") =>
+        mutable id;
+        mutable startPos;
+        mutable endPos;
+        match (rawString.IndexOf(':'))
+        {
+          | -1  => Message.FatalError(expr.Location, "String does not contain quotation rule id");
+          | pos =>
+            id = rawString.Substring(2, pos - 2).Trim();
+            startPos = pos + 1;
+            while (startPos < rawString.Length && char.IsWhiteSpace(rawString, startPos))
+              ++startPos;
+            endPos = rawString.Length - 2;
+            while (startPos < endPos && char.IsWhiteSpace(rawString, endPos - 1))
+              --endPos;
+        };
+
+        mutable parseCallback;
+        unless (Parsers.TryGetValue(id, out parseCallback))
+          Message.FatalError($"Quotation rule '$id' is not registered");
+
+        def originalSource = SourceSnapshot(rawString, expr.Location.FileIndex, Location.GetFileName(expr.Location.FileIndex));
+        def sourceToParse  = originalSource.WithTextSubstring(startPos, endPos - startPos); // cut string braces and spaces <#id: #>
+        def offset         = expr.Location.Begin;
+        def parseResult    = parseCallback(sourceToParse);
+        unless (parseResult.IsSuccess)
+        {
+          foreach (e in parseResult.GetErrors())
+          {
+            def begin = QuotationUtils.TranslateLineColumn(offset, e.Location.StartLineColumn);
+            def end   = QuotationUtils.TranslateLineColumn(offset, e.Location.EndLineColumn);
+            Message.Error(Nemerle.Compiler.Location(e.Location.Source.FileIndex, begin, end), e.Message);
+          }
+        }
+        (parseResult, offset)
+
+      | _ => Message.FatalError(expr.Location, "Recursive string literal <#rule:...#> expected");
+    }
+
+    private Parsers : SCG.Dictionary[string, SourceSnapshot -> Nitra.ParseResult]
+    {
+      mutable key : object = object();
+      get
+      {
+        if (ManagerClass.Instance.UserData.Contains(key))
+          ManagerClass.Instance.UserData[key] :> SCG.Dictionary[_, _]
+        else
+        {
+          def table = SCG.Dictionary();
+          ManagerClass.Instance.UserData.Add(key, table);
+          table
+        }
+      }
+    }
+  }
+}

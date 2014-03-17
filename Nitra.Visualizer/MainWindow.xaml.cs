@@ -335,6 +335,11 @@ namespace Nitra.Visualizer
 
     private void UpdateAst()
     {
+      if (_parseResult == null)
+        return;
+      if (IsSplicable(_parseResult))
+        return;
+
       if (_ast == null)
       {
         var timer = Stopwatch.StartNew();
@@ -370,6 +375,11 @@ namespace Nitra.Visualizer
     {
       _needUpdateHtmlPrettyPrint = false;
 
+      if (_parseResult == null)
+        return;
+      if (IsSplicable(_parseResult))
+        return;
+
       if (_ast == null)
         _ast = _parseResult.CreateAst();
 
@@ -384,9 +394,9 @@ namespace Nitra.Visualizer
       _needUpdateTextPrettyPrint = false;
 
       if (_parseResult == null)
-      {
         return;
-      }
+      if (IsSplicable(_parseResult))
+        return;
 
       if (_ast == null)
         _ast = _parseResult.CreateAst();
@@ -1247,6 +1257,11 @@ namespace Nitra.Visualizer
       e.Handled = true;
     }
 
+    private static bool IsSplicable(ParseResult parseResult)
+    {
+      return parseResult.RuleParser.Descriptor.Grammar.IsSplicable;
+    }
+    
     private void FindNext_Executed_Selected(object sender, ExecutedRoutedEventArgs e)
     {
       FindSelected(next: true);

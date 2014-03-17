@@ -1,0 +1,96 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Runtime
+{
+  [MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Assembly)]
+  public macro SequenceAstGenerator()
+  {
+    def astEnv = ManagerClass.Instance.CoreEnv.EnterIntoNamespace(["Nitra"]);
+    for (mutable memberCount = 2; memberCount <= 10; ++memberCount)
+      SequenceAstGeneratorImpl.GenerateType(astEnv, "SequenceAst", memberCount)
+  }
+
+  internal module SequenceAstGeneratorImpl
+  {
+    public GenerateType(env : GlobalEnv, name : string, memberCount : int) : void
+    {
+      def typeVariables  = SCG.List();
+      def constraints    = SCG.List();
+
+      for (mutable i = 1; i <= memberCount; ++i)
+      {
+        def typeVariable = Splicable.Name(<[ $("T" + i.ToString() : usesite) ]>);
+        typeVariables.Add(typeVariable);
+        constraints.Add(Constraint(typeVariable, <[ Nitra.IAst ]>, false));
+      }
+
+      def applyItemExprs = SCG.List();
+      for (mutable i = memberCount; i >= 1; --i)
+      {
+        applyItemExprs.Add(<[ when (CanApplyVisitor.[$("T" + i.ToString() : usesite)]()) applyItem += 1; ]>);
+        when (i > 1)
+          applyItemExprs.Add(<[ applyItem <<= 1 ]>);
+      }
+
+      def tb = env.Define(<[ decl:
+        [Record]
+        public sealed class $(name : usesite)[..$(typeVariables.ToNList())] : Nitra.Ast where ..$(constraints.ToNList())
+        {
+          private static applyItem : int;
+          static this() { unchecked { ..$applyItemExprs } }
+          public override Location : Nitra.Location { get }
+        }
+      ]>);
+
+      def variableRefs = SCG.List();
+      def statements = SCG.List();
+
+      for (mutable i = 1; i <= memberCount; ++i)
+      {
+        def itemName = "Item" + i.ToString();
+        def itemType = "T" + i.ToString();
+        tb.Define(<[ decl:
+          public $(itemName : usesite) : $(itemType : usesite);
+        ]>);
+
+        def mask = 1 << (i - 1);
+
+        def tempVarName = "newItem" + i.ToString();
+        statements.Add(<[ mutable $(tempVarName : usesite) = this.$(itemName : usesite); ]>);
+        statements.Add(<[
+          when (applyItem %& $(mask : int) != 0)
+          {
+            $(tempVarName : usesite) = visitor.Visit(this.$(itemName : usesite) :> Nitra.Ast) :> $(itemType : usesite);
+            isUntouched &= ReferenceEquals($(tempVarName : usesite), this.$(itemName : usesite));
+          }
+        ]>);
+        variableRefs.Add(<[ $(tempVarName : usesite) ]>);
+      }
+
+      tb.Define(<[ decl:
+        public override Apply(visitor : Nitra.AstVisitor) : Nitra.Ast
+        {
+          unchecked
+          {
+            visitor.Enter(this);
+            mutable isUntouched = true;
+            ..$statements;
+            def result = if (isUntouched) this else $(name : usesite)(this.Location, ..$variableRefs);
+            visitor.Leave(this, result);
+            result
+          }
+        }
+      ]>);
+
+      tb.Compile();
+    }
+  }
+}

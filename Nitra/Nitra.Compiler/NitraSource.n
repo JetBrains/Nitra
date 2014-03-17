@@ -32,6 +32,35 @@ namespace Nitra
     private ParserHost    : ParserHost;
     private IsUnderNitraForVisualStudio : bool;
 
+    private static RestrictedNames : SCG.HashSet[string] = SCG.HashSet(array[
+      // AST classes
+      "Located",
+      "Ast",
+      "MissingAst",
+      "AmbiguousAst",
+      "Nested",
+
+      // AST Methods
+      "Equals",
+      "GetHashCode",
+      "GetType",
+      "ReferenceEquals",
+      "MemberwiseClone",
+      "Finalize",
+      "Read",
+      "Write",
+      "ToString",
+      "PrettyPrint",
+      "GetText",
+      "FirstChar",
+      "IntersectsWith",
+      "Intersection",
+      "Create",
+
+      // AST Properties
+      "Location",
+      "PrettyPrintSource"
+    ]);
     public this(path : string, manager : ManagerClass)
     {
       Path    = path;
@@ -113,10 +142,23 @@ namespace Nitra
       public ExportableSymbolType : option[TypeBuilder] { get; }
     }
 
+    [Record]
+    private class ChemicalSymbolData
+    {
+      public TypeBuilder          : TypeBuilder         { get; }
+      public ChemicalSymbolType   : option[TypeBuilder] { get; }
+    }
+
     public static AddExportableSymbol(tb : TypeBuilder, exportableSymbolType : option[TypeBuilder]) : void
     {
       def data = ExportableSymbolData(tb, exportableSymbolType);
       tb.Manager.GetListUserData.[ExportableSymbolData]().Add(data);
+    }
+
+    public static AddChemicalSymbol(tb : TypeBuilder, chemicalSymbolType : option[TypeBuilder]) : void
+    {
+      def data = ChemicalSymbolData(tb, chemicalSymbolType);
+      tb.Manager.GetListUserData.[ChemicalSymbolData]().Add(data);
     }
 
     public BeforeInheritance() : void
@@ -201,34 +243,83 @@ namespace Nitra
       project.ErrorCount == errorCount
     }
 
+    private CheckRestrictedNames(project : CompilingNitraProject) : bool
+    {
+      def errorCount   = project.ErrorCount;
+
+      def check(loc : Location, name : string) : void
+      {
+        when (RestrictedNames.Contains(name))
+          project.Error(loc, $"Name '$name' is restricted due to internal use", 0);
+      }
+
+      foreach (syntaxModule in project.Environment.Root.GetDescendants.[ParsedSyntaxModuleSymbol]())
+      {
+        foreach (ruleSymbol in syntaxModule.Node.GetDescendants.[RuleSymbol]())
+        {
+          check(ruleSymbol.FirstLocation, ruleSymbol.Name);
+
+          when (ruleSymbol is SyntaxRuleSymbol as s)
+            foreach (ruleMethodSymbol in s.RuleMethods)
+              check(ruleMethodSymbol.FirstLocation, ruleMethodSymbol.Name);
+
+          match (ruleSymbol)
+          {
+            | SimpleRuleSymbol    as s with seq = s.NonVoidSubRules
+            | ExtensionRuleSymbol as s with seq = s.NonVoidSubRules =>
+              foreach (r in seq)
+                check(r.Location, r.FieldName);
+
+            | _ => ()
+          }
+        }
+      }
+
+      project.ErrorCount == errorCount
+    }
+
+    private CreateSplicableSyntaxModules(project : CompilingNitraProject) : bool
+    {
+      def errorCount = project.ErrorCount;
+
+      def converter = SplicableSyntaxModuleConverter(project);
+      def syntaxModules = project.Environment.Root.GetDescendants.[ParsedSyntaxModuleSymbol]().ToList();
+      foreach (syntaxModule in syntaxModules)
+        converter.CreateSymbols(syntaxModule);
+      converter.RewriteRules();
+
+      project.ErrorCount == errorCount
+    }
+
     private MakeEmitters(project : CompilingNitraProject) : void
     {
       def environment = project.Environment;
 
-      MakeEmitters.[ParsedSyntaxModuleSymbol, _](environment, SyntaxModuleEmitter);
+      def syntaxModuleEmitters = Manager.GetListUserData.[SyntaxModuleEmitter]();
+      def walkerEmitters       = Manager.GetListUserData.[WalkerEmitter]();
+      def walkerGenerators     = array[/*AstWalkerGenerator(environment),*/       HighlighterWalkerGenerator(environment),
+                                       /*OutliningWalkerGenerator(environment), ReflectionWalkerGenerator(environment)*/   ];
 
-      def walkerEmitters             = Manager.GetListUserData.[WalkerEmitter]();
-
-      def walkerGenerators = array[/*AstWalkerGenerator(environment),*/       HighlighterWalkerGenerator(environment),
-                                   /*OutliningWalkerGenerator(environment), ReflectionWalkerGenerator(environment)*/   ];
-
-      foreach (syntaxModule in project.Environment.Root.GetDescendants.[ParsedSyntaxModuleSymbol]())
-        foreach (walkerGenerator in walkerGenerators)
-          walkerEmitters.Add(WalkerEmitter(environment, syntaxModule, walkerGenerator));
+      foreach (syntaxModule in environment.Root.GetDescendants.[SyntaxModuleSymbol]())
+      {
+        | ExternalSyntaxModuleSymbol => ()
+        | _ =>
+          syntaxModuleEmitters.Add(SyntaxModuleEmitter(environment, syntaxModule));
+          unless (syntaxModule.IsSplicable)
+            foreach (walkerGenerator in walkerGenerators)
+              walkerEmitters.Add(WalkerEmitter(environment, syntaxModule, walkerGenerator));
+      }
 
       def externalSymbolEmitters = Manager.GetListUserData.[ExternalSymbolEmitter]();
-      def serializationEmitter = Manager.CreateBinarySerializationEmitter(NitraBinarySerializationMessageEmitter(), NitraSymbolRefBinarySerializationEmitterExtension(environment));
+      def serializationEmitter   = Manager.CreateBinarySerializationEmitter(NitraBinarySerializationMessageEmitter(), NitraSymbolRefBinarySerializationEmitterExtension(environment));
       foreach (data in Manager.GetListUserData.[ExportableSymbolData]())
         externalSymbolEmitters.Add(ExternalSymbolEmitter(environment, data.TypeBuilder, data.ExportableSymbolType, serializationEmitter));
       ResetListUserData.[ExportableSymbolData]();
-    }
 
-    private MakeEmitters[SymbolType, EmitterType](environment : EmitterEnvironment, makeEmitter : EmitterEnvironment * SymbolType -> EmitterType) : void
-      where SymbolType : Symbol
-    {
-      def emitters = environment.Manager.GetListUserData.[EmitterType]();
-      foreach (symbol in environment.Root.GetDescendants.[SymbolType]())
-        emitters.Add(makeEmitter(environment, symbol));
+      def chemicalSymbolEmitters = Manager.GetListUserData.[ChemicalSymbolEmitter]();
+      foreach (data in Manager.GetListUserData.[ChemicalSymbolData]())
+        chemicalSymbolEmitters.Add(ChemicalSymbolEmitter(environment, data.TypeBuilder, data.ChemicalSymbolType));
+      ResetListUserData.[ChemicalSymbolData]();
     }
 
     private DefineAst() : void
@@ -251,10 +342,14 @@ namespace Nitra
         emitter.DefineParserMethods();
     }
 
-    private DefineExternalSymbols() : void
+    private DefineSymbols() : void
     {
       def externalSymbolEmitters = Manager.GetListUserData.[ExternalSymbolEmitter]();
       foreach (emitter in externalSymbolEmitters)
+        emitter.DefineMembers();
+
+      def chemicalSymbolEmitters = Manager.GetListUserData.[ChemicalSymbolEmitter]();
+      foreach (emitter in chemicalSymbolEmitters)
         emitter.DefineMembers();
     }
 
@@ -271,7 +366,7 @@ namespace Nitra
         emitter.DefineDescriptor();
     }
 
-    private EmitExternalSymbols() : void
+    private EmitSymbols() : void
     {
       def externalSymbolEmitters = Manager.GetListUserData.[ExternalSymbolEmitter]();
       try
@@ -283,11 +378,17 @@ namespace Nitra
           def buffer = SCG.List();
           foreach (emitter in externalSymbolEmitters)
             buffer.Add(<[ typeof($(emitter.TargetSymbolType.GetMemType() : typed)) ]>);
-          Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ Nitra.Serialization.ExportableSymbolsAttribute(array[..$(buffer.ToNList())]) ]>);
+          Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ Nitra.Serialization.ExportableSymbolsAttribute(array[..$buffer]) ]>);
         }
         Manager.FinalizeBinarySerializationEmitter();
       }
       finally ResetListUserData.[ExternalSymbolEmitter]();
+
+      def chemicalSymbolEmitters = Manager.GetListUserData.[ChemicalSymbolEmitter]();
+      try
+        foreach (emitter in chemicalSymbolEmitters)
+          emitter.Emit();
+      finally ResetListUserData.[ChemicalSymbolEmitter]();
     }
 
     private EmitSyntaxModules() : void
@@ -378,6 +479,10 @@ namespace Nitra
             throw Recovery();
           unless (TypeSyntaxModules(project, fileAsts))
             throw Recovery();
+          unless (CheckRestrictedNames(project))
+            throw Recovery();
+          unless (CreateSplicableSyntaxModules(project))
+            throw Recovery();
 
           MakeEmitters(project);
 
@@ -392,9 +497,9 @@ namespace Nitra
 
     public WithTypedMembers() : void
     {
-      DefineExternalSymbols();
+      DefineSymbols();
 
-      EmitExternalSymbols();
+      EmitSymbols();
       EmitSyntaxModules();
       EmitWalkers();
     }

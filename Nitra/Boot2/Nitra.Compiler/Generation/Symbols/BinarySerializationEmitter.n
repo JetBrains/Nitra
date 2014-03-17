@@ -78,7 +78,7 @@ namespace Nitra.Compiler
         body.Add(<[ def $(p.Name : usesite) = $e ]>);
       foreach (m in members)
         body.Add(MakeMemberWriteCode(owner, m, objAccess));
-      <[ { ..$(body.ToNList()) } ]>
+      <[ { ..$body } ]>
     }
 
     public MakeMembersDeserializationCode(owner : FixedType, members : list[IMember], objAccess : PExpr, args : list[PExpr]) : PExpr
@@ -89,8 +89,10 @@ namespace Nitra.Compiler
       foreach ((p, e) in _deserializationParams.Zip(args))
         body.Add(<[ def $(p.Name : usesite) = $e ]>);
 
-      def cases1 = members.RevMap(m => <[ case: | $(GetMemberName(m) : string) => $objAccess.$(m.Name : usesite) = $(MakeMemberReadCode(owner, m)) ]>);
-      def cases2 = <[ case: | name => $(_messageEmitter.EmitWarning(<[ "Data for the '" + name + "' member is ignored." ]>)) ]> :: cases1;
+      def fieldNameCases = List();
+      foreach (m in members)
+        fieldNameCases.Add(<[ case: | $(GetMemberName(m) : string) => $objAccess.$(m.Name : usesite) = $(MakeMemberReadCode(owner, m)) ]>);
+      fieldNameCases.Add(<[ case: | name => $(_messageEmitter.EmitWarning(<[ "Data for the '" + name + "' member is ignored." ]>)) ]>);
 
       body.Add(<[
         def loop()
@@ -101,14 +103,14 @@ namespace Nitra.Compiler
             def fieldName = reader.ReadString();
             match (fieldName)
             {
-              ..$(cases2.Reverse())
+              ..$fieldNameCases
             }
             loop()
           }
         }
       ]>);
       body.Add(<[ loop(); ]>);
-      <[ { ..$(body.ToNList()) } ]>
+      <[ { ..$body } ]>
     }
 
     GetSerializableMembers(ti : TypeInfo) : list[IMember]
@@ -160,15 +162,14 @@ namespace Nitra.Compiler
         ]>
     }
 
-    MakeMembersWriteCode(type : FixedType, objExpr : PExpr) : PExpr
+    MakeMembersWriteCode(type : FixedType, objExpr : PExpr) : option[PExpr]
     {
-      def members = GetSerializableMembers(type.TypeInfo);
-      if (members is [])
-        <[ () ]>
-      else
+      match (GetSerializableMembers(type.TypeInfo))
       {
-        def code    = members.Map(m => MakeMemberWriteCode(type, m, objExpr));
-        <[ { ..$code } ]>
+        | [] => None()
+        | members =>
+          def code = members.Map(m => MakeMemberWriteCode(type, m, objExpr));
+          Some(<[ { ..$code } ]>)
       }
     }
 
@@ -180,8 +181,12 @@ namespace Nitra.Compiler
       body.Add(<[ _ = typeCode; ]>);
       foreach (m in members)
         body.Add(<[ mutable $(varPrefix + m.Name : usesite); ]>);
-      def cases1 = members.RevMap(m => <[ case: | $(GetMemberName(m) : string) => $(varPrefix + m.Name : usesite) = $(MakeMemberReadCode(type, m)) ]>);
-      def cases2 = <[ case: | name => $(_messageEmitter.EmitWarning(<[ "Data for the '" + name + "' member is ignored." ]>)) ]> :: cases1;
+
+      def fieldNameCases = List();
+      foreach (m in members)
+        fieldNameCases.Add(<[ case: | $(GetMemberName(m) : string) => $(varPrefix + m.Name : usesite) = $(MakeMemberReadCode(type, m)) ]>);
+      fieldNameCases.Add(<[ case: | name => $(_messageEmitter.EmitWarning(<[ "Data for the '" + name + "' member is ignored." ]>)) ]>);
+
       def ctorArgs = members.Map(m => <[ $(varPrefix + m.Name : usesite) ]>);
       body.Add(<[
         def loop()
@@ -192,7 +197,7 @@ namespace Nitra.Compiler
             def fieldName = reader.ReadString();
             match (fieldName)
             {
-              ..$(cases2.Reverse())
+              ..$fieldNameCases
             }
             loop()
           }
@@ -200,7 +205,7 @@ namespace Nitra.Compiler
       ]>);
       body.Add(<[ loop() ]>);
       body.Add(<[ $(type : typed)(..$ctorArgs) ]>);
-      <[ { ..$(body.NToList()) } ]>
+      <[ { ..$body } ]>
     }
 
     IsVariant(ti : TypeInfo) : bool
@@ -268,49 +273,51 @@ namespace Nitra.Compiler
 
     MakeVariantReaderMethodBody(ty : FixedType) : PExpr
     {
-      def makeCase(optionType : FixedType.Class)
+      def optionCases = List();
+      foreach (optionType in GetVariantOptions(ty))
       {
         def code = MakeRecordReadCode(optionType);
-        <[ case: | $(optionType.TypeInfo.Name : string) => $code ]>
+        optionCases.Add(<[ case: | $(optionType.TypeInfo.Name : string) => $code ]>);
       }
-      def options = GetVariantOptions(ty);
-      def cases1  = options.Map(makeCase);
-      def cases2  = cases1 + [<[ case: | m => $(_messageEmitter.EmitFatalError(<[ "The serialization data for '" + m + "' member is ignored."]>)); ]>];
+      optionCases.Add(<[ case: | m => $(_messageEmitter.EmitFatalError(<[ "The serialization data for '" + m + "' member is ignored."]>)); ]>);
       <[
         assert(typeCode == Nitra.Serialization.TypeTag.Variant);
         match (reader.ReadString())
         {
-          ..$cases2
+          ..$optionCases
         }
       ]>
     }
 
     MakeVariantWriterMethodBody(ty : FixedType) : PExpr
     {
-      def makeCase(optionType : FixedType.Class)
+      def optionCases = List();
+      foreach (optionType in GetVariantOptions(ty))
       {
-        def code = MakeMembersWriteCode(optionType, <[ o ]>);
-        if (code is <[ () ]>)
-          <[ case:
-            | $(optionType.TypeInfo.Name : usesite) =>
-              writer.Write($(optionType.TypeInfo.Name : string));
-          ]>
-        else
-          <[ case:
-            | $(optionType.TypeInfo.Name : usesite) as o =>
-              writer.Write($(optionType.TypeInfo.Name : string));
-              $code
-          ]>
-      }
-      def options = GetVariantOptions(ty);
-      def cases1  = options.Map(makeCase);
+        def case =
+          match (MakeMembersWriteCode(optionType, <[ o ]>))
+          {
+            | None =>
+              <[ case:
+                | $(optionType.TypeInfo.Name : usesite) =>
+                  writer.Write($(optionType.TypeInfo.Name : string));
+              ]>
 
+            | Some(code) =>
+              <[ case:
+                | $(optionType.TypeInfo.Name : usesite) as o =>
+                  writer.Write($(optionType.TypeInfo.Name : string));
+                  $code
+              ]>
+          }
+        optionCases.Add(case);
+      }
       <[
         writer.Write($(TypeTag.Variant :> byte)); // Variant кодирует variant. Его формат отличается от объекта наличием строки поределяющей подтип.
         writer.Write(memberName);
         match (obj)
         {
-          ..$cases1
+          ..$optionCases
         };
         writer.Write($(TypeTag.Empty :> byte));
       ]>
@@ -325,12 +332,24 @@ namespace Nitra.Compiler
       match (typeCode)
       {
         | TypeTag.Object =>
-          writerCode = <[
-              writer.Write($(TypeTag.Object :> byte));
-              writer.Write(memberName);
-              $(MakeMembersWriteCode(ty, <[ obj ]>));
-              writer.Write($(TypeTag.Empty :> byte));
-            ]>;
+          writerCode =
+            match (MakeMembersWriteCode(ty, <[ obj ]>))
+            {
+              | None =>
+                <[
+                  writer.Write($(TypeTag.Object :> byte));
+                  writer.Write(memberName);
+                  writer.Write($(TypeTag.Empty :> byte));
+                ]>;
+
+              | Some(code) =>
+                <[
+                  writer.Write($(TypeTag.Object :> byte));
+                  writer.Write(memberName);
+                  $code;
+                  writer.Write($(TypeTag.Empty :> byte));
+                ]>;
+            }
 
           readerCode = MakeRecordReadCode(ty);
 

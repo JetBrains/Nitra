@@ -3,6 +3,7 @@
 //#define DebugThreading
 using Nitra.Internal.Recovery;
 using Nitra.Runtime.Errors;
+using Nitra.Runtime.Reflection;
 
 using System;
 using System.IO;
@@ -133,6 +134,8 @@ namespace Nitra.DebugStrategies
 
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
+
+      AstPatcher.Patch(startSeq, rp, memiozation);
 
       _parseResult = null;
 

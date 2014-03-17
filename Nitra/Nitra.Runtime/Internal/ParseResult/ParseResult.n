@@ -21,12 +21,13 @@ using SCG = System.Collections.Generic;
 
 namespace Nitra
 {
-  public partial class ParseResult : SourceSnapshot
+  public partial class ParseResult : IPrettyPrintSource, ISourceSnapshotProvider
   {
     public static AstParsedState = ~int.MaxValue;
 
     public static ResultOffset = 0;
 
+    public         Text             : string         { get; }
     public mutable ast              : array[int];
     public mutable memoize          : array[int];
     public mutable allocated        : int;
@@ -41,10 +42,10 @@ namespace Nitra
     private mutable _maxFailPos     : int;
     private mutable _counter        : int;
     private _errors                 : SCG.List[Error] = SCG.List();
-    
+
     public this(source : SourceSnapshot, startPos : int, initalSize : int, parserHost : ParserHost, ruleParser : RuleParser)
     {
-      base(source);
+      Text             = source.Text;
       OriginalSource   = source;
       StartPos         = startPos;
       TokenEnumerator1 = TokenEnumerator(this);
@@ -291,12 +292,6 @@ namespace Nitra
       size;
     }
 
-    private delegate SimpleAstCreate(pos : ref int, parseResult : ParseResult) : Ast;
-    private static SimpleAstCreateSignature : array[Type] = array[typeof(int).MakeByRefType(), typeof(ParseResult)];
-
-    private delegate ExtensibleAstCreate(pos : ref int, parseResult : ParseResult, bindingPower : int, ruleDescriptor : ExtensibleRuleDescriptor) : Ast;
-    private static ExtensibleAstCreateSignature : array[Type] = array[typeof(int).MakeByRefType(), typeof(ParseResult), typeof(int), typeof(ExtensibleRuleDescriptor)];
-
     public CreateAst() : Nitra.Ast
     {
       //FIXME: rewrite without reflection
@@ -304,16 +299,32 @@ namespace Nitra
       match (this.RuleParser.Descriptor)
       {
         | SimpleRuleDescriptor =>
-          def astCreateMethod = astType.GetMethod("Create", SimpleAstCreateSignature);
-          def astCreate       = Delegate.CreateDelegate(typeof(SimpleAstCreate), astCreateMethod) :> SimpleAstCreate;
-          mutable pos = StartPos;
-          astCreate(ref pos, this)
+          def astCreateMethod = astType.GetMethod("Create", array[typeof(int).MakeByRefType(), typeof(ParseResult)]);
+          astCreateMethod.Invoke(null, array[StartPos : object, this]) :> Ast
 
         | ExtensibleRuleDescriptor as descriptor =>
-          def astCreateMethod = typeof(ExtensibleRuleAstConstructor[_]).MakeGenericType(astType).GetMethod("Create", ExtensibleAstCreateSignature);
-          def astCreate       = Delegate.CreateDelegate(typeof(ExtensibleAstCreate), astCreateMethod) :> ExtensibleAstCreate;
+          def astFactory      = typeof(DefaultExtensibleRuleAstFactory[_]).MakeGenericType(astType).GetField("Instance").GetValue(null);
+          def astCreateMethod = typeof(ExtensibleRuleAstConstructor).GetMethod("Create").MakeGenericMethod(astType);
+          astCreateMethod.Invoke(null, array[StartPos : object, this, 0, descriptor, astFactory]) :> Ast
+
+        | _ => assert(false)
+      }
+    }
+
+    public CreateSplicableAst[T](splicableAstBuilder : ISplicableAstBuilder[T]) : T
+    {
+      def ruleDescriptor  = this.RuleParser.Descriptor;
+      match (ruleDescriptor)
+      {
+        | SimpleRuleDescriptor =>
+          def grammarAssembly = ruleDescriptor.Grammar.GetType().Assembly;
+          def walkerType      = grammarAssembly.GetType(ruleDescriptor.Grammar.FullName + "AstWalker", throwOnError = true);
+          def method          = walkerType.GetMethod(ruleDescriptor.Name.Replace('.', '_')).MakeGenericMethod(typeof(T));
+          method.Invoke(null, array[StartPos : object, this, splicableAstBuilder]) :> T
+
+        | ExtensibleRuleDescriptor as d =>
           mutable pos = StartPos;
-          astCreate(ref pos, this, 0, descriptor)
+          ExtensibleRuleAstConstructor.Create(ref pos, this, 0, d, splicableAstBuilder)
 
         | _ => assert(false)
       }
@@ -362,6 +373,33 @@ namespace Nitra
     {
       def ruleId = this.ast[astPtr] & ExtensibleRuleParser.AstMask.Id;
       (this.ParserHost.RuleParsers[ruleId] :> IRuleParserReflection).Reflection(ruleId)
+    }
+
+    public GetGarbage(prevPos : int, pos : int) : NSpan
+    {
+      def cmp(e)
+      {
+        if (e.Skip.StartPos < prevPos)
+          -1
+        else
+          if (e.Skip.EndPos >= pos)
+            1
+          else
+            0
+      }
+      def errorIndex = ErrorData.BinarySearch(cmp);
+      if (errorIndex >= 0)
+      {
+        def error = ErrorData[errorIndex];
+        error.Skip
+      }
+      else
+        NSpan()
+    }
+
+    private GetSource() : SourceSnapshot implements ISourceSnapshotProvider.GetSource
+    {
+      OriginalSource
     }
   }
 }
