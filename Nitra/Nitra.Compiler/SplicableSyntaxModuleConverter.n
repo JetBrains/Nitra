@@ -11,15 +11,15 @@ using Nemerle.Utility;
 
 using System;
 using SCG = System.Collections.Generic;
-using System.Linq;
 
 namespace Nitra.Compiler
 {
   public sealed class SplicableSyntaxModuleConverter
   {
-    _rewriteOperations : SCG.List[SyntaxRuleSymbol * SyntaxRuleSymbol]      = SCG.List();
-    _ruleMapTable      : SCG.Dictionary[SyntaxRuleSymbol, SyntaxRuleSymbol] = SCG.Dictionary();
-    _project           : NitraProject;
+    _rewriteOperations  : SCG.List[SyntaxRuleSymbol * SyntaxRuleSymbol]      = SCG.List();
+    _ruleMapTable       : SCG.Dictionary[SyntaxRuleSymbol, SyntaxRuleSymbol] = SCG.Dictionary();
+    _baseRulesToResolve : SCG.List[Symbol * ExtensibleRuleSymbol] = SCG.List();
+    _project            : NitraProject;
 
     public this(project : NitraProject)
     {
@@ -71,28 +71,26 @@ namespace Nitra.Compiler
               _rewriteOperations.Add(ruleSymbol, rewrittenRuleSymbol);
               enumerateRules(ruleSymbol.Node, rewrittenRuleSymbol.Node, rewrittenRuleSymbol);
 
-            | ExtensionRuleSymbol as ruleSymbol =>
+            | ExtensionRuleSymbol(BaseRule = SymbolRef.Some(extendingRuleSymbol)) as ruleSymbol =>
               assert(!ruleSymbol.IsToken);
-
-              def rewrittenBaseRule = LookupRewrittenRuleSymbol(ruleSymbol.BaseRule.Value);
 
               def rewrittenRuleSymbol = ChemicalBaseExtensionRuleSymbol(ruleSymbol.FirstLocation, ruleSymbol.Name)
                 .SetDeclarationSite(declarationSite)
                 .SetOptions(RuleDefinitionOptions.Empty)
-                .SetBaseRule(SymbolRef.Some(Location.Default, true, rewrittenBaseRule))
                 .SetSplicableType(ExtensionRuleSymbol.SplicableRuleType.Normal())
                 .SetSpliceSource(SymbolRef.Some(Location.Default, true, ruleSymbol));
+
+              _baseRulesToResolve.Add(rewrittenRuleSymbol, extendingRuleSymbol);
 
               _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
               _rewriteOperations.Add(ruleSymbol, rewrittenRuleSymbol);
               enumerateRules(ruleSymbol.Node, rewrittenRuleSymbol.Node, rewrittenRuleSymbol);
 
             | ExtendSyntaxSymbol(Extend = SymbolRef.Some(ExtensibleRuleSymbol(IsToken = false) as extendingRuleSymbol)) as extendSymbol =>
-              def rewrittenBaseRule = LookupRewrittenRuleSymbol(extendingRuleSymbol);
-
               def rewrittenExtendSymbol = ChemicalExtendSyntaxSymbol(extendSymbol.FirstLocation, extendSymbol.Name)
-                .SetDeclarationSite(declarationSite)
-                .SetExtend(SymbolRef.Some(Location.Default, true, rewrittenBaseRule));
+                .SetDeclarationSite(declarationSite);
+
+              _baseRulesToResolve.Add(rewrittenExtendSymbol, extendingRuleSymbol);
 
               _ = targetNode.AddAndReport(rewrittenExtendSymbol, rewrittenExtendSymbol.FirstLocation);
               enumerateRules(extendSymbol.Node, rewrittenExtendSymbol.Node, rewrittenExtendSymbol);
@@ -102,6 +100,20 @@ namespace Nitra.Compiler
         }
       }
       enumerateRules(syntaxModule.Node, splicableSyntaxModule.Node, splicableSyntaxModule)
+    }
+
+    public ResolveBaseRules() : void
+    {
+      foreach ((symbol, extensibleRuleSymbol) in _baseRulesToResolve)
+      {
+        def rewrittenBaseRule = LookupRewrittenRuleSymbol(extensibleRuleSymbol);
+        match (symbol)
+        {
+          | ChemicalBaseExtensionRuleSymbol as extensionSymbol => _ = extensionSymbol.SetBaseRule(SymbolRef.Some(Location.Default, true, rewrittenBaseRule));
+          | ChemicalExtendSyntaxSymbol      as extendSymbol    => _ = extendSymbol.SetExtend(SymbolRef.Some(Location.Default, true, rewrittenBaseRule));
+          | _ => assert(false);
+        }
+      }
     }
 
     public RewriteRules() : void
@@ -237,10 +249,11 @@ namespace Nitra.Compiler
       else
       {
         def syntaxModule = ruleSymbol.DeclaringModule;
-        if (syntaxModule.Node.Parent.BindMany.[TSymbol](("Splicable" + syntaxModule.Name) :: ruleSymbol.ModuleRelativeName) is [r])
+        def name = ("Splicable" + syntaxModule.Name) :: ruleSymbol.ModuleRelativeName;
+        if (syntaxModule.Node.Parent.BindMany.[TSymbol](name) is [r])
           r
         else
-          assert3(false, "cant find rewritten rule")
+          assert3(false, $<#cant find rewritten rule '..$(name; ".")'#>)
       }
     }
 
