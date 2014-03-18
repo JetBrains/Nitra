@@ -1,13 +1,18 @@
-﻿using Nemerle;
+﻿using Nitra.Internal;
+using Nitra.Internal.Recovery;
+using Nitra.Runtime;
+using Nitra.Runtime.Reflection;
+
+using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
-using Nitra.Internal;
-using Nitra.Runtime;
 
 using System;
 using System.Diagnostics;
 using System.Linq;
+
+using System.Xml.Linq;
 using SCG = System.Collections.Generic;
 
 namespace Nitra
@@ -21,10 +26,16 @@ namespace Nitra
     public ParserHost               : ParserHost;
     public SimpleRuleParsers        : Hashtable[SimpleRuleDescriptor, SimpleRuleParser];
     public ExtensibleRules          : Hashtable[ExtensibleRuleDescriptor, ExtensibleRuleParserData] = Hashtable();
-    public Tokens                   : SCG.HashSet[TokenParser] = SCG.HashSet();
+    public Tokens                   : SCG.Dictionary[object, TokenParser] = SCG.Dictionary();
+    public VoidTokens               : SCG.Dictionary[object, TokenParser] = SCG.Dictionary();
 
     public StartID                  : int;
     public RuleParserMap            : SCG.List[object] = SCG.List();
+    
+    public Simples     : Seq[SimpleRuleParser];
+    public Prefixs     : Seq[ExtensionRuleParser];
+    public Postfixs    : Seq[ExtensionRuleParser];
+    public Extensibles : Seq[ExtensibleRuleParser];
 
     public NewRuleId(ruleParser : object) : int
     {
@@ -79,16 +90,23 @@ namespace Nitra
       foreach (extensibleRule in ExtensibleRules)
         _ = GetExtensibleRuleParser(extensibleRule.Key, 0);
 
-      InitMandatoryTokenCount();
       InitTokens();
+
+      Simples     = SimpleRuleParsers.Values.ToArray();
+      def extensibleRules = ExtensibleRules.Values;
+      Prefixs     = extensibleRules.Map(data => data.PrefixParsers).Flatten().ToArray();
+      Postfixs    = extensibleRules.Map(data => data.PostfixParsers).Flatten().ToArray();
+      Extensibles = extensibleRules.Map(data => data.Parsers.Filter(_ != null)).Flatten().ToArray();
+
+      InitMandatoryTokenCount();
     }
 
     private InitMandatoryTokenCount() : void
     {
-      def simple = SCG.List(SimpleRuleParsers.Values);
-      def prefix = SCG.List(ExtensibleRules.Values.Map(data => data.PrefixParsers).Flatten());
-      def postfix = SCG.List(ExtensibleRules.Values.Map(data => data.PostfixParsers).Flatten());
-      def extensible = SCG.List(ExtensibleRules.Values.Map(data => data.Parsers.Filter(_ != null)).Flatten());
+      def simple     = Simples     :> array[SimpleRuleParser];
+      def prefix     = Prefixs     :> array[ExtensionRuleParser];
+      def postfix    = Postfixs    :> array[ExtensionRuleParser];
+      def extensible = Extensibles :> array[ExtensibleRuleParser];
 
       foreach (ruleParser in simple)     ruleParser.MandatoryTokens = ~0;
       foreach (ruleParser in prefix)     ruleParser.MandatoryTokens = ~0;
@@ -104,6 +122,42 @@ namespace Nitra
         foreach (ruleParser in postfix)    when (ruleParser.UpdateMandatoryTokens()) updated = true;
         foreach (ruleParser in extensible) when (ruleParser.UpdateMandatoryTokens()) updated = true;
       }
+
+      foreach (ruleParser in simple)     ruleParser.ParsingSequence = ParsingSequence.CreateSimple(ruleParser);
+      foreach (ruleParser in prefix)     ruleParser.ParsingSequence = ParsingSequence.CreateExtension(ruleParser);
+      foreach (ruleParser in postfix)    ruleParser.ParsingSequence = ParsingSequence.CreateExtension(ruleParser);
+      foreach (ruleParser in extensible) ruleParser.ParsingSequence = ParsingSequence.CreateExtensible(ruleParser);
+
+      def updateTokens(parsingSequence)
+      {
+        def addToken(state, key : object)
+        {
+          mutable token;
+          when (Tokens.TryGetValue(key, out token))
+            _ = token.Callers.Add(state.Id, parsingSequence)
+        }
+        foreach (state in parsingSequence.States)
+        {
+          | Predicate                 => ()
+          | Simple           as state => _ = state.RuleParser.ParsingSequence.Callers.Add(state.Id, parsingSequence); when (state.RuleParser.IsTokenRule) addToken(state, state.RuleParser)
+          | Extensible       as state => _ = state.RuleParser.ParsingSequence.Callers.Add(state.Id, parsingSequence); when (state.RuleParser.IsTokenRule) addToken(state, state.RuleParser)
+          | ExtensionPrefix  as state => _ = state.RuleParser.ParsingSequence.Callers.Add(state.Id, parsingSequence)
+          | ExtensionPostfix as state => _ = state.RuleParser.ParsingSequence.Callers.Add(state.Id, parsingSequence)
+          | Subsequence      as state => _ = state.Sequence.Callers.Add(state.Id, parsingSequence)
+          | Scan             as state =>
+            match (state.Subrule)
+            {
+              | RegularCall as subrule => addToken(state, subrule.Descriptor)
+              | TokenString as subrule => addToken(state, subrule.Str)
+              | Empty                  => ()
+              | _                      => assert3(false)
+            }
+        }
+      }
+      foreach (ruleParser in simple)     updateTokens(ruleParser.ParsingSequence);
+      foreach (ruleParser in prefix)     updateTokens(ruleParser.ParsingSequence);
+      foreach (ruleParser in postfix)    updateTokens(ruleParser.ParsingSequence);
+      foreach (ruleParser in extensible) updateTokens(ruleParser.ParsingSequence);
     }
 
     private InitTokens() : void
@@ -119,34 +173,46 @@ namespace Nitra
           | ListWithSeparator as subrule => visit(subrule.Rule);  visit(subrule.Separator);
           | ExtensibleCall    as subrule => visitExtensible(subrule.RuleParser);
           | SimpleCall        as subrule => visitSimple(subrule.RuleParser);
-          | RegularCall       as subrule => _ = Tokens.Add(TokenParser.RegularCall(subrule.Descriptor));
-          | TokenString       as subrule => _ = Tokens.Add(TokenParser.TokenString(subrule.Str));
+          | TokenString       as subrule => Tokens[subrule.Str]        = TokenParser.TokenString(subrule.Str);
           | Empty | Marker => ()
+          | RegularCall       as subrule => 
+            if (subrule.Descriptor.IsVoid)
+              VoidTokens[subrule.Descriptor] = TokenParser.RegularCall(subrule.Descriptor);
+            else
+              Tokens[subrule.Descriptor]     = TokenParser.RegularCall(subrule.Descriptor);
         }
       }
       and visitSimple(parser)
       {
         if (parser.IsTokenRule)
-          _ = Tokens.Add(TokenParser.SimpleCall(parser));
-        else
-          when (simpleVisited.Add(parser))
-            visit(parser.Reflection(parser.RuleId));
+        {
+          if (parser.IsVoid)
+            VoidTokens[parser] = TokenParser.SimpleCall(parser);
+          else
+            Tokens[parser]     = TokenParser.SimpleCall(parser);
+        }
+        else when (simpleVisited.Add(parser))
+          visit(parser.Reflection(parser.RuleId));
       }
       and visitExtensible(parser)
       {
         if (parser.IsTokenRule)
-          _ = Tokens.Add(TokenParser.ExtensibleCall(parser));
-        else
-          when (extensibleVisited.Add(parser))
+        {
+          if (parser.IsVoid)
+            VoidTokens[parser] = TokenParser.ExtensibleCall(parser);
+          else
+            Tokens[parser]     = TokenParser.ExtensibleCall(parser);
+        }
+        else when (extensibleVisited.Add(parser))
+        {
+          foreach (parser in parser.PrefixRules)
+            visit(parser.Reflection(parser.RuleId));
+          for (mutable i = parser.FirstPostfixRule; i < parser.PostfixRules.Length; ++i)
           {
-            foreach (parser in parser.PrefixRules)
-              visit(parser.Reflection(parser.RuleId));
-            for (mutable i = parser.FirstPostfixRule; i < parser.PostfixRules.Length; ++i)
-            {
-              def parser = parser.PostfixRules[i];
-              visit(parser.Reflection(parser.RuleId));
-            }
+            def parser = parser.PostfixRules[i];
+            visit(parser.Reflection(parser.RuleId));
           }
+        }
       }
 
       foreach ((descriptor, parser) when descriptor.IsStartRule in SimpleRuleParsers.KeyValuePairs)
@@ -166,15 +232,309 @@ namespace Nitra
       SimpleRuleParsers[rd]
     }
     
-    public ParseAllGrammarTokens(pos : int, parseResult : ParseResult) : SCG.HashSet[int]
+    public ParseAllNonVoidGrammarTokens(pos : int, parseResult : ParseResult) : SCG.HashSet[int]
     {
       def text = parseResult.Text;
       def results = SCG.HashSet.[int]();
 
-      foreach (token in Tokens)
+      foreach (token in Tokens.Values)
         _ = results.Add(token.Parse(pos, text, parseResult));
 
       results
+    }
+
+    public ParseAllVoidGrammarTokens(pos : int, parseResult : ParseResult) : SCG.HashSet[int]
+    {
+      def text = parseResult.Text;
+      def results = SCG.HashSet.[int]();
+
+      foreach (token in VoidTokens.Values)
+        _ = results.Add(token.Parse(pos, text, parseResult));
+
+      results
+    }
+    
+    public ParseAllGrammarTokens(pos : int, parseResult : ParseResult) : SCG.HashSet[int]
+    {
+      when (parseResult.TerminateParsing)
+        throw OperationCanceledException();
+        
+      def text = parseResult.Text;
+      def results = SCG.HashSet.[int]();
+
+      foreach (token in Tokens.Values)
+        _ = results.Add(token.Parse(pos, text, parseResult));
+
+      foreach (token in VoidTokens.Values)
+        _ = results.Add(token.Parse(pos, text, parseResult));
+
+      when (parseResult.TerminateParsing)
+        throw OperationCanceledException();
+        
+      results
+    }
+
+    private static HtmlTemplate = @"
+<html>
+<head>
+    <title>Pretty Print</title>
+    <meta http-equiv='Content-Type' content='text/html;charset=utf-8'/>
+    <style type='text/css'>
+pre
+{
+  color: black;
+  font-weight: normal;
+  font-size: 12pt;
+  font-family: Consolas, Courier New, Monospace;
+}
+
+.default
+{
+  color: black;
+  background: white;
+}
+
+.keyword
+{
+  color: Blue;
+}
+
+.string
+{
+  color: Red;
+}
+
+.marker
+{
+  color: LightGray;
+}
+
+a:hover
+{
+  color: DarkBlue;
+  font-weight: bold;
+  text-decoration: none;
+}
+
+
+.simpleRuleCall
+{
+  color: DarkBlue;
+}
+
+.extensibleRuleCall
+{
+  color: DarkCyan;
+}
+
+.regexRuleCall
+{
+  color: DarkMagenta;
+}
+
+a:visited, a:link, a:active
+{
+  text-decoration: none;
+}
+</style>
+</head>
+<body>
+<pre>
+<content/>
+</pre>
+</body>
+</html>
+"; 
+    
+    public ToHtml() : XElement
+    {
+      def root       = XElement("span");
+      def keywordCss = XAttribute("class", "keyword");
+      def stringCss  = XAttribute("class", "string");
+      def markerCss  = XAttribute("class", "marker");
+      def seqInfoToLabelMap = Hashtable.[RuleDescriptor, string]();
+      mutable id = 0;
+      def getId()    : int    { id++; id }
+      def getLabel(descriptor : RuleDescriptor) : string
+      {
+        mutable label;
+        unless (seqInfoToLabelMap.TryGetValue(descriptor, out label))
+        {
+          label = "Ref_" + getId();
+          seqInfoToLabelMap.Add(descriptor, label);
+        }
+        
+        label
+      }
+      def renderAHref(descriptor : RuleDescriptor, text : string) : XElement
+      {
+        def cssClass =
+          match (descriptor)
+          {
+            | SimpleRuleDescriptor     => "simpleRuleCall"
+            | ExtensibleRuleDescriptor => "extensibleRuleCall"
+            | RegularRuleDescriptor    => "regexRuleCall"
+            | _                        => assert3(false);
+          };
+        
+        XElement("a", XAttribute("href", "#" + getLabel(descriptor)), XAttribute("class", cssClass), text)
+      }
+      def convertSubrule(parent : XElement, subrule : SubruleInfo) : void
+      {
+        def predicates = subrule.HeadPredicates;
+        
+        foreach (predicate in predicates)
+        {
+          parent.Add(if (predicate.IsAnd) "&" else "!");
+          renderSubSequence(parent, predicate, suppressParentheses=false);
+          parent.Add(" ");
+        }
+        
+        match (subrule)
+        {
+          | Empty                  => parent.Add(XElement("span", stringCss, <#""#>));
+          | RegularCall       as r =>
+            def descriptor = r.Descriptor;
+            parent.Add(renderAHref(descriptor, descriptor.Name));
+            
+          | ExtensibleCall    as r =>
+            def parser = r.RuleParser;
+            def bp     = parser.BindingPower;
+            parent.Add(renderAHref(parser.Descriptor, parser.RuleName));
+            when (bp != 0)
+              parent.Add(" : " + bp);
+          
+          | SimpleCall        as r =>
+            def parser = r.RuleParser;
+            parent.Add(renderAHref(parser.Descriptor, parser.RuleName));
+          
+          | Option            as r => renderSubSequence(parent, r.Rule, suppressParentheses=false); parent.Add("?");
+          | List              as r => renderSubSequence(parent, r.Rule, suppressParentheses=false); parent.Add(if (r.Min > 0) "+" else "*");
+          | ListWithSeparator as r =>
+            parent.Add("(");
+            renderSubSequence(parent, r.Rule, suppressParentheses=true);
+            parent.Add("; ");
+            renderSubSequence(parent, r.Separator, suppressParentheses=true);
+            when (r.HangingSeparator)
+              parent.Add("; ?");
+            parent.Add(if (r.Min > 0) ")+" else ")*");
+
+          | TokenString       as r => parent.Add(XElement("span", stringCss, "\"" + X.EscapeString(r.Str) + "\""));
+          | Marker            as r => parent.Add(XElement("span", markerCss, r.Name));
+        }
+      }
+      and renderSubSequence(result : XElement, info : SequenceInfo, suppressParentheses : bool) : void
+      {
+        def needParentheses = !suppressParentheses && info.Subrules.Length != 1;
+        when (needParentheses)
+          result.Add("(");
+        convertSubrules(result, info.Subrules);
+        when (needParentheses)
+          result.Add(")");
+      }
+      and convertSubrules(parent : XElement, subrules : array[SubruleInfo]) : void
+      {
+        foreach (subrule in subrules with i)
+        {
+          when (i != 0)
+            parent.Add(" ");
+          convertSubrule(parent, subrule);
+        }
+      }
+      def getType(parser : RuleParser) : XElement
+      {
+        XElement("span", keywordCss, if (parser.IsVoid) "void " else if (parser.IsTokenRule) "token " else "syntax ")
+      }
+      def ruleHeader(prefix : XElement, parser : RuleParser, name : string, maxNameLen : int = 0) : XElement
+      {
+        def nameLen = name.Length;
+        def title = XAttribute("title", "Syntax module: " + parser.Descriptor.Grammar.FullName 
+          + ";  Assembly: " + parser.Descriptor.Grammar.GetType().Assembly.FullName);
+        def result = XElement("span", XAttribute("id", getLabel(parser.Descriptor)), title);
+        result.Add(prefix);
+        result.Add(XElement("span", name));
+        when (nameLen < maxNameLen)
+          result.Add(string(' ', maxNameLen - nameLen));
+        result
+      }
+      def renderPrefix(parser : ExtensionRuleParser, maxNameLen : int) : void
+      {
+        def (bp, baseRuleDescriptor) = if (parser.Descriptor is PostfixRuleDescriptor as postfix) (postfix.BindingPower, postfix.BaseRule) else (-1, null);
+        def info   = parser.Reflection(parser.RuleId) :> SequenceInfo.Ast;
+        def result = ruleHeader(XElement("span", "  | "), parser, parser.RuleName, maxNameLen);
+        result.Add(" = ");
+        when (bp >= 0)
+        {
+          def baseRule = this.ExtensibleRules[baseRuleDescriptor].GetParser(0);
+          result.Add(XElement("span", " ", renderAHref(baseRule.Descriptor, baseRule.RuleName)));
+          when (bp > 0)
+            result.Add(" : " + bp + " ");
+        }
+        convertSubrules(result, info.Subrules);
+        result.Add(";\r\n");
+        root.Add(result);
+      }
+
+      def header = XElement("span");
+      def assemblies = Grammars.GroupBy(g => g.GetType().Assembly);
+      foreach (assembly in assemblies.OrderBy(a => a.Key.FullName))
+      {
+        header.Add(XElement("span", "Assemby: " + assembly.Key.FullName + "\r\n"));
+        
+        foreach (syntaxModule in assembly.OrderBy(m => m.FullName))
+          header.Add(XElement("span", "  Syntax module: " + syntaxModule.FullName + "\r\n"));
+      }
+      
+      header.Add(XElement("span", "\r\n"));
+      
+      root.Add(XElement("span", "\r\n"));
+      
+      def parsers = SCG.List.[StartRuleParser](Simples);
+      parsers.AddRange(Extensibles.Where(e => e.BindingPower == 0));
+      def parsers2 = parsers.OrderByDescending(_.IsTokenRule).ThenBy(_.RuleName);
+      
+      foreach (parser in parsers2)
+      {
+        | SimpleRuleParser as parser =>
+          when (parser.Reflection(parser.RuleId) is SequenceInfo.Ast as info)
+          {
+            def result = ruleHeader(getType(parser), parser, info.Parser.RuleName);
+            result.Add(" = ");
+            convertSubrules(result, info.Subrules);
+            result.Add(";\r\n");
+            root.Add(result);
+          }
+        
+        | ExtensibleRuleParser as parser =>
+          def result = ruleHeader(getType(parser), parser, parser.RuleName);
+          root.Add(result);
+          root.Add("\r\n{\r\n");
+        
+          def extensionRules = SCG.List(parser.PrefixRules.OrderBy(r => r.Descriptor.Name));
+          extensionRules.AddRange(parser.PostfixRules.OrderBy(r => (r.Descriptor :> PostfixRuleDescriptor).BindingPower).ThenBy(r => r.RuleName));
+          
+          when (extensionRules.Count > 0)
+          {
+            def maxNameLen = extensionRules.Max(r => r.RuleName.Length);
+            foreach(subParser in extensionRules)
+              renderPrefix(subParser, maxNameLen);
+          }
+          
+          root.Add("}\r\n");
+          
+        | _ => assert3(false);
+      }
+
+      foreach (descriptor is RegularRuleDescriptor in seqInfoToLabelMap.Keys.Distinct().OrderByDescending(_.Name))
+        root.AddFirst(XElement("span", XAttribute("id", getLabel(descriptor)), XElement("span", keywordCss, "regex"), " ", descriptor.Name, " = ", descriptor.RegexText, ";\r\n"));
+      
+      root.AddFirst(header);
+      
+      def template = XElement.Parse(HtmlTemplate);
+      def content = template.Descendants("content").First();
+      Debug.Assert(content.Parent != null);
+      content.Parent.ReplaceAll(root);
+      template
     }
   }
 }
