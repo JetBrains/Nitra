@@ -1,0 +1,269 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.Runtime.Reflection;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Internal.Recovery
+{
+  [Record]
+  public class AstPatcher
+  {
+    [Record]
+    public class SimpleAst
+    {
+      public ParsedSequence : ParsedSequence;
+      public End            : int;
+      public Fields         : array[int];
+
+      [RecordIgnore]
+      public mutable Ptr    : int = -1;
+
+      public Size           : int { get { Fields.Sum() } }
+    }
+
+    [Record]
+    public class ExtensionAst
+    {
+      public ParsedSequence : ParsedSequence;
+      public End            : int;
+
+      [RecordIgnore]
+      public mutable Ptr    : int = -1;
+
+      [RecordIgnore]
+      public mutable BP     : int = int.MaxValue;
+
+      [RecordIgnore]
+      public Extensions     : Dictionary[int, SimpleAst] = Dictionary();
+
+      public Size           : int { get { End - ParsedSequence.StartPos } }
+    }
+
+    private _recoveryParser : RecoveryParser;
+    private _memiozation : Dictionary[ParsedSeqKey, Dictionary[ParsedSubrule, int] * int];
+
+    [RecordIgnore]
+    public _simple : Hashtable[int * ParsingSequence, SimpleAst] = Hashtable();
+
+    [RecordIgnore]
+    public _extension : Hashtable[int * bool * ExtensibleRuleParserData, ExtensionAst] = Hashtable();
+
+    [RecordIgnore]
+    public _toProcess : System.Collections.Generic.Stack[ParsedSequence * int] = System.Collections.Generic.Stack();
+
+    private static Fail : int = int.MaxValue;
+
+    private FirstSubrule(seq : ParsedSequence, subrules : array[ParsedSubrule]) : ParsedSubrule
+    {
+      foreach (newSubrule in seq.GetFirstSubrules(subrules).OrderBy(s => s.Begin).ThenBy(s => s.State))
+        return newSubrule;
+      ParsedSubrule(-1, -1, -1)
+    }
+
+    private NextSubrule(seq : ParsedSequence, subrules : array[ParsedSubrule], curSubrule : ParsedSubrule) : ParsedSubrule
+    {
+      foreach (newSubrule in seq.GetNextSubrules(curSubrule, subrules))
+        return newSubrule;
+      ParsedSubrule(-1, -1, -1)
+    }
+
+    public ParseSequence(
+      seq : ParsedSequence,
+      end : int) : void
+    {
+      def makeSequence(seq : ParsedSequence, end : int) : SimpleAst
+      {
+        def (parses, ignoredTokens) = _memiozation[ParsedSeqKey(seq, end)];
+        when (ignoredTokens == Fail)
+          assert3(false);
+
+        def subrules = parses.Keys.ToArray();
+
+        def ast = SimpleAst(seq, end, array(seq.ParsingSequence.SequenceInfo.Subrules.Length));
+        for (mutable subrule = FirstSubrule(seq, subrules); subrule.State >= 0; subrule = NextSubrule(seq, subrules, subrule))
+        {
+          def state = seq.ParsingSequence.States[subrule.State];
+          def index = state.Subrule.Offset - 3;//TODO: FIXME HACK!
+          def size = subrule.End - subrule.Begin;
+          ast.Fields[index] += size;
+
+          def sequences = seq.GetSequencesForSubrule(subrule).ToArray();
+          if (sequences.Length > 0)
+          {
+            assert3(sequences.Length == 1);
+            assert(_memiozation[ParsedSeqKey(sequences[0], subrule.End)][1] == parses[subrule]);
+            _toProcess.Push(sequences[0], subrule.End);
+          }
+          else
+          {
+            when (state is ParsingState.Subsequence as state when state.SequenceInfo.Description == "IgnoreToken")//TODO: Hardcode
+            when (_recoveryParser.ParseResult.TryGetAst(subrule.Begin, state.SequenceInfo.Id) <= 0)
+            {
+              def ptr = _recoveryParser.ParseResult.Allocate(state.SequenceInfo.AstSize, state.SequenceInfo.Id);
+              _recoveryParser.ParseResult.ast[ptr + ExtensibleRuleParser.AstOfs.Next] = _recoveryParser.ParseResult.memoize[subrule.Begin];
+              _recoveryParser.ParseResult.memoize[subrule.Begin] = ptr;
+
+              def error = ParseErrorData(NSpan(subrule.Begin, subrule.End));
+              def index = _recoveryParser.ParseResult.ErrorData.Count;
+              _recoveryParser.ParseResult.ErrorData.Add(error);
+              _recoveryParser.ParseResult.ast[ptr + state.SequenceInfo.Subrules[0].Offset] = ~index;
+              _recoveryParser.ParseResult.ast[ptr + ExtensibleRuleParser.AstOfs.State] = Nitra.ParseResult.AstParsedState;
+            }
+          }
+        }
+        assert3(ast.Size == end - seq.StartPos);
+        ast
+      }
+
+      match (seq.ParsingSequence)
+      {
+        | Sequence =>
+          mutable ast;
+          when (_simple.TryGetValue((seq.StartPos, seq.ParsingSequence), out ast))
+          {
+            assert3(ast.Size == end - seq.StartPos);
+            return;
+          }
+
+          ast = makeSequence(seq, end);
+          _simple.Add((seq.StartPos, seq.ParsingSequence), ast);
+
+        | Extensible as parsingSequence =>
+          def (parses, ignoredTokens)= _memiozation[ParsedSeqKey(seq, end)];
+          when (ignoredTokens == Fail)
+            assert3(false);
+
+          def subrules = parses.Keys.ToArray();
+
+          mutable isPrefix = true;
+          for (mutable subrule = FirstSubrule(seq, subrules); subrule.State >= 0; { subrule = NextSubrule(seq, subrules, subrule); isPrefix = false })
+          {
+            when (!isPrefix && subrule.Begin == subrule.End)
+              continue;
+            def key = (subrule.Begin, isPrefix, parsingSequence.RuleParser.ParserData);
+            mutable ast;
+            when (_extension.TryGetValue(key, out ast))
+            {
+              assert3(ast.Size == end - seq.StartPos);
+              ast.BP = Math.Min(ast.BP, parsingSequence.RuleParser.BindingPower);
+              continue;
+            }
+            ast = ExtensionAst(seq, end);
+            ast.BP = parsingSequence.RuleParser.BindingPower;
+            _extension.Add(key, ast);
+
+            foreach (sequence in seq.GetSequencesForSubrule(subrule))
+              when (_memiozation[ParsedSeqKey(sequence, subrule.End)][1] == parses[subrule])
+              {
+                def ext = makeSequence(sequence, subrule.End);
+                ast.Extensions.Add(sequence.ParsingSequence.SequenceInfo.Id, ext);
+                _toProcess.Push(sequence, subrule.End);
+              }
+          }
+          //assert3(ast.Size == end - seq.StartPos);
+      }
+    }
+
+    public static Patch(startSeq : ParsedSequence, recoveryParser : RecoveryParser, memiozation : Dictionary[ParsedSeqKey, Dictionary[ParsedSubrule, int] * int]) : void
+    {
+      def errorId = recoveryParser.ParseResult.ParserHost.ErrorId;
+      def astBuilder = AstPatcher(recoveryParser, memiozation);
+      astBuilder.ParseSequence(startSeq, recoveryParser.ParseResult.Text.Length);
+      while (astBuilder._toProcess.Count > 0)
+        astBuilder.ParseSequence(astBuilder._toProcess.Pop());
+      def parseResult = recoveryParser.ParseResult;
+      def fillAst(ast)
+      {
+        def info = ast.ParsedSequence.ParsingSequence.SequenceInfo;
+        def subrules = info.Subrules;
+        for (mutable i = 0; i < subrules.Length; ++i)
+          parseResult.ast[ast.Ptr + subrules[i].Offset] = ast.Fields[i];
+
+        parseResult.ast[ast.Ptr + ExtensibleRuleParser.AstOfs.State] = Nitra.ParseResult.AstParsedState;
+      }
+
+      foreach (ast in astBuilder._simple.Values)
+      {
+        def startPos = ast.ParsedSequence.StartPos;
+        def info = ast.ParsedSequence.ParsingSequence.SequenceInfo;
+        ast.Ptr = parseResult.TryGetAst(startPos, info.Id);
+        when (ast.Ptr <= 0)
+        {
+          ast.Ptr = parseResult.Allocate(info.AstSize, info.Id);
+          parseResult.ast[ast.Ptr + ExtensibleRuleParser.AstOfs.Next] = parseResult.memoize[startPos];
+          parseResult.memoize[startPos] = ast.Ptr;
+        }
+        fillAst(ast);
+      }
+
+      foreach (((startPos, isPrefix, parserData), ast) in astBuilder._extension.KeyValuePairs)
+      {
+        ast.Ptr = parseResult.TryGetAst(startPos, if (isPrefix) parserData.PrefixId else parserData.PostfixId);
+        def fillPointers(mutable ptr)
+        {
+          for (; ptr > 0; ptr = parseResult.ast[ptr + ExtensibleRuleParser.AstOfs.Next])
+          {
+            def id = parseResult.ast[ptr + ExtensibleRuleParser.AstOfs.Id] & ExtensibleRuleParser.AstMask.Id;
+            mutable ext;
+            when (ast.Extensions.TryGetValue(id, out ext))
+              ext.Ptr = ptr;
+          }
+        }
+        def buildList(parsers)
+        {
+          mutable prevExtPtr = 0;
+          for (mutable i = parsers.Length - 1; i >= 0; --i)
+          {
+            def extParser = parsers[i];
+            def info = extParser.Reflection(extParser.RuleId);
+            when (ast.Extensions.ContainsKey(extParser.RuleId))
+            {
+              def isBest = prevExtPtr == 0;
+              def ext = ast.Extensions[extParser.RuleId];
+              when (ext.Ptr <= 0)
+                ext.Ptr = parseResult.Allocate(info.AstSize, info.Id);
+              parseResult.ast[ext.Ptr + ExtensibleRuleParser.AstOfs.Next] = prevExtPtr;
+              prevExtPtr = ext.Ptr;
+              parseResult.ast[ext.Ptr + ExtensibleRuleParser.AstOfs.Id] = info.Id | if (isBest) ExtensibleRuleParser.AstFlags.Best else ExtensibleRuleParser.AstFlags.Equal;
+              fillAst(ext);
+            }
+          }
+          prevExtPtr
+        }
+        if (isPrefix)
+        {
+          when (ast.Ptr <= 0)
+          {
+            ast.Ptr = parseResult.Allocate(ExtensibleRuleParser.PrefixOfs.NodeSize, parserData.PrefixId);
+            parseResult.ast[ast.Ptr + ExtensibleRuleParser.PrefixOfs.Next] = parseResult.memoize[startPos];
+            parseResult.memoize[startPos] = ast.Ptr;
+          }
+          fillPointers(parseResult.ast[ast.Ptr + ExtensibleRuleParser.PrefixOfs.List]);
+          parseResult.ast[ast.Ptr + ExtensibleRuleParser.PrefixOfs.List] = buildList(parserData.PrefixParsers);
+        }
+        else
+        {
+          when (ast.Ptr <= 0)
+          {
+            ast.Ptr = parseResult.Allocate(ExtensibleRuleParser.PostfixOfs.NodeSize, parserData.PostfixId);
+            parseResult.ast[ast.Ptr + ExtensibleRuleParser.PostfixOfs.Next] = parseResult.memoize[startPos];
+            parseResult.memoize[startPos] = ast.Ptr;
+          }
+          mutable index = 0;
+          for (; index < parserData.PostfixParsers.Length; ++index)
+            when (ast.BP >= parserData.PostfixDescriptors[index].BindingPower)
+              break;
+          parseResult.ast[ast.Ptr + ExtensibleRuleParser.PostfixOfs.FirstRuleIndex] = index;
+          fillPointers(parseResult.ast[ast.Ptr + ExtensibleRuleParser.PostfixOfs.List]);
+          parseResult.ast[ast.Ptr + ExtensibleRuleParser.PostfixOfs.List] = buildList(parserData.PostfixParsers);
+        }
+      }
+    }
+  }
+}

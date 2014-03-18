@@ -5,6 +5,7 @@ using Nemerle.Utility;
 using Nemerle.Imperative;
 
 using Nitra.Internal;
+using Nitra.Internal.Recovery;
 using Nitra.Runtime.Reflection;
 
 using System;
@@ -49,10 +50,10 @@ namespace Nitra.Runtime
     {
       mutable curTextPos = startPos;
       if (endPos < 0)
-        _ = Walk(parseResult.TryGetAst(curTextPos, ruleInfo.RuleParser.RuleId), curTextPos, parseResult, context)
+        _ = WalkSimple(curTextPos, ruleInfo.RuleParser, parseResult, context)
       else when (startPos != endPos)
       {
-        curTextPos = Walk(parseResult.GetAst(curTextPos, ruleInfo.RuleParser.RuleId), curTextPos, parseResult, context);
+        curTextPos = WalkSimple(curTextPos, ruleInfo.RuleParser, parseResult, context);
         assert3(curTextPos == endPos);
       }
     }
@@ -62,11 +63,11 @@ namespace Nitra.Runtime
       mutable curTextPos = startPos;
       if (endPos < 0)
         _ = WalkExtension(parseResult.TryGetAst(curTextPos, ruleInfo.RuleParser.PrefixId), curTextPos, ruleInfo.RuleParser, parseResult, context)
+      else if (startPos == endPos)
+        OnPrefixMissed(ruleInfo.RuleParser, startPos, parseResult, context)
       else
       {
-        def astPtr = parseResult.GetAst(curTextPos, ruleInfo.RuleParser.PrefixId);
-
-        curTextPos = WalkExtension(astPtr, curTextPos, ruleInfo.RuleParser, parseResult, context);
+        curTextPos = WalkExtension(parseResult.GetAst(curTextPos, ruleInfo.RuleParser.PrefixId), curTextPos, ruleInfo.RuleParser, parseResult, context);
         while (curTextPos < endPos)
           curTextPos = WalkExtension(parseResult.GetAst(curTextPos, ruleInfo.RuleParser.PostfixId), curTextPos, ruleInfo.RuleParser, parseResult, context);
         assert3(curTextPos == endPos);
@@ -77,10 +78,10 @@ namespace Nitra.Runtime
     {
       mutable curTextPos = startPos;
       if (endPos < 0)
-         _ = WalkAst(parseResult.TryGetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context)
+         _ = WalkSequence(parseResult.TryGetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context)
       else when (startPos != endPos)
       {
-        curTextPos = WalkAst(parseResult.GetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context);
+        curTextPos = WalkSequence(parseResult.GetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context);
         assert3(curTextPos == endPos);
       }
     }
@@ -89,11 +90,11 @@ namespace Nitra.Runtime
     {
       mutable curTextPos = startPos;
       if (endPos < 0)
-         _ = WalkAst(parseResult.TryGetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context)
+         _ = WalkSequence(parseResult.TryGetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context)
       else when (startPos != endPos && !ruleInfo.IsOptimized)
       {
         while (curTextPos < endPos)
-          curTextPos = WalkAst(parseResult.GetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context);
+          curTextPos = WalkSequence(parseResult.GetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context);
         assert3(curTextPos == endPos);
       }
     }
@@ -102,16 +103,16 @@ namespace Nitra.Runtime
     {
       mutable curTextPos = startPos;
       if (endPos < 0)
-         _ = WalkAst(parseResult.TryGetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context)
+         _ = WalkSequence(parseResult.TryGetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context)
       else when (startPos != endPos)
       {
         while (true)
         {
           when (curTextPos >= endPos) break;
-          curTextPos = WalkAst(parseResult.GetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context);
+          curTextPos = WalkSequence(parseResult.GetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context);
 
           when (curTextPos >= endPos) break;
-          curTextPos = WalkAst(parseResult.GetAst(curTextPos, ruleInfo.Separator.Id), curTextPos, parseResult, context);
+          curTextPos = WalkSequence(parseResult.GetAst(curTextPos, ruleInfo.Separator.Id), curTextPos, parseResult, context);
         }
         assert3(curTextPos == endPos);
       }
@@ -121,22 +122,15 @@ namespace Nitra.Runtime
     {
       match (parseResult.RuleParser)
       {
-        | ExtensibleRuleParser as ruleParser => WalkExtensible(0, ruleParser, parseResult, context)
-        | SimpleRuleParser     as ruleParser => WalkAst       (parseResult.TryGetAst(0, ruleParser.RuleId), 0, parseResult, context)
+        | ExtensibleRuleParser as ruleParser => WalkExtensible(parseResult.StartPos, ruleParser, parseResult, context)
+        | SimpleRuleParser     as ruleParser => WalkSimple(parseResult.StartPos, ruleParser, parseResult, context)
         | _                                  => assert3(false)
       }
     }
 
-    public Walk(astPtr : int, mutable curTextPos : int, parseResult : ParseResult, context : TContext) : int
+    public WalkSimple(curTextPos : int, ruleParser : SimpleRuleParser, parseResult : ParseResult, context : TContext) : int
     {
-      when (astPtr <= 0)
-        return -1;
-
-      match (parseResult.GetRuleParser(astPtr))
-      {
-        | ExtensibleRuleParserData as ruleParserData => WalkExtension(astPtr, curTextPos, ruleParserData.GetParser(0), parseResult, context)
-        | _                                          => WalkAst      (astPtr, curTextPos, parseResult, context)
-      }
+      WalkSequence(parseResult.TryGetAst(curTextPos, ruleParser.RuleId), curTextPos, parseResult, context)
     }
 
     public WalkExtensible(mutable curTextPos : int, ruleParser : ExtensibleRuleParser, parseResult : ParseResult, context : TContext) : int
@@ -171,7 +165,7 @@ namespace Nitra.Runtime
         if (bestResult > 0)
         {
           def bestPrefixAstPtr = ruleParser.BestPrefix(bestResult, parseResult);
-          WalkAst(bestPrefixAstPtr, curTextPos, parseResult, context)
+          WalkSequence(bestPrefixAstPtr, curTextPos, parseResult, context)
         }
         else
         {
@@ -183,11 +177,11 @@ namespace Nitra.Runtime
       {
         mutable postfixAst = astPtr;
         def astPtr = ruleParser.BestPostfix(parseResult.TryGetPostfix(ref curTextPos, ref postfixAst), parseResult);
-        WalkAst(astPtr, curTextPos, parseResult, context)
+        WalkSequence(astPtr, curTextPos, parseResult, context)
       }
     }
 
-    private WalkAst(astPtr : int, mutable curTextPos : int, parseResult : ParseResult, context : TContext) : int
+    protected WalkSequence(astPtr : int, mutable curTextPos : int, parseResult : ParseResult, context : TContext) : int
     {
       when (astPtr <= 0)
         return -1;

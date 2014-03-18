@@ -23,7 +23,7 @@ namespace Nitra
 
     private _compositeGrammars : Hashtable[Set[GrammarDescriptor], CompositeGrammar] = Hashtable();
 
-    private _allRules : SCG.List[object] = SCG.List(42);
+    private mutable volatile _allRules : array[object] = array(1);//Root recovery stack frame id.
 
     [Record]
     private class Key
@@ -40,7 +40,8 @@ namespace Nitra
 
     public MakeCompositeGrammar(grammarDescriptors : SCG.IEnumerable[GrammarDescriptor]) : CompositeGrammar
     {
-      grammarDescriptors.Fold(DefaultCompositeGrammar, (grammarDescriptor, parent) => AddGrammar(parent, grammarDescriptor))
+      lock (_syncRoot)
+        grammarDescriptors.Fold(DefaultCompositeGrammar, (grammarDescriptor, parent) => AddGrammar(parent, grammarDescriptor))
     }
 
     public MakeCompositeGrammar(grammarDescriptor : GrammarDescriptor) : CompositeGrammar
@@ -55,47 +56,44 @@ namespace Nitra
         parent
       else
       {
-        def key = Key(parent, grammarDescriptor);
-        def res = _grammarSetCache[key];
-        if (res == null)
+        lock (_syncRoot)
         {
-          lock (_syncRoot)
+          def key = Key(parent, grammarDescriptor);
+          def res = _grammarSetCache[key];
+          if (res == null)
           {
-            def res = _grammarSetCache[key];
-            if (res == null)
+            mutable grammars = parent.Grammars;
+            def addGrammar(descriptor)
             {
-              mutable grammars = parent.Grammars;
-              def addGrammar(descriptor)
+              when (!grammars.Contains(descriptor))
               {
-                when (!grammars.Contains(descriptor))
-                {
-                  grammars = grammars.Add(descriptor);
-                  foreach (descriptor in descriptor.Dependencies)
-                    addGrammar(descriptor);
-                }
+                grammars = grammars.Add(descriptor);
+                foreach (descriptor in descriptor.Dependencies)
+                  addGrammar(descriptor);
               }
-              addGrammar(grammarDescriptor);
+            }
+            addGrammar(grammarDescriptor);
 
-              def res = if (_compositeGrammars.Contains(grammars))
-                _compositeGrammars[grammars]
-              else
-              {
-                def res = CompositeGrammar(this, grammars, _allRules.Count);
-                _allRules.AddRange(res.RuleParserMap);
-                _compositeGrammars.Add(grammars, res);
-                foreach (walkersHost in _walkers.Values)
-                  walkersHost.AddCompositeGrammar(res);
-                res
-              }
-              _grammarSetCache.Add(key, res);
+            def res = if (_compositeGrammars.Contains(grammars))
+              _compositeGrammars[grammars]
+            else
+            {
+              def res = CompositeGrammar(this, grammars, _allRules.Length);
+              def newAllRules = array(_allRules.Length + res.RuleParserMap.Count);
+              _allRules.CopyTo(newAllRules, 0);
+              res.RuleParserMap.CopyTo(newAllRules, _allRules.Length);
+              _allRules = newAllRules;
+              _compositeGrammars.Add(grammars, res);
+              foreach (walkersHost in _walkers.Values)
+                walkersHost.AddCompositeGrammar(res);
               res
             }
-            else
-              res :> CompositeGrammar;
+            _grammarSetCache.Add(key, res);
+            res
           }
+          else
+            res :> CompositeGrammar;
         }
-        else
-          res :> CompositeGrammar;
       }
     }
   }

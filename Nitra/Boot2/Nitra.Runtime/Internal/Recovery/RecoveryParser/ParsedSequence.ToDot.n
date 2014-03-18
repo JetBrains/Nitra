@@ -1,0 +1,109 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Internal.Recovery
+{
+  partial class ParsedSequence
+  {
+    SubruleToDot(subrule : ParsedSubrule, nodes : SCG.HashSet[string], edges : SCG.List[string], parsedSubrules : Seq[ParsedSubrule]) : void
+    {
+      def border = if (subrule.State >= 0 && this.ParsingSequence.States[subrule.State].Next.Contains(-1)) " peripheries=2" else "";
+      def shape  = if (subrule.State < -1) " shape=box" else "";
+      def bkcolor  = if (subrule.IsEmpty) " style=filled color=lightgrey" else "";
+      unless (nodes.Add($<#$(Name(subrule)) [label="$(Label(subrule))"$border$shape$bkcolor]#>))
+        return;
+
+      def subrules = this.GetNextSubrules(subrule, parsedSubrules).ToArray();
+      foreach (nextSubrule in subrules)
+      {
+        edges.Add($<#$(Name(subrule)) -> $(Name(nextSubrule))#>);
+        SubruleToDot(nextSubrule, nodes, edges, parsedSubrules);
+      }
+    }
+    
+    public ToDot(parsedSubrules : Seq[ParsedSubrule]) : string
+    {
+      def nodes = SCG.HashSet();
+      def edges = SCG.List();
+
+      //def parsedNodes = parsedSubrules.GroupBy(p => (p.Begin, p.State));
+      def subrules    = this.GetFirstSubrules(parsedSubrules).ToArray();
+
+      foreach (subrule in subrules)
+        SubruleToDot(subrule, nodes, edges, parsedSubrules);
+
+      def graphLabel = this.ParsingSequence.GraphLabel() + "\r\n" + X.DotEscape(this.RecoveryParser.ParseResult.DebugText) + "\r\n\r\n";
+      def content = $<#
+        digraph RecoveryParser
+        {
+          rankdir=LR;
+          compound=true;
+          label="$graphLabel";
+          fontname="Consolas";
+    
+          ..$(nodes; "\r\n          ")
+    
+          ..$(edges; "\r\n          ")
+        }
+      #>;
+      
+      content
+    }
+    
+    public Visualize() : void
+    {
+      Visualize(ParsedSubrules);
+    }
+    
+    public Visualize(parsedSubrules : Seq[ParsedSubrule]) : void
+    {
+      def fileName = GetFilePath();
+      File.WriteAllText(fileName, ToDot(parsedSubrules));
+      X.ConvertToDot(fileName);
+    }
+    
+    GetFilePath() : string
+    {
+      def ruleParser = ParsingSequence.SequenceInfo.Parser :> RuleParser;
+      def path = Path.Combine(Path.GetTempPath(), "Nitra", "Dot", $<#..$(ruleParser.Grammar.Grammars; "-"; g => g.Name)#>, ruleParser.Descriptor.Name);
+      def filePath = path + ".dot";
+      def dir = Path.GetDirectoryName(filePath);
+      unless (Directory.Exists(dir))
+        _ = Directory.CreateDirectory(dir);
+      filePath
+    }
+    
+    Label(subrule : ParsedSubrule) : string
+    {
+      def label =
+        match (subrule.State)
+        {
+          | -1 => "End"
+          | -2 => "Deleted token"
+          | -3 => "Deleted garbage"
+          | s  => this.ParsingSequence.States[s].Description
+        };
+
+      def mandatoryTokenCount = if (subrule.State >= 0) SubruleMandatoryTokenCount(subrule) else -1;
+      "Ins: " + mandatoryTokenCount + "\r\n"
+        + subrule + " " + X.DotEscape(label) + "\r\n"
+        + this.RecoveryParser.ParseResult.Text.Substring(subrule.Begin, subrule.Length)
+    }
+
+    Name(subrule : ParsedSubrule) : string
+    {
+      "Span_State_" + subrule.State.ToString("X") + "_" + subrule.Begin + "_" + subrule.End
+    }
+  }
+}

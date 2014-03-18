@@ -1,4 +1,6 @@
-﻿using Nitra.Runtime;
+﻿using Nitra.Internal;
+using Nitra.Internal.Recovery;
+using Nitra.Runtime;
 using Nitra.Runtime.Reflection;
 
 using Nemerle;
@@ -17,7 +19,7 @@ using System.Collections.ObjectModel;
 using System.Text;
 using SCG = System.Collections.Generic;
 
-namespace Nitra.Internal
+namespace Nitra
 {
   public partial class ParseResult : IPrettyPrintSource, ISourceSnapshotProvider
   {
@@ -36,7 +38,6 @@ namespace Nitra.Internal
     public         RuleParser       : RuleParser     { get; }
     public mutable LastParseStart   : int;
     public mutable LastParseEnd     : int;
-    public         RecoveryStacks   : SCG.List[RecoveryStackFrame];
     public         ErrorData        : SCG.List[ParseErrorData];
     private mutable _maxFailPos     : int;
     private mutable _counter        : int;
@@ -50,7 +51,6 @@ namespace Nitra.Internal
       TokenEnumerator1 = TokenEnumerator(this);
       TokenEnumerator2 = TokenEnumerator(this);
       ErrorData        = SCG.List();
-      RecoveryStacks   = SCG.List();
       this.ast         = array(if (initalSize < 10) 10 else initalSize);
       this.memoize     = array(Text.Length + 1);
       this.allocated   = 0;
@@ -81,7 +81,7 @@ namespace Nitra.Internal
       set { _maxFailPos = value }
     }
 
-    public IsSuccess : bool { get { ErrorData.Count == 0 } }
+    public IsSuccess : bool { get { _errors.Count == 0 } }
     
     public TokenEnumerator1 : TokenEnumerator;
     public TokenEnumerator2 : TokenEnumerator;
@@ -292,42 +292,6 @@ namespace Nitra.Internal
       size;
     }
 
-    public PatchAst(ruleParser : IRecoveryRuleParser, astPtr : int, errorIndex : int, astFailState : int, failState : int, startState : int) : void
-    {
-      when (astFailState < failState)
-      {
-        mutable subrule = astPtr + ruleParser.GetOffsetForState(astFailState);
-        for (mutable state = astFailState; state != failState; state = ruleParser.GetNextState(state))
-        {
-          ast[subrule] = int.MinValue;
-          ++subrule;
-        }
-      }
-      if (startState == -2)
-        ast[astPtr + ExtensibleRuleParser.AstOfs.State] = ~failState;
-      else
-      {
-        if (startState >= 0)
-          ast[astPtr + ExtensibleRuleParser.AstOfs.State] = ~startState;
-        else
-          ast[astPtr + ExtensibleRuleParser.AstOfs.State] = AstParsedState;
-        mutable subrule = astPtr + ruleParser.GetOffsetForState(failState);
-        ast[subrule] = ~errorIndex;
-        ++subrule;
-        for (mutable state = ruleParser.GetNextState(failState); state != startState; state = ruleParser.GetNextState(state))
-        {
-          ast[subrule] = int.MinValue;
-          ++subrule;
-        }
-      }
-    }
-
-    private delegate SimpleAstCreate(pos : ref int, parseResult : ParseResult) : Ast;
-    private static SimpleAstCreateSignature : array[Type] = array[typeof(int).MakeByRefType(), typeof(ParseResult)];
-
-    private delegate ExtensibleAstCreate(pos : ref int, parseResult : ParseResult, bindingPower : int, ruleDescriptor : ExtensibleRuleDescriptor) : Ast;
-    private static ExtensibleAstCreateSignature : array[Type] = array[typeof(int).MakeByRefType(), typeof(ParseResult), typeof(int), typeof(ExtensibleRuleDescriptor)];
-
     public CreateAst() : Nitra.Ast
     {
       //FIXME: rewrite without reflection
@@ -335,16 +299,32 @@ namespace Nitra.Internal
       match (this.RuleParser.Descriptor)
       {
         | SimpleRuleDescriptor =>
-          def astCreateMethod = astType.GetMethod("Create", SimpleAstCreateSignature);
-          def astCreate       = Delegate.CreateDelegate(typeof(SimpleAstCreate), astCreateMethod) :> SimpleAstCreate;
-          mutable pos = StartPos;
-          astCreate(ref pos, this)
+          def astCreateMethod = astType.GetMethod("Create", array[typeof(int).MakeByRefType(), typeof(ParseResult)]);
+          astCreateMethod.Invoke(null, array[StartPos : object, this]) :> Ast
 
         | ExtensibleRuleDescriptor as descriptor =>
-          def astCreateMethod = typeof(ExtensibleRuleAstConstructor[_]).MakeGenericType(astType).GetMethod("Create", ExtensibleAstCreateSignature);
-          def astCreate       = Delegate.CreateDelegate(typeof(ExtensibleAstCreate), astCreateMethod) :> ExtensibleAstCreate;
+          def astFactory      = typeof(DefaultExtensibleRuleAstFactory[_]).MakeGenericType(astType).GetField("Instance").GetValue(null);
+          def astCreateMethod = typeof(ExtensibleRuleAstConstructor).GetMethod("Create").MakeGenericMethod(astType);
+          astCreateMethod.Invoke(null, array[StartPos : object, this, 0, descriptor, astFactory]) :> Ast
+
+        | _ => assert(false)
+      }
+    }
+
+    public CreateSplicableAst[T](splicableAstBuilder : ISplicableAstBuilder[T]) : T
+    {
+      def ruleDescriptor  = this.RuleParser.Descriptor;
+      match (ruleDescriptor)
+      {
+        | SimpleRuleDescriptor =>
+          def grammarAssembly = ruleDescriptor.Grammar.GetType().Assembly;
+          def walkerType      = grammarAssembly.GetType(ruleDescriptor.Grammar.FullName + "AstWalker", throwOnError = true);
+          def method          = walkerType.GetMethod(ruleDescriptor.Name.Replace('.', '_')).MakeGenericMethod(typeof(T));
+          method.Invoke(null, array[StartPos : object, this, splicableAstBuilder]) :> T
+
+        | ExtensibleRuleDescriptor as d =>
           mutable pos = StartPos;
-          astCreate(ref pos, this, 0, descriptor)
+          ExtensibleRuleAstConstructor.Create(ref pos, this, 0, d, splicableAstBuilder)
 
         | _ => assert(false)
       }

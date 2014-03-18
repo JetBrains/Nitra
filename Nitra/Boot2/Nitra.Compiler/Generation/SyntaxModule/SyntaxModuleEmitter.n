@@ -16,9 +16,9 @@ namespace Nitra.Compiler
 {
   internal partial class SyntaxModuleEmitter
   {
-    public Environment  : EmitterEnvironment       { get; }
-    public Env          : GlobalEnv                { get; }
-    public SyntaxModule : ParsedSyntaxModuleSymbol { get; }
+    public Environment   : EmitterEnvironment { get; }
+    public Env           : GlobalEnv          { get; }
+    public SyntaxModule  : SyntaxModuleSymbol { get; }
 
     public GrammarTB               : TypeBuilder { get; }
     public GrammarImplTB           : TypeBuilder { get; }
@@ -26,18 +26,19 @@ namespace Nitra.Compiler
 
     private GrammarAstTB           : TypeBuilder; //TODO : переместить в более подходящее место
 
-    private _ruleParserEmitters            : list[RuleParserEmitter];
+    private _ruleParserEmitters            : List[RuleParserEmitter] = List();
     private _ruleDescriptorEmitters        : List[IRuleDescriptorEmitter] = List();
     private _allAstEmitters                : List[IAstEmitter] = List();
     private _simpleAstEmitters             : List[IAstEmitter] = List();
     private _extensionAstEmitters          : List[IAstEmitter] = List();
+    private _splicableAstWalkerEmitter     : SplicableAstWalkerEmitter;
     private _astEmitterDefineTypeFunctions : Hashtable[IRuleDeclarationSite, ClassMember.TypeDeclaration -> TypeBuilder] = Hashtable();
 
-    public this(environment : EmitterEnvironment, syntaxModule : ParsedSyntaxModuleSymbol)
+    public this(environment : EmitterEnvironment, syntaxModule : SyntaxModuleSymbol)
     {
-      Environment  = environment;
-      SyntaxModule = syntaxModule;
-      Env          = Environment.NamespaceOfSymbol(syntaxModule);
+      Environment       = environment;
+      SyntaxModule      = syntaxModule;
+      Env               = Environment.NamespaceOfSymbol(syntaxModule);
       _externalGrammars = HashSet(syntaxModule.ExternalImports);
 
       GrammarTB               = Env.Define(<[ decl: public partial module $(syntaxModule.Name : usesite) { } ]>);
@@ -46,32 +47,33 @@ namespace Nitra.Compiler
         public sealed class $(AssemblyConstants.GrammarDescriptorImplName : usesite) : Nitra.GrammarDescriptor
         {
           private this() {}
-          public override Name      : string { get { $(syntaxModule.Name : string) } }
-          public override FullName  : string { get { $(syntaxModule.Node.FullName : string) } }
-          public override Namespace : string { get { $(syntaxModule.Node.Parent.FullName : string) } }
+          public override Name        : string { get { $(syntaxModule.Name                 : string) } }
+          public override FullName    : string { get { $(syntaxModule.Node.FullName        : string) } }
+          public override Namespace   : string { get { $(syntaxModule.Node.Parent.FullName : string) } }
+          public override IsSplicable : bool   { get { $(syntaxModule.IsSplicable          : bool)   } }
         }
       ]>);
       GrammarDescriptorImplTB.DefineConditional(<[ decl: private static _staticDescriptor : this = $(GrammarDescriptorImplTB.GetMemType() : typed)() ]>);
       GrammarDescriptorImplTB.DefineConditional(<[ decl: public static StaticDescriptor : this { get { _staticDescriptor } } ]>);
       GrammarTB.DefineConditional(<[ decl: public static StaticDescriptor : Nitra.GrammarDescriptor { get { $(GrammarDescriptorImplTB.GetMemType() : typed).StaticDescriptor } } ]>);
 
-      GrammarAstTB            = Env.Define(<[ decl: public partial module $(syntaxModule.Name + "Ast" : usesite) {} ]>);
+      if (SyntaxModule.IsSplicable)
+        _splicableAstWalkerEmitter = SplicableAstWalkerEmitter(Environment, SyntaxModule);
+      else
+        GrammarAstTB = Env.Define(<[ decl: public partial module $(syntaxModule.Name + "Ast" : usesite) {} ]>);
 
-      _ruleParserEmitters = SyntaxModule.Node.GetDescendants.[RuleDefSymbol]().FoldLeft([],
-        fun(rs : RuleDefSymbol, acc)
-        {
-          match (rs)
-          {
-            | ExtensibleRuleSymbol       => acc
-            | ExtensionRuleSymbol  as rs => ExtensionRuleParserEmitter(this, rs) :: acc
-            | SimpleRuleSymbol     as rs => SimpleRuleParserEmitter(this, rs) :: acc
-            | RegularRuleSymbol    as rs => RegularRuleParserEmitter(this, rs) :: acc
-            | _                          => assert(false);
-          }
-        });
+      def allRuleSymbols = SyntaxModule.Node.GetDescendants.[RuleDefSymbol]();
 
+      foreach (ruleSymbol in allRuleSymbols)
+      {
+        | ExtensibleRuleSymbol       => ()
+        | ExtensionRuleSymbol  as rs => _ruleParserEmitters.Add(ExtensionRuleParserEmitter(this, rs))
+        | SimpleRuleSymbol     as rs => _ruleParserEmitters.Add(SimpleRuleParserEmitter(this, rs))
+        | RegularRuleSymbol    as rs => _ruleParserEmitters.Add(RegularRuleParserEmitter(this, rs))
+        | _                          => assert(false);
+      }
 
-      // TODO: Нужно сорать литералы.
+      // TODO: Нужно собрать литералы.
       def code = List();
       foreach (e is RegularRuleParserEmitter in _ruleParserEmitters)
         code.Add(<[  _ = results.Add($(GrammarImplTB.GetMemType() : typed).$(e.MethodName : global)(pos, text)); ]>);
@@ -89,7 +91,7 @@ namespace Nitra.Compiler
       mutable regularRuleSymbols    = [];
       mutable postfixRuleSymbols    = [];
       mutable prefixRuleSymbols     = [];
-      foreach (ruleSymbol in SyntaxModule.Node.GetDescendants.[RuleDefSymbol]())
+      foreach (ruleSymbol in allRuleSymbols)
       {
         | ExtensibleRuleSymbol                         as ruleSymbol => extensibleRuleSymbols ::= ruleSymbol
         | SimpleRuleSymbol                             as ruleSymbol => simpleRuleSymbols     ::= ruleSymbol
@@ -104,40 +106,35 @@ namespace Nitra.Compiler
       unless (prefixRuleSymbols.IsEmpty)     _ruleDescriptorEmitters.Add(PrefixRuleDescriptorEmitter(this, prefixRuleSymbols));
       unless (postfixRuleSymbols.IsEmpty)    _ruleDescriptorEmitters.Add(PostfixRuleDescriptorEmitter(this, postfixRuleSymbols));
 
-      def isAst(symbol) : bool
+      when (GrammarAstTB != null)
       {
-        | SimpleRuleSymbol as symbol => !(symbol.Type is RuleType.Void)
-        | ExtensibleRuleSymbol       => true
-        | ExtensionRuleSymbol        => true
-        | _                          => false
-      }
+        foreach (ruleSymbol when ruleSymbol.Type is RuleType.Ref in SyntaxModule.Node.GetDescendants.[SyntaxRuleSymbol]())
+        {
+          def emitter = RuleAstEmitter(Environment, ruleSymbol);
+          if (ruleSymbol is ExtensionRuleSymbol)
+            _extensionAstEmitters.Add(emitter);
+          else
+            _simpleAstEmitters.Add(emitter);
+          _allAstEmitters.Add(emitter);
+        }
 
-      foreach (ruleSymbol when isAst(ruleSymbol) in SyntaxModule.Node.GetDescendants.[SyntaxRuleSymbol]())
-      {
-        def emitter = RuleAstEmitter(Environment, ruleSymbol);
-        if (ruleSymbol is ExtensionRuleSymbol)
-          _extensionAstEmitters.Add(emitter);
-        else
+        foreach (extendSyntaxSymbol in SyntaxModule.Node.GetDescendants.[ExtendSyntaxSymbol]())
+        {
+          def emitter = ExtendSyntaxAstEmitter(extendSyntaxSymbol);
           _simpleAstEmitters.Add(emitter);
-        _allAstEmitters.Add(emitter);
-      }
+          _allAstEmitters.Add(emitter);
+        }
 
-      foreach (extendSyntaxSymbol in SyntaxModule.Node.GetDescendants.[ExtendSyntaxSymbol]())
-      {
-        def emitter = ExtendSyntaxAstEmitter(extendSyntaxSymbol);
-        _simpleAstEmitters.Add(emitter);
-        _allAstEmitters.Add(emitter);
-      }
-
-      _astEmitterDefineTypeFunctions[SyntaxModule] = GrammarAstTB.DefineNestedType;
-      foreach (emitter when emitter.Symbol is IRuleDeclarationSite in _allAstEmitters)
-      {
-        _astEmitterDefineTypeFunctions[emitter.Symbol :> IRuleDeclarationSite] =
-          fun (decl)
-          {
-            DefineAstTypes(emitter);
-            emitter.DefineNestedType(decl)
-          };
+        _astEmitterDefineTypeFunctions[SyntaxModule] = GrammarAstTB.DefineNestedType;
+        foreach (emitter when emitter.Symbol is IRuleDeclarationSite in _allAstEmitters)
+        {
+          _astEmitterDefineTypeFunctions[emitter.Symbol :> IRuleDeclarationSite] =
+            fun (decl)
+            {
+              DefineAstTypes(emitter);
+              emitter.DefineNestedType(decl)
+            };
+        }
       }
 
       foreach (spanClass in SyntaxModule.Node.GetDescendants.[SpanClassSymbol]())
@@ -165,6 +162,8 @@ namespace Nitra.Compiler
     {
       foreach (emitter in _allAstEmitters)
         emitter.DefineMembers();
+      when (_splicableAstWalkerEmitter != null)
+        _splicableAstWalkerEmitter.DefineMembers();
     }
 
     private _externalGrammars : HashSet[SyntaxModuleSymbol];
@@ -212,8 +211,10 @@ namespace Nitra.Compiler
         emitter.Emit();
       foreach (emitter in _allAstEmitters)
         emitter.Emit();
-
-      GrammarAstTB.Compile();
+      when (_splicableAstWalkerEmitter != null)
+        _splicableAstWalkerEmitter.Emit();
+      when (GrammarAstTB != null)
+        GrammarAstTB.Compile();
       GrammarDescriptorImplTB.Compile();
       GrammarImplTB.Compile();
       GrammarTB.Compile();
