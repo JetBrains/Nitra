@@ -28,8 +28,6 @@ namespace Nitra.DebugStrategies
 {
   using ParsedSequenceAndSubrules = Nemerle.Core.list<TokensInsertedForSubrule>;
   using FlattenSequences = List<Nemerle.Core.list<TokensInsertedForSubrule>>;
-  using SubruleParsesAndEnd = Nemerle.Builtins.Tuple<SubruleParses, int>;
-
   using ParsedList = Nemerle.Core.list<ParsedSequenceAndSubrule>;
   using Nitra.Runtime;
 
@@ -114,7 +112,7 @@ namespace Nitra.DebugStrategies
         throw new OperationCanceledException();
 
       var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new TokensInsertedForSubrule[0]) },
-      parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].Field1, memiozation);
+        parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].End, memiozation);
 
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
@@ -153,9 +151,9 @@ namespace Nitra.DebugStrategies
         var reverse = result.ToArray().Reverse();
         foreach (var x in reverse)
         {
-          var ins = x.Field0;
-          var seq = x.Field1;
-          var subrule = x.Field2;
+          var ins = x.InsertedTokens;
+          var seq = x.Seq;
+          var subrule = x.Subrule;
 
           if (skipRecovery)
           {
@@ -290,12 +288,12 @@ namespace Nitra.DebugStrategies
       if (!memiozation.TryGetValue(key, out first))
         Debug.Assert(false);
 
-      var parses = first.Field0;
+      var parses = first.SubruleParses;
 
-      if (first.Field1 == Fail)
+      if (first.End == Fail)
         return new FlattenSequences();
 
-      if (sequenceInsertedTokens != first.Field1)
+      if (sequenceInsertedTokens != first.End)
       {
         //Debug.Assert(false);
         return new FlattenSequences();
@@ -332,7 +330,7 @@ namespace Nitra.DebugStrategies
       var key = new ParsedSequenceKey(seq, end);
 
       if (memiozation.TryGetValue(key, out result))
-        return result.Field1;
+        return result.End;
 
       if (seq.StartPos == end)
       {
@@ -367,7 +365,7 @@ namespace Nitra.DebugStrategies
       var result2 = new SubruleParsesAndEnd(bestResults, comulativeMin);
       memiozation[key] = result2;
 
-      return result2.Field1;
+      return result2.End;
     }
 
     private int LocalMinForSubSequence(ParsedSequence seq, Dictionary<ParsedSequenceKey, SubruleParsesAndEnd> memiozation, ParsedSubrule subrule, int localMin)
