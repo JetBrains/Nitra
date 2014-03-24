@@ -21,7 +21,7 @@ namespace Nitra.Visualizer.Rendering
     {
       foreach (var rule in _compositeGrammar.Simples)
       {
-        Debug.WriteLine(rule.RuleName);
+        Debug.WriteLine(rule.Descriptor.Name);
         var reflection = rule.Reflection(rule.RuleId);
 
         // Pattern matchin emuletion :)
@@ -64,29 +64,29 @@ namespace Nitra.Visualizer.Rendering
 
     public void Render(SequenceInfo.Ast info)
     {
-      var name = info.Parser.RuleName;
+      var name = info.RuleName;
       var xx = info.Subrules[0];
 
     }
 
     public void Render(SequenceInfo.List info)
     {
-      var name = info.Parser.RuleName;
+      var name = info.RuleName;
     }
 
     public void Render(SequenceInfo.ListWithSeparatorRule info)
     {
-      var name = info.Parser.RuleName;
+      var name = info.RuleName;
     }
 
     public void Render(SequenceInfo.ListWithSeparatorSeparator info)
     {
-      var name = info.Parser.RuleName;
+      var name = info.RuleName;
     }
 
     public void Render(SequenceInfo.Option info)
     {
-      var name = info.Parser.RuleName;
+      var name = info.RuleName;
     }
   }
 }
