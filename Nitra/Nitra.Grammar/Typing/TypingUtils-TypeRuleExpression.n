@@ -22,16 +22,18 @@ namespace Nitra.Grammar
         def keywordContext = context.TryGetContext.[KeywordRegexContext]();
         def moduleContext  = context.GetContext.[SyntaxModuleBodyContext]();
         def makeCall(loc, sSymbol) { Rule.Call(loc, sSymbol.Type, sSymbol.Name, RuleRef.Some(loc, true, sSymbol), 0); }
+        def getSpaceRule(loc) { moduleContext.GetSpaceRule(context, "s", loc) }
+        def tryAddSpaceRule(rule, loc)
+        {
+          match (getSpaceRule(loc))
+          {
+            | None          => (rule, None())
+            | Some(sSymbol) => (rule, Some(makeCall(loc, sSymbol)))
+          }
+        }
         def transform(_ : Rule) : Rule * option[Rule]
         {
-          | Repeat              as rule when rule.IsSkipAnyPattern =>
-            def loc = rule.Location.FromEnd();
-            match (moduleContext.GetSpaceRule(context, "s", loc))
-            {
-              | None          => (rule, None())
-              | Some(sSymbol) => (rule, Some(makeCall(loc, sSymbol)))
-            }
-
+          | Repeat              as rule when rule.IsSkipAnyPattern => tryAddSpaceRule(rule, rule.Location.FromEnd())
           | Repeat              as rule => (Rule.Repeat(rule, rule.MinCount, rule.MaxCount, transformToSequence(rule.Rule)), None())
           | RepeatWithSeparator as rule => (Rule.RepeatWithSeparator(rule, rule.MinCount, rule.MaxCount, transformToSequence(rule.Rule), transformToSequence(rule.Separator), rule.HangingSeparator), None())
           | Not                 as rule => (Rule.Not(rule, transformToSequence(rule.Rule)), None())
@@ -44,16 +46,10 @@ namespace Nitra.Grammar
 
           | String              as rule =>
             def loc = rule.Location.FromEnd();
-            def findResult =
-              if (keywordContext?.FindRule(rule.Str) is Some as sym)
-                sym : option[_]
-              else
-                moduleContext.GetSpaceRule(context, "s", loc);
-            match (findResult)
-            {
-              | None          => (rule, None())
-              | Some(sSymbol) => (rule, Some(makeCall(loc, sSymbol)))
-            }
+            if (keywordContext?.FindRule(rule.Str) is VSome(sym))
+              (rule, Some(makeCall(loc, sym)))
+            else
+              tryAddSpaceRule(rule, loc)
 
           | Call                as rule =>
             def calleeOptions =
@@ -61,23 +57,24 @@ namespace Nitra.Grammar
                 ruleSymbol.Options
               else
                 RuleDefinitionOptions();
-            match (rule.Type)
+
+            // Whitespace rule is NOT inserted after 'syntax' rules marked with 'SuppressTrailingSpaces' attribute
+            if (calleeOptions.IsSuppressTrailingSpaces)
+              (rule, None())
+            // Whitespace rule is inserted after 'syntax' rules marked with 'ExplicitSpaces' attribute
+            else if (calleeOptions.IsExplicitSpaces)
+              tryAddSpaceRule(rule, rule.Location.FromEnd())
+            // Whitespace rule is inserted after all 'regex' rules
+            else if (rule.RuleRef is RuleRef.Some(RegularRuleSymbol as ruleSymbol))
             {
-              // Whitespace rule is NOT inserted after 'syntax' rules marked with 'SuppressTrailingSpaces' attribute
-              | _ when calleeOptions.IsSuppressTrailingSpaces => (rule, None())
-
-              // Whitespace rule is inserted after 'syntax' rules marked with 'ExplicitSpaces' attribute
-              | _ when calleeOptions.IsExplicitSpaces
-              | Chars => // Whitespace rule is inserted after all 'token' rules
-                def loc = rule.Location.FromEnd();
-                match (moduleContext.GetSpaceRule(context, "s", loc))
-                {
-                  | None          => (rule, None())
-                  | Some(sSymbol) => (rule, Some(makeCall(loc, sSymbol)))
-                }
-
-              | _ => (rule, None())
+              def loc = rule.Location.FromEnd();
+              if (keywordContext?.FindRule(ruleSymbol.Rule) is VSome(sym))
+                (rule, Some(makeCall(loc, sym)))
+              else
+                tryAddSpaceRule(rule, loc);
             }
+            else
+              (rule, None());
         }
         and transformToSequence(rule : Rule) : Rule
         {
@@ -100,7 +97,7 @@ namespace Nitra.Grammar
         when (options.IsStart)
         {
           def loc = rule.Location.FromStart();
-          when (moduleContext.GetSpaceRule(context, "s", loc) is Some(sSymbol))
+          when (getSpaceRule(loc) is Some(sSymbol))
             buffer.Add(makeCall(loc, sSymbol));
         }
         match (rule)
