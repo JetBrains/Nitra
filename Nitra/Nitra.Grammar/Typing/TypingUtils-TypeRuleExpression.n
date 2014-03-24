@@ -1,0 +1,166 @@
+﻿using Nitra.Model;
+using Nitra.ProjectSystem;
+using Nitra.Runtime;
+using Nitra.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+
+namespace Nitra.Grammar
+{
+  internal partial module TypingUtils
+  {
+    public TypeRuleExpression(options : RuleDefinitionOptions, context : Context, rule : Rule) : Rule.Sequence
+    {
+      def insertWhitespaceRules() : List[Rule]
+      {
+        def keywordContext = context.TryGetContext.[KeywordRegexContext]();
+        def moduleContext  = context.GetContext.[SyntaxModuleBodyContext]();
+        def makeCall(loc, sSymbol) { Rule.Call(loc, sSymbol.Type, sSymbol.Name, RuleRef.Some(loc, true, sSymbol), 0); }
+        def transform(_ : Rule) : Rule * option[Rule]
+        {
+          | Repeat              as rule when rule.IsSkipAnyPattern =>
+            def loc = rule.Location.FromEnd();
+            match (moduleContext.GetSpaceRule(context, "s", loc))
+            {
+              | None          => (rule, None())
+              | Some(sSymbol) => (rule, Some(makeCall(loc, sSymbol)))
+            }
+
+          | Repeat              as rule => (Rule.Repeat(rule, rule.MinCount, rule.MaxCount, transformToSequence(rule.Rule)), None())
+          | RepeatWithSeparator as rule => (Rule.RepeatWithSeparator(rule, rule.MinCount, rule.MaxCount, transformToSequence(rule.Rule), transformToSequence(rule.Separator), rule.HangingSeparator), None())
+          | Not                 as rule => (Rule.Not(rule, transformToSequence(rule.Rule)), None())
+          | And                 as rule => (Rule.And(rule, transformToSequence(rule.Rule)), None())
+          | Sequence            as rule => 
+            def buffer = List();
+            foreach (r in rule.Rules)
+              transformToBuffer(r, buffer);
+            (Rule.Sequence(rule, buffer.ToNList()), None())
+
+          | String              as rule =>
+            def loc = rule.Location.FromEnd();
+            def findResult =
+              if (keywordContext?.FindRule(rule.Str) is Some as sym)
+                sym : option[_]
+              else
+                moduleContext.GetSpaceRule(context, "s", loc);
+            match (findResult)
+            {
+              | None          => (rule, None())
+              | Some(sSymbol) => (rule, Some(makeCall(loc, sSymbol)))
+            }
+
+          | Call                as rule =>
+            def calleeOptions =
+              if (rule.RuleRef is RuleRef.Some(RuleDefSymbol as ruleSymbol))
+                ruleSymbol.Options
+              else
+                RuleDefinitionOptions();
+            match (rule.Type)
+            {
+              // Whitespace rule is NOT inserted after 'syntax' rules marked with 'SuppressTrailingSpaces' attribute
+              | _ when calleeOptions.IsSuppressTrailingSpaces => (rule, None())
+
+              // Whitespace rule is inserted after 'syntax' rules marked with 'ExplicitSpaces' attribute
+              | _ when calleeOptions.IsExplicitSpaces
+              | Chars => // Whitespace rule is inserted after all 'token' rules
+                def loc = rule.Location.FromEnd();
+                match (moduleContext.GetSpaceRule(context, "s", loc))
+                {
+                  | None          => (rule, None())
+                  | Some(sSymbol) => (rule, Some(makeCall(loc, sSymbol)))
+                }
+
+              | _ => (rule, None())
+            }
+        }
+        and transformToSequence(rule : Rule) : Rule
+        {
+          match (transform(rule))
+          {
+            | (rule, Some(s)) => Rule.Sequence(rule, [rule, s])
+            | (rule, None)    => rule
+          }
+        }
+        and transformToBuffer(rule : Rule, buffer : List[Rule]) : void
+        {
+          match (transform(rule))
+          {
+            | (rule, Some(s)) => buffer.Add(rule); buffer.Add(s);
+            | (rule, None)    => buffer.Add(rule);
+          }
+        }
+
+        def buffer = List();
+        when (options.IsStart)
+        {
+          def loc = rule.Location.FromStart();
+          when (moduleContext.GetSpaceRule(context, "s", loc) is Some(sSymbol))
+            buffer.Add(makeCall(loc, sSymbol));
+        }
+        match (rule)
+        {
+          | Sequence(rules) => foreach (r in rules) transformToBuffer(r, buffer);
+          | _               => transformToBuffer(rule, buffer);
+        }
+        buffer
+      }
+
+      def createUniqueFieldNames(rules : IEnumerable[Rule]) : list[Rule]
+      {
+        def fieldNameUniqueness = Dictionary();
+        def plainAstFields = List();
+        foreach (rule in rules)
+        {
+          def fieldName =
+            if (!string.IsNullOrEmpty(rule.FieldName))
+              Utils.ToPascalCase(rule.FieldName)
+            else if (rule.Type is RuleType.Void)
+              "_"
+            else
+              "Node";
+          plainAstFields.Add(fieldName, rule);
+          fieldNameUniqueness[fieldName] = !fieldNameUniqueness.ContainsKey(fieldName);
+        }
+        def fieldNameCounters = Dictionary();
+        def finalRules = List();
+        foreach ((fieldName, fieldRule) in plainAstFields)
+        {
+          def indexedFieldName =
+            if (fieldNameUniqueness[fieldName])
+              fieldName
+            else
+            {
+              mutable counter;
+              _ = fieldNameCounters.TryGetValue(fieldName, out counter);
+              counter += 1;
+              fieldNameCounters[fieldName] = counter;
+              if (char.IsDigit(fieldName, fieldName.Length - 1))
+                fieldName + "_" + counter.ToString()
+              else
+                fieldName + counter.ToString()
+            }
+          finalRules.Add(fieldRule.UpdateFieldName(indexedFieldName));
+        }
+        finalRules.ToNList();
+      }
+
+      def rules =
+        if (options.IsExplicitSpaces)
+          match (rule)
+          {
+            | Sequence(rules) => rules
+            | _               => [rule]
+          }
+        else
+          insertWhitespaceRules();
+
+      Rule.Sequence(rule.Location, rule.Type, "", createUniqueFieldNames(rules))
+    }
+  }
+}
