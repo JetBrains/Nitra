@@ -485,7 +485,7 @@ namespace Nitra.DebugStrategies
               if (state.IsToken)
               {
                 var simple = state as ParsingState.Simple;
-                if (simple == null || simple.RuleParser.RuleName != "S" && simple.RuleParser.RuleName != "s")
+                if (simple == null || simple.RuleParser.Descriptor.Name != "S" && simple.RuleParser.Descriptor.Name != "s")
                   continue;
                 rp.PredictionOrScanning(maxPos, record, false);
               }
@@ -518,7 +518,7 @@ namespace Nitra.DebugStrategies
                 if (state.IsToken)
                 {
                   var simple = state as ParsingState.Simple;
-                  if (simple == null || simple.RuleParser.RuleName != "S" && simple.RuleParser.RuleName != "s")
+                  if (simple == null || simple.RuleParser.Descriptor.Name != "S" && simple.RuleParser.Descriptor.Name != "s")
                     continue;
                 }
                 rp.PredictionOrScanning(subrule.Begin, new ParseRecord(sequence, subrule.State, subrule.Begin), false);

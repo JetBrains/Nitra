@@ -66,6 +66,34 @@ namespace Nitra.Compiler
 
     protected DefineReflection(tb : TypeBuilder, rootSequence : SequenceCompileInfo.Ast) : void
     {
+      def codeForSubrule(subrule : SubruleCompileInfo) : string
+      {
+        if (subrule is SubruleCompileInfo.Marker)
+          ""
+        else
+        {
+          def nextField(subrule : SubruleCompileInfo) : SubruleCompileInfo
+          {
+            if (subrule == null)
+              null
+            else if (subrule.NextSibling != null)
+              subrule.NextSibling
+            else
+              nextField(subrule.Owner.Owner)
+          }
+
+          mutable str = rootSequence.CodeForState(subrule.State);
+          when (subrule.IsLoopSeparatorStart)
+          {
+            def afterLoopField = nextField(subrule);
+
+            when (afterLoopField != null)
+              str += ", " + rootSequence.CodeForState(afterLoopField.State);
+          }
+          str
+        }
+      }
+
       def sequenceFieldCases = List();
       def sequenceFields = List();
       def reflectSequence(sequence : SequenceCompileInfo) : PExpr
@@ -122,17 +150,31 @@ namespace Nitra.Compiler
               <[ $(name : global) ]>
             };
           def headPredicates = <[ array[..$(subrule.HeadPredicates.Map(p => reflectSequence(p)))] ]>;
-          def args = <[ $(subrule.Offset) ]> :: <[ $(subrule.ToString()) ]> :: <[ $(subrule.State) ]> :: <[ $(subrule.CanParseEmptyString) ]> 
-            :: headPredicate :: headPredicates :: args;
+          def isVoid = subrule.SrcRule.Type is RuleType.Void;
+          def args =
+            <[ $(subrule.Offset) ]>              :: //Offset
+            <[ $(subrule.ToString()) ]>          :: //Description
+            <[ $(subrule.State) ]>               :: //State
+            <[ $(subrule.CanParseEmptyString) ]> :: //CanParseEmptyString
+            <[ $(isVoid) ]>                      :: //IsVoid
+            <[ $(codeForSubrule(subrule)) ]>     :: //Code
+            headPredicate                        :: //HeadPredicate
+            headPredicates                       :: //HeadPredicates
+            args;
           subrules.Add(<[ $subruleType(..$args) ]>);
         }
         def additionalArgs = if (sequence is SequenceCompileInfo.Predicate(isAnd)) [<[ $isAnd ]>] else [];
         def sequenceFieldName = $"sequenceInfo$(sequenceFields.Count)";
         sequenceFields.Add((sequenceFieldName, type));
         def isVoid = sequence.SrcRule.Type is RuleType.Void;
+        def getRuleName(seq : SequenceCompileInfo)
+        {
+          | Ast as seq => seq.Symbol.Name
+          | _          => getRuleName(seq.Owner.Owner);
+        }
         sequenceFieldCases.Add(<[case: | _ when ruleId == $(sequence.AstId : global) => $(sequenceFieldName : global) ]>);
         <[
-          $(sequenceFieldName : global) = $type(this, $(sequence.AstId : global), $(sequence.Size), $(sequence.ToString()), $isVoid, array[..$subrules], ..$additionalArgs);
+          $(sequenceFieldName : global) = $type(this, $(sequence.AstId : global), $(sequence.Size), $(getRuleName(sequence)), $(sequence.ToString()), $isVoid, array[..$subrules], ..$additionalArgs);
           $(sequenceFieldName : global);
         ]>
       }
@@ -188,46 +230,13 @@ namespace Nitra.Compiler
     protected DefineParse(tb : TypeBuilder, sequence : SequenceCompileInfo.Ast) : void
     {
       ParseMethodEmitter(this, tb, sequence).Emit();
-      RecoveryRuleParserEmitter(this, tb, sequence).Emit();
-    }
-
-    protected DefineGetNextState(tb : TypeBuilder, sequence : SequenceCompileInfo.Ast) : void
-    {
-      def subrules = sequence.AllSubrules
-        .Where(subrule => !(subrule is SubruleCompileInfo.Marker))
-        .OrderBy(_.State)
-        .ToList();
-      assert(subrules.Select((f, i) => (f.State, i)).All((state, i) => state == i)); // ensure states are sequential starting from 0
-      def states = subrules.Select(f => if (f.NextSibling != null) <[ $(f.NextSibling.State : int) ]> else  <[ -1 ]>);
-      tb.DefineConditional(<[ decl:
-        private static _stateMap : array[int] = array[..$states];
-      ]>);
-      tb.DefineConditional(<[ decl:
-        [Nemerle.Diagnostics.CompileStatistic("Reflection:GetNextState")]
-        public override GetNextState(state : int) : int
-        {
-          _stateMap[state]
-        }
-      ]>);
-    }
-
-    protected DefineStartState(tb : TypeBuilder, sequence : SequenceCompileInfo.Ast) : void
-    {
-      def startState = sequence.NonMarkerSubrules[0].State;
-      tb.DefineConditional(<[ decl:
-        public override StartState : int { get $(startState : int) }
-      ]>);
-    }
-
-    protected DefineUpdateMandatoryTokens(tb : TypeBuilder, sequence : SequenceCompileInfo.Ast) : void
-    {
-      UpdateMandatoryTokensMethodEmitter(this, tb, sequence).Emit();
     }
 
     protected DefineIsVoid(tb : TypeBuilder, sequence : SequenceCompileInfo.Ast) : void
     {
       def startState = sequence.Symbol.Type is RuleType.Void;
-      tb.DefineConditional(<[ decl: public override IsVoid : bool { get $(startState : bool) } ]>);
+      tb.DefineConditional(<[ decl: public override IsVoid      : bool { get $(startState : bool) } ]>);
+      tb.DefineConditional(<[ decl: public override IsTokenRule : bool { get { $(sequence.Symbol.Options.IsTokenRule) } } ]>);
     }
 
     public abstract CreateConstant(name : string, value : int) : string;
