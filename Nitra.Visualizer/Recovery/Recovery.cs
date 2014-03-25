@@ -114,6 +114,8 @@ namespace Nitra.DebugStrategies
       var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new TokensInsertedForSubrule[0]) },
         parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].End, memiozation);
 
+      ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
+
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
@@ -634,11 +636,13 @@ namespace Nitra.DebugStrategies
 
       do
       {
-        CheckUnclosedToken(rp);
 
         deleted.AddRange(FindMaxFailPos(rp));
         if (rp.MaxPos != rp.ParseResult.Text.Length)
           UpdateParseErrorCount();
+
+        CheckUnclosedToken(rp);
+
         maxPos = rp.MaxPos;
         failPositions.Add(maxPos);
 
@@ -694,34 +698,45 @@ namespace Nitra.DebugStrategies
 
     private void CheckUnclosedToken(RecoveryParser rp)
     {
-      var maxPos = rp.MaxPos;
-      var tokens  = rp.ParseResult.RuleParser.Grammar.Tokens;
+      var maxPos  = rp.MaxPos;
+      var grammar = rp.ParseResult.RuleParser.Grammar;
       var records = rp.Records[maxPos].ToArray();
       var result  = new SCG.HashSet<ParseRecord>();
 
       foreach (var record in records)
       {
-        var res = IsInsideToken(tokens, record);
+        if (record.IsComplete)
+          continue;
+
+        var res = IsInsideToken(grammar, record);
 
         if (!res.HasValue)
-          return;
+          continue;
 
-        if (res.Value.ParsePos == rp.MaxPos)
-          result.Add(res.Value);
-      }
-
-      foreach (var record in result)
         rp.SubruleParsed(maxPos, maxPos, record);
+      }
     }
 
-    private static ParseRecord? IsInsideToken(SCG.Dictionary<object, TokenParser> tokens, ParseRecord record)
+    private static ParseRecord? IsInsideToken(CompositeGrammar compositeGrammar, ParseRecord record)
     {
-      if (record.Sequence.ParsingSequence.SequenceInfo is SequenceInfo.Ast && tokens.ContainsKey(record.Sequence.ParsingSequence.SequenceInfo.Parser))
-        return record;
+      return IsInsideTokenImpl(compositeGrammar, new SCG.HashSet<ParseRecord>(), record);
+    }
+
+    private static ParseRecord? IsInsideTokenImpl(CompositeGrammar compositeGrammar, SCG.HashSet<ParseRecord> visited, ParseRecord record)
+    {
+      if (!visited.Add(record))
+        return null;
+
+      if (record.Sequence.ParsingSequence.SequenceInfo is SequenceInfo.Ast)
+      {
+        var parser = record.Sequence.ParsingSequence.SequenceInfo.Parser;
+        if (compositeGrammar.Tokens.ContainsKey(parser) || compositeGrammar.VoidTokens.ContainsKey(parser))
+          return record;
+      }
 
       foreach (var caller in record.Sequence.Callers)
       {
-        var result = IsInsideToken(tokens, caller);
+        var result = IsInsideTokenImpl(compositeGrammar, visited, caller);
         if (result.HasValue)
           return result;
       }
