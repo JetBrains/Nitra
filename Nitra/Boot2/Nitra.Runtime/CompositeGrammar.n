@@ -101,6 +101,38 @@ namespace Nitra
       InitMandatoryTokenCount();
     }
 
+    //public UpdateMandatoryTokens() : bool
+    //{
+    //  mutable min = ~int.MaxValue;
+    //  foreach (ruleParser in PrefixRules)
+    //  {
+    //    def cur = ruleParser.MandatoryTokens;
+    //    min = if (min < 0) if (cur < 0) if (~min < ~cur) min else cur
+    //                       else         if (~min <  cur) min else cur
+    //          else         if (cur < 0) if (min <= ~cur) min else cur
+    //                       else         if (min <=  cur) min else cur
+    //  }
+    //  def updated = min != MandatoryTokens;
+    //  MandatoryTokens = min;
+    //  updated
+    //}
+
+    private static AddMandatoryTokens(mt1 : int, mt2 : int) : int
+    {
+      if (mt1 < 0) if (mt2 < 0) ~(~mt1 + ~mt2)
+                   else         ~(~mt1 +  mt2)
+      else         if (mt2 < 0) ~( mt1 + ~mt2)
+                   else          ( mt1 +  mt2)
+    }
+
+    private static MinMandatoryTokens(mt1 : int, mt2 : int) : int
+    {
+      if (mt1 < 0) if (mt2 < 0) if (~mt1 < ~mt2) mt1 else mt2
+                   else         if (~mt1 <  mt2) mt1 else mt2
+      else         if (mt2 < 0) if (mt1 <= ~mt2) mt1 else mt2
+                   else         if (mt1 <=  mt2) mt1 else mt2
+    }
+
     private InitMandatoryTokenCount() : void
     {
       def simple     = Simples     :> array[SimpleRuleParser];
@@ -108,19 +140,93 @@ namespace Nitra
       def postfix    = Postfixs    :> array[ExtensionRuleParser];
       def extensible = Extensibles :> array[ExtensibleRuleParser];
 
-      foreach (ruleParser in simple)     ruleParser.MandatoryTokens = ~0;
-      foreach (ruleParser in prefix)     ruleParser.MandatoryTokens = ~0;
-      foreach (ruleParser in postfix)    ruleParser.MandatoryTokens = ~0;
-      foreach (ruleParser in extensible) ruleParser.MandatoryTokens = ~0;
+      def initSequenceInfo(seq)
+      {
+        seq.MandatoryTokenCount = ~0;
+        foreach (subrule in seq.Subrules)
+        {
+          subrule.MandatoryTokenCount = ~0;
+          match (subrule)
+          {
+            | Empty | RegularCall | TokenString | ExtensibleCall | SimpleCall => ()
+            | Option            as subrule => initSequenceInfo(subrule.Rule);
+            | List              as subrule => initSequenceInfo(subrule.Rule);
+            | ListWithSeparator as subrule => initSequenceInfo(subrule.Rule); initSequenceInfo(subrule.Separator);
+            | Marker                       => assert(false);
+          }
+        }
+      }
+
+      foreach (ruleParser in simple)     initSequenceInfo(ruleParser.SequenceInfo);
+      foreach (ruleParser in prefix)     initSequenceInfo(ruleParser.SequenceInfo);
+      foreach (ruleParser in postfix)    initSequenceInfo(ruleParser.SequenceInfo);
+      foreach (ruleParser in extensible) ruleParser.MandatoryTokenCount = ~0;
 
       mutable updated = true;
       while (updated)
       {
         updated = false;
-        foreach (ruleParser in simple)     when (ruleParser.UpdateMandatoryTokens()) updated = true;
-        foreach (ruleParser in prefix)     when (ruleParser.UpdateMandatoryTokens()) updated = true;
-        foreach (ruleParser in postfix)    when (ruleParser.UpdateMandatoryTokens()) updated = true;
-        foreach (ruleParser in extensible) when (ruleParser.UpdateMandatoryTokens()) updated = true;
+        def updateSequenceInfo(seq)
+        {
+          mutable count = 0;
+          foreach (subrule in seq.Subrules)
+          {
+            subrule.MandatoryTokenCount = match (subrule)
+            {
+              | Empty                        => 0;
+              | RegularCall       as subrule => if (subrule.CanParseEmptyString) 0 else 1;
+              | TokenString       as subrule => if (subrule.Str == "") 0 else 1;
+              | ExtensibleCall    as subrule =>
+                if (subrule.RuleParser.Descriptor.IsTokenRule)
+                  1
+                else
+                  subrule.RuleParser.MandatoryTokenCount
+
+              | SimpleCall        as subrule =>
+                if (subrule.RuleParser.Descriptor.IsTokenRule)
+                  if (subrule.RuleParser.SequenceInfo.CanParseEmptyString) 0 else 1
+                else
+                  subrule.RuleParser.SequenceInfo.MandatoryTokenCount
+
+              | Option            as subrule =>
+                updateSequenceInfo(subrule.Rule);
+                0;
+
+              | List              as subrule =>
+                updateSequenceInfo(subrule.Rule);
+                subrule.Min * subrule.Rule.MandatoryTokenCount;
+
+              | ListWithSeparator as subrule =>
+                updateSequenceInfo(subrule.Rule);
+                updateSequenceInfo(subrule.Separator);
+                match (subrule.Min)
+                {
+                  | 0 => 0
+                  | 1 => subrule.Rule.MandatoryTokenCount
+                  | c => c * subrule.Rule.MandatoryTokenCount + (c - 1) * subrule.Separator.MandatoryTokenCount
+                }
+
+              | Marker                       => assert(false);
+            }
+            count = AddMandatoryTokens(count, subrule.MandatoryTokenCount);
+          }
+          updated = updated || count != seq.MandatoryTokenCount;
+          seq.MandatoryTokenCount = count;
+        }
+        foreach (ruleParser in simple)     updateSequenceInfo(ruleParser.SequenceInfo);
+        foreach (ruleParser in prefix)     updateSequenceInfo(ruleParser.SequenceInfo);
+        foreach (ruleParser in postfix)    updateSequenceInfo(ruleParser.SequenceInfo);
+        foreach (ruleParser in extensible)
+        {
+          mutable min = ~int.MaxValue;
+          foreach (ruleParser in ruleParser.PrefixRules)
+          {
+            def cur = ruleParser.SequenceInfo.MandatoryTokenCount;
+            min = MinMandatoryTokens(min, cur);
+          }
+          updated = updated || min != ruleParser.MandatoryTokenCount;
+          ruleParser.MandatoryTokenCount = min;
+        }
       }
 
       foreach (ruleParser in simple)     ruleParser.ParsingSequence = ParsingSequence.CreateSimple(ruleParser);
@@ -400,13 +506,13 @@ a:visited, a:link, a:active
           | ExtensibleCall    as r =>
             def parser = r.RuleParser;
             def bp     = parser.BindingPower;
-            parent.Add(renderAHref(parser.Descriptor, parser.RuleName));
+            parent.Add(renderAHref(parser.Descriptor, parser.Descriptor.Name));
             when (bp != 0)
               parent.Add(" : " + bp);
           
           | SimpleCall        as r =>
             def parser = r.RuleParser;
-            parent.Add(renderAHref(parser.Descriptor, parser.RuleName));
+            parent.Add(renderAHref(parser.Descriptor, parser.Descriptor.Name));
           
           | Option            as r => renderSubSequence(parent, r.Rule, suppressParentheses=false); parent.Add("?");
           | List              as r => renderSubSequence(parent, r.Rule, suppressParentheses=false); parent.Add(if (r.Min > 0) "+" else "*");
@@ -461,12 +567,12 @@ a:visited, a:link, a:active
       {
         def (bp, baseRuleDescriptor) = if (parser.Descriptor is PostfixRuleDescriptor as postfix) (postfix.BindingPower, postfix.BaseRule) else (-1, null);
         def info   = parser.Reflection(parser.RuleId) :> SequenceInfo.Ast;
-        def result = ruleHeader(XElement("span", "  | "), parser, parser.RuleName, maxNameLen);
+        def result = ruleHeader(XElement("span", "  | "), parser, parser.Descriptor.Name, maxNameLen);
         result.Add(" = ");
         when (bp >= 0)
         {
           def baseRule = this.ExtensibleRules[baseRuleDescriptor].GetParser(0);
-          result.Add(XElement("span", " ", renderAHref(baseRule.Descriptor, baseRule.RuleName)));
+          result.Add(XElement("span", " ", renderAHref(baseRule.Descriptor, baseRule.Descriptor.Name)));
           when (bp > 0)
             result.Add(" : " + bp + " ");
         }
@@ -491,14 +597,14 @@ a:visited, a:link, a:active
       
       def parsers = SCG.List.[StartRuleParser](Simples);
       parsers.AddRange(Extensibles.Where(e => e.BindingPower == 0));
-      def parsers2 = parsers.OrderByDescending(_.IsTokenRule).ThenBy(_.RuleName);
+      def parsers2 = parsers.OrderByDescending(_.IsTokenRule).ThenBy(x => x.Descriptor.Name);
       
       foreach (parser in parsers2)
       {
         | SimpleRuleParser as parser =>
           when (parser.Reflection(parser.RuleId) is SequenceInfo.Ast as info)
           {
-            def result = ruleHeader(getType(parser), parser, info.Parser.RuleName);
+            def result = ruleHeader(getType(parser), parser, parser.Descriptor.Name);
             result.Add(" = ");
             convertSubrules(result, info.Subrules);
             result.Add(";\r\n");
@@ -506,16 +612,16 @@ a:visited, a:link, a:active
           }
         
         | ExtensibleRuleParser as parser =>
-          def result = ruleHeader(getType(parser), parser, parser.RuleName);
+          def result = ruleHeader(getType(parser), parser, parser.Descriptor.Name);
           root.Add(result);
           root.Add("\r\n{\r\n");
         
           def extensionRules = SCG.List(parser.PrefixRules.OrderBy(r => r.Descriptor.Name));
-          extensionRules.AddRange(parser.PostfixRules.OrderBy(r => (r.Descriptor :> PostfixRuleDescriptor).BindingPower).ThenBy(r => r.RuleName));
+          extensionRules.AddRange(parser.PostfixRules.OrderBy(r => (r.Descriptor :> PostfixRuleDescriptor).BindingPower).ThenBy(r => r.Descriptor.Name));
           
           when (extensionRules.Count > 0)
           {
-            def maxNameLen = extensionRules.Max(r => r.RuleName.Length);
+            def maxNameLen = extensionRules.Max(r => r.Descriptor.Name.Length);
             foreach(subParser in extensionRules)
               renderPrefix(subParser, maxNameLen);
           }

@@ -1,0 +1,76 @@
+﻿using Nitra.Model;
+using Nitra.ProjectSystem;
+using Nitra.Runtime;
+using Nitra.Typing;
+
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+
+using G = NitraSyntaxAst;
+
+namespace Nitra.Grammar
+{
+  internal partial module TypingUtils
+  {
+    public TypeCall(baseRule : option[ExtensibleRuleSymbol], _precedence : int, _fieldName : option[string], context : Context, options : RuleDefinitionOptions,
+      QualifiedName : G.QualifiedIdentifier, BindingPower : OptionAst[SequenceAst[NSpan, G.Number]]) : Rule
+    {
+      def parts = QualifiedName.Parts();
+      def newFieldName : string = _fieldName ?? Utils.LastOrDefault(parts, "");
+
+      when (Utils.TryBind.[RuleAliasSymbol](context, QualifiedName) is Some(alias))
+        return alias.Rule.Typing(baseRule, _precedence, Some(newFieldName), context, options);
+
+      def ruleRef = RuleRef.Create(QualifiedName, Utils.Bind(context, QualifiedName));
+      def type =
+        if (ruleRef is RuleRef.Some(RuleDefSymbol as ruleSymbol))
+        {
+          when (ruleSymbol is ExtensionRuleSymbol)
+            Project.CurrentProject.Error(QualifiedName,
+              "You can't use directly reference an extension rule. Use reference to extensible rule instead or make a separate rule.", -1);
+
+          def declarationSiteContext = context.GetContext.[RuleDeclarationSiteContext]();
+          match (declarationSiteContext.DeclarationSite)
+          {
+            | declarationSite is ExtendSyntaxSymbol =>
+              when (declarationSite.Extend is Some(declaration) when declaration.IsToken)
+                Project.CurrentProject.Error(ruleRef.Location, "Can't refer to a syntax rule from token.", -1);
+
+            | declarationSite is RuleDefSymbol =>
+              when (declarationSite.IsToken && !ruleSymbol.IsToken)
+                Project.CurrentProject.Error(ruleRef.Location, "Can't refer to a syntax rule from token.", -1);
+
+            | _                  => ()
+          }
+
+          ruleSymbol.Type
+        }
+        else RuleType.Void();
+
+      def bp =
+        match (BindingPower)
+        {
+          | None
+          | Some(t) when t.Item2.Value() == 0 =>
+            match (baseRule, ruleRef)
+            {
+              | (Some(baseRuleSymbol), RuleRef.Some(ruleRefSymbol)) when baseRuleSymbol == ruleRefSymbol => _precedence
+              | _ => 0
+            }
+
+          | Some(t) with num = t.Item2 =>
+            when (_precedence != 0)
+              Project.CurrentProject.Error(num, "You can't set a binding power if you set a precedence.", -1);
+            num.Value()
+        };
+
+      Rule.Call(QualifiedName.Location, type, newFieldName, ruleRef, bp);
+    }
+  }
+}
