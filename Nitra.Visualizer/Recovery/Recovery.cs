@@ -643,6 +643,8 @@ namespace Nitra.DebugStrategies
 
         if (!CheckUnclosedToken(rp))
           deleted.AddRange(tmpDeleted);
+        else
+        { }
 
 
         maxPos = rp.MaxPos;
@@ -714,6 +716,9 @@ namespace Nitra.DebugStrategies
         var res = IsInsideToken(grammar, record);
 
         if (!res || record.Sequence.StartPos >= maxPos)
+          continue;
+
+        if (record.Sequence.ParsingSequence.IsNullable)
           continue;
 
         unclosedTokenFound = true;
