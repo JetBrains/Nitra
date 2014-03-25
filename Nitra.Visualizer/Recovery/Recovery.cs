@@ -631,8 +631,11 @@ namespace Nitra.DebugStrategies
       var failPositions = new HashSet<int>();
       var deleted = new List<Tuple<int, ParsedSequence>>();
 
+
       do
       {
+        CheckUnclosedToken(rp);
+
         deleted.AddRange(FindMaxFailPos(rp));
         if (rp.MaxPos != rp.ParseResult.Text.Length)
           UpdateParseErrorCount();
@@ -687,6 +690,43 @@ namespace Nitra.DebugStrategies
       foreach (var del in deleted)
         DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
+    }
+
+    private void CheckUnclosedToken(RecoveryParser rp)
+    {
+      var maxPos = rp.MaxPos;
+      var tokens  = rp.ParseResult.RuleParser.Grammar.Tokens;
+      var records = rp.Records[maxPos].ToArray();
+      var result  = new SCG.HashSet<ParseRecord>();
+
+      foreach (var record in records)
+      {
+        var res = IsInsideToken(tokens, record);
+
+        if (!res.HasValue)
+          return;
+
+        if (res.Value.ParsePos == rp.MaxPos)
+          result.Add(res.Value);
+      }
+
+      foreach (var record in result)
+        rp.SubruleParsed(maxPos, maxPos, record);
+    }
+
+    private static ParseRecord? IsInsideToken(SCG.Dictionary<object, TokenParser> tokens, ParseRecord record)
+    {
+      if (record.Sequence.ParsingSequence.SequenceInfo is SequenceInfo.Ast && tokens.ContainsKey(record.Sequence.ParsingSequence.SequenceInfo.Parser))
+        return record;
+
+      foreach (var caller in record.Sequence.Callers)
+      {
+        var result = IsInsideToken(tokens, caller);
+        if (result.HasValue)
+          return result;
+      }
+
+      return null;
     }
 
     private static void RemoveEmpty(HashSet<int> res, int maxPos)
