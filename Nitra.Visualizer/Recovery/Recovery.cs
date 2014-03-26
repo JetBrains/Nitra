@@ -114,7 +114,7 @@ namespace Nitra.DebugStrategies
       var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new TokensInsertedForSubrule[0]) },
         parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].End, memiozation);
 
-      ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
+      //ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
 
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
