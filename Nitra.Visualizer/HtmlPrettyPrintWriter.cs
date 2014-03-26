@@ -17,6 +17,7 @@ namespace Nitra.Visualizer
     private int _currentIndent;
     private int _lastStartLine;
     private int _lastIndentEnd;
+    private int _lastMissing;
 
     public HtmlPrettyPrintWriter(PrettyPrintOptions options, string missingNodeClass, string debugClass, string garbageClass)
       : base(options)
@@ -56,6 +57,7 @@ namespace Nitra.Visualizer
     {
       if ((Options & PrettyPrintOptions.MissingNodes) == PrettyPrintOptions.MissingNodes)
         WriteSpan(_missingNodeClass, ruleDescriptor.Name);
+      _lastMissing = _buffer.Length;
     }
 
     public override void AmbiguousNode(IAmbiguousAst ast)
@@ -96,7 +98,16 @@ namespace Nitra.Visualizer
         IndentCurrentLine();
       }
       else if ((Options & PrettyPrintOptions.DebugIndent) == PrettyPrintOptions.DebugIndent)
-        WriteSpan(_debugClass, "No new line before indentation decreasing.");
+      {
+        if (_lastMissing == _buffer.Length)
+        {
+          IndentNewLine();
+          _currentIndent++;
+          Unindent();
+        }
+        else
+          WriteSpan(_debugClass, "No new line before indentation decreasing.");
+      }
       else
         IndentNewLine();
     }
