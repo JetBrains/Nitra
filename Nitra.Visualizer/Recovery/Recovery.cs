@@ -15,7 +15,6 @@ using System.Xml.Linq;
 using NB = Nemerle.Builtins;
 using SCG = System.Collections.Generic;
 
-using SubruleParses = System.Collections.Generic.Dictionary<Nitra.Internal.Recovery.ParsedSubrule, int>;
 //using ParsedSequenceAndSubrule2 = Nemerle.Builtins.Tuple</*Inserted tokens*/int, Nitra.Internal.Recovery.ParsedSequence, Nitra.Internal.Recovery.ParsedSubrule>;
 
 #if NITRA_RUNTIME
@@ -26,8 +25,9 @@ namespace Nitra.Strategies
 namespace Nitra.DebugStrategies
 #endif
 {
-  using ParsedSequenceAndSubrules = Nemerle.Core.list<TokensInsertedForSubrule>;
-  using FlattenSequences = List<Nemerle.Core.list<TokensInsertedForSubrule>>;
+  using SubrulesTokenChanges = Dictionary<ParsedSubrule, TokenChanges>;
+  using ParsedSequenceAndSubrules = Nemerle.Core.list<SubruleTokenChanges>;
+  using FlattenSequences = List<Nemerle.Core.list<SubruleTokenChanges>>;
   using ParsedList = Nemerle.Core.list<ParsedSequenceAndSubrule>;
   using Nitra.Runtime;
 
@@ -98,7 +98,7 @@ namespace Nitra.DebugStrategies
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
-      var memiozation = new Dictionary<ParsedSequenceKey, SubruleParsesAndEnd>();
+      var memiozation = new Dictionary<ParsedSequenceKey, SequenceTokenChanges>();
       FindBestPath(startSeq, textLen, memiozation);
 
       UpdateFindBestPathTime();
@@ -111,8 +111,8 @@ namespace Nitra.DebugStrategies
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
-      var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new TokensInsertedForSubrule[0]) },
-        parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].End, memiozation);
+      var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new SubruleTokenChanges[0]) },
+        parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].TotalTokenChanges, memiozation);
 
       //ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
 
@@ -153,13 +153,13 @@ namespace Nitra.DebugStrategies
         var reverse = result.ToArray().Reverse();
         foreach (var x in reverse)
         {
-          var ins = x.InsertedTokens;
+          var ins = x.TokenChanges;
           var seq = x.Seq;
           var subrule = x.Subrule;
 
           if (skipRecovery)
           {
-            if (ins == 0 && seq.ParsingSequence.RuleName != "s")
+            if (!ins.HasChanges && seq.ParsingSequence.RuleName != "s")
             {
               skipRecovery = false;
               //Debug.WriteLine(x);
@@ -179,7 +179,7 @@ namespace Nitra.DebugStrategies
           }
           else
           {
-            if (ins != 0)
+            if (ins.HasChanges)
             {
               failSeq = seq;
               failSubrule = subrule;
@@ -194,7 +194,7 @@ namespace Nitra.DebugStrategies
         parseResult.ReportError(new ExpectedSubrulesError(new Location(parseResult.OriginalSource, e.Key.StartPos, e.Key.EndPos), e.Value));
     }
 
-    private FlattenSequences FlattenSubrule(FlattenSequences prevs, ParseResult parseResult, ParsedSequence seq, SubruleParses parses, ParsedSubrule subrule, int subruleInsertedTokens, Dictionary<ParsedSequenceKey, SubruleParsesAndEnd> memiozation)
+    private FlattenSequences FlattenSubrule(FlattenSequences prevs, ParseResult parseResult, ParsedSequence seq, SubrulesTokenChanges parses, ParsedSubrule subrule, TokenChanges tokenChanges, Dictionary<ParsedSequenceKey, SequenceTokenChanges> memiozation)
     {
     Begin:
 
@@ -222,7 +222,7 @@ namespace Nitra.DebugStrategies
         foreach (var subSequences in sequences)
         {
           //Debug.WriteLine(subruledDesc);
-          var result = FlattenSequence(prevs, parseResult, subSequences, subrule.End, subruleInsertedTokens, memiozation);
+          var result = FlattenSequence(prevs, parseResult, subSequences, subrule.End, tokenChanges, memiozation);
           currentNodes.AddRange(result);
         }
       }
@@ -230,7 +230,7 @@ namespace Nitra.DebugStrategies
       if (currentNodes.Count == 0) // если не было сабсиквенсов, надо создать продолжения из текущего сабруля
       {
         foreach (var prev in prevs)
-          currentNodes.Add(new ParsedSequenceAndSubrules.Cons(new TokensInsertedForSubrule(subruleInsertedTokens, seq, subrule), prev));
+          currentNodes.Add(new ParsedSequenceAndSubrules.Cons(new SubruleTokenChanges(seq, subrule, tokenChanges), prev));
       }
 
       var nextSubrules = seq.GetNextSubrules(subrule, parses.Keys).ToArray();
@@ -244,8 +244,8 @@ namespace Nitra.DebugStrategies
             if (nextSubrule.State == 9 && nextSubrule.Begin == 8 && nextSubrule.End == 15)
             { }
 
-            subruleInsertedTokens = parses[nextSubrule];
-            if (subruleInsertedTokens == Fail)
+            tokenChanges = parses[nextSubrule];
+            if (tokenChanges.IsFail)
               return currentNodes;
             // recursive self call...
             prevs = currentNodes;
@@ -260,7 +260,7 @@ namespace Nitra.DebugStrategies
             foreach (var nextSubrule in nextSubrules)
             {
               var newSubruleInsertedTokens = parses[nextSubrule];
-              if (newSubruleInsertedTokens == Fail)
+              if (newSubruleInsertedTokens.IsFail)
                 continue;
 
               var result = FlattenSubrule(currentNodes, parseResult, seq, parses, nextSubrule, newSubruleInsertedTokens, memiozation);
@@ -277,25 +277,25 @@ namespace Nitra.DebugStrategies
       ParseResult parseResult,
       ParsedSequence seq,
       int end,
-      int sequenceInsertedTokens,
-      Dictionary<ParsedSequenceKey, SubruleParsesAndEnd> memiozation)
+      TokenChanges sequenceInsertedTokens,
+      Dictionary<ParsedSequenceKey, SequenceTokenChanges> memiozation)
     {
       //var seqTxt = parseResult.Text.Substring(seq.StartPos, end - seq.StartPos);
 
       if (seq.StartPos == 8 && end == 15)
         Debug.Assert(true);
 
-      SubruleParsesAndEnd first;
+      SequenceTokenChanges first;
       var key = new ParsedSequenceKey(seq, end);
       if (!memiozation.TryGetValue(key, out first))
         Debug.Assert(false);
 
-      var parses = first.SubruleParses;
+      var parses = first.SubrulesTokenChanges;
 
-      if (first.End == Fail)
+      if (first.TotalTokenChanges.IsFail)
         return new FlattenSequences();
 
-      if (sequenceInsertedTokens != first.End)
+      if (sequenceInsertedTokens != first.TotalTokenChanges)
       {
         //Debug.Assert(false);
         return new FlattenSequences();
@@ -312,7 +312,7 @@ namespace Nitra.DebugStrategies
         //var state = stateIndex < 0 ? null : seq.ParsingSequence.States[stateIndex];
 
         var insertedTokens = parses[firstSubrule];
-        if (insertedTokens == Fail)
+        if (insertedTokens.IsFail)
           continue;
 
         var result = FlattenSubrule(prevs, parseResult, seq, parses, firstSubrule, insertedTokens, memiozation);
@@ -322,55 +322,57 @@ namespace Nitra.DebugStrategies
       return total;
     }
 
-    private int FindBestPath(ParsedSequence seq, int end, Dictionary<ParsedSequenceKey, SubruleParsesAndEnd> memiozation)
+    private TokenChanges FindBestPath(ParsedSequence seq, int end, Dictionary<ParsedSequenceKey, SequenceTokenChanges> memiozation)
     {
       if (_parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
-      SubruleParsesAndEnd result;
+      SequenceTokenChanges result;
 
       var key = new ParsedSequenceKey(seq, end);
 
       if (memiozation.TryGetValue(key, out result))
-        return result.End;
+        return result.TotalTokenChanges;
 
       if (seq.StartPos == end)
       {
-        memiozation.Add(key, new SubruleParsesAndEnd(new Dictionary<ParsedSubrule, int>(), seq.ParsingSequence.MandatoryTokenCount));
-        return seq.ParsingSequence.MandatoryTokenCount;
+        var tokenChanges = new TokenChanges(seq.ParsingSequence.MandatoryTokenCount, 0);
+        memiozation.Add(key, new SequenceTokenChanges(new SubrulesTokenChanges(), tokenChanges));
+        return tokenChanges;
       }
 
-      var results = new Dictionary<ParsedSubrule, int>();
+      var results = new SubrulesTokenChanges();
       var validSubrules = seq.GetValidSubrules(end).ToList();
       if (validSubrules.Count == 0)
       {
-        memiozation.Add(key, new SubruleParsesAndEnd(results, 0));
-        return 0;
+        var tokenChanges = new TokenChanges();
+        memiozation.Add(key, new SequenceTokenChanges(results, tokenChanges));
+        return tokenChanges;
       }
-      memiozation.Add(key, new SubruleParsesAndEnd(results, Fail));
+      memiozation.Add(key, new SequenceTokenChanges(results, TokenChanges.Fail));
 
       foreach (var subrule in validSubrules)
       {
-        var localMin = Fail;
+        TokenChanges localMin = TokenChanges.Fail;
         if (_deletedToken.ContainsKey(new ParsedSequenceAndSubrule(seq, subrule)))
-          localMin = 1; // оцениваем удаление как одну вставку
+          localMin = new TokenChanges(0, 1);
         else
           localMin = LocalMinForSubSequence(seq, memiozation, subrule, localMin);
 
         results[subrule] = localMin;
       }
 
-      int comulativeMin;
+      TokenChanges comulativeMin;
       if (results.Count == 0)
       { }
       var bestResults = RemoveWorstPaths(seq, end, results, out comulativeMin);
-      var result2 = new SubruleParsesAndEnd(bestResults, comulativeMin);
+      var result2 = new SequenceTokenChanges(bestResults, comulativeMin);
       memiozation[key] = result2;
 
-      return result2.End;
+      return result2.TotalTokenChanges;
     }
 
-    private int LocalMinForSubSequence(ParsedSequence seq, Dictionary<ParsedSequenceKey, SubruleParsesAndEnd> memiozation, ParsedSubrule subrule, int localMin)
+    private TokenChanges LocalMinForSubSequence(ParsedSequence seq, Dictionary<ParsedSequenceKey, SequenceTokenChanges> memiozation, ParsedSubrule subrule, TokenChanges localMin)
     {
       var subSeqs = seq.GetSequencesForSubrule(subrule).ToArray();
       var hasSequence = false;
@@ -387,10 +389,11 @@ namespace Nitra.DebugStrategies
       if (!hasSequence)
       {
         if (subrule.IsEmpty)
-          localMin = seq.SubruleMandatoryTokenCount(subrule);
+          localMin = new TokenChanges(seq.SubruleMandatoryTokenCount(subrule), 0);
         else
-          localMin = 0;
+          localMin = new TokenChanges();
       }
+
       return localMin;
     }
 
@@ -403,9 +406,9 @@ namespace Nitra.DebugStrategies
       return int.MaxValue;
     }
 
-    private static SubruleParses RemoveWorstPaths(ParsedSequence seq, int end, SubruleParses parses, out int comulativeMin)
+    private static SubrulesTokenChanges RemoveWorstPaths(ParsedSequence seq, int end, SubrulesTokenChanges parses, out TokenChanges comulativeMin)
     {
-      var comulativeCost = new SubruleParses();
+      var comulativeCost = new SubrulesTokenChanges();
       bool updated = true;
       while (updated)
       {
@@ -413,19 +416,19 @@ namespace Nitra.DebugStrategies
         foreach (var parse in parses)
         {
           var subrule = parse.Key;
-          int oldCount;
+          TokenChanges oldCount;
           if (!comulativeCost.TryGetValue(subrule, out oldCount))
             updated = true;
-          int min;
+          TokenChanges min;
           if (seq.StartPos == subrule.Begin && seq.ParsingSequence.StartStates.Contains(subrule.State))
-            min = 0;
+            min = new TokenChanges();
           else
           {
-            min = Fail;
-            int prevCount;
+            min = TokenChanges.Fail;
+            TokenChanges prevCount;
             foreach (var prevSubrule in seq.GetPrevSubrules(subrule, parses.Keys))
               if (comulativeCost.TryGetValue(prevSubrule, out prevCount))
-                min = Math.Min(min, prevCount);
+                min = TokenChanges.Min(min, prevCount);
           }
           var newCount = AddOrFail(min, parses[subrule]);
           comulativeCost[subrule] = newCount;
@@ -437,7 +440,7 @@ namespace Nitra.DebugStrategies
       var comulativeMin2 = toProcess.Min(s => comulativeCost[s]);
       comulativeMin = comulativeMin2;
       toProcess = new SCG.Queue<ParsedSubrule>(toProcess.Where(s => comulativeCost[s] == comulativeMin2));
-      var good = new SubruleParses();
+      var good = new SubrulesTokenChanges();
       while (toProcess.Count > 0)
       {
         var subrule = toProcess.Dequeue();
@@ -447,9 +450,9 @@ namespace Nitra.DebugStrategies
         var prev = seq.GetPrevSubrules(subrule, parses.Keys).ToList();
         if (prev.Count > 0)
         {
-          int min;
+          TokenChanges min;
           if (seq.StartPos == subrule.Begin && seq.ParsingSequence.StartStates.Contains(subrule.State))
-            min = 0;
+            min = new TokenChanges();
           else
             min = prev.Min(s => comulativeCost[s]);
           foreach (var prevSubrule in prev)
@@ -460,9 +463,11 @@ namespace Nitra.DebugStrategies
       return good;
     }
 
-    private static int AddOrFail(int source, int addition)
+    private static TokenChanges AddOrFail(TokenChanges source, TokenChanges addition)
     {
-      return source == Fail || addition == Fail ? Fail : source + addition;
+      return source.IsFail || addition.IsFail 
+        ? TokenChanges.Fail
+        : new TokenChanges(source.Inserted + addition.Inserted, source.Deleted + addition.Deleted);
     }
 
     private List<Tuple<int, ParsedSequence>> FindMaxFailPos(RecoveryParser rp)
@@ -641,9 +646,9 @@ namespace Nitra.DebugStrategies
         if (rp.MaxPos != rp.ParseResult.Text.Length)
           UpdateParseErrorCount();
 
-        if (!CheckUnclosedToken(rp))
+        //if (!CheckUnclosedToken(rp))
           deleted.AddRange(tmpDeleted);
-        else
+        //else
         { }
 
 
@@ -870,25 +875,24 @@ pre
 
       foreach (var node in path.Reverse())
       {
-        //var str = node.Field0;
-        var insertedTokens = node.InsertedTokens;
+        var tokenChanges = node.TokenChanges;
         var seq = node.Seq;
         var subrule = node.Subrule;
-
+        
         bool isGarbage;
-        if (deletedToken.TryGetValue(new ParsedSequenceAndSubrule(seq, subrule), out isGarbage))
+        if (deletedToken.TryGetValue(new ParsedSequenceAndSubrule(seq, subrule), out isGarbage))// TODO: Возможно здесь надо проверять значение tokenChanges.Deleted
         {
           isPrevInsertion = false;
           var title = new XAttribute("title", "Deleted token;  Subrule: " + subrule + ";  Sequence: " + seq + ";");
           results.Add(new XElement("span", isGarbage ? _garbageClass : _deletedClass,
             title, text.Substring(subrule.Begin, subrule.End - subrule.Begin)));
         }
-        else if (insertedTokens > 0)
+        else if (tokenChanges.HasChanges)
         {
           var desc = seq.ParsingSequence.States[subrule.State].Description;
           if (!subrule.IsEmpty)
           { }
-          var title = new XAttribute("title", "Inserted tokens: " + insertedTokens + ";  Subrule: " + subrule + ";  Sequence: " + seq + ";");
+          var title = new XAttribute("title", "Inserted tokens: " + tokenChanges + ";  Subrule: " + subrule + ";  Sequence: " + seq + ";");
           results.Add(new XElement("span", _skipedStateClass, title, isPrevInsertion ? " " + desc : desc));
           isPrevInsertion = true;
         }
