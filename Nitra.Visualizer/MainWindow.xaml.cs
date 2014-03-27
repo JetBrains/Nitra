@@ -1274,8 +1274,6 @@ namespace Nitra.Visualizer
 
     private void FindSelected(bool next)
     {
-      string searchPattren;
-
       if (_text.SelectionLength > 0)
       {
         _findText.Text = _text.SelectedText;
