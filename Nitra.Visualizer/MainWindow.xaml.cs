@@ -790,9 +790,14 @@ namespace Nitra.Visualizer
       {
         for (int col = 0; col < cols; col++)
         {
-          sb.Append(data[col][row]);
-          if (col != cols - 1)
-            sb.Append(" │");
+          var currRows = data[col];
+
+          if (row < currRows.Length)
+          {
+            sb.Append(currRows[row]);
+            if (col != cols - 1)
+              sb.Append(" │");
+          }
         }
         sb.AppendLine();
       }
