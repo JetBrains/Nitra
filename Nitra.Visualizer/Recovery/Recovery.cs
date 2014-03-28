@@ -382,8 +382,7 @@ namespace Nitra.DebugStrategies
         hasSequence = true;
         var localRes = FindBestPath(subSeq, subrule.End, memiozation);
 
-        if (localRes < localMin)
-          localMin = localRes;
+        localMin = TokenChanges.Min(localMin, localRes);
       }
 
       if (!hasSequence)
