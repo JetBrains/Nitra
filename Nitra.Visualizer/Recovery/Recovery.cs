@@ -114,7 +114,7 @@ namespace Nitra.DebugStrategies
       var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new SubruleTokenChanges[0]) },
         parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].TotalTokenChanges, memiozation);
 
-      ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
+      //ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
 
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
@@ -645,10 +645,10 @@ namespace Nitra.DebugStrategies
         if (rp.MaxPos != rp.ParseResult.Text.Length)
           UpdateParseErrorCount();
 
-        if (!CheckUnclosedToken(rp))
-          deleted.AddRange(tmpDeleted);
-        else
-        { }
+        //if (!CheckUnclosedToken(rp))
+        //  deleted.AddRange(tmpDeleted);
+        //else
+        //{ }
 
 
         maxPos = rp.MaxPos;
