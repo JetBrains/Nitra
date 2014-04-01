@@ -645,10 +645,10 @@ namespace Nitra.DebugStrategies
         if (rp.MaxPos != rp.ParseResult.Text.Length)
           UpdateParseErrorCount();
 
-        //if (!CheckUnclosedToken(rp))
-        //  deleted.AddRange(tmpDeleted);
-        //else
-        //{ }
+        if (!CheckUnclosedToken(rp))
+          deleted.AddRange(tmpDeleted);
+        else
+        { }
 
 
         maxPos = rp.MaxPos;
@@ -709,7 +709,7 @@ namespace Nitra.DebugStrategies
       var maxPos  = rp.MaxPos;
       var grammar = rp.ParseResult.RuleParser.Grammar;
       var records = rp.Records[maxPos].ToArray();
-      var result  = new SCG.HashSet<ParseRecord>();
+      var result  = new SCG.Dictionary<ParseRecord, bool>();
       var unclosedTokenFound = false;
 
       foreach (var record in records)
@@ -717,12 +717,15 @@ namespace Nitra.DebugStrategies
         if (record.IsComplete)
           continue;
 
-        var res = IsInsideToken(grammar, record);
-
-        if (!res || record.Sequence.StartPos >= maxPos)
+        if (record.Sequence.StartPos >= maxPos)
           continue;
 
         if (record.Sequence.ParsingSequence.IsNullable)
+          continue;
+
+        var res = IsInsideToken(result, grammar, record);
+
+        if (!res)
           continue;
 
         unclosedTokenFound = true;
@@ -732,30 +735,32 @@ namespace Nitra.DebugStrategies
       return unclosedTokenFound;
     }
 
-    private static bool IsInsideToken(CompositeGrammar compositeGrammar, ParseRecord record)
+    private static bool IsInsideToken(SCG.Dictionary<ParseRecord, bool> memoization, CompositeGrammar compositeGrammar, ParseRecord record)
     {
-      return IsInsideTokenImpl(compositeGrammar, new SCG.HashSet<ParseRecord>(), record);
-    }
-
-    private static bool IsInsideTokenImpl(CompositeGrammar compositeGrammar, SCG.HashSet<ParseRecord> visited, ParseRecord record)
-    {
-      if (!visited.Add(record))
-        return false;
+      bool res;
+      if (memoization.TryGetValue(record, out res))
+        return res;
 
       if (record.Sequence.ParsingSequence.SequenceInfo is SequenceInfo.Ast)
       {
         var parser = record.Sequence.ParsingSequence.SequenceInfo.Parser;
-        if (compositeGrammar.Tokens.ContainsKey(parser) || compositeGrammar.VoidTokens.ContainsKey(parser))
-          return true;
+        res = compositeGrammar.Tokens.ContainsKey(parser) || compositeGrammar.VoidTokens.ContainsKey(parser);
+        memoization[record] = res;
+        if(res)
+          return res;
       }
 
       foreach (var caller in record.Sequence.Callers)
       {
-        var result = IsInsideTokenImpl(compositeGrammar, visited, caller);
-        if (result)
+        res = IsInsideToken(memoization, compositeGrammar, caller);
+        if (res)
+        {
+          memoization[record] = true;
           return true;
+        }
       }
 
+      memoization[record] = false;
       return false;
     }
 
