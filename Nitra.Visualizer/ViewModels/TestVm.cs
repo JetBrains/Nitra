@@ -25,7 +25,17 @@ namespace Nitra.Visualizer.ViewModels
 
     public string Gold
     {
-      get { return File.ReadAllText(Path.ChangeExtension(TestPath, ".gold")); }
+      get
+      {
+        try
+        {
+          return File.ReadAllText(Path.ChangeExtension(TestPath, ".gold"));
+        }
+        catch (FileNotFoundException)
+        {
+          return "";
+        }
+      }
       set { File.WriteAllText(Path.ChangeExtension(TestPath, ".gold"), value); }
     }
 
