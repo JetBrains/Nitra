@@ -106,7 +106,7 @@ namespace Nitra.Visualizer
           Unindent();
         }
         else
-          WriteSpan(_debugClass, "No new line before indentation decreasing.");
+          WriteSpan(_debugClass, " No new line before indentation decreasing.");
       }
       else
         IndentNewLine();
