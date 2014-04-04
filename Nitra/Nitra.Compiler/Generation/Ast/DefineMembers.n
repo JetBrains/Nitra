@@ -253,25 +253,39 @@ namespace Nitra.Compiler
         | _ => assert(false)
       }
 
+      def getStartPos() : PExpr
+      {
+        match (this.RuleSymbol)
+        {
+          | SimpleRuleSymbol
+          | ExtensionRuleSymbol(ExtensionType = Prefix)  => <[ this.startPos ]>
+          | ExtensionRuleSymbol(ExtensionType = Postfix) => <[ this.astStartPos ]>
+          | _ => assert(false)
+        }
+      }
+
       foreach (field in fields)
       {
         def statements = SCG.List();
 
         mutable needRuleParser  : bool;
         mutable needCaching     : bool;
+        mutable needPos         : bool;
 
         def analyze(_ : FieldExpr) : void
         {
           | Prefix         => ()
-          | Tuple(items)   => foreach (expr in items) analyze(expr);
-          | Chars(_, true) => needRuleParser = true;
-          | Chars          => ()
-          | Other(_, true) => needRuleParser = true; needCaching = true;
-          | Other          =>                        needCaching = true;
+          | Tuple(items)   => needPos = true; foreach (expr in items) analyze(expr);
+          | Chars(_, true) => needPos = true; needRuleParser = true;
+          | Chars          => needPos = true;
+          | Other(_, true) => needPos = true; needRuleParser = true; needCaching = true;
+          | Other          => needPos = true;                        needCaching = true;
         }
 
         analyze(field.Expr);
 
+        when (needPos)
+          statements.Add(<[ mutable pos = $(getStartPos()); ]>);
         when (needRuleParser)
           statements.Add(<[ def ruleParser = parseResult.GetRuleParser(astPtr) :> $(this.RuleSymbol.GetParserClassRef()) ]>);
 
@@ -280,10 +294,20 @@ namespace Nitra.Compiler
           | Prefix(expr)
           | Chars(expr, _)
           | Other(expr, _) => expr
-          | Tuple(items)   => <[
-            def sequenceStartPos = pos;
-            Nitra.SequenceAst(Nitra.Location(parseResult.OriginalSource, sequenceStartPos, pos), ..$(items.Map(compile)))
-          ]>
+          | Tuple(items)   =>
+            def tupleCode = SCG.List();
+            def tupleArgs = SCG.List();
+            foreach (item in items)
+            {
+              def name = Util.tmpname("ast");
+              tupleCode.Add(<[ def $(name : usesite) = $(compile(item)) ]>);
+              tupleArgs.Add(<[ $(name : usesite) ]>);
+            }
+            <[
+              def sequenceStartPos = pos;
+              ..$tupleCode;
+              Nitra.SequenceAst(Nitra.Location(parseResult.OriginalSource, sequenceStartPos, pos), ..$tupleArgs)
+            ]>
         }
 
         statements.Add(compile(field.Expr));

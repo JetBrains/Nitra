@@ -1354,5 +1354,17 @@ namespace Nitra.Visualizer
     {
       return char.IsLetterOrDigit(ch) || ch == '_';
     }
+
+    private void _control_KeyDown_resize(object sender, KeyEventArgs e)
+    {
+      var control = sender as Control;
+      if (control != null)
+      {
+        if (e.Key == Key.Add && Keyboard.Modifiers == ModifierKeys.Control)
+          control.FontSize++;
+        else if (e.Key == Key.Subtract && Keyboard.Modifiers == ModifierKeys.Control)
+          control.FontSize--;
+      }
+    }
   }
 }

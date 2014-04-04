@@ -150,7 +150,14 @@ namespace Nitra.Visualizer.ViewModels
       if (StartRule == null)
         return null;
 
-      return _parserHost.DoParsing(source, _compositeGrammar, StartRule, recoveryStrategy);
+      try
+      {
+        return _parserHost.DoParsing(source, _compositeGrammar, StartRule, recoveryStrategy);
+      }
+      catch (Exception)
+      {
+        return null;
+      }
     }
 
     public void ShowGrammar()
