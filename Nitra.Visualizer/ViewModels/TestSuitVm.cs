@@ -20,6 +20,7 @@ namespace Nitra.Visualizer.ViewModels
     public StartRuleDescriptor                      StartRule     { get; private set; }
     public ObservableCollection<TestVm>             Tests         { get; private set; }
     public string                                   TestSuitPath  { get; set; }
+    public Exception                                Exception     { get; private set; }
 
     public string _hint;
     public override string Hint { get { return _hint; } }
@@ -152,10 +153,13 @@ namespace Nitra.Visualizer.ViewModels
 
       try
       {
-        return _parserHost.DoParsing(source, _compositeGrammar, StartRule, recoveryStrategy);
+        var res = _parserHost.DoParsing(source, _compositeGrammar, StartRule, recoveryStrategy);
+        this.Exception = null;
+        return res;
       }
-      catch (Exception)
+      catch (Exception ex)
       {
+        this.Exception = ex;
         return null;
       }
     }
