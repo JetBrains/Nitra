@@ -243,7 +243,24 @@ namespace Nitra.Visualizer
       _errorsTreeView.Items.Clear();
 
       if (_parseResult == null)
-        _status.Text = "Not parsed!";
+        if (_currentTestSuit.Exception != null)
+        {
+          var msg = "Exception: " + _currentTestSuit.Exception.Message;
+          _status.Text = msg;
+
+          var errorNode = new TreeViewItem();
+          errorNode.Header = "(1,1): " + msg;
+          errorNode.Tag = _currentTestSuit.Exception;
+          errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
+          _errorsTreeView.Items.Add(errorNode);
+
+          var marker = _textMarkerService.Create(0, _text.Text.Length);
+          marker.MarkerType = TextMarkerType.SquigglyUnderline;
+          marker.MarkerColor = Colors.Purple;
+          marker.ToolTip = msg;
+        }
+        else
+          _status.Text = "Not parsed!";
       else
       {
         var errors = _parseResult.GetErrors();
@@ -256,7 +273,7 @@ namespace Nitra.Visualizer
         }
 
 
-        foreach (ParseError error in errors)
+        foreach (var error in errors)
         {
           var location = error.Location;
           var marker = _textMarkerService.Create(location.StartPos, location.Length);
@@ -286,10 +303,17 @@ namespace Nitra.Visualizer
     void errorNode_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
       var node = (TreeViewItem)sender;
-      var error = (ParseError)node.Tag;
-      _text.CaretOffset = error.Location.StartPos;
-      _text.Select(error.Location.StartPos, error.Location.Length);
-      _text.ScrollToLine(error.Location.StartLineColumn.Line);
+      var error = node.Tag as ParseError;
+      if (error != null)
+      {
+        _text.CaretOffset = error.Location.StartPos;
+        _text.Select(error.Location.StartPos, error.Location.Length);
+        _text.ScrollToLine(error.Location.StartLineColumn.Line);
+      }
+      else
+      {
+        _text.CaretOffset = 0;
+      }
       e.Handled = true;
       _text.Focus();
     }

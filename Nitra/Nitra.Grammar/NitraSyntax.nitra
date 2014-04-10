@@ -167,31 +167,103 @@ syntax module NitraSyntax
       }
   }
 
-  syntax NitraTypeParams = "<" (NitraType; "," sm; ?)+ ">";
-  syntax NitraSimpleName = Identifier NitraTypeParams?;
+  syntax NitraTypeArguments = "<" (NitraType; "," sm; ?)+ ">"
+  {
+    Typing() : list[NType]
+    {
+      def buffer = List();
+      foreach (t in this.NitraTypes.Item1)
+        buffer.Add(t.Typing());
+      buffer.ToNList()
+    }
+  }
+
+  syntax NitraTypeName = Identifier NitraTypeArguments?
+  {
+    Typing() : TypeNamePart
+    {
+      def name     = this.Identifier.GetText();
+      def typeArgs = if (this.NitraTypeArgumentsOpt is Some(ta)) ta.Typing() else [];
+      TypeNamePart(name, typeArgs)
+    }
+  }
 
   syntax NitraType
   {
-    | Qualified = NitraQualifiedType
-    | Tuple     = NitraType "*" NitraType
-    | Func      = NitraType "->" NitraType
-  }
+    Typing() : NType;
 
-  syntax NitraQualifiedType
-  {
     | PredefinedType
-    | NitraSimpleName
-    | Qualified  = NitraType "." NitraSimpleName precedence 20;
-    | OptionList = NitraType "*"
-    | List       = NitraType "+"
-    | Option     = NitraType "?"
+      {
+        override Typing
+        {
+          def value = match (GetText(this.PredefinedType))
+          {
+            | "void"   => NPredefinedType.Void
+            | "int"    => NPredefinedType.Int
+            | "string" => NPredefinedType.String
+            | _        => assert3(false)
+          };
+          NType.Predefined(value);
+        }
+      }
+    | QualifiedType  = (NitraTypeName; ".")+
+      {
+        override Typing
+        {
+          def parts = List();
+          foreach (t in this.NitraTypeNames.Item1)
+            parts.Add(t.Typing());
+          NType.Qualified(parts.ToNList());
+        }
+      }
+    | Braces         = "(" NitraType ")"
+      {
+        override Typing = this.NitraType.Typing();
+      }
+    | Tuple          = NitraType ("*" NitraType)+  precedence 30
+      {
+        override Typing
+        {
+          def members = List();
+          members.Add(this.NitraType.Typing());
+          foreach (t in this.NitraTypes)
+            members.Add(t.Item2.Typing());
+          NType.Tuple(members.ToNList());
+        }
+      }
+    | Func           = NitraType "->" NitraType    precedence 20  right-associative
+      {
+        override Typing = NType.Func(this.NitraType1.Typing(), this.NitraType2.Typing());
+      }
+    | OptionList     = NitraType "*" precedence 400
+      {
+        override Typing = NType.OptionList(this.NitraType.Typing());
+      }
+    | List           = NitraType "+" precedence 400
+      {
+        override Typing = NType.List(this.NitraType.Typing());
+      }
+    | Option         = NitraType "?" precedence 400
+      {
+        override Typing = NType.Option(this.NitraType.Typing());
+      }
   }
 
   syntax NitraField = Name ":" NitraType RuleMethodBody
   {
-    CollectGlobalSymbols(_site : IMemberSite) : void {}
+    CollectGlobalSymbols(site : IMemberSite) : void
+    {
+      def symbol = ParsedNitraFieldSymbol(this);
+      _ = site.Node.AddAndReport(symbol, Name.Location);
+    }
     [Cached] MakeContext(parent : Context) : Context = parent;
-    Typing() : void {}
+    [Cached] private MakeType() : NType = this.NitraType.Typing();
+    [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
+    Typing() : void
+    {
+      _ = MakeType();
+      _ = MakeBody();
+    }
   }
 
   syntax DeclarationMember
