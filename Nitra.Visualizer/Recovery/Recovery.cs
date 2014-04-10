@@ -134,6 +134,7 @@ namespace Nitra.DebugStrategies
         throw new OperationCanceledException();
 
       AstPatcher.Patch(startSeq, rp, memiozation);
+      AstPatcher.FindBestPath(startSeq, rp, _deletedToken);
 
       _parseResult = null;
 

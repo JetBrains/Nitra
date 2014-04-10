@@ -262,5 +262,160 @@ namespace Nitra.Internal.Recovery
         }
       }
     }
+
+    public static FindBestPath(startSeq : ParsedSequence, recoveryParser : RecoveryParser, deletedTokens : Dictionary[ParsedSequenceAndSubrule, bool]) : void
+    {
+      def astPatcher = AstPatcher2(startSeq, recoveryParser, deletedTokens);
+      def time = Diagnostics.Stopwatch.StartNew();
+      astPatcher.FindBestPath();
+      def time = time.Elapsed;
+      def asd = time;
+      astPatcher.PatchAst();
+    }
+  }
+
+  [Record]
+  public class AstPatcher2
+  {
+    private _startSeq        : ParsedSequence;
+    private _recoveryParser  : RecoveryParser;
+    private _deletedTokens   : Dictionary[ParsedSequenceAndSubrule, bool];
+    private _allSubrules     : array[List[ParsedSequence * ParsedSubrule]];
+    private _stateEndChanges : Hashtable[(ParsedSequence * int * int), TokenChanges] = Hashtable();
+
+    public this(startSeq : ParsedSequence, recoveryParser : RecoveryParser, deletedTokens : Dictionary[ParsedSequenceAndSubrule, bool])
+    {
+      _startSeq       = startSeq;
+      _recoveryParser = recoveryParser;
+      _deletedTokens  = deletedTokens;
+      _allSubrules    = array(_recoveryParser.ParseResult.Text.Length + 1);
+    }
+
+    public PatchAst() : void
+    {
+      foreach (endState in _startSeq.ParsingSequence.EndStates)
+      {
+        def start = _stateEndChanges.Get(_startSeq, endState, _recoveryParser.ParseResult.Text.Length);
+        def asd = start;
+      }
+    }
+
+    public FindBestPath() : void
+    {
+      foreach (seq in _recoveryParser.Sequences.Values)
+        foreach (subrule in seq.ParsedSubrules)
+        {
+          when (_allSubrules[subrule.End] == null)
+            _allSubrules[subrule.End] = List();
+          _allSubrules[subrule.End].Add((seq, subrule));
+        }
+
+      foreach (subrules when subrules != null in _allSubrules)
+      {
+        //Сортировка не влияет на результат. Но уменьшает необходимое колличество итераций.
+        subrules.Sort(((_, subrule1), (_, subrule2)) =>
+        {
+          def c = -subrule1.Begin.CompareTo(subrule2.Begin);
+          if (c == 0)
+            subrule1.State.CompareTo(subrule2.State);
+          else
+            c
+        });
+        for (mutable updated = true; updated;)
+        {
+          updated = false;
+          foreach ((seq, subrule) in subrules)
+          {
+            def state = seq.ParsingSequence.States[subrule.State];
+            def prevChanges = if (seq.StartPos == subrule.Begin && state.IsStart)
+              //последовательность всегда начинается без исменений
+              //предыдущие изменения суммируются в момент вызова последовательности
+              //ибо последовательность может быть вызвана из разных мест
+              //и соответственно иметь разное число предыдущих изменений
+              TokenChanges(0, 0)
+            else
+            {
+              mutable minChanges = TokenChanges.Fail;
+              foreach (prevState in state.Prev)
+              {
+                mutable curChanges;
+                def key = (seq, prevState, subrule.Begin);
+                when (_stateEndChanges.TryGetValue(key, out curChanges))
+                  minChanges = TokenChanges.Min(curChanges, minChanges);
+              }
+              minChanges
+            }
+            def subruleChanges =
+            {
+              def minChangesFromSequence(parsingSequence, mutable minChanges)
+              {
+                mutable calledSeq;
+                if (_recoveryParser.Sequences.TryGetValue((subrule.Begin, parsingSequence), out calledSeq))
+                {
+                  foreach (endState in parsingSequence.EndStates)
+                  {
+                    mutable curChanges;
+                    def key = (calledSeq, endState, subrule.End);
+                    when (_stateEndChanges.TryGetValue(key, out curChanges))
+                      minChanges = TokenChanges.Min(curChanges, minChanges);
+                  }
+                  minChanges
+                }
+                else
+                  TokenChanges(0, 0);//Нет последовательности. Значит было успешно разобран основным парсером.
+              }
+              if (_deletedTokens.ContainsKey(ParsedSequenceAndSubrule(seq, subrule)))
+                TokenChanges(0, 1);
+              else match (state)
+              {
+                | Scan | Predicate =>
+                  if (subrule.IsEmpty)
+                    TokenChanges(state.Subrule.MandatoryTokenCount, 0);
+                  else
+                    TokenChanges(0, 0)
+
+                | Simple           as seq1 with parsingSequence = seq1.RuleParser.ParsingSequence
+                | Extensible       as seq2 with parsingSequence = seq2.RuleParser.ParsingSequence
+                | Subsequence      as seq5 with parsingSequence = seq5.Sequence =>
+                  if (subrule.IsEmpty)
+                    TokenChanges(state.Subrule.MandatoryTokenCount, 0);
+                  else
+                    minChangesFromSequence(parsingSequence, TokenChanges.Fail);
+
+                | ExtensionPrefix  as prefix =>
+                  if (subrule.IsEmpty)
+                    TokenChanges(prefix.RuleParser.MandatoryTokenCount, 0);
+                  else
+                  {
+                    mutable minChanges = TokenChanges.Fail;
+                    foreach (ruleParser in prefix.RuleParser.PrefixRules)
+                      minChanges = minChangesFromSequence(ruleParser.ParsingSequence, minChanges);
+                    minChanges
+                  }
+
+                | ExtensionPostfix as postfix =>
+                  if (subrule.IsEmpty)
+                    TokenChanges(0, 0);
+                  else
+                  {
+                    mutable minChanges = TokenChanges.Fail;
+                    foreach (ruleParser when postfix.RuleParser.FirstPostfixRuleId <= ruleParser.RuleId in postfix.RuleParser.PostfixRules)
+                      minChanges = minChangesFromSequence(ruleParser.ParsingSequence, minChanges);
+                    minChanges
+                  }
+              }
+            };
+            def key = (seq, subrule.State, subrule.End);
+            _ = _stateEndChanges.Update(key, TokenChanges.Fail, oldChanges =>
+            {
+              def newChanges = TokenChanges.Min(oldChanges, prevChanges + subruleChanges);
+              when (newChanges != oldChanges)
+                updated = true;
+              newChanges
+            });
+          }
+        }
+      }
+    }
   }
 }
