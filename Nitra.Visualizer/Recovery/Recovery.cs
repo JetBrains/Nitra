@@ -98,6 +98,8 @@ namespace Nitra.DebugStrategies
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
+      AstPatcher.FindBestPath(startSeq, rp, _deletedToken);
+
       var memiozation = new Dictionary<ParsedSequenceKey, SequenceTokenChanges>();
       FindBestPath(startSeq, textLen, memiozation);
 
@@ -134,7 +136,6 @@ namespace Nitra.DebugStrategies
         throw new OperationCanceledException();
 
       AstPatcher.Patch(startSeq, rp, memiozation);
-      AstPatcher.FindBestPath(startSeq, rp, _deletedToken);
 
       _parseResult = null;
 
