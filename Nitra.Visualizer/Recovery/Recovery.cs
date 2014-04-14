@@ -581,6 +581,14 @@ namespace Nitra.DebugStrategies
       return false;
     }
 
+    private List<TokenParserApplication> GetCurrentTokens(RecoveryParser rp, int pos)
+    {
+      var parseResult = rp.ParseResult;
+      var grammar = parseResult.RuleParser.Grammar;
+      var res = grammar.ParseNonVoidTokens(pos, parseResult);
+      return res;
+    }
+
     private void DeleteTokens(RecoveryParser rp, int pos, ParsedSequence sequence, int tokensToDelete)
     {
       if (tokensToDelete <= 0)
@@ -649,11 +657,16 @@ namespace Nitra.DebugStrategies
         if (!CheckUnclosedToken(rp))
           deleted.AddRange(tmpDeleted);
         else
-        { }
-
+        {
+        }
 
         maxPos = rp.MaxPos;
         failPositions.Add(maxPos);
+        var tokens = GetCurrentTokens(rp, rp.MaxPos);
+        foreach (var token in tokens)
+        {
+          var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
+        }
 
         var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
         var prevRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
