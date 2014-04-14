@@ -88,6 +88,7 @@ namespace Nitra.DebugStrategies
 
       RecoverAllWays(rp);
 
+      AstPatcher.FindBestPath(startSeq, rp, _deletedToken);
       UpdateRecoverAllWaysTime();
 #if DebugOutput
       timer.Stop();
@@ -97,8 +98,6 @@ namespace Nitra.DebugStrategies
 
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
-
-      AstPatcher.FindBestPath(startSeq, rp, _deletedToken);
 
       var memiozation = new Dictionary<ParsedSequenceKey, SequenceTokenChanges>();
       FindBestPath(startSeq, textLen, memiozation);
