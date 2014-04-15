@@ -662,13 +662,45 @@ namespace Nitra.DebugStrategies
 
         maxPos = rp.MaxPos;
         failPositions.Add(maxPos);
+        var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
+
         var tokens = GetCurrentTokens(rp, rp.MaxPos);
+
+        var visited = new HashSet<ParsingCallerInfo>();
+        var roots = new Dictionary<ParsingCallerInfo, bool>();
+        foreach (var record in records)
+          if (!record.IsComplete)
+            AddRoot(roots, record.Sequence.ParsingSequence, record.State);
+
         foreach (var token in tokens)
         {
           var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
+          foreach (var callerInfo in token.Token.Callers)
+            FindAllCallers(visited, roots, callerInfo);
         }
 
-        var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
+        //processedSeqs.ExceptWith(roots);
+
+        //foreach (var parsingCallerInfo in processedSeqs)
+        //{
+        //  if (parsingCallerInfo.Sequence.States[parsingCallerInfo.State].IsStart)
+        //  {
+        //    foreach (var record in records)
+        //      foreach (var caller in parsingCallerInfo.Sequence.Callers)
+        //        if (caller.State == record.State && caller.Sequence == record.Sequence.ParsingSequence)
+        //          rp.StartParseSequence(record, maxPos, parsingCallerInfo.Sequence);
+        //  }
+        //  else
+        //  {
+            
+        //  }
+        //}
+
+        foreach (var x in roots)
+          if (x.Value)
+            Debug.WriteLine(x.Key);
+
+
         var prevRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
 
         do
@@ -716,6 +748,58 @@ namespace Nitra.DebugStrategies
       foreach (var del in deleted)
         DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
+    }
+
+    private void AddRoot(Dictionary<ParsingCallerInfo, bool> roots, ParsingSequence parsingSequence, int state)
+    {
+      var key = new ParsingCallerInfo(parsingSequence, state);
+      
+      if (roots.ContainsKey(key))
+        return;
+
+      roots.Add(new ParsingCallerInfo(parsingSequence, state), true);
+
+      foreach (var stateNext in parsingSequence.States[state].Next)
+        if (stateNext >= 0)
+          AddRoot(roots, parsingSequence, stateNext);
+    }
+
+    private bool FindAllCallers(HashSet<ParsingCallerInfo> visited, Dictionary<ParsingCallerInfo, bool> roots, ParsingCallerInfo callerInfo)
+    {
+
+      if (callerInfo.ToString().Contains("0:'?'  1:s  2:Expression  ●  3:':'  4:s  5:Expression"))
+      { }
+
+      visited.Add(callerInfo);
+
+      bool found;
+      if (roots.TryGetValue(callerInfo, out found))
+      {
+        //TODO: зафигачить пропарсивания при раскрутке стека
+        return found;
+      }
+
+      foreach (var caller in callerInfo.Sequence.Callers)
+      {
+        if (roots.ContainsKey(caller))
+        {
+          if (!found)
+            found = roots[caller];
+        }
+        else if (!visited.Contains(caller) && FindAllCallers(visited, roots, caller))
+        {
+          //TODO: зафигачить пропарсивания при раскрутке стека
+          found = true;
+        }
+      }
+
+      if (found)
+      {
+        Debug.WriteLine(callerInfo);
+      }
+      roots[callerInfo] = found;
+
+      return found;
     }
 
     private bool CheckUnclosedToken(RecoveryParser rp)
