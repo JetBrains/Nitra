@@ -1,0 +1,128 @@
+﻿using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Reflection;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Quote
+{
+  internal sealed class RuleRegistry
+  {
+    private assemblies       : list[Assembly];
+    private assemblyScope    : Func[SCG.IEnumerable[Assembly]];
+    private aliasTable       : SCG.Dictionary[string, GrammarDescriptor];
+    private rulesByName      : SCG.Dictionary[string, ParserRecord];
+    private rulesByAliasName : SCG.Dictionary[string * string, ParserRecord.Some];
+
+    public this([NotNull] assemblies : list[Assembly])
+    {
+      this.assemblies       = assemblies;
+      this.assemblyScope    = () => assemblies;
+      this.aliasTable       = SCG.Dictionary();
+      this.rulesByName      = SCG.Dictionary();
+      this.rulesByAliasName = SCG.Dictionary();
+    }
+
+    public AddRules([NotNull] assemblyName : string, [NotNull] grammarName : string, grammarAlias : string) : void
+    {
+      def hasAlias = !string.IsNullOrEmpty(grammarAlias);
+
+      if (assemblies.Find(a => a.GetName().Name == assemblyName) is Some(a))
+      {
+        foreach (g when g.FullName == grammarName in GrammarDescriptor.GetDescriptors(a))
+        {
+          when (hasAlias)
+          {
+            mutable existingGrammar;
+            when (aliasTable.TryGetValue(grammarAlias, out existingGrammar))
+              Message.FatalError($"Alias '$grammarAlias' already used for grammar '$(existingGrammar.FullName)'");
+
+            aliasTable[grammarAlias] = g;
+          }
+
+          foreach (r is StartRuleDescriptor in g.Rules)
+          {
+            def record = ParserRecord.Some(r);
+            mutable existingRecord;
+            if (rulesByName.TryGetValue(r.Name, out existingRecord))
+            {
+              def otherOptions =
+                match (existingRecord)
+                {
+                  | Ambiguous(options) => options
+                  | Some as x          => [x]
+                }
+              rulesByName[r.Name] = ParserRecord.Ambiguous(record :: otherOptions);
+            }
+            else
+              rulesByName[r.Name] = record;
+
+            when (hasAlias)
+              rulesByAliasName[grammarAlias, r.Name] = record;
+          }
+        }
+        otherwise Message.FatalError($"Grammar '$grammarName' not found in assembly '$a'");
+      }
+      else Message.FatalError($"Assembly '$assemblyName' is not refrenced");
+    }
+
+    public GetParser(grammarAlias : string, [NotNull] ruleName : string) : SourceSnapshot -> ParseResult
+    {
+      if (string.IsNullOrEmpty(grammarAlias))
+      {
+        mutable record;
+        if (rulesByName.TryGetValue(ruleName, out record))
+        {
+          match (record)
+          {
+            | Some as x          => x.GetOrCreateParser(assemblyScope)
+            | Ambiguous(options) =>
+              def format(record : ParserRecord.Some) : string
+              {
+                record.ruleDescriptor.Grammar.FullName + "::" + record.ruleDescriptor.Name
+              }
+              Message.FatalError($<#Quotation rule name '$ruleName' is ambiguous: ..$(options; ", "; format)#>);
+          }
+        }
+        else
+          Message.FatalError($"Quotation rule '$ruleName' not found");
+      }
+      else
+      {
+        mutable record;
+        if (rulesByAliasName.TryGetValue((grammarAlias, ruleName), out record))
+          record.GetOrCreateParser(assemblyScope)
+        else
+          Message.FatalError($"Quotation rule '$grammarAlias::$ruleName' not found");
+      }
+    }
+
+    private variant ParserRecord
+    {
+      | Ambiguous { options : list[ParserRecord.Some] }
+      | Some
+        {
+          ruleDescriptor : StartRuleDescriptor;
+
+          [RecordIgnore]
+          private mutable parser : SourceSnapshot -> ParseResult;
+
+          public GetOrCreateParser(assemblyScope : Func[SCG.IEnumerable[Assembly]]) : SourceSnapshot -> ParseResult
+          {
+            when (null == parser)
+            {
+              def parserHost = ParserHost(assemblyScope);
+              parser = parserHost.DoParsing(_, ruleDescriptor);
+            }
+            parser
+          }
+        }
+    }
+  }
+}
