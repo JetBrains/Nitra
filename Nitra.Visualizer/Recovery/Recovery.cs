@@ -672,6 +672,8 @@ namespace Nitra.DebugStrategies
           if (!record.IsComplete)
             AddRoot(roots, record.Sequence.ParsingSequence, record.State);
 
+        var roots2 = new Dictionary<ParsingCallerInfo, bool>(roots);
+
         foreach (var token in tokens)
         {
           var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
@@ -679,22 +681,18 @@ namespace Nitra.DebugStrategies
             FindAllCallers(visited, roots, callerInfo);
         }
 
-        //processedSeqs.ExceptWith(roots);
+        foreach (var x in roots2)
+          if (x.Value)
+            Debug.WriteLine(x.Key);
 
-        //foreach (var parsingCallerInfo in processedSeqs)
-        //{
-        //  if (parsingCallerInfo.Sequence.States[parsingCallerInfo.State].IsStart)
-        //  {
-        //    foreach (var record in records)
-        //      foreach (var caller in parsingCallerInfo.Sequence.Callers)
-        //        if (caller.State == record.State && caller.Sequence == record.Sequence.ParsingSequence)
-        //          rp.StartParseSequence(record, maxPos, parsingCallerInfo.Sequence);
-        //  }
-        //  else
-        //  {
-            
-        //  }
-        //}
+        foreach (var x in roots)
+          if (x.Value)
+            Debug.WriteLine(x.Key);
+
+
+        foreach (var key in roots2.Keys)
+          roots.Remove(key);
+        //roots.ExceptWith(roots2);
 
         foreach (var x in roots)
           if (x.Value)
@@ -762,6 +760,11 @@ namespace Nitra.DebugStrategies
       foreach (var stateNext in parsingSequence.States[state].Next)
         if (stateNext >= 0)
           AddRoot(roots, parsingSequence, stateNext);
+        else
+        {
+          foreach (var caller in parsingSequence.Callers)
+            AddRoot(roots, caller.Sequence, caller.State);
+        }
     }
 
     private bool FindAllCallers(HashSet<ParsingCallerInfo> visited, Dictionary<ParsingCallerInfo, bool> roots, ParsingCallerInfo callerInfo)
