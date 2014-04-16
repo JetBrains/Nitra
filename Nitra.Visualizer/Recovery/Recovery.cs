@@ -670,7 +670,7 @@ namespace Nitra.DebugStrategies
         var roots = new Dictionary<ParsingCallerInfo, bool>();
         foreach (var record in records)
           if (!record.IsComplete)
-            AddRoot(roots, record.Sequence.ParsingSequence, record.State);
+            AddRoot(roots, record.Sequence, record.State);
 
         var roots2 = new Dictionary<ParsingCallerInfo, bool>(roots);
 
@@ -681,18 +681,17 @@ namespace Nitra.DebugStrategies
             FindAllCallers(visited, roots, callerInfo);
         }
 
-        foreach (var x in roots2)
-          if (x.Value)
-            Debug.WriteLine(x.Key);
+        //foreach (var x in roots2)
+        //  if (x.Value)
+        //    Debug.WriteLine(x.Key);
 
-        foreach (var x in roots)
-          if (x.Value)
-            Debug.WriteLine(x.Key);
+        //foreach (var x in roots)
+        //  if (x.Value)
+        //    Debug.WriteLine(x.Key);
 
 
         foreach (var key in roots2.Keys)
           roots.Remove(key);
-        //roots.ExceptWith(roots2);
 
         foreach (var x in roots)
           if (x.Value)
@@ -748,32 +747,32 @@ namespace Nitra.DebugStrategies
       rp.Parse();
     }
 
-    private void AddRoot(Dictionary<ParsingCallerInfo, bool> roots, ParsingSequence parsingSequence, int state)
+    private void AddRoot(Dictionary<ParsingCallerInfo, bool> roots, ParsedSequence parsedSequence, int state)
     {
-      var key = new ParsingCallerInfo(parsingSequence, state);
+      //if (parsedSequence.ToString().Contains("'?'"))
+      //{ }
+      var parsingSequence = parsedSequence.ParsingSequence;
+      var key = new ParsingCallerInfo(parsedSequence.ParsingSequence, state);
       
       if (roots.ContainsKey(key))
         return;
 
-      roots.Add(new ParsingCallerInfo(parsingSequence, state), true);
+      roots.Add(key, true);
 
       foreach (var stateNext in parsingSequence.States[state].Next)
         if (stateNext >= 0)
-          AddRoot(roots, parsingSequence, stateNext);
+          AddRoot(roots, parsedSequence, stateNext);
         else
         {
-          foreach (var caller in parsingSequence.Callers)
+          foreach (var caller in parsedSequence.Callers)
             AddRoot(roots, caller.Sequence, caller.State);
         }
     }
 
     private bool FindAllCallers(HashSet<ParsingCallerInfo> visited, Dictionary<ParsingCallerInfo, bool> roots, ParsingCallerInfo callerInfo)
     {
-
-      if (callerInfo.ToString().Contains("0:'?'  1:s  2:Expression  ●  3:':'  4:s  5:Expression"))
-      { }
-
-      visited.Add(callerInfo);
+      //if (callerInfo.ToString().Contains("0:'?'  1:s  2:Expression  ●  3:':'  4:s  5:Expression"))
+      //{ }
 
       bool found;
       if (roots.TryGetValue(callerInfo, out found))
@@ -782,12 +781,16 @@ namespace Nitra.DebugStrategies
         return found;
       }
 
+      visited.Add(callerInfo);
+
       foreach (var caller in callerInfo.Sequence.Callers)
       {
-        if (roots.ContainsKey(caller))
+
+        bool callerIsFound;
+        if (roots.TryGetValue(callerInfo, out callerIsFound))
         {
           if (!found)
-            found = roots[caller];
+            found = callerIsFound;
         }
         else if (!visited.Contains(caller) && FindAllCallers(visited, roots, caller))
         {
