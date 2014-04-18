@@ -29,47 +29,71 @@ namespace Nitra.Quote
       this.rulesByAliasName = SCG.Dictionary();
     }
 
-    public AddRules([NotNull] assemblyName : string, [NotNull] grammarName : string, grammarAlias : string) : void
+    public AddRules(assemblyName : string, [NotNull] grammarName : string, grammarAlias : string) : void
+    {
+      if (string.IsNullOrEmpty(assemblyName))
+        LoadGrammar(assemblies, grammarName, grammarAlias)
+      else if (assemblies.Find(a => a.GetName().Name == assemblyName) is Some(a))
+        LoadGrammar([a], grammarName, grammarAlias)
+      else
+        Message.FatalError($"Assembly '$assemblyName' is not refrenced")
+    }
+
+    private LoadGrammar(assembliesToSearch : list[Assembly], grammarName : string, grammarAlias : string) : void
+    {
+      def candidates = SCG.List();
+      foreach (a in assembliesToSearch)
+        foreach (g in GetGrammarDescriptors(a))
+          when (g.FullName == grammarName)
+            candidates.Add(g, a);
+
+      match (candidates.Count)
+      {
+        | 0 => Message.FatalError($"Grammar '$grammarName' not found");
+        | 1 => LoadRules(candidates[0][0], grammarAlias)
+        | _ => Message.FatalError($<#Ambiguous grammar name '$grammarName'. Found in following assemblies: ..$(candidates; ". "; (_, a) => a.GetName().ToString())#>);
+      }
+    }
+
+    private LoadRules(grammar : GrammarDescriptor, grammarAlias : string) : void
     {
       def hasAlias = !string.IsNullOrEmpty(grammarAlias);
 
-      if (assemblies.Find(a => a.GetName().Name == assemblyName) is Some(a))
+      when (hasAlias)
       {
-        foreach (g when g.FullName == grammarName in GrammarDescriptor.GetDescriptors(a))
-        {
-          when (hasAlias)
-          {
-            mutable existingGrammar;
-            when (aliasTable.TryGetValue(grammarAlias, out existingGrammar))
-              Message.FatalError($"Alias '$grammarAlias' already used for grammar '$(existingGrammar.FullName)'");
+        mutable existingGrammar;
+        when (aliasTable.TryGetValue(grammarAlias, out existingGrammar))
+          Message.FatalError($"Alias '$grammarAlias' already used for grammar '$(existingGrammar.FullName)'");
 
-            aliasTable[grammarAlias] = g;
-          }
-
-          foreach (r is StartRuleDescriptor in g.Rules)
-          {
-            def record = ParserRecord.Some(r);
-            mutable existingRecord;
-            if (rulesByName.TryGetValue(r.Name, out existingRecord))
-            {
-              def otherOptions =
-                match (existingRecord)
-                {
-                  | Ambiguous(options) => options
-                  | Some as x          => [x]
-                }
-              rulesByName[r.Name] = ParserRecord.Ambiguous(record :: otherOptions);
-            }
-            else
-              rulesByName[r.Name] = record;
-
-            when (hasAlias)
-              rulesByAliasName[grammarAlias, r.Name] = record;
-          }
-        }
-        otherwise Message.FatalError($"Grammar '$grammarName' not found in assembly '$a'");
+        aliasTable[grammarAlias] = grammar;
       }
-      else Message.FatalError($"Assembly '$assemblyName' is not refrenced");
+
+      foreach (r is StartRuleDescriptor in grammar.Rules)
+      {
+        def record = ParserRecord.Some(r);
+        mutable existingRecord;
+        if (rulesByName.TryGetValue(r.Name, out existingRecord))
+        {
+          def otherOptions =
+            match (existingRecord)
+            {
+              | Ambiguous(options) => options
+              | Some as x          => [x]
+            }
+          rulesByName[r.Name] = ParserRecord.Ambiguous(record :: otherOptions);
+        }
+        else
+          rulesByName[r.Name] = record;
+
+        when (hasAlias)
+          rulesByAliasName[grammarAlias, r.Name] = record;
+      }
+    }
+
+    [Memoize]
+    private GetGrammarDescriptors(assembly : Assembly) : array[GrammarDescriptor]
+    {
+      GrammarDescriptor.GetDescriptors(assembly)
     }
 
     public GetParser(grammarAlias : string, [NotNull] ruleName : string) : SourceSnapshot -> ParseResult
