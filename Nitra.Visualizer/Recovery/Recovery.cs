@@ -672,7 +672,7 @@ namespace Nitra.DebugStrategies
         var roots = new Dictionary<ParsingCallerInfo, bool>();
         foreach (var record in records)
           if (!record.IsComplete)
-            AddRoot(roots, record.Sequence, record.State);
+            AddRoot(roots, record.Sequence, record.State, maxPos);
 
         var roots2 = new Dictionary<ParsingCallerInfo, bool>(roots);
 
@@ -682,6 +682,8 @@ namespace Nitra.DebugStrategies
           foreach (var callerInfo in token.Token.Callers)
             FindAllCallers(visited, roots, callerInfo, maxPos);
         }
+
+        rp.Parse();
 
         //foreach (var x in roots2)
         //  if (x.Value)
@@ -749,7 +751,7 @@ namespace Nitra.DebugStrategies
       rp.Parse();
     }
 
-    private void AddRoot(Dictionary<ParsingCallerInfo, bool> roots, ParsedSequence parsedSequence, int state)
+    private void AddRoot(Dictionary<ParsingCallerInfo, bool> roots, ParsedSequence parsedSequence, int state, int textPos)
     {
       var parsingSequence = parsedSequence.ParsingSequence;
 
@@ -768,11 +770,12 @@ namespace Nitra.DebugStrategies
             if (nextState >= 0)
               toProcess.Push(nextState);
           roots.Add(key, false);
+          _recoveryParser.SubruleParsed(textPos, textPos, new ParseRecord(parsedSequence, curState, textPos));
         }
       }
 
       foreach (var caller in parsedSequence.Callers)
-        AddRoot(roots, caller.Sequence, caller.State);
+        AddRoot(roots, caller.Sequence, caller.State, textPos);
     }
 
     //этот метод создаёт стек от рута до токена
