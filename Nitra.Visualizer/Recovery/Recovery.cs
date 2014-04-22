@@ -668,87 +668,75 @@ namespace Nitra.DebugStrategies
 
         var tokens = GetCurrentTokens(rp, rp.MaxPos);
 
-        var visited = new Dictionary<ParsingCallerInfo, ParseRecord?>();
-        var roots = new Dictionary<ParsingCallerInfo, bool>();
-        foreach (var record in records)
-          if (!record.IsComplete)
-            AddRoot(roots, record.Sequence, record.State, maxPos);
-
-        var roots2 = new Dictionary<ParsingCallerInfo, bool>(roots);
-
-        foreach (var token in tokens)
+        if (tokens.Count > 0)
         {
-          var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
-          foreach (var callerInfo in token.Token.Callers)
-            FindAllCallers(visited, roots, callerInfo, maxPos);
-        }
-
-        rp.Parse();
-
-        //foreach (var x in roots2)
-        //  if (x.Value)
-        //    Debug.WriteLine(x.Key);
-
-        //foreach (var x in roots)
-        //  if (x.Value)
-        //    Debug.WriteLine(x.Key);
-
-
-        foreach (var key in roots2.Keys)
-          roots.Remove(key);
-
-        foreach (var x in roots)
-          if (x.Value)
-            Debug.WriteLine(x.Key);
-
-
-        var prevRecords = new SCG.HashSet<ParseRecord>(rp.Records[maxPos]);
-
-        do
-        {
-          if (_parseResult.TerminateParsing)
-            throw new OperationCanceledException();
-
-          while (records.Count > 0)
-          {
-            var record = records.Dequeue();
-
-            if (record.IsComplete)
+          var visited = new Dictionary<ParsingCallerInfo, ParseRecord?>();
+          var roots = new Dictionary<ParsingCallerInfo, bool>();
+          foreach (var record in records)
+            if (!record.IsComplete)
             {
-              rp.StartParseSubrule(maxPos, record);
-              continue;
-            }
-            if (record.Sequence.IsToken)
-              continue;
-
-            foreach (var state in record.ParsingState.Next)
-            {
-              var newRecord = new ParseRecord(record.Sequence, state, maxPos);
-              if (!rp.Records[maxPos].Contains(newRecord))
-              {
-                records.Enqueue(newRecord);
-                prevRecords.Add(newRecord);
-              }
+              if (!(record.Sequence.IsToken && record.ParsingState.IsStart))
+                AddRoot(roots, record.Sequence, record.State, maxPos);
+              else
+              { }
             }
 
-            rp.SubruleParsed(maxPos, maxPos, record);
-            rp.PredictionOrScanning(maxPos, record, false);
-          }
+            foreach (var token in tokens)
+            {
+              var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
+              foreach (var callerInfo in token.Token.Callers)
+                FindAllCallers(visited, roots, callerInfo, maxPos);
+            }
 
-          rp.Parse();
-
-          foreach (var record in rp.Records[maxPos])
-            if (!prevRecords.Contains(record))
-              records.Enqueue(record);
-          prevRecords.UnionWith(rp.Records[maxPos]);
+            rp.Parse();
         }
-        while (records.Count > 0);
+        else if (rp.MaxPos == rp.ParseResult.Text.Length)
+        {
+          SkipAllStates(rp, maxPos, records);
+        }
       }
       while (rp.MaxPos > maxPos);
 
       foreach (var del in deleted)
         DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
+    }
+
+    private void SkipAllStates(RecoveryParser rp, int maxPos, Queue<ParseRecord> records)
+    {
+      var records2 = rp.Records[maxPos];
+      do
+      {
+        while (records.Count > 0)
+          SkipAllStates(records.Dequeue(), maxPos, records2);
+
+        foreach (var tuple in rp.RecordsToProcess)
+          records.Enqueue(tuple.Field1);
+
+        rp.Parse();
+      } while (records.Count > 0);
+    }
+
+    private void SkipAllStates(ParseRecord record, int pos, HashSet<ParseRecord> records)
+    {
+      foreach (var caller in record.Sequence.Callers)
+        if (!records.Contains(caller))
+          SkipAllStates(caller, pos, records);
+
+      if (!record.IsComplete)
+      {
+        _recoveryParser.SubruleParsed(pos, pos, record);
+
+        foreach (var nextState in record.ParsingState.Next)
+        {
+          if (nextState >= 0)
+          {
+            var next = record.Next(nextState);
+            if (!records.Contains(next))
+              SkipAllStates(next, pos, records);
+          }
+        }
+      }
     }
 
     private void AddRoot(Dictionary<ParsingCallerInfo, bool> roots, ParsedSequence parsedSequence, int state, int textPos)
@@ -795,6 +783,7 @@ namespace Nitra.DebugStrategies
       }
       else
         caller = null;
+
       visited.Add(callerInfo, caller);
 
       foreach (var seqCaller in callerInfo.Sequence.Callers)
