@@ -690,7 +690,7 @@ namespace Nitra.DebugStrategies
 
             rp.Parse();
         }
-        else if (rp.MaxPos == rp.ParseResult.Text.Length)
+        else if (rp.MaxPos == rp.ParseResult.Text.Length && deleted.Count == 0)
         {
           SkipAllStates(rp, maxPos, records);
         }
@@ -704,7 +704,8 @@ namespace Nitra.DebugStrategies
 
     private void SkipAllStates(RecoveryParser rp, int maxPos, Queue<ParseRecord> records)
     {
-      var records2 = rp.Records[maxPos];
+      _nestedLevel = 0;
+      var records2 = new HashSet<ParseRecord>();
       do
       {
         while (records.Count > 0)
@@ -717,11 +718,23 @@ namespace Nitra.DebugStrategies
       } while (records.Count > 0);
     }
 
-    private void SkipAllStates(ParseRecord record, int pos, HashSet<ParseRecord> records)
+    private static int _nestedLevel;
+
+    private void SkipAllStates(ParseRecord record, int pos, HashSet<ParseRecord> visited)
     {
+      if (visited.Contains(record))
+        return;
+
+      _nestedLevel++;
+
+      if (_nestedLevel == 1000)
+      {
+      }
+
+      visited.Add(record);
+
       foreach (var caller in record.Sequence.Callers)
-        if (!records.Contains(caller))
-          SkipAllStates(caller, pos, records);
+        SkipAllStates(caller, pos, visited);
 
       if (!record.IsComplete)
       {
@@ -732,11 +745,12 @@ namespace Nitra.DebugStrategies
           if (nextState >= 0)
           {
             var next = record.Next(nextState);
-            if (!records.Contains(next))
-              SkipAllStates(next, pos, records);
+            SkipAllStates(next, pos, visited);
           }
         }
       }
+
+      _nestedLevel--;
     }
 
     private void AddRoot(Dictionary<ParsingCallerInfo, bool> roots, ParsedSequence parsedSequence, int state, int textPos)
