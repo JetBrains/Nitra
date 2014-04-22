@@ -44,6 +44,7 @@ namespace Nitra.DebugStrategies
     public const int Fail = int.MaxValue;
     private readonly Dictionary<ParsedSequenceAndSubrule, bool> _deletedToken = new Dictionary<ParsedSequenceAndSubrule, bool>();
     private ParseResult _parseResult;
+    private RecoveryParser _recoveryParser;
 #if DebugThreading
     private static int _counter = 0;
     private int _id;
@@ -76,6 +77,7 @@ namespace Nitra.DebugStrategies
       _deletedToken.Clear();
       var textLen = parseResult.Text.Length;
       var rp = new RecoveryParser(parseResult);
+      _recoveryParser = rp;
       rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
       var startSeq = rp.Sequences.First().Value;
 
@@ -88,7 +90,7 @@ namespace Nitra.DebugStrategies
 
       RecoverAllWays(rp);
 
-      AstPatcher.FindBestPath(startSeq, rp, _deletedToken);
+      //AstPatcher.FindBestPath(startSeq, rp, _deletedToken);
       UpdateRecoverAllWaysTime();
 #if DebugOutput
       timer.Stop();
@@ -666,7 +668,7 @@ namespace Nitra.DebugStrategies
 
         var tokens = GetCurrentTokens(rp, rp.MaxPos);
 
-        var visited = new HashSet<ParsingCallerInfo>();
+        var visited = new Dictionary<ParsingCallerInfo, ParseRecord?>();
         var roots = new Dictionary<ParsingCallerInfo, bool>();
         foreach (var record in records)
           if (!record.IsComplete)
@@ -678,7 +680,7 @@ namespace Nitra.DebugStrategies
         {
           var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
           foreach (var callerInfo in token.Token.Callers)
-            FindAllCallers(visited, roots, callerInfo);
+            FindAllCallers(visited, roots, callerInfo, maxPos);
         }
 
         //foreach (var x in roots2)
@@ -749,63 +751,79 @@ namespace Nitra.DebugStrategies
 
     private void AddRoot(Dictionary<ParsingCallerInfo, bool> roots, ParsedSequence parsedSequence, int state)
     {
-      //if (parsedSequence.ToString().Contains("'?'"))
-      //{ }
       var parsingSequence = parsedSequence.ParsingSequence;
-      var key = new ParsingCallerInfo(parsedSequence.ParsingSequence, state);
-      
-      if (roots.ContainsKey(key))
+
+      if (roots.ContainsKey(new ParsingCallerInfo(parsedSequence.ParsingSequence, state)))
         return;
 
-      roots.Add(key, true);
-
-      foreach (var stateNext in parsingSequence.States[state].Next)
-        if (stateNext >= 0)
-          AddRoot(roots, parsedSequence, stateNext);
-        else
+      var toProcess = new SCG.Stack<int>();
+      toProcess.Push(state);
+      while (toProcess.Count > 0)
+      {
+        var curState = toProcess.Pop();
+        var key = new ParsingCallerInfo(parsedSequence.ParsingSequence, curState);
+        if (!roots.ContainsKey(key))
         {
-          foreach (var caller in parsedSequence.Callers)
-            AddRoot(roots, caller.Sequence, caller.State);
+          foreach (var nextState in parsingSequence.States[curState].Next)
+            if (nextState >= 0)
+              toProcess.Push(nextState);
+          roots.Add(key, false);
         }
+      }
+
+      foreach (var caller in parsedSequence.Callers)
+        AddRoot(roots, caller.Sequence, caller.State);
     }
 
-    private bool FindAllCallers(HashSet<ParsingCallerInfo> visited, Dictionary<ParsingCallerInfo, bool> roots, ParsingCallerInfo callerInfo)
+    //этот метод создаёт стек от рута до токена
+    private ParseRecord? FindAllCallers(Dictionary<ParsingCallerInfo, ParseRecord?> visited, Dictionary<ParsingCallerInfo, bool> roots, ParsingCallerInfo callerInfo, int textPos)
     {
-      //if (callerInfo.ToString().Contains("0:'?'  1:s  2:Expression  ●  3:':'  4:s  5:Expression"))
-      //{ }
+      ParseRecord? caller;
+      if (visited.TryGetValue(callerInfo, out caller))
+        return caller;
 
-      bool found;
-      if (roots.TryGetValue(callerInfo, out found))
+      var addParses = false;
+      if (roots.ContainsKey(callerInfo) && !roots[callerInfo])
       {
-        //TODO: зафигачить пропарсивания при раскрутке стека
-        return found;
+        roots[callerInfo] = true;
+        var seq = _recoveryParser.StartParseSequence(textPos, callerInfo.Sequence);
+        caller = new ParseRecord(seq, callerInfo.State, textPos);
+        addParses = true;
       }
+      else
+        caller = null;
+      visited.Add(callerInfo, caller);
 
-      visited.Add(callerInfo);
-
-      foreach (var caller in callerInfo.Sequence.Callers)
+      foreach (var seqCaller in callerInfo.Sequence.Callers)
       {
-
-        bool callerIsFound;
-        if (roots.TryGetValue(callerInfo, out callerIsFound))
+        var newCaller = FindAllCallers(visited, roots, seqCaller, textPos);
+        if (newCaller.HasValue)
         {
-          if (!found)
-            found = callerIsFound;
-        }
-        else if (!visited.Contains(caller) && FindAllCallers(visited, roots, caller))
-        {
-          //TODO: зафигачить пропарсивания при раскрутке стека
-          found = true;
+          _recoveryParser.StartParseSequence(newCaller.Value, textPos, callerInfo.Sequence);
+          addParses = true;
         }
       }
 
-      if (found)
+      if (addParses)
       {
-        Debug.WriteLine(callerInfo);
+        var seq = _recoveryParser.StartParseSequence(textPos, callerInfo.Sequence);
+        var toProcess = new SCG.Stack<int>();
+        var visitedStates = new SCG.HashSet<int>();
+        foreach (var prevState in callerInfo.Sequence.States[callerInfo.State].Prev)
+          toProcess.Push(prevState);
+        while (toProcess.Count > 0)
+        {
+          var state = toProcess.Pop();
+          if (visitedStates.Add(state))
+          {
+            foreach (var prevState in callerInfo.Sequence.States[state].Prev)
+              toProcess.Push(prevState);
+            _recoveryParser.SubruleParsed(textPos, textPos, new ParseRecord(seq, state, textPos));
+          }
+        }
       }
-      roots[callerInfo] = found;
 
-      return found;
+      return caller;
     }
 
     private bool CheckUnclosedToken(RecoveryParser rp)
