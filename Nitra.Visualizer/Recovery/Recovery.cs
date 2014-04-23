@@ -690,9 +690,13 @@ namespace Nitra.DebugStrategies
 
             rp.Parse();
         }
-        else if (rp.MaxPos == rp.ParseResult.Text.Length && deleted.Count == 0)
+        else if (rp.MaxPos == rp.ParseResult.Text.Length)
         {
           SkipAllStates(rp, maxPos, records);
+        }
+        else
+        {
+          Debug.Assert(false);
         }
       }
       while (rp.MaxPos > maxPos);
