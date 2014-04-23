@@ -117,7 +117,7 @@ namespace Nitra.DebugStrategies
       var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new SubruleTokenChanges[0]) },
         parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].TotalTokenChanges, memiozation);
 
-      //ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
+      ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
 
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
@@ -685,7 +685,12 @@ namespace Nitra.DebugStrategies
             {
               var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
               foreach (var callerInfo in token.Token.Callers)
+              {
+                if (callerInfo.Sequence.RuleName == "Invocation")
+                {
+                }
                 FindAllCallers(visited, roots, callerInfo, maxPos);
+              }
             }
 
             rp.Parse();
@@ -701,8 +706,8 @@ namespace Nitra.DebugStrategies
       }
       while (rp.MaxPos > maxPos);
 
-      foreach (var del in deleted)
-        DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
+      //foreach (var del in deleted)
+      //  DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
     }
 
