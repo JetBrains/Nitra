@@ -836,6 +836,8 @@ namespace Nitra.DebugStrategies
             _recoveryParser.SubruleParsed(textPos, textPos, new ParseRecord(seq, state, textPos));
           }
         }
+        caller = new ParseRecord(seq, callerInfo.State, textPos);
+        visited[callerInfo] = caller;
       }
 
       return caller;
