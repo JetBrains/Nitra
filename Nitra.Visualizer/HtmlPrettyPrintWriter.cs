@@ -35,11 +35,19 @@ namespace Nitra.Visualizer
       WriteSpan(_garbageClass, text);
     }
 
-    protected override void FormatToken(IPrettyPrintSource source, NSpan token)
+    protected override void FormatToken(IPrettyPrintSource source, NSpan token, bool canBeEmpty, string ruleName)
     {
       TryPrintGarbage(source, token);
-      var text = source.Text.Substring(token.StartPos, token.Length);
-      WebUtility.HtmlEncode(text, _writer);
+      if (token.IsEmpty)
+      {
+        if (!canBeEmpty && (Options & PrettyPrintOptions.MissingNodes) == PrettyPrintOptions.MissingNodes)
+          WriteSpan(_missingNodeClass, ruleName);
+      }
+      else
+      {
+        var text = source.Text.Substring(token.StartPos, token.Length);
+        WebUtility.HtmlEncode(text, _writer);
+      }
     }
 
     protected override void FormatString(IPrettyPrintSource source, NSpan token, string text)

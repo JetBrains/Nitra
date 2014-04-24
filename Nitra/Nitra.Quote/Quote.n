@@ -7,15 +7,32 @@ using Nemerle.Utility;
 using Nemerle.Imperative;
 
 using System;
+using System.Text.RegularExpressions;
 using System.Reflection;
 using SCG = System.Collections.Generic;
 
 namespace Nitra.Quote
 {
   [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
-  macro QuotationRules(assemblyName : string, grammarName : string, params rules : list[PExpr])
+  macro ImportRules(params options : list[PExpr])
   {
-    QuotationImpl.QuotationRules(assemblyName, grammarName, rules)
+    mutable assemblyName;
+    mutable grammarName;
+    mutable grammarAlias;
+    foreach (opt in options)
+    {
+      | <[ Assembly = $(n : string) ]> => assemblyName = n
+      | <[ Assembly = $x ]>            => Message.FatalError(x.Location, "Assembly name expected");
+      | <[ Grammar  = $(n : string) ]> => grammarName = n
+      | <[ Grammar  = $x ]>            => Message.FatalError(x.Location, "Grammar name expected");
+      | <[ GrammarAlias = $(n : string) ]> => grammarAlias = n
+      | <[ GrammarAlias = $x ]>            => Message.FatalError(x.Location, "Grammar alias expected");
+      | x => Message.FatalError(x.Location, "Expected 'Assembly', 'Grammar' or 'GrammarAlias' options");
+    }
+    when (string.IsNullOrEmpty(grammarName))
+      Message.FatalError("Grammar name not specified");
+
+    QuotationImpl.Registry.AddRules(assemblyName, grammarName, grammarAlias);
   }
 
   macro Quotation(expr : PExpr) : PExpr
@@ -31,57 +48,13 @@ namespace Nitra.Quote
 
   module QuotationImpl
   {
-    public QuotationRules(assemblyName : string, grammarName : string, ruleList : list[PExpr]) : void
-    {
-      def rules = SCG.Dictionary();
-      foreach (p in ruleList)
-      {
-        | <[ $(ruleName : string) ]> with id = ruleName
-        | <[ ($(ruleName : string), $(id : string)) ]>
-        | <[ $(ruleName : string) = $(id : string) ]> =>
-          when (rules.ContainsKey(ruleName))
-            Message.Error(p.Location, $"Duplicated rule name '$ruleName'");
-          rules[ruleName] = (id, p.Location);
-
-        | _ => Message.FatalError(p.Location, "Expected rule name and id pair")
-      }
-
-      def assemblies = ManagerClass.Instance.ReferencedAssemblies.Map(_.Assembly);
-      if (assemblies.Find(a => a.GetName().Name == assemblyName) is Some(a))
-      {
-        foreach (g when g.FullName == grammarName in GrammarDescriptor.GetDescriptors(a))
-        {
-          foreach (r is StartRuleDescriptor in g.Rules)
-          {
-            mutable data;
-            when (rules.TryGetValue(r.Name, out data))
-            {
-              def (id, loc) = data;
-              if (Parsers.ContainsKey(id))
-                Message.Error(loc, $"Quotation rule '$id' already registered");
-              else
-              {
-                def parserHost = ParserHost(() => assemblies);
-                Parsers.Add(id, parserHost.DoParsing(_, r));
-              }
-              _ = rules.Remove(r.Name);
-            }
-          }
-
-          foreach (SCG.KeyValuePair(Key = ruleName, Value = (_, loc)) in rules)
-            Message.Error(loc, $"Rule '$ruleName' not found in grammar '$grammarName' from assembly '$a'");
-        }
-        otherwise Message.FatalError($"Grammar '$grammarName' not found in assembly '$a'");
-      }
-      else Message.FatalError($"Assembly '$assemblyName' is not refrenced");
-    }
-
     public MakeQuote(typer : Typer, expr : PExpr) : PExpr
     {
       def (parseResult, offset) = ParseQuotation(expr);
+      def builder = QuotationCodeAstBuilder(typer.Manager, typer.Env, offset, () => <[ $("context" : dyn) ]>);
       <[
         def $("context" : dyn) = Nitra.Runtime.ChemicalAstContext();
-        $(parseResult.CreateSplicableAst.[PExpr](QuotationCodeAstBuilder(typer.Manager, typer.Env, offset, () => <[ $("context" : dyn) ]>)))
+        $(parseResult.CreateSplicableAst.[PExpr](builder));
       ]>
     }
 
@@ -97,7 +70,8 @@ namespace Nitra.Quote
         | <[ $x = $p ]>           => Util.locate(pattern.Location, <[ $x = $(convertPattern(p)) ]>)
         | <[ $(_ : string) ]>     =>
           def (parseResult, offset) = ParseQuotation(pattern);
-          parseResult.CreateSplicableAst.[PExpr](QuotationPatternAstBuilder(typer.Manager, typer.Env, offset))
+          def builder = QuotationPatternAstBuilder(typer.Manager, typer.Env, offset);
+          parseResult.CreateSplicableAst.[PExpr](builder)
 
         | _ => pattern
       }
@@ -115,58 +89,58 @@ namespace Nitra.Quote
     private ParseQuotation(expr : PExpr) : ParseResult * TextPoint
     {
       | Literal(Literal.String(RawString = rawString)) when rawString.StartsWith("<#") =>
-        mutable id;
-        mutable startPos;
-        mutable endPos;
-        match (rawString.IndexOf(':'))
+        def result = QuotationLiteralRegex.Match(rawString);
+        if (result.Success)
         {
-          | -1  => Message.FatalError(expr.Location, "String does not contain quotation rule id");
-          | pos =>
-            id = rawString.Substring(2, pos - 2).Trim();
-            startPos = pos + 1;
-            while (startPos < rawString.Length && char.IsWhiteSpace(rawString, startPos))
-              ++startPos;
-            endPos = rawString.Length - 2;
-            while (startPos < endPos && char.IsWhiteSpace(rawString, endPos - 1))
-              --endPos;
-        };
+          def grammarAliasGroup = result.Groups["grammarAlias"];
+          def grammarAlias = if (grammarAliasGroup.Success) grammarAliasGroup.Value else null;
 
-        mutable parseCallback;
-        unless (Parsers.TryGetValue(id, out parseCallback))
-          Message.FatalError($"Quotation rule '$id' is not registered");
+          def ruleNameGroup = result.Groups["ruleName"];
+          assert2(ruleNameGroup.Success);
+          def ruleName = ruleNameGroup.Value;
 
-        def originalSource = SourceSnapshot(rawString, expr.Location.FileIndex, Location.GetFileName(expr.Location.FileIndex));
-        def sourceToParse  = originalSource.WithTextSubstring(startPos, endPos - startPos); // cut string braces and spaces <#id: #>
-        def offset         = expr.Location.Begin;
-        def parseResult    = parseCallback(sourceToParse);
-        unless (parseResult.IsSuccess)
-        {
-          foreach (e in parseResult.GetErrors())
+          def codeGroup = result.Groups["code"];
+          assert2(codeGroup.Success);
+
+          def parseCallback = Registry.GetParser(grammarAlias, ruleName);
+
+          def originalSource = SourceSnapshot(rawString, expr.Location.FileIndex, Location.GetFileName(expr.Location.FileIndex));
+          def sourceToParse  = originalSource.WithTextSubstring(codeGroup.Index, codeGroup.Length); // cut string braces and spaces <#id: #>
+          def offset         = expr.Location.Begin;
+          def parseResult    = parseCallback(sourceToParse);
+          unless (parseResult.IsSuccess)
           {
-            def begin = QuotationUtils.TranslateLineColumn(offset, e.Location.StartLineColumn);
-            def end   = QuotationUtils.TranslateLineColumn(offset, e.Location.EndLineColumn);
-            Message.Error(Nemerle.Compiler.Location(e.Location.Source.FileIndex, begin, end), e.Message);
+            foreach (e in parseResult.GetErrors())
+            {
+              def begin = QuotationUtils.TranslateLineColumn(offset, e.Location.StartLineColumn);
+              def end   = QuotationUtils.TranslateLineColumn(offset, e.Location.EndLineColumn);
+              Message.Error(Nemerle.Compiler.Location(e.Location.Source.FileIndex, begin, end), e.Message);
+            }
           }
+          (parseResult, offset)
         }
-        (parseResult, offset)
+        else
+          Message.FatalError(expr.Location, "String is not valid quotation");
 
       | _ => Message.FatalError(expr.Location, "Recursive string literal <#rule:...#> expected");
     }
 
-    private Parsers : SCG.Dictionary[string, SourceSnapshot -> Nitra.ParseResult]
+    public Registry : RuleRegistry
     {
       mutable key : object = object();
       get
       {
         if (ManagerClass.Instance.UserData.Contains(key))
-          ManagerClass.Instance.UserData[key] :> SCG.Dictionary[_, _]
+          ManagerClass.Instance.UserData[key] :> RuleRegistry
         else
         {
-          def table = SCG.Dictionary();
-          ManagerClass.Instance.UserData.Add(key, table);
-          table
+          def registry = RuleRegistry(ManagerClass.Instance.ReferencedAssemblies.Map(_.Assembly));
+          ManagerClass.Instance.UserData.Add(key, registry);
+          registry
         }
       }
     }
+
+    private QuotationLiteralRegex : Regex = Regex(@"^<#\s*((?<grammarAlias>.*?)\s*::\s*)?(?<ruleName>.*?)\s*:\s*(?<code>.*?)\s*#>$", RegexOptions.Singleline);
   }
 }

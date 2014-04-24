@@ -1,4 +1,4 @@
 @echo off
 title UpdateRecovery
-xcopy %~dp0\..\N2.Visualizer\Recovery\Recovery.cs %~dp0\N2.Runtime\Internal\Recovery /R /Y
+xcopy %~dp0\..\Nitra.Visualizer\Recovery\Recovery.cs %~dp0\Nitra.Runtime\Internal\Recovery /R /Y
 pause
