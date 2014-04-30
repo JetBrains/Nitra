@@ -683,6 +683,8 @@ namespace Nitra.DebugStrategies
               { }
             }
 
+            ToDot(roots);
+
             foreach (var token in tokens)
             {
               var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
@@ -714,6 +716,11 @@ namespace Nitra.DebugStrategies
       rp.Parse();
     }
 
+    private void ToDot(Dictionary<ParsingCallerInfo, bool> roots)
+    {
+      ToDot(roots.Select(r => r.Key));
+    }
+
     private void ToDot(ParsingCallerInfo callerInfo)
     {
       ToDot(Enumerable.Repeat(callerInfo, 1));
@@ -727,9 +734,9 @@ namespace Nitra.DebugStrategies
         {
           compound=true;
         ");
-
+      var visited =  new HashSet<ParsingCallerInfo>();
       foreach (var callerInfo in callerInfos)
-        ToDot(sb, new HashSet<ParsingCallerInfo>(), callerInfo);
+        ToDot(sb, visited, callerInfo, true);
 
       sb.Append(@"}");
 
@@ -748,19 +755,22 @@ namespace Nitra.DebugStrategies
       return X.DotEscape(callerInfo.ToString());
     }
 
-    private void ToDot(StringBuilder sb, HashSet<ParsingCallerInfo> visited, ParsingCallerInfo callerInfo)
+    private void ToDot(StringBuilder sb, HashSet<ParsingCallerInfo> visited, ParsingCallerInfo callerInfo, bool isStart)
     {
       if (!visited.Add(callerInfo))
         return;
+      const string StartStyle = " peripheries=2 color=blue";
+      ;
+      var style = isStart ? StartStyle : "";
 
       var id = Name(callerInfo);
-      sb.AppendLine(id + "[label=\"" + Label(callerInfo) + "\" shape=box]");
+      sb.AppendLine(id + "[label=\"" + Label(callerInfo) + "\" shape=box"+ style + "]");
 
       foreach (var caller in callerInfo.Sequence.Callers)
         sb.AppendLine(Name(caller) + " -> " + id);
       
       foreach (var caller in callerInfo.Sequence.Callers)
-        ToDot(sb, visited, caller);
+        ToDot(sb, visited, caller, false);
     }
 
     private void SkipAllStates(RecoveryParser rp, int maxPos, Queue<ParseRecord> records)
