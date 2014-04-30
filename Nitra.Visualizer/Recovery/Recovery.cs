@@ -1,6 +1,8 @@
 ﻿//#region Пролог
 //#define DebugOutput
 //#define DebugThreading
+
+using System.Text;
 using Nitra.Internal.Recovery;
 using Nitra.Runtime.Errors;
 using Nitra.Runtime.Reflection;
@@ -684,6 +686,7 @@ namespace Nitra.DebugStrategies
             foreach (var token in tokens)
             {
               var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
+              ToDot(token.Token.Callers);
               foreach (var callerInfo in token.Token.Callers)
               {
                 if (callerInfo.Sequence.RuleName == "Invocation")
@@ -709,6 +712,55 @@ namespace Nitra.DebugStrategies
       //foreach (var del in deleted)
       //  DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
+    }
+
+    private void ToDot(ParsingCallerInfo callerInfo)
+    {
+      ToDot(Enumerable.Repeat(callerInfo, 1));
+    }
+
+    private void ToDot(IEnumerable<ParsingCallerInfo> callerInfos)
+    {
+      var sb = new StringBuilder();
+      sb.Append(@"
+        digraph RecoveryParser
+        {
+          compound=true;
+        ");
+
+      foreach (var callerInfo in callerInfos)
+        ToDot(sb, new HashSet<ParsingCallerInfo>(), callerInfo);
+
+      sb.Append(@"}");
+
+      var fileName = Path.GetTempFileName();
+      File.WriteAllText(fileName, sb.ToString());
+      X.ConvertToDot(fileName);
+    }
+
+    string Name(ParsingCallerInfo callerInfo)
+    {
+      return "Node_" + callerInfo.GetHashCode();
+    }
+
+    string Label(ParsingCallerInfo callerInfo)
+    {
+      return X.DotEscape(callerInfo.ToString());
+    }
+
+    private void ToDot(StringBuilder sb, HashSet<ParsingCallerInfo> visited, ParsingCallerInfo callerInfo)
+    {
+      if (!visited.Add(callerInfo))
+        return;
+
+      var id = Name(callerInfo);
+      sb.AppendLine(id + "[label=\"" + Label(callerInfo) + "\" shape=box]");
+
+      foreach (var caller in callerInfo.Sequence.Callers)
+        sb.AppendLine(Name(caller) + " -> " + id);
+      
+      foreach (var caller in callerInfo.Sequence.Callers)
+        ToDot(sb, visited, caller);
     }
 
     private void SkipAllStates(RecoveryParser rp, int maxPos, Queue<ParseRecord> records)
