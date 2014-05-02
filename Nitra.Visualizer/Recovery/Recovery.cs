@@ -650,10 +650,8 @@ namespace Nitra.DebugStrategies
       var failPositions = new HashSet<int>();
       var deleted = new List<Tuple<int, ParsedSequence>>();
 
-
       do
       {
-
         var tmpDeleted = FindMaxFailPos(rp);
         if (rp.MaxPos != rp.ParseResult.Text.Length)
           UpdateParseErrorCount();
@@ -666,114 +664,36 @@ namespace Nitra.DebugStrategies
 
         maxPos = rp.MaxPos;
         failPositions.Add(maxPos);
-        var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
 
         var tokens = GetCurrentTokens(rp, rp.MaxPos);
 
         if (tokens.Count > 0)
         {
           var sequencesInProgress = new Dictionary<ParsingSequence, HashSet<ParsedSequence>>();
-          var roots = new Dictionary<ParsingCallerInfo, bool>();
-          foreach (var record in records)
-            if (!record.IsComplete)
-            {
-              HashSet<ParsedSequence> sequences;
-              if (!sequencesInProgress.TryGetValue(record.Sequence.ParsingSequence, out sequences))
-              {
-                sequences = new HashSet<ParsedSequence>();
-                sequencesInProgress.Add(record.Sequence.ParsingSequence, sequences);
-              }
-              sequences.Add(record.Sequence);
-              if (!(record.Sequence.IsToken && record.ParsingState.IsStart))
-                AddRoot(roots, record.Sequence, record.State, maxPos);
-              else
-              { }
-            }
+          var roots = CalcRoots(rp, maxPos, sequencesInProgress);
+
           //ToDot(roots);
 
-          var callers = new HashSet<ParsingCallerInfo>();
-          foreach (var token in tokens)
-          {
-            var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
-            //ToDot(token.Token.Callers);
-            foreach (var callerInfo in token.Token.Callers)
-            {
-              if (callerInfo.Sequence.RuleName == "Invocation")
-              {
-              }
-              FindAllCallers(callers, callerInfo);
-            }
-          }
-          var callees = new HashSet<ParsingCallerInfo>();
-          foreach (var callee in roots.Keys)
-            FindAllCallees(callees, callee);
+          var callers = CalcCallers(rp, tokens);
 
-          var callPath = new HashSet<ParsingCallerInfo>();
-          var callPathSequences = new Dictionary<ParsingSequence, List<int>>();
-          foreach (var callee in callees)
-            if (callers.Contains(callee))
-            {
-              callPath.Add(callee);
-              List<int> states;
-              if (!callPathSequences.TryGetValue(callee.Sequence, out states))
-              {
-                states = new List<int>();
-                callPathSequences.Add(callee.Sequence, states);
-              }
-              states.Add(callee.State);
-            }
           ToDot(callers);
+
+          var callees = CalcCallees(roots);
+
           ToDot(callees);
+
+          var callPathSequences = new Dictionary<ParsingSequence, List<int>>();
+          var callPath = CalcCallPath(callees, callers, callPathSequences);
+
           ToDot(callPath);
 
-          foreach (var kv in callPathSequences)
-          {
-            var sequence = kv.Key;
-            var states = kv.Value;
-            HashSet<ParsedSequence> sequences;
-            if (!sequencesInProgress.TryGetValue(sequence, out sequences))
-            {
-              sequences = new HashSet<ParsedSequence>();
-              sequencesInProgress.Add(sequence, sequences);
-            }
-            foreach (var state in states)
-              if (sequence.States[state].IsStart)
-              {
-                sequences.Add(_recoveryParser.StartParseSequence(maxPos, sequence));
-                break;
-              }
-            if (sequences.Count == 0)
-            {
-              //сюда попадать не должны
-            }
-
-            foreach (var parsedSequence in sequences)
-              foreach (var state in states)
-                _recoveryParser.SubruleParsed(maxPos, maxPos, new ParseRecord(parsedSequence, state, maxPos));
-          }
-
-          foreach (var kv in callPathSequences)
-          {
-            var sequence = kv.Key;
-            var states = kv.Value;
-            foreach (var state in states)
-              if (sequence.States[state].IsStart)
-              {
-                foreach (var caller in sequence.Callers)
-                  if (callPath.Contains(caller))
-                    foreach (var parsedSequence in sequencesInProgress[caller.Sequence])
-                      _recoveryParser.StartParseSequence(new ParseRecord(parsedSequence, caller.State, maxPos), maxPos, sequence);
-                break;
-              }
-          }
-
-          //
+          UpdateParserState(callPathSequences, sequencesInProgress, maxPos, callPath);
 
           rp.Parse();
         }
         else if (rp.MaxPos == rp.ParseResult.Text.Length)
         {
-          SkipAllStates(rp, maxPos, records);
+          SkipAllStates(rp, maxPos, new SCG.Queue<ParseRecord>(rp.Records[maxPos]));
         }
         else
         {
@@ -785,6 +705,125 @@ namespace Nitra.DebugStrategies
       //foreach (var del in deleted)
       //  DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
+    }
+
+    private void UpdateParserState(Dictionary<ParsingSequence, List<int>> callPathSequences, Dictionary<ParsingSequence, HashSet<ParsedSequence>> sequencesInProgress, int maxPos,
+      HashSet<ParsingCallerInfo> callPath)
+    {
+      foreach (var kv in callPathSequences)
+      {
+        var sequence = kv.Key;
+        var states = kv.Value;
+        HashSet<ParsedSequence> sequences;
+        if (!sequencesInProgress.TryGetValue(sequence, out sequences))
+        {
+          sequences = new HashSet<ParsedSequence>();
+          sequencesInProgress.Add(sequence, sequences);
+        }
+
+        foreach (var state in states)
+        {
+          if (sequence.States[state].IsStart)
+          {
+            sequences.Add(_recoveryParser.StartParseSequence(maxPos, sequence));
+            break;
+          }
+        }
+
+        if (sequences.Count == 0)
+        {
+          //сюда попадать не должны
+        }
+
+        foreach (var parsedSequence in sequences)
+          foreach (var state in states)
+            _recoveryParser.SubruleParsed(maxPos, maxPos, new ParseRecord(parsedSequence, state, maxPos));
+      }
+
+      foreach (var kv in callPathSequences)
+      {
+        var sequence = kv.Key;
+        var states = kv.Value;
+        foreach (var state in states)
+          if (sequence.States[state].IsStart)
+          {
+            foreach (var caller in sequence.Callers)
+              if (callPath.Contains(caller))
+                foreach (var parsedSequence in sequencesInProgress[caller.Sequence])
+                  _recoveryParser.StartParseSequence(new ParseRecord(parsedSequence, caller.State, maxPos), maxPos, sequence);
+            break;
+          }
+      }
+    }
+
+    private static HashSet<ParsingCallerInfo> CalcCallPath(HashSet<ParsingCallerInfo> callees, HashSet<ParsingCallerInfo> callers, Dictionary<ParsingSequence, List<int>> callPathSequences)
+    {
+      var callPath = new HashSet<ParsingCallerInfo>();
+
+      foreach (var callee in callees)
+      {
+        if (callers.Contains(callee))
+        {
+          callPath.Add(callee);
+          List<int> states;
+          if (!callPathSequences.TryGetValue(callee.Sequence, out states))
+          {
+            states = new List<int>();
+            callPathSequences.Add(callee.Sequence, states);
+          }
+          states.Add(callee.State);
+        }
+      }
+      return callPath;
+    }
+
+    private HashSet<ParsingCallerInfo> CalcCallees(Dictionary<ParsingCallerInfo, bool> roots)
+    {
+      var callees = new HashSet<ParsingCallerInfo>();
+      foreach (var callee in roots.Keys)
+        FindAllCallees(callees, callee);
+      return callees;
+    }
+
+    private HashSet<ParsingCallerInfo> CalcCallers(RecoveryParser rp, List<TokenParserApplication> tokens)
+    {
+      var callers = new HashSet<ParsingCallerInfo>();
+      foreach (var token in tokens)
+      {
+        var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
+        //ToDot(token.Token.Callers);
+        foreach (var callerInfo in token.Token.Callers)
+        {
+          if (callerInfo.Sequence.RuleName == "Invocation")
+          {
+          }
+          FindAllCallers(callers, callerInfo);
+        }
+      }
+      return callers;
+    }
+
+    private Dictionary<ParsingCallerInfo, bool> CalcRoots(RecoveryParser rp, int maxPos, Dictionary<ParsingSequence, HashSet<ParsedSequence>> sequencesInProgress)
+    {
+      var roots = new Dictionary<ParsingCallerInfo, bool>();
+      var records = new SCG.Queue<ParseRecord>(rp.Records[maxPos]);
+      foreach (var record in records)
+        if (!record.IsComplete)
+        {
+          HashSet<ParsedSequence> sequences;
+          if (!sequencesInProgress.TryGetValue(record.Sequence.ParsingSequence, out sequences))
+          {
+            sequences = new HashSet<ParsedSequence>();
+            sequencesInProgress.Add(record.Sequence.ParsingSequence, sequences);
+          }
+          sequences.Add(record.Sequence);
+          if (!(record.Sequence.IsToken && record.ParsingState.IsStart))
+            AddRoot(roots, record.Sequence, record.State, maxPos);
+          else
+          {
+          }
+        }
+      return roots;
     }
 
     private void ToDot(Dictionary<ParsingCallerInfo, bool> roots)
