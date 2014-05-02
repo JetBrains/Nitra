@@ -75,7 +75,6 @@ namespace Nitra.DebugStrategies
       var timer = Stopwatch.StartNew();
       Debug.WriteLine(RecoveryDebug.CurrentTestName + " -----------------------------------------------------------");
 #endif
-
       _deletedToken.Clear();
       var textLen = parseResult.Text.Length;
       var rp = new RecoveryParser(parseResult);
@@ -550,79 +549,6 @@ namespace Nitra.DebugStrategies
 
     const int s_loopState = 0;
 
-    /// <summary>
-    /// В позиции облома может находиться "грязь", т.е. набор символов которые не удается разобрать ни одним правилом токена
-    /// доступным в CompositeGrammar в данном месте. Ни одно правило не сможет спарсить этот код, так что просто ищем 
-    /// следующий корректный токе и пропускаем все что идет до него (грязь).
-    /// </summary>
-    /// <returns>true - если грязь была удалена</returns>
-    private bool TryDeleteGarbage(RecoveryParser rp, int maxPos, ParsedSequence sequence)
-    {
-      var text = rp.ParseResult.Text;
-      if (maxPos >= text.Length)
-        return false;
-      var parseResult = rp.ParseResult;
-      var grammar = parseResult.RuleParser.Grammar;
-      var res = grammar.ParseAllGrammarTokens(maxPos, parseResult);
-      RemoveEmpty(res, maxPos);
-
-      if (res.Count == 0)
-      {
-        var i = maxPos + 1;
-        for (; i < text.Length; i++) // крутимся пока не будет распознан токен или достигнут конец строки
-        {
-          var res2 = grammar.ParseAllGrammarTokens(i, parseResult);
-          RemoveEmpty(res2, i);
-          if (res2.Count > 0)
-            break;
-        }
-
-        _deletedToken[new ParsedSequenceAndSubrule(sequence, new ParsedSubrule(maxPos, i, s_loopState))] = true;
-        rp.SubruleParsed(maxPos, i, new ParseRecord(sequence, 0, maxPos));
-        return true;
-      }
-
-      return false;
-    }
-
-    private List<TokenParserApplication> GetCurrentTokens(RecoveryParser rp, int pos)
-    {
-      var parseResult = rp.ParseResult;
-      var grammar = parseResult.RuleParser.Grammar;
-      var res = grammar.ParseNonVoidTokens(pos, parseResult);
-      return res;
-    }
-
-    private void DeleteTokens(RecoveryParser rp, int pos, ParsedSequence sequence, int tokensToDelete)
-    {
-      if (tokensToDelete <= 0)
-        return;
-
-      var text = rp.ParseResult.Text;
-      var parseResult = rp.ParseResult;
-      var grammar = parseResult.RuleParser.Grammar;
-      var res = grammar.ParseAllNonVoidGrammarTokens(pos, parseResult);
-      RemoveEmpty(res, pos);
-
-      if (res.Count == 0)
-        return;
-
-      foreach (var nextPos in res)
-        if (CanDelete(text, pos, nextPos))
-          ContinueDeleteTokens(rp, sequence, pos, nextPos, tokensToDelete);
-    }
-
-    private bool CanDelete(string text, int pos, int nextPos)
-    {
-      // TODO: Надо неализовать эту функцию на базе метаинформации из грамматик.
-      switch (text.Substring(pos, nextPos - pos))
-      {
-        case ",":
-        case ";": return false;
-        default: return true;
-      }
-    }
-
     private void ContinueDeleteTokens(RecoveryParser rp, ParsedSequence sequence, int pos, int nextPos, int tokensToDelete)
     {
       _deletedToken[new ParsedSequenceAndSubrule(sequence, new ParsedSubrule(pos, nextPos, s_loopState))] = false;
@@ -642,6 +568,8 @@ namespace Nitra.DebugStrategies
         DeleteTokens(rp, nextPos2, sequence, tokensToDelete - 1);
       }
     }
+
+    #region RecoverAllWays
 
     private void RecoverAllWays(RecoveryParser rp)
     {
@@ -705,55 +633,6 @@ namespace Nitra.DebugStrategies
       //foreach (var del in deleted)
       //  DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
-    }
-
-    private void UpdateParserState(Dictionary<ParsingSequence, List<int>> callPathSequences, Dictionary<ParsingSequence, HashSet<ParsedSequence>> sequencesInProgress, int maxPos,
-      HashSet<ParsingCallerInfo> callPath)
-    {
-      foreach (var kv in callPathSequences)
-      {
-        var sequence = kv.Key;
-        var states = kv.Value;
-        HashSet<ParsedSequence> sequences;
-        if (!sequencesInProgress.TryGetValue(sequence, out sequences))
-        {
-          sequences = new HashSet<ParsedSequence>();
-          sequencesInProgress.Add(sequence, sequences);
-        }
-
-        foreach (var state in states)
-        {
-          if (sequence.States[state].IsStart)
-          {
-            sequences.Add(_recoveryParser.StartParseSequence(maxPos, sequence));
-            break;
-          }
-        }
-
-        if (sequences.Count == 0)
-        {
-          //сюда попадать не должны
-        }
-
-        foreach (var parsedSequence in sequences)
-          foreach (var state in states)
-            _recoveryParser.SubruleParsed(maxPos, maxPos, new ParseRecord(parsedSequence, state, maxPos));
-      }
-
-      foreach (var kv in callPathSequences)
-      {
-        var sequence = kv.Key;
-        var states = kv.Value;
-        foreach (var state in states)
-          if (sequence.States[state].IsStart)
-          {
-            foreach (var caller in sequence.Callers)
-              if (callPath.Contains(caller))
-                foreach (var parsedSequence in sequencesInProgress[caller.Sequence])
-                  _recoveryParser.StartParseSequence(new ParseRecord(parsedSequence, caller.State, maxPos), maxPos, sequence);
-            break;
-          }
-      }
     }
 
     private static HashSet<ParsingCallerInfo> CalcCallPath(HashSet<ParsingCallerInfo> callees, HashSet<ParsingCallerInfo> callers, Dictionary<ParsingSequence, List<int>> callPathSequences)
@@ -826,112 +705,56 @@ namespace Nitra.DebugStrategies
       return roots;
     }
 
-    private void ToDot(Dictionary<ParsingCallerInfo, bool> roots)
+    private void UpdateParserState(
+      Dictionary<ParsingSequence, List<int>> callPathSequences,
+      Dictionary<ParsingSequence, HashSet<ParsedSequence>> sequencesInProgress,
+      int maxPos,
+      HashSet<ParsingCallerInfo> callPath)
     {
-      ToDot(roots.Select(r => r.Key));
-    }
-
-    private void ToDot(ParsingCallerInfo callerInfo)
-    {
-      ToDot(Enumerable.Repeat(callerInfo, 1));
-    }
-
-    private void ToDot(IEnumerable<ParsingCallerInfo> callerInfos)
-    {
-      var sb = new StringBuilder();
-      sb.Append(@"
-        digraph RecoveryParser
+      foreach (var kv in callPathSequences)
+      {
+        var sequence = kv.Key;
+        var states = kv.Value;
+        HashSet<ParsedSequence> sequences;
+        if (!sequencesInProgress.TryGetValue(sequence, out sequences))
         {
-          compound=true;
-        ");
-      var visited =  new HashSet<ParsingCallerInfo>();
-      foreach (var callerInfo in callerInfos)
-        ToDot(sb, visited, callerInfo, true);
+          sequences = new HashSet<ParsedSequence>();
+          sequencesInProgress.Add(sequence, sequences);
+        }
 
-      sb.Append(@"}");
-
-      var fileName = Path.GetTempFileName();
-      File.WriteAllText(fileName, sb.ToString());
-      X.ConvertToDot(fileName);
-    }
-
-    string Name(ParsingCallerInfo callerInfo)
-    {
-      return "Node_" + callerInfo.GetHashCode();
-    }
-
-    string Label(ParsingCallerInfo callerInfo)
-    {
-      return X.DotEscape(callerInfo.State + " " + callerInfo.ToString());
-    }
-
-    private void ToDot(StringBuilder sb, HashSet<ParsingCallerInfo> visited, ParsingCallerInfo callerInfo, bool isStart)
-    {
-      if (!visited.Add(callerInfo))
-        return;
-      const string StartStyle = " peripheries=2 color=blue";
-      ;
-      var style = isStart ? StartStyle : "";
-
-      var id = Name(callerInfo);
-      sb.AppendLine(id + "[label=\"" + Label(callerInfo) + "\" shape=box"+ style + "]");
-
-      foreach (var caller in callerInfo.Sequence.Callers)
-        sb.AppendLine(Name(caller) + " -> " + id);
-      
-      foreach (var caller in callerInfo.Sequence.Callers)
-        ToDot(sb, visited, caller, false);
-    }
-
-    private void SkipAllStates(RecoveryParser rp, int maxPos, Queue<ParseRecord> records)
-    {
-      _nestedLevel = 0;
-      var records2 = new HashSet<ParseRecord>();
-      do
-      {
-        while (records.Count > 0)
-          SkipAllStates(records.Dequeue(), maxPos, records2);
-
-        foreach (var tuple in rp.RecordsToProcess)
-          records.Enqueue(tuple.Field1);
-
-        rp.Parse();
-      } while (records.Count > 0);
-    }
-
-    private static int _nestedLevel;
-
-    private void SkipAllStates(ParseRecord record, int pos, HashSet<ParseRecord> visited)
-    {
-      if (visited.Contains(record))
-        return;
-
-      _nestedLevel++;
-
-      if (_nestedLevel == 1000)
-      {
-      }
-
-      visited.Add(record);
-
-      foreach (var caller in record.Sequence.Callers)
-        SkipAllStates(caller, pos, visited);
-
-      if (!record.IsComplete)
-      {
-        _recoveryParser.SubruleParsed(pos, pos, record);
-
-        foreach (var nextState in record.ParsingState.Next)
+        foreach (var state in states)
         {
-          if (nextState >= 0)
+          if (sequence.States[state].IsStart)
           {
-            var next = record.Next(nextState);
-            SkipAllStates(next, pos, visited);
+            sequences.Add(_recoveryParser.StartParseSequence(maxPos, sequence));
+            break;
           }
         }
+
+        if (sequences.Count == 0)
+        {
+          //сюда попадать не должны
+        }
+
+        foreach (var parsedSequence in sequences)
+          foreach (var state in states)
+            _recoveryParser.SubruleParsed(maxPos, maxPos, new ParseRecord(parsedSequence, state, maxPos));
       }
 
-      _nestedLevel--;
+      foreach (var kv in callPathSequences)
+      {
+        var sequence = kv.Key;
+        var states = kv.Value;
+        foreach (var state in states)
+          if (sequence.States[state].IsStart)
+          {
+            foreach (var caller in sequence.Callers)
+              if (callPath.Contains(caller))
+                foreach (var parsedSequence in sequencesInProgress[caller.Sequence])
+                  _recoveryParser.StartParseSequence(new ParseRecord(parsedSequence, caller.State, maxPos), maxPos, sequence);
+            break;
+          }
+      }
     }
 
     private void AddRoot(Dictionary<ParsingCallerInfo, bool> roots, ParsedSequence parsedSequence, int state, int textPos)
@@ -1005,6 +828,8 @@ namespace Nitra.DebugStrategies
       }
     }
 
+    #endregion
+
     private bool CheckUnclosedToken(RecoveryParser rp)
     {
       var maxPos  = rp.MaxPos;
@@ -1034,6 +859,134 @@ namespace Nitra.DebugStrategies
       }
 
       return unclosedTokenFound;
+    }
+
+    #region Deletion
+
+    /// <summary>
+    /// В позиции облома может находиться "грязь", т.е. набор символов которые не удается разобрать ни одним правилом токена
+    /// доступным в CompositeGrammar в данном месте. Ни одно правило не сможет спарсить этот код, так что просто ищем 
+    /// следующий корректный токе и пропускаем все что идет до него (грязь).
+    /// </summary>
+    /// <returns>true - если грязь была удалена</returns>
+    private bool TryDeleteGarbage(RecoveryParser rp, int maxPos, ParsedSequence sequence)
+    {
+      var text = rp.ParseResult.Text;
+      if (maxPos >= text.Length)
+        return false;
+      var parseResult = rp.ParseResult;
+      var grammar = parseResult.RuleParser.Grammar;
+      var res = grammar.ParseAllGrammarTokens(maxPos, parseResult);
+      RemoveEmpty(res, maxPos);
+
+      if (res.Count == 0)
+      {
+        var i = maxPos + 1;
+        for (; i < text.Length; i++) // крутимся пока не будет распознан токен или достигнут конец строки
+        {
+          var res2 = grammar.ParseAllGrammarTokens(i, parseResult);
+          RemoveEmpty(res2, i);
+          if (res2.Count > 0)
+            break;
+        }
+
+        _deletedToken[new ParsedSequenceAndSubrule(sequence, new ParsedSubrule(maxPos, i, s_loopState))] = true;
+        rp.SubruleParsed(maxPos, i, new ParseRecord(sequence, 0, maxPos));
+        return true;
+      }
+
+      return false;
+    }
+
+    private void DeleteTokens(RecoveryParser rp, int pos, ParsedSequence sequence, int tokensToDelete)
+    {
+      if (tokensToDelete <= 0)
+        return;
+
+      var text = rp.ParseResult.Text;
+      var parseResult = rp.ParseResult;
+      var grammar = parseResult.RuleParser.Grammar;
+      var res = grammar.ParseAllNonVoidGrammarTokens(pos, parseResult);
+      RemoveEmpty(res, pos);
+
+      if (res.Count == 0)
+        return;
+
+      foreach (var nextPos in res)
+        if (CanDelete(text, pos, nextPos))
+          ContinueDeleteTokens(rp, sequence, pos, nextPos, tokensToDelete);
+    }
+
+    private List<TokenParserApplication> GetCurrentTokens(RecoveryParser rp, int pos)
+    {
+      var parseResult = rp.ParseResult;
+      var grammar = parseResult.RuleParser.Grammar;
+      var res = grammar.ParseNonVoidTokens(pos, parseResult);
+      return res;
+    }
+
+    private bool CanDelete(string text, int pos, int nextPos)
+    {
+      // TODO: Надо неализовать эту функцию на базе метаинформации из грамматик.
+      switch (text.Substring(pos, nextPos - pos))
+      {
+        case ",":
+        case ";": return false;
+        default: return true;
+      }
+    }
+
+    #endregion
+
+    private void SkipAllStates(RecoveryParser rp, int maxPos, Queue<ParseRecord> records)
+    {
+      _nestedLevel = 0;
+      var records2 = new HashSet<ParseRecord>();
+      do
+      {
+        while (records.Count > 0)
+          SkipAllStates(records.Dequeue(), maxPos, records2);
+
+        foreach (var tuple in rp.RecordsToProcess)
+          records.Enqueue(tuple.Field1);
+
+        rp.Parse();
+      } while (records.Count > 0);
+    }
+
+    private static int _nestedLevel;
+
+    private void SkipAllStates(ParseRecord record, int pos, HashSet<ParseRecord> visited)
+    {
+      if (visited.Contains(record))
+        return;
+
+      _nestedLevel++;
+
+      if (_nestedLevel == 1000)
+      {
+      }
+
+      visited.Add(record);
+
+      foreach (var caller in record.Sequence.Callers)
+        SkipAllStates(caller, pos, visited);
+
+      if (!record.IsComplete)
+      {
+        _recoveryParser.SubruleParsed(pos, pos, record);
+
+        foreach (var nextState in record.ParsingState.Next)
+        {
+          if (nextState >= 0)
+          {
+            var next = record.Next(nextState);
+            SkipAllStates(next, pos, visited);
+          }
+        }
+      }
+
+      _nestedLevel--;
     }
 
     private static bool IsInsideToken(SCG.Dictionary<ParseRecord, bool> memoization, CompositeGrammar compositeGrammar, ParseRecord record)
@@ -1069,6 +1022,67 @@ namespace Nitra.DebugStrategies
     {
       res.RemoveWhere(x => x <= maxPos);
     }
+
+    #region Dot
+
+    private void ToDot(Dictionary<ParsingCallerInfo, bool> roots)
+    {
+      ToDot(roots.Select(r => r.Key));
+    }
+
+    private void ToDot(ParsingCallerInfo callerInfo)
+    {
+      ToDot(Enumerable.Repeat(callerInfo, 1));
+    }
+
+    private void ToDot(IEnumerable<ParsingCallerInfo> callerInfos)
+    {
+      var sb = new StringBuilder();
+      sb.Append(@"
+        digraph RecoveryParser
+        {
+          compound=true;
+        ");
+      var visited = new HashSet<ParsingCallerInfo>();
+      foreach (var callerInfo in callerInfos)
+        ToDot(sb, visited, callerInfo, true);
+
+      sb.Append(@"}");
+
+      var fileName = Path.GetTempFileName();
+      File.WriteAllText(fileName, sb.ToString());
+      X.ConvertToDot(fileName);
+    }
+
+    string Name(ParsingCallerInfo callerInfo)
+    {
+      return "Node_" + callerInfo.GetHashCode();
+    }
+
+    string Label(ParsingCallerInfo callerInfo)
+    {
+      return X.DotEscape(callerInfo.State + " " + callerInfo.ToString());
+    }
+
+    private void ToDot(StringBuilder sb, HashSet<ParsingCallerInfo> visited, ParsingCallerInfo callerInfo, bool isStart)
+    {
+      if (!visited.Add(callerInfo))
+        return;
+      const string StartStyle = " peripheries=2 color=blue";
+      ;
+      var style = isStart ? StartStyle : "";
+
+      var id = Name(callerInfo);
+      sb.AppendLine(id + "[label=\"" + Label(callerInfo) + "\" shape=box" + style + "]");
+
+      foreach (var caller in callerInfo.Sequence.Callers)
+        sb.AppendLine(Name(caller) + " -> " + id);
+
+      foreach (var caller in callerInfo.Sequence.Callers)
+        ToDot(sb, visited, caller, false);
+    }
+
+    #endregion
 
     protected virtual void UpdateEarleyParseTime() { }
     protected virtual void UpdateRecoverAllWaysTime() { }
