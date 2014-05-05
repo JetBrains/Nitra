@@ -854,15 +854,13 @@ namespace Nitra.DebugStrategies
       while (statesToAdd.Count > 0)
       {
         var state = statesToAdd.Pop();
+        foreach (var calleeSequence in callee.Sequence.States[state].CalleeSequences)
+          foreach (var startState in calleeSequence.StartStates)
+            if (startState != -1)
+              FindAllCallees(callees, CreateParsingCallerInfo(calleeSequence, startState));
         foreach (var nextState in callee.Sequence.States[state].Next)
           if (nextState != -1 && callees.Add(CreateParsingCallerInfo(callee.Sequence, nextState)))
-          {
             statesToAdd.Push(nextState);
-            foreach (var calleeSequence in callee.Sequence.States[nextState].CalleeSequences)
-              foreach (var startState in calleeSequence.StartStates)
-                if (startState != -1)
-                  FindAllCallees(callees, CreateParsingCallerInfo(calleeSequence, startState));
-          }
       }
     }
 
