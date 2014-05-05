@@ -67,7 +67,7 @@ namespace Nitra.DebugStrategies
       Debug.WriteLine(">>>> Strategy " + _id + " ThreadId=" + System.Threading.Thread.CurrentThread.ManagedThreadId);
 #endif
       //Debug.Assert(parseResult.RecoveryStacks.Count > 0);
-
+      _callerInfoMap = new Dictionary<ParsingCallerInfo, ParsingCallerInfo>();
       _parseResult = parseResult;
 
 #if DebugOutput
@@ -694,6 +694,11 @@ namespace Nitra.DebugStrategies
 
     private HashSet<ParsingCallerInfo> CalcCallers(RecoveryParser rp, List<TokenParserApplication> tokens)
     {
+      foreach (var token in tokens)
+        foreach (var caller in token.Token.Callers)
+          _callerInfoMap[caller] = caller;
+
+
       var callers = new HashSet<ParsingCallerInfo>();
       foreach (var token in tokens)
       {
@@ -709,6 +714,7 @@ namespace Nitra.DebugStrategies
           FindAllCallers(callers, callerInfo);
         }
       }
+
       return callers;
     }
 
@@ -793,7 +799,7 @@ namespace Nitra.DebugStrategies
     {
       var parsingSequence = parsedSequence.ParsingSequence;
 
-      if (roots.ContainsKey(new ParsingCallerInfo(parsedSequence.ParsingSequence, state)))
+      if (roots.ContainsKey(CreateParsingCallerInfo(parsedSequence.ParsingSequence, state)))
         return;
 
       var toProcess = new SCG.Stack<int>();
@@ -801,7 +807,7 @@ namespace Nitra.DebugStrategies
       while (toProcess.Count > 0)
       {
         var curState = toProcess.Pop();
-        var key = new ParsingCallerInfo(parsedSequence.ParsingSequence, curState);
+        var key = CreateParsingCallerInfo(parsedSequence.ParsingSequence, curState);
         if (!roots.ContainsKey(key))
         {
           foreach (var nextState in parsingSequence.States[curState].Next)
@@ -827,7 +833,7 @@ namespace Nitra.DebugStrategies
       {
         var state = statesToAdd.Pop();
         foreach (var prevState in caller.Sequence.States[state].Prev)
-          if (callers.Add(new ParsingCallerInfo(caller.Sequence, prevState)))
+          if (callers.Add(CreateParsingCallerInfo(caller.Sequence, prevState)))
             statesToAdd.Push(prevState);
       }
 
@@ -849,15 +855,28 @@ namespace Nitra.DebugStrategies
       {
         var state = statesToAdd.Pop();
         foreach (var nextState in callee.Sequence.States[state].Next)
-          if (nextState != -1 && callees.Add(new ParsingCallerInfo(callee.Sequence, nextState)))
+          if (nextState != -1 && callees.Add(CreateParsingCallerInfo(callee.Sequence, nextState)))
           {
             statesToAdd.Push(nextState);
             foreach (var calleeSequence in callee.Sequence.States[nextState].CalleeSequences)
               foreach (var startState in calleeSequence.StartStates)
                 if (startState != -1)
-                  FindAllCallees(callees, new ParsingCallerInfo(calleeSequence, startState));
+                  FindAllCallees(callees, CreateParsingCallerInfo(calleeSequence, startState));
           }
       }
+    }
+
+    Dictionary<ParsingCallerInfo, ParsingCallerInfo> _callerInfoMap;
+
+    ParsingCallerInfo CreateParsingCallerInfo(ParsingSequence sequence, int state)
+    {
+      var key = new ParsingCallerInfo(sequence, state);
+      ParsingCallerInfo result;
+      if (_callerInfoMap.TryGetValue(key, out result))
+        return result;
+
+      _callerInfoMap[key] = key;
+      return key;
     }
 
     #endregion
@@ -1137,15 +1156,15 @@ namespace Nitra.DebugStrategies
       
       var style = isStart ? StartStyle : "";
       
-      if (HasMask(callerInfo, Callee | Caller))
+      if (HasMask(callerInfo, Token))
         style += " color=red";
-      else if (HasMask(callerInfo, Callee))
+      else if (HasMask(callerInfo, Root))
         style += " color=blue";
-      else if (HasMask(callerInfo, Caller))
-        style += " color=green";
+      //else if (HasMask(callerInfo, Caller))
+      //  style += " color=green";
 
-      if (HasMask(callerInfo, Root))
-        style += " color=purple";
+      //if (HasMask(callerInfo, Root))
+      //  style += " color=purple";
 
       var id = Name(callerInfo);
       sb.AppendLine(id + "[label=\"" + Label(callerInfo) + "\" shape=box" + style + "]");
