@@ -1131,7 +1131,12 @@ namespace Nitra.DebugStrategies
       if (HasMask(callerInfo, Caller))
         prefix += "<";
 
-      return X.DotEscape(prefix + callerInfo.State + " " + callerInfo.ToString());
+      var str = prefix + callerInfo.State + " " + callerInfo.ToString();
+
+      if (!string.IsNullOrWhiteSpace(callerInfo.Sequence.RuleName))
+        str = callerInfo.Sequence.RuleName + "\r\n" + str;
+
+      return X.DotEscape(str);
     }
 
     string GetStyle(ParsingCallerInfo callerInfo, int mask, string style)
