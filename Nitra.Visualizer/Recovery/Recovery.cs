@@ -1160,7 +1160,8 @@ namespace Nitra.DebugStrategies
       const string StartStyle  = " peripheries=2";
       
       var style = isStart ? StartStyle : "";
-      
+      var state = callerInfo.Sequence.States[callerInfo.State];
+
       if (HasMask(callerInfo, Token))
         style += " color=red";
       else if (HasMask(callerInfo, Root))
@@ -1172,13 +1173,19 @@ namespace Nitra.DebugStrategies
       //  style += " color=purple";
 
       var id = Name(callerInfo);
-      sb.AppendLine(id + "[label=\"" + Label(callerInfo) + "\" shape=box" + style + "]");
+      sb.AppendLine(id + "[label=\"" + Label(callerInfo) + "\" shape=box" + style + "];");
 
-      foreach (var caller in callerInfo.Sequence.Callers)
-        sb.AppendLine(Name(caller) + " -> " + id);
+      foreach (var prev in state.Prev)
+        sb.AppendLine(Name(new ParsingCallerInfo(callerInfo.Sequence, prev)) + " -> " + id + ";");
 
-      foreach (var caller in callerInfo.Sequence.Callers)
-        ToDot(sb, visited, caller, false);
+      if (callerInfo.Sequence.States[callerInfo.State].IsStart)
+      {
+        foreach (var caller in callerInfo.Sequence.Callers)
+          sb.AppendLine(Name(caller) + " -> " + id + "[color=blue]" + ";");
+
+        foreach (var caller in callerInfo.Sequence.Callers)
+          ToDot(sb, visited, caller, false);
+      }
     }
 
     #endregion
