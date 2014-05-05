@@ -1100,8 +1100,14 @@ namespace Nitra.DebugStrategies
       sb.AppendLine();
 
       var visited = new HashSet<ParsingCallerInfo>();
+      var created  = new HashSet<ParsingCallerInfo>();
       foreach (var callerInfo in callerInfos)
-        ToDot(sb, visited, callerInfo, true);
+        ToDot(sb, visited, callerInfo, true, created);
+
+      created.ExceptWith(visited);
+
+      foreach (var callerInfo in created)
+        sb.AppendLine(Name(callerInfo) + "[label=\"" + Label(callerInfo) + "\" shape=box color=purple];");
 
       sb.Append(@"}");
 
@@ -1149,7 +1155,7 @@ namespace Nitra.DebugStrategies
       return (callerInfo.Mask & mask) == mask;
     }
 
-    private void ToDot(StringBuilder sb, HashSet<ParsingCallerInfo> visited, ParsingCallerInfo callerInfo, bool isStart)
+    private void ToDot(StringBuilder sb, HashSet<ParsingCallerInfo> visited, ParsingCallerInfo callerInfo, bool isStart, HashSet<ParsingCallerInfo> created)
     {
       if (string.Equals(callerInfo.Sequence.RuleName, "s", StringComparison.InvariantCultureIgnoreCase))
         return;
@@ -1176,7 +1182,12 @@ namespace Nitra.DebugStrategies
       sb.AppendLine(id + "[label=\"" + Label(callerInfo) + "\" shape=box" + style + "];");
 
       foreach (var prev in state.Prev)
-        sb.AppendLine(Name(new ParsingCallerInfo(callerInfo.Sequence, prev)) + " -> " + id + ";");
+      {
+        var callerInfoPrev = new ParsingCallerInfo(callerInfo.Sequence, prev);
+        created.Add(callerInfoPrev);
+        var idPrev = Name(callerInfoPrev);
+        sb.AppendLine(idPrev + " -> " + id + ";");
+      }
 
       if (callerInfo.Sequence.States[callerInfo.State].IsStart)
       {
@@ -1184,7 +1195,7 @@ namespace Nitra.DebugStrategies
           sb.AppendLine(Name(caller) + " -> " + id + "[color=blue]" + ";");
 
         foreach (var caller in callerInfo.Sequence.Callers)
-          ToDot(sb, visited, caller, false);
+          ToDot(sb, visited, caller, false, created);
       }
     }
 
