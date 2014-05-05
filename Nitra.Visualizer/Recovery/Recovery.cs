@@ -600,20 +600,20 @@ namespace Nitra.DebugStrategies
           var sequencesInProgress = new Dictionary<ParsingSequence, HashSet<ParsedSequence>>();
           var roots = CalcRoots(rp, maxPos, sequencesInProgress);
 
-          //ToDot(roots);
+          ToDot(roots, "roots");
 
           var callers = CalcCallers(rp, tokens);
 
-          ToDot(callers);
+          ToDot(callers, "callers");
 
           var callees = CalcCallees(roots);
 
-          ToDot(callees);
+          ToDot(callees, "callees");
 
           var callPathSequences = new Dictionary<ParsingSequence, List<int>>();
           var callPath = CalcCallPath(callees, callers, callPathSequences);
 
-          ToDot(callPath);
+          ToDot(callPath, "callPath");
 
           UpdateParserState(callPathSequences, sequencesInProgress, maxPos, callPath);
 
@@ -1025,31 +1025,36 @@ namespace Nitra.DebugStrategies
 
     #region Dot
 
-    private void ToDot(Dictionary<ParsingCallerInfo, bool> roots)
+    private void ToDot(Dictionary<ParsingCallerInfo, bool> roots, string namePrefix)
     {
-      ToDot(roots.Select(r => r.Key));
+      ToDot(roots.Select(r => r.Key), namePrefix);
     }
 
-    private void ToDot(ParsingCallerInfo callerInfo)
+    private void ToDot(ParsingCallerInfo callerInfo, string namePrefix)
     {
-      ToDot(Enumerable.Repeat(callerInfo, 1));
+      ToDot(Enumerable.Repeat(callerInfo, 1), namePrefix);
     }
 
-    private void ToDot(IEnumerable<ParsingCallerInfo> callerInfos)
+    private void ToDot(IEnumerable<ParsingCallerInfo> callerInfos, string namePrefix)
     {
       var sb = new StringBuilder();
       sb.Append(@"
         digraph RecoveryParser
         {
           compound=true;
-        ");
+          label=");
+      sb.Append('\"');
+      sb.Append(namePrefix);
+      sb.Append('\"');
+      sb.AppendLine();
+
       var visited = new HashSet<ParsingCallerInfo>();
       foreach (var callerInfo in callerInfos)
         ToDot(sb, visited, callerInfo, true);
 
       sb.Append(@"}");
 
-      var fileName = Path.GetTempFileName();
+      var fileName = Path.Combine(Path.GetTempPath(), namePrefix + ".dot");
       File.WriteAllText(fileName, sb.ToString());
       X.ConvertToDot(fileName);
     }
@@ -1066,8 +1071,12 @@ namespace Nitra.DebugStrategies
 
     private void ToDot(StringBuilder sb, HashSet<ParsingCallerInfo> visited, ParsingCallerInfo callerInfo, bool isStart)
     {
+      if (string.Equals(callerInfo.Sequence.RuleName, "s", StringComparison.InvariantCultureIgnoreCase))
+        return;
+
       if (!visited.Add(callerInfo))
         return;
+
       const string StartStyle = " peripheries=2 color=blue";
       ;
       var style = isStart ? StartStyle : "";
