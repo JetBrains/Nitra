@@ -571,6 +571,12 @@ namespace Nitra.DebugStrategies
 
     #region RecoverAllWays
 
+    const int Root   = 0x01;
+    const int Callee = 0x02;
+    const int Caller = 0x04;
+    const int Token  = 0x08;
+
+
     private void RecoverAllWays(RecoveryParser rp)
     {
       // ReSharper disable once RedundantAssignment
@@ -597,18 +603,28 @@ namespace Nitra.DebugStrategies
 
         if (tokens.Count > 0)
         {
+          var root = rp.Sequences.First();
+
           var sequencesInProgress = new Dictionary<ParsingSequence, HashSet<ParsedSequence>>();
           var roots = CalcRoots(rp, maxPos, sequencesInProgress);
+
+          Mark(roots, Root);
 
           ToDot(roots, "roots");
 
           var callers = CalcCallers(rp, tokens);
 
+          Mark(callers, Caller);
+
           ToDot(callers, "callers");
 
           var callees = CalcCallees(roots);
 
+          Mark(callees, Callee);
+
           ToDot(callees, "callees");
+
+          ToDot(Enumerable.Concat(callees, callers), "all");
 
           var callPathSequences = new Dictionary<ParsingSequence, List<int>>();
           var callPath = CalcCallPath(callees, callers, callPathSequences);
@@ -633,6 +649,18 @@ namespace Nitra.DebugStrategies
       //foreach (var del in deleted)
       //  DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
+    }
+
+    private static void Mark(HashSet<ParsingCallerInfo> callers, int mask)
+    {
+      foreach (var item in callers)
+        item.Mask |= mask;
+    }
+
+    private static void Mark(Dictionary<ParsingCallerInfo, bool> roots, int mask)
+    {
+      foreach (var item in roots)
+        item.Key.Mask |= mask;
     }
 
     private static HashSet<ParsingCallerInfo> CalcCallPath(HashSet<ParsingCallerInfo> callees, HashSet<ParsingCallerInfo> callers, Dictionary<ParsingSequence, List<int>> callPathSequences)
@@ -669,6 +697,8 @@ namespace Nitra.DebugStrategies
       var callers = new HashSet<ParsingCallerInfo>();
       foreach (var token in tokens)
       {
+        Mark(token.Token.Callers, Token);
+
         var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
         //ToDot(token.Token.Callers);
         foreach (var callerInfo in token.Token.Callers)
@@ -689,6 +719,8 @@ namespace Nitra.DebugStrategies
       foreach (var record in records)
         if (!record.IsComplete)
         {
+          if (record.ToString().Contains("Root"))
+          {}
           HashSet<ParsedSequence> sequences;
           if (!sequencesInProgress.TryGetValue(record.Sequence.ParsingSequence, out sequences))
           {
@@ -1066,7 +1098,31 @@ namespace Nitra.DebugStrategies
 
     string Label(ParsingCallerInfo callerInfo)
     {
-      return X.DotEscape(callerInfo.State + " " + callerInfo.ToString());
+      string prefix = "";
+
+      if (HasMask(callerInfo, Root))
+        prefix += "~";
+
+      if (HasMask(callerInfo, Token))
+        prefix += "%";
+
+      if (HasMask(callerInfo, Callee))
+        prefix += ">";
+
+      if (HasMask(callerInfo, Caller))
+        prefix += "<";
+
+      return X.DotEscape(prefix + callerInfo.State + " " + callerInfo.ToString());
+    }
+
+    string GetStyle(ParsingCallerInfo callerInfo, int mask, string style)
+    {
+      return HasMask(callerInfo, mask) ? style : "";
+    }
+
+    static bool HasMask(ParsingCallerInfo callerInfo, int  mask)
+    {
+      return (callerInfo.Mask & mask) == mask;
     }
 
     private void ToDot(StringBuilder sb, HashSet<ParsingCallerInfo> visited, ParsingCallerInfo callerInfo, bool isStart)
@@ -1077,9 +1133,19 @@ namespace Nitra.DebugStrategies
       if (!visited.Add(callerInfo))
         return;
 
-      const string StartStyle = " peripheries=2 color=blue";
-      ;
+      const string StartStyle  = " peripheries=2";
+      
       var style = isStart ? StartStyle : "";
+      
+      if (HasMask(callerInfo, Callee | Caller))
+        style += " color=red";
+      else if (HasMask(callerInfo, Callee))
+        style += " color=blue";
+      else if (HasMask(callerInfo, Caller))
+        style += " color=green";
+
+      if (HasMask(callerInfo, Root))
+        style += " color=purple";
 
       var id = Name(callerInfo);
       sb.AppendLine(id + "[label=\"" + Label(callerInfo) + "\" shape=box" + style + "]");
