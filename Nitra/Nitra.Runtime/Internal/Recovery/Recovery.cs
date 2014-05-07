@@ -388,7 +388,7 @@ namespace Nitra.DebugStrategies
       if (!hasSequence)
       {
         if (subrule.IsEmpty)
-          localMin = new TokenChanges(seq.SubruleMandatoryTokenCount(subrule), 0);
+          localMin = new TokenChanges(seq.SubruleMandatoryTokenCount(subrule.State), 0);
         else
           localMin = new TokenChanges();
       }
