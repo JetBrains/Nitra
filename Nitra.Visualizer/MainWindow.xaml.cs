@@ -545,7 +545,7 @@ namespace Nitra.Visualizer
       catch (Exception ex)
       {
         ClearMarkers();
-        MessageBox.Show(this, ex.Message);
+        MessageBox.Show(this, ex.GetType().Name + ":" + ex.Message);
         Debug.WriteLine(ex.ToString());
       }
     }
@@ -586,7 +586,7 @@ namespace Nitra.Visualizer
           }
         }
       }
-      catch (Exception ex) { Debug.WriteLine(ex.Message); }
+      catch (Exception ex) { Debug.WriteLine(ex.GetType().Name + ":" + ex.Message); }
     }
 
     private void textBox1_MouseHover(object sender, MouseEventArgs e)
@@ -1223,7 +1223,7 @@ namespace Nitra.Visualizer
         }
         catch (Exception ex)
         {
-          MessageBox.Show(this, "Fail to update the test '" + test.Name + "'." + Environment.NewLine + ex.Message, "Visualizer!", 
+          MessageBox.Show(this, "Fail to update the test '" + test.Name + "'." + Environment.NewLine + ex.GetType().Name + ":" + ex.Message, "Visualizer!", 
             MessageBoxButton.YesNo, 
             MessageBoxImage.Error);
         }

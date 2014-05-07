@@ -71,7 +71,7 @@ namespace Nitra.Visualizer
         }
         catch (Exception ex)
         {
-          MessageBox.Show(this, "Can't create the folder '" + testsLocationRootFull + "'.\r\n" + ex.Message, "Visualizer", MessageBoxButton.OK,
+          MessageBox.Show(this, "Can't create the folder '" + testsLocationRootFull + "'.\r\n" + ex.GetType().Name + ":" + ex.Message, "Visualizer", MessageBoxButton.OK,
             MessageBoxImage.Error);
           _testsLocationRootTextBox.Focus();
           return false;
@@ -108,7 +108,7 @@ namespace Nitra.Visualizer
       }
       catch (Exception ex)
       {
-        _testsLocationRootFullPathTextBlock.Text = "Error: " + ex.Message;
+        _testsLocationRootFullPathTextBlock.Text = ex.GetType().Name + ":" + ex.Message;
         SetRedColor();
       }
     }

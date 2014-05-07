@@ -102,6 +102,8 @@ namespace Nitra.DebugStrategies
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
+      rp.Visualize();
+
       var memiozation = new Dictionary<ParsedSequenceKey, SequenceTokenChanges>();
       FindBestPath(startSeq, textLen, memiozation);
 
@@ -118,7 +120,7 @@ namespace Nitra.DebugStrategies
       var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new SubruleTokenChanges[0]) },
         parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].TotalTokenChanges, memiozation);
 
-      ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
+      //ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
 
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
@@ -206,9 +208,6 @@ namespace Nitra.DebugStrategies
       //var stateIndex = subrule.State;
       //var state = stateIndex < 0 ? null : seq.ParsingSequence.States[stateIndex];
 
-      if (subrule.End == 11)
-      { }
-
       var currentNodes = new FlattenSequences();
       //var subruledDesc = seq.GetSubruleDescription(subrule.State);
       if (subrule.IsEmpty)
@@ -219,9 +218,6 @@ namespace Nitra.DebugStrategies
       else
       {
         var sequences = seq.GetSequencesForSubrule(subrule).ToArray();
-
-        if (sequences.Length > 1)
-        { }
 
         foreach (var subSequences in sequences)
         {
@@ -392,7 +388,7 @@ namespace Nitra.DebugStrategies
       if (!hasSequence)
       {
         if (subrule.IsEmpty)
-          localMin = new TokenChanges(seq.SubruleMandatoryTokenCount(subrule), 0);
+          localMin = new TokenChanges(seq.SubruleMandatoryTokenCount(subrule.State), 0);
         else
           localMin = new TokenChanges();
       }
@@ -494,7 +490,7 @@ namespace Nitra.DebugStrategies
               if (state.IsToken)
               {
                 var simple = state as ParsingState.Simple;
-                if (simple == null || simple.RuleParser.Descriptor.Name != "S" && simple.RuleParser.Descriptor.Name != "s")
+                if (simple == null || !simple.RuleParser.Descriptor.Name.Equals("s", StringComparison.InvariantCultureIgnoreCase))
                   continue;
                 rp.PredictionOrScanning(maxPos, record, false);
               }
@@ -608,28 +604,28 @@ namespace Nitra.DebugStrategies
           var sequencesInProgress = new Dictionary<ParsingSequence, HashSet<ParsedSequence>>();
           var roots = CalcRoots(rp, maxPos, sequencesInProgress);
 
-          Mark(roots, Root);
+          //Mark(roots, Root);
 
-          ToDot(roots, "roots");
+          //ToDot(roots, "roots");
 
           var callers = CalcCallers(rp, tokens);
 
           Mark(callers, Caller);
 
-          ToDot(callers, "callers");
+          //ToDot(callers, "callers");
 
           var callees = CalcCallees(roots);
 
-          Mark(callees, Callee);
+          //Mark(callees, Callee);
 
-          ToDot(callees, "callees");
+          //ToDot(callees, "callees");
 
-          ToDot(Enumerable.Concat(callees, callers), "all");
+          //ToDot(Enumerable.Concat(callees, callers), "all");
 
           var callPathSequences = new Dictionary<ParsingSequence, List<int>>();
           var callPath = CalcCallPath(callees, callers, callPathSequences);
 
-          ToDot(callPath, "callPath");
+          //ToDot(callPath, "callPath");
 
           UpdateParserState(callPathSequences, sequencesInProgress, maxPos, callPath);
 
@@ -704,15 +700,10 @@ namespace Nitra.DebugStrategies
       {
         Mark(token.Token.Callers, Token);
 
-        var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
+        //var yyy = rp.ParseResult.Text.Substring(token.Start, token.Length);
         //ToDot(token.Token.Callers);
         foreach (var callerInfo in token.Token.Callers)
-        {
-          if (callerInfo.Sequence.RuleName == "Invocation")
-          {
-          }
           FindAllCallers(callers, callerInfo);
-        }
       }
 
       return callers;
@@ -725,8 +716,6 @@ namespace Nitra.DebugStrategies
       foreach (var record in records)
         if (!record.IsComplete)
         {
-          if (record.ToString().Contains("Root"))
-          {}
           HashSet<ParsedSequence> sequences;
           if (!sequencesInProgress.TryGetValue(record.Sequence.ParsingSequence, out sequences))
           {

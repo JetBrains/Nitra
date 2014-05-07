@@ -47,7 +47,7 @@ namespace Nitra.Visualizer
       }
       catch (Exception ex)
       {
-        Debug.WriteLine(ex.Message);
+        Debug.WriteLine(ex.GetType().Name + ":" + ex.Message);
         firstErrorOffset = 0;
         return Enumerable.Empty<NewFolding>();
       }

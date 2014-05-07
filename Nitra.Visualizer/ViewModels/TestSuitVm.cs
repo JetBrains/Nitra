@@ -93,7 +93,7 @@ namespace Nitra.Visualizer.ViewModels
       catch (Exception ex)
       {
         TestState = TestState.Ignored;
-        _hint = "Failed to load test suite:" + Environment.NewLine + ex.Message;
+        _hint = "Failed to load test suite:" + Environment.NewLine + ex.GetType().Name + ":" + ex.Message;
       }
 
       Name = Path.GetFileName(testSuitPath);

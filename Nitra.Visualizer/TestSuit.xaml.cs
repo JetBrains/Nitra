@@ -75,7 +75,7 @@ namespace Nitra.Visualizer
       {
         syntaxModules.Clear();
         _assemblies.Foreground = Brushes.Red;
-        _assemblies.ToolTip = "Error: " + ex.Message + Environment.NewLine + _assembiesToolTip;
+        _assemblies.ToolTip = ex.GetType().Name + ":" + ex.Message + Environment.NewLine + _assembiesToolTip;
       }
 
       var prevItems = _syntaxModules.ItemsSource as ObservableCollection<SyntaxModuleVm>;
@@ -328,7 +328,7 @@ namespace Nitra.Visualizer
       }
       catch (Exception ex)
       {
-        MessageBox.Show(this, ex.Message, "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        MessageBox.Show(this, ex.GetType().Name + ":" + ex.Message, "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
         return;
       }
 
