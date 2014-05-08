@@ -102,7 +102,7 @@ namespace Nitra.DebugStrategies
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
-      rp.Visualize();
+      //rp.Visualize();
 
       var memiozation = new Dictionary<ParsedSequenceKey, SequenceTokenChanges>();
       FindBestPath(startSeq, textLen, memiozation);
@@ -120,7 +120,7 @@ namespace Nitra.DebugStrategies
       var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new SubruleTokenChanges[0]) },
         parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].TotalTokenChanges, memiozation);
 
-      //ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
+      ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
 
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
@@ -642,8 +642,8 @@ namespace Nitra.DebugStrategies
       }
       while (rp.MaxPos > maxPos);
 
-      //foreach (var del in deleted)
-      //  DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
+      foreach (var del in deleted)
+        DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
     }
 
