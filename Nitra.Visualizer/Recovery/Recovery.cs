@@ -139,7 +139,8 @@ namespace Nitra.DebugStrategies
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
-      AstPatcher.Patch(startSeq, rp, memiozation);
+      AstPatcher3.PatchAst(startSeq, rp, _deletedToken);
+      //AstPatcher.Patch(startSeq, rp, memiozation);
 
       _parseResult = null;
 
