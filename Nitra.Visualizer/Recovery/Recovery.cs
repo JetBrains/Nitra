@@ -102,7 +102,7 @@ namespace Nitra.DebugStrategies
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
-      rp.Visualize();
+      //rp.Visualize();
 
       var memiozation = new Dictionary<ParsedSequenceKey, SequenceTokenChanges>();
       FindBestPath(startSeq, textLen, memiozation);
@@ -605,7 +605,7 @@ namespace Nitra.DebugStrategies
           var sequencesInProgress = new Dictionary<ParsingSequence, HashSet<ParsedSequence>>();
           var roots = CalcRoots(rp, maxPos, sequencesInProgress);
 
-          //Mark(roots, Root);
+          Mark(roots, Root);
 
           //ToDot(roots, "roots");
 
@@ -617,7 +617,7 @@ namespace Nitra.DebugStrategies
 
           var callees = CalcCallees(roots);
 
-          //Mark(callees, Callee);
+          Mark(callees, Callee);
 
           //ToDot(callees, "callees");
 
@@ -643,8 +643,8 @@ namespace Nitra.DebugStrategies
       }
       while (rp.MaxPos > maxPos);
 
-      //foreach (var del in deleted)
-      //  DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
+      foreach (var del in deleted)
+        DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
     }
 
