@@ -643,8 +643,8 @@ namespace Nitra.DebugStrategies
       }
       while (rp.MaxPos > maxPos);
 
-      foreach (var del in deleted)
-        DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
+      //foreach (var del in deleted)
+      //  DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
     }
 
