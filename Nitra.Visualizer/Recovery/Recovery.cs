@@ -102,10 +102,10 @@ namespace Nitra.DebugStrategies
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
-      //rp.Visualize();
+      rp.Visualize();
 
-      var memiozation = new Dictionary<ParsedSequenceKey, SequenceTokenChanges>();
-      FindBestPath(startSeq, textLen, memiozation);
+      //var memiozation = new Dictionary<ParsedSequenceKey, SequenceTokenChanges>();
+      //FindBestPath(startSeq, textLen, memiozation);
 
       UpdateFindBestPathTime();
 #if DebugOutput
@@ -117,8 +117,8 @@ namespace Nitra.DebugStrategies
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
-      var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new SubruleTokenChanges[0]) },
-        parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].TotalTokenChanges, memiozation);
+      //var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new SubruleTokenChanges[0]) },
+      //  parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].TotalTokenChanges, memiozation);
 
       //ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
 
@@ -131,7 +131,7 @@ namespace Nitra.DebugStrategies
       Debug.WriteLine("FlattenSequence took: " + timer.Elapsed);
 #endif
 
-      CollectError(rp, results);
+      //CollectError(rp, results);
 #if DebugThreading
       Debug.WriteLine("<<<< Strategy " + _id + " ThreadId=" + System.Threading.Thread.CurrentThread.ManagedThreadId);
 #endif
@@ -566,7 +566,7 @@ namespace Nitra.DebugStrategies
       }
     }
 
-    #region RecoverAllWays
+    #region |
 
     const int Root   = 0x01;
     const int Callee = 0x02;
