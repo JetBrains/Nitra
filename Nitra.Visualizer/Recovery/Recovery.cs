@@ -80,7 +80,7 @@ namespace Nitra.DebugStrategies
       var rp = new RecoveryParser(parseResult);
       _recoveryParser = rp;
       rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
-      var startSeq = rp.Sequences.First().Value;
+      var startSeq = rp.StartSequence;
 
       UpdateEarleyParseTime();
 #if DebugOutput
