@@ -1,0 +1,501 @@
+﻿using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.Runtime.Reflection;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Internal.Recovery
+{
+  public class AstPatcher4
+  {
+    [Record]
+    private class SubrulesRange
+    {
+      public BeginIndex : int;
+      public EndIndex   : int;
+    }
+
+    [Record]
+    public struct RecoveredSequence
+    {
+      public Subrules        : array[ParsedSubrule * TokenChanges];
+      public TokenChanges    : TokenChanges;
+    }
+
+    [Record]
+    public struct RecoveredPrefix
+    {
+      public TokenChanges : TokenChanges;
+    }
+
+    [Record]
+    public struct RecoveredPostfix
+    {
+      public ChangesForBP : Nemerle.Collections.Hashtable[int, TokenChanges];
+    }
+
+    private         _recoveredSequence  : Nemerle.Collections.Hashtable[int * int * ParsingSequence, RecoveredSequence]         = Nemerle.Collections.Hashtable();
+    private         _recoveredPrefix    : Nemerle.Collections.Hashtable[int * int * ExtensibleRuleParserData, RecoveredPrefix]  = Nemerle.Collections.Hashtable();
+    private         _recoveredPostfix   : Nemerle.Collections.Hashtable[int * int * ExtensibleRuleParserData, RecoveredPostfix] = Nemerle.Collections.Hashtable();
+
+    private         _toProcess          : System.Collections.Generic.Queue[ParsedSequence * int] = System.Collections.Generic.Queue();
+    private         _startSeq           : ParsedSequence;
+    private         _recoveryParser     : RecoveryParser;
+    private         _deletedTokens      : Dictionary[ParsedSequenceAndSubrule, bool];
+    private         _allSubrules        : List[ParsedSubrule] = List();
+    private mutable _subruleChanges     : array[TokenChanges];
+    private         _subruleEndsAt      : array[Nemerle.Collections.Hashtable[ParsedSequence, SubrulesRange]];
+    private         _stateEndChanges    : Nemerle.Collections.Hashtable[ParsedSequence * int * int, TokenChanges] = Nemerle.Collections.Hashtable();
+    private mutable _iteration          : int = 0;
+    private mutable _recursive          : bool = false;
+    private mutable _updated            : bool = false;
+
+    public this(startSeq : ParsedSequence, recoveryParser : RecoveryParser, deletedTokens : Dictionary[ParsedSequenceAndSubrule, bool])
+    {
+      _startSeq       = startSeq;
+      _recoveryParser = recoveryParser;
+      _deletedTokens  = deletedTokens;
+      _subruleEndsAt  = array(_recoveryParser.ParseResult.Text.Length + 1);
+    }
+
+    public static PatchAst(startSeq : ParsedSequence, recoveryParser : RecoveryParser, deletedTokens : Dictionary[ParsedSequenceAndSubrule, bool]) : void
+    {
+      def astPatcher = AstPatcher4(startSeq, recoveryParser, deletedTokens);
+      def time = Diagnostics.Stopwatch.StartNew();
+      astPatcher.FindBestPath();
+      time.Stop();
+      _ = time.Elapsed;
+      astPatcher.PatchAst();
+      //astPatcher.Visualize();
+    }
+
+    public PatchAst() : void
+    {
+      ParseSequence(_startSeq, _recoveryParser.ParseResult.Text.Length);
+      while (_toProcess.Count > 0)
+        ParseSequence(_toProcess.Dequeue());
+    }
+
+    public ParseSequence(seq : ParsedSequence, end : int) : void
+    {
+      def makeSequence(seq : ParsedSequence, mutable end : int) : void
+      {
+        def key = (seq.StartPos, end, seq.ParsingSequence);
+        unless (_recoveredSequence.Contains(key))
+        {
+          def subrules = GetSubrulesAndChanges(seq, end);
+          def ast = RecoveredSequence(subrules, seq.Ends[end]);
+          foreach ((subrule, changes) in _subrules)
+          {
+            def sequences = seq.GetSequencesForSubrule(subrule).ToArray();
+            when (sequences.Length > 0)
+            {
+              assert3(sequences.Length == 1);
+              assert(sequences[0].Ends[subrule.End] == changes);
+              _toProcess.Enqueue(sequences[0], subrule.End);
+            }
+          }
+          _recoveredSequence.Add(key, ast);
+        }
+      }
+
+      match (seq.ParsingSequence)
+      {
+        | Sequence =>
+          makeSequence(seq, end);
+
+        | Extensible as parsingSequence =>
+          def key = (seq.StartPos, end, seq.ParsingSequence);
+          def bp = parsingSequence.RuleParser.BindingPower;
+          def subrules = GetSubrulesAndChanges(seq, end);
+          unless (_recoveredSequence.Contains(key))
+            _recoveredSequence.Add(key, RecoveredSequence(subrules, seq.Ends[end]));
+          foreach ((subrule, changes) in subrules with i)
+          {
+            def key = (subrule.Begin, subrule.End, parsingSequence.RuleParser.ParserData);
+            if (i == 0)
+            {
+              mutable prefix;
+              if (_recoveredPrefix.TryGetValue(key, out prefix))
+                assert(prefix.TokenChanges == changes);
+              else
+                _recoveredPrefix.Add(key, RecoveredPrefix(changes));
+            }
+            else
+            {
+              when (subrule.Begin == subrule.End)
+                continue;
+              mutable postfix;
+              if (_recoveredPostfix.TryGetValue(key, out postfix))
+              {
+                if (postfix.ChangesForBP.Contains(end))
+                  assert(postfix.ChangesForBP[end] == changes);
+                else
+                  postfix.ChangesForBP.Add(bp, changes);
+              }
+              else
+              {
+                postfix = RecoveredPostfix(Nemerle.Collections.Hashtable());
+                _recoveredPostfix.Add(key, postfix);
+                postfix.ChangesForBP.Add(bp, changes);
+              }
+            }
+
+            foreach (sequence in seq.GetSequencesForSubrule(subrule))
+            {
+              mutable seqChanges;
+              when (sequence.Ends.TryGetValue(subrule.End, out seqChanges))
+              when (seqChanges == changes)
+                makeSequence(sequence, subrule.End);
+            }
+          }
+      }
+    }
+
+    private _subrules : List[ParsedSubrule * TokenChanges] = List();
+    private GetSubrulesAndChanges(seq : ParsedSequence, mutable end : int) : array[ParsedSubrule * TokenChanges]
+    {
+      _subrules.Clear();
+      mutable changes = seq.Ends[end];
+      mutable state = seq.ParsingSequence.EndStates.Where(endState =>
+      {
+        mutable stateChanges;
+        if (_stateEndChanges.TryGetValue((seq, endState, end), out stateChanges))
+          stateChanges == changes
+        else
+          false
+      }).Max();
+
+      endSearch:
+      {
+        while (true) continueSearch:
+        {
+          def range = _subruleEndsAt[end][seq];
+          def prevStates = seq.ParsingSequence.States[state].Prev;
+          for (mutable i = range.BeginIndex; i < range.EndIndex; ++i)
+          {
+            def subrule = _allSubrules[i];
+            when (subrule.State != state)
+              continue;
+            def subruleChanges = _subruleChanges[i];
+            when (subrule.Begin == seq.StartPos && seq.ParsingSequence.States[subrule.State].IsStart && subruleChanges == changes)
+            {
+              _subrules.Add(subrule, subruleChanges);
+              endSearch();
+            }
+            foreach (prevState in prevStates)
+            {
+              mutable prevChanges;
+              when (_stateEndChanges.TryGetValue((seq, prevState, subrule.Begin), out prevChanges))
+              when (prevChanges + subruleChanges == changes)
+              {
+                end     = subrule.Begin;
+                changes = prevChanges;
+                state   = prevState;
+                _subrules.Add(subrule, subruleChanges);
+                continueSearch();
+              }
+            }
+          }
+          assert3(false);
+        }
+      }
+      _subrules.Reverse();
+      _subrules.ToArray();
+    }
+
+    private static SubrulesComparison : Comparison[ParsedSubrule] = (l, r) =>
+    {
+      res:
+        {
+          mutable c;
+          // Группируем по хвостамю
+          c = l.End.CompareTo(r.End); when (c != 0) res(c);
+          // Двигаем пустылки назад.
+          c = l.Begin.CompareTo(r.Begin); when (c != 0) res(c);
+          // Сдвигаем большие состояния в конец.
+          // При текущей форме графа это позволяет произвести рассчёт за одн проход.
+          // Если граф состояний парсинга изменится для пустышек может понадоится итерировать до фиксированной точки.
+          l.State.CompareTo(r.State);
+        }
+    };
+
+    public AddSubrulesRange(seq : ParsedSequence, begin : int, end : int) : void
+    {
+      def pos = _allSubrules[begin].End;
+      when (_subruleEndsAt[pos] == null)
+        _subruleEndsAt[pos] = Nemerle.Collections.Hashtable();
+      _subruleEndsAt[pos].Add(seq, SubrulesRange(begin, end));//отрицательный begin означет что диапазон ещё не обсчитан
+    }
+
+    public FindBestPath() : void
+    {
+      def tmpSubrules = List();
+      foreach (seq in _recoveryParser.Sequences.Values)
+      {
+        when (seq.ParsedSubrules.Count == 0)
+          continue;
+        tmpSubrules.Clear();
+        tmpSubrules.AddRange(seq.ParsedSubrules);
+        tmpSubrules.Sort(SubrulesComparison);
+        mutable end   = _allSubrules.Count;
+        mutable begin = end;
+        _allSubrules.AddRange(tmpSubrules);
+        for (; end < _allSubrules.Count; ++end)
+          when (_allSubrules[begin].End != _allSubrules[end].End)
+          {
+            AddSubrulesRange(seq, begin, end);
+            begin = end;
+          }
+        AddSubrulesRange(seq, begin, end);
+      }
+      _subruleChanges = array(_allSubrules.Count);
+
+      foreach (ranges when ranges != null in _subruleEndsAt)
+      {
+        _recursive = false;
+        do
+        {
+          ++_iteration;
+          _updated = false;
+          foreach (kv in ranges)
+            CalcSubrulesRange(kv.Key, kv.Value);
+        }//Если нет рекурсии то рассчёт происходит за один проход.
+        while (_updated && _recursive);
+      }
+
+      foreach (end in _startSeq.Ends.Keys.ToArray())
+      {
+        ++_iteration;
+        _ = CalcSequenceEndChanges(_startSeq, end);
+      }
+    }
+
+    private CalcSequenceEndChanges(parsingSequence : ParsingSequence, begin : int, end : int) : TokenChanges
+    {
+      mutable seq;
+      if (_recoveryParser.Sequences.TryGetValue((begin, parsingSequence), out seq))
+        CalcSequenceEndChanges(seq, end);
+      else
+        TokenChanges(0, 0);//Нет последовательности. Значит было успешно разобрано основным парсером.
+    }
+
+    private CalcSequenceEndChanges(seq : ParsedSequence, end : int) : TokenChanges
+    {
+      mutable changes;
+      unless (seq.Ends.TryGetValue(end, out changes))
+        return TokenChanges.Fail;
+
+      when (seq.Iteration == _iteration)
+        return changes;
+
+      //обработка рекурсии
+      when (seq.Iteration > _iteration)
+      {
+        _recursive = true;
+        return changes;
+      }
+
+      seq.Iteration = _iteration + 1;
+
+      def oldChanges = changes;
+      def range = _subruleEndsAt[end][seq];
+      CalcSubrulesRange(seq, range);
+      foreach (endState in seq.ParsingSequence.EndStates)
+      {
+        mutable stateChanges;
+        when (_stateEndChanges.TryGetValue((seq, endState, end), out stateChanges))
+          changes = TokenChanges.Min(changes, stateChanges);
+      }
+      seq.Ends[end] = changes;
+      seq.Iteration = _iteration;
+      _updated = _updated || oldChanges != changes;
+      changes
+    }
+
+    private CalcSubrulesRange(seq : ParsedSequence, range : SubrulesRange) : void
+    {
+      for (mutable i = range.BeginIndex; i < range.EndIndex; ++i)
+      {
+        def subrule = _allSubrules[i];
+        def state = seq.ParsingSequence.States[subrule.State];
+
+        def prevChanges =
+          if (seq.StartPos == subrule.Begin && state.IsStart)
+            // Последовательность всегда начинается без изменений. Предыдущие изменения суммируются в момент вызова последовательности
+            // ибо последовательность может быть вызвана из разных мест и соответственно иметь разное число предыдущих изменений.
+            TokenChanges(0, 0)
+          else
+          {
+            mutable minChanges = TokenChanges.Fail;
+            foreach (prevState in state.Prev)
+            {
+              mutable curChanges;
+              def key = (seq, prevState, subrule.Begin);
+              when (_stateEndChanges.TryGetValue(key, out curChanges))
+                minChanges = TokenChanges.Min(curChanges, minChanges);
+            }
+            minChanges
+          };
+
+        def subruleChanges = CalcSubruleTokenChanges(seq, subrule, state);
+        _subruleChanges[i] = subruleChanges;
+
+        def key = (seq, subrule.State, subrule.End);
+        def newChanges = prevChanges + subruleChanges;
+        mutable oldChanges;
+        unless (_stateEndChanges.TryGetValue(key, out oldChanges))
+          oldChanges = TokenChanges.Fail;
+        _stateEndChanges[key] = TokenChanges.Min(newChanges, oldChanges);
+      }
+    }
+
+    private CalcSubruleTokenChanges(seq : ParsedSequence, subrule : ParsedSubrule, state : ParsingState) : TokenChanges
+    {
+      if (_deletedTokens.ContainsKey(ParsedSequenceAndSubrule(seq, subrule)))
+        TokenChanges(0, 1);
+      else match (state)
+      {
+        | Scan when subrule.IsEmpty => TokenChanges(state.Subrule.MandatoryTokenCount, 0);
+        | Scan | Predicate          => TokenChanges(0, 0)
+        | Simple           as state1 with parsingSequence = state1.RuleParser.ParsingSequence
+        | Extensible       as state2 with parsingSequence = state2.RuleParser.ParsingSequence
+        | Subsequence      as state3 with parsingSequence = state3.Sequence =>
+          if (subrule.IsEmpty)
+          {
+            def changes = TokenChanges(parsingSequence.MandatoryTokenCount, 0);
+            mutable innerSeq;
+            mutable oldChanges;
+            when (_recoveryParser.Sequences.TryGetValue((subrule.Begin, parsingSequence), out innerSeq))
+            when (innerSeq.Ends.TryGetValue(subrule.End, out oldChanges))
+            when (oldChanges != changes)
+            {
+              _updated = true;
+              innerSeq.Ends[subrule.End] = changes;
+            }
+            changes
+          }
+          else
+            CalcSequenceEndChanges(parsingSequence, subrule.Begin, subrule.End);
+
+        | ExtensionPrefix  as prefix when subrule.IsEmpty => TokenChanges(prefix.RuleParser.MandatoryTokenCount, 0)
+        | ExtensionPrefix  as prefix =>
+          mutable minChanges = TokenChanges.Fail;
+          foreach (ruleParser in prefix.RuleParser.PrefixRules)
+            minChanges = TokenChanges.Min(minChanges, CalcSequenceEndChanges(ruleParser.ParsingSequence, subrule.Begin, subrule.End));
+          minChanges
+
+        | ExtensionPostfix when subrule.IsEmpty => TokenChanges(0, 0)
+        | ExtensionPostfix as postfix =>
+          mutable minChanges = TokenChanges.Fail;
+          foreach (ruleParser when postfix.RuleParser.FirstPostfixRuleId <= ruleParser.RuleId in postfix.RuleParser.PostfixRules)
+            minChanges = TokenChanges.Min(minChanges, CalcSequenceEndChanges(ruleParser.ParsingSequence, subrule.Begin, subrule.End));
+          minChanges
+      }
+    }
+
+    public Visualize() : void
+    {
+      def fileName = IO.Path.GetTempFileName();
+      IO.File.WriteAllText(fileName, ToDot());
+      X.ConvertToDot(fileName);
+    }
+
+    public ToDot() : string
+    {
+      def nodes = List();
+      def edges = List();
+      when (false)nodes.Add("");
+
+      def keyToId(begin, end, parsingSequence)
+      {
+        $"n$(begin)_$(end)_$(parsingSequence.Id)"
+      }
+
+      foreach ((key, recoveredSequence) in _recoveredSequence.KeyValuePairs)
+      {
+        def (begin, end, parsingSequence) = key;
+        def id = keyToId(key);
+        def states = HashSet(recoveredSequence.Subrules.Select((subrule, _) => (subrule.Begin, subrule.State)));
+        //def edgeLabel(begin, end)
+        //{
+        //  $<# [label="$(X.DotEscape(_recoveryParser.ParseResult.Text.Substring(begin, end - begin)))"] #>
+        //}
+        //nodes.Add($<#$(Name(state)) [label="$(Label(state))"]#>);
+        foreach (start in parsingSequence.StartStates)
+          if (start < 0) when (begin == end)
+            edges.Add($<#$(id)_Begin -> $(id)_End [label = "$(recoveredSequence.TokenChanges)"]#>);
+          else when (states.Contains((begin, start)))
+            edges.Add($<#$(id)_Begin -> $(id)_$(begin)_$(start)#>);
+
+        foreach ((subrule, changes) in recoveredSequence.Subrules)
+        {
+          def state = parsingSequence.States[subrule.State];
+          def curNode = $<#$(id)_$(subrule.Begin)_$(state.Id)#>;
+          def nextNodes = List();
+          foreach (next in state.Next)
+            if (next < 0) when (subrule.End == end)
+              nextNodes.Add($<#$(id)_End#>, changes);
+            else when (states.Contains((subrule.End, next)))
+              nextNodes.Add($<#$(id)_$(subrule.End)_$(next)#>, changes);
+
+          def callSequence(seq)
+          {
+            mutable ast;
+            def key = (subrule.Begin, subrule.End, seq);
+            when (_recoveredSequence.TryGetValue(key, out ast))
+            {
+              edges.Add($<#$curNode -> $(keyToId(key))_Begin [color = blue]#>);
+              foreach ((nextNode, _) in nextNodes)
+                edges.Add($<#$(keyToId(key))_End -> $nextNode [color = green]#>);
+            }
+          }
+
+          match (state)
+          {
+            | Scan | Predicate => ()
+            | Simple      as state1 with seq = state1.RuleParser.ParsingSequence
+            | Extensible  as state2 with seq = state2.RuleParser.ParsingSequence
+            | Subsequence as state3 with seq = state3.Sequence =>
+              callSequence(seq)
+
+            | ExtensionPrefix  as state =>
+              def key = (subrule.Begin, subrule.End, state.RuleParser.ParserData);
+              when (_recoveredPrefix.Contains(key))
+                foreach (prefixRule in state.RuleParser.PrefixRules)
+                  callSequence(prefixRule.ParsingSequence);
+
+            | ExtensionPostfix as state =>
+              def key = (subrule.Begin, subrule.End, state.RuleParser.ParserData);
+              when (_recoveredPostfix.Contains(key))
+                foreach (postfixRule when state.RuleParser.FirstPostfixRuleId <= postfixRule.RuleId in state.RuleParser.PostfixRules)
+                  callSequence(postfixRule.ParsingSequence);
+
+          }
+          foreach ((nextNode, changes) in nextNodes)
+            edges.Add($<#$curNode -> $nextNode [label = "$changes"]#>);
+        }
+      }
+
+      //nodes.Add(<#End [label="-1: End"]#>);
+
+      def content = $<#
+        digraph RecoveryParser
+        {
+          rankdir=LR;
+          compound=true;
+    
+          ..$(nodes; ";\r\n          ")
+    
+          ..$(edges; ";\r\n          ")
+        }
+      #>;
+      
+      content
+    }
+  }
+}
