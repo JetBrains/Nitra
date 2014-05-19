@@ -7,9 +7,12 @@ using Nemerle.Utility;
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 
 using Hashtable = Nemerle.Collections.Hashtable;
+using SCG = System.Collections.Generic;
 
 namespace Nitra.Internal.Recovery
 {
@@ -365,9 +368,89 @@ namespace Nitra.Internal.Recovery
 
     public Visualize() : void
     {
-      def fileName = IO.Path.GetTempFileName();
-      IO.File.WriteAllText(fileName, ToDot());
-      X.ConvertToDot(fileName);
+      def dir = Path.Combine(Path.GetTempPath(), "Dot");
+      when (Directory.Exists(dir))
+      {
+        Directory.Delete(dir, recursive=true);
+        _ = Directory.CreateDirectory(dir);
+      }
+        
+      def files = SCG.List();
+      
+      def startSeq = _recoveryParser.StartSequence;
+      
+      foreach (((start, end, parsingSeq), recSeq) in  _recoveredSequence.KeyValuePairs)
+        ToDot(files, start, end, parsingSeq, recSeq);
+      
+            
+      when (files.Count > 0)
+      {
+        def file = startSeq.ParsingSequence.GetFilePath(0, _recoveryParser.ParseResult.Text.Length);
+        X.ConvertToDot(files);
+      _ = Process.Start(file + ".svg");
+      }
+    }
+    
+    ToDot(files : SCG.List[string], start : int, end : int, parsingSeq : ParsingSequence, recSeq : RecoveredSequence) : void
+    {
+      def file = parsingSeq.GetFilePath(start, end);
+      files.Add(file);
+
+      def parseResult = _recoveryParser.ParseResult;
+      def nodes = SCG.List();
+      def edges = SCG.List();
+      
+      def graph = parsingSeq.MakeGraph(recSeq.Subrules);
+      
+      foreach (((stateIndex, _) as node, edges2) in graph.KeyValuePairs)
+      {
+        def border  = if (stateIndex <= 0) " peripheries=2" else "";
+        def shape   = if (stateIndex <  0) " shape=box"     else "";
+        def bkcolor = "";//if (isValidNode(nodeData, node)) " color=green"
+        nodes.Add($<#$(parsingSeq.Name(node)) [label="$(parsingSeq.Label(node))"$border$shape$bkcolor]#>);
+        
+        foreach ((subrule, changes) in edges2)
+        {
+          def state = parsingSeq.States[stateIndex];
+          def text  = 
+            if (subrule.IsEmpty)
+              "Ins: " + changes
+            else
+            {
+              def str = X.EscapeString(subrule.Length + ":«" + parseResult.Text.Substring(subrule.Begin, subrule.Length) + "»");
+              if (changes.HasChanges)
+                changes + " " + str
+              else
+                str
+            };
+              
+          foreach (nextStateIndex in state.Next)
+          {
+            def style = "";
+            def to = (nextStateIndex, subrule.End);
+              def url = parsingSeq.GetUrl(subrule.Begin, subrule.End);
+            edges.Add($<#$(parsingSeq.Name(node)) -> $(parsingSeq.Name(to)) [label="$text"$style URL="$url"]#>);
+          }
+        }
+      }
+            
+      def graphLabel = parsingSeq.GraphLabel() + "\r\n" + X.DotEscape(parseResult.DebugText) + "\r\n\r\n";
+
+      def content = $<#
+        digraph RecoveryParser
+        {
+          rankdir=LR;
+          compound=true;
+          label="$graphLabel";
+          fontname="Consolas";
+    
+          ..$(nodes; "\r\n          ")
+    
+          ..$(edges; "\r\n          ")
+        }
+      #>;
+      
+      File.WriteAllText(file, content);
     }
 
     public ToDot() : string

@@ -10,6 +10,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 
+using System.Text;
 using SCG = System.Collections.Generic;
 
 namespace Nitra.Internal.Recovery
@@ -50,6 +51,127 @@ namespace Nitra.Internal.Recovery
       #>;
       
       content
+    }
+
+    public MakeGraph(parsedSubrules : Seq[ParsedSubrule]) : Hashtable[int * int, list[ParsedSubrule]]
+    {
+      def nodes         = SCG.HashSet();
+      def nodeEdges     = Hashtable();
+      
+      foreach (subrule in parsedSubrules)
+      {
+        def key = (subrule.State, subrule.Begin);
+        mutable edges;
+        unless (nodeEdges.TryGetValue(key, out edges))
+          edges = [];
+        nodeEdges[key] = subrule :: edges;
+      }
+      
+      foreach (subrule in parsedSubrules)
+      {
+        def stateIndex = subrule.State;
+        def state      = this.States[stateIndex];
+        def from       = (stateIndex, subrule.Begin);
+
+        _ = nodes.Add(from);
+        
+        foreach (nextStateIndex in state.Next)
+        {
+          def to = (nextStateIndex, subrule.End);
+          _ = nodes.Add(to);
+        }
+      }
+
+      foreach (node in nodes)
+      {
+        mutable edges;
+        unless (nodeEdges.TryGetValue(node, out edges))
+          nodeEdges[node] = [];
+      }
+      
+      nodeEdges
+    }
+
+    public MakeGraph(parsedSubrules : Seq[ParsedSubrule * TokenChanges]) : Hashtable[int * int, list[ParsedSubrule * TokenChanges]]
+    {
+      def nodes         = SCG.HashSet();
+      def nodeEdges     = Hashtable();
+      
+      foreach ((subrule, _) as subruleChanges in parsedSubrules)
+      {
+        def key = (subrule.State, subrule.Begin);
+        mutable edges;
+        unless (nodeEdges.TryGetValue(key, out edges))
+          edges = [];
+        nodeEdges[key] = subruleChanges :: edges;
+      }
+      
+      foreach ((subrule, _) in parsedSubrules)
+      {
+        def stateIndex = subrule.State;
+        def state      = this.States[stateIndex];
+        def from       = (stateIndex, subrule.Begin);
+
+        _ = nodes.Add(from);
+        
+        foreach (nextStateIndex in state.Next)
+        {
+          def to = (nextStateIndex, subrule.End);
+          _ = nodes.Add(to);
+        }
+      }
+
+      foreach (node in nodes)
+      {
+        mutable edges;
+        unless (nodeEdges.TryGetValue(node, out edges))
+          nodeEdges[node] = [];
+      }
+      
+      nodeEdges
+    }
+    
+    public FindValidPaths(graph : Hashtable[int * int, list[ParsedSubrule]], startPos : int, end : int) : Hashtable[int * int, int]
+    {
+      def nodeData = Hashtable.[int * int, int]();
+      def walk(stateIndex : int, pos : int) : int
+      {
+        def key = (stateIndex, pos);
+        mutable res;
+        when (nodeData.TryGetValue(key, out res))
+          return res;
+          
+        when (stateIndex < 0)
+        {
+          res = if (pos == end) 1 else 0;
+          nodeData[key] = res;
+          return res;
+        }
+        
+        nodeData[key] = int.MaxValue;
+        
+        def edges = graph[key];
+        
+        foreach (nextStateIndex in this.States[stateIndex].Next)
+        {
+          foreach (edge in edges)
+          {
+            def res2 = walk(nextStateIndex, edge.End);
+            
+            when (res2 == 1)
+              res = res2;
+          }
+        }
+        
+        nodeData[key] = res;
+        res
+      }
+      
+      foreach (stateIndex in this.StartStates)
+        when (graph.ContainsKey(stateIndex, startPos))
+          _ = walk(stateIndex, startPos);
+      
+      nodeData
     }
 
     public GraphLabel() : string
@@ -95,6 +217,63 @@ namespace Nitra.Internal.Recovery
       filePath
     }
     
+    public GetFilePath(startPos : int, end : int) : string
+    {
+      def escape(str : string) : string
+      {
+        def sb = StringBuilder(str);
+        
+        _ = sb.Replace("*", "ZERO_LOOP");
+        _ = sb.Replace("+", "ONE_ZERO_LOOP");
+        _ = sb.Replace("?", "OPT");
+        
+        foreach (ch in Path.GetInvalidPathChars())
+          _ = sb.Replace(ch, '_');
+          
+        _ = sb.Replace(Path.PathSeparator, '_');
+        _ = sb.Replace(Path.VolumeSeparatorChar, '_');
+        _ = sb.Replace('<', '_');
+        _ = sb.Replace('>', '_');
+        _ = sb.Replace('/', '_');
+        _ = sb.Replace('\\', '_');
+        _ = sb.Replace(' ', '_');
+        _ = sb.Replace('\t', '_');
+        _ = sb.Replace('\n', '_');
+        _ = sb.Replace('\r', '_');
+        _ = sb.Replace("____", "_");
+        _ = sb.Replace("___", "_");
+        _ = sb.Replace("__", "_");
+        
+        sb.ToString()
+      }
+      def fileName = 
+        match (this)
+        {
+          | Sequence as seq => startPos + "-" + seq.RuleName + "-" + escape(seq.RuleDesc) + "-" + end
+          | seq => startPos + "-" + seq.RuleName + "-" + end
+        };
+      def filePath = Path.Combine(Path.GetTempPath(), "Dot", fileName);
+      def dir = Path.GetDirectoryName(filePath);
+      unless (Directory.Exists(dir))
+        _ = Directory.CreateDirectory(dir);
+      filePath
+    }
+
+    public GetUrlForExtensible(startPos : int, end : int) : string
+    {
+      Path.GetFileName(GetFilePath(startPos, end)) + "-Extensions.html"
+    }
+    
+    public GetUrl(startPos : int, end : int) : string
+    {
+      Path.GetFileName(GetFilePath(startPos, end)) + ".svg"
+    }
+    
+    public GetFilePathForExtensible(startPos : int, end : int) : string
+    {
+      GetFilePath(startPos, end) + "-Extensions.html"
+    }
+    
     Label(state : ParsingState) : string
     {
       state.Id + ": " + X.DotEscape(state.Description)
@@ -103,6 +282,23 @@ namespace Nitra.Internal.Recovery
     Name(state : ParsingState) : string
     {
       "State" + state.Id
+    }
+    
+    public Label(stateIndex : int, pos : int) : string
+    {
+      def label =
+        match (stateIndex)
+        {
+          | -1 => "End"
+          | s  => X.DotEscape(this.States[s].Description)
+        };
+
+      "State: " + stateIndex + "At: " + pos + "\r\n" + label
+    }
+
+    public Name(stateIndex : int, pos : int) : string
+    {
+      "Node_State_" + (if (stateIndex < 0) "End" else stateIndex.ToString()) + "_Pos_" + pos
     }
   }
 }

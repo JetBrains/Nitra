@@ -102,7 +102,6 @@ namespace Nitra.DebugStrategies
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
-      rp.Visualize();
 
       //var memiozation = new Dictionary<ParsedSequenceKey, SequenceTokenChanges>();
       //FindBestPath(startSeq, textLen, memiozation);
@@ -139,7 +138,9 @@ namespace Nitra.DebugStrategies
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
-      AstPatcher3.PatchAst(startSeq, rp, _deletedToken);
+      //AstPatcher3.PatchAst(startSeq, rp, _deletedToken);
+      AstPatcher4.PatchAst(startSeq, rp, _deletedToken);
+      //rp.Visualize();
       //AstPatcher.Patch(startSeq, rp, memiozation);
 
       _parseResult = null;
@@ -600,18 +601,19 @@ namespace Nitra.DebugStrategies
 
         if (tokens.Count > 0)
         {
+          //ToDot(tokens.First().Token.Callers, "TokenRoots");
           var root = rp.Sequences.First();
 
           var sequencesInProgress = new Dictionary<ParsingSequence, HashSet<ParsedSequence>>();
           var roots = CalcRoots(rp, maxPos, sequencesInProgress);
 
-          Mark(roots, Root);
+          //Mark(roots, Root);
 
           //ToDot(roots, "roots");
 
           var callers = CalcCallers(rp, tokens);
 
-          Mark(callers, Caller);
+          //Mark(callers, Caller);
 
           //ToDot(callers, "callers");
 
@@ -643,8 +645,8 @@ namespace Nitra.DebugStrategies
       }
       while (rp.MaxPos > maxPos);
 
-      foreach (var del in deleted)
-        DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
+      //foreach (var del in deleted)
+      //  DeleteTokens(rp, del.Item1, del.Item2, NumberOfTokensForSpeculativeDeleting);
       rp.Parse();
     }
 
