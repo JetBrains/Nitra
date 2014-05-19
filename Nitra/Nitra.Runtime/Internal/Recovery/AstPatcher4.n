@@ -29,21 +29,7 @@ namespace Nitra.Internal.Recovery
       public TokenChanges    : TokenChanges;
     }
 
-    [Record]
-    public struct RecoveredPrefix
-    {
-      public TokenChanges : TokenChanges;
-    }
-
-    [Record]
-    public struct RecoveredPostfix
-    {
-      public ChangesForBP : Hashtable[int, TokenChanges];
-    }
-
     private         _recoveredSequence  : Hashtable[int * int * ParsingSequence, RecoveredSequence]         = Hashtable();
-    private         _recoveredPrefix    : Hashtable[int * int * ExtensibleRuleParserData, RecoveredPrefix]  = Hashtable();
-    private         _recoveredPostfix   : Hashtable[int * int * ExtensibleRuleParserData, RecoveredPostfix] = Hashtable();
 
     private         _toProcess          : Queue[ParsedSequence * int] = Queue();
     private         _startSeq           : ParsedSequence;
@@ -111,42 +97,17 @@ namespace Nitra.Internal.Recovery
         | Sequence =>
           makeSequence(seq, end);
 
-        | Extensible as parsingSequence =>
+        | Extensible =>
           def key = (seq.StartPos, end, seq.ParsingSequence);
-          def bp = parsingSequence.RuleParser.BindingPower;
-          def subrules = GetSubrulesAndChanges(seq, end);
-          unless (_recoveredSequence.Contains(key))
-            _recoveredSequence.Add(key, RecoveredSequence(subrules, seq.Ends[end]));
-          foreach ((subrule, changes) in subrules with i)
+          when (_recoveredSequence.Contains(key))
+            return;
+          def filteredSubrules = List();
+          foreach ((subrule, changes) in GetSubrulesAndChanges(seq, end) with i)
           {
-            def key = (subrule.Begin, subrule.End, parsingSequence.RuleParser.ParserData);
-            if (i == 0)
-            {
-              mutable prefix;
-              if (_recoveredPrefix.TryGetValue(key, out prefix))
-                assert(prefix.TokenChanges == changes);
-              else
-                _recoveredPrefix.Add(key, RecoveredPrefix(changes));
-            }
-            else
-            {
-              when (subrule.Begin == subrule.End)
-                continue;
-              mutable postfix;
-              if (_recoveredPostfix.TryGetValue(key, out postfix))
-              {
-                if (postfix.ChangesForBP.Contains(end))
-                  assert(postfix.ChangesForBP[end] == changes);
-                else
-                  postfix.ChangesForBP.Add(bp, changes);
-              }
-              else
-              {
-                postfix = RecoveredPostfix(Hashtable());
-                _recoveredPostfix.Add(key, postfix);
-                postfix.ChangesForBP.Add(bp, changes);
-              }
-            }
+            when (i > 0 && subrule.Begin == subrule.End)
+              continue;
+
+            filteredSubrules.Add((subrule, changes));
 
             foreach (sequence in seq.GetSequencesForSubrule(subrule))
             {
@@ -156,6 +117,7 @@ namespace Nitra.Internal.Recovery
                 makeSequence(sequence, subrule.End);
             }
           }
+          _recoveredSequence.Add(key, RecoveredSequence(filteredSubrules.ToArray(), seq.Ends[end]));
       }
     }
 
@@ -451,6 +413,7 @@ namespace Nitra.Internal.Recovery
             mutable ast;
             def key = (subrule.Begin, subrule.End, seq);
             when (_recoveredSequence.TryGetValue(key, out ast))
+            when (ast.TokenChanges == changes)
             {
               edges.Add($<#$curNode -> $(keyToId(key))_Begin [color = blue]#>);
               foreach ((nextNode, _) in nextNodes)
@@ -467,16 +430,12 @@ namespace Nitra.Internal.Recovery
               callSequence(seq)
 
             | ExtensionPrefix  as state =>
-              def key = (subrule.Begin, subrule.End, state.RuleParser.ParserData);
-              when (_recoveredPrefix.Contains(key))
-                foreach (prefixRule in state.RuleParser.PrefixRules)
-                  callSequence(prefixRule.ParsingSequence);
+              foreach (prefixRule in state.RuleParser.PrefixRules)
+                callSequence(prefixRule.ParsingSequence);
 
             | ExtensionPostfix as state =>
-              def key = (subrule.Begin, subrule.End, state.RuleParser.ParserData);
-              when (_recoveredPostfix.Contains(key))
-                foreach (postfixRule when state.RuleParser.FirstPostfixRuleId <= postfixRule.RuleId in state.RuleParser.PostfixRules)
-                  callSequence(postfixRule.ParsingSequence);
+              foreach (postfixRule when state.RuleParser.FirstPostfixRuleId <= postfixRule.RuleId in state.RuleParser.PostfixRules)
+                callSequence(postfixRule.ParsingSequence);
 
           }
           foreach ((nextNode, changes) in nextNodes)
