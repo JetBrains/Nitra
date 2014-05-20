@@ -139,8 +139,9 @@ namespace Nitra.DebugStrategies
         throw new OperationCanceledException();
 
       //AstPatcher3.PatchAst(startSeq, rp, _deletedToken);
-      AstPatcher4.PatchAst(startSeq, rp, _deletedToken);
-      //rp.Visualize();
+      var patcer = new AstPatcher4(startSeq, rp, _deletedToken);
+      patcer.PatchAst();
+      rp.Visualize(patcer);
       //AstPatcher.Patch(startSeq, rp, memiozation);
 
       _parseResult = null;

@@ -32,19 +32,47 @@ namespace Nitra.Internal.Recovery
       public TokenChanges    : TokenChanges;
     }
 
-    private         _recoveredSequence  : Hashtable[int * int * ParsingSequence, RecoveredSequence]         = Hashtable();
+    public          RecoveredSequences : Hashtable[int * int * ParsingSequence, RecoveredSequence] { get; default Hashtable(); }
+    public          StateEndChanges    : Hashtable[ParsedSequence * int * int, TokenChanges]      { get; default Hashtable(); }
+                                       
+    private         _toProcess         : Queue[ParsedSequence * int] = Queue();
+    private         _startSeq          : ParsedSequence;
+    private         _recoveryParser    : RecoveryParser;
+    private         _deletedTokens     : Dictionary[ParsedSequenceAndSubrule, bool];
+    private         _allSubrules       : List[ParsedSubrule] = List();
+    private mutable _subruleChanges    : array[TokenChanges];
+    private         _subruleEndsAt     : array[Hashtable[ParsedSequence, SubrulesRange]];
+    private mutable _iteration         : int = 0;
+    private mutable _recursive         : bool = false;
+    private mutable _updated           : bool = false;
 
-    private         _toProcess          : Queue[ParsedSequence * int] = Queue();
-    private         _startSeq           : ParsedSequence;
-    private         _recoveryParser     : RecoveryParser;
-    private         _deletedTokens      : Dictionary[ParsedSequenceAndSubrule, bool];
-    private         _allSubrules        : List[ParsedSubrule] = List();
-    private mutable _subruleChanges     : array[TokenChanges];
-    private         _subruleEndsAt      : array[Hashtable[ParsedSequence, SubrulesRange]];
-    private         _stateEndChanges    : Hashtable[ParsedSequence * int * int, TokenChanges] = Hashtable();
-    private mutable _iteration          : int = 0;
-    private mutable _recursive          : bool = false;
-    private mutable _updated            : bool = false;
+    public GetNodeChanges(seq : ParsedSequence, subruleState : int, subruleStartPos : int) : TokenChanges
+    {
+      if (subruleState < 0)
+        seq.Ends[subruleStartPos]
+      else if (seq.StartPos == subruleStartPos && seq.ParsingSequence.States[subruleState].IsStart)
+        TokenChanges()
+      else
+      {
+        mutable min = TokenChanges.Fail;
+        foreach (prevState in seq.ParsingSequence.States[subruleState].Prev)
+        {
+          mutable value;
+          when (StateEndChanges.TryGetValue((seq, prevState, subruleStartPos), out value))
+            min = TokenChanges.Min(min, value);
+        }
+        min
+      }
+    }
+
+    public GetChangesForSubrule(seq : ParsedSequence, subrule : ParsedSubrule) : TokenChanges
+    {
+      def range = _subruleEndsAt[subrule.End][seq];
+      for (mutable i = range.BeginIndex; i < range.EndIndex; ++i)
+        when (_allSubrules[i] == subrule)
+          return _subruleChanges[i];
+      TokenChanges.Fail;
+    }
 
     public this(startSeq : ParsedSequence, recoveryParser : RecoveryParser, deletedTokens : Dictionary[ParsedSequenceAndSubrule, bool])
     {
@@ -54,18 +82,17 @@ namespace Nitra.Internal.Recovery
       _subruleEndsAt  = array(_recoveryParser.ParseResult.Text.Length + 1);
     }
 
-    public static PatchAst(startSeq : ParsedSequence, recoveryParser : RecoveryParser, deletedTokens : Dictionary[ParsedSequenceAndSubrule, bool]) : void
+    public PatchAst() : void
     {
-      def astPatcher = AstPatcher4(startSeq, recoveryParser, deletedTokens);
       def time = Diagnostics.Stopwatch.StartNew();
-      astPatcher.FindBestPath();
+      FindBestPath();
       time.Stop();
       _ = time.Elapsed;
-      astPatcher.PatchAst();
-      astPatcher.Visualize();
+      DoPatchAst();
+      Visualize();
     }
 
-    public PatchAst() : void
+    private DoPatchAst() : void
     {
       ParseSequence(_startSeq, _recoveryParser.ParseResult.Text.Length);
       while (_toProcess.Count > 0)
@@ -77,7 +104,7 @@ namespace Nitra.Internal.Recovery
       def makeSequence(seq : ParsedSequence, mutable end : int) : void
       {
         def key = (seq.StartPos, end, seq.ParsingSequence);
-        unless (_recoveredSequence.Contains(key))
+        unless (RecoveredSequences.Contains(key))
         {
           def subrules = GetSubrulesAndChanges(seq, end);
           def ast = RecoveredSequence(subrules, seq.Ends[end]);
@@ -91,7 +118,7 @@ namespace Nitra.Internal.Recovery
               _toProcess.Enqueue(sequences[0], subrule.End);
             }
           }
-          _recoveredSequence.Add(key, ast);
+          RecoveredSequences.Add(key, ast);
         }
       }
 
@@ -102,7 +129,7 @@ namespace Nitra.Internal.Recovery
 
         | Extensible =>
           def key = (seq.StartPos, end, seq.ParsingSequence);
-          when (_recoveredSequence.Contains(key))
+          when (RecoveredSequences.Contains(key))
             return;
           def filteredSubrules = List();
           foreach ((subrule, changes) in GetSubrulesAndChanges(seq, end) with i)
@@ -120,7 +147,7 @@ namespace Nitra.Internal.Recovery
                 makeSequence(sequence, subrule.End);
             }
           }
-          _recoveredSequence.Add(key, RecoveredSequence(filteredSubrules.ToArray(), seq.Ends[end]));
+          RecoveredSequences.Add(key, RecoveredSequence(filteredSubrules.ToArray(), seq.Ends[end]));
       }
     }
 
@@ -132,7 +159,7 @@ namespace Nitra.Internal.Recovery
       mutable state = seq.ParsingSequence.EndStates.Where(endState =>
       {
         mutable stateChanges;
-        if (_stateEndChanges.TryGetValue((seq, endState, end), out stateChanges))
+        if (StateEndChanges.TryGetValue((seq, endState, end), out stateChanges))
           stateChanges == changes
         else
           false
@@ -158,7 +185,7 @@ namespace Nitra.Internal.Recovery
             foreach (prevState in prevStates)
             {
               mutable prevChanges;
-              when (_stateEndChanges.TryGetValue((seq, prevState, subrule.Begin), out prevChanges))
+              when (StateEndChanges.TryGetValue((seq, prevState, subrule.Begin), out prevChanges))
               when (prevChanges + subruleChanges == changes)
               {
                 end     = subrule.Begin;
@@ -276,7 +303,7 @@ namespace Nitra.Internal.Recovery
       foreach (endState in seq.ParsingSequence.EndStates)
       {
         mutable stateChanges;
-        when (_stateEndChanges.TryGetValue((seq, endState, end), out stateChanges))
+        when (StateEndChanges.TryGetValue((seq, endState, end), out stateChanges))
           changes = TokenChanges.Min(changes, stateChanges);
       }
       seq.Ends[end] = changes;
@@ -304,7 +331,7 @@ namespace Nitra.Internal.Recovery
             {
               mutable curChanges;
               def key = (seq, prevState, subrule.Begin);
-              when (_stateEndChanges.TryGetValue(key, out curChanges))
+              when (StateEndChanges.TryGetValue(key, out curChanges))
                 minChanges = TokenChanges.Min(curChanges, minChanges);
             }
             minChanges
@@ -316,9 +343,9 @@ namespace Nitra.Internal.Recovery
         def key = (seq, subrule.State, subrule.End);
         def newChanges = prevChanges + subruleChanges;
         mutable oldChanges;
-        unless (_stateEndChanges.TryGetValue(key, out oldChanges))
+        unless (StateEndChanges.TryGetValue(key, out oldChanges))
           oldChanges = TokenChanges.Fail;
-        _stateEndChanges[key] = TokenChanges.Min(newChanges, oldChanges);
+        StateEndChanges[key] = TokenChanges.Min(newChanges, oldChanges);
       }
     }
 
@@ -368,7 +395,7 @@ namespace Nitra.Internal.Recovery
 
     public Visualize() : void
     {
-      def dir = Path.Combine(Path.GetTempPath(), "Dot");
+      def dir = Path.Combine(Path.GetTempPath(), "Patch");
       when (Directory.Exists(dir))
       {
         Directory.Delete(dir, recursive=true);
@@ -379,13 +406,13 @@ namespace Nitra.Internal.Recovery
       
       def startSeq = _recoveryParser.StartSequence;
       
-      foreach (((start, end, parsingSeq), recSeq) in  _recoveredSequence.KeyValuePairs)
+      foreach (((start, end, parsingSeq), recSeq) in  RecoveredSequences.KeyValuePairs)
         ToDot(files, start, end, parsingSeq, recSeq);
       
             
       when (files.Count > 0)
       {
-        def file = startSeq.ParsingSequence.GetFilePath(0, _recoveryParser.ParseResult.Text.Length);
+        def file = startSeq.ParsingSequence.GetFilePath("Patch", 0, _recoveryParser.ParseResult.Text.Length);
         X.ConvertToDot(files);
       _ = Process.Start(file + ".svg");
       }
@@ -393,7 +420,7 @@ namespace Nitra.Internal.Recovery
     
     ToDot(files : SCG.List[string], start : int, end : int, parsingSeq : ParsingSequence, recSeq : RecoveredSequence) : void
     {
-      def file = parsingSeq.GetFilePath(start, end);
+      def file = parsingSeq.GetFilePath("Patch", start, end);
       files.Add(file);
 
       def parseResult = _recoveryParser.ParseResult;
@@ -426,7 +453,7 @@ namespace Nitra.Internal.Recovery
             
           def subrule = ParsedSubrule(pos, endPos, stateIndex);
           def subSeqs = parsingSeq.GetSequencesForSubrule(subrule, _recoveryParser)
-              .Where(seq => _recoveredSequence.ContainsKey((pos, endPos, seq.ParsingSequence))).ToArray();
+              .Where(seq => RecoveredSequences.ContainsKey((pos, endPos, seq.ParsingSequence))).ToArray();
               
           def to = (endStateIndex, endPos);
           def style = "";//(if (skip)  " fontcolor=red" else "")
@@ -437,7 +464,7 @@ namespace Nitra.Internal.Recovery
             | 0 => edges.Add($<#$(parsingSeq.Name(node)) -> $(parsingSeq.Name(to)) [label="$text"$style$(if (subrule.IsEmpty) "" else " fontcolor=purple")]#>);
             | 1 =>
               def subSeq = subSeqs[0];
-              def url = subSeq.GetUrl(subSeq.StartPos, endPos);
+              def url = subSeq.GetUrl("Patch", subSeq.StartPos, endPos);
               def text2 = if (parsingSeq is ParsingSequence.Extensible) subSeq.ParsingSequence.RuleName + " - " + text else text;
               edges.Add($<#$(parsingSeq.Name(node)) -> $(parsingSeq.Name(to)) [label="$text2"$style URL="$url"]#>);
               
@@ -447,7 +474,7 @@ namespace Nitra.Internal.Recovery
               
               foreach (subSeq in subSeqs)
               {
-                def url = subSeq.GetUrl(subSeq.StartPos, endPos);
+                def url = subSeq.GetUrl("Patch", subSeq.StartPos, endPos);
                 edges2.Add($<#<a href="$url" style="text-decoration: initial; font-size: 20px;">$(subSeq.ParsingSequence.RuleName)</a>#>);
               }
               //GetFilePathForExtensible
@@ -466,10 +493,10 @@ namespace Nitra.Internal.Recovery
     </pre>
     </body>
   </html> #>;
-              def htmlPath = parsingSeq.GetFilePathForExtensible(start, endPos);
+              def htmlPath = parsingSeq.GetFilePathForExtensible("Patch", start, endPos);
               File.WriteAllText(htmlPath, htmlContent);
               
-              def url = parsingSeq.GetUrlForExtensible(start, endPos);
+              def url = parsingSeq.GetUrlForExtensible("Patch", start, endPos);
               def text2 = parsingSeq.RuleName + " - " + text;
               edges.Add($<#$(parsingSeq.Name(node)) -> $(parsingSeq.Name(to)) [label="$text2"$style URL="$url"]#>);
           }
