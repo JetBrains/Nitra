@@ -3,6 +3,7 @@
 //#define DebugThreading
 
 using System.Text;
+using Nemerle.Collections;
 using Nitra.Internal.Recovery;
 using Nitra.Runtime.Errors;
 using Nitra.Runtime.Reflection;
@@ -16,6 +17,8 @@ using System.Xml.Linq;
 
 using NB = Nemerle.Builtins;
 using SCG = System.Collections.Generic;
+
+using Nemerle.Core;
 
 //using ParsedSequenceAndSubrule2 = Nemerle.Builtins.Tuple</*Inserted tokens*/int, Nitra.Internal.Recovery.ParsedSequence, Nitra.Internal.Recovery.ParsedSubrule>;
 
@@ -141,12 +144,21 @@ namespace Nitra.DebugStrategies
       //AstPatcher3.PatchAst(startSeq, rp, _deletedToken);
       var patcer = new AstPatcher4(startSeq, rp, _deletedToken);
       patcer.PatchAst();
+
       rp.Visualize(patcer);
+      var x = Grouping(patcer);
       //AstPatcher.Patch(startSeq, rp, memiozation);
 
       _parseResult = null;
 
       return parseResult.Text.Length;
+    }
+
+    private static Dictionary<Tuple<int, ParsingSequence>, AstPatcher4.RecoveredSequence[]> Grouping(AstPatcher4 patcer)
+    {
+      return patcer.RecoveredSequences.GroupBy(g => Tuple.Create(g.Key.Field0, g.Key.Field2))
+        .Where(a => a.Count() > 1)
+        .ToDictionary(y => y.Key, y => y.Select(z => z.Value).ToArray());
     }
 
     private void CollectError(RecoveryParser rp, FlattenSequences results)
@@ -980,7 +992,7 @@ namespace Nitra.DebugStrategies
 
     #endregion
 
-    private void SkipAllStates(RecoveryParser rp, int maxPos, Queue<ParseRecord> records)
+    private void SkipAllStates(RecoveryParser rp, int maxPos, SCG.Queue<ParseRecord> records)
     {
       _nestedLevel = 0;
       var records2 = new HashSet<ParseRecord>();
