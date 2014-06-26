@@ -1,4 +1,8 @@
-﻿using Nemerle;
+﻿using Microsoft.VisualStudio.Text;
+using Nitra.Runtime.Highlighting;
+using Nitra.VisualStudio.Parsing;
+
+using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Imperative;
 using Nemerle.Text;
@@ -17,13 +21,15 @@ namespace Nitra.VisualStudio.KeyBinding
 {
   internal class KeyBindingCommandFilter : IOleCommandTarget
   {
-    private m_textView : IWpfTextView;
+    private _textView : IWpfTextView;
     internal mutable m_nextTarget : IOleCommandTarget;
     internal mutable m_added : bool;
+    private _parseAgent : ParseAgent;
     
     public this(textView : IWpfTextView)
     {
-      m_textView = textView;
+      _textView = textView;
+      _ = Utils.TryGetOrCreateParseAgent(textView.TextBuffer, out _parseAgent);
     }    
 
     public QueryStatus(pguidCmdGroup : ref Guid, cCmds : uint, prgCmds : array[OLECMD], pCmdText : IntPtr) : int
@@ -33,30 +39,52 @@ namespace Nitra.VisualStudio.KeyBinding
 
     public Exec(pguidCmdGroup : ref Guid, nCmdID : uint, nCmdexecopt : uint, pvaIn : IntPtr, pvaOut : IntPtr) : int
     {
-      mutable typedChar = char.MinValue;
       when (pguidCmdGroup == VSConstants.VSStd2K)
       {
         match (nCmdID :> VSConstants.VSStd2KCmdID)
         {
-          | VSConstants.VSStd2KCmdID.GOTOBRACE => 
-            return VSConstants.S_OK;
-            
+          | VSConstants.VSStd2KCmdID.GOTOBRACE => OnGoToBrace(); return VSConstants.S_OK;
           | _ => assert2(true);
         }
         
       }
       
-      
-      when (pguidCmdGroup == VSConstants.VSStd2K && nCmdID == VSConstants.VSStd2KCmdID.TYPECHAR :> uint)
-      {
-        typedChar = Marshal.GetObjectForNativeVariant(pvaIn) :> char;
-        when (typedChar.Equals('+'))
-        {
-          
-        }
-      }
+      //mutable typedChar = char.MinValue;
+      //when (pguidCmdGroup == VSConstants.VSStd2K && nCmdID == VSConstants.VSStd2KCmdID.TYPECHAR :> uint)
+      //{
+      //  typedChar = Marshal.GetObjectForNativeVariant(pvaIn) :> char;
+      //  when (typedChar.Equals('+'))
+      //  {
+      //  }
+      //}
 
       m_nextTarget.Exec(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
+    }
+    
+    OnGoToBrace() : void
+    {
+      when (_parseAgent.LastResult == null)
+        return;
+        
+      def walker = MatchBracketsWalker();
+      def pos = _textView.Caret.Position.BufferPosition.Position;
+      def context = MatchBracketsWalker.Context(_textView.Caret.Position.BufferPosition.Position);
+      _ = walker.Walk(_parseAgent.LastResult, context);
+      foreach (brackets in context.Brackets)
+      {
+        def newPos =
+          if (brackets.CloseBracket.IntersectsWith(pos))
+            brackets.OpenBracket.StartPos
+          else if (brackets.OpenBracket.IntersectsWith(pos))
+            brackets.CloseBracket.StartPos
+          else
+            pos;
+
+        def point = SnapshotPoint(_textView.TextBuffer.CurrentSnapshot, newPos);
+        _ = _textView.Caret.MoveTo(point);
+        _textView.Caret.EnsureVisible();
+        break;
+      }
     }
   }
 }

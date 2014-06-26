@@ -18,36 +18,47 @@ using System.Windows.Media;
 
 using NLog;
 
-using Microsoft.VisualStudio.Utilities;
+using Microsoft.VisualStudio.Editor;
 using Microsoft.VisualStudio.Language.StandardClassification;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Utilities;
+
+using Microsoft.VisualStudio.Language.Intellisense;
+using Microsoft.VisualStudio.OLE.Interop;
+using Microsoft.VisualStudio.Shell;
 
 namespace Nitra.VisualStudio
 {
-  [Export(typeof(IWpfTextViewCreationListener))]
-  [ContentType("code")]
-  [TextViewRole(PredefinedTextViewRoles.Document)]
-  internal sealed class ViewCreationListener : IWpfTextViewCreationListener
+  [Export(typeof(IVsTextViewCreationListener))]
+  [ContentType("text")]
+  [TextViewRole(PredefinedTextViewRoles.Editable)]
+  internal class KeyFilterFactory : IVsTextViewCreationListener
   {
-                     _logger                            : Logger                             = LogManager.GetLogger(typeof(this).FullName);
-    [Import] mutable _globalConfig                      : INitraGlobalConfig                 = null;
-    [Import] mutable _formatMapService                  : IClassificationFormatMapService    = null;
-    [Import] mutable _classificationTypeRegistryService : IClassificationTypeRegistryService = null;
-    [Import] mutable _standardClassifications           : IStandardClassificationService     = null;
+    [Import(typeof(IVsEditorAdaptersFactoryService))]
+    private mutable _editorFactory : IVsEditorAdaptersFactoryService;
 
-    public TextViewCreated(textView : IWpfTextView) : void
+    [Import]
+    private mutable _serviceProvider : SVsServiceProvider;
+
+    private mutable _helperFactory : DisplayWindowHelper;
+
+    [ImportingConstructor]
+    internal this(completionBroker : ICompletionBroker, signatureHelpBroker : ISignatureHelpBroker, smartTagBroker : ISmartTagBroker, quickInfoBroker : IQuickInfoBroker)
     {
-      // TODO: WORKAROUND: Надо разобраться как корректно добавлять формат для классификаторов, а этот код удалить.
-      when (textView.TextBuffer.Properties.ContainsProperty(TextBufferProperties.Language))
-      {
-        _logger.Trace("TextViewCreated");
-        def formatMap = _formatMapService.GetClassificationFormatMap(textView);
-        _globalConfig.ApplySpanClassStyles(formatMap, _classificationTypeRegistryService, _standardClassifications);
-      }
+      _helperFactory = DisplayWindowHelper(completionBroker, signatureHelpBroker, smartTagBroker, quickInfoBroker);
+    }
 
-      AddCommandFilter(textView.ToVsTextView(), KeyBindingCommandFilter(textView));
+    public VsTextViewCreated(viewAdapter : IVsTextView) : void
+    {
+      def view = _editorFactory.GetWpfTextView(viewAdapter);
+      when (view == null)
+        return;
+
+      //def displayHelper = _helperFactory.ForTextView(view);
+
+      AddCommandFilter(viewAdapter, KeyBindingCommandFilter(view));
     }
 
     AddCommandFilter(viewAdapter : IVsTextView, commandFilter : KeyBindingCommandFilter) : void
@@ -66,6 +77,93 @@ namespace Nitra.VisualStudio
                     commandFilter.m_nextTarget = next;
             }
         }
+    }
+  }  
+
+	internal sealed class DisplayWindowHelper
+  {
+    private mutable _completionBroker : ICompletionBroker;
+    private mutable _signatureHelpBroker : ISignatureHelpBroker;
+    private mutable _smartTagBroker : ISmartTagBroker;
+    private mutable _quickInfoBroker : IQuickInfoBroker;
+
+    private this(
+      view : ITextView,
+      completionBroker : ICompletionBroker,
+      signatureHelpBroker : ISignatureHelpBroker,
+      smartTagBroker : ISmartTagBroker,
+      quickInfoBroker : IQuickInfoBroker)
+    {
+      this(completionBroker, signatureHelpBroker, smartTagBroker, quickInfoBroker);
+      this.TextView = view;
+    }
+
+    internal this(
+      completionBroker : ICompletionBroker,
+      signatureHelpBroker : ISignatureHelpBroker,
+      smartTagBroker : ISmartTagBroker,
+      quickInfoBroker : IQuickInfoBroker)
+    {
+      _completionBroker = completionBroker;
+      _signatureHelpBroker = signatureHelpBroker;
+      _smartTagBroker = smartTagBroker;
+      _quickInfoBroker = quickInfoBroker;
+    }
+
+    internal ForTextView(view : ITextView) : DisplayWindowHelper
+    {
+      DisplayWindowHelper(
+        view,
+        _completionBroker,
+        _signatureHelpBroker,
+        _smartTagBroker,
+        _quickInfoBroker)
+    }
+
+    internal TextView : ITextView { get; private set; }
+
+    internal IsCompletionActive : bool
+    {
+      get { if (_completionBroker != null) _completionBroker.IsCompletionActive(this.TextView) else false }
+    }
+
+    internal IsSignatureHelpActive : bool
+    {
+      get { if (_signatureHelpBroker != null) _signatureHelpBroker.IsSignatureHelpActive(this.TextView) else false; }
+    }
+
+    internal IsSmartTagSessionActive : bool
+    {
+      get { if (_smartTagBroker != null) _smartTagBroker.IsSmartTagActive(this.TextView) else false }
+    }
+
+    internal IsQuickInfoActive : bool
+    {
+      get { if (_quickInfoBroker != null) _quickInfoBroker.IsQuickInfoActive(this.TextView) else false }
+    }
+  }
+  
+  [Export(typeof(IWpfTextViewCreationListener))]
+  [ContentType("code")]
+  [TextViewRole(PredefinedTextViewRoles.Editable)]
+  internal sealed class ViewCreationListener : IWpfTextViewCreationListener
+  {
+                     _logger                            : Logger                             = LogManager.GetLogger(typeof(this).FullName);
+    [Import] mutable _globalConfig                      : INitraGlobalConfig                 = null;
+    [Import] mutable _formatMapService                  : IClassificationFormatMapService    = null;
+    [Import] mutable _classificationTypeRegistryService : IClassificationTypeRegistryService = null;
+    [Import] mutable _standardClassifications           : IStandardClassificationService     = null;
+
+
+    public TextViewCreated(textView : IWpfTextView) : void
+    {
+      // TODO: WORKAROUND: Надо разобраться как корректно добавлять формат для классификаторов, а этот код удалить.
+      when (textView.TextBuffer.Properties.ContainsProperty(TextBufferProperties.Language))
+      {
+        _logger.Trace("TextViewCreated");
+        def formatMap = _formatMapService.GetClassificationFormatMap(textView);
+        _globalConfig.ApplySpanClassStyles(formatMap, _classificationTypeRegistryService, _standardClassifications);
+      }
     }
   }
 }
