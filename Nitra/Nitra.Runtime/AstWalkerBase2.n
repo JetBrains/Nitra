@@ -1,0 +1,366 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Surround;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using Nitra.Internal;
+using Nitra.Internal.Recovery;
+using Nitra.Runtime.Reflection;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+[assembly: DefineSurround("not_recovery", false, def old_isRecovered = _isRecovered, _isRecovered = old_isRecovered)]
+
+namespace Nitra.Runtime
+{
+  public abstract class AstWalkerBase2[TContext]
+  {
+    mutable _isRecovered : bool;
+    
+    public virtual OnEmpty(ruleInfo : SubruleInfo.Empty, startPos : int, endPos : int, parseResult : ParseResult, context : TContext) : void
+    {
+      IgnoreParams();
+    }
+
+    public virtual OnMarker(ruleInfo : SubruleInfo.Marker, startPos : int, endPos : int, parseResult : ParseResult, context : TContext) : void
+    {
+      IgnoreParams();
+    }
+
+    public virtual OnPrefixMissed(ruleParser : ExtensibleRuleParser, pos : int, parseResult : ParseResult, context : TContext) : void
+    {
+      IgnoreParams();
+    }
+
+    public virtual OnRegularCall(ruleInfo : SubruleInfo.RegularCall, startPos : int, endPos : int, parseResult : ParseResult, context : TContext) : void
+    {
+      IgnoreParams();
+    }
+
+    public virtual OnTokenString(ruleInfo : SubruleInfo.TokenString, startPos : int, endPos : int, parseResult : ParseResult, context : TContext) : void
+    {
+      IgnoreParams();
+    }
+
+    public Walk(parseResult : ParseResult, context : TContext) : void
+    {
+      _isRecovered = parseResult.RecoveredSequences.Count > 0;
+      def endPos = parseResult.Text.Length;
+      
+      match (parseResult.RuleParser)
+      {
+        | ExtensibleRuleParser as ruleParser => WalkExtensible(parseResult.StartPos, endPos, ruleParser, parseResult, context)
+        | SimpleRuleParser     as ruleParser => WalkSimple(parseResult.StartPos, endPos, ruleParser, parseResult, context)
+        | _                                  => assert3(false)
+      }
+    }
+
+    public virtual OnSimpleCall(ruleInfo : SubruleInfo.SimpleCall, startPos : int, endPos : int, parseResult : ParseResult, context : TContext) : void
+    {
+      when (_isRecovered)
+      {
+        when (Walk(parseResult, ruleInfo.RuleParser.ParsingSequence, startPos, endPos, context))
+          return;
+      }
+      
+      assert2(endPos >= 0);
+      
+      when (startPos != endPos)
+      {
+        surroundwith(not_recovery)
+        WalkSimple(startPos, endPos, ruleInfo.RuleParser, parseResult, context);
+      }
+    }
+
+    public virtual OnListItem(ruleInfo : SubruleInfo.ListItem, startPos : int, endPos : int, parseResult : ParseResult, context : TContext) : void
+    {
+      when (_isRecovered)
+      {
+        when (Walk(parseResult, ruleInfo.ParsingSequence, startPos, endPos, context))
+          return;
+      }
+      
+      assert2(endPos >= 0);
+      
+      when (startPos != endPos)
+      {
+        surroundwith(not_recovery)
+          _ = Walk(parseResult, ruleInfo.ParsingSequence, startPos, endPos, context);
+      }
+    }
+
+    public virtual OnExtensibleCall(ruleInfo : SubruleInfo.ExtensibleCall, startPos : int, endPos : int, parseResult : ParseResult, context : TContext) : void
+    {
+      mutable curTextPos = startPos;
+
+      when (_isRecovered)
+      {
+        when (Walk(parseResult, ruleInfo.RuleParser.ParsingSequence, startPos, endPos, context))
+          return;
+      }
+      
+      assert2(endPos >= 0);
+
+      surroundwith(not_recovery)
+      {
+        curTextPos = WalkExtension(parseResult.GetAst(curTextPos, ruleInfo.RuleParser.PrefixId), curTextPos, ruleInfo.RuleParser, parseResult, context);
+        while (curTextPos < endPos)
+          curTextPos = WalkExtension(parseResult.GetAst(curTextPos, ruleInfo.RuleParser.PostfixId), curTextPos, ruleInfo.RuleParser, parseResult, context);
+        assert3(curTextPos == endPos);
+      }
+    }
+
+    public virtual OnOption(ruleInfo : SubruleInfo.Option, startPos : int, endPos : int, parseResult : ParseResult, context : TContext) : void
+    {
+      assert2(endPos >= 0);
+
+      when (startPos == endPos)
+        return;
+      
+      when (_isRecovered)
+      {
+        when (Walk(parseResult, ruleInfo.Rule.ParsingSequence, startPos, endPos, context))
+          return;
+      }
+
+      surroundwith(not_recovery)
+      {
+        def curTextPos = WalkSequence(parseResult.GetAst(startPos, ruleInfo.Rule.Id), startPos, parseResult, context);
+        assert3(curTextPos == endPos);
+      }
+    }
+
+    public virtual OnList(ruleInfo : SubruleInfo.List, startPos : int, endPos : int, parseResult : ParseResult, context : TContext) : void
+    {
+      mutable curTextPos = startPos;
+      
+      when (_isRecovered)
+      {
+        when (Walk(parseResult, ruleInfo.ParsingSequence, startPos, endPos, context))
+          return;
+      }
+
+      assert2(endPos >= 0);
+
+      when (startPos != endPos && !ruleInfo.IsOptimized)
+      {
+        while (curTextPos < endPos)
+          surroundwith(not_recovery)
+            curTextPos = WalkSequence(parseResult.GetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context);
+        assert3(curTextPos == endPos);
+      }
+    }
+
+    public virtual OnListWithSeparator(ruleInfo : SubruleInfo.ListWithSeparator, startPos : int, endPos : int, parseResult : ParseResult, context : TContext) : void
+    {
+      mutable curTextPos = startPos;
+      
+      when (_isRecovered)
+      {
+        when (Walk(parseResult, ruleInfo.ParsingSequence, startPos, endPos, context))
+          return;
+      }
+      
+      assert2(endPos >= 0);
+
+      when (startPos != endPos)
+      {
+        surroundwith(not_recovery)
+        while (true)
+        {
+          when (curTextPos >= endPos) break;
+          curTextPos = WalkSequence(parseResult.GetAst(curTextPos, ruleInfo.Rule.Id), curTextPos, parseResult, context);
+
+          when (curTextPos >= endPos) break;
+          curTextPos = WalkSequence(parseResult.GetAst(curTextPos, ruleInfo.Separator.Id), curTextPos, parseResult, context);
+        }
+        assert3(curTextPos == endPos);
+      }
+    }
+
+    Walk(parseResult : ParseResult, states : array[ParsingState], subrules : array[ParsedSubrule * TokenChanges], i : int, context : TContext) : void
+    {
+      def (subrule, _) = subrules[i];
+      def state = states[subrule.State];
+      def ruleInfo = state.Subrule;// TODO: переименовать .Subrule в SubruleInfo
+      match (ruleInfo)
+      {
+        | null                          =>
+          match (state)
+          {
+            | ExtensionPrefix  as state =>
+              foreach (prefix in state.RuleParser.PrefixRules)
+                when (parseResult.RecoveredSequences.ContainsKey((subrule.Begin, subrule.End, prefix.ParsingSequence)))
+                  _ = WalkPrefix(-1, subrule.Begin, subrule.End, prefix, parseResult, context);
+
+            | ExtensionPostfix as state => 
+              foreach (postfix in state.RuleParser.PostfixRules)
+                when (postfix.RuleId >= state.RuleParser.FirstPostfixRuleId)
+                when (parseResult.RecoveredSequences.ContainsKey((subrule.Begin, subrule.End, postfix.ParsingSequence)))
+                  _ = WalkPostfix(-1, subrule.Begin, subrule.End, postfix, parseResult, context);
+
+            | _ => assert(false)
+          }
+
+        | Marker                        => assert3(false)
+        | RegularCall       as ruleInfo => OnRegularCall      (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
+        | TokenString       as ruleInfo => OnTokenString      (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
+        | SimpleCall        as ruleInfo => OnSimpleCall       (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
+        | ExtensibleCall    as ruleInfo => OnExtensibleCall   (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
+        | Option            as ruleInfo => OnOption           (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
+        | List              as ruleInfo => OnList             (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
+        | ListWithSeparator as ruleInfo => OnListWithSeparator(ruleInfo, subrule.Begin, subrule.End, parseResult, context)
+        | ListItem          as ruleInfo => OnListItem         (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
+        | Empty             as ruleInfo => OnEmpty            (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
+      }
+      
+      foreach ((nextSubrule, _) in subrules with nextIndex)
+        when (subrule.End == nextSubrule.Begin && state.Next.Contains(nextSubrule.State))
+          Walk(parseResult, states, subrules, nextIndex, context);
+    }
+    
+    Walk(parseResult : ParseResult, parsingSequence : ParsingSequence, startPos : int, endPos : int, context : TContext) : bool
+    {
+      //ruleParser.ParsingSequence.SequenceInfo
+      mutable recoveredSequence;
+      
+      unless (parseResult.RecoveredSequences.TryGetValue((startPos, endPos, parsingSequence), out recoveredSequence))
+        return false;
+        
+      def states = parsingSequence.States;
+      
+      foreach ((subrule, _) in recoveredSequence.Subrules with i)
+        when (subrule.Begin == startPos && states[subrule.State].IsStart) // TODO: Прерывать цикла когда позиция ушла вперед
+          Walk(parseResult, states, recoveredSequence.Subrules, i, context);
+          
+      true
+    }
+    
+    public virtual WalkSimple(startPos : int, endPos : int, ruleParser : SimpleRuleParser, parseResult : ParseResult, context : TContext) : void
+    {
+      when (_isRecovered)
+      {
+        when (Walk(parseResult, ruleParser.ParsingSequence, startPos, endPos, context))
+          return;
+      }
+      
+      surroundwith(not_recovery)
+      {
+        def end = WalkSequence(parseResult.TryGetAst(startPos, ruleParser.RuleId), startPos, parseResult, context);
+        assert(end == endPos);
+      }
+    }
+
+    public WalkExtensible(startPos : int, endPos : int, ruleParser : ExtensibleRuleParser, parseResult : ParseResult, context : TContext) : void
+    {
+      when (_isRecovered)
+      {
+        when (Walk(parseResult, ruleParser.ParsingSequence, startPos, endPos, context))
+          return;
+      }
+      
+      surroundwith(not_recovery)
+      {
+        mutable curTextPos = startPos;
+        curTextPos = WalkExtension(parseResult.TryGetAst(curTextPos, ruleParser.PrefixId), curTextPos, ruleParser, parseResult, context);
+        do
+          curTextPos = WalkExtension(parseResult.TryGetAst(curTextPos, ruleParser.PostfixId), curTextPos, ruleParser, parseResult, context);
+        while (curTextPos >= 0);
+      }
+    }
+
+    public WalkExtension(astPtr : int, mutable curTextPos : int, ruleParser : ExtensibleRuleParser, parseResult : ParseResult, context : TContext) : int
+    {
+      when (astPtr <= 0)
+        return -1;
+
+      def id = parseResult.ast[astPtr] & ExtensibleRuleParser.AstMask.Id;
+      if (id == ruleParser.PrefixId)
+      {
+        mutable prefixAst = astPtr;
+        def bestResult = parseResult.TryGetPrefix(ref curTextPos, ref prefixAst);
+
+        if (bestResult > 0)
+        {
+          def bestPrefixAstPtr = ruleParser.BestPrefix(bestResult, parseResult);
+          def extensionParser = ruleParser.PrefixRuleParser(bestPrefixAstPtr, parseResult);
+          mutable endPos = curTextPos;
+          foreach (subrule in extensionParser.SequenceInfo.Subrules)
+            endPos += parseResult.GetSize(bestPrefixAstPtr + subrule.Offset);
+          WalkPrefix(bestPrefixAstPtr, curTextPos, endPos, extensionParser, parseResult, context);
+          endPos
+        }
+        else
+        {
+          OnPrefixMissed(ruleParser, curTextPos, parseResult, context);
+          curTextPos
+        }
+      }
+      else
+      {
+        mutable postfixAst = astPtr;
+        def bestPostfixAstPtr = ruleParser.BestPostfix(parseResult.TryGetPostfix(ref curTextPos, ref postfixAst), parseResult);
+        def extensionParser = ruleParser.PostfixRuleParser(bestPostfixAstPtr, parseResult);
+        mutable endPos = curTextPos;
+        foreach (subrule in extensionParser.SequenceInfo.Subrules)
+          endPos += parseResult.GetSize(bestPostfixAstPtr + subrule.Offset);
+        WalkPostfix(bestPostfixAstPtr, curTextPos, endPos, extensionParser, parseResult, context);
+        endPos
+      }
+    }
+
+    public virtual WalkPrefix(astPtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult, context : TContext) : void
+    {
+      if (astPtr < 0)
+        _ = Walk(parseResult, ruleParser.ParsingSequence, startPos, endPos, context);
+      else
+        _ = WalkSequence(astPtr, startPos, parseResult, context)
+    }
+
+    public virtual WalkPostfix(astPtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult, context : TContext) : void
+    {
+      if (astPtr < 0)
+        _ = Walk(parseResult, ruleParser.ParsingSequence, startPos, endPos, context);
+      else
+        _ = WalkSequence(astPtr, startPos, parseResult, context)
+    }
+
+    protected WalkSequence(astPtr : int, mutable curTextPos : int, parseResult : ParseResult, context : TContext) : int
+    {
+      assert2(astPtr > 0);
+      assert2(parseResult.ast[astPtr + ExtensibleRuleParser.AstOfs.State] == int.MinValue);
+
+      foreach (ruleInfo in parseResult.GetSequenceInfo(astPtr).SubrulesWithMarkers)
+      {
+        if (ruleInfo is Marker as ruleInfo)
+          OnMarker(ruleInfo, curTextPos, curTextPos, parseResult, context);
+        else
+        {
+          def sizePtr = astPtr + ruleInfo.Offset;
+          def size    = parseResult.GetSize(sizePtr);
+          def endPos  = curTextPos + size;
+
+          match (ruleInfo)
+          {
+            | ListItem                      => assert(false)
+            | Marker                        => assert3(false)
+            | RegularCall       as ruleInfo => OnRegularCall      (ruleInfo, curTextPos, endPos, parseResult, context)
+            | TokenString       as ruleInfo => OnTokenString      (ruleInfo, curTextPos, endPos, parseResult, context)
+            | SimpleCall        as ruleInfo => OnSimpleCall       (ruleInfo, curTextPos, endPos, parseResult, context)
+            | ExtensibleCall    as ruleInfo => OnExtensibleCall   (ruleInfo, curTextPos, endPos, parseResult, context)
+            | Option            as ruleInfo => OnOption           (ruleInfo, curTextPos, endPos, parseResult, context)
+            | List              as ruleInfo => OnList             (ruleInfo, curTextPos, endPos, parseResult, context)
+            | ListWithSeparator as ruleInfo => OnListWithSeparator(ruleInfo, curTextPos, endPos, parseResult, context)
+            | Empty             as ruleInfo => OnEmpty            (ruleInfo, curTextPos, endPos, parseResult, context)
+          }
+          curTextPos = endPos;
+        }
+      }
+      curTextPos
+    }
+  }
+}
