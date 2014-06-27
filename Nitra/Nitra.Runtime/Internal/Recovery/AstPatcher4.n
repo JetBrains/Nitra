@@ -25,14 +25,7 @@ namespace Nitra.Internal.Recovery
       public EndIndex   : int;
     }
 
-    [Record]
-    public struct RecoveredSequence
-    {
-      public Subrules        : array[ParsedSubrule * TokenChanges];
-      public TokenChanges    : TokenChanges;
-    }
-
-    public          RecoveredSequences : Hashtable[int * int * ParsingSequence, RecoveredSequence] { get; default Hashtable(); }
+    public          ParseResult : ParseResult { get; private set; }
     public          StateEndChanges    : Hashtable[ParsedSequence * int * int, TokenChanges]      { get; default Hashtable(); }
                                        
     private         _toProcess         : Queue[ParsedSequence * int] = Queue();
@@ -76,10 +69,11 @@ namespace Nitra.Internal.Recovery
 
     public this(startSeq : ParsedSequence, recoveryParser : RecoveryParser, deletedTokens : Dictionary[ParsedSequenceAndSubrule, bool])
     {
-      _startSeq       = startSeq;
-      _recoveryParser = recoveryParser;
-      _deletedTokens  = deletedTokens;
-      _subruleEndsAt  = array(_recoveryParser.ParseResult.Text.Length + 1);
+      _startSeq        = startSeq;
+      _recoveryParser  = recoveryParser;
+      _deletedTokens   = deletedTokens;
+      this.ParseResult = recoveryParser.ParseResult;
+      _subruleEndsAt   = array(this.ParseResult.Text.Length + 1);
     }
 
     public PatchAst() : void
@@ -94,7 +88,7 @@ namespace Nitra.Internal.Recovery
 
     private DoPatchAst() : void
     {
-      ParseSequence(_startSeq, _recoveryParser.ParseResult.Text.Length);
+      ParseSequence(_startSeq, this.ParseResult.Text.Length);
       while (_toProcess.Count > 0)
         ParseSequence(_toProcess.Dequeue());
     }
@@ -104,10 +98,10 @@ namespace Nitra.Internal.Recovery
       def makeSequence(seq : ParsedSequence, mutable end : int) : void
       {
         def key = (seq.StartPos, end, seq.ParsingSequence);
-        unless (RecoveredSequences.Contains(key))
+        unless (this.ParseResult.RecoveredSequences.Contains(key))
         {
           def subrules = GetSubrulesAndChanges(seq, end);
-          def ast = RecoveredSequence(subrules, seq.Ends[end]);
+          def ast = ParseResult.RecoveredSequence(subrules, seq.Ends[end]);
           foreach ((subrule, changes) in _subrules)
           {
             def sequences = seq.GetSequencesForSubrule(subrule).ToArray();
@@ -118,7 +112,7 @@ namespace Nitra.Internal.Recovery
               _toProcess.Enqueue(sequences[0], subrule.End);
             }
           }
-          RecoveredSequences.Add(key, ast);
+          this.ParseResult.RecoveredSequences.Add(key, ast);
         }
       }
 
@@ -129,7 +123,7 @@ namespace Nitra.Internal.Recovery
 
         | Extensible =>
           def key = (seq.StartPos, end, seq.ParsingSequence);
-          when (RecoveredSequences.Contains(key))
+          when (this.ParseResult.RecoveredSequences.Contains(key))
             return;
           def filteredSubrules = List();
           foreach ((subrule, changes) in GetSubrulesAndChanges(seq, end) with i)
@@ -147,7 +141,7 @@ namespace Nitra.Internal.Recovery
                 makeSequence(sequence, subrule.End);
             }
           }
-          RecoveredSequences.Add(key, RecoveredSequence(filteredSubrules.ToArray(), seq.Ends[end]));
+          this.ParseResult.RecoveredSequences.Add(key, ParseResult.RecoveredSequence(filteredSubrules.ToArray(), seq.Ends[end]));
       }
     }
 
@@ -357,9 +351,11 @@ namespace Nitra.Internal.Recovery
       {
         | Scan when subrule.IsEmpty => TokenChanges(state.Subrule.MandatoryTokenCount, 0);
         | Scan | Predicate          => TokenChanges(0, 0)
-        | Simple           as state1 with parsingSequence = state1.RuleParser.ParsingSequence
-        | Extensible       as state2 with parsingSequence = state2.RuleParser.ParsingSequence
-        | Subsequence      as state3 with parsingSequence = state3.Sequence =>
+        | Simple            as state1 with parsingSequence = state1.RuleParser.ParsingSequence
+        | Extensible        as state2 with parsingSequence = state2.RuleParser.ParsingSequence
+        | List              as state3 with parsingSequence = state3.Sequence
+        | ListWithSeparator as state4 with parsingSequence = state4.Sequence
+        | Subsequence       as state5 with parsingSequence = state5.Sequence =>
           if (subrule.IsEmpty)
           {
             def changes = TokenChanges(parsingSequence.MandatoryTokenCount, 0);
@@ -406,24 +402,24 @@ namespace Nitra.Internal.Recovery
       
       def startSeq = _recoveryParser.StartSequence;
       
-      foreach (((start, end, parsingSeq), recSeq) in  RecoveredSequences.KeyValuePairs)
+      foreach (((start, end, parsingSeq), recSeq) in  this.ParseResult.RecoveredSequences.KeyValuePairs)
         ToDot(files, start, end, parsingSeq, recSeq);
       
             
       when (files.Count > 0)
       {
-        def file = startSeq.ParsingSequence.GetFilePath("Patch", 0, _recoveryParser.ParseResult.Text.Length);
+        def file = startSeq.ParsingSequence.GetFilePath("Patch", 0, this.ParseResult.Text.Length);
         X.ConvertToDot(files);
       _ = Process.Start(file + ".svg");
       }
     }
     
-    ToDot(files : SCG.List[string], start : int, end : int, parsingSeq : ParsingSequence, recSeq : RecoveredSequence) : void
+    ToDot(files : SCG.List[string], start : int, end : int, parsingSeq : ParsingSequence, recSeq : ParseResult.RecoveredSequence) : void
     {
       def file = parsingSeq.GetFilePath("Patch", start, end);
       files.Add(file);
 
-      def parseResult = _recoveryParser.ParseResult;
+      def parseResult = this.ParseResult;
       def nodes = SCG.List();
       def edges = SCG.List();
       
@@ -453,7 +449,7 @@ namespace Nitra.Internal.Recovery
             
           def subrule = ParsedSubrule(pos, endPos, stateIndex);
           def subSeqs = parsingSeq.GetSequencesForSubrule(subrule, _recoveryParser)
-              .Where(seq => RecoveredSequences.ContainsKey((pos, endPos, seq.ParsingSequence))).ToArray();
+              .Where(seq => this.ParseResult.RecoveredSequences.ContainsKey((pos, endPos, seq.ParsingSequence))).ToArray();
               
           def to = (endStateIndex, endPos);
           def style = "";//(if (skip)  " fontcolor=red" else "")

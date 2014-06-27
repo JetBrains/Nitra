@@ -145,8 +145,8 @@ namespace Nitra.DebugStrategies
       var patcer = new AstPatcher4(startSeq, rp, _deletedToken);
       patcer.PatchAst();
 
-      rp.Visualize(patcer);
-      var x = Grouping(patcer);
+      //rp.Visualize(patcer);
+      //var x = Grouping(patcer);
       //AstPatcher.Patch(startSeq, rp, memiozation);
 
       _parseResult = null;
@@ -154,9 +154,9 @@ namespace Nitra.DebugStrategies
       return parseResult.Text.Length;
     }
 
-    private static Dictionary<Tuple<int, ParsingSequence>, AstPatcher4.RecoveredSequence[]> Grouping(AstPatcher4 patcer)
+    private static Dictionary<Tuple<int, ParsingSequence>, ParseResult.RecoveredSequence[]> Grouping(AstPatcher4 patcer)
     {
-      return patcer.RecoveredSequences.GroupBy(g => Tuple.Create(g.Key.Field0, g.Key.Field2))
+      return patcer.ParseResult.RecoveredSequences.GroupBy(g => Tuple.Create(g.Key.Field0, g.Key.Field2))
         .Where(a => a.Count() > 1)
         .ToDictionary(y => y.Key, y => y.Select(z => z.Value).ToArray());
     }
