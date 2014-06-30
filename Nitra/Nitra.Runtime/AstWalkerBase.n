@@ -110,7 +110,10 @@ namespace Nitra.Runtime
         curTextPos = WalkExtension(parseResult.GetAst(curTextPos, ruleInfo.RuleParser.PrefixId), curTextPos, ruleInfo.RuleParser, parseResult, context);
         while (curTextPos < endPos)
           curTextPos = WalkExtension(parseResult.GetAst(curTextPos, ruleInfo.RuleParser.PostfixId), curTextPos, ruleInfo.RuleParser, parseResult, context);
-        assert3(curTextPos == endPos);
+        when (curTextPos != endPos)
+        {
+          assert2(false);
+        }
       }
     }
 
@@ -182,20 +185,34 @@ namespace Nitra.Runtime
       }
     }
 
-    Walk(parseResult : ParseResult, states : array[ParsingState], subrules : array[ParsedSubrule * TokenChanges], i : int, context : TContext) : void
+    Walk(parseResult : ParseResult, states : array[ParsingState], subrules : array[ParsedSubrule * TokenChanges], i : int, sequenceInfo : SequenceInfo, prevIndexWithMarkers : int, context : TContext) : void
     {
       def (subrule, _) = subrules[i];
       def state = states[subrule.State];
       def ruleInfo = state.Subrule;// TODO: переименовать .Subrule в SubruleInfo
+      
+      when (sequenceInfo != null)
+      {
+        for (mutable j = prevIndexWithMarkers + 1; j < ruleInfo.IndexWithMarkers; j++)
+        {
+          def subruleInfo = sequenceInfo.SubrulesWithMarkers[j];
+          when (subruleInfo is SubruleInfo.Marker as marker)
+            OnMarker(marker, subrule.Begin, subrule.Begin, parseResult, context);
+        }
+      }
+      
       match (ruleInfo)
       {
         | null                          =>
           match (state)
           {
             | ExtensionPrefix  as state =>
-              foreach (prefix in state.RuleParser.PrefixRules)
-                when (parseResult.RecoveredSequences.ContainsKey((subrule.Begin, subrule.End, prefix.ParsingSequence)))
-                  _ = WalkPrefix(-1, subrule.Begin, subrule.End, prefix, parseResult, context);
+              if (subrule.IsEmpty)
+                OnPrefixMissed(state.RuleParser, subrule.Begin, parseResult, context);
+              else
+                foreach (prefix in state.RuleParser.PrefixRules)
+                  when (parseResult.RecoveredSequences.ContainsKey((subrule.Begin, subrule.End, prefix.ParsingSequence)))
+                    _ = WalkPrefix(-1, subrule.Begin, subrule.End, prefix, parseResult, context);
 
             | ExtensionPostfix as state => 
               foreach (postfix in state.RuleParser.PostfixRules)
@@ -218,13 +235,34 @@ namespace Nitra.Runtime
         | Empty             as ruleInfo => OnEmpty            (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
       }
       
+      def newPrevIndexWithMarkers = if (ruleInfo == null) -1 else ruleInfo.IndexWithMarkers;
+      mutable walkCalled = false;
+      
       foreach ((nextSubrule, _) in subrules with nextIndex)
+      {
         when (subrule.End == nextSubrule.Begin && state.Next.Contains(nextSubrule.State))
-          Walk(parseResult, states, subrules, nextIndex, context);
+        {
+          Walk(parseResult, states, subrules, nextIndex, sequenceInfo, newPrevIndexWithMarkers, context);
+          walkCalled = true;
+        }
+      }
+      
+      when (!walkCalled && sequenceInfo != null)
+      {
+        for (mutable j = ruleInfo.IndexWithMarkers + 1; j < sequenceInfo.SubrulesWithMarkers.Length; j++)
+        {
+          def subruleInfo = sequenceInfo.SubrulesWithMarkers[j];
+          when (subruleInfo is SubruleInfo.Marker as marker)
+            OnMarker(marker, subrule.Begin, subrule.Begin, parseResult, context);
+        }
+      }
     }
     
     Walk(parseResult : ParseResult, parsingSequence : ParsingSequence, startPos : int, endPos : int, context : TContext) : bool
     {
+      when (startPos == endPos)
+        return true;
+
       //ruleParser.ParsingSequence.SequenceInfo
       mutable recoveredSequence;
       
@@ -235,7 +273,7 @@ namespace Nitra.Runtime
       
       foreach ((subrule, _) in recoveredSequence.Subrules with i)
         when (subrule.Begin == startPos && states[subrule.State].IsStart) // TODO: Прерывать цикла когда позиция ушла вперед
-          Walk(parseResult, states, recoveredSequence.Subrules, i, context);
+          Walk(parseResult, states, recoveredSequence.Subrules, i, parsingSequence.SequenceInfo, -1, context);
           
       true
     }

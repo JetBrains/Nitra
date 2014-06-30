@@ -145,6 +145,20 @@ namespace Nitra.DebugStrategies
       var patcer = new AstPatcher4(startSeq, rp, _deletedToken);
       patcer.PatchAst();
 
+      var errorCollector = new ErrorCollectorWalker();
+      errorCollector.Walk(parseResult, 42);
+
+      foreach (var seq in rp.ParseResult.RecoveredSequences)
+      {
+        foreach (var subrule in seq.Value.Subrules)
+        {
+          if (subrule.Field0.IsEmpty && subrule.Field1.HasChanges)//!seq.Key.Field2.States[subrule.Field0.State].Subrule.CanParseEmptyString)
+          {
+            var xx = rp.Sequences[new NB.Tuple<int, ParsingSequence>(seq.Key.Field0, seq.Key.Field2)];
+          }
+        }
+      }
+
       //rp.Visualize(patcer);
       //var x = Grouping(patcer);
       //AstPatcher.Patch(startSeq, rp, memiozation);
@@ -944,8 +958,10 @@ namespace Nitra.DebugStrategies
             break;
         }
 
-        _deletedToken[new ParsedSequenceAndSubrule(sequence, new ParsedSubrule(maxPos, i, s_loopState))] = true;
-        rp.SubruleParsed(maxPos, i, new ParseRecord(sequence, 0, maxPos));
+        var listSequence = rp.StartParseSequence(new ParseRecord(sequence, 0, sequence.StartPos), sequence.StartPos, ((ParsingState.List)sequence.ParsingSequence.States[0]).Sequence);
+
+        _deletedToken[new ParsedSequenceAndSubrule(listSequence, new ParsedSubrule(maxPos, i, s_loopState))] = true;
+        rp.SubruleParsed(maxPos, i, new ParseRecord(listSequence, 0, maxPos));
         return true;
       }
 
