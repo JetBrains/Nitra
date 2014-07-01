@@ -133,7 +133,6 @@ namespace Nitra.DebugStrategies
       Debug.WriteLine("FlattenSequence took: " + timer.Elapsed);
 #endif
 
-      //CollectError(rp, results);
 #if DebugThreading
       Debug.WriteLine("<<<< Strategy " + _id + " ThreadId=" + System.Threading.Thread.CurrentThread.ManagedThreadId);
 #endif
@@ -145,19 +144,7 @@ namespace Nitra.DebugStrategies
       var patcer = new AstPatcher4(startSeq, rp, _deletedToken);
       patcer.PatchAst();
 
-      var errorCollector = new ErrorCollectorWalker();
-      errorCollector.Walk(parseResult, 42);
-
-      foreach (var seq in rp.ParseResult.RecoveredSequences)
-      {
-        foreach (var subrule in seq.Value.Subrules)
-        {
-          if (subrule.Field0.IsEmpty && subrule.Field1.HasChanges)//!seq.Key.Field2.States[subrule.Field0.State].Subrule.CanParseEmptyString)
-          {
-            var xx = rp.Sequences[new NB.Tuple<int, ParsingSequence>(seq.Key.Field0, seq.Key.Field2)];
-          }
-        }
-      }
+      CollectError(parseResult);
 
       //rp.Visualize(patcer);
       //var x = Grouping(patcer);
@@ -175,58 +162,10 @@ namespace Nitra.DebugStrategies
         .ToDictionary(y => y.Key, y => y.Select(z => z.Value).ToArray());
     }
 
-    private void CollectError(RecoveryParser rp, FlattenSequences results)
+    private static void CollectError(ParseResult parseResult)
     {
-      //var text = rp.ParseResult.Text;
-      var expected = new Dictionary<NSpan, HashSet<ParsedSequenceAndSubrule>>();
-      var failSeq = default(ParsedSequence);
-      var failSubrule = default(ParsedSubrule);
-      var skipRecovery = false;
-
-      foreach (var result in results)
-      {
-        var reverse = result.ToArray().Reverse();
-        foreach (var x in reverse)
-        {
-          var ins = x.TokenChanges;
-          var seq = x.Seq;
-          var subrule = x.Subrule;
-
-          if (skipRecovery)
-          {
-            if (!ins.HasChanges && seq.ParsingSequence.RuleName != "s")
-            {
-              skipRecovery = false;
-              //Debug.WriteLine(x);
-              HashSet<ParsedSequenceAndSubrule> parsedNodes;
-              var span = new NSpan(failSubrule.Begin, subrule.Begin);
-              if (!expected.TryGetValue(span, out parsedNodes))
-              {
-                parsedNodes = new HashSet<ParsedSequenceAndSubrule>();
-                expected[span] = parsedNodes;
-              }
-
-              if (failSubrule.IsEmpty)
-                parsedNodes.Add(new ParsedSequenceAndSubrule(failSeq, failSubrule));
-              else
-                parsedNodes.Add(new ParsedSequenceAndSubrule(seq, subrule));
-            }
-          }
-          else
-          {
-            if (ins.HasChanges)
-            {
-              failSeq = seq;
-              failSubrule = subrule;
-              skipRecovery = true;
-            }
-          }
-        }
-      }
-
-      var parseResult = rp.ParseResult;
-      foreach (var e in expected)
-        parseResult.ReportError(new ExpectedSubrulesError(new Location(parseResult.OriginalSource, e.Key.StartPos, e.Key.EndPos), e.Value));
+      var errorCollector = new ErrorCollectorWalker();
+      errorCollector.Walk(parseResult);
     }
 
     private FlattenSequences FlattenSubrule(FlattenSequences prevs, ParseResult parseResult, ParsedSequence seq, SubrulesTokenChanges parses, ParsedSubrule subrule, TokenChanges tokenChanges, Dictionary<ParsedSequenceKey, SequenceTokenChanges> memiozation)
