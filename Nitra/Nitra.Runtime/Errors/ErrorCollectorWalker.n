@@ -1,5 +1,6 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -17,12 +18,30 @@ namespace Nitra.Runtime.Errors
   {
     public class Context
     {
-      public Inserted : List[INitraReflection * NSpan] = List();
+      public mutable Inserted : list[INitraReflection * NSpan];
+      public Parent : Context;
+      public mutable IsLeaf : bool = true;
+      
+      public this(parent : Context)
+      {
+        Parent    = parent;
+        Inserted = parent.Inserted;
+      }
+      
+      public this()
+      {
+        Inserted = [];
+      }
+      
+      public Add(ruleInfo : INitraReflection, span : NSpan) : void
+      {
+        Inserted ::= (ruleInfo, span);
+      }
       
       public GetErrors(parseResult : ParseResult) : Seq[ExpectedError]
       {
         def result = List();
-        def groups = Inserted.GroupBy((_, span) => span.EndPos);
+        def groups = Inserted.Reverse().GroupBy((_, span) => span.EndPos);
         foreach (group in groups)
         {
           def (_, span) = group.First();
@@ -45,7 +64,15 @@ namespace Nitra.Runtime.Errors
     public Walk(parseResult : ParseResult) : void
     {
       Walk(parseResult, Context());
-      
+            
+      def getGroupKey(e : INitraReflection) : object
+      {
+        | SubruleInfo.TokenString as x => x.Sequence
+        | _ => e
+      }
+
+      def x = Errors.Where(e => e.Expected.Count == 1 && e.Expected.All(x => x is SubruleInfo.TokenString));
+      _ = x;
       foreach (error in Errors)
         parseResult.ReportError(error);
     }
@@ -56,7 +83,7 @@ namespace Nitra.Runtime.Errors
 
       when (startPos == endPos && !ruleInfo.CanParseEmptyString)
       {
-        context.Inserted.Add((ruleInfo, NSpan(startPos, endPos)));
+        context.Add(ruleInfo, NSpan(startPos, endPos));
       }
     }
 
@@ -66,7 +93,7 @@ namespace Nitra.Runtime.Errors
 
       when (startPos == endPos && !ruleInfo.CanParseEmptyString)
       {
-        context.Inserted.Add((ruleInfo, NSpan(startPos, endPos)));
+        context.Add(ruleInfo, NSpan(startPos, endPos));
       }
     }
 
@@ -74,7 +101,8 @@ namespace Nitra.Runtime.Errors
     {
       when (startPos == endPos && !ruleInfo.CanParseEmptyString)
       {
-        context.Inserted.Add((ruleInfo, NSpan(startPos, endPos)));
+        context.Add(ruleInfo, NSpan(startPos, endPos));
+        return;
       }
       base.OnSimpleCall(ruleInfo, startPos, endPos, parseResult, context);
     }
@@ -83,25 +111,18 @@ namespace Nitra.Runtime.Errors
     {
       when (startPos == endPos && !ruleInfo.CanParseEmptyString)
       {
-        context.Inserted.Add((ruleInfo, NSpan(startPos, endPos)));
+        context.Add(ruleInfo, NSpan(startPos, endPos));
+        return;
       }
       base.OnExtensibleCall(ruleInfo, startPos, endPos, parseResult, context);
-    }
-
-    public override OnOption(ruleInfo : SubruleInfo.Option, startPos : int, endPos : int, parseResult : ParseResult, context : Context) : void
-    {
-      when (startPos == endPos && !ruleInfo.CanParseEmptyString)
-      {
-        context.Inserted.Add((ruleInfo, NSpan(startPos, endPos)));
-      }
-      base.OnOption(ruleInfo, startPos, endPos, parseResult, context);
     }
 
     public override OnList(ruleInfo : SubruleInfo.List, startPos : int, endPos : int, parseResult : ParseResult, context : Context) : void
     {
       when (startPos == endPos && !ruleInfo.CanParseEmptyString)
       {
-        context.Inserted.Add((ruleInfo, NSpan(startPos, endPos)));
+        context.Add(ruleInfo, NSpan(startPos, endPos));
+        return;
       }
       base.OnList(ruleInfo, startPos, endPos, parseResult, context);
     }
@@ -110,32 +131,18 @@ namespace Nitra.Runtime.Errors
     {
       when (startPos == endPos && !ruleInfo.CanParseEmptyString)
       {
-        context.Inserted.Add((ruleInfo, NSpan(startPos, endPos)));
+        context.Add(ruleInfo, NSpan(startPos, endPos));
+        return;
       }
       base.OnListWithSeparator(ruleInfo, startPos, endPos, parseResult, context);
-    }
-
-    public override WalkSimple(startPos : int, endPos : int, ruleParser : SimpleRuleParser, parseResult : ParseResult, context : Context) : void
-    {
-      when (startPos == endPos && !ruleParser.SequenceInfo.CanParseEmptyString)
-      {
-        context.Inserted.Add((ruleParser, NSpan(startPos, endPos)));
-      }
-      base.WalkSimple(startPos, endPos, ruleParser, parseResult, context);
-      TryAddErrors(parseResult, context);
-    }
-    
-    public override WalkExtensible(startPos : int, endPos : int, ruleParser : ExtensibleRuleParser, parseResult : ParseResult, context : Context) : void
-    {
-      base.WalkExtensible(startPos, endPos, ruleParser, parseResult, context);
-      TryAddErrors(parseResult, context);
     }
 
     public override OnListItem(astPtr : int, ruleInfo : SubruleInfo.ListItem, startPos : int, endPos : int, parseResult : ParseResult, context : Context) : void
     {
       when (startPos == endPos && !ruleInfo.CanParseEmptyString)
       {
-        context.Inserted.Add((ruleInfo, NSpan(startPos, endPos)));
+        context.Add(ruleInfo, NSpan(startPos, endPos));
+        return;
       }
       base.OnListItem(astPtr, ruleInfo, startPos, endPos, parseResult, context);
     }
@@ -143,16 +150,46 @@ namespace Nitra.Runtime.Errors
     public override OnPrefixMissed(ruleParser : ExtensibleRuleParser, pos : int, parseResult : ParseResult, context : Context) : void
     {
       IgnoreParams();
-      context.Inserted.Add((ruleParser, NSpan(pos, pos)));
+      context.Add(ruleParser, NSpan(pos, pos));
+    }
+
+    public override WalkSimple(startPos : int, endPos : int, ruleParser : SimpleRuleParser, parseResult : ParseResult, context : Context) : void
+    {
+      def newContext = Context(context);
+      base.WalkSimple(startPos, endPos, ruleParser, parseResult, newContext);
+      TryAddErrors(parseResult, newContext);
+    }
+    
+    public override WalkExtensible(startPos : int, endPos : int, ruleParser : ExtensibleRuleParser, parseResult : ParseResult, context : Context) : void
+    {
+      def newContext = Context(context);
+      base.WalkExtensible(startPos, endPos, ruleParser, parseResult, newContext);
+      TryAddErrors(parseResult, newContext);
+    }
+    
+    public override WalkPrefix(astPtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult, context : Context) : void
+    {
+      def newContext = Context(context);
+      base.WalkPrefix(astPtr, startPos, endPos, ruleParser, parseResult, context);
+      //TryAddErrors(parseResult, newContext);
+    }
+
+    public override WalkPostfix(astPtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult, context : Context) : void
+    {
+      def newContext = Context(context);
+      base.WalkPostfix(astPtr, startPos, endPos, ruleParser, parseResult, context);
+      TryAddErrors(parseResult, newContext);
     }
     
     TryAddErrors(parseResult : ParseResult, context : Context) : void
     {
-      when (context.Inserted.Count > 0)
+      when (context.Inserted : object != context.Parent?.Inserted && context.IsLeaf)
       {
+        when (context.Parent != null)
+          context.Parent.IsLeaf = false;
+        
         foreach (e in context.GetErrors(parseResult))
           this.Errors.Add(e);
-        context.Inserted.Clear();
       }
     }
   }

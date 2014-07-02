@@ -143,6 +143,7 @@ namespace Nitra.DebugStrategies
       //AstPatcher3.PatchAst(startSeq, rp, _deletedToken);
       var patcer = new AstPatcher4(startSeq, rp, _deletedToken);
       patcer.PatchAst();
+      patcer.Visualize();
 
       CollectError(parseResult);
 
