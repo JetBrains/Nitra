@@ -167,75 +167,70 @@ namespace Nitra.Runtime
       }
     }
 
-    Walk(parseResult : ParseResult, states : array[ParsingState], subrules : array[ParsedSubrule * TokenChanges], i : int, sequenceInfo : SequenceInfo, prevIndexWithMarkers : int, context : TContext) : void
+    Walk(parseResult : ParseResult, states : array[ParsingState], subrules : array[int * int], sequenceInfo : SequenceInfo, context : TContext) : void
     {
-      def (subrule, _) = subrules[i];
-      def state = states[subrule.State];
-      def ruleInfo = state.Subrule;// TODO: переименовать .Subrule в SubruleInfo
-      
+      mutable prevIndexWithMarkers = -1;
+      for (mutable i = 0; i < subrules.Length - 1; ++i)
+      {
+        def begin    = subrules[i][0];
+        def end      = subrules[i + 1][0];
+        def state    = states[subrules[i][1]];
+        def ruleInfo = state.Subrule;
+
+        when (sequenceInfo != null)
+        {
+          for (mutable j = prevIndexWithMarkers + 1; j < ruleInfo.IndexWithMarkers; j++)
+          {
+            def subruleInfo = sequenceInfo.SubrulesWithMarkers[j];
+            when (subruleInfo is SubruleInfo.Marker as marker)
+              OnMarker(marker, begin, begin, parseResult, context);
+          }
+        }
+
+        match (state)
+        {
+          | ExtensionPrefix  as state =>
+            if (begin == end)
+              OnPrefixMissed(state.RuleParser, begin, parseResult, context);
+            else
+              foreach (prefix in state.RuleParser.PrefixRules)
+                when (parseResult.RecoveredSequences.ContainsKey((begin, end, prefix.ParsingSequence)))
+                  _ = WalkPrefix(-1, begin, end, prefix, parseResult, context);
+
+          | ExtensionPostfix as state => 
+            foreach (postfix in state.RuleParser.PostfixRules)
+              when (postfix.RuleId >= state.RuleParser.FirstPostfixRuleId)
+              when (parseResult.RecoveredSequences.ContainsKey((begin, end, postfix.ParsingSequence)))
+                _ = WalkPostfix(-1, begin, end, postfix, parseResult, context);
+
+          | Predicate => ()
+
+          | _ =>
+            match (ruleInfo)
+            {
+              | Marker                        => assert3(false)
+              | RegularCall       as ruleInfo => OnRegularCall      (    ruleInfo, begin, end, parseResult, context)
+              | TokenString       as ruleInfo => OnTokenString      (    ruleInfo, begin, end, parseResult, context)
+              | SimpleCall        as ruleInfo => OnSimpleCall       (    ruleInfo, begin, end, parseResult, context)
+              | ExtensibleCall    as ruleInfo => OnExtensibleCall   (    ruleInfo, begin, end, parseResult, context)
+              | Option            as ruleInfo => OnOption           (    ruleInfo, begin, end, parseResult, context)
+              | List              as ruleInfo => OnList             (    ruleInfo, begin, end, parseResult, context)
+              | ListWithSeparator as ruleInfo => OnListWithSeparator(    ruleInfo, begin, end, parseResult, context)
+              | ListItem          as ruleInfo => OnListItem         (-1, ruleInfo, begin, end, parseResult, context)
+              | Empty             as ruleInfo => OnEmpty            (    ruleInfo, begin, end, parseResult, context)
+            }
+        }
+        prevIndexWithMarkers = if (ruleInfo == null) -1 else ruleInfo.IndexWithMarkers;
+      }
+
       when (sequenceInfo != null)
       {
-        for (mutable j = prevIndexWithMarkers + 1; j < ruleInfo.IndexWithMarkers; j++)
+        def seqEnd = subrules[subrules.Length - 1][0];
+        for (mutable j = prevIndexWithMarkers + 1; j < sequenceInfo.SubrulesWithMarkers.Length; j++)
         {
           def subruleInfo = sequenceInfo.SubrulesWithMarkers[j];
           when (subruleInfo is SubruleInfo.Marker as marker)
-            OnMarker(marker, subrule.Begin, subrule.Begin, parseResult, context);
-        }
-      }
-      
-      match (state)
-      {
-        | ExtensionPrefix  as state =>
-          if (subrule.IsEmpty)
-            OnPrefixMissed(state.RuleParser, subrule.Begin, parseResult, context);
-          else
-            foreach (prefix in state.RuleParser.PrefixRules)
-              when (parseResult.RecoveredSequences.ContainsKey((subrule.Begin, subrule.End, prefix.ParsingSequence)))
-                _ = WalkPrefix(-1, subrule.Begin, subrule.End, prefix, parseResult, context);
-
-        | ExtensionPostfix as state => 
-          foreach (postfix in state.RuleParser.PostfixRules)
-            when (postfix.RuleId >= state.RuleParser.FirstPostfixRuleId)
-            when (parseResult.RecoveredSequences.ContainsKey((subrule.Begin, subrule.End, postfix.ParsingSequence)))
-              _ = WalkPostfix(-1, subrule.Begin, subrule.End, postfix, parseResult, context);
-
-        | Predicate => ()
-
-        | _ =>
-          match (ruleInfo)
-          {
-            | Marker                        => assert3(false)
-            | RegularCall       as ruleInfo => OnRegularCall      (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
-            | TokenString       as ruleInfo => OnTokenString      (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
-            | SimpleCall        as ruleInfo => OnSimpleCall       (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
-            | ExtensibleCall    as ruleInfo => OnExtensibleCall   (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
-            | Option            as ruleInfo => OnOption           (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
-            | List              as ruleInfo => OnList             (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
-            | ListWithSeparator as ruleInfo => OnListWithSeparator(ruleInfo, subrule.Begin, subrule.End, parseResult, context)
-            | ListItem          as ruleInfo => OnListItem         (-1, ruleInfo, subrule.Begin, subrule.End, parseResult, context)
-            | Empty             as ruleInfo => OnEmpty            (ruleInfo, subrule.Begin, subrule.End, parseResult, context)
-          }
-      }
-      
-      def newPrevIndexWithMarkers = if (ruleInfo == null) -1 else ruleInfo.IndexWithMarkers;
-      mutable walkCalled = false;
-      
-      foreach ((nextSubrule, _) in subrules with nextIndex)
-      {
-        when (subrule.End == nextSubrule.Begin && state.Next.Contains(nextSubrule.State))
-        {
-          Walk(parseResult, states, subrules, nextIndex, sequenceInfo, newPrevIndexWithMarkers, context);
-          walkCalled = true;
-        }
-      }
-      
-      when (!walkCalled && sequenceInfo != null)
-      {
-        for (mutable j = ruleInfo.IndexWithMarkers + 1; j < sequenceInfo.SubrulesWithMarkers.Length; j++)
-        {
-          def subruleInfo = sequenceInfo.SubrulesWithMarkers[j];
-          when (subruleInfo is SubruleInfo.Marker as marker)
-            OnMarker(marker, subrule.Begin, subrule.Begin, parseResult, context);
+            OnMarker(marker, seqEnd, seqEnd, parseResult, context);
         }
       }
     }
@@ -250,13 +245,18 @@ namespace Nitra.Runtime
       
       unless (parseResult.RecoveredSequences.TryGetValue((startPos, endPos, parsingSequence), out recoveredSequence))
         return false;
-        
+
       def states = parsingSequence.States;
-      
-      foreach ((subrule, _) in recoveredSequence.Subrules with i)
-        when (subrule.Begin == startPos && states[subrule.State].IsStart) // TODO: Прерывать цикла когда позиция ушла вперед
-          Walk(parseResult, states, recoveredSequence.Subrules, i, parsingSequence.SequenceInfo, -1, context);
-          
+      match (recoveredSequence)
+      {
+        | Unambiguous as recoveredSequence =>
+          Walk(parseResult, states, recoveredSequence.Subrules, parsingSequence.SequenceInfo, context)
+
+        | Ambiguous   as recoveredSequence =>
+          foreach (subrules in recoveredSequence.Subrules)
+            Walk(parseResult, states, subrules, parsingSequence.SequenceInfo, context)
+      }
+
       true
     }
     

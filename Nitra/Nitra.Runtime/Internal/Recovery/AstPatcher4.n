@@ -92,6 +92,52 @@ namespace Nitra.Internal.Recovery
         ParseSequence(_toProcess.Dequeue());
     }
 
+    private AddRecoveredSequence(key : int * int * ParsingSequence, subrules : array[ParsedSubrule * TokenChanges], _tokenChanges : TokenChanges) : void
+    {//TODO: Optimize
+      def (_startPos, endPos, parsingSequence) = key;
+      def states = parsingSequence.States;
+
+      def allFlattenSubrules = List();
+      def flattenSubrules    = List();
+      def walk(index)
+      {
+        mutable walkCalled = false;
+        def (subrule, _) = subrules[index];
+        def state = states[subrule.State];
+        flattenSubrules.Add(subrule);
+
+        foreach ((nextSubrule, _) in subrules with nextIndex)
+          when (subrule.End == nextSubrule.Begin && state.Next.Contains(nextSubrule.State))
+          {
+            walk(nextIndex);
+            walkCalled = true;
+          }
+
+        unless (walkCalled)
+        {
+          def positions = array(flattenSubrules.Count + 1);
+          foreach (subrule in flattenSubrules with i)
+            positions[i] = (subrule.Begin, subrule.State);
+          positions[flattenSubrules.Count] = (endPos, -1);
+          allFlattenSubrules.Add(positions);
+        }
+
+        flattenSubrules.RemoveAt(flattenSubrules.Count - 1);
+      }
+      walk(0);
+
+      def recoveredSequence = if (allFlattenSubrules.Count == 1)
+      {
+        ParseResult.RecoveredSequence.Unambiguous(subrules, allFlattenSubrules[0]);
+      }
+      else
+      {
+        ParseResult.RecoveredSequence.Ambiguous(subrules, allFlattenSubrules.ToArray());
+      }
+
+      this.ParseResult.RecoveredSequences.Add(key, recoveredSequence);
+    }
+
     public ParseSequence(seq : ParsedSequence, end : int) : void
     {
       def makeSequence(seq : ParsedSequence, mutable end : int) : void
@@ -100,7 +146,6 @@ namespace Nitra.Internal.Recovery
         unless (this.ParseResult.RecoveredSequences.Contains(key))
         {
           def subrules = GetSubrulesAndChanges(seq, end);
-          def ast = ParseResult.RecoveredSequence(subrules, seq.Ends[end]);
           foreach ((subrule, changes) in _subrules)
           {
             def sequences = seq.GetSequencesForSubrule(subrule).ToArray();
@@ -113,10 +158,10 @@ namespace Nitra.Internal.Recovery
             else when (_deletedTokens.ContainsKey(ParsedSequenceAndSubrule(seq, subrule)))
             {
               def key = (subrule.Begin, subrule.End, (seq.ParsingSequence.States[0] :> ParsingState.Subsequence).Sequence);
-              this.ParseResult.RecoveredSequences.Add(key, ParseResult.RecoveredSequence(array[], TokenChanges(0, 1)));
+              AddRecoveredSequence(key, array[], TokenChanges(0, 1));
             }
           }
-          this.ParseResult.RecoveredSequences.Add(key, ast);
+          AddRecoveredSequence(key, subrules, seq.Ends[end]);
         }
       }
 
@@ -145,7 +190,7 @@ namespace Nitra.Internal.Recovery
                 makeSequence(sequence, subrule.End);
             }
           }
-          this.ParseResult.RecoveredSequences.Add(key, ParseResult.RecoveredSequence(filteredSubrules.ToArray(), seq.Ends[end]));
+          AddRecoveredSequence(key, filteredSubrules.ToArray(), seq.Ends[end]);
       }
     }
 
@@ -427,7 +472,7 @@ namespace Nitra.Internal.Recovery
       def nodes = SCG.List();
       def edges = SCG.List();
       
-      def graph = parsingSeq.MakeGraph(recSeq.Subrules, end);
+      def graph = parsingSeq.MakeGraph(recSeq.AllSubrules, end);
       
       foreach (((stateIndex, pos) as node, edges2) in graph.KeyValuePairs)
       {
