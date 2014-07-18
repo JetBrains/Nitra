@@ -284,7 +284,7 @@ namespace Nitra.Visualizer
           marker.ToolTip = error.Message + "\r\n\r\n" + text;
 
           var errorNode = new TreeViewItem();
-          errorNode.Header = "(" + error.Location.EndLineColumn + "): " + error.Message;
+          errorNode.Header = "(" + error.Location.EndLineColumn + "): " + error.ToString();
           errorNode.Tag = error;
           errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
 
