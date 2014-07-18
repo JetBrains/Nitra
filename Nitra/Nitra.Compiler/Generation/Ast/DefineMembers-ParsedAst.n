@@ -73,7 +73,7 @@ namespace Nitra.Compiler
                 this.parseResult = parseResult;
                 this.startPos    = startPos;
                 this.endPos      = endPos;
-                this.astPtr      = -recoveredSubrulesIndex;
+                this.astPtr      = ~recoveredSubrulesIndex;
               }
             }
           ]>);
@@ -114,41 +114,40 @@ namespace Nitra.Compiler
 
       foreach (field in fields)
       {
-        def statements = SCG.List();
-
         mutable needRuleParser  : bool;
         mutable needCaching     : bool;
         mutable needPos         : bool;
 
         def analyze(_ : FieldExpr) : void
         {
-          | Prefix         => ()
-          | Tuple(items)   => needPos = true; foreach (expr in items) analyze(expr);
-          | Chars(_, true) => needPos = true; needRuleParser = true;
-          | Chars          => needPos = true;
-          | Other(_, true) => needPos = true; needRuleParser = true; needCaching = true;
-          | Other          => needPos = true;                        needCaching = true;
+          | Prefix                       => ()
+          | Tuple(items)                 => needPos = true; foreach (expr in items) analyze(expr);
+          | Chars(NeedRuleParser = true) => needPos = true; needRuleParser = true;
+          | Chars                        => needPos = true;
+          | Other(NeedRuleParser = true) => needPos = true; needRuleParser = true; needCaching = true;
+          | Other                        => needPos = true;                        needCaching = true;
         }
 
         analyze(field.Expr);
 
+        def statementsStandardMode = SCG.List();
         when (needPos)
-          statements.Add(<[ mutable pos = $(getStartPos()); ]>);
+          statementsStandardMode.Add(<[ mutable pos = $(getStartPos()); ]>);
         when (needRuleParser)
-          statements.Add(<[ def ruleParser = parseResult.GetRuleParser(astPtr) :> $(this.RuleSymbol.GetParserClassRef()) ]>);
+          statementsStandardMode.Add(<[ def ruleParser = parseResult.GetRuleParser(astPtr) :> $(this.RuleSymbol.GetParserClassRef()) ]>);
 
-        def compile(_ : FieldExpr) : PExpr
+        def compileStandardMode(_ : FieldExpr) : PExpr
         {
           | Prefix(expr)
-          | Chars(expr, _)
-          | Other(expr, _) => expr
+          | Chars(ExprStandardMode = expr)
+          | Other(ExprStandardMode = expr) => expr
           | Tuple(items)   =>
             def tupleCode = SCG.List();
             def tupleArgs = SCG.List();
             foreach (item in items)
             {
               def name = Util.tmpname("ast");
-              tupleCode.Add(<[ def $(name : usesite) = $(compile(item)) ]>);
+              tupleCode.Add(<[ def $(name : usesite) = $(compileStandardMode(item)) ]>);
               tupleArgs.Add(<[ $(name : usesite) ]>);
             }
             <[
@@ -157,22 +156,36 @@ namespace Nitra.Compiler
               Nitra.SequenceAst(Nitra.Location(parseResult.OriginalSource, sequenceStartPos, pos), ..$tupleArgs)
             ]>
         }
+        statementsStandardMode.Add(compileStandardMode(field.Expr));
 
-        statements.Add(compile(field.Expr));
+        def statementsRecoveryMode = SCG.List();
+        statementsRecoveryMode.Add(<[ def (subrules, parsingSequence) = this.parseResult.RecoveredSubrules[~this.astPtr]; ]>);
+        statementsRecoveryMode.Add(<[ _ = subrules;                                                                       ]>);
+        statementsRecoveryMode.Add(<[ _ = parsingSequence;                                                                ]>);
+        statementsRecoveryMode.Add(<[ System.Diagnostics.Debugger.Break();                                                ]>);
 
-        def code = <[
-          if (this.astPtr > 0)
-          {
-            ..$statements
-          }
-          else
-          {
-            def record = this.parseResult.RecoveredSubrules[-this.astPtr];
-            _ = record;
-            System.Diagnostics.Debugger.Break();
-            assert(false);
-          };
-        ]>;
+        def compileRecoveryMode(_ : FieldExpr) : PExpr
+        {
+          | Prefix(expr)
+          | Chars(ExprRecoveryMode = expr)
+          | Other(ExprRecoveryMode = expr) => expr
+          | Tuple(items)   =>
+            def tupleCode = SCG.List();
+            def tupleArgs = SCG.List();
+            foreach (item in items)
+            {
+              def name = Util.tmpname("ast");
+              tupleCode.Add(<[ def $(name : usesite) = $(compileRecoveryMode(item)) ]>);
+              tupleArgs.Add(<[ $(name : usesite) ]>);
+            }
+            <[
+              ..$tupleCode;
+              Nitra.SequenceAst(Nitra.Location(parseResult.OriginalSource, 0, 0), ..$tupleArgs)
+            ]>
+        }
+        statementsRecoveryMode.Add(compileRecoveryMode(field.Expr));
+
+        def code = <[ if (this.astPtr >= 0) { ..$statementsStandardMode } else { ..$statementsRecoveryMode } ]>;
 
         def codeWithCaching =
           if (needCaching)
