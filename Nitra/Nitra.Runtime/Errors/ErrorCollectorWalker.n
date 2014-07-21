@@ -13,18 +13,20 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 
+using SCG = System.Collections.Generic;
+
 namespace Nitra.Runtime.Errors
 {
-  public sealed class ErrorCollectorWalker : AstWalkerBase[Context.Node]
+  public sealed class ErrorCollectorWalker : AstWalkerBase[Error.Node]
   {
     [Record]
-    public variant Context
+    public variant Error
     {
       | Leaf
         {
           Skipped : INitraReflection; Span : NSpan;
           
-          public override Message() : string
+          public override Message(_isTopLevel : bool) : string
           {
             Skipped.ToString()
           }
@@ -34,44 +36,57 @@ namespace Nitra.Runtime.Errors
         {
           Frame : INitraReflection;
           mutable IsAlternative : bool;
-          [RecordIgnore] public Children : List[Context] = List();
+          [RecordIgnore] public Children : List[Error] = List();
           
           public Add(ruleInfo : INitraReflection, span : NSpan) : void
           {
-            Children.Add(Context.Leaf(ruleInfo, span));
+            Children.Add(Error.Leaf(ruleInfo, span));
           }
           
-          public override Message() : string
+          public override Message(isTopLevel : bool) : string
           {
-            if (IsAlternative)
-              $<#..$(Children; " or ")#>
+            def (open, close) = if (isTopLevel) (null, null) else ("(", ")");
+            if (Children.Count == 1)
+              Children[0].Message()
+            else if (IsAlternative)
+              $<#$open..$(Children; " or "; _.Message(false))$close#>
             else
-              $<#..$(Children; " ")#>
-          }
-          
-          public override Optimize() : void
-          {
-          //  foreach (child in Children)
-          //    child.Optimize();
-              
-          //  when (IsAlternative)
-          //  {
-          //    Children.SelectMany(c => c.);
-          //    foreach (child in Children)
-          //    {
-          //      | Leaf => ()
-          //      | Node as n => ()
-          //    }
-          //  }
+              $<#$open..$(Children; " "; _.Message(false))$close#>
           }
         }
+      
+      public ErrorPositions(posinitns : HashSet[int]) : void
+      {
+        match (this)
+        {
+          | Leaf as x => _ = posinitns.Add(x.Span.EndPos)
+          | Node as n => 
+            foreach (c in n.Children)
+              c.ErrorPositions(posinitns);
+        }
+      }
         
+      public Clone(pos : int) : Error
+      {
+        match (this)
+        {
+          | Leaf(skipped, span) => Leaf(skipped, span)
+          | Node as n => 
+            def newNode = Node(n.Frame, n.IsAlternative);
+            foreach (c in n.Children)
+            {
+              | Leaf(_, span) when !span.IntersectsWith(pos, pos) => ()
+              | _ => newNode.Children.Add(c.Clone(pos));
+            }
+            newNode
+        }
+      }
        
-      class ListContextComparer : IEqualityComparer[List[Context]]
+      class ListContextComparer : IEqualityComparer[List[Error]]
       {
         Comparer : ContextComparer = ContextComparer();
         
-        public Equals(xs : List[Context], ys : List[Context]) : bool
+        public Equals(xs : List[Error], ys : List[Error]) : bool
         {
           when (xs.Count != ys.Count)
             return false;
@@ -83,7 +98,7 @@ namespace Nitra.Runtime.Errors
           true
         }
         
-        public GetHashCode(xs : List[Context]) : int
+        public GetHashCode(xs : List[Error]) : int
         {
           mutable hash;
 
@@ -94,13 +109,13 @@ namespace Nitra.Runtime.Errors
         }
       }
 
-      class ContextComparer : IEqualityComparer[Context]
+      class ContextComparer : IEqualityComparer[Error]
       {
-        public Equals(x : Context, y : Context) : bool
+        public Equals(x : Error, y : Error) : bool
         {
           match (x, y)
           {
-            | (Context.Leaf as x, Context.Leaf as y) =>
+            | (Error.Leaf as x, Error.Leaf as y) =>
               when (x.Span != y.Span)
                 return false;
           
@@ -122,11 +137,11 @@ namespace Nitra.Runtime.Errors
           }
         }
         
-        public GetHashCode(obj : Context) : int
+        public GetHashCode(obj : Error) : int
         {
           match (obj)
           {
-            | Context.Leaf as obj =>
+            | Error.Leaf as obj =>
               def hash = 
                 match (obj.Skipped)
                 {
@@ -148,8 +163,11 @@ namespace Nitra.Runtime.Errors
           }
         }
       }
+            
+      static listContextComparer : ListContextComparer = ListContextComparer();
+      static contextComparer     : ContextComparer = ContextComparer();
 
-      public GetFlattenChildren(result : List[Context]) : void
+      public GetFlattenChildren(result : List[Error]) : void
       {
         match (this)
         {
@@ -162,46 +180,78 @@ namespace Nitra.Runtime.Errors
               c.GetFlattenChildren(altResult);
               result2.Add(altResult);
             }
-            def comparer = ListContextComparer();
-            
-            def groups = result2.GroupBy(x => x, comparer);
-            def groups2 = groups.ToArray();
-            if (groups2.Length == 1)
+
+            def nextList(result2 : List[List[Error]]) : List[Error]
             {
-              n.Children.RemoveRange(1, result2.Count - 1);
-              //n.Children.Clear();
-              //n.Children.AddRange(groups2[0].First());
-              n.IsAlternative = false;
-              GetFlattenChildren(result);
-            }
-            else
-            {
-              def getKey(e : List[Context], i : int) : int * ExtensibleRuleDescriptor
+              def result = List();
+              foreach (lst in result2)
               {
-                match (e[i])
-                {
-                  | Leaf(SubruleInfo as info, _) => (e.Count, info.Sequence.ExtensionRuleDescriptorOpt)
-                  | _ => (0, null)
-                }
+                when (lst.Count == 0)
+                  break;
+                result.Add(lst[0]);
+                lst.RemoveAt(0);
               }
+                
+              result
+            }
+            def isAllTokensIsSameExtentions(tokens : List[Error]) : bool
+            {
+              mutable current;
+              foreach (t in tokens)
+              {
+                | Leaf(SubruleInfo as info, _) => 
+                  if (current == null)
+                    current = info.Sequence.ExtensionRuleDescriptorOpt;
+                  else when (current : object != info.Sequence?.ExtensionRuleDescriptorOpt)
+                    return false;
+
+                | _ => return false;
+              }
+                
+              true
+            }
+            def isAllTokensEquals(tokens : List[Error]) : bool
+            {
+              mutable current;
+              foreach (t in tokens)
+              {
+                | Leaf => 
+                  if (current == null)
+                    current = t;
+                  else unless (contextComparer.Equals(current, t))
+                    return false;
+
+                | _ => return false;
+              }
+                
+              true
+            }
+
+            def result3 = List();
+            mutable current = nextList(result2);
               
-              def operators = result2.GroupBy(getKey(_, 0));
-              foreach (operator when operator.Key[0] != 0 in operators)
+            while (current.Count > 0)
+            {
+              if (isAllTokensEquals(current))
+                result3.Add(current[0]) // все токены идентичны и можно брать первый попавшийся
+              else if (isAllTokensIsSameExtentions(current))
               {
-                def xx = operator.ToArray();
-                foreach (xxx in operator)
-                {
-                  _ = xxx;
-                  _ = xx;
-                }
-                //for (mutable i = 1; i < xx.Length; i++)
-                //{
-                //  xx[i]
-                //}
+                def newContext = Error.Node(n.Frame, true); // все токены относятся к одному оператору и могут быть объеденены
+                newContext.Children.AddRange(current);
+                result3.Add(newContext);
               }
-              ();
+              else
+              {
+                // все плохо и нам не удалось сгруппировать токены. Рапортуем об наличии альтернатив
+                def newContext = Error.Node(null, true); // все токены относятся к разным правилам
+                newContext.Children.AddRange(current);
+                result3.Add(newContext);
+              }
+                
+              current = nextList(result2);
             }
-            _ = result2;
+            result.AddRange(result3);
+            ();
               
           | Node as n =>
             foreach (c in n.Children)
@@ -209,9 +259,7 @@ namespace Nitra.Runtime.Errors
         }
       }
 
-      public virtual Optimize() : void {}
-      
-      public abstract Message() : string;
+      public abstract Message(isTopLevel : bool = true) : string;
         
       public override ToString() : string
       {
@@ -221,6 +269,15 @@ namespace Nitra.Runtime.Errors
           | Node as n => (if (n.IsAlternative) "Alternatives=" else "Children=").ToString() + n.Children.Count + " Tokens=" + DebugTotalLength
                           + "\r\n" + n.Frame?.ShortName;
         }
+      }
+      
+      public Simplify() : Error
+      {
+        def result = List();
+        GetFlattenChildren(result);
+        def newContext = Error.Node(null, false);
+        newContext.Children.AddRange(result);
+        newContext
       }
       
       DebugTotalLength : int
@@ -237,7 +294,7 @@ namespace Nitra.Runtime.Errors
       }
 
       [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
-      AsArray2 : array[Context]
+      AsArray2 : array[Error]
       {
         get
         {
@@ -250,68 +307,8 @@ namespace Nitra.Runtime.Errors
       }
     }
     
-    /*
-    public class Context
-    {
-      public mutable Inserted : list[INitraReflection * NSpan];
-      public Parent : Context;
-      public mutable IsLeaf : bool = true;
-      public mutable _skipped : int;
-      
-      public this(parent : Context)
-      {
-        Parent   = parent;
-        Inserted = parent.Inserted;
-      }
-      
-      public this()
-      {
-        Inserted = [];
-      }
-      
-      public Add(ruleInfo : INitraReflection, span : NSpan) : void
-      {
-        Inserted ::= (ruleInfo, span);
-        _ = Inserted;
-      }
-      
-      public GetErrors(parseResult : ParseResult) : Seq[ExpectedError]
-      {
-        def result   = List();
-        def inserted = Inserted.Reverse();
-        mutable currSpan = NSpan(-1, -1);
-        mutable infos    = List();
-        def add(parseResult, currSpan, infos)
-        {
-          def loc = Location(parseResult.OriginalSource, currSpan);
-          def error = ExpectedError(loc, infos);
-          result.Add(error);
-        }
-        
-        foreach ((e, span) in inserted)
-        {
-          when (currSpan.EndPos != span.EndPos)
-          {
-            when (currSpan.StartPos >= 0)
-              add(parseResult, currSpan, infos);
-            
-            infos.Clear();
-            currSpan = span;
-          }
-          
-          infos.Add(e);
-        }
-        
-        when (infos.Count > 0)
-          add(parseResult, currSpan, infos);
-        
-        result
-      }
-    }
-    */
-
-    _simpleNodes     : Hashtable[SimpleRuleParser * NSpan, Context.Node] = Hashtable();
-    _extensibleNodes : Hashtable[ExtensibleRuleParser * NSpan, Context.Node] = Hashtable();
+    _simpleNodes     : Hashtable[SimpleRuleParser * NSpan, Error.Node] = Hashtable();
+    _extensibleNodes : Hashtable[ExtensibleRuleParser * NSpan, Error.Node] = Hashtable();
     
     public Errors : List[ExpectedError] { get; default List();}
     
@@ -319,14 +316,14 @@ namespace Nitra.Runtime.Errors
     {
     }
 
-    static ToDot(parseResult : ParseResult, context : Context) : string
+    public static ToDot(parseResult : ParseResult, context : Error) : string
     {
       def graphLabel = X.DotEscape(parseResult.DebugText);
       def edges = List();
       def nodes = List();
       def nodesIdMap = Hashtable();
       mutable id = 0;
-      def makeNodes(context : Context)
+      def makeNodes(context : Error)
       {
         when (nodesIdMap.ContainsKey(context))
           return;
@@ -338,12 +335,12 @@ namespace Nitra.Runtime.Errors
         
         nodes.Add($<#$name [label="$(X.DotEscape(context.ToString()))"$style]#>);
         
-        when (context is Context.Node as node)
+        when (context is Error.Node as node)
           foreach (child in node.Children)
             makeNodes(child);
       }
       def visited = HashSet();
-      def makeEdges(context : Context)
+      def makeEdges(context : Error)
       {
         unless (visited.Add(context))
           return;
@@ -352,7 +349,7 @@ namespace Nitra.Runtime.Errors
         def id1 = nodesIdMap[context];
         def name1 = "Node_" + id1;
         
-        when (context is Context.Node as node)
+        when (context is Error.Node as node)
           foreach (child in node.Children)
           {
             def id2 = nodesIdMap[child];
@@ -379,49 +376,37 @@ namespace Nitra.Runtime.Errors
       
       content
     }
-    
+
     public Walk(parseResult : ParseResult) : void
     {
       _simpleNodes.Clear();
       _extensibleNodes.Clear();
-      def context = Context.Node(null, isAlternative=false);
+      def context = Error.Node(null, isAlternative=false);
       Walk(parseResult, context);
 
-      X.ExecuteDot(ToDot(parseResult, context));
+      //X.ExecuteDot(ToDot(parseResult, context));
+      def newContext = context.Simplify();
+      //X.ExecuteDot(ToDot(parseResult, newContext));
+      def source = parseResult.OriginalSource;
+      def errorSet = HashSet();
+      def errors = List();
       
-      def result = List();
-      context.GetFlattenChildren(result);
-      _ = result;
-      X.ExecuteDot(ToDot(parseResult, context));
+      newContext.ErrorPositions(errorSet);
       
-      /*
-      def errors = Errors.Distinct();
-      
-      def aggregateErrors(errors) : Seq[ParseError]
+      if (errorSet.Count == 1)
       {
-        def groups = errors.GroupBy(e => e.Location.EndPos);
-        def result = List();
-        foreach (group in groups)
-        {
-          def xs = group.ToArray();
-          
-          if (xs.Length == 1)
-            result.Add(xs[0]);
-          else
-            result.Add(CompositeExpectedError(xs[0].Location, xs));
-        }
+        def pos = errorSet.First();
+        errors.Add(ExpectedError(Location(source, NSpan(pos, pos)), newContext));
+      }
+      else
+        foreach (pos in errorSet.OrderBy(x => x))
+          errors.Add(ExpectedError(Location(source, NSpan(pos, pos)), newContext.Clone(pos).Simplify()));
         
-        result.OrderBy(e => e.Location.StartPos).ThenBy(e => e.Location.EndPos)
-      }
-      
-      def aggregatedErrors = aggregateErrors(errors);
-      
-      foreach (error in aggregatedErrors)
+      foreach (error in errors)
         parseResult.ReportError(error);
-      */
     }
 
-    public override OnRegularCall(ruleInfo : SubruleInfo.RegularCall, startPos : int, endPos : int, parseResult : ParseResult, context : Context.Node) : void
+    public override OnRegularCall(ruleInfo : SubruleInfo.RegularCall, startPos : int, endPos : int, parseResult : ParseResult, context : Error.Node) : void
     {
       IgnoreParams();
 
@@ -431,7 +416,7 @@ namespace Nitra.Runtime.Errors
       }
     }
 
-    public override OnTokenString(ruleInfo : SubruleInfo.TokenString, startPos : int, endPos : int, parseResult : ParseResult, context : Context.Node) : void
+    public override OnTokenString(ruleInfo : SubruleInfo.TokenString, startPos : int, endPos : int, parseResult : ParseResult, context : Error.Node) : void
     {
       IgnoreParams();
 
@@ -441,7 +426,7 @@ namespace Nitra.Runtime.Errors
       }
     }
 
-    public override OnSimpleCall(ruleInfo : SubruleInfo.SimpleCall, startPos : int, endPos : int, parseResult : ParseResult, context : Context.Node) : void
+    public override OnSimpleCall(ruleInfo : SubruleInfo.SimpleCall, startPos : int, endPos : int, parseResult : ParseResult, context : Error.Node) : void
     {
       when (startPos == endPos && !ruleInfo.CanParseEmptyString)
       {
@@ -451,7 +436,7 @@ namespace Nitra.Runtime.Errors
       base.OnSimpleCall(ruleInfo, startPos, endPos, parseResult, context);
     }
 
-    public override OnExtensibleCall(ruleInfo : SubruleInfo.ExtensibleCall, startPos : int, endPos : int, parseResult : ParseResult, context : Context.Node) : void
+    public override OnExtensibleCall(ruleInfo : SubruleInfo.ExtensibleCall, startPos : int, endPos : int, parseResult : ParseResult, context : Error.Node) : void
     {
       when (startPos == endPos && !ruleInfo.CanParseEmptyString)
       {
@@ -461,7 +446,7 @@ namespace Nitra.Runtime.Errors
       base.OnExtensibleCall(ruleInfo, startPos, endPos, parseResult, context);
     }
 
-    public override OnList(ruleInfo : SubruleInfo.List, startPos : int, endPos : int, parseResult : ParseResult, context : Context.Node) : void
+    public override OnList(ruleInfo : SubruleInfo.List, startPos : int, endPos : int, parseResult : ParseResult, context : Error.Node) : void
     {
       when (startPos == endPos && !ruleInfo.CanParseEmptyString)
       {
@@ -471,7 +456,7 @@ namespace Nitra.Runtime.Errors
       base.OnList(ruleInfo, startPos, endPos, parseResult, context);
     }
 
-    public override OnListWithSeparator(ruleInfo : SubruleInfo.ListWithSeparator, startPos : int, endPos : int, parseResult : ParseResult, context : Context.Node) : void
+    public override OnListWithSeparator(ruleInfo : SubruleInfo.ListWithSeparator, startPos : int, endPos : int, parseResult : ParseResult, context : Error.Node) : void
     {
       when (startPos == endPos && !ruleInfo.CanParseEmptyString)
       {
@@ -481,7 +466,7 @@ namespace Nitra.Runtime.Errors
       base.OnListWithSeparator(ruleInfo, startPos, endPos, parseResult, context);
     }
 
-    public override OnListItem(astPtr : int, ruleInfo : SubruleInfo.ListItem, startPos : int, endPos : int, parseResult : ParseResult, context : Context.Node) : void
+    public override OnListItem(astPtr : int, ruleInfo : SubruleInfo.ListItem, startPos : int, endPos : int, parseResult : ParseResult, context : Error.Node) : void
     {
       when (startPos == endPos && !ruleInfo.CanParseEmptyString)
       {
@@ -491,13 +476,13 @@ namespace Nitra.Runtime.Errors
       base.OnListItem(astPtr, ruleInfo, startPos, endPos, parseResult, context);
     }
     
-    public override OnPrefixMissed(ruleParser : ExtensibleRuleParser, pos : int, parseResult : ParseResult, context : Context.Node) : void
+    public override OnPrefixMissed(ruleParser : ExtensibleRuleParser, pos : int, parseResult : ParseResult, context : Error.Node) : void
     {
       IgnoreParams();
       context.Add(ruleParser, NSpan(pos, pos));
     }
 
-    public override WalkSimple(startPos : int, endPos : int, ruleParser : SimpleRuleParser, parseResult : ParseResult, context : Context.Node) : void
+    public override WalkSimple(startPos : int, endPos : int, ruleParser : SimpleRuleParser, parseResult : ParseResult, context : Error.Node) : void
     {
       mutable newContext;
       def key = (ruleParser, NSpan(startPos, endPos));
@@ -505,41 +490,41 @@ namespace Nitra.Runtime.Errors
         newContext.IsAlternative = true;
       else
       {
-        newContext = Context.Node(ruleParser, isAlternative=false);
+        newContext = Error.Node(ruleParser, isAlternative=false);
         _simpleNodes.Add(key, newContext);
         base.WalkSimple(startPos, endPos, ruleParser, parseResult, newContext);
       }
       AddErrors(context, newContext);
     }
     
-    public override WalkExtensible(startPos : int, endPos : int, ruleParser : ExtensibleRuleParser, parseResult : ParseResult, context : Context.Node) : void
+    public override WalkExtensible(startPos : int, endPos : int, ruleParser : ExtensibleRuleParser, parseResult : ParseResult, context : Error.Node) : void
     {
       mutable newContext;
       def key = (ruleParser, NSpan(startPos, endPos));
       unless (_extensibleNodes.TryGetValue(key, out newContext))
       {
-        newContext = Context.Node(ruleParser, isAlternative=true);
+        newContext = Error.Node(ruleParser, isAlternative=true);
         _extensibleNodes.Add(key, newContext);
         base.WalkExtensible(startPos, endPos, ruleParser, parseResult, newContext);
       }
       AddErrors(context, newContext);
     }
     
-    public override WalkPrefix(astPtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult, context : Context.Node) : void
+    public override WalkPrefix(astPtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult, context : Error.Node) : void
     {
-      def newContext = Context.Node(ruleParser, isAlternative=false);
+      def newContext = Error.Node(ruleParser, isAlternative=false);
       base.WalkPrefix(astPtr, startPos, endPos, ruleParser, parseResult, newContext);
       AddErrors(context, newContext);
     }
 
-    public override WalkPostfix(astPtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult, context : Context.Node) : void
+    public override WalkPostfix(astPtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : ParseResult, context : Error.Node) : void
     {
-      def newContext = Context.Node(ruleParser, isAlternative=false);
+      def newContext = Error.Node(ruleParser, isAlternative=false);
       base.WalkPostfix(astPtr, startPos, endPos, ruleParser, parseResult, newContext);
       AddErrors(context, newContext);
     }
     
-    AddErrors(context : Context.Node, newContext : Context.Node) : void
+    AddErrors(context : Error.Node, newContext : Error.Node) : void
     {
       match (newContext.Children.Count)
       {
