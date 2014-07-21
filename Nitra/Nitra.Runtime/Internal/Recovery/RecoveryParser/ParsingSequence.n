@@ -26,11 +26,18 @@ namespace Nitra.Internal.Recovery
     public EndStates           : array[int];
     public States              : array[ParsingState];
 
+    private _staticStateToEarleyMap : Hashtable[int, int];
+
     | Sequence   { }
     | Extensible { RuleParser : ExtensibleRuleParser }
 
     [RecordIgnore]
     public Callers             : SCG.HashSet[ParsingCallerInfo] = SCG.HashSet();
+
+    public GetEarleyState(staticState : int) : int
+    {
+      _staticStateToEarleyMap[staticState]
+    }
 
     public IsStartState(state : int) : bool
     {
@@ -65,12 +72,12 @@ namespace Nitra.Internal.Recovery
 
     public static CreateSimple(ruleParser : SimpleRuleParser) : ParsingSequence
     {
-      CreateSequence(ruleParser.Reflection(ruleParser.RuleId), ruleParser.IsTokenRule)
+      CreateSequence(ruleParser.Reflection(ruleParser.RuleId), ruleParser.IsTokenRule, Hashtable())
     }
 
     public static CreateExtension(ruleParser : ExtensionRuleParser) : ParsingSequence
     {
-      CreateSequence(ruleParser.Reflection(ruleParser.RuleId), ruleParser.IsTokenRule)
+      CreateSequence(ruleParser.Reflection(ruleParser.RuleId), ruleParser.IsTokenRule, Hashtable())
     }
 
     public static CreateExtensible(ruleParser : ExtensibleRuleParser) : ParsingSequence
@@ -87,11 +94,12 @@ namespace Nitra.Internal.Recovery
           ParsingState.ExtensionPrefix (0, array[1, -1], array[],     true,  null, ruleParser),
           ParsingState.ExtensionPostfix(1, array[1, -1], array[0, 1], false, null, ruleParser)
         ],
+        null,
         ruleParser
       )
     }
 
-    public static CreateListSequence(subrule : SubruleInfo.List) : ParsingSequence // TODO: Построение последовательностей костыль на костыле. Переделать.
+    public static CreateListSequence(subrule : SubruleInfo.List, staticStateToEarley : Hashtable[int, int]) : ParsingSequence // TODO: Построение последовательностей костыль на костыле. Переделать.
     {
       def transitions = SCG.HashSet();
       def states = SCG.List();
@@ -99,11 +107,12 @@ namespace Nitra.Internal.Recovery
       {
         state.Id = states.Count;
         states.Add(state);
+        staticStateToEarley[state.Subrule.State] = state.Id;
         state
       }
       _ = transitions.Add((-1, 0));
 
-      def rule = CreateSequence(subrule.Rule, false);
+      def rule = CreateSequence(subrule.Rule, false, staticStateToEarley);
       def subruleRule = SubruleInfo.ListItem(-1, subrule.Rule.Description, -1, subrule.Rule.CanParseEmptyString, false, subrule.Rule.Description, null, array[], rule);
       subrule.ListItemRule = subruleRule;
       def startState = states.Count;
@@ -131,12 +140,12 @@ namespace Nitra.Internal.Recovery
         _ = transitions.Add((state - 1, state - 1));
       }
 
-      def parsingSequence = CreateSequence(states, transitions, null, false, "List", subrule.Description, subrule.MandatoryTokenCount);
+      def parsingSequence = CreateSequence(states, transitions, null, false, "List", subrule.Description, subrule.MandatoryTokenCount, staticStateToEarley);
       subrule.ParsingSequence = parsingSequence;
       parsingSequence
     }
 
-    public static CreateListWithSeparatorSequence(subrule : SubruleInfo.ListWithSeparator) : ParsingSequence
+    public static CreateListWithSeparatorSequence(subrule : SubruleInfo.ListWithSeparator, staticStateToEarley : Hashtable[int, int]) : ParsingSequence
     {
       def transitions = SCG.HashSet();
       def states = SCG.List();
@@ -144,12 +153,13 @@ namespace Nitra.Internal.Recovery
       {
         state.Id = states.Count;
         states.Add(state);
+        staticStateToEarley[state.Subrule.State] = state.Id;
         state
       }
       _ = transitions.Add((-1, 0));
 
-      def rule = CreateSequence(subrule.Rule, false);
-      def separator = CreateSequence(subrule.Separator, false);
+      def rule = CreateSequence(subrule.Rule, false, staticStateToEarley);
+      def separator = CreateSequence(subrule.Separator, false, staticStateToEarley);
       def subruleRule = SubruleInfo.ListItem(-1, subrule.Rule.Description, -1, subrule.Rule.CanParseEmptyString, false, subrule.Rule.Description, null, array[], rule);
       def subruleSeparator = SubruleInfo.ListItem(-1, subrule.Separator.Description, -1, subrule.Separator.CanParseEmptyString, false, subrule.Separator.Description, null, array[], separator);
       subrule.ListItemRule = subruleRule;
@@ -195,17 +205,17 @@ namespace Nitra.Internal.Recovery
         _ = transitions.Add((state - 2, state));
       }
 
-      def parsingSequence = CreateSequence(states, transitions, null, false, "ListWithSeparator", subrule.Description, subrule.MandatoryTokenCount);
+      def parsingSequence = CreateSequence(states, transitions, null, false, "ListWithSeparator", subrule.Description, subrule.MandatoryTokenCount, staticStateToEarley);
       subrule.ParsingSequence = parsingSequence;
       parsingSequence
     }
 
     public static CreateRoot() : ParsingSequence
     {
-      ParsingSequence.Sequence(null, "Root", "Root", false, 1, array[0], array[0], array[ParsingState.Scan(0, array[-1], array[], true, null)])
+      ParsingSequence.Sequence(null, "Root", "Root", false, 1, array[0], array[0], array[ParsingState.Scan(0, array[-1], array[], true, null)], null)
     }
 
-    private static CreateSequence(sequence : SequenceInfo, isToken : bool) : ParsingSequence
+    private static CreateSequence(sequence : SequenceInfo, isToken : bool, staticStateToEarley : Hashtable[int, int]) : ParsingSequence
     {
       def transitions = SCG.HashSet();
       def states = SCG.List();
@@ -213,6 +223,7 @@ namespace Nitra.Internal.Recovery
       {
         state.Id = states.Count;
         states.Add(state);
+        staticStateToEarley[state.Subrule.State] = state.Id;
         state
       }
 
@@ -241,9 +252,9 @@ namespace Nitra.Internal.Recovery
           | Empty             as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Scan             (0, null, null, false, subrule)))
           | RegularCall       as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Scan             (0, null, null, false, subrule)))
           | TokenString       as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Scan             (0, null, null, false, subrule)))
-          | Option            as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence      (0, null, null, false, subrule, CreateSequence(subrule.Rule, false), subrule.Rule)))
-          | List              as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.List             (0, null, null, false, subrule, CreateListSequence(subrule))))
-          | ListWithSeparator as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.ListWithSeparator(0, null, null, false, subrule, CreateListWithSeparatorSequence(subrule))))
+          | Option            as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence      (0, null, null, false, subrule, CreateSequence(subrule.Rule, false, staticStateToEarley), subrule.Rule)))
+          | List              as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.List             (0, null, null, false, subrule, CreateListSequence(subrule, staticStateToEarley))))
+          | ListWithSeparator as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.ListWithSeparator(0, null, null, false, subrule, CreateListWithSeparatorSequence(subrule, staticStateToEarley))))
         }
         def endState = states.Count;
         if (subrule.CanParseEmptyString)
@@ -258,12 +269,12 @@ namespace Nitra.Internal.Recovery
           prevStates.Add(startState);
         }
       }
-      def parsingSequence = CreateSequence(states, transitions, sequence, isToken, sequence.RuleName, sequence.Description, sequence.MandatoryTokenCount);
+      def parsingSequence = CreateSequence(states, transitions, sequence, isToken, sequence.RuleName, sequence.Description, sequence.MandatoryTokenCount, staticStateToEarley);
       sequence.ParsingSequence = parsingSequence;
       parsingSequence
     }
 
-    private static CreateSequence(states : SCG.List[ParsingState], transitions : SCG.HashSet[int * int], sequence : SequenceInfo, isToken : bool, ruleName : string, description : string, mandatoryTokenCount : int) : ParsingSequence
+    private static CreateSequence(states : SCG.List[ParsingState], transitions : SCG.HashSet[int * int], sequence : SequenceInfo, isToken : bool, ruleName : string, description : string, mandatoryTokenCount : int, staticStateToEarley : Hashtable[int, int]) : ParsingSequence
     {
       foreach (state in states)
       {
@@ -290,6 +301,7 @@ namespace Nitra.Internal.Recovery
         , startStates
         , endStates.ToArray().SortInplace(_.CompareTo(_))
         , states.ToArray()
+        , staticStateToEarley
         );
       res
     }
