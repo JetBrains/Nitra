@@ -60,13 +60,15 @@ namespace Nitra.Compiler
             statementsStandardMode.Add(WalkerGenerator.Skip(subrule, parentAstPtr));
           statementsStandardMode.Add(valueExpr);
 
-          def statementsRecoveryMode = GetSubruleValueRecoveryMode(subrule);
+          def statementsRecoveryMode = SCG.List();
+          statementsRecoveryMode.Add(<[ def recoveredSubrulesIndex = ~this.astPtr ]>);
+          statementsRecoveryMode.Add(GetSubruleValueRecoveryMode(subrule));
 
           def expr =
             if (subrule.SrcRule.Type is RuleType.Chars)
-              FieldExpr.Chars(<[ { ..$statementsStandardMode } ]>, needRuleParser, statementsRecoveryMode)
+              FieldExpr.Chars(<[ { ..$statementsStandardMode } ]>, needRuleParser, <[ { ..$statementsRecoveryMode } ]>)
             else
-              FieldExpr.Other(<[ { ..$statementsStandardMode } ]>, needRuleParser, statementsRecoveryMode);
+              FieldExpr.Other(<[ { ..$statementsStandardMode } ]>, needRuleParser, <[ { ..$statementsRecoveryMode } ]>);
 
           ruleExprs.Add(subrule.SrcRule, expr);
         }
@@ -252,12 +254,23 @@ namespace Nitra.Compiler
         | 0 => ()
         | 1 => statements.Add(subruleValues[0]);
         | _ =>
-          statements.Insert(0, <[ def sequenceStartPos = 0; ]>);
-          statements.Insert(1, <[ def sequenceEndPos = 0; ]>);
+          statements.Insert(0, <[ def sequenceStartPos = subruleStartPos; ]>);
+          statements.Insert(1, <[ def sequenceEndPos   = subruleEndPos; ]>);
           statements.Add(<[ Nitra.SequenceAst(Nitra.Location(parseResult.OriginalSource, sequenceStartPos, sequenceEndPos), ..$subruleValues) ]>);
       }
 
-      <[ { ..$statements } ]>
+      <[
+        mutable recoveredSequence;
+        if (parseResult.RecoveredSequences.TryGetValue((subruleStartPos, subruleEndPos, parsingSequence), out recoveredSequence))
+        {
+          match (recoveredSequence)
+          {
+            | Unambiguous(recoveredSubrulesIndex) => { ..$statements }
+            | Ambiguous                           => throw System.NotImplementedException("Ambiguous recovery mode AST reading not implemented")
+          }
+        }
+        else throw System.NotImplementedException("Fallback to standard mode AST reading not implemented")
+      ]>
     }
 
     private GetSubruleValueRecoveryMode(subrule : SubruleCompileInfo) : PExpr
@@ -298,13 +311,17 @@ namespace Nitra.Compiler
           else
             <[
               if (subruleStartPos < subruleEndPos)
+              {
                 Nitra.OptionAst.Some(Nitra.Location(parseResult.OriginalSource, subruleStartPos, subruleEndPos), $(GetSequenceValueRecoveryMode(subrule.Rule)))
+              }
               else
+              {
                 Nitra.OptionAst.None(Nitra.Location(parseResult.OriginalSource, subruleStartPos, subruleEndPos))
+              }
             ]>
 
-        | List           => <[ throw System.NotImplementedException() ]>
-        | ListWithSeparator => <[ throw System.NotImplementedException() ]>
+        | List           => <[ throw System.NotImplementedException("Recovery mode AST reading: List") ]>
+        | ListWithSeparator => <[ throw System.NotImplementedException("Recovery mode AST reading: ListWithSeparator") ]>
         | Marker => <[ () ]>
       };
       def skippedValue = match (subrule)
@@ -359,10 +376,14 @@ namespace Nitra.Compiler
         mutable parsingSequence;
         mutable subruleStartPos;
         mutable subruleEndPos;
-        if (parseResult.FindRecoveredSubrule(~this.astPtr, $(subrule.State : int), out parsingSequence, out subruleStartPos, out subruleEndPos))
+        if (parseResult.FindRecoveredSubrule(recoveredSubrulesIndex, $(subrule.State : int), out parsingSequence, out subruleStartPos, out subruleEndPos))
+        {
           $recoveredValue
+        }
         else
+        {
           $skippedValue
+        }
       ]>
     }
 
