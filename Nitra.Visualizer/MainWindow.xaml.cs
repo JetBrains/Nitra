@@ -343,9 +343,10 @@ namespace Nitra.Visualizer
         else if (_needUpdatePerformance     && object.ReferenceEquals(_tabControl.SelectedItem, _performanceTabItem))
           UpdatePerformance();
       }
-// ReSharper disable EmptyGeneralCatchClause
-      catch { }
-// ReSharper restore EmptyGeneralCatchClause
+      catch(Exception e)
+      {
+        Debug.Write(e);
+      }
     }
 
     private void UpdatePerformance()
