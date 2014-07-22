@@ -1,4 +1,7 @@
-﻿using Nemerle.Imperative;
+﻿using Nitra.Runtime.Highlighting;
+using Nitra.VisualStudio.Parsing;
+
+using Nemerle.Imperative;
 
 using System;
 using System.Linq;
@@ -14,230 +17,83 @@ namespace Nitra.VisualStudio
 {
   internal class BraceMatchingTagger : ITagger[TextMarkerTag]
   {
-    public Language : Language { get; }
-    private _braceList : Dictionary[char, char];
+    public  Language    : Language { get; }
+    private _parseAgent : ParseAgent;
 
     internal this (language : Language, view : ITextView, sourceBuffer : ITextBuffer)
     {
       Language = language;
         //here the keys are the open braces, and the values are the close braces
-      _braceList = Dictionary();
-      _braceList.Add('{', '}');
-      _braceList.Add('[', ']');
-      _braceList.Add('(', ')');
       this.View = view;
       this.SourceBuffer = sourceBuffer;
-      this.CurrentChar = null;
+      this.CaretPos = null;
 
       this.View.Caret.PositionChanged += CaretPositionChanged;
       this.View.LayoutChanged += ViewLayoutChanged;
+      
+      _ = Utils.TryGetOrCreateParseAgent(sourceBuffer, out _parseAgent);
     }
 
-    View : ITextView
-    {
-      get; set;
-    }
-
-    SourceBuffer : ITextBuffer
-    {
-      get;
-      set;
-    }
-
-    CurrentChar : SnapshotPoint?
-    {
-      get;
-      set;
-    }
+    View         : ITextView      { get; set; }
+    SourceBuffer : ITextBuffer    { get; set; }
+    CaretPos     : SnapshotPoint? { get; set; }
 
     public event TagsChanged : EventHandler [SnapshotSpanEventArgs];
 
-    ViewLayoutChanged (_ : object, e : TextViewLayoutChangedEventArgs) : void
+    ViewLayoutChanged(_ : object, e : TextViewLayoutChangedEventArgs) : void
     {
       unless (e.NewSnapshot == e.OldSnapshot : object) //make sure that there has really been a change
         UpdateAtCaretPosition(View.Caret.Position);
     }
 
-    CaretPositionChanged (_ : object, e : CaretPositionChangedEventArgs) : void
+    CaretPositionChanged(_ : object, e : CaretPositionChangedEventArgs) : void
     {
-      UpdateAtCaretPosition (e.NewPosition);
+      UpdateAtCaretPosition(e.NewPosition);
     }
 
-    UpdateAtCaretPosition (caretPosition : CaretPosition) : void
+    UpdateAtCaretPosition(caretPosition : CaretPosition) : void
     {
-      CurrentChar = caretPosition.Point.GetPoint (SourceBuffer, caretPosition.Affinity);
+      CaretPos = caretPosition.Point.GetPoint(SourceBuffer, caretPosition.Affinity);
 
-      when (CurrentChar.HasValue)
-      {
-        def tempEvent = TagsChanged;
-        when (tempEvent != null)
-          tempEvent (this, SnapshotSpanEventArgs (SnapshotSpan (SourceBuffer.CurrentSnapshot, 0, SourceBuffer.CurrentSnapshot.Length)));
-      }
+      when (CaretPos.HasValue)
+        TagsChanged?.Invoke(this, SnapshotSpanEventArgs(SnapshotSpan(SourceBuffer.CurrentSnapshot, 0, SourceBuffer.CurrentSnapshot.Length)));
     }
 
     public GetTags(spans : NormalizedSnapshotSpanCollection) : IEnumerable[ITagSpan[TextMarkerTag]]
     {
       when (spans.Count == 0)   //there is no content in the buffer
-        Nemerle.Imperative.Return ();
+        return;
 
       //don't do anything if the current SnapshotPoint is not initialized or at the end of the buffer
-      when (!CurrentChar.HasValue || CurrentChar.Value.Position >= CurrentChar.Value.Snapshot.Length)
-        Nemerle.Imperative.Return ();
+      when (!CaretPos.HasValue || CaretPos.Value.Position >= CaretPos.Value.Snapshot.Length)
+        return;
 
       //hold on to a snapshot of the current character
-      mutable currentChar = CurrentChar.Value;
+      mutable currentCaretPos = CaretPos.Value;
 
       //if the requested snapshot isn't the same as the one the brace is on, translate our spans to the expected snapshot
-      when (spans [0].Snapshot != currentChar.Snapshot : object)
-        currentChar = currentChar.TranslateTo (spans [0].Snapshot, PointTrackingMode.Positive);
+      when (spans[0].Snapshot != currentCaretPos.Snapshot : object)
+        currentCaretPos = currentCaretPos.TranslateTo(spans [0].Snapshot, PointTrackingMode.Positive);
+        
+      when (_parseAgent.LastResult == null)
+        return;
+        
+      def walker = MatchBracketsWalker();
+      def context = MatchBracketsWalker.Context(currentCaretPos.Position);
+      _ = walker.Walk(_parseAgent.LastResult, context);
 
-      //get the current char and the previous char
-      def currentText = currentChar.GetChar ();
-      def lastChar = if (currentChar == 0) currentChar else currentChar - 1; //if currentChar is 0 (beginning of buffer), don't move it back
-      def lastText = lastChar.GetChar ();
-      mutable pairSpan = SnapshotSpan ();
-
-      if (_braceList.ContainsKey (currentText))   //the key is the open brace
+      foreach (brackets in context.Brackets)
       {
-        mutable closeChar;
-        _ = _braceList.TryGetValue (currentText, out closeChar);
-        when (BraceMatchingTagger.FindMatchingCloseChar (currentChar, currentText, closeChar, View.TextViewLines.Count, out pairSpan))
-        {
-          yield TagSpan (SnapshotSpan (currentChar, 1), TextMarkerTag ("blue"));
-          yield TagSpan (pairSpan, TextMarkerTag ("blue"));
-        }
+        def textMarkerTag = if (brackets.OpenBracket.IsEmpty || brackets.CloseBracket.IsEmpty) TextMarkerTag("NitraError") else TextMarkerTag("blue");
+        yield TagSpan(ToSnapshotSpan(currentCaretPos.Snapshot, brackets.OpenBracket),  textMarkerTag);
+        yield TagSpan(ToSnapshotSpan(currentCaretPos.Snapshot, brackets.CloseBracket), textMarkerTag);
       }
-      else when (_braceList.ContainsValue (lastText))    //the value is the close brace, which is the *previous* character
-           {
-             def open = _braceList.Where (a => a.Value.Equals (lastText)).Select (a => a.Key);
-             when (BraceMatchingTagger.FindMatchingOpenChar (lastChar, open.ElementAt (0), lastText, View.TextViewLines.Count, out pairSpan))
-             {
-               yield TagSpan (SnapshotSpan (lastChar, 1), TextMarkerTag ("blue"));
-               yield TagSpan (pairSpan, TextMarkerTag ("blue"));
-             }
-           }
     }
-
-    private static FindMatchingCloseChar(startPoint : SnapshotPoint, open : char, close : char, maxLines : int, pairSpan : out SnapshotSpan) : bool
+    
+    public static ToSnapshotSpan(snapshot : ITextSnapshot, span : NSpan) : SnapshotSpan
     {
-      pairSpan = SnapshotSpan(startPoint.Snapshot, 1, 1);
-      mutable line = startPoint.GetContainingLine();
-      mutable lineText = line.GetText();
-      mutable lineNumber = line.LineNumber;
-      mutable offset = startPoint.Position - line.Start.Position + 1;
-
-      mutable stopLineNumber = startPoint.Snapshot.LineCount - 1;
-
-      when (maxLines > 0)
-        stopLineNumber = Math.Min(stopLineNumber, lineNumber + maxLines);
-
-      mutable openCount = 0;
-      mutable founded = false;
-      while (true)
-      {
-        //walk the entire line
-        while (offset < line.Length && !founded)
-        {
-          mutable currentChar = lineText[offset];
-          if (currentChar == close) //found the close character
-          {
-            if (openCount > 0)
-            {
-              openCount--;
-            }
-            else    //found the matching close
-            {
-              pairSpan = SnapshotSpan(startPoint.Snapshot, line.Start + offset, 1);
-              founded = true;
-            }
-          }
-          else when (currentChar == open) // this is another open
-                 openCount++;
-          offset++;
-        }
-
-        if (!founded)
-        {
-        //move on to the next line
-          lineNumber++;
-          when (lineNumber > stopLineNumber)
-            break;
-
-          line = line.Snapshot.GetLineFromLineNumber(lineNumber);
-          lineText = line.GetText();
-          offset = 0;
-        }
-        else
-          break;
-      }
-
-      founded;
-    }
-
-    private static FindMatchingOpenChar(startPoint : SnapshotPoint, open : char, close : char, maxLines : int, pairSpan : out SnapshotSpan) : bool
-    {
-      pairSpan = SnapshotSpan(startPoint, startPoint);
-
-      mutable line = startPoint.GetContainingLine();
-
-      mutable lineNumber = line.LineNumber;
-      mutable offset = startPoint - line.Start - 1; //move the offset to the character before this one
-
-    //if the offset is negative, move to the previous line
-      when (offset < 0)
-      {
-        lineNumber--;
-        line = line.Snapshot.GetLineFromLineNumber(lineNumber);
-        offset = line.Length - 1;
-      }
-
-      mutable lineText = line.GetText();
-
-      mutable stopLineNumber = 0;
-      when (maxLines > 0)
-        stopLineNumber = Math.Max(stopLineNumber, lineNumber - maxLines);
-
-      mutable closeCount = 0;
-      mutable founded = false;
-
-      while (true)
-      {
-        // Walk the entire line
-        while (offset >= 0 && !founded)
-        {
-          mutable currentChar = lineText[offset];
-
-          if (currentChar == open)
-          {
-            if (closeCount > 0)
-              closeCount--;
-            else // We've found the open character
-            {
-              pairSpan = SnapshotSpan(line.Start + offset, 1); //we just want the character itself
-              founded = true;
-            }
-          }
-            else when (currentChar == close)
-                   closeCount++;
-          offset--;
-        }
-
-        if (!founded)
-        {
-          lineNumber--;
-
-          // Move to the previous line
-          when (lineNumber < stopLineNumber)
-            break;
-
-          line = line.Snapshot.GetLineFromLineNumber(lineNumber);
-          lineText = line.GetText();
-          offset = line.Length - 1;
-        }
-        else
-          break;
-      }
-      founded;
+      def msSpan = Span(span.StartPos, span.Length);
+      SnapshotSpan(snapshot, msSpan)
     }
   }
 }
