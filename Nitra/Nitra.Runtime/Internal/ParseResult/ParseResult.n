@@ -73,31 +73,75 @@ namespace Nitra
     /// Таким образом мы можем легко вычислить позиции и размеры всех сабрулей
     public RecoveredSubrules  : SCG.List[SubrulesWithParsingSequence] = SCG.List();
 
-    public FindRecoveredSubrule(recoveredSubruleIndex : int, staticState : int, parsingSequence : out ParsingSequence, startPos : out int, endPos : out int) : bool
+    public FindRecoveredSubrule(subruleStarts : array[SubruleStart], state : int, startPos : out int, endPos : out int) : bool
     {
-      def rec = RecoveredSubrules[recoveredSubruleIndex];
-      parsingSequence = rec.ParsingSequence;
-      def state = parsingSequence.GetEarleyState(staticState);
-
-      foreach (subruleStart when (subruleStart.State == state) in rec.Subrules with i)
+      foreach (subruleStart when (subruleStart.State == state) in subruleStarts with i)
       {
         startPos = subruleStart.Pos;
-        endPos   = rec.Subrules[i + 1].Pos;
+        endPos   = subruleStarts[i + 1].Pos;
         return true;
       }
 
-      foreach (subruleStart when (subruleStart.State > state) in rec.Subrules)
+      foreach (subruleStart when (subruleStart.State > state) in subruleStarts)
       {
         startPos = subruleStart.Pos;
         endPos   = startPos;
         return false;
       }
 
-      def subruleStart = rec.Subrules[rec.Subrules.Length - 1];
+      def subruleStart = subruleStarts[subruleStarts.Length - 1];
       assert(subruleStart.State == -1);
       startPos = subruleStart.Pos;
       endPos   = startPos;
       false
+    }
+
+    public ReadListAst[T](parentParsingSequence : ParsingSequence, state : int, startPos : int, endPos : int, makeItem : ParsingSequence * int * int -> T) : Nitra.ListAst[T]
+      where T : IAst
+    {
+      if (startPos < endPos)
+      {
+        def parsingSequence = (parentParsingSequence.States[state].Subrule :> SubruleInfo.List).ParsingSequence;
+        mutable recoveredSequence;
+        if (RecoveredSequences.TryGetValue((startPos, endPos, parsingSequence), out recoveredSequence))
+        {
+          def states = parsingSequence.States;
+          match (recoveredSequence)
+          {
+            | Unambiguous(recoveredSubruleIndex) =>
+              def items = SCG.List();
+
+              def subrules = RecoveredSubrules[recoveredSubruleIndex].Subrules;
+              for (mutable i = 0; i < subrules.Length - 1; ++i)
+              {
+                def begin    = subrules[i].Pos;
+                def end      = subrules[i + 1].Pos;
+                def state    = states[subrules[i].State];
+
+                match (state.Subrule)
+                {
+                  | ListItem(ParsingSequence = itemParsingSequence) =>
+                    def item = makeItem(itemParsingSequence, begin, end);
+                    items.Add(item);
+
+                  | _ => assert(false, "List items expected");
+                }
+              }
+
+              ListAst(Location(OriginalSource, startPos, endPos), items);
+
+            | Ambiguous => throw NotImplementedException("Ambiguous");
+          }
+        }
+        else
+        {
+          throw NotImplementedException("Fallback to standard AST reading");
+        }
+      }
+      else
+      {
+        ListAst(Location(OriginalSource, startPos, endPos));
+      }
     }
 
     internal AddRecoveredSubrule(item : array[SubruleStart], parsingSequence : ParsingSequence) : int
