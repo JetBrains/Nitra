@@ -13,10 +13,101 @@ namespace Nitra.Internal
 {
   public module ExtensibleRuleAstConstructor
   {
-    public Create[T](subruleStartPos : int, subruleEndPos : int, parseResult : ParseResult, bindingPower : int, ruleDescriptor : ExtensibleRuleDescriptor, astFactory : IExtensibleRuleAstFactory[T]) : T
+    public Create[T](startPos : int, endPos : int, parseResult : ParseResult, bindingPower : int, ruleDescriptor : ExtensibleRuleDescriptor, astFactory : IExtensibleRuleAstFactory[T]) : T
     {
-      IgnoreParams();
-      throw NotImplementedException("Recovery mode AST reading: Extensible");
+      def ruleParser = parseResult.RuleParser.Grammar.GetExtensibleRuleParser(ruleDescriptor, bindingPower);
+
+      mutable recoveredSequence;
+      if (parseResult.RecoveredSequences.TryGetValue((startPos, endPos, ruleParser.ParsingSequence), out recoveredSequence))
+      {
+        match (recoveredSequence)
+        {
+          | Unambiguous(recoveredSubrulesIndex) =>
+            def (subruleStarts, parsingSequence) = parseResult.RecoveredSubrules[recoveredSubrulesIndex];
+            def states = parsingSequence.States;
+
+            def prefixes  = System.Collections.Generic.List();
+            def getPrefix()
+            {
+              match (prefixes.Count)
+              {
+                | 0 =>
+                  def ast = astFactory.CreateMissing(parseResult, ruleDescriptor, startPos);
+                  prefixes.Add(null, ast);
+                  ast
+
+                | 1 => prefixes[0][1]
+                | _ =>
+                  def ast = astFactory.CreateAmbiguous(parseResult, ruleDescriptor, startPos, endPos, prefixes.ToArray());
+                  prefixes.Clear();
+                  prefixes.Add(null, ast);
+                  ast
+              }
+            }
+
+            def postfixes = System.Collections.Generic.List();
+
+            for (mutable i = 0; i < subruleStarts.Length - 1; ++i)
+            {
+              def begin    = subruleStarts[i].Pos;
+              def end      = subruleStarts[i + 1].Pos;
+              def state    = states[subruleStarts[i].State];
+
+              match (state)
+              {
+                | ExtensionPrefix =>
+                  assert(postfixes.Count == 0);
+
+                  if (begin == end)
+                    prefixes.Add(null, astFactory.CreateMissing(parseResult, ruleDescriptor, begin));
+                  else
+                    foreach (prefix in ruleParser.PrefixRules)
+                    {
+                      mutable prefixRecoveredSequence;
+                      when (parseResult.RecoveredSequences.TryGetValue((begin, end, prefix.ParsingSequence), out prefixRecoveredSequence))
+                      {
+                        match (prefixRecoveredSequence)
+                        {
+                          | Unambiguous(recoveredSubrulesIndex) => prefixes.Add(prefix, astFactory.CreatePrefix(begin, end, recoveredSubrulesIndex, prefix, parseResult));
+                          | Ambiguous => assert(false, "Ambiguous extension prefix")
+                        }
+                      }
+                    }
+
+                | ExtensionPostfix => 
+                  foreach (postfix in ruleParser.PostfixRules)
+                  {
+                    mutable postfixRecoveredSequence;
+                    when (postfix.RuleId >= ruleParser.FirstPostfixRuleId)
+                    when (parseResult.RecoveredSequences.TryGetValue((begin, end, postfix.ParsingSequence), out postfixRecoveredSequence))
+                    {
+                      match (postfixRecoveredSequence)
+                      {
+                        | Unambiguous(recoveredSubrulesIndex) => postfixes.Add(postfix, astFactory.CreatePostfix(getPrefix(), startPos, begin, end, recoveredSubrulesIndex, postfix, parseResult));
+                        | Ambiguous => assert(false, "Ambiguous extension postfix")
+                      }
+                    }
+                  }
+
+                | _ => assert(false, "ExtensionPrefix or ExtensionPostfix expected");
+              }
+            }
+
+            match (postfixes.Count)
+            {
+              | 0 => getPrefix()
+              | 1 => postfixes[0][1]
+              | _ => astFactory.CreateAmbiguous(parseResult, ruleDescriptor, startPos, endPos, postfixes.ToArray())
+            }
+
+          | Ambiguous => assert(false, "Ambiguous extension")
+        }
+      }
+      else
+      {
+        mutable pos = startPos;
+        Create(ref pos, parseResult, bindingPower, ruleDescriptor, astFactory)
+      }
     }
 
     public Create[T](pos : ref int, parseResult : ParseResult, bindingPower : int, ruleDescriptor : ExtensibleRuleDescriptor, astFactory : IExtensibleRuleAstFactory[T]) : T
