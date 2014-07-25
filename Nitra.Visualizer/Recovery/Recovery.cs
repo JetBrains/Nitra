@@ -231,8 +231,7 @@ namespace Nitra.DebugStrategies
 
     private void ContinueDeleteTokens(RecoveryParser rp, ParsedSequence sequence, int pos, int nextPos, int tokensToDelete)
     {
-      _deletedToken[new ParsedSequenceAndSubrule(sequence, new ParsedSubrule(pos, nextPos, s_loopState))] = false;
-      rp.SubruleParsed(pos, nextPos, new ParseRecord(sequence, 0, pos));
+      DeleteToken(rp, sequence, pos, nextPos, false);
 
       var parseResult = rp.ParseResult;
       var grammar = parseResult.RuleParser.Grammar;
@@ -613,14 +612,18 @@ namespace Nitra.DebugStrategies
             break;
         }
 
-        var listSequence = rp.StartParseSequence(new ParseRecord(sequence, 0, sequence.StartPos), sequence.StartPos, ((ParsingState.List)sequence.ParsingSequence.States[0]).Sequence);
-
-        _deletedToken[new ParsedSequenceAndSubrule(listSequence, new ParsedSubrule(maxPos, i, s_loopState))] = true;
-        rp.SubruleParsed(maxPos, i, new ParseRecord(listSequence, 0, maxPos));
+        DeleteToken(rp, sequence, maxPos, i, true);
         return true;
       }
 
       return false;
+    }
+
+    private void DeleteToken(RecoveryParser rp, ParsedSequence sequence, int beingPos, int endPos, bool isToken)
+    {
+      var listSequence = rp.StartParseSequence(new ParseRecord(sequence, 0, sequence.StartPos), sequence.StartPos, ((ParsingState.List)sequence.ParsingSequence.States[0]).Sequence);
+      _deletedToken[new ParsedSequenceAndSubrule(listSequence, new ParsedSubrule(beingPos, endPos, s_loopState))] = isToken;
+      rp.SubruleParsed(beingPos, endPos, new ParseRecord(listSequence, 0, beingPos));
     }
 
     private void DeleteTokens(RecoveryParser rp, int pos, ParsedSequence sequence, int tokensToDelete)
