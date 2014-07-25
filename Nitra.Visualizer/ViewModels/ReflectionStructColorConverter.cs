@@ -18,8 +18,14 @@ namespace Nitra.Visualizer.ViewModels
 
       if (node.Info.IsMarker)
         return Brushes.DarkGray;
+
       if (node.Location.IsEmpty)
-        return Brushes.Teal;
+      {
+        if (node.Info.CanParseEmptyString)
+          return Brushes.Teal;
+
+        return Brushes.Red;
+      }
 
       return SystemColors.ControlTextBrush;
     }
