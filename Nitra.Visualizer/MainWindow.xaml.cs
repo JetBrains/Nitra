@@ -377,23 +377,11 @@ namespace Nitra.Visualizer
     {
       _needUpdateReflection = false;
 
-      //_reflectionTreeView.Items.Clear();
-
       if (_parseResult == null)
         return;
 
       var root = _parseResult.Reflect();
-
       _reflectionTreeView.ItemsSource = new[] { (ReflectionStruct)root };
-
-      //var treeNode = new TreeViewItem();
-      //treeNode.Expanded += node_Expanded;
-      //treeNode.Header = root.Description;
-      //treeNode.Tag = root;
-      //treeNode.ContextMenu = (ContextMenu)Resources["TreeContextMenu"];
-      //if (root.Children.Count != 0)
-      //  treeNode.Items.Add(new TreeViewItem());
-      //treeView1.Items.Add(treeNode);
     }
 
     private void UpdateHtmlPrettyPrint()
@@ -427,36 +415,6 @@ namespace Nitra.Visualizer
         _ast = _parseResult.CreateAst();
 
       _prettyPrintTextBox.Text = _ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
-    }
-
-    void Fill(ItemCollection treeNodes, ReadOnlyCollection<ReflectionStruct> nodes)
-    {
-      foreach (var node in nodes)
-      {
-        var treeNode = new TreeViewItem();
-        treeNode.Header = node.Description;
-        treeNode.Tag = node;
-        treeNode.Expanded += node_Expanded;
-        if (node.Location.Length == 0)
-          treeNode.Background = new SolidColorBrush(Color.FromRgb(200, 255, 200));
-
-        treeNodes.Add(treeNode);
-
-        if (node.Children.Count != 0)
-          treeNode.Items.Add(new TreeViewItem());
-      }
-    }
-
-    void node_Expanded(object sender, RoutedEventArgs e)
-    {
-      var treeNode = (TreeViewItem)e.Source;
-      if (treeNode.Items.Count == 1 && ((TreeViewItem)treeNode.Items[0]).Header == null)
-      {
-        treeNode.Items.Clear();
-        var node = (ReflectionStruct)treeNode.Tag;
-        Fill(treeNode.Items, node.Children);
-        treeNode.Expanded -= node_Expanded;
-      }
     }
 
     private void textBox1_TextChanged(object sender, EventArgs e)

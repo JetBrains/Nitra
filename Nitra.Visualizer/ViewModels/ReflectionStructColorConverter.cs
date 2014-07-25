@@ -16,6 +16,8 @@ namespace Nitra.Visualizer.ViewModels
     {
       var node = (ReflectionStruct)value;
 
+      if (node.Info.IsMarker)
+        return Brushes.DarkGray;
       if (node.Location.IsEmpty)
         return Brushes.Teal;
 
