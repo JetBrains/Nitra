@@ -19,6 +19,13 @@ namespace Nitra.Runtime
 {
   public abstract class AstWalkerBase[TContext]
   {
+    [Record]
+    public struct ExtensionAmbiguity
+    {
+      public AstPtr              : int;
+      public ExtensionRuleParser : ExtensionRuleParser;
+    }
+    
     mutable _isRecovered : bool;
     
     public virtual OnEmpty(ruleInfo : SubruleInfo.Empty, startPos : int, endPos : int, parseResult : ParseResult, context : TContext) : void
@@ -167,7 +174,33 @@ namespace Nitra.Runtime
       }
     }
 
-    Walk(parseResult : ParseResult, states : array[ParsingState], subrules : array[ParseResult.SubruleStart], sequenceInfo : SequenceInfo, context : TContext) : void
+    GetExtentions(parseResult : ParseResult, minRuleId : int, extensions : array[ExtensionRuleParser], begin : int, end : int, ambiguity : out List[ExtensionAmbiguity]) : ExtensionRuleParser
+    {
+      mutable firstPrefix;
+      
+      foreach (extension in extensions)
+      {
+        when (extension.RuleId >= minRuleId)
+        when (parseResult.RecoveredSequences.ContainsKey((begin, end, extension.ParsingSequence)))
+        {
+          if (firstPrefix == null)
+            firstPrefix = extension;
+          else
+          {
+            when (ambiguity == null)
+            {
+              ambiguity = List();
+              ambiguity.Add(ExtensionAmbiguity(-1, firstPrefix));
+            }
+            ambiguity.Add(ExtensionAmbiguity(-1, firstPrefix));
+          }
+        }
+      }
+      
+      firstPrefix
+    }
+    
+    public Walk(parseResult : ParseResult, states : array[ParsingState], subrules : array[ParseResult.SubruleStart], sequenceInfo : SequenceInfo, context : TContext) : void
     {
       mutable prevIndexWithMarkers = -1;
       for (mutable i = 0; i < subrules.Length - 1; ++i)
@@ -193,15 +226,24 @@ namespace Nitra.Runtime
             if (begin == end)
               OnPrefixMissed(state.RuleParser, begin, parseResult, context);
             else
-              foreach (prefix in state.RuleParser.PrefixRules)
-                when (parseResult.RecoveredSequences.ContainsKey((begin, end, prefix.ParsingSequence)))
-                  _ = WalkPrefix(-1, begin, end, prefix, parseResult, context);
+            {
+              mutable ambiguousPrefixs;
+              def firstPrefix = GetExtentions(parseResult, -1, state.RuleParser.PrefixRules, begin, end, out ambiguousPrefixs);
+              
+              if (ambiguousPrefixs != null)
+                OnAmbiguousPrefix(parseResult, state.RuleParser, ambiguousPrefixs, begin, end, context);
+              else when (firstPrefix != null)
+                _ = WalkPrefix(-1, begin, end, firstPrefix, parseResult, context);
+            }
 
           | ExtensionPostfix as state => 
-            foreach (postfix in state.RuleParser.PostfixRules)
-              when (postfix.RuleId >= state.RuleParser.FirstPostfixRuleId)
-              when (parseResult.RecoveredSequences.ContainsKey((begin, end, postfix.ParsingSequence)))
-                _ = WalkPostfix(-1, begin, end, postfix, parseResult, context);
+            mutable ambiguousPostfixs;
+            def firstPrefix = GetExtentions(parseResult, state.RuleParser.FirstPostfixRuleId, state.RuleParser.PostfixRules, begin, end, out ambiguousPostfixs);
+              
+            if (ambiguousPostfixs != null)
+              OnAmbiguousPrefix(parseResult, state.RuleParser, ambiguousPostfixs, begin, end, context);
+            else when (firstPrefix != null)
+              _ = WalkPrefix(-1, begin, end, firstPrefix, parseResult, context);
 
           | Predicate => ()
 
@@ -235,10 +277,26 @@ namespace Nitra.Runtime
       }
     }
     
-    public virtual OnAmbiguous(parseResult : ParseResult, states : array[ParsingState], parseWays : array[array[ParseResult.SubruleStart]], sequenceInfo : SequenceInfo, context : TContext) : void
+    public virtual OnAmbiguous(parseResult : ParseResult, states : array[ParsingState], parseWays : array[array[ParseResult.SubruleStart]], sequenceInfo : SequenceInfo, startPos : int, endPos : int, context : TContext) : void
     {
+      _ = startPos; _ = endPos;
+
       foreach (parseWay in parseWays)
         Walk(parseResult, states, parseWay, sequenceInfo, context)
+    }
+    
+    public virtual OnAmbiguousPrefix(parseResult : ParseResult, extensibleRuleParser : ExtensibleRuleParser, ambiguousPrefixs : List[ExtensionAmbiguity], startPos : int, endPos : int, context : TContext) : void
+    {
+      _ = extensibleRuleParser;
+      foreach (parser in ambiguousPrefixs)
+        _ = WalkPostfix(parser.AstPtr, startPos, endPos, parser.ExtensionRuleParser, parseResult, context);
+    }
+    
+    public virtual OnAmbiguousPostfix(parseResult : ParseResult, extensibleRuleParser : ExtensibleRuleParser, ambiguousPrefixs : List[ExtensionAmbiguity], startPos : int, endPos : int, context : TContext) : void
+    {
+      _ = extensibleRuleParser;
+      foreach (parser in ambiguousPrefixs)
+        _ = WalkPostfix(parser.AstPtr, startPos, endPos, parser.ExtensionRuleParser, parseResult, context);
     }
     
     Walk(parseResult : ParseResult, parsingSequence : ParsingSequence, startPos : int, endPos : int, context : TContext) : bool
@@ -263,7 +321,7 @@ namespace Nitra.Runtime
           foreach (subruleStart in recoveredSequence.Subrules with i)
             parseWays[i] = recoveredSubrules[subruleStart].Subrules;
           
-          OnAmbiguous(parseResult, states, parseWays, parsingSequence.SequenceInfo, context);
+          OnAmbiguous(parseResult, states, parseWays, parsingSequence.SequenceInfo, startPos, endPos, context);
       }
 
       true
@@ -316,11 +374,32 @@ namespace Nitra.Runtime
 
         if (bestResult > 0)
         {
-          def bestPrefixAstPtr = ruleParser.BestPrefix(bestResult, parseResult);
-          def extensionParser = ruleParser.PrefixRuleParser(bestPrefixAstPtr, parseResult);
-          def endPos = curTextPos + parseResult.GetAstSize(bestPrefixAstPtr, extensionParser.SequenceInfo);
-          WalkPrefix(bestPrefixAstPtr, curTextPos, endPos, extensionParser, parseResult, context);
-          endPos
+          mutable pos = curTextPos;
+          mutable prefixAstPtr = ruleParser.FindFirstPrefix(ref pos, parseResult);
+          if (ruleParser.FindNextPrefix(prefixAstPtr, parseResult) > 0)
+          {
+            def ambiguousPrefixs = List.[ExtensionAmbiguity]();
+            def extensionParser = ruleParser.PrefixRuleParser(prefixAstPtr, parseResult);
+            def endPos = curTextPos + parseResult.GetAstSize(prefixAstPtr, extensionParser.SequenceInfo);
+            do
+            {
+              def extensionParser = ruleParser.PrefixRuleParser(prefixAstPtr, parseResult);
+              ambiguousPrefixs.Add(ExtensionAmbiguity(prefixAstPtr, extensionParser));
+              prefixAstPtr = ruleParser.FindNextPrefix(prefixAstPtr, parseResult);
+            }
+            while (prefixAstPtr > 0);
+            
+            OnAmbiguousPrefix(parseResult, ruleParser, ambiguousPrefixs, curTextPos, endPos, context);
+
+            endPos
+          }
+          else
+          {
+            def extensionParser = ruleParser.PrefixRuleParser(prefixAstPtr, parseResult);
+            def endPos = curTextPos + parseResult.GetAstSize(prefixAstPtr, extensionParser.SequenceInfo);
+            WalkPrefix(prefixAstPtr, curTextPos, endPos, extensionParser, parseResult, context);
+            endPos
+          }
         }
         else
         {
@@ -330,12 +409,32 @@ namespace Nitra.Runtime
       }
       else
       {
-        mutable postfixAst = astPtr;
-        def bestPostfixAstPtr = ruleParser.BestPostfix(parseResult.TryGetPostfix(ref curTextPos, ref postfixAst), parseResult);
-        def extensionParser = ruleParser.PostfixRuleParser(bestPostfixAstPtr, parseResult);
-        def endPos = curTextPos + parseResult.GetAstSize(bestPostfixAstPtr, extensionParser.SequenceInfo);
-        WalkPostfix(bestPostfixAstPtr, curTextPos, endPos, extensionParser, parseResult, context);
-        endPos
+        mutable pos = curTextPos;
+        mutable postfixAst = ruleParser.FindFirstPostfix(ref pos, parseResult);
+        if (ruleParser.FindNextPostfix(postfixAst, parseResult) > 0)
+        {
+          def ambiguousPrefixs = List.[ExtensionAmbiguity]();
+          def extensionParser = ruleParser.PostfixRuleParser(postfixAst, parseResult);
+          def endPos = curTextPos + parseResult.GetAstSize(postfixAst, extensionParser.SequenceInfo);
+          do
+          {
+            def extensionParser = ruleParser.PostfixRuleParser(postfixAst, parseResult);
+            ambiguousPrefixs.Add(ExtensionAmbiguity(postfixAst, extensionParser));
+            postfixAst = ruleParser.FindNextPostfix(postfixAst, parseResult);
+          }
+          while (postfixAst > 0);
+            
+          OnAmbiguousPostfix(parseResult, ruleParser, ambiguousPrefixs, curTextPos, endPos, context);
+
+          endPos
+        }
+        else
+        {
+          def extensionParser = ruleParser.PostfixRuleParser(postfixAst, parseResult);
+          def endPos = curTextPos + parseResult.GetAstSize(postfixAst, extensionParser.SequenceInfo);
+          WalkPostfix(postfixAst, curTextPos, endPos, extensionParser, parseResult, context);
+          endPos
+        }
       }
     }
 
