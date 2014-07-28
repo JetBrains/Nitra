@@ -19,6 +19,9 @@ namespace Nitra.Visualizer.ViewModels
       if (node.Info.IsMarker)
         return Brushes.DarkGray;
 
+      if (node.Kind == ReflectionKind.Deleted)
+        return Brushes.Red;
+      
       if (node.Location.IsEmpty)
       {
         if (node.Info.CanParseEmptyString)
@@ -26,6 +29,9 @@ namespace Nitra.Visualizer.ViewModels
 
         return Brushes.Red;
       }
+
+      if (node.Kind == ReflectionKind.Ambiguous)
+        return Brushes.DarkOrange;
 
       return SystemColors.ControlTextBrush;
     }
