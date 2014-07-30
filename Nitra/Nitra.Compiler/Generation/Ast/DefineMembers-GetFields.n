@@ -106,46 +106,93 @@ namespace Nitra.Compiler
     {
       assert(_parsedAstTb != null);
 
-      def readSequenceAstBody =
-        if (_sequencesAstStandardMode.Count > 0)
+      def makeIdSwitch(codeItems : SCG.List[PExpr], f : PExpr -> PExpr) : PExpr
+      {
+        if (codeItems.Count > 0)
         {
           def cases = SCG.List();
-          foreach (code in _sequencesAstStandardMode with index)
+          foreach (code in codeItems with index)
             cases.Add(<[ case: | $(index : int) => $code ]>);
           cases.Add(<[ case: | _ => throw System.ArgumentOutOfRangeException("id") ]>);
-          <[ match (id) { ..$cases } ]>
+          f(<[ match (id) { ..$cases } ]>)
         }
         else
           <[ throw System.ArgumentOutOfRangeException("id") ]>;
+      }
+
+      def makeStandardModeBody(codeItems : SCG.List[PExpr]) : PExpr
+      {
+        makeIdSwitch(codeItems, x => x)
+      }
 
       _parsedAstTb.DefineConditional(<[ decl:
-        private __ReadSequenceAst(id : int, pos : ref int) : Nitra.Ast
+        private __ReadSequenceAstStandardMode(id : int, pos : ref int) : Nitra.Ast
           implements Nitra.Internal.IAstSequenceLoader[Nitra.Ast].ReadSequence
         {
-          unchecked { _ = id; _ = pos; $readSequenceAstBody }
+          unchecked { _ = id; _ = pos; $(makeStandardModeBody(_sequencesAstStandardMode)) }
         }
       ]>);
 
-      def readSequenceSpanBody =
-        if (_sequencesSpanStandardMode.Count > 0)
-        {
-          def cases = SCG.List();
-          foreach (code in _sequencesSpanStandardMode with index)
-            cases.Add(<[ case: | $(index : int) => $code ]>);
-          cases.Add(<[ case: | _ => throw System.ArgumentOutOfRangeException("id") ]>);
-          <[ match (id) { ..$cases } ]>
-        }
-        else
-          <[ throw System.ArgumentOutOfRangeException("id") ]>;
-
-
       _parsedAstTb.DefineConditional(<[ decl:
-        private __ReadSequenceSpan(id : int, pos : ref int) : Nitra.NSpan
+        private __ReadSequenceSpanStandardMode(id : int, pos : ref int) : Nitra.NSpan
           implements Nitra.Internal.IAstSequenceLoader[Nitra.NSpan].ReadSequence
         {
-          unchecked { _ = id; _ = pos; $readSequenceSpanBody }
+          unchecked { _ = id; _ = pos; $(makeStandardModeBody(_sequencesSpanStandardMode)) }
         }
-      ]>)
+      ]>);
+
+      def makeRecoveryModeBody(codeItems : SCG.List[PExpr], fallbackMethod : PExpr) : PExpr
+      {
+        makeIdSwitch(codeItems, body =>
+        <[
+          mutable recoveredSequence;
+          if (parseResult.RecoveredSequences.TryGetValue((_subruleStartPos, _subruleEndPos, parsingSequence), out recoveredSequence))
+          {
+            match (recoveredSequence)
+            {
+              | Unambiguous(recoveredSubrulesIndex) => $body
+              | Ambiguous                           => throw System.NotImplementedException("Ambiguous recovery mode AST reading not implemented")
+            }
+          }
+          else
+          {
+            mutable pos = _subruleStartPos;
+            $fallbackMethod(id, ref pos); // BUG: DOES NOT WORK NOW
+          }
+        ]>)
+      }
+
+      _parsedAstTb.DefineConditional(<[ decl:
+        private __ReadSequenceAstRecoveryMode(id : int, _subruleStartPos : int, _subruleEndPos : int, parsingSequence : Nitra.Internal.Recovery.ParsingSequence) : Nitra.Ast
+          implements Nitra.Internal.IAstSequenceLoader[Nitra.Ast].ReadSequence
+        {
+          unchecked { _ = id; _ = parsingSequence; $(makeRecoveryModeBody(_sequencesAstRecoveryMode, <[ this.__ReadSequenceAstStandardMode ]>)) }
+        }
+      ]>);
+
+      _parsedAstTb.DefineConditional(<[ decl:
+        private __ReadSequenceSpanRecoveryMode(id : int, _subruleStartPos : int, _subruleEndPos : int, parsingSequence : Nitra.Internal.Recovery.ParsingSequence) : Nitra.NSpan
+          implements Nitra.Internal.IAstSequenceLoader[Nitra.NSpan].ReadSequence
+        {
+          unchecked { _ = id; _ = parsingSequence; $(makeRecoveryModeBody(_sequencesSpanRecoveryMode, <[ this.__ReadSequenceSpanStandardMode ]>)) }
+        }
+      ]>);
+
+      _parsedAstTb.DefineConditional(<[ decl:
+        private __ReadEmptySequenceAst(id : int, pos : int) : Nitra.Ast
+          implements Nitra.Internal.IAstSequenceLoader[Nitra.Ast].ReadEmptySequence
+        {
+          unchecked { _ = id; _ = pos; $(makeStandardModeBody(_sequencesEmptyAstRecoveryMode)) }
+        }
+      ]>);
+
+      _parsedAstTb.DefineConditional(<[ decl:
+        private __ReadEmptySequenceSpan(id : int, pos : int) : Nitra.NSpan
+          implements Nitra.Internal.IAstSequenceLoader[Nitra.NSpan].ReadEmptySequence
+        {
+          unchecked { _ = id; _ = pos; $(makeStandardModeBody(_sequencesEmptySpanRecoveryMode)) }
+        }
+      ]>);
     }
 
     [RecordIgnore]
@@ -153,6 +200,18 @@ namespace Nitra.Compiler
 
     [RecordIgnore]
     private _sequencesSpanStandardMode : SCG.List[PExpr] = SCG.List();
+
+    [RecordIgnore]
+    private _sequencesAstRecoveryMode  : SCG.List[PExpr] = SCG.List();
+
+    [RecordIgnore]
+    private _sequencesSpanRecoveryMode : SCG.List[PExpr] = SCG.List();
+
+    [RecordIgnore]
+    private _sequencesEmptyAstRecoveryMode  : SCG.List[PExpr] = SCG.List();
+
+    [RecordIgnore]
+    private _sequencesEmptySpanRecoveryMode : SCG.List[PExpr] = SCG.List();
 
     private CompileSequenceValueStandardMode(sequence : SequenceCompileInfo, name : string) : PExpr * PExpr * int
     {
@@ -191,13 +250,13 @@ namespace Nitra.Compiler
 
       if (subrules.Count == 1 && subrules[0].SrcRule.Type is RuleType.Chars)
       {
-        def id = _sequencesSpanStandardMode.Count();
+        def id = _sequencesSpanStandardMode.Count;
         _sequencesSpanStandardMode.Add(codeWithRuleParser);
         (<[ $(Environment.NSpanTypeVar : typed) ]>, <[ $(Environment.GetAstType(sequence.SrcRule.Type) : typed) ]>, id)
       }
       else
       {
-        def id = _sequencesAstStandardMode.Count();
+        def id = _sequencesAstStandardMode.Count;
         _sequencesAstStandardMode.Add(codeWithRuleParser);
         (<[ $(Environment.AstTypeVar : typed) ]>, <[ $(Environment.GetAstType(sequence.SrcRule.Type) : typed) ]>, id)
       }
@@ -282,21 +341,23 @@ namespace Nitra.Compiler
       }
     }
 
-    private GetSequenceValueRecoveryMode(sequence : SequenceCompileInfo) : PExpr
+    private CompileSequenceValueRecoveryMode(sequence : SequenceCompileInfo) : PExpr * PExpr * int
     {
       def statements    = SCG.List();
+      def subrules      = SCG.List();
       def subruleValues = SCG.List();
 
       foreach (subrule when IsSubruleAcceptedForAst(subrule) in sequence.NonMarkerSubrules)
       {
         def varName = subrule.MakeVariableName("ast");
-        statements.Add(<[ def $(varName : usesite) = $(GetSubruleValueRecoveryMode(subrule)) ]>);
+        statements.Add(<[ def $(varName : usesite) = $(CompileSubruleValueRecoveryMode(subrule)) ]>);
         subruleValues.Add(<[ $(varName : usesite) ]>);
+        subrules.Add(subrule);
       }
 
       match (subruleValues.Count)
       {
-        | 0 => ()
+        | 0 => statements.Add(<[ null ]>);
         | 1 => statements.Add(subruleValues[0]);
         | _ =>
           statements.Insert(0, <[ def sequenceStartPos = _subruleStartPos; ]>);
@@ -304,21 +365,23 @@ namespace Nitra.Compiler
           statements.Add(<[ Nitra.SequenceAst(Nitra.Location(parseResult.OriginalSource, sequenceStartPos, sequenceEndPos), ..$subruleValues) ]>);
       }
 
-      <[
-        mutable recoveredSequence;
-        if (parseResult.RecoveredSequences.TryGetValue((_subruleStartPos, _subruleEndPos, parsingSequence), out recoveredSequence))
-        {
-          match (recoveredSequence)
-          {
-            | Unambiguous(recoveredSubrulesIndex) => { ..$statements }
-            | Ambiguous                           => throw System.NotImplementedException("Ambiguous recovery mode AST reading not implemented")
-          }
-        }
-        else throw System.NotImplementedException("Fallback to standard mode AST reading not implemented")
-      ]>
+      def code = <[ { ..$statements }]>;
+
+      if (subrules.Count == 1 && subrules[0].SrcRule.Type is RuleType.Chars)
+      {
+        def id = _sequencesSpanRecoveryMode.Count;
+        _sequencesSpanRecoveryMode.Add(code);
+        (<[ $(Environment.NSpanTypeVar : typed) ]>, <[ $(Environment.GetAstType(sequence.SrcRule.Type) : typed) ]>, id)
+      }
+      else
+      {
+        def id = _sequencesAstRecoveryMode.Count;
+        _sequencesAstRecoveryMode.Add(code);
+        (<[ $(Environment.AstTypeVar : typed) ]>, <[ $(Environment.GetAstType(sequence.SrcRule.Type) : typed) ]>, id)
+      }
     }
 
-    private GetSubruleValueRecoveryMode(subrule : SubruleCompileInfo) : PExpr
+    private CompileSubruleValueRecoveryMode(subrule : SubruleCompileInfo) : PExpr
     {
       def recoveredValue = match (subrule)
       {
@@ -354,30 +417,20 @@ namespace Nitra.Compiler
           if (subrule.SrcRule.Type is RuleType.Void)
             <[ () ]>
           else
-            <[
-              if (_subruleStartPos < _subruleEndPos)
-              {
-                def parsingSequence = (parsingSequence.States[state].Subrule :> Nitra.Runtime.Reflection.SubruleInfo.Option).Rule.ParsingSequence;
-                Nitra.OptionAst.Some(Nitra.Location(parseResult.OriginalSource, _subruleStartPos, _subruleEndPos), $(GetSequenceValueRecoveryMode(subrule.Rule)))
-              }
-              else
-              {
-                Nitra.OptionAst.None(Nitra.Location(parseResult.OriginalSource, _subruleStartPos, _subruleEndPos))
-              }
-            ]>
+          {
+            def (loaderType, itemType, id) = CompileSequenceValueRecoveryMode(subrule.Rule);
+            <[ Nitra.Internal.AstFactory.CreateOption.[$loaderType, $itemType](this, this.parseResult, parsingSequence, state, $(id : int), _subruleStartPos, _subruleEndPos) ]>
+          }
 
         | List as lst =>
           if (subrule.SrcRule.Type is RuleType.Void)
             <[ () ]>
           else
-            <[
-              this.parseResult.ReadListAst(parsingSequence, state, _subruleStartPos, _subruleEndPos, fun(parsingSequence, _subruleStartPos, _subruleEndPos) {
-                if (_subruleStartPos < _subruleEndPos)
-                  $(GetSequenceValueRecoveryMode(lst.Rule))
-                else
-                  $(GetEmptySequenceValueRecoveryMode(lst.Rule))
-              })
-            ]>
+          {
+            def (loaderType, itemType, id) = CompileSequenceValueRecoveryMode(lst.Rule);
+            def emptyId                    = CompileEmptySequenceValueRecoveryMode(lst.Rule);
+            <[ Nitra.Internal.AstFactory.CreateList.[$loaderType, $itemType](this, this.parseResult, parsingSequence, state, $(id : int), $(emptyId : int), _subruleStartPos, _subruleEndPos) ]>
+          }
 
         | ListWithSeparator as lst =>
           match (lst.Rule.SrcRule.Type, lst.Separator.SrcRule.Type)
@@ -430,7 +483,7 @@ namespace Nitra.Compiler
         | Marker => <[ () ]>
       };
 
-      def skippedValue = GetEmptySubruleValueRecoveryMode(subrule, true);
+      def skippedValue = CompileEmptySubruleValueRecoveryMode(subrule, true);
 
       <[
         def (subruleStarts, parsingSequence) = parseResult.RecoveredSubrules[recoveredSubrulesIndex];
@@ -443,29 +496,44 @@ namespace Nitra.Compiler
       ]>
     }
 
-    private GetEmptySequenceValueRecoveryMode(sequence : SequenceCompileInfo) : PExpr
+    private CompileEmptySequenceValueRecoveryMode(sequence : SequenceCompileInfo) : int
     {
       def statements    = SCG.List();
+      def subrules      = SCG.List();
       def subruleValues = SCG.List();
 
       foreach (subrule when IsSubruleAcceptedForAst(subrule) in sequence.NonMarkerSubrules)
       {
         def varName = subrule.MakeVariableName("ast");
-        statements.Add(<[ def $(varName : usesite) = $(GetEmptySubruleValueRecoveryMode(subrule, false)) ]>);
+        statements.Add(<[ def $(varName : usesite) = $(CompileEmptySubruleValueRecoveryMode(subrule, false)) ]>);
         subruleValues.Add(<[ $(varName : usesite) ]>);
+        subrules.Add(subrule);
       }
 
       match (subruleValues.Count)
       {
-        | 0 => ()
+        | 0 => statements.Add(<[ null ]>);
         | 1 => statements.Add(subruleValues[0]);
         | _ => statements.Add(<[ Nitra.SequenceAst(Nitra.Location(parseResult.OriginalSource, _subruleStartPos, _subruleEndPos), ..$subruleValues) ]>);
       }
 
-      <[ { ..$statements } ]>
+      def code = <[ { ..$statements }]>;
+
+      if (subrules.Count == 1 && subrules[0].SrcRule.Type is RuleType.Chars)
+      {
+        def id = _sequencesEmptySpanRecoveryMode.Count;
+        _sequencesEmptySpanRecoveryMode.Add(code);
+        id
+      }
+      else
+      {
+        def id = _sequencesEmptyAstRecoveryMode.Count;
+        _sequencesEmptyAstRecoveryMode.Add(code);
+        id
+      }
     }
 
-    private GetEmptySubruleValueRecoveryMode(subrule : SubruleCompileInfo, allowEmptySpan : bool) : PExpr
+    private CompileEmptySubruleValueRecoveryMode(subrule : SubruleCompileInfo, allowEmptySpan : bool) : PExpr
     {
       match (subrule)
       {
