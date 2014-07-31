@@ -6,6 +6,7 @@ using Nemerle.Imperative;
 using Nemerle.Extensions;
 
 using Nitra.Collections;
+using Nitra.Runtime;
 using Nitra.Runtime.Reflection;
 
 using System;
@@ -22,20 +23,20 @@ namespace Nitra.Internal.Recovery
     public ParseResult       : ParseResult;
     public Sequences         : Hashtable[int * ParsingSequence, ParsedSequence] = Hashtable();
     public Records           : array[SCG.HashSet[ParseRecord]];
-    public RecordsToProcess  : SCG.Stack[int * ParseRecord] = SCG.Stack(50);
+    public RecordsToProcess  : PriorityQueue[ParseRecord] = PriorityQueue((l, r) =>
+    {
+      def c = l.TokenChanges.CompareTo(r.TokenChanges);
+      if (c != 0)
+        c
+      else
+        l.ParsePos.CompareTo(r.ParsePos)
+    });
     public mutable MaxPos    : int = -1;
+    public mutable BestSolution : TokenChanges = TokenChanges.Fail;
     mutable  _nextId : int;
 
     public StartSequence : ParsedSequence { get { this.Sequences[0, this.ParseResult.RuleParser.ParsingSequence] } }
-    
-    public RecordsToProcess2  : array[int * ParseRecord]
-    {
-      get
-      {
-        RecordsToProcess.ToArray()
-      }
-    }
-    
+
     public GetNextId() : int { _nextId++; _nextId }
 
     public Visualize(astPatcher : AstPatcher) : void
@@ -94,7 +95,7 @@ namespace Nitra.Internal.Recovery
         sequence = ParsedSequence(this, startPos, parsingSequence);
         Sequences.Add(key, sequence);
         foreach (startState in sequence.ParsingSequence.StartStates)
-          StartParseSubrule(startPos, ParseRecord(sequence, startState, startPos));
+          StartParseSubrule(ParseRecord(sequence, startState, TokenChanges.None, startPos));
       }
       sequence;
     }
@@ -106,37 +107,36 @@ namespace Nitra.Internal.Recovery
       sequence;
     }
 
-    public StartParseSubrule(pos : int, record : ParseRecord) : void
+    public StartParseSubrule(record : ParseRecord) : void
     {
       when (record.IsComplete)
-        record.Sequence.AddEnd(pos);
-      mutable set = Records[pos];
+        record.Sequence.AddEnd(record.ParsePos, record.TokenChanges);
+      mutable set = Records[record.ParsePos];
       when (set == null)
       {
         set = SCG.HashSet();
-        Records[pos] = set;
-        MaxPos = Math.Max(MaxPos, pos);
+        Records[record.ParsePos] = set;
+        MaxPos = Math.Max(MaxPos, record.ParsePos);
       }
-      record.ParsePos = pos;
       def newRecord = set.Add(record);
       when (newRecord && !record.IsComplete)
-        RecordsToProcess.Push((pos, record));
+        RecordsToProcess.Enqueue(record);
     }
 
-    public SubruleParsed(begin : int, end : int, record : ParseRecord) : void
+    public SubruleParsed(begin : int, end : int, record : ParseRecord, tokenChanges : TokenChanges) : void
     {
       unless (begin == end && record.ParsingState.IsNullable)
       {
         record.Sequence.Add(ParsedSubrule(begin, end, record.State));
         foreach (next in record.ParsingState.Next)
-          StartParseSubrule(end, record.Next(next));
+          StartParseSubrule(record.Next(next, end, tokenChanges));
       }
     }
 
     public StartParse(ruleParser : RuleParser) : void
     {
       def textPos = 0;
-      def root = ParseRecord(ParsedSequence(this, 0, ParsingSequence.CreateRoot()), 0, -1);
+      def root = ParseRecord(ParsedSequence(this, 0, ParsingSequence.CreateRoot()), 0, TokenChanges.None, textPos);
       match (ruleParser)
       {
         | SimpleRuleParser     as ruleParser =>
@@ -154,25 +154,31 @@ namespace Nitra.Internal.Recovery
     {
       while (RecordsToProcess.Count > 0)
       {
-        def (pos, record) = RecordsToProcess.Pop();
-        PredictionOrScanning(pos, record, optimize = true);
+        def record = RecordsToProcess.FrontItem;
+        when (record.ParsePos == ParseResult.Text.Length)
+          BestSolution = TokenChanges.Min(BestSolution, record.TokenChanges);
+        unless (record.TokenChanges <= BestSolution)
+          return;
+        PredictionOrScanning(record, optimize = true);
+        _ = RecordsToProcess.Dequeue();
       }
     }
 
-    public Completion(pos : int, caller : ParseRecord, sequence : ParsedSequence) : void
+    public Completion(endPos : int, caller : ParseRecord, sequence : ParsedSequence) : void
     {
-      SubruleParsed(sequence.StartPos, pos, caller);
+      SubruleParsed(sequence.StartPos, endPos, caller, sequence.Ends[endPos]);
     }
 
-    public PredictionOrScanning(textPos : int, record : ParseRecord, optimize : bool) : void
+    public PredictionOrScanning(record : ParseRecord, optimize : bool) : void
     {
+      def textPos = record.ParsePos;
       mutable endPos;
       match (record.ParsingState)
       {
         | Simple           as state =>
           if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 && (endPos != MaxPos || MaxPos >= ParseResult.MaxFailPos) })
           {
-            SubruleParsed(textPos, endPos, record);
+            SubruleParsed(textPos, endPos, record, TokenChanges.None);
             when (textPos == endPos)
               _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence);
           }
@@ -182,7 +188,7 @@ namespace Nitra.Internal.Recovery
         | Extensible       as state =>
           if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 && (endPos != MaxPos || MaxPos >= ParseResult.MaxFailPos) })
           {
-            SubruleParsed(textPos, endPos, record);
+            SubruleParsed(textPos, endPos, record, TokenChanges.None);
             when (textPos == endPos)
               _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence);
           }
@@ -205,11 +211,11 @@ namespace Nitra.Internal.Recovery
         | Scan             as state =>
           endPos = state.Subrule.Parse(textPos, ParseResult.Text, ParseResult);
           when (endPos >= 0)
-            SubruleParsed(textPos, endPos, record);
+            SubruleParsed(textPos, endPos, record, TokenChanges.None);
 
         | Predicate        as state =>
           when (state.HeadPredicate(textPos, ParseResult.Text, ParseResult))
-            SubruleParsed(textPos, textPos, record);
+            SubruleParsed(textPos, textPos, record, TokenChanges.None);
       }
     }
 
