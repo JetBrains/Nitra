@@ -61,6 +61,7 @@ namespace Nitra.Compiler
 
           def statementsRecoveryMode = SCG.List();
           statementsRecoveryMode.Add(<[ def recoveredSubrulesIndex = ~this.astPtr ]>);
+          statementsRecoveryMode.Add(<[ def (subruleStarts, parsingSequence) = parseResult.RecoveredSubrules[recoveredSubrulesIndex]; ]>);
           statementsRecoveryMode.Add(CompileSubruleValueRecoveryMode(subrule));
 
           def expr =
@@ -110,7 +111,17 @@ namespace Nitra.Compiler
 
       def spanValues(cr : SequenceCompilationResult) : bool { cr.IsSpan }
 
-      def makeIdSwitch(pred : SequenceCompilationResult -> bool, selector : SequenceCompilationResult -> PExpr) : PExpr
+      def standardModeBody(code : PExpr) : PExpr { code }
+
+      def recoveryModeBody(code : PExpr) : PExpr
+      {
+        <[
+          def (subruleStarts, parsingSequence) = parseResult.RecoveredSubrules[recoveredSubrulesIndex];
+          $code;
+        ]>
+      }
+
+      def makeIdSwitch(pred : SequenceCompilationResult -> bool, selector : SequenceCompilationResult -> PExpr, body : PExpr -> PExpr) : PExpr
       {
         def cases = SCG.List();
         foreach (copilationResult when pred(copilationResult) in _sequenceCompilationResults.Values with index)
@@ -121,7 +132,7 @@ namespace Nitra.Compiler
         if (cases.Count > 0)
         {
           cases.Add(<[ case: | _ => throw System.ArgumentOutOfRangeException("id") ]>);
-          <[ match (id) { ..$cases } ]>
+          body(<[ match (id) { ..$cases } ]>)
         }
         else
           <[ throw System.ArgumentOutOfRangeException("id") ]>;
@@ -131,7 +142,7 @@ namespace Nitra.Compiler
         private __ReadSequenceAstStandardMode(id : int, pos : ref int) : Nitra.Ast
           implements Nitra.Internal.IAstSequenceLoader[Nitra.Ast].ReadSequence
         {
-          unchecked { _ = id; _ = pos; $(makeIdSwitch(astValues, _.CodeStandardMode)) }
+          unchecked { _ = id; _ = pos; $(makeIdSwitch(astValues, _.CodeStandardMode, standardModeBody)) }
         }
       ]>);
 
@@ -139,7 +150,7 @@ namespace Nitra.Compiler
         private __ReadSequenceSpanStandardMode(id : int, pos : ref int) : Nitra.NSpan
           implements Nitra.Internal.IAstSequenceLoader[Nitra.NSpan].ReadSequence
         {
-          unchecked { _ = id; _ = pos; $(makeIdSwitch(spanValues, _.CodeStandardMode)) }
+          unchecked { _ = id; _ = pos; $(makeIdSwitch(spanValues, _.CodeStandardMode, standardModeBody)) }
         }
       ]>);
 
@@ -147,7 +158,7 @@ namespace Nitra.Compiler
         private __ReadSequenceAstRecoveryMode(id : int, recoveredSubrulesIndex : int) : Nitra.Ast
           implements Nitra.Internal.IAstSequenceLoader[Nitra.Ast].ReadSequence
         {
-          unchecked { _ = id; _ = recoveredSubrulesIndex; $(makeIdSwitch(astValues, _.CodeRecoveryMode)) }
+          unchecked { _ = id; _ = recoveredSubrulesIndex; $(makeIdSwitch(astValues, _.CodeRecoveryMode, recoveryModeBody)) }
         }
       ]>);
 
@@ -155,7 +166,7 @@ namespace Nitra.Compiler
         private __ReadSequenceSpanRecoveryMode(id : int, recoveredSubrulesIndex : int) : Nitra.NSpan
           implements Nitra.Internal.IAstSequenceLoader[Nitra.NSpan].ReadSequence
         {
-          unchecked { _ = id; _ = recoveredSubrulesIndex; $(makeIdSwitch(spanValues, _.CodeRecoveryMode)) }
+          unchecked { _ = id; _ = recoveredSubrulesIndex; $(makeIdSwitch(spanValues, _.CodeRecoveryMode, recoveryModeBody)) }
         }
       ]>);
 
@@ -163,7 +174,7 @@ namespace Nitra.Compiler
         private __ReadEmptySequenceAst(id : int, _subruleStartPos : int) : Nitra.Ast
           implements Nitra.Internal.IAstSequenceLoader[Nitra.Ast].ReadEmptySequence
         {
-          unchecked { _ = id; $(makeIdSwitch(astValues, _.EmptyCodeRecoveryMode)) }
+          unchecked { _ = id; $(makeIdSwitch(astValues, _.EmptyCodeRecoveryMode, standardModeBody)) }
         }
       ]>);
 
@@ -171,7 +182,7 @@ namespace Nitra.Compiler
         private __ReadEmptySequenceSpan(id : int, _subruleStartPos : int) : Nitra.NSpan
           implements Nitra.Internal.IAstSequenceLoader[Nitra.NSpan].ReadEmptySequence
         {
-          unchecked { _ = id; $(makeIdSwitch(spanValues, _.EmptyCodeRecoveryMode)) }
+          unchecked { _ = id; $(makeIdSwitch(spanValues, _.EmptyCodeRecoveryMode, standardModeBody)) }
         }
       ]>);
     }
@@ -234,7 +245,8 @@ namespace Nitra.Compiler
             statementsStandardMode.Insert(0, <[ def sequenceStartPos = pos; ]>);
             statementsStandardMode.Add(<[ Nitra.SequenceAst(Nitra.Location(parseResult.OriginalSource, sequenceStartPos, pos), ..$(subruleValues.MapToList(nameToExpr))) ]>);
 
-            statementsRecoveryMode.Add(<[ def (sequenceStartPos, sequenceEndPos) = parseResult.GetRecoveredSubruleSpan(recoveredSubrulesIndex); ]>);
+            statementsRecoveryMode.Add(<[ def sequenceStartPos = subruleStarts[0].Pos ]>);
+            statementsRecoveryMode.Add(<[ def sequenceEndPos = subruleStarts[subruleStarts.Length - 1].Pos ]>);
             statementsRecoveryMode.Add(<[ Nitra.SequenceAst(Nitra.Location(parseResult.OriginalSource, sequenceStartPos, sequenceEndPos), ..$(subruleValues.MapToList(nameToExpr))) ]>);
 
             statementsEmptyRecoveryMode.Add(<[ Nitra.SequenceAst(Nitra.Location(parseResult.OriginalSource, _subruleStartPos, _subruleStartPos), ..$(subruleValues.MapToList(nameToExpr))) ]>);
@@ -442,12 +454,11 @@ namespace Nitra.Compiler
       def skippedValue = CompileEmptySubruleValueRecoveryMode(subrule, true);
 
       <[
-        def (subruleStarts, parsingSequence) = parseResult.RecoveredSubrules[recoveredSubrulesIndex];
         def state = parsingSequence.GetEarleyState($(subrule.State : int));
         match (this.parseResult.FindRecoveredSubrule(subruleStarts, state))
         {
           | (true, _subruleStartPos, _subruleEndPos)  => $recoveredValue
-          | (false, _subruleStartPos, _subruleEndPos) => $skippedValue
+          | (false, _subruleStartPos, _) => $skippedValue
         }
       ]>
     }
