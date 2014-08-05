@@ -321,7 +321,9 @@ namespace Nitra.DebugStrategies
         }
         else
         {
-          Debug.Assert(false);
+          var oldMaxPos = rp.MaxPos;
+          rp.Parse();
+          Debug.Assert(oldMaxPos != rp.MaxPos);
         }
       }
       while (rp.MaxPos > maxPos);
