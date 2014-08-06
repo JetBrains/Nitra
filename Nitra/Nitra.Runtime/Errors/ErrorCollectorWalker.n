@@ -20,6 +20,20 @@ namespace Nitra.Runtime.Errors
   public sealed class ErrorCollectorWalker : AstWalkerBase[Error.Node]
   {
     [Record]
+    class AggregateOperator : INitraReflection
+    {
+      public OperatorType : OperatorType;
+      public Errors       : List[Error];
+      
+      public CanParseEmptyString : bool   { get { false } }
+      public ShortName           : string { get { FullName } }
+      public FullName            : string { get { $"a $(this.OperatorType.ToString().ToLower()) operator" } }
+      public IsMarker            : bool   { get { false } }
+      
+      public override ToString() : string{ FullName }
+    }
+    
+    [Record]
     public variant Error
     {
       | Leaf
@@ -225,6 +239,43 @@ namespace Nitra.Runtime.Errors
                 
               true
             }
+            def canBeFoldedAsOperator(tokens : List[Error]) : OperatorType
+            {
+              mutable currentParserData = null;
+              mutable current = OperatorType.None;
+              mutable isPostfix;
+              mutable ruleCount = 0;
+
+              foreach (t in tokens)
+              {
+                | Leaf(SubruleInfo as info, _) => 
+                  def seq = info.Sequence;
+                  def parser = seq.Parser :> ExtensionRuleParser;
+              
+                  if (currentParserData == null)
+                  {
+                    currentParserData = parser.ParserData;
+                    current           = parser.Descriptor.OperatorType;
+                    isPostfix         = seq.IsPostfix;
+                  }
+                  else if (!object.ReferenceEquals(currentParserData, parser.ParserData))
+                    return OperatorType.None;
+                  else when (current != parser.Descriptor.OperatorType)
+                    return OperatorType.None;
+
+                  ruleCount++;
+
+                | _ => return OperatorType.None;
+              }
+              
+              when (currentParserData == null || current == OperatorType.None)
+                return OperatorType.None;
+                
+              if (ruleCount > 3)
+                current
+              else
+                OperatorType.None
+            }
             def isAllTokensEquals(tokens : List[Error]) : bool
             {
               mutable current;
@@ -251,9 +302,19 @@ namespace Nitra.Runtime.Errors
                 result3.Add(current[0]) // все токены идентичны и можно брать первый попавшийся
               else if (isAllTokensIsSameExtentions(current))
               {
-                def newContext = Error.Node(n.Frame, true); // все токены относятся к одному оператору и могут быть объеденены
-                newContext.Children.AddRange(current);
-                result3.Add(newContext);
+                def operatorType = canBeFoldedAsOperator(current);
+                if (operatorType != OperatorType.None)
+                {
+                  def op = AggregateOperator(operatorType, current);
+                  def newContext = Error.Leaf(op, (current[0] :> Error.Leaf).Span); // все токены относятся к одному оператору и могут быть объеденены
+                  result3.Add(newContext);
+                }
+                else
+                {
+                  def newContext = Error.Node(n.Frame, isAlternative=true); // все токены относятся к одному оператору и могут быть объеденены
+                  newContext.Children.AddRange(current);
+                  result3.Add(newContext);
+                }
               }
               else
               {
