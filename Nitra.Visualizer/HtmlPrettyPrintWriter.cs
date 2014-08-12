@@ -71,8 +71,10 @@ namespace Nitra.Visualizer
     public override void AmbiguousNode(IAmbiguousAst ast)
     {
       WriteSpan(_missingNodeClass, "ambiguous " + ast.RuleDescriptor.Name);
+      var previousTokenPos = _previousTokenPos;
       foreach (var a in ast.Ambiguities)
       {
+        _previousTokenPos = previousTokenPos;
         NewLine();
         a.PrettyPrint(this, 0);
       }
