@@ -251,7 +251,6 @@ namespace Nitra.DebugStrategies
             prevs = currentNodes;
             subrule = nextSubrule;
             goto Begin;
-            return null;
           }
         default:
           {

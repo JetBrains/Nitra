@@ -20,6 +20,39 @@ namespace Nitra.Runtime.Errors
   public sealed class ErrorCollectorWalker : AstWalkerBase[Error.Node]
   {
     [Record]
+    class AggregateOperator : INitraReflection
+    {
+      public OperatorInfo        : OperatorInfo;
+      public Prefix              : bool           { get { this.OperatorInfo %&& OperatorInfo.Prefix } }
+      public Postfix             : bool           { get { this.OperatorInfo %&& OperatorInfo.Postfix } }
+      public Infix               : bool           { get { this.OperatorInfo %&& OperatorInfo.Infix } }
+      public Arity               : int            { get; }
+      public Errors              : List[Error];
+      
+      public CanParseEmptyString : bool           { get { false } }
+      public ShortName           : string         { get { FullName } }
+      public FullName            : string         { get { $"a $OperatorArity operator" } }
+      public IsMarker            : bool           { get { false } }
+      public OperatorArity       : string
+      {
+        get
+        {
+          match (Arity)
+          {
+            | 0 => assert(false);
+            | 1 => "unary"
+            | 2 => "binary"
+            | 3 => "ternary"
+            | 4 => "quaternary"
+            | _ => "n-ary"
+          }
+        }
+      }
+      
+      public override ToString() : string{ FullName }
+    }
+    
+    [Record]
     public variant Error
     {
       | Leaf
@@ -129,7 +162,7 @@ namespace Nitra.Runtime.Errors
                 | (SubruleInfo.List              as a, SubruleInfo.List              as b) => cmpSeq(a.Rule, b.Rule)
                 | (SubruleInfo.ListWithSeparator as a, SubruleInfo.ListWithSeparator as b) => cmpSeq(a.Rule, b.Rule) && cmpSeq(a.Separator, b.Separator)
                 | (SubruleInfo.Option            as a, SubruleInfo.Option            as b) => cmpSeq(a.Rule, b.Rule)
-                | (SubruleInfo.Marker            as a, SubruleInfo.Marker            as b) => true
+                | (SubruleInfo.Marker,                 SubruleInfo.Marker)                 => true
                 | _                                                                        => false
               }
               and cmpSeq(a : SequenceInfo, b : SequenceInfo) : bool
@@ -225,6 +258,44 @@ namespace Nitra.Runtime.Errors
                 
               true
             }
+            def canBeFoldedAsOperator(tokens : List[Error]) : OperatorInfo * int
+            {
+              mutable currentParserData = null;
+              mutable current = (OperatorInfo.None, 0);
+              mutable isPostfix;
+              mutable ruleCount = 0;
+
+              foreach (t in tokens)
+              {
+                | Leaf(SubruleInfo as info, _) => 
+                  def seq = info.Sequence;
+                  def parser = seq.Parser :> ExtensionRuleParser;
+                  def desc = parser.Descriptor;
+              
+                  if (currentParserData == null)
+                  {
+                    currentParserData = parser.ParserData;
+                    current           = (desc.OperatorInfo, desc.Arity);
+                    isPostfix         = seq.IsPostfix;
+                  }
+                  else if (!object.ReferenceEquals(currentParserData, parser.ParserData))
+                    return (OperatorInfo.None, 0);
+                  else when (current[0] != desc.OperatorInfo && current[1] == desc.Arity)
+                    return (OperatorInfo.None, 0);
+
+                  ruleCount++;
+
+                | _ => return (OperatorInfo.None, 0);
+              }
+              
+              when (currentParserData == null || current[0] == OperatorInfo.None)
+                return (OperatorInfo.None, 0);
+                
+              if (ruleCount > 3)
+                current
+              else
+                (OperatorInfo.None, 0)
+            }
             def isAllTokensEquals(tokens : List[Error]) : bool
             {
               mutable current;
@@ -251,9 +322,19 @@ namespace Nitra.Runtime.Errors
                 result3.Add(current[0]) // все токены идентичны и можно брать первый попавшийся
               else if (isAllTokensIsSameExtentions(current))
               {
-                def newContext = Error.Node(n.Frame, true); // все токены относятся к одному оператору и могут быть объеденены
-                newContext.Children.AddRange(current);
-                result3.Add(newContext);
+                def (operatorType, arity) = canBeFoldedAsOperator(current);
+                if (operatorType != OperatorInfo.None)
+                {
+                  def op = AggregateOperator(operatorType, arity, current);
+                  def newContext = Error.Leaf(op, (current[0] :> Error.Leaf).Span); // все токены относятся к одному оператору и могут быть объеденены
+                  result3.Add(newContext);
+                }
+                else
+                {
+                  def newContext = Error.Node(n.Frame, isAlternative=true); // все токены относятся к одному оператору и могут быть объеденены
+                  newContext.Children.AddRange(current);
+                  result3.Add(newContext);
+                }
               }
               else
               {

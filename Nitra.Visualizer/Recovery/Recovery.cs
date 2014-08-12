@@ -200,7 +200,7 @@ namespace Nitra.DebugStrategies
             }
             // Если в последовательнсости есть пропарсивания оканчивающиеся на место падения, добавляем кишки этого состояния в Эрли.
             // Это позволит, на следующем шаге, поискать в них эски.
-            foreach (var subrule in sequence.ParsedSubrules)
+            foreach (var subrule in sequence.ParsedSubrules.ToArray())
               if (subrule.State >= 0 && subrule.End == maxPos && sequence.ParsingSequence.SequenceInfo != null)
               {
                 var state = sequence.ParsingSequence.States[subrule.State];
@@ -321,7 +321,9 @@ namespace Nitra.DebugStrategies
         }
         else
         {
-          Debug.Assert(false);
+          var oldMaxPos = rp.MaxPos;
+          rp.Parse();
+          Debug.Assert(oldMaxPos != rp.MaxPos);
         }
       }
       while (rp.MaxPos > maxPos);
