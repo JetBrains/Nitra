@@ -71,6 +71,11 @@ namespace Nitra.Visualizer
     public override void AmbiguousNode(IAmbiguousAst ast)
     {
       WriteSpan(_missingNodeClass, "ambiguous " + ast.RuleDescriptor.Name);
+      foreach (var a in ast.Ambiguities)
+      {
+        NewLine();
+        a.PrettyPrint(this, 0);
+      }
     }
 
     public override void NewLine()
