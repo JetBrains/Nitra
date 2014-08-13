@@ -9,11 +9,11 @@ namespace Nitra.Visualizer
 {
   internal class HtmlPrettyPrintWriter : PrettyPrintWriter
   {
-    private StringBuilder _buffer;
-    private StringWriter _writer; // for HtmlEncode
-    private string _missingNodeClass;
-    private string _debugClass;
-    private string _garbageClass;
+    private readonly StringBuilder _buffer;
+    private readonly StringWriter _writer; // for HtmlEncode
+    private readonly string _missingNodeClass;
+    private readonly string _debugClass;
+    private readonly string _garbageClass;
     private int _currentIndent;
     private int _lastStartLine;
     private int _lastIndentEnd;
@@ -70,14 +70,18 @@ namespace Nitra.Visualizer
 
     public override void AmbiguousNode(IAmbiguousAst ast)
     {
-      WriteSpan(_missingNodeClass, "ambiguous " + ast.RuleDescriptor.Name);
+      WriteSpan(_missingNodeClass, "<# ambiguous " + ast.RuleDescriptor.Name + ", " + ast.Ambiguities.Count + " options");
+      NewLineAndIndent();
       var previousTokenPos = _previousTokenPos;
       foreach (var a in ast.Ambiguities)
       {
         _previousTokenPos = previousTokenPos;
-        NewLine();
         a.PrettyPrint(this, 0);
+        NewLine();
       }
+      Unindent();
+      WriteSpan(_missingNodeClass, "#>");
+      NewLine();
     }
 
     public override void NewLine()
