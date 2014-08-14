@@ -4,19 +4,41 @@ using Nitra.Runtime;
 using Nitra.Typing;
 
 using Nemerle;
+using Nemerle.Imperative;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
+
+using G = NitraSyntaxAst;
 
 namespace Nitra.Grammar
 {
   internal partial module TypingUtils
   {
+    private static KeywordSpanClassSymbolName : Location = { def name = "Keyword"; Location(SingleLineSourceSnapshot(name), 0, name.Length); };
+
     public TypeRuleExpression(options : RuleDefinitionOptions, context : Context, rule : Rule) : Rule.Sequence
     {
+      mutable keywordSpanClassSymbol;
+      mutable isKeywordSpanClassSymbolBind;
+      def getKeywordSpanClass(loc : Location) : SpanClassSymbol
+      {
+        when (keywordSpanClassSymbol == null)
+        unless (isKeywordSpanClassSymbolBind)
+        {
+          def result = context.BindMany.[SpanClassSymbol](KeywordSpanClassSymbolName);
+          match (result.Candidates)
+          {
+            | first :: _ => keywordSpanClassSymbol = first;
+            | []         => ProjectSystem.NitraProject.CurrentProject.Error(loc, $<#Span class '$(KeywordSpanClassSymbolName.GetText())' not found in current context.#>, -1);
+          }
+        }
+        keywordSpanClassSymbol
+      }
       def insertWhitespaceRules() : List[Rule]
       {
         def keywordContext = context.TryGetContext.[KeywordRegexContext]();
@@ -47,7 +69,7 @@ namespace Nitra.Grammar
           | String              as rule =>
             def loc = rule.Location.FromEnd();
             if (keywordContext?.FindRule(rule.Str) is VSome(sym))
-              (rule, Some(makeCall(loc, sym)))
+              (Rule.String(rule.Location, rule.FieldName, rule.Str, true, rule.SpanClass ?? getKeywordSpanClass(loc)), Some(makeCall(loc, sym)))
             else
               tryAddSpaceRule(rule, loc)
 
@@ -68,8 +90,8 @@ namespace Nitra.Grammar
             else if (rule.RuleRef is RuleRef.Some(RegularRuleSymbol as ruleSymbol))
             {
               def loc = rule.Location.FromEnd();
-              if (keywordContext?.FindRule(ruleSymbol.Rule) is VSome(sym))
-                (rule, Some(makeCall(loc, sym)))
+              if (keywordContext?.FindRule(ruleSymbol) is VSome(sym))
+                (Rule.Call(rule.Location, rule.Type, rule.FieldName, rule.RuleRef, rule.BindingPower, rule.SpanClass ?? getKeywordSpanClass(loc)), Some(makeCall(loc, sym)))
               else
                 tryAddSpaceRule(rule, loc);
             }
@@ -107,7 +129,6 @@ namespace Nitra.Grammar
         }
         buffer
       }
-
       def createUniqueFieldNames(rules : IEnumerable[Rule]) : list[Rule]
       {
         def fieldNameUniqueness = Dictionary();
@@ -158,6 +179,77 @@ namespace Nitra.Grammar
           insertWhitespaceRules();
 
       Rule.Sequence(rule.Location, rule.Type, "", createUniqueFieldNames(rules))
+    }
+    
+    public TryInferOperatorType(symbol : ParsedExtensionRuleSymbol) : void
+    {
+      def baseRuleRef = symbol.BaseRule;
+      
+      when (symbol.Name == "Mul")
+      {
+        assert(true);
+      }
+      when (baseRuleRef.IsNone)
+        return;
+        
+      def isArgument(rule : Rule) : bool
+      {
+        | Call(Some(argSymbol is RuleDefSymbol), _) => !(argSymbol.Type is RuleType.Void || argSymbol.IsToken)
+        | _ => false
+      }      
+      mutable arity = 0;
+      
+      foreach (rule in symbol.Rule.Rules)
+      {
+        when (isArgument(rule))
+          arity++;
+      }
+      
+      def rulesWithoutVoid = symbol.Rule.Rules.FilterToArray(rule => !(rule.Type is RuleType.Void));
+      def end = rulesWithoutVoid.Length - 1;
+      mutable firstIsArg;
+      mutable lastIsArg;
+      mutable infix;
+      mutable prevIsArg;
+      foreach (rule in rulesWithoutVoid with i)
+      {
+        def currIsArg = isArgument(rule);
+        if (i == 0) // first
+        {
+          infix = currIsArg;
+          prevIsArg = currIsArg;
+          firstIsArg = currIsArg;
+        }
+        else if (i == end)
+        {
+          lastIsArg = currIsArg;
+          unless (lastIsArg)
+            infix = false;
+          when (prevIsArg)
+            infix = false; // no separator!
+        }
+        else when (infix)
+        {
+          when (prevIsArg && currIsArg)
+            infix = false; // no separator!
+            
+          prevIsArg = currIsArg;
+        }
+      }
+      
+      mutable newOptions = symbol.Options;
+      
+      when (infix)
+        newOptions = newOptions.SetOperatorInfo(null, OperatorInfo.Infix);
+      unless (firstIsArg)
+        newOptions = newOptions.SetOperatorInfo(null, OperatorInfo.Prefix);
+      unless (lastIsArg)
+        newOptions = newOptions.SetOperatorInfo(null, OperatorInfo.Postfix);
+      when (arity > 0)
+        newOptions = newOptions.SetArity(null, arity);
+        
+      when (symbol.Options : object != newOptions)
+        symbol.SetOptions(newOptions);
     }
   }
 }

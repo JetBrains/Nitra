@@ -17,18 +17,18 @@ namespace Nitra.Internal.Recovery
   [Record, StructuralEquality]
   public partial class ParsedSequence
   {
-    [EqualsIgnore]
-    public RecoveryParser : RecoveryParser;
-    public StartPos : int;
-    public ParsingSequence : ParsingSequence;
+    [EqualsIgnore]               public         RecoveryParser  : RecoveryParser;
+                                 public         StartPos        : int;
+                                 public         ParsingSequence : ParsingSequence;
 
-    [RecordIgnore, EqualsIgnore] public Callers        : SCG.HashSet[ParseRecord]   = SCG.HashSet();
-    [RecordIgnore, EqualsIgnore] public ParsedSubrules : SCG.HashSet[ParsedSubrule] = SCG.HashSet();
-    [RecordIgnore, EqualsIgnore] public Ends           : SCG.HashSet[int]           = SCG.HashSet();
+    [RecordIgnore, EqualsIgnore] public         Callers         : SCG.HashSet[ParseRecord]     = SCG.HashSet();
+    [RecordIgnore, EqualsIgnore] public         ParsedSubrules  : SCG.HashSet[ParsedSubrule]   = SCG.HashSet();
+    [RecordIgnore, EqualsIgnore] public         Ends            : Hashtable[int, TokenChanges] = Hashtable();
+    [RecordIgnore, EqualsIgnore] public mutable Iteration       : int = -1;
 
     public IsToken : bool { get { this.ParsingSequence.IsToken }}
     
-    public RuleName : string { get { "" } }
+    public RuleName : string { get { this.ParsingSequence.RuleName } }
 
     public Add(subrule : ParsedSubrule) : void
     {
@@ -39,82 +39,54 @@ namespace Nitra.Internal.Recovery
     {
       match (ParsingSequence.States[subrule.State])
       {
-        | Simple           as state => state.RuleParser.IsVoid
-        | Extensible       as state => state.RuleParser.IsVoid
-        | ExtensionPrefix  as state => state.RuleParser.IsVoid
-        | ExtensionPostfix as state => state.RuleParser.IsVoid
-        | Subsequence      as state => state.SequenceInfo.IsVoid
-        | Scan                      => false
-        | Predicate                 => true
+        | Simple            as state => state.RuleParser.IsVoid
+        | Extensible        as state => state.RuleParser.IsVoid
+        | ExtensionPrefix   as state => state.RuleParser.IsVoid
+        | ExtensionPostfix  as state => state.RuleParser.IsVoid
+        | Subsequence       as state => state.SequenceInfo.IsVoid
+        | List                       => false
+        | ListWithSeparator          => false
+        | Scan                       => false
+        | Predicate                  => true
       }
     }
     
-    public SubruleMandatoryTokenCount(subrule : ParsedSubrule) : int
+    public SubruleMandatoryTokenCount(state : int) : int
     {
-      match (ParsingSequence.States[subrule.State])
+      match (ParsingSequence.States[state])
       {
-        | Simple           as state => state.RuleParser.SequenceInfo.MandatoryTokenCount
-        | Extensible       as state => state.RuleParser.MandatoryTokenCount
-        | ExtensionPrefix  as state => state.RuleParser.MandatoryTokenCount
-        | ExtensionPostfix          => 0
-        | Subsequence      as state => state.SequenceInfo.MandatoryTokenCount
-        | Scan             as state => state.Subrule.MandatoryTokenCount
-        | Predicate                 => 0
+        | Simple            as state => state.RuleParser.SequenceInfo.MandatoryTokenCount
+        | Extensible        as state => state.RuleParser.MandatoryTokenCount
+        | ExtensionPrefix   as state => state.RuleParser.MandatoryTokenCount
+        | ExtensionPostfix           => 0
+        | Subsequence       as state => state.SequenceInfo.MandatoryTokenCount
+        | List              as state => state.Subrule.MandatoryTokenCount
+        | ListWithSeparator as state => state.Subrule.MandatoryTokenCount
+        | Scan              as state => state.Subrule.MandatoryTokenCount
+        | Predicate                  => 0
       }
     }
 
     public GetSequencesForSubrule(parsedSubrule : ParsedSubrule) : Seq[ParsedSequence]
     {
-      def begin = parsedSubrule.Begin;
-      def end   = parsedSubrule.End;
-      mutable sequence;
-
-      match (ParsingSequence.States[parsedSubrule.State])
-      {
-        | Simple           as state =>
-          when (RecoveryParser.Sequences.TryGetValue((begin, state.RuleParser.ParsingSequence), out sequence))
-          when (sequence.Ends.Contains(end))
-            yield sequence;
-
-        | Extensible       as state =>
-          when (RecoveryParser.Sequences.TryGetValue((begin, state.RuleParser.ParsingSequence), out sequence))
-          when (sequence.Ends.Contains(end))
-            yield sequence;
-
-        | ExtensionPrefix  as state =>
-          foreach (prefixRule in state.RuleParser.PrefixRules)
-            when (RecoveryParser.Sequences.TryGetValue((begin, prefixRule.ParsingSequence), out sequence))
-            when (sequence.Ends.Contains(end))
-              yield sequence;
-
-        | ExtensionPostfix as state =>
-          foreach (postfixRule when state.RuleParser.FirstPostfixRuleId <= postfixRule.RuleId in state.RuleParser.PostfixRules)
-            when (RecoveryParser.Sequences.TryGetValue((begin, postfixRule.ParsingSequence), out sequence))
-            when (sequence.Ends.Contains(end))
-              yield sequence;
-
-        | Subsequence      as state =>
-          when (RecoveryParser.Sequences.TryGetValue((begin, state.Sequence), out sequence))
-          when (sequence.Ends.Contains(end))
-            yield sequence;
-
-        | Scan => ()
-        | Predicate => ()
-      }
+      this.ParsingSequence.GetSequencesForSubrule(parsedSubrule, this.RecoveryParser);
     }
     
     public AddCaller(caller : ParseRecord) : void
     {
       when (Callers.Add(caller))
-        foreach (end in Ends)
-          RecoveryParser.RecordsToComplete.Push(end, caller, this);
+        foreach (end in Ends.Keys)
+          RecoveryParser.Completion(end, caller, this);
     }
 
     public AddEnd(end : int) : void
     {
-      when (Ends.Add(end))
+      when (!Ends.Contains(end))
+      {
+        Ends.Add(end, TokenChanges.Fail);
         foreach (caller in Callers)
-          RecoveryParser.RecordsToComplete.Push(end, caller, this);
+          RecoveryParser.Completion(end, caller, this);
+      }
     }
 
     public GetNextSubrules(subrule : ParsedSubrule) : Seq[ParsedSubrule]
@@ -275,6 +247,8 @@ namespace Nitra.Internal.Recovery
           _ = sb.Append("…");
               
         _ = sb.Append("»");
+        
+        _ = sb.Append($" Name=«$RuleName»");
       }
     }
   }
