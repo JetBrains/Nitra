@@ -18,14 +18,14 @@ using System.Xml.Linq;
 using NB = Nemerle.Builtins;
 using SCG = System.Collections.Generic;
 
-using Nemerle.Core;
-
 //using ParsedSequenceAndSubrule2 = Nemerle.Builtins.Tuple</*Inserted tokens*/int, Nitra.Internal.Recovery.ParsedSequence, Nitra.Internal.Recovery.ParsedSubrule>;
 
 #if NITRA_RUNTIME
 namespace Nitra.Strategies
 #else
 // ReSharper disable once CheckNamespace
+
+using Nemerle.Core;
 
 namespace Nitra.DebugStrategies
 #endif
@@ -79,7 +79,7 @@ namespace Nitra.DebugStrategies
       Debug.WriteLine(RecoveryDebug.CurrentTestName + " -----------------------------------------------------------");
 #endif
       _deletedToken.Clear();
-      var textLen = parseResult.Text.Length;
+      //var textLen = parseResult.Text.Length;
       var rp = new RecoveryParser(parseResult);
       _recoveryParser = rp;
       rp.StartParse(parseResult.RuleParser);//, parseResult.MaxFailPos);
@@ -283,7 +283,7 @@ namespace Nitra.DebugStrategies
         if (tokens.Count > 0)
         {
           //ToDot(tokens.First().Token.Callers, "TokenRoots");
-          var root = rp.Sequences.First();
+          //var root = rp.Sequences.First();
 
           var sequencesInProgress = new Dictionary<ParsingSequence, HashSet<ParsedSequence>>();
           var roots = CalcRoots(rp, maxPos, sequencesInProgress);
@@ -339,7 +339,7 @@ namespace Nitra.DebugStrategies
         item.Mask |= mask;
     }
 
-    private static void Mark(Dictionary<ParsingCallerInfo, bool> roots, int mask)
+    public static void Mark(Dictionary<ParsingCallerInfo, bool> roots, int mask)
     {
       foreach (var item in roots)
         item.Key.Mask |= mask;
@@ -374,7 +374,7 @@ namespace Nitra.DebugStrategies
       return callees;
     }
 
-    private HashSet<ParsingCallerInfo> CalcCallers(RecoveryParser rp, List<TokenParserApplication> tokens)
+    private HashSet<ParsingCallerInfo> CalcCallers(RecoveryParser _rp, List<TokenParserApplication> tokens)
     {
       foreach (var token in tokens)
         foreach (var caller in token.Token.Callers)
@@ -755,12 +755,12 @@ namespace Nitra.DebugStrategies
 
     #region Dot
 
-    private void ToDot(Dictionary<ParsingCallerInfo, bool> roots, string namePrefix)
+    public void ToDot(Dictionary<ParsingCallerInfo, bool> roots, string namePrefix)
     {
       ToDot(roots.Select(r => r.Key), namePrefix);
     }
 
-    private void ToDot(ParsingCallerInfo callerInfo, string namePrefix)
+    public void ToDot(ParsingCallerInfo callerInfo, string namePrefix)
     {
       ToDot(Enumerable.Repeat(callerInfo, 1), namePrefix);
     }
@@ -824,7 +824,7 @@ namespace Nitra.DebugStrategies
       return X.DotEscape(str);
     }
 
-    string GetStyle(ParsingCallerInfo callerInfo, int mask, string style)
+    public string GetStyle(ParsingCallerInfo callerInfo, int mask, string style)
     {
       return HasMask(callerInfo, mask) ? style : "";
     }
