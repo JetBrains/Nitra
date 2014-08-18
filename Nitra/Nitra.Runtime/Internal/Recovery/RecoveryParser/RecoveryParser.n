@@ -162,6 +162,8 @@ namespace Nitra.Internal.Recovery
       }
     }
 
+    private ErrorPositions : SCG.HashSet[int] = SCG.HashSet();
+
     public StartParse(ruleParser : RuleParser) : void
     {
       def textPos = 0;
@@ -179,10 +181,45 @@ namespace Nitra.Internal.Recovery
         | _ => assert3(false)
       }
       Parse();
-      ParseToFailPos();
-      DeleteTokenOrGarbage(MaxPos);
-      Parse();
 
+      while (BestSolution.IsFail)
+      {
+        ParseToFailPos();
+        _ = ErrorPositions.Add(MaxPos);
+        InsertSubrules(MaxPos);
+        DeleteTokenOrGarbage(MaxPos);
+        Parse();
+      }
+    }
+
+    private InsertSubrules(maxPos : int) : void
+    {
+      def toProcess = SCG.Stack(Records[maxPos].KeyValuePairs);
+      def processed = Hashtable();
+      while (toProcess.Count > 0)
+      {
+        def (record, tokenChanges) = toProcess.Pop();
+
+        mutable oldTokenChanges;
+        when (processed.TryGetValue(record, out oldTokenChanges) && oldTokenChanges <= tokenChanges)
+          continue;
+
+        processed[record] = tokenChanges;
+        when (record.IsComplete)
+          continue;
+
+        def state = record.Sequence.ParsingSequence.States[record.State];
+        when (state.IsNullable)
+          continue;
+
+        def subruleTokenChanges = TokenChanges(inserted = state.MandatoryTokenCount, deleted = 0);
+        SubruleParsed(maxPos, maxPos, record, tokenChanges, subruleTokenChanges);
+        foreach (nextState in state.Next)
+        {
+          def nextRecord = ParseRecord(record.Sequence, nextState, maxPos);
+          toProcess.Push(nextRecord, tokenChanges + subruleTokenChanges);
+        }
+      }
     }
 
     private DeleteTokenOrGarbage(maxPos : int) : void
@@ -246,16 +283,14 @@ namespace Nitra.Internal.Recovery
             }
 
           def sequences = SCG.HashSet(Records[maxPos].Keys.Select(r => r.Sequence));
-          foreach (sequence in sequences)
-          {
+          foreach (sequence when sequence.ParsingSequence.SequenceInfo != null in sequences)
             foreach (subrule in sequence.ParsedSubrules)
-              when (subrule.State >= 0 && subrule.End == maxPos && sequence.ParsingSequence.SequenceInfo != null)
+              when (subrule.State >= 0 && subrule.End == maxPos)
               {
                 //def state = sequence.ParsingSequence.States[subrule.State];
                 def record = ParseRecord(sequence, subrule.State, subrule.Begin);
                 PredictionOrScanning(record, Records[record.ParsePos][record], false);
               }
-          }
           Parse();
         }
         while (count < Records[maxPos].Count);
@@ -273,7 +308,7 @@ namespace Nitra.Internal.Recovery
           RecordsToProcess.Enqueue(record, tokenChanges);
           return;
         }
-        PredictionOrScanning(record, tokenChanges, optimize = true);
+        PredictionOrScanning(record, tokenChanges, optimize = !ErrorPositions.Contains(record.ParsePos));
       }
     }
 
