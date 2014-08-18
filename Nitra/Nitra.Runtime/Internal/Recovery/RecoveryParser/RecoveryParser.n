@@ -69,17 +69,6 @@ namespace Nitra.Internal.Recovery
       _ = Process.Start(filePath);
       }
     }
-    
-    //public Records3(pattern : string = null, complatedOnly : bool = false, pos : int = -1) : array[array[ParseRecord]]
-    //{
-    //  def result = array(Records.Length);
-        
-    //  foreach (x when x != null && (pos < 0 || pos == i) in Records with i)
-    //    result[i] = x.Where(r => (pattern == null || r.ToString().Contains(pattern)) && (!complatedOnly || r.IsComplete))
-    //                  .OrderBy(r => r.Sequence.StartPos).ThenBy(r => r.ToString(i)).ToArray();
-          
-    //  result
-    //}
 
     public this(parseResult : ParseResult)
     {
@@ -111,7 +100,11 @@ namespace Nitra.Internal.Recovery
     public StartParseSubrule(record : ParseRecord, tokenChanges : TokenChanges) : void
     {
       when (record.IsComplete)
+      {
+        when (record.ParsePos == ParseResult.Text.Length && StartSequence : object == record.Sequence)
+          BestSolution = TokenChanges.Min(BestSolution, tokenChanges);
         record.Sequence.AddEnd(record.ParsePos, tokenChanges);
+      }
       mutable set = Records[record.ParsePos];
       when (set == null)
       {
@@ -172,7 +165,9 @@ namespace Nitra.Internal.Recovery
     public StartParse(ruleParser : RuleParser) : void
     {
       def textPos = 0;
+      Records[textPos] = Hashtable();
       def root = ParseRecord(ParsedSequence(this, 0, ParsingSequence.CreateRoot()), 0, textPos);
+      Records[textPos][root] = TokenChanges(0, 0);
       match (ruleParser)
       {
         | SimpleRuleParser     as ruleParser =>
@@ -185,7 +180,44 @@ namespace Nitra.Internal.Recovery
       }
       Parse();
       ParseToFailPos();
-      //Delete(MaxPos, MaxPos + 10);
+      DeleteTokenOrGarbage(MaxPos);
+      Parse();
+
+    }
+
+    private DeleteTokenOrGarbage(maxPos : int) : void
+    {
+      def text = ParseResult.Text;
+      when (maxPos >= text.Length)
+        return;
+
+      def getTokens(pos)
+      {
+        def grammar = ParseResult.RuleParser.Grammar;
+        def res = grammar.ParseAllNonVoidGrammarTokens(pos, ParseResult);
+        _ = res.RemoveWhere(x => x <= pos);
+        res
+      }
+
+      def tokens = getTokens(maxPos);
+
+      if (tokens .Count == 0)
+      {
+        mutable i = maxPos + 1;
+        for (; i < text.Length; i++) // крутимся пока не будет распознан токен или достигнут конец строки
+        {
+          def tokens = getTokens(i);
+          when (tokens.Count > 0)
+            break;
+        }
+
+        Delete(maxPos, i);
+      }
+      else
+      {
+        foreach (token in tokens)
+          Delete(maxPos, token);
+      }
     }
 
     private ParseToFailPos() : void
@@ -235,13 +267,13 @@ namespace Nitra.Internal.Recovery
     {
       while (RecordsToProcess.Count > 0)
       {
-        def (record, tokenChanges) = RecordsToProcess.FrontItem;
-        when (record.ParsePos == ParseResult.Text.Length)
-          BestSolution = TokenChanges.Min(BestSolution, tokenChanges);
-        unless (tokenChanges > BestSolution)
+        def (record, tokenChanges) = RecordsToProcess.Dequeue();
+        when (!BestSolution.IsFail && tokenChanges > BestSolution)
+        {
+          RecordsToProcess.Enqueue(record, tokenChanges);
           return;
+        }
         PredictionOrScanning(record, tokenChanges, optimize = true);
-        _ = RecordsToProcess.Dequeue();
       }
     }
 
@@ -252,7 +284,8 @@ namespace Nitra.Internal.Recovery
 
     public PredictionOrScanning(record : ParseRecord, tokenChanges : TokenChanges, optimize : bool) : void
     {
-      when (record.ParsingState.CanConsumeErrorTokens)
+      def state = record.ParsingState;
+      when (state.CanConsumeErrorTokens)
       {
         def begin = record.ParsePos;
         mutable ends;
@@ -263,7 +296,7 @@ namespace Nitra.Internal.Recovery
 
       def textPos = record.ParsePos;
       mutable endPos;
-      match (record.ParsingState)
+      match (state)
       {
         | Simple           as state =>
           if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 })
