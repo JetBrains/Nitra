@@ -1,6 +1,7 @@
 ﻿using Nitra.Internal;
 using Nitra.Internal.Recovery;
 using Nitra.Runtime;
+using Nitra.Runtime.Errors;
 
 using Nemerle;
 using Nemerle.Assertions;
@@ -63,13 +64,26 @@ namespace Nitra
         mutable res = ruleParser.Parse(startPos, parseResult.Text, parseResult);
         when (res < 0)
         {
-          res = if (recoveryStrategy == null)
+          def maxFailPos = parseResult.MaxFailPos;
+          try
           {
-            assert3(this.RecoveryStrategy != null);
-            this.RecoveryStrategy(parseResult);
+            res =
+              if (recoveryStrategy == null)
+              {
+                assert3(this.RecoveryStrategy != null);
+                this.RecoveryStrategy(parseResult);
+              }
+              else
+                recoveryStrategy(parseResult);
           }
-          else
-            recoveryStrategy(parseResult);
+          catch
+          {
+            | _ is OperationCanceledException => throw;
+            | e =>
+              def error = GetParsingFailureError(parseResult, maxFailPos);
+              parseResult.ReportError(error);
+              throw ParsingFailureException(error.ToString(), e, parseResult);
+          }
         }
         assert3(res >= 0);
 
@@ -81,6 +95,32 @@ namespace Nitra
       {
         when (registration is VSome(registration))
           registration.Dispose();
+      }
+    }
+
+    private static GetParsingFailureError(parseResult : ParseResult, maxFailPos : int) : ParseError
+    {
+      def isValidToken(x) { x > maxFailPos }
+
+      when (maxFailPos == parseResult.Text.Length)
+        return UnexpectedEndOfFileError(Location(parseResult.OriginalSource, maxFailPos, maxFailPos));
+
+      def tokens = parseResult.RuleParser.Grammar.ParseAllGrammarTokens(maxFailPos, parseResult);
+      if (tokens.Any(isValidToken))
+      {
+        def longestToken = tokens.Max();
+        UnexpectedError(Location(parseResult.OriginalSource, maxFailPos, longestToken))
+      }
+      else
+      {
+        mutable pos = maxFailPos + 1; // range already checked
+        while (pos < parseResult.Text.Length)
+        {
+          when (parseResult.RuleParser.Grammar.ParseAllGrammarTokens(pos, parseResult).Any(isValidToken))
+            break;
+          ++pos;
+        }
+        UnexpectedError(Location(parseResult.OriginalSource, maxFailPos, pos))
       }
     }
   }

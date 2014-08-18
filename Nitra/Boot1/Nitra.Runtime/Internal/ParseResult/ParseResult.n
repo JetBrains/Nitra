@@ -43,6 +43,48 @@ namespace Nitra
     private mutable _counter        : int;
     private _errors                 : SCG.List[Error] = SCG.List();
 
+    [Record]
+    public struct SubruleStart
+    {
+      /// Начало соотвестствующего подправила
+      public Pos   : int;
+      public State : int;
+      public override ToString() : string { $"Pos=$Pos, State=$State" }
+    }
+
+    [Record]
+    public variant RecoveredSequence
+    {
+      public AllSubrules : array[ParsedSubrule * TokenChanges];
+      public TokenChanges : TokenChanges;
+
+      public IsDeleted : bool { get { AllSubrules.Length == 0 && TokenChanges.Deleted > 0 && TokenChanges.Inserted == 0 } }
+
+      | Unambiguous { /** Индекс в RecoveredSubrules  */ Subrules : int }
+      | Ambiguous   { /** Индексы в RecoveredSubrules */ Subrules : array[int] }
+    }
+
+    [Record]
+    public struct SubrulesWithParsingSequence
+    {
+      public Subrules        : array[SubruleStart];
+      public ParsingSequence : ParsingSequence;
+    }
+
+    /// В массиве хранятся начала соотвестствующих подправил. Последним элементом массива - позиция конечного состояния (-1).
+    /// Таким образом мы можем легко вычислить позиции и размеры всех сабрулей
+    public RecoveredSubrules  : SCG.List[SubrulesWithParsingSequence] = SCG.List();
+
+    internal AddRecoveredSubrule(item : array[SubruleStart], parsingSequence : ParsingSequence) : int
+    {
+      def index = RecoveredSubrules.Count;
+      RecoveredSubrules.Add(SubrulesWithParsingSequence(item, parsingSequence));
+      index
+    }
+
+    /// Key = Start * End * ParsingSequence
+    public RecoveredSequences : Hashtable[int * int * ParsingSequence, RecoveredSequence] { get; default Hashtable(); }
+
     public this(source : SourceSnapshot, startPos : int, initalSize : int, parserHost : ParserHost, ruleParser : RuleParser)
     {
       Text             = source.Text;
@@ -275,6 +317,14 @@ namespace Nitra
       }
     }
 
+    public GetAstSize(astPtr : int, sequenceInfo : SequenceInfo) : int
+    {
+      mutable size = 0;
+      foreach (subrule in sequenceInfo.Subrules)
+        size += GetSize(astPtr + subrule.Offset);
+      size;
+    }
+
     public AstSize(astPtr : int, begin : int, end : int) : int
     {
       mutable size = 0;
@@ -284,15 +334,21 @@ namespace Nitra
       size;
     }
 
+    public Trivia : array[SCG.KeyValuePair[NSpan, int]] { get; private set; }
+
     public CreateAst() : Nitra.Ast
     {
+      def walker = TriviaCollector();
+      walker.Walk(this);
+      this.Trivia = walker.Trivia.OrderBy(x => x.Key.EndPos).ToArray();
+      
       //FIXME: rewrite without reflection
       def astType = ReflectionHelper.GetBaseAstType(this.RuleParser.Descriptor);
       match (this.RuleParser.Descriptor)
       {
         | SimpleRuleDescriptor =>
-          def astCreateMethod = astType.GetMethod("Create", array[typeof(int).MakeByRefType(), typeof(ParseResult)]);
-          astCreateMethod.Invoke(null, array[StartPos : object, this]) :> Ast
+          def astCreateMethod = astType.GetMethod("Create", array[typeof(int), typeof(int), typeof(ParseResult)]);
+          astCreateMethod.Invoke(null, array[this.StartPos : object, this.Text.Length : object, this]) :> Ast
 
         | ExtensibleRuleDescriptor as descriptor =>
           def astFactory      = typeof(DefaultExtensibleRuleAstFactory[_]).MakeGenericType(astType).GetField("Instance").GetValue(null);
@@ -334,13 +390,21 @@ namespace Nitra
       _ = walker.Walk(this, outlining);
     }
 
+    class Root : INitraReflection
+    {
+      public FullName            : string { get { "Roor" } }
+      public ShortName           : string { get { "Roor" } }
+      public IsMarker            : bool   { get { false } }
+      public CanParseEmptyString : bool   { get { false } }
+    }
+
     public Reflect() : ReflectionStruct
     {
       def nodes = SCG.List();
       def walker = ReflectionWalker();
       _ = walker.Walk(this, nodes);
       // FIXME: этот код должен быть в волкере
-      ReflectionStruct(RuleParser.Descriptor.Name, NSpan(StartPos, ast[ParseResult.ResultOffset]), ReadOnlyCollection(nodes.ToArray()))
+      ReflectionStruct(Root(), RuleParser.Descriptor.Name, ReflectionKind.Normal, NSpan(StartPos, ast[ParseResult.ResultOffset]), ReadOnlyCollection(nodes.ToArray()))
     }
 
     public ReportError(error : ParseError) : void
@@ -367,21 +431,20 @@ namespace Nitra
 
     public GetGarbage(prevPos : int, pos : int) : NSpan
     {
-      def cmp(e)
+      def cmp(e : SCG.KeyValuePair[NSpan, int]) : int
       {
-        if (e.Skip.StartPos < prevPos)
+        if (e.Key.StartPos < prevPos)
           -1
-        else
-          if (e.Skip.EndPos >= pos)
+        else if (e.Key.EndPos > pos)
             1
-          else
+        else
             0
       }
-      def errorIndex = ErrorData.BinarySearch(cmp);
+      def errorIndex = Trivia.BinarySearch(cmp);
       if (errorIndex >= 0)
       {
-        def error = ErrorData[errorIndex];
-        error.Skip
+        def error = Trivia[errorIndex];
+        error.Key
       }
       else
         NSpan()

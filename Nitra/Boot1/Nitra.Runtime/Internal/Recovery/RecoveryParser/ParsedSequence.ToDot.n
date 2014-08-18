@@ -10,40 +10,139 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 
+using System.Text;
 using SCG = System.Collections.Generic;
 
 namespace Nitra.Internal.Recovery
 {
   partial class ParsedSequence
   {
-    SubruleToDot(subrule : ParsedSubrule, nodes : SCG.HashSet[string], edges : SCG.List[string], parsedSubrules : Seq[ParsedSubrule]) : void
+    public MakeGraph(parsedSubrules : Seq[ParsedSubrule], end : int) : Hashtable[int * int, list[int * int]]
     {
-      def border = if (subrule.State >= 0 && this.ParsingSequence.States[subrule.State].Next.Contains(-1)) " peripheries=2" else "";
-      def shape  = if (subrule.State < -1) " shape=box" else "";
-      def bkcolor  = if (subrule.IsEmpty) " style=filled color=lightgrey" else "";
-      unless (nodes.Add($<#$(Name(subrule)) [label="$(Label(subrule))"$border$shape$bkcolor]#>))
-        return;
+      this.ParsingSequence.MakeGraph(parsedSubrules, end)
+    }
 
-      def subrules = this.GetNextSubrules(subrule, parsedSubrules).ToArray();
-      foreach (nextSubrule in subrules)
-      {
-        edges.Add($<#$(Name(subrule)) -> $(Name(nextSubrule))#>);
-        SubruleToDot(nextSubrule, nodes, edges, parsedSubrules);
-      }
+    public FindValidPaths(graph : Hashtable[int * int, list[int * int]], end : int) : Hashtable[int * int, int]
+    {
+      this.ParsingSequence.FindValidPaths(graph, this.StartPos, end)
     }
     
-    public ToDot(parsedSubrules : Seq[ParsedSubrule]) : string
+    public ToDot(astPatcher : AstPatcher4, parsedSubrules : Seq[ParsedSubrule], end : int) : string
     {
-      def nodes = SCG.HashSet();
-      def edges = SCG.List();
+      when (GetUrl("Seq", this.StartPos, end) == "0-LocalVariable-LocalVariableDeclaration_'_'_S_-6.svg")
+      {
+        assert2(true);
+      }
 
-      //def parsedNodes = parsedSubrules.GroupBy(p => (p.Begin, p.State));
-      def subrules    = this.GetFirstSubrules(parsedSubrules).ToArray();
+      def isValidNode(nodeData : Hashtable[int * int, int], node) : bool
+      {
+        mutable res;
+        when (nodeData.TryGetValue(node, out res))
+          return res == 1;
+          
+        false
+      }
 
-      foreach (subrule in subrules)
-        SubruleToDot(subrule, nodes, edges, parsedSubrules);
+      def nodeData = FindValidPaths(MakeGraph(this.ParsedSubrules, end), end);
+        
+      def nodes         = SCG.HashSet();
+      def edges         = SCG.List();
+      
+      mutable recoveredSequence;
+      def bestPath =
+        if (this.RecoveryParser.ParseResult.RecoveredSequences.TryGetValue((StartPos, end, ParsingSequence), out recoveredSequence))
+          Hashtable(recoveredSequence.AllSubrules)
+        else
+          Hashtable();
+      
+      foreach (subrule in parsedSubrules)
+      {
+        def stateIndex  = subrule.State;
+        def state       = this.ParsingSequence.States[stateIndex];
+        def from        = (stateIndex, subrule.Begin);
+        def isFromValid = isValidNode(nodeData, from);
+        def ins         = SubruleMandatoryTokenCount(stateIndex);
+        def skip        = subrule.IsEmpty && ins > 0;
+        def changes     = astPatcher.GetChangesForSubrule(this, subrule);
+        def text        = 
+          if (subrule.IsEmpty)
+            "Ins: " + changes
+          else
+            X.EscapeString(changes + " " + subrule.Length + ":«" + this.RecoveryParser.ParseResult.Text.Substring(subrule.Begin, subrule.Length) + "»");
+        
+        _ = nodes.Add(from);
+        
+        def subSeqs = 
+          if (subrule.IsEmpty)
+            array(0)
+          else
+            this.GetSequencesForSubrule(subrule).Where(seq => seq.Ends[subrule.End] == changes).ToArray();
+
+        foreach (nextStateIndex in state.Next)
+        {
+          def end = subrule.End;
+          def to = (nextStateIndex, subrule.End);
+          _ = nodes.Add(to);
+          def style = (if (skip)  " fontcolor=red" else "")
+                    + (if (isFromValid && isValidNode(nodeData, to)) " color=green" else "")
+                    + (if (bestPath.ContainsKey(subrule)) " style=bold" else " style=dashed");
+          
+          match (subSeqs.Length)
+          {
+            | 0 => edges.Add($<#$(Name(from)) -> $(Name(to)) [label="$text"$style$(if (subrule.IsEmpty) "" else " fontcolor=purple")]#>);
+            | 1 =>
+              def subSeq = subSeqs[0];
+              def url = subSeq.GetUrl("Seq", subSeq.StartPos, end);
+              def text2 = if (this.ParsingSequence is ParsingSequence.Extensible) subSeq.ParsingSequence.RuleName + " - " + text else text;
+              edges.Add($<#$(Name(from)) -> $(Name(to)) [label="$text2"$style URL="$url"]#>);
+              
+            | _ => // делаем промежуточный файл
+              assert2(this.ParsingSequence is ParsingSequence.Extensible);
+              def edges2 = SCG.List();
+              
+              foreach (subSeq in subSeqs)
+              {
+                def url = subSeq.GetUrl("Seq", subSeq.StartPos, end);
+                edges2.Add($<#<a href="$url" style="text-decoration: initial; font-size: 20px;">$(subSeq.ParsingSequence.RuleName)</a>#>);
+              }
+              //GetFilePathForExtensible
+              def htmlContent = $<#
+<?xml version="1.0" encoding="utf-8"?>
+<html>
+  <head>
+    <title>$RuleName</title>
+    <meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+  </head>
+  <body>
+  <pre>
+  $text
+  
+..$(edges2; "\r\n")
+  </pre>
+  </body>
+</html> #>;
+              def htmlPath = GetFilePathForExtensible("Seq", this.StartPos, end);
+              File.WriteAllText(htmlPath, htmlContent);
+              
+              def url = this.GetUrlForExtensible("Seq", this.StartPos, end);
+              def text2 = this.RuleName + " - " + text;
+              edges.Add($<#$(Name(from)) -> $(Name(to)) [label="$text2"$style URL="$url"]#>);
+          }
+        }
+      }
+
+      def nodes2 = SCG.List();
+      
+      foreach ((stateIndex, pos) as node in nodes)
+      {
+        def border  = if (stateIndex < 0 || this.ParsingSequence.States[stateIndex].IsStart) " peripheries=2" else "";
+        def shape   = if (stateIndex <  0) " shape=box" else "";
+        def bkcolor = if (isValidNode(nodeData, node)) " color=green" else "";
+        nodes2.Add($<#$(Name(node)) [label="$(Label(astPatcher, stateIndex, pos))"$border$shape$bkcolor]#>);
+      }
 
       def graphLabel = this.ParsingSequence.GraphLabel() + "\r\n" + X.DotEscape(this.RecoveryParser.ParseResult.DebugText) + "\r\n\r\n";
+      
       def content = $<#
         digraph RecoveryParser
         {
@@ -52,7 +151,7 @@ namespace Nitra.Internal.Recovery
           label="$graphLabel";
           fontname="Consolas";
     
-          ..$(nodes; "\r\n          ")
+          ..$(nodes2; "\r\n          ")
     
           ..$(edges; "\r\n          ")
         }
@@ -60,50 +159,86 @@ namespace Nitra.Internal.Recovery
       
       content
     }
-    
-    public Visualize() : void
+
+    /// Return generated 
+    public ToDot(files : SCG.List[string], astPatcher : AstPatcher4, end : int = -1) : void
     {
-      Visualize(ParsedSubrules);
+      def visited = HashSet();
+      ToDot(visited, files, astPatcher, end)
     }
     
-    public Visualize(parsedSubrules : Seq[ParsedSubrule]) : void
+    /// Return generated 
+    public ToDot(visited : HashSet[ParsedSequence * int], files : SCG.List[string], astPatcher : AstPatcher4, end : int = -1) : void
     {
-      def fileName = GetFilePath();
-      File.WriteAllText(fileName, ToDot(parsedSubrules));
-      X.ConvertToDot(fileName);
+      when (ParsedSubrules.Count > 0)
+        ToDot(visited, files, astPatcher, ParsedSubrules, end);
     }
     
-    GetFilePath() : string
+    /// Return generated 
+    public ToDot(visited : HashSet[ParsedSequence * int], files : SCG.List[string], astPatcher : AstPatcher4, parsedSubrules : Seq[ParsedSubrule], end : int = -1) : void
     {
-      def ruleParser = ParsingSequence.SequenceInfo.Parser :> RuleParser;
-      def path = Path.Combine(Path.GetTempPath(), "Nitra", "Dot", $<#..$(ruleParser.Grammar.Grammars; "-"; g => g.Name)#>, ruleParser.Descriptor.Name);
-      def filePath = path + ".dot";
-      def dir = Path.GetDirectoryName(filePath);
-      unless (Directory.Exists(dir))
-        _ = Directory.CreateDirectory(dir);
-      filePath
+      when (this.ParsingSequence.SequenceInfo == null && this.ParsingSequence.RuleName == "Root")
+        return;
+        
+      if (end >= 0)
+      {
+        unless (visited.Add((this, end)))
+          return;
+
+        def fileName = GetFilePath("Seq", this.StartPos, end);
+        File.WriteAllText(fileName, ToDot(astPatcher, parsedSubrules, end));
+        files.Add(fileName);
+      }
+      else foreach (end2 in this.Ends)
+      {
+        def end = end2.Key;
+        
+        unless (visited.Add((this, end)))
+          continue;
+
+        def fileName = GetFilePath("Seq", this.StartPos, end);
+        File.WriteAllText(fileName, ToDot(astPatcher, parsedSubrules, end));
+        files.Add(fileName);
+      }
     }
     
-    Label(subrule : ParsedSubrule) : string
+    public GetUrlForExtensible(dir : string, startPos : int, end : int) : string
     {
+      this.ParsingSequence.GetUrlForExtensible(dir, startPos, end)
+    }
+    
+    public GetUrl(dir : string, startPos : int, end : int) : string
+    {
+      this.ParsingSequence.GetUrl(dir, startPos, end)
+    }
+    
+    public GetFilePathForExtensible(dir : string, startPos : int, end : int) : string
+    {
+      this.ParsingSequence.GetFilePathForExtensible(dir, startPos, end)
+    }
+    
+    public GetFilePath(dir : string, startPos : int, end : int) : string
+    {
+      this.ParsingSequence.GetFilePath(dir, startPos, end)
+    }
+    
+    Label(astPatcher : AstPatcher4, stateIndex : int, pos : int) : string
+    {
+      def changes = astPatcher.GetNodeChanges(this, stateIndex, pos);
+          
       def label =
-        match (subrule.State)
+        match (stateIndex)
         {
           | -1 => "End"
-          | -2 => "Deleted token"
-          | -3 => "Deleted garbage"
-          | s  => this.ParsingSequence.States[s].Description
+          | s  => X.DotEscape(this.ParsingSequence.States[s].Description)
         };
 
-      def mandatoryTokenCount = if (subrule.State >= 0) SubruleMandatoryTokenCount(subrule) else -1;
-      "Ins: " + mandatoryTokenCount + "\r\n"
-        + subrule + " " + X.DotEscape(label) + "\r\n"
-        + this.RecoveryParser.ParseResult.Text.Substring(subrule.Begin, subrule.Length)
+      "State: " + stateIndex + " At: " + pos + " Skip: " + changes + "\r\n" + label
     }
 
-    Name(subrule : ParsedSubrule) : string
+    Name(stateIndex : int, pos : int) : string
     {
-      "Span_State_" + subrule.State.ToString("X") + "_" + subrule.Begin + "_" + subrule.End
+      "Node_State_" + (if (stateIndex < 0) "End" else stateIndex.ToString()) + "_Pos_" + pos
     }
   }
 }

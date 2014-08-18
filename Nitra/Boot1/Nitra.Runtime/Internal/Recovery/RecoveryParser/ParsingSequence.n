@@ -23,13 +23,21 @@ namespace Nitra.Internal.Recovery
     public IsToken             : bool;
     public MandatoryTokenCount : int;
     public StartStates         : array[int];
+    public EndStates           : array[int];
     public States              : array[ParsingState];
+
+    private _staticStateToEarleyMap : Hashtable[int, int];
 
     | Sequence   { }
     | Extensible { RuleParser : ExtensibleRuleParser }
 
     [RecordIgnore]
-    public Callers             : SCG.HashSet[int * ParsingSequence] = SCG.HashSet();
+    public Callers             : SCG.HashSet[ParsingCallerInfo] = SCG.HashSet();
+
+    public GetEarleyState(staticState : int) : int
+    {
+      _staticStateToEarleyMap[staticState]
+    }
 
     public IsStartState(state : int) : bool
     {
@@ -50,14 +58,26 @@ namespace Nitra.Internal.Recovery
       }
     }
 
+    public Id : string
+    {
+      get
+      {
+        match (this)
+        {
+          | Sequence   as ps => $"s$(ps.SequenceInfo.Id)"
+          | Extensible as ps => $"e$(ps.RuleParser.PrefixId)bp$(ps.RuleParser.BindingPower)"
+        }
+      }
+    }
+
     public static CreateSimple(ruleParser : SimpleRuleParser) : ParsingSequence
     {
-      CreateSequence(ruleParser.Reflection(ruleParser.RuleId), ruleParser.IsTokenRule)
+      CreateSequence(ruleParser.Reflection(ruleParser.RuleId), ruleParser.IsTokenRule, Hashtable())
     }
 
     public static CreateExtension(ruleParser : ExtensionRuleParser) : ParsingSequence
     {
-      CreateSequence(ruleParser.Reflection(ruleParser.RuleId), ruleParser.IsTokenRule)
+      CreateSequence(ruleParser.Reflection(ruleParser.RuleId), ruleParser.IsTokenRule, Hashtable())
     }
 
     public static CreateExtensible(ruleParser : ExtensibleRuleParser) : ParsingSequence
@@ -69,20 +89,17 @@ namespace Nitra.Internal.Recovery
         ruleParser.IsTokenRule,
         ruleParser.MandatoryTokenCount,
         array[0],
+        array[0, 1],
         array[
-          ParsingState.ExtensionPrefix (0, array[1, -1], array[],     null, ruleParser),
-          ParsingState.ExtensionPostfix(1, array[1, -1], array[0, 1], null, ruleParser)
+          ParsingState.ExtensionPrefix (0, array[1, -1], array[],     true,  null, ruleParser),
+          ParsingState.ExtensionPostfix(1, array[1, -1], array[0, 1], false, null, ruleParser)
         ],
+        null,
         ruleParser
       )
     }
 
-    public static CreateRoot() : ParsingSequence
-    {
-      ParsingSequence.Sequence(null, "Root", "Root", false, 1, array[0], array[ParsingState.Scan(0, array[-1], array[], null)])
-    }
-
-    private static CreateSequence(sequence : SequenceInfo, isToken : bool) : ParsingSequence
+    public static CreateListSequence(subrule : SubruleInfo.List, staticStateToEarley : Hashtable[int, int]) : ParsingSequence // TODO: Построение последовательностей костыль на костыле. Переделать.
     {
       def transitions = SCG.HashSet();
       def states = SCG.List();
@@ -90,6 +107,129 @@ namespace Nitra.Internal.Recovery
       {
         state.Id = states.Count;
         states.Add(state);
+        staticStateToEarley[state.Subrule.State] = state.Id;
+        state
+      }
+      _ = transitions.Add((-1, 0));
+
+      def rule = CreateSequence(subrule.Rule, false, staticStateToEarley);
+      def subruleRule = SubruleInfo.ListItem(-1, subrule.Rule.Description, -1, subrule.Rule.CanParseEmptyString, false, subrule.Rule.Description, null, array[], rule);
+      subrule.ListItemRule = subruleRule;
+      def startState = states.Count;
+      mutable state = startState;
+      if (subrule.Max.HasValue)
+      {
+        def endState = startState + subrule.Max.Value;
+        for (mutable i = 0; i < subrule.Max.Value; ++i)
+        {
+          _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, false, subruleRule, rule, subrule.Rule)));
+          _ = transitions.Add((state, state + 1));
+          when (i >= subrule.Min)
+            _ = transitions.Add((state, endState));
+          ++state;
+        }
+      }
+      else
+      {
+        for (mutable i = 0; i < if (subrule.Min == 0) 1 else subrule.Min; ++i)
+        {
+          _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, false, subruleRule, rule, subrule.Rule)));
+          _ = transitions.Add((state, state + 1));
+          ++state;
+        }
+        _ = transitions.Add((state - 1, state - 1));
+      }
+
+      when (subrule.CanParseEmptyString)
+        _ = transitions.Add((-1, states.Count));
+
+      def parsingSequence = CreateSequence(states, transitions, null, false, "List", subrule.Description, subrule.MandatoryTokenCount, staticStateToEarley);
+      subrule.ParsingSequence = parsingSequence;
+      parsingSequence
+    }
+
+    public static CreateListWithSeparatorSequence(subrule : SubruleInfo.ListWithSeparator, staticStateToEarley : Hashtable[int, int]) : ParsingSequence
+    {
+      def transitions = SCG.HashSet();
+      def states = SCG.List();
+      def add(state)
+      {
+        state.Id = states.Count;
+        states.Add(state);
+        staticStateToEarley[state.Subrule.State] = state.Id;
+        state
+      }
+      _ = transitions.Add((-1, 0));
+
+      def rule = CreateSequence(subrule.Rule, false, staticStateToEarley);
+      def separator = CreateSequence(subrule.Separator, false, staticStateToEarley);
+      def subruleRule = SubruleInfo.ListItem(-1, subrule.Rule.Description, -1, subrule.Rule.CanParseEmptyString, false, subrule.Rule.Description, null, array[], rule);
+      def subruleSeparator = SubruleInfo.ListItem(-1, subrule.Separator.Description, -1, subrule.Separator.CanParseEmptyString, false, subrule.Separator.Description, null, array[], separator);
+      subrule.ListItemRule = subruleRule;
+      subrule.ListItemSeparator = subruleSeparator;
+      def startState = states.Count;
+      if (subrule.Max.HasValue)
+      {
+        def endState = startState + subrule.Max.Value * 2 - if (subrule.HangingSeparator) 0 else 1;
+        for (mutable state = startState; state < endState; ++state)
+        {
+          def i = (state - startState) / 2;
+          if ((state - startState) % 2 == 0)
+          {
+            _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, false, subruleRule, rule, subrule.Rule)));
+            _ = transitions.Add((state, state + 1));
+            when (i >= subrule.Min)
+              _ = transitions.Add((state, endState));
+          }
+          else
+          {
+            _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, false, subruleSeparator, separator, subrule.Separator)));
+            _ = transitions.Add((state, state + 1));
+            when (i >= subrule.Min && subrule.HangingSeparator)
+              _ = transitions.Add((state, endState));
+          }
+        }
+      }
+      else
+      {
+        mutable state = startState;
+        def count = if (subrule.Min == 0) 1 else subrule.Min;
+        for (mutable i = 0; i < count; ++i)
+        {
+          _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, false, subruleRule, rule, subrule.Rule)));
+          _ = transitions.Add((state, state + 1));
+          ++state;
+          _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, false, subruleSeparator, separator, subrule.Separator)));
+          when (i < count - 1 || subrule.HangingSeparator)
+          _ = transitions.Add((state, state + 1));
+          ++state;
+        }
+        _ = transitions.Add((state - 1, state - 2));
+        _ = transitions.Add((state - 2, state));
+      }
+
+      when (subrule.CanParseEmptyString)
+        _ = transitions.Add((-1, states.Count));
+
+      def parsingSequence = CreateSequence(states, transitions, null, false, "ListWithSeparator", subrule.Description, subrule.MandatoryTokenCount, staticStateToEarley);
+      subrule.ParsingSequence = parsingSequence;
+      parsingSequence
+    }
+
+    public static CreateRoot() : ParsingSequence
+    {
+      ParsingSequence.Sequence(null, "Root", "Root", false, 1, array[0], array[0], array[ParsingState.Scan(0, array[-1], array[], true, null)], null)
+    }
+
+    private static CreateSequence(sequence : SequenceInfo, isToken : bool, staticStateToEarley : Hashtable[int, int]) : ParsingSequence
+    {
+      def transitions = SCG.HashSet();
+      def states = SCG.List();
+      def add(state)
+      {
+        state.Id = states.Count;
+        states.Add(state);
+        staticStateToEarley[state.Subrule.State] = state.Id;
         state
       }
 
@@ -98,85 +238,12 @@ namespace Nitra.Internal.Recovery
       _ = transitions.Add((-1, 0));
       foreach (subrule in sequence.Subrules)
       {
-        def listStates(subrule : SubruleInfo.List) : void
-        {
-          def rule = CreateSequence(subrule.Rule, false);
-          def startState = states.Count;
-          mutable state = startState;
-          if (subrule.Max.HasValue)
-          {
-            def endState = startState + subrule.Max.Value;
-            for (mutable i = 0; i < subrule.Max.Value; ++i)
-            {
-              _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, subrule, rule, subrule.Rule)));
-              _ = transitions.Add((state, state + 1));
-              when (i >= subrule.Min)
-                _ = transitions.Add((state, endState));
-              ++state;
-            }
-          }
-          else
-          {
-            for (mutable i = 0; i < if (subrule.Min == 0) 1 else subrule.Min; ++i)
-            {
-              _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, subrule, rule, subrule.Rule)));
-              _ = transitions.Add((state, state + 1));
-              ++state;
-            }
-            _ = transitions.Add((state - 1, state - 1));
-          }
-        }
-        def listWithSeparatorStates(subrule : SubruleInfo.ListWithSeparator) : void
-        {
-          def rule = CreateSequence(subrule.Rule, false);
-          def separator = CreateSequence(subrule.Separator, false);
-          def startState = states.Count;
-          if (subrule.Max.HasValue)
-          {
-            def endState = startState + subrule.Max.Value * 2 - if (subrule.HangingSeparator) 0 else 1;
-            for (mutable state = startState; state < endState; ++state)
-            {
-              def i = (state - startState) / 2;
-              if ((state - startState) % 2 == 0)
-              {
-                _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, subrule, rule, subrule.Rule)));
-                _ = transitions.Add((state, state + 1));
-                when (i >= subrule.Min)
-                  _ = transitions.Add((state, endState));
-              }
-              else
-              {
-                _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, subrule, separator, subrule.Separator)));
-                _ = transitions.Add((state, state + 1));
-                when (i >= subrule.Min && subrule.HangingSeparator)
-                  _ = transitions.Add((state, endState));
-              }
-            }
-          }
-          else
-          {
-            mutable state = startState;
-            def count = if (subrule.Min == 0) 1 else subrule.Min;
-            for (mutable i = 0; i < count; ++i)
-            {
-              _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, subrule, rule, subrule.Rule)));
-              _ = transitions.Add((state, state + 1));
-              ++state;
-              _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, subrule, separator, subrule.Separator)));
-              when (i < count - 1 || subrule.HangingSeparator)
-              _ = transitions.Add((state, state + 1));
-              ++state;
-            }
-            _ = transitions.Add((state - 1, state - 2));
-            _ = transitions.Add((state - 2, state));
-          }
-        }
 
         when (subrule.HeadPredicate != null)
         {
           def startState = states.Count;
           _ = transitions.Add((startState, startState + 1));
-          _ = add(ParsingState.Predicate(0, null, null, subrule, subrule.HeadPredicate));
+          _ = add(ParsingState.Predicate(0, null, null, false, subrule, subrule.HeadPredicate));
           prevStates.Clear();
           prevStates.Add(startState);
         }
@@ -184,15 +251,16 @@ namespace Nitra.Internal.Recovery
         def startState = states.Count;
         match (subrule)
         {
+          | ListItem                     => assert(false)
           | Marker                       => assert3(false)
-          | ExtensibleCall    as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Extensible (0, null, null, subrule, subrule.RuleParser)))
-          | SimpleCall        as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Simple     (0, null, null, subrule, subrule.RuleParser)))
-          | Empty             as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Scan       (0, null, null, subrule)))
-          | RegularCall       as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Scan       (0, null, null, subrule)))
-          | TokenString       as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Scan       (0, null, null, subrule)))
-          | Option            as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence(0, null, null, subrule, CreateSequence(subrule.Rule, false), subrule.Rule)))
-          | List              as subrule => listStates(subrule)
-          | ListWithSeparator as subrule => listWithSeparatorStates(subrule)
+          | ExtensibleCall    as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Extensible       (0, null, null, false, subrule, subrule.RuleParser)))
+          | SimpleCall        as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Simple           (0, null, null, false, subrule, subrule.RuleParser)))
+          | Empty             as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Scan             (0, null, null, false, subrule)))
+          | RegularCall       as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Scan             (0, null, null, false, subrule)))
+          | TokenString       as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Scan             (0, null, null, false, subrule)))
+          | Option            as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.Subsequence      (0, null, null, false, subrule, CreateSequence(subrule.Rule, false, staticStateToEarley), subrule.Rule)))
+          | List              as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.List             (0, null, null, false, subrule, CreateListSequence(subrule, staticStateToEarley))))
+          | ListWithSeparator as subrule => _ = transitions.Add((startState, startState + 1)); _ = subrule.ParsingStates.Add(add(ParsingState.ListWithSeparator(0, null, null, false, subrule, CreateListWithSeparatorSequence(subrule, staticStateToEarley))))
         }
         def endState = states.Count;
         if (subrule.CanParseEmptyString)
@@ -207,6 +275,13 @@ namespace Nitra.Internal.Recovery
           prevStates.Add(startState);
         }
       }
+      def parsingSequence = CreateSequence(states, transitions, sequence, isToken, sequence.RuleName, sequence.Description, sequence.MandatoryTokenCount, staticStateToEarley);
+      sequence.ParsingSequence = parsingSequence;
+      parsingSequence
+    }
+
+    private static CreateSequence(states : SCG.List[ParsingState], transitions : SCG.HashSet[int * int], sequence : SequenceInfo, isToken : bool, ruleName : string, description : string, mandatoryTokenCount : int, staticStateToEarley : Hashtable[int, int]) : ParsingSequence
+    {
       foreach (state in states)
       {
         state.Next = transitions.Where(t => t[0] == state.Id).Select(t => if (t[1] == states.Count) -1 else t[1]).ToArray().SortInplace(_.CompareTo(_));
@@ -214,8 +289,72 @@ namespace Nitra.Internal.Recovery
       }
       def startStates = transitions.Where(t => t[0] == -1).Select(t => if (t[1] == states.Count) -1 else t[1]).ToArray().SortInplace(_.CompareTo(_));
       def states = states;
-      def res = ParsingSequence.Sequence(sequence, sequence.RuleName, sequence.Description, isToken, sequence.MandatoryTokenCount, startStates, states.ToArray());
+      foreach (startState in startStates)
+        when (startState >= 0)
+          states[startState].IsStart = true;
+
+      def endStates = SCG.List();
+      foreach (state in states)
+        when (state.Next.Exists(_ == -1))
+          endStates.Add(state.Id);
+
+      def res = ParsingSequence.Sequence
+        ( sequence
+        , ruleName
+        , description
+        , isToken
+        , mandatoryTokenCount
+        , startStates
+        , endStates.ToArray().SortInplace(_.CompareTo(_))
+        , states.ToArray()
+        , staticStateToEarley
+        );
       res
+    }
+
+    public GetSequencesForSubrule(parsedSubrule : ParsedSubrule, recoveryParser : RecoveryParser) : Seq[ParsedSequence]
+    {
+      when (parsedSubrule.IsEmpty)
+        return;
+      
+      def begin = parsedSubrule.Begin;
+      def end   = parsedSubrule.End;
+      mutable sequence;
+
+      match (this.States[parsedSubrule.State])
+      {
+        | Simple           as state =>
+          when (recoveryParser.Sequences.TryGetValue((begin, state.RuleParser.ParsingSequence), out sequence))
+            when (sequence.Ends.Contains(end))
+              yield sequence;
+
+        | Extensible       as state =>
+          when (recoveryParser.Sequences.TryGetValue((begin, state.RuleParser.ParsingSequence), out sequence))
+            when (sequence.Ends.Contains(end))
+              yield sequence;
+
+        | ExtensionPrefix  as state =>
+          foreach (prefixRule in state.RuleParser.PrefixRules)
+            when (recoveryParser.Sequences.TryGetValue((begin, prefixRule.ParsingSequence), out sequence))
+              when (sequence.Ends.Contains(end))
+                yield sequence;
+
+        | ExtensionPostfix as state =>
+          foreach (postfixRule when state.RuleParser.FirstPostfixRuleId <= postfixRule.RuleId in state.RuleParser.PostfixRules)
+            when (recoveryParser.Sequences.TryGetValue((begin, postfixRule.ParsingSequence), out sequence))
+              when (sequence.Ends.Contains(end))
+                yield sequence;
+
+        | List              as state1 with seq = state1.Sequence
+        | ListWithSeparator as state2 with seq = state2.Sequence
+        | Subsequence       as state3 with seq = state3.Sequence =>
+          when (recoveryParser.Sequences.TryGetValue((begin, seq), out sequence))
+          when (sequence.Ends.Contains(end))
+            yield sequence;
+
+        | Scan => ()
+        | Predicate => ()
+      }
     }
     
     public override ToString() : string
@@ -241,10 +380,17 @@ namespace Nitra.Internal.Recovery
       }
       def printState(sb : Text.StringBuilder, state : ParsingState) : void
       {
-        _ = sb.Append(state.Id).Append(":").Append(state.Description);
+        def trimmed = state.Description.Trim();
+        def desc = if (trimmed == state.Description) state.Description else "(" + trimmed + ")";
+        _ = sb.Append(state.Id).Append(":").Append(desc);
       }
       def seq      = this;
-      def bp       = if (seq.SequenceInfo?.Parser is ExtensibleRuleParser as p) p.BindingPower else 0;
+      def bp       = 
+        if (seq is ParsingSequence.Extensible as p)
+          p.RuleParser.BindingPower
+        else if (seq.SequenceInfo?.Parser is ExtensibleRuleParser as p)
+          p.BindingPower
+        else 0;
 
       mutable skip = false;
       foreach (state in seq.States)
