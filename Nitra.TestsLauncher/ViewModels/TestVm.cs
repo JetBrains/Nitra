@@ -1,13 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using Nitra.Internal;
-using Nitra.Visualizer.Annotations;
-using Nemerle.Diff;
+﻿using Nitra.Visualizer.Annotations;
 
-namespace Nitra.Visualizer.ViewModels
+using System.IO;
+
+namespace Nitra.ViewModels
 {
-  class TestVm : FullPathVm
+  public class TestVm : FullPathVm
   {
     public string     TestPath          { get; private set; }
     public TestSuitVm TestSuit          { get; private set; }

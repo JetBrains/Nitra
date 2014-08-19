@@ -11,7 +11,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using System.Xml.Linq;
-using Nitra.Visualizer.ViewModels;
+using Nitra.ViewModels;
 using Microsoft.Win32;
 
 namespace Nitra.Visualizer
@@ -63,7 +63,7 @@ namespace Nitra.Visualizer
         {
           var path = Path.Combine(testsLocationRootFullPath, relativeAssemblyPath);
           var fullPath = Path.GetFullPath(path);
-          var grammarDescriptors = Utils.LoadAssembly(fullPath);
+          var grammarDescriptors = Utils.LoadAssembly(fullPath, Settings.Default.Config);
           foreach (var grammarDescriptor in grammarDescriptors)
             syntaxModules.Add(new SyntaxModuleVm(grammarDescriptor));
         }

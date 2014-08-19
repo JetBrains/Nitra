@@ -8,7 +8,7 @@ namespace Nitra.Strategies
 namespace Nitra.DebugStrategies
 #endif
 {
-  sealed class RecoveryPerformanceData
+  public sealed class RecoveryPerformanceData
   {
     public Stopwatch Timer = new Stopwatch();
     public TimeSpan  EarleyParseTime;

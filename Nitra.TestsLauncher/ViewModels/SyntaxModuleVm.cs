@@ -1,8 +1,8 @@
 ﻿using System.Linq;
 
-namespace Nitra.Visualizer.ViewModels
+namespace Nitra.ViewModels
 {
-  class SyntaxModuleVm
+  public class SyntaxModuleVm
   {
     public GrammarDescriptor GrammarDescriptor { get; private set; }
 

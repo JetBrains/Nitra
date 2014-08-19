@@ -1,29 +1,32 @@
-﻿using System;
+﻿using ICSharpCode.AvalonEdit.AddIn;
+using ICSharpCode.AvalonEdit.Document;
+using ICSharpCode.AvalonEdit.Folding;
+using ICSharpCode.AvalonEdit.Highlighting;
+using ICSharpCode.SharpDevelop.Editor;
+
+using Microsoft.Win32;
+
+using Nemerle.Diff;
+
+using Nitra.DebugStrategies;
+using Nitra.Runtime.Reflection;
+using Nitra.ViewModels;
+using Nitra.Visualizer.Properties;
+
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Timers;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using ICSharpCode.AvalonEdit.AddIn;
-using ICSharpCode.AvalonEdit.Document;
-using ICSharpCode.AvalonEdit.Folding;
-using ICSharpCode.AvalonEdit.Highlighting;
-using ICSharpCode.SharpDevelop.Editor;
-using Microsoft.Win32;
-using Nitra.DebugStrategies;
-using Nitra.Internal.Recovery;
-using Nitra.Runtime.Reflection;
-using Nitra.Visualizer.Properties;
-using System.Diagnostics;
-using System.Text;
-using Nitra.Visualizer.ViewModels;
-using Nemerle.Diff;
 
 namespace Nitra.Visualizer
 {
@@ -151,19 +154,7 @@ namespace Nitra.Visualizer
       if (!Directory.Exists(_settings.TestsLocationRoot ?? ""))
         return;
 
-      foreach (var dir in Directory.GetDirectories(_settings.TestsLocationRoot ?? ""))
-      {
-        var testSuit = new TestSuitVm(_settings.TestsLocationRoot, dir);
-        if (path != null)
-        {
-          if (testSuit.FullPath == path)
-            testSuit.IsSelected = true; // Прикольно что по другому фокус не изменить!
-          else foreach (var test in testSuit.Tests)
-            if (test.FullPath == path)
-              test.IsSelected = true;
-        }
-        testSuits.Add(testSuit);
-      }
+      Utils.LoadTestSuits(_settings.TestsLocationRoot, path, _settings.Config, testSuits);
 
       _testsTreeView.ItemsSource = testSuits;
     }

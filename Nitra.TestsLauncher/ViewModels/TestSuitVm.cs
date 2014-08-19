@@ -1,19 +1,17 @@
-﻿using System;
-using Nitra.DebugStrategies;
-using Nitra.Internal;
-using Nitra.Runtime.Reflection;
+﻿using Nitra.DebugStrategies;
+using Nitra.Visualizer;
 using Nitra.Visualizer.Annotations;
 
+using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
-using Nitra.Visualizer.Rendering;
 
-namespace Nitra.Visualizer.ViewModels
+namespace Nitra.ViewModels
 {
-  class TestSuitVm : FullPathVm
+  public class TestSuitVm : FullPathVm
   {
     public string                                   Name          { get; private set; }
     public ObservableCollection<GrammarDescriptor>  SynatxModules { get; private set; }
@@ -34,7 +32,7 @@ namespace Nitra.Visualizer.ViewModels
     public XElement Xml { get { return Utils.MakeXml(_rootPath, SynatxModules, StartRule); } }
 
 
-    public TestSuitVm(string rootPath, string testSuitPath)
+    public TestSuitVm(string rootPath, string testSuitPath, string config)
       : base(testSuitPath)
     {
       _rootPath = rootPath;
@@ -48,7 +46,7 @@ namespace Nitra.Visualizer.ViewModels
         var root = XElement.Load(gonfigPath);
         var libs = root.Elements("Lib").ToList();
         var result =
-          libs.Select(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib.Attribute("Path").Value)))
+          libs.Select(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib.Attribute("Path").Value)), config)
             .Join(lib.Elements("SyntaxModule"),
               m => m.FullName,
               m => m.Attribute("Name").Value,
@@ -70,7 +68,7 @@ namespace Nitra.Visualizer.ViewModels
         var indent = Environment.NewLine + "  ";
         var para = Environment.NewLine + Environment.NewLine;
 
-        _hint = "Libraries:" + indent + string.Join(indent, libs.Select(lib => Utils.UpdatePathForConfig(lib.Attribute("Path").Value))) + para
+        _hint = "Libraries:" + indent + string.Join(indent, libs.Select(lib => Utils.UpdatePathForConfig(lib.Attribute("Path").Value, config))) + para
                + "Syntax modules:" + indent + string.Join(indent, SynatxModules.Select(m => m.FullName)) + para
                + "Start rule:" + indent + name;
       }
@@ -115,7 +113,7 @@ namespace Nitra.Visualizer.ViewModels
     }
 
 
-    internal void TestStateChanged()
+    public void TestStateChanged()
     {
       if (this.TestState == TestState.Ignored)
         return;

@@ -8,7 +8,7 @@ using System.Windows.Data;
 using System.Windows.Media;
 using Nitra.Runtime.Reflection;
 
-namespace Nitra.Visualizer.ViewModels
+namespace Nitra.Visualizer
 {
   public class ReflectionStructColorConverter : IValueConverter
   {

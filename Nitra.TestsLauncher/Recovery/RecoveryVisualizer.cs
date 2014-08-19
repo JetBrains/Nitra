@@ -13,7 +13,7 @@ namespace Nitra.Strategies
 namespace Nitra.DebugStrategies
 #endif
 {
-  sealed class RecoveryVisualizer : Recovery
+  public sealed class RecoveryVisualizer : Recovery
   {
     private readonly RecoveryPerformanceData _recoveryPerformanceData;
 

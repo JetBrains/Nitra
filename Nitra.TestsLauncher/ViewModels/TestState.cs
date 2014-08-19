@@ -1,4 +1,4 @@
-﻿namespace Nitra.Visualizer.ViewModels
+﻿namespace Nitra.ViewModels
 {
   public enum TestState
   {

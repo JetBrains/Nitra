@@ -1,24 +1,26 @@
-﻿using System;
+﻿using Nitra.ViewModels;
+using Nitra.Visualizer.Annotations;
+
+using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Runtime.InteropServices;
-using System.Reflection;
+using System.Collections.ObjectModel;
 using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
-using Nitra.Visualizer.Annotations;
-using Nitra.Visualizer.Properties;
 
 namespace Nitra.Visualizer
 {
-  static class Utils
+  public static class Utils
   {
     static readonly Regex _configRx = new Regex(@"[\\/](Release|Debug)[\\/]", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    public static GrammarDescriptor[] LoadAssembly(string assemblyFilePath)
+    public static GrammarDescriptor[] LoadAssembly(string assemblyFilePath, string config)
     {
-      assemblyFilePath = UpdatePathForConfig(assemblyFilePath);
+      assemblyFilePath = UpdatePathForConfig(assemblyFilePath, config);
 
       var assembly = Assembly.ReflectionOnlyLoadFrom(assemblyFilePath);
       var runtime = typeof(Nitra.ParseResult).Assembly.GetName();
@@ -36,9 +38,9 @@ namespace Nitra.Visualizer
       return GrammarDescriptor.GetDescriptors(assembly);
     }
 
-    public static string UpdatePathForConfig(string assemblyFilePath)
+    public static string UpdatePathForConfig(string assemblyFilePath, string config)
     {
-      return _configRx.Replace(assemblyFilePath, @"\" + Settings.Default.Config + @"\");
+      return _configRx.Replace(assemblyFilePath, @"\" + config + @"\");
     }
 
     enum FILE_ATTRIBUTE
@@ -97,6 +99,23 @@ namespace Nitra.Visualizer
             ));
 
       return new XElement("Config", libs);
+    }
+
+    public static void LoadTestSuits(string testsLocationRoot, string path, string config, Collection<TestSuitVm> testSuits)
+    {
+      foreach (var dir in Directory.GetDirectories(testsLocationRoot ?? ""))
+      {
+        var testSuit = new TestSuitVm(testsLocationRoot, dir, config);
+        if (path != null)
+        {
+          if (testSuit.FullPath == path)
+            testSuit.IsSelected = true; // Прикольно что по другому фокус не изменить!
+          else foreach (var test in testSuit.Tests)
+              if (test.FullPath == path)
+                test.IsSelected = true;
+        }
+        testSuits.Add(testSuit);
+      }
     }
   }
 }

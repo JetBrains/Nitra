@@ -1,10 +1,11 @@
-﻿using System;
-using System.ComponentModel;
-using Nitra.Visualizer.Annotations;
+﻿using Nitra.Visualizer.Annotations;
 
-namespace Nitra.Visualizer.ViewModels
+using System;
+using System.ComponentModel;
+
+namespace Nitra.ViewModels
 {
-  abstract class FullPathVm : INotifyPropertyChanged
+  public abstract class FullPathVm : INotifyPropertyChanged
   {
     private bool      _isSelected;
     private TestState _testState;
