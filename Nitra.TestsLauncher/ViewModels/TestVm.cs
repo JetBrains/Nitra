@@ -70,5 +70,10 @@ namespace Nitra.ViewModels
       File.WriteAllText(TestPath, code);
       File.WriteAllText(Path.ChangeExtension(TestPath, ".gold"), gold);
     }
+
+    public override string ToString()
+    {
+      return Name;
+    }
   }
 }

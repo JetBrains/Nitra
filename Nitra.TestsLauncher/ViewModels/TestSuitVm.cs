@@ -169,5 +169,10 @@ namespace Nitra.ViewModels
       xtml.Save(filePath, SaveOptions.DisableFormatting);
       Process.Start(filePath);
     }
+
+    public override string ToString()
+    {
+      return Name;
+    }
   }
 }

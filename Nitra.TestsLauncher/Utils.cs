@@ -101,7 +101,7 @@ namespace Nitra.Visualizer
       return new XElement("Config", libs);
     }
 
-    public static void LoadTestSuits(string testsLocationRoot, string path, string config, Collection<TestSuitVm> testSuits)
+    public static void LoadTestSuits(string testsLocationRoot, string path, string config, ICollection<TestSuitVm> testSuits)
     {
       foreach (var dir in Directory.GetDirectories(testsLocationRoot ?? ""))
       {
