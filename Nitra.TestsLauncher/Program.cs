@@ -1,6 +1,9 @@
 ﻿using Nitra.DebugStrategies;
 using Nitra.ViewModels;
 using Nitra.Visualizer;
+
+using Nemerle.Diff;
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -132,6 +135,10 @@ namespace Nitra.TestsLauncher
             case TestState.Failure:
               ContinuePrint("failed!", ConsoleColor.Red);
               someTestsFailed = true;
+              Indent();
+              Diff(test);
+              Unindent();
+
              break;
             case TestState.Ignored:
               ContinuePrint("ignored.", ConsoleColor.Yellow);
@@ -156,7 +163,86 @@ namespace Nitra.TestsLauncher
         PrintLine("Some tests is failed!", ConsoleColor.Red);
 
       Console.WriteLine("done...");
-      //Console.ReadLine();
+
+      if (someTestsFailed || someTestSuitsFailedToLoad)
+      {
+        //Console.ReadLine();
+        Environment.Exit(-1);
+      }
+    }
+
+    private static void Diff(TestVm test)
+    {
+      var textA = Split(test.Gold);
+      var textB = Split(test.PrettyPrintResult);
+      const int rangeToShow = 3;
+      var indexA = 0;
+      var output = new List<string>();
+
+      foreach (var diffItem in textA.Diff(textB))
+      {
+        //в начале итерации indexA содержит индекс строки идущей сразу за предыдущим блоком
+
+        // определяем нужно ли выводить разделитель
+        if (diffItem.Index - indexA > rangeToShow * 2)
+        {
+          //показываем строки идущие после предыдущего блока
+          for (var i = 0; i < rangeToShow; ++i)
+          {
+            PrintLine("  " + textA[indexA]);
+            ++indexA;
+          }
+
+          PrintLine("  " + "...", ConsoleColor.Gray);
+
+          //показываем строки идущие перед текущим блоком
+          indexA = diffItem.Index - rangeToShow;
+          for (var i = 0; i < rangeToShow; ++i)
+          {
+            PrintLine("  " + textA[indexA]);
+            ++indexA;
+          }
+        }
+        else
+        {
+          //показываем строки между блоками
+          while (indexA < diffItem.Index)
+          {
+            PrintLine("  " + textA[indexA]);
+            ++indexA;
+          }
+        }
+
+        // показываем удаленные строки
+        for (var i = 0; i < diffItem.Deleted; ++i)
+        {
+          PrintLine("- " + textA[indexA], ConsoleColor.Red);
+          ++indexA;
+        }
+
+        // показываем добавленные строки
+        foreach (var insertedItem in diffItem.Inserted)
+          PrintLine("+ " + insertedItem, ConsoleColor.Green);
+      }
+
+      // показываем не более rangeToShow последующих строк
+      var tailLinesToShow = Math.Min(rangeToShow, textA.Length - indexA);
+
+      for (var i = 0; i < tailLinesToShow; ++i)
+      {
+        PrintLine("  " + textA[indexA]);
+        ++indexA;
+      }
+
+      if (indexA < textA.Length)
+        PrintLine("  " + "...", ConsoleColor.Gray);
+
+      PrintLine("END-DIFF", ConsoleColor.Gray);
+    }
+
+    private static string[] Split(string gold)
+    {
+      return gold.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
     }
 
     private static int CalcMaxNameLen(List<TestSuitVm> testSuits)
