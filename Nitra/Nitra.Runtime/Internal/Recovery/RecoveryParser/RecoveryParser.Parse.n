@@ -1,0 +1,168 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+using Nemerle.Extensions;
+
+using Nitra.Collections;
+using Nitra.Runtime;
+using Nitra.Runtime.Reflection;
+
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Internal.Recovery
+{
+  public partial class RecoveryParser
+  {
+    public Parse() : void
+    {
+      while (RecordsToProcess.Count > 0)
+      {
+        def (record, tokenChanges) = RecordsToProcess.Dequeue();
+        when (!BestSolution.IsFail && tokenChanges > BestSolution)
+        {
+          RecordsToProcess.Enqueue(record, tokenChanges);
+          return;
+        }
+        PredictionOrScanning(record, tokenChanges, optimize = !ErrorPositions.Contains(record.ParsePos));
+      }
+    }
+
+    public Completion(endPos : int, caller : ParseRecord, sequence : ParsedSequence) : void
+    {
+      SubruleParsed(sequence.StartPos, endPos, caller, Records[caller.ParsePos][caller], sequence.Ends[endPos]);
+    }
+
+    public PredictionOrScanning(record : ParseRecord, tokenChanges : TokenChanges, optimize : bool) : void
+    {
+      def state = record.ParsingState;
+      when (state.CanConsumeErrorTokens)
+      {
+        def begin = record.ParsePos;
+        mutable ends;
+        when (Deleted.TryGetValue(begin, out ends))
+          foreach (end in ends)
+            SubruleParsed(begin, end, record, tokenChanges, TokenChanges(inserted = 0, deleted = 1));
+      }
+
+      def textPos = record.ParsePos;
+      mutable endPos;
+      match (state)
+      {
+        | Simple           as state =>
+          if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 })
+          {
+            SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
+            when (textPos == endPos)
+              _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence);
+          }
+          else
+            _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence);
+
+        | Extensible       as state =>
+          if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 })
+          {
+            SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
+            when (textPos == endPos)
+              _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence);
+          }
+          else
+            _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence);
+
+        | ExtensionPrefix  as state =>
+          foreach (prefixRule in state.RuleParser.PrefixRules)
+            _ = StartParseSequence(record, textPos, prefixRule.ParsingSequence);
+
+        | ExtensionPostfix as state =>
+          foreach (postfixRule when state.RuleParser.FirstPostfixRuleId <= postfixRule.RuleId in state.RuleParser.PostfixRules)
+            _ = StartParseSequence(record, textPos, postfixRule.ParsingSequence);
+
+        | List              as state1 with seq = state1.Sequence
+        | ListWithSeparator as state2 with seq = state2.Sequence
+        | Subsequence       as state3 with seq = state3.Sequence =>
+          _ = StartParseSequence(record, textPos, seq);
+
+        | Scan             as state =>
+          endPos = state.Subrule.Parse(textPos, ParseResult.Text, ParseResult);
+          when (endPos >= 0)
+            SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
+
+        | Predicate        as state =>
+          when (state.HeadPredicate(textPos, ParseResult.Text, ParseResult))
+            SubruleParsed(textPos, textPos, record, tokenChanges, TokenChanges.None);
+      }
+    }
+
+    public StartParseSequence(startPos : int, parsingSequence : ParsingSequence) : ParsedSequence
+    {
+      def key = (startPos, parsingSequence);
+      mutable sequence;
+      unless (Sequences.TryGetValue(key, out sequence))
+      {
+        sequence = ParsedSequence(this, startPos, parsingSequence);
+        Sequences.Add(key, sequence);
+        foreach (startState in sequence.ParsingSequence.StartStates)
+          StartParseSubrule(ParseRecord(sequence, startState, startPos), TokenChanges.None);
+      }
+      sequence;
+    }
+
+    public StartParseSequence(caller : ParseRecord, startPos : int, parsingSequence : ParsingSequence) : ParsedSequence
+    {
+      def sequence = StartParseSequence(startPos, parsingSequence);
+      sequence.AddCaller(caller);
+      sequence;
+    }
+
+    public StartParseSubrule(record : ParseRecord, tokenChanges : TokenChanges) : void
+    {
+      when (record.IsComplete)
+      {
+        when (record.ParsePos == ParseResult.Text.Length && StartSequence : object == record.Sequence)
+          BestSolution = TokenChanges.Min(BestSolution, tokenChanges);
+        record.Sequence.AddEnd(record.ParsePos, tokenChanges);
+      }
+      mutable set = Records[record.ParsePos];
+      when (set == null)
+      {
+        set = Hashtable();
+        Records[record.ParsePos] = set;
+        MaxPos = Math.Max(MaxPos, record.ParsePos);
+      }
+      mutable oldTokenChanges;
+      def newRecord = if (set.TryGetValue(record, out oldTokenChanges))
+      {
+        if (tokenChanges < oldTokenChanges)
+        {
+          set[record] = tokenChanges;
+          true
+        }
+        else
+          false
+      }
+      else
+      {
+        set.Add(record, tokenChanges);
+        true
+      }
+      when (newRecord && !record.IsComplete)
+        RecordsToProcess.Enqueue(record, tokenChanges);
+    }
+
+    public SubruleParsed(begin : int, end : int, record : ParseRecord, tokenChanges : TokenChanges, subruleTokenChanges : TokenChanges) : void
+    {
+      unless (begin == end && record.ParsingState.IsNullable)
+      {
+        record.Sequence.Add(ParsedSubrule(begin, end, record.State));
+        foreach (next in record.ParsingState.Next)
+          StartParseSubrule(record.Next(next, end), tokenChanges + subruleTokenChanges);
+      }
+    }
+  }
+}
