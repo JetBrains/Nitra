@@ -23,10 +23,10 @@ namespace Nitra.Internal.Recovery
     public Sequences         : Hashtable[int * ParsingSequence, ParsedSequence] = Hashtable();
     public Records           : array[SCG.HashSet[ParseRecord]];
     public RecordsToProcess  : SCG.Stack[int * ParseRecord] = SCG.Stack(50);
-    public RecordsToComplete : SCG.Stack[int * ParseRecord * ParsedSequence] = SCG.Stack(50);
     public mutable MaxPos    : int = -1;
-
     mutable  _nextId : int;
+
+    public StartSequence : ParsedSequence { get { this.Sequences[0, this.ParseResult.RuleParser.ParsingSequence] } }
     
     public RecordsToProcess2  : array[int * ParseRecord]
     {
@@ -38,19 +38,36 @@ namespace Nitra.Internal.Recovery
     
     public GetNextId() : int { _nextId++; _nextId }
 
-    //public Records2           : array[array[ParseRecord]]
-    //{
-    //  get
-    //  {
-    //    def result = array(Records.Length);
+    public Visualize(astPatcher : AstPatcher4) : void
+    {
+      def dir = Path.Combine(Path.GetTempPath(), "Seq");
+      when (Directory.Exists(dir))
+      {
+        Directory.Delete(dir, recursive=true);
+        _ = Directory.CreateDirectory(dir);
+      }
         
-    //    foreach (x when x != null in Records with i)
-    //      result[i] = x.OrderBy(r => r.ToString(i)).ToArray();
-          
-    //    result
-    //  }
-    //}
+      def visited = SCG.HashSet();
+      def files = SCG.List();
+      
+      foreach (recordSet when recordSet != null in this.Records)
+          foreach (record in recordSet)
+            record.Sequence.ToDot(visited, files, astPatcher, -1);
+            
+      when (files.Count > 0)
+      {
+        X.ConvertToDot(files);
+      }
+      
 
+      when (this.Records[0] != null && this.Records[0].Count > 0)
+      {
+        def seq = Sequences[(0, ParseResult.RuleParser.ParsingSequence)];
+        def filePath = seq.GetFilePath("Seq", seq.StartPos, this.ParseResult.Text.Length) + ".svg";
+      _ = Process.Start(filePath);
+      }
+    }
+    
     public Records3(pattern : string = null, complatedOnly : bool = false, pos : int = -1) : array[array[ParseRecord]]
     {
       def result = array(Records.Length);
@@ -68,7 +85,7 @@ namespace Nitra.Internal.Recovery
       ParseResult = parseResult;
     }
 
-    public StartParseSequence(caller : ParseRecord, startPos : int, parsingSequence : ParsingSequence) : void
+    public StartParseSequence(startPos : int, parsingSequence : ParsingSequence) : ParsedSequence
     {
       def key = (startPos, parsingSequence);
       mutable sequence;
@@ -79,7 +96,14 @@ namespace Nitra.Internal.Recovery
         foreach (startState in sequence.ParsingSequence.StartStates)
           StartParseSubrule(startPos, ParseRecord(sequence, startState, startPos));
       }
+      sequence;
+    }
+
+    public StartParseSequence(caller : ParseRecord, startPos : int, parsingSequence : ParsingSequence) : ParsedSequence
+    {
+      def sequence = StartParseSequence(startPos, parsingSequence);
       sequence.AddCaller(caller);
+      sequence;
     }
 
     public StartParseSubrule(pos : int, record : ParseRecord) : void
@@ -116,10 +140,10 @@ namespace Nitra.Internal.Recovery
       match (ruleParser)
       {
         | SimpleRuleParser     as ruleParser =>
-          StartParseSequence(root, textPos, ruleParser.ParsingSequence);
+          _ = StartParseSequence(root, textPos, ruleParser.ParsingSequence);
 
         | ExtensibleRuleParser as ruleParser =>
-          StartParseSequence(root, textPos, ruleParser.ParsingSequence);
+          _ = StartParseSequence(root, textPos, ruleParser.ParsingSequence);
 
         | _ => assert3(false)
       }
@@ -128,15 +152,10 @@ namespace Nitra.Internal.Recovery
 
     public Parse() : void
     {
-      while (RecordsToProcess.Count > 0 || RecordsToComplete.Count > 0)
+      while (RecordsToProcess.Count > 0)
       {
-        while (RecordsToProcess.Count > 0)
-        {
-          def (pos, record) = RecordsToProcess.Pop();
-          PredictionOrScanning(pos, record, optimize=true);
-        }
-        while (RecordsToComplete.Count > 0)
-          Completion(RecordsToComplete.Pop());
+        def (pos, record) = RecordsToProcess.Pop();
+        PredictionOrScanning(pos, record, optimize = true);
       }
     }
 
@@ -151,27 +170,37 @@ namespace Nitra.Internal.Recovery
       match (record.ParsingState)
       {
         | Simple           as state =>
-          if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 })
+          if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 && (endPos != MaxPos || MaxPos >= ParseResult.MaxFailPos) })
+          {
             SubruleParsed(textPos, endPos, record);
+            when (textPos == endPos)
+              _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence);
+          }
           else
-            StartParseSequence(record, textPos, state.RuleParser.ParsingSequence);
+            _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence);
 
         | Extensible       as state =>
-          if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 })
+          if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 && (endPos != MaxPos || MaxPos >= ParseResult.MaxFailPos) })
+          {
             SubruleParsed(textPos, endPos, record);
+            when (textPos == endPos)
+              _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence);
+          }
           else
-            StartParseSequence(record, textPos, state.RuleParser.ParsingSequence);
+            _ = StartParseSequence(record, textPos, state.RuleParser.ParsingSequence);
 
         | ExtensionPrefix  as state =>
           foreach (prefixRule in state.RuleParser.PrefixRules)
-            StartParseSequence(record, textPos, prefixRule.ParsingSequence);
+            _ = StartParseSequence(record, textPos, prefixRule.ParsingSequence);
 
         | ExtensionPostfix as state =>
           foreach (postfixRule when state.RuleParser.FirstPostfixRuleId <= postfixRule.RuleId in state.RuleParser.PostfixRules)
-            StartParseSequence(record, textPos, postfixRule.ParsingSequence);
+            _ = StartParseSequence(record, textPos, postfixRule.ParsingSequence);
 
-        | Subsequence      as state =>
-          StartParseSequence(record, textPos, state.Sequence);
+        | List              as state1 with seq = state1.Sequence
+        | ListWithSeparator as state2 with seq = state2.Sequence
+        | Subsequence       as state3 with seq = state3.Sequence =>
+          _ = StartParseSequence(record, textPos, seq);
 
         | Scan             as state =>
           endPos = state.Subrule.Parse(textPos, ParseResult.Text, ParseResult);

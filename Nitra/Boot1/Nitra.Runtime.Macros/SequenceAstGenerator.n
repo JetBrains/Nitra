@@ -10,7 +10,7 @@ using SCG = System.Collections.Generic;
 
 namespace Nitra.Runtime
 {
-  [MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Assembly)]
+  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
   public macro SequenceAstGenerator()
   {
     def astEnv = ManagerClass.Instance.CoreEnv.EnterIntoNamespace(["Nitra"]);
@@ -22,14 +22,32 @@ namespace Nitra.Runtime
   {
     public GenerateType(env : GlobalEnv, name : string, memberCount : int) : void
     {
-      def typeVariables  = SCG.List();
-      def constraints    = SCG.List();
+      def baseTypeVariables      = SCG.List();
+      def concreteTypeVariables  = SCG.List();
+      def ambiguousTypeVariables = SCG.List();
+
+      def baseConstraints      = SCG.List();
+      def concreteConstraints  = SCG.List();
+      def ambiguousConstraints = SCG.List();
+
+      def concreteBaseTypeParameters = SCG.List();
+      def ambiguousBaseTypeParameters = SCG.List();
 
       for (mutable i = 1; i <= memberCount; ++i)
       {
         def typeVariable = Splicable.Name(<[ $("T" + i.ToString() : usesite) ]>);
-        typeVariables.Add(typeVariable);
-        constraints.Add(Constraint(typeVariable, <[ Nitra.IAst ]>, false));
+        baseTypeVariables.Add(typeVariable);
+        baseConstraints.Add(Constraint(typeVariable, <[ Nitra.IAst ]>, false));
+
+        def typeVariable = Splicable.Name(<[ $("T" + i.ToString() : usesite) ]>);
+        concreteTypeVariables.Add(typeVariable);
+        concreteConstraints.Add(Constraint(typeVariable, <[ Nitra.IAst ]>, false));
+        concreteBaseTypeParameters.Add(<[ $("T" + i.ToString() : usesite) ]>);
+
+        def typeVariable = Splicable.Name(<[ $("T" + i.ToString() : usesite) ]>);
+        ambiguousTypeVariables.Add(typeVariable);
+        ambiguousConstraints.Add(Constraint(typeVariable, <[ Nitra.IAst ]>, false));
+        ambiguousBaseTypeParameters.Add(<[ $("T" + i.ToString() : usesite) ]>);
       }
 
       def applyItemExprs = SCG.List();
@@ -40,13 +58,30 @@ namespace Nitra.Runtime
           applyItemExprs.Add(<[ applyItem <<= 1 ]>);
       }
 
-      def tb = env.Define(<[ decl:
+      def baseTb = env.Define(<[ decl:
         [Record]
-        public sealed class $(name : usesite)[..$(typeVariables.ToNList())] : Nitra.Ast where ..$(constraints.ToNList())
+        public abstract class $(name : usesite)[..$(baseTypeVariables.ToNList())] : Nitra.Ast where ..$(baseConstraints.ToNList())
+        {
+        }
+      ]>);
+
+      def concreteTb = env.Define(<[ decl:
+        [Record]
+        public sealed class $("Concrete" + name : usesite)[..$(concreteTypeVariables.ToNList())] : $(name : usesite)[..$(concreteBaseTypeParameters.ToNList())] where ..$(concreteConstraints.ToNList())
         {
           private static applyItem : int;
           static this() { unchecked { ..$applyItemExprs } }
           public override Location : Nitra.Location { get }
+        }
+      ]>);
+
+      def ambiguousTb = env.Define(<[ decl:
+        [Record]
+        public sealed class $("Ambiguous" + name : usesite)[..$(ambiguousTypeVariables.ToNList())] : $(name : usesite)[..$(ambiguousBaseTypeParameters.ToNList())], Nitra.IAmbiguousAst where ..$(ambiguousConstraints.ToNList())
+        {
+          public Ambiguities       : array[$(name : usesite)[..$(ambiguousBaseTypeParameters.ToNList())]] { get; }
+          public AmbiguityType     : AstAmbiguityType { get Nitra.AstAmbiguityType.Recovery }
+          public override Location : Nitra.Location { get Ambiguities[0].Location }
         }
       ]>);
 
@@ -57,8 +92,16 @@ namespace Nitra.Runtime
       {
         def itemName = "Item" + i.ToString();
         def itemType = "T" + i.ToString();
-        tb.Define(<[ decl:
-          public $(itemName : usesite) : $(itemType : usesite);
+        baseTb.Define(<[ decl:
+          public abstract $(itemName : usesite) : $(itemType : usesite) { get }
+        ]>);
+
+        concreteTb.Define(<[ decl:
+          public override $(itemName : usesite) : $(itemType : usesite) { get }
+        ]>);
+
+        ambiguousTb.Define(<[ decl:
+          public override $(itemName : usesite) : $(itemType : usesite) { get throw System.NotSupportedException("Sequence is ambiguous") }
         ]>);
 
         def mask = 1 << (i - 1);
@@ -75,7 +118,7 @@ namespace Nitra.Runtime
         variableRefs.Add(<[ $(tempVarName : usesite) ]>);
       }
 
-      tb.Define(<[ decl:
+      concreteTb.Define(<[ decl:
         public override Apply(visitor : Nitra.AstVisitor) : Nitra.Ast
         {
           unchecked
@@ -83,14 +126,16 @@ namespace Nitra.Runtime
             visitor.Enter(this);
             mutable isUntouched = true;
             ..$statements;
-            def result = if (isUntouched) this else $(name : usesite)(this.Location, ..$variableRefs);
+            def result = if (isUntouched) this else $("Concrete" + name : usesite)(this.Location, ..$variableRefs);
             visitor.Leave(this, result);
             result
           }
         }
       ]>);
 
-      tb.Compile();
+      baseTb.Compile();
+      concreteTb.Compile();
+      ambiguousTb.Compile();
     }
   }
 }

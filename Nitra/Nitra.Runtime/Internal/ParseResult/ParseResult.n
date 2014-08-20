@@ -39,7 +39,6 @@ namespace Nitra
     public mutable LastParseStart   : int;
     public mutable LastParseEnd     : int;
     public         ErrorData        : SCG.List[ParseErrorData];
-    public mutable ErrorDataSorted  : array[ParseErrorData];
     private mutable _maxFailPos     : int;
     private mutable _counter        : int;
     private _errors                 : SCG.List[Error] = SCG.List();
@@ -75,177 +74,6 @@ namespace Nitra
     /// В массиве хранятся начала соотвестствующих подправил. Последним элементом массива - позиция конечного состояния (-1).
     /// Таким образом мы можем легко вычислить позиции и размеры всех сабрулей
     public RecoveredSubrules  : SCG.List[SubrulesWithParsingSequence] = SCG.List();
-
-    public FindRecoveredSubrule(subruleStarts : array[SubruleStart], state : int) : bool * int * int
-    {
-      foreach (subruleStart when (subruleStart.State == state) in subruleStarts with i)
-      {
-        def startPos = subruleStart.Pos;
-        def endPos   = subruleStarts[i + 1].Pos;
-        return (true, startPos, endPos);
-      }
-
-      foreach (subruleStart when (subruleStart.State > state) in subruleStarts)
-        return (false, subruleStart.Pos, subruleStart.Pos);
-
-      def subruleStart = subruleStarts[subruleStarts.Length - 1];
-      assert(subruleStart.State == -1);
-      (false, subruleStart.Pos, subruleStart.Pos)
-    }
-
-    public ReadListAst[T](parentParsingSequence : ParsingSequence, state : int, startPos : int, endPos : int, makeItem : ParsingSequence * int * int -> T) : Nitra.ListAst[T]
-      where T : IAst
-    {
-      if (startPos < endPos)
-      {
-        def parsingSequence = (parentParsingSequence.States[state].Subrule :> SubruleInfo.List).ParsingSequence;
-        mutable recoveredSequence;
-        if (RecoveredSequences.TryGetValue((startPos, endPos, parsingSequence), out recoveredSequence))
-        {
-          def states = parsingSequence.States;
-          match (recoveredSequence)
-          {
-            | Unambiguous(recoveredSubruleIndex) =>
-              def items = SCG.List();
-
-              def subrules = RecoveredSubrules[recoveredSubruleIndex].Subrules;
-              for (mutable i = 0; i < subrules.Length - 1; ++i)
-              {
-                def begin    = subrules[i].Pos;
-                def end      = subrules[i + 1].Pos;
-                def state    = states[subrules[i].State];
-
-                match (state.Subrule)
-                {
-                  | ListItem(ParsingSequence = itemParsingSequence) =>
-                    def item = makeItem(itemParsingSequence, begin, end);
-                    items.Add(item);
-
-                  | _ => assert(false, "List items expected");
-                }
-              }
-
-              ListAst(Location(OriginalSource, startPos, endPos), items);
-
-            | Ambiguous => throw NotImplementedException("Ambiguous List");
-          }
-        }
-        else
-        {
-          throw NotImplementedException("Fallback to standard AST reading");
-        }
-      }
-      else
-      {
-        ListAst(Location(OriginalSource, startPos, endPos));
-      }
-    }
-
-    public ReadListWithSeparatorAst[TItem, TSeparator](
-      parentParsingSequence : ParsingSequence,
-      state : int,
-      startPos : int,
-      endPos : int,
-      makeItem : ParsingSequence * int * int -> TItem,
-      makeSeparator : ParsingSequence * int * int -> TSeparator) : SequenceAst[ListAst[TItem], ListAst[TSeparator]]
-      where TItem : IAst
-      where TSeparator : IAst
-    {
-      ReadListWithSeparatorAstImpl(parentParsingSequence, state, startPos, endPos, makeItem, makeSeparator,
-        (loc, items, separators) => SequenceAst(loc, if (items : object != null) ListAst(loc, items) else ListAst(loc), if (separators : object != null) ListAst(loc, separators) else ListAst(loc)))
-    }
-
-    public ReadListWithSeparatorOnlyItemsAst[TItem, TSeparator](
-      parentParsingSequence : ParsingSequence,
-      state : int,
-      startPos : int,
-      endPos : int,
-      makeItem : ParsingSequence * int * int -> TItem) : ListAst[TItem]
-      where TItem : IAst
-    {
-      ReadListWithSeparatorAstImpl(parentParsingSequence, state, startPos, endPos, makeItem, _ => 0,
-        (loc, items, _) => if (items : object != null) ListAst(loc, items) else ListAst(loc))
-    }
-
-    public ReadListWithSeparatorOnlySeparatorsAst[TItem, TSeparator](
-      parentParsingSequence : ParsingSequence,
-      state : int,
-      startPos : int,
-      endPos : int,
-      makeSeparator : ParsingSequence * int * int -> TSeparator) : ListAst[TSeparator]
-      where TSeparator : IAst
-    {
-      ReadListWithSeparatorAstImpl(parentParsingSequence, state, startPos, endPos, _ => 0, makeSeparator,
-        (loc, _, separators) => if (separators : object != null) ListAst(loc, separators) else ListAst(loc))
-    }
-
-    private ReadListWithSeparatorAstImpl[TItem, TSeparator, TResult](
-      parentParsingSequence : ParsingSequence,
-      state : int,
-      startPos : int,
-      endPos : int,
-      makeItem : ParsingSequence * int * int -> TItem,
-      makeSeparator : ParsingSequence * int * int -> TSeparator,
-      makeResult : Location * SCG.List[TItem] * SCG.List[TSeparator] -> TResult) : TResult
-    {
-      if (startPos < endPos)
-      {
-        def listInfo = parentParsingSequence.States[state].Subrule :> SubruleInfo.ListWithSeparator;
-        def parsingSequence = listInfo.ParsingSequence;
-        mutable recoveredSequence;
-        if (RecoveredSequences.TryGetValue((startPos, endPos, parsingSequence), out recoveredSequence))
-        {
-          def states = parsingSequence.States;
-          match (recoveredSequence)
-          {
-            | Unambiguous(recoveredSubruleIndex) =>
-              def items      = SCG.List();
-              def separators = SCG.List();
-
-              def subrules = RecoveredSubrules[recoveredSubruleIndex].Subrules;
-              for (mutable i = 0; i < subrules.Length - 1; ++i)
-              {
-                def begin       = subrules[i].Pos;
-                def end         = subrules[i + 1].Pos;
-                def stateNumber = subrules[i].State;
-                def state       = states[stateNumber];
-
-                match (state.Subrule)
-                {
-                  | ListItem(ParsingSequence = itemParsingSequence) =>
-                    match (stateNumber)
-                    {
-                      | 0 =>
-                        def item = makeItem(itemParsingSequence, begin, end);
-                        items.Add(item);
-
-                      | 1 =>
-                        def separator = makeSeparator(itemParsingSequence, begin, end);
-                        separators.Add(separator);
-
-                      | _ => assert(false, "Unknown ListWithSeparator state number");
-                    }
-
-                  | _ => assert(false, "List items expected");
-                }
-              }
-
-              makeResult(Location(OriginalSource, startPos, endPos), items, separators)
-
-            | Ambiguous => throw NotImplementedException("Ambiguous ListWithSeparator");
-          }
-        }
-        else
-        {
-          throw NotImplementedException("Fallback to standard AST reading");
-        }
-      }
-      else
-      {
-        makeResult(Location(OriginalSource, startPos, endPos), null, null)
-      }
-    }
-
 
     internal AddRecoveredSubrule(item : array[SubruleStart], parsingSequence : ParsingSequence) : int
     {
@@ -506,6 +334,28 @@ namespace Nitra
       size;
     }
 
+    private mutable _trivia : array[SCG.KeyValuePair[NSpan, int]];
+
+    public Trivia : array[SCG.KeyValuePair[NSpan, int]]
+    {
+      get
+      {
+        when (_trivia == null)
+        {
+          lock (Text)
+          {
+            when (_trivia == null)
+            {
+              def walker = TriviaCollector();
+              walker.Walk(this);
+              _trivia = walker.Trivia.OrderBy(x => x.Key.EndPos).ToArray();
+            }
+          }
+        }
+        _trivia
+      }
+    }
+
     public CreateAst() : Nitra.Ast
     {
       //FIXME: rewrite without reflection
@@ -518,7 +368,9 @@ namespace Nitra
 
         | ExtensibleRuleDescriptor as descriptor =>
           def astFactory      = typeof(DefaultExtensibleRuleAstFactory[_]).MakeGenericType(astType).GetField("Instance").GetValue(null);
-          def astCreateMethod = typeof(ExtensibleRuleAstConstructor).GetMethod("Create").MakeGenericMethod(astType);
+          def type = typeof(ExtensibleRuleAstConstructor);
+          def method = type.GetMethods().First(m => m.Name == "Create" && m.GetParameters().Length == 5);
+          def astCreateMethod = method.MakeGenericMethod(astType);
           astCreateMethod.Invoke(null, array[StartPos : object, this, 0, descriptor, astFactory]) :> Ast
 
         | _ => assert(false)
@@ -597,36 +449,29 @@ namespace Nitra
 
     public GetGarbage(prevPos : int, pos : int) : NSpan
     {
-      def cmp(e : ParseErrorData) : int
+      def cmp(e : SCG.KeyValuePair[NSpan, int]) : int
       {
-        if (e.Skip.StartPos < prevPos)
+        if (e.Key.StartPos < prevPos)
           -1
-        else
-          if (e.Skip.EndPos > pos)
+        else if (e.Key.EndPos > pos)
             1
-          else
+        else
             0
       }
-      def errorIndex = ErrorDataSorted.BinarySearch(cmp);
+      mutable errorIndex = Trivia.BinarySearch(cmp);
       if (errorIndex >= 0)
       {
-        def error = ErrorDataSorted[errorIndex];
-        error.Skip
+        for (mutable i = errorIndex - 1; i >= 0; i--)
+          when (cmp(Trivia[i]) == 0)
+            errorIndex = i;
+
+        def error = Trivia[errorIndex];
+        error.Key
       }
       else
         NSpan()
     }
 
-    internal UpdateErrorDataSorted() : void
-    {
-      this.ErrorDataSorted = this.ErrorData.ToArray();
-      def cmp(x : ParseErrorData, y : ParseErrorData) : int
-      {
-        x.Skip.StartPos - y.Skip.StartPos
-      }
-      Array.Sort(this.ErrorDataSorted, cmp);
-    }
-    
     private GetSource() : SourceSnapshot implements ISourceSnapshotProvider.GetSource
     {
       OriginalSource
