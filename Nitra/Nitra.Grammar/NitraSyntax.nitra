@@ -267,6 +267,21 @@ syntax module NitraSyntax
     }
   }
 
+  syntax DeclarationBody = outline_begin_before nl "{" inl Members=DeclarationMember* d "}" outline_end_before nl
+  {
+    CollectGlobalSymbols(site : IMemberSite) : void
+    {
+      foreach (member in Members)
+        member.CollectGlobalSymbols(site);
+    }
+    [Cached] MakeContext(parent : Context) : Context = PassThrough(Members, parent, _.MakeContext(_));
+    Typing() : void
+    {
+      foreach (member in Members)
+        member.Typing();
+    }
+  }
+  
   syntax DeclarationMember
   {
     CollectGlobalSymbols(site : IMemberSite) : void;
@@ -294,6 +309,43 @@ syntax module NitraSyntax
         override Typing               = NitraField.Typing();
       }
   }
+  
+  syntax ExtensibleDeclarationBody = outline_begin_before nl "{" inl Options=DeclarationOption* d "}" outline_end_before nl
+  {
+    CollectGlobalSymbols(site : IMemberSite) : void
+    {
+      foreach (option in Options)
+        option.CollectGlobalSymbols(site);
+    }
+    [Cached] MakeContext(parent : Context) : Context = PassThrough(Options, parent, _.MakeContext(_));
+    Typing(baseDeclarationRef : SymbolRef[ExtensibleDeclarationSymbol]) : void
+    {
+      foreach (option in Options)
+        option.Typing(baseDeclarationRef);
+    }
+  }
+  
+  syntax DeclarationOption = "|" sm Name Body=DeclarationBody
+  {
+    CollectGlobalSymbols(site : IMemberSite) : void
+    {
+      def symbol = ParsedExtensionDeclarationSymbol(this);
+      _ = site.Node.AddAndReport(symbol, Name.Location);
+      Body.CollectGlobalSymbols(symbol);
+    }
+    [Cached] MakeContext(parent : Context) : Context
+    {
+      def  context1 = DeclarationContext(parent, Name);
+      def _context2 = Body.MakeContext(context1);
+      parent
+    }
+    Typing(baseDeclarationRef : SymbolRef[ExtensibleDeclarationSymbol]) : void
+    {
+      _ = MakeBaseDeclarationRef(baseDeclarationRef);
+      Body.Typing();
+    }
+    [Cached] MakeBaseDeclarationRef(baseDeclarationRef : SymbolRef[ExtensibleDeclarationSymbol]) : SymbolRef[ExtensibleDeclarationSymbol] = baseDeclarationRef;
+  }
 
   syntax NamespaceMember
   {
@@ -310,7 +362,6 @@ syntax module NitraSyntax
           foreach (decl in Members)
             decl.CollectGlobalSymbols(symbol);
         }
-        [Cached] private MakeInitialContext(contextToSave : SymbolContext) : SymbolContext = contextToSave;
         override MakeContext
         {
           def  context1 = SymbolContext(parent, Name);
@@ -320,23 +371,56 @@ syntax module NitraSyntax
         override Typing = foreach (member in Members) member.Typing();
       }
 
-    | Declaration = "declaration" sm Name outline_begin_before nl "{" inl Members=DeclarationMember* d "}" outline_end_before nl
+    | SimpleDeclaration = "declaration" sm Name Body=DeclarationBody
       {
         override CollectGlobalSymbols
         {
-          def symbol = ParsedDeclarationSymbol(this);
+          def symbol = ParsedSimpleDeclarationSymbol(this);
           _ = ns.Node.AddAndReport(symbol, Name.Location);
-          foreach (decl in Members)
-            decl.CollectGlobalSymbols(symbol);
+          Body.CollectGlobalSymbols(symbol);
         }
-        [Cached] private MakeInitialContext(contextToSave : DeclarationContext) : DeclarationContext = contextToSave;
         override MakeContext
         {
           def  context1 = DeclarationContext(parent, Name);
-          def _context2 = PassThrough(Members, context1, _.MakeContext(_));
+          def _context2 = Body.MakeContext(context1);
           parent
         }
-        override Typing = foreach (member in Members) member.Typing();
+        override Typing = Body.Typing();
+      }
+
+    | ExtensibleDeclaration = "declarations" sm Name Body=ExtensibleDeclarationBody
+      {
+        [Cached] private MakeDeclarationSymbol() : ParsedExtensibleDeclarationSymbol = ParsedExtensibleDeclarationSymbol(this);
+        override CollectGlobalSymbols
+        {
+          def symbol = MakeDeclarationSymbol();
+          _ = ns.Node.AddAndReport(symbol, Name.Location);
+          Body.CollectGlobalSymbols(symbol);
+        }
+        override MakeContext
+        {
+          def  context1 = DeclarationContext(parent, Name);
+          def _context2 = Body.MakeContext(context1);
+          parent
+        }
+        override Typing = Body.Typing(SymbolRef.Some(Name.Location, false, DeclarationSymbol));
+      }
+
+    | ExtendDeclaration = "extend" "declarations" sm BaseName=QualifiedName Body=ExtensibleDeclarationBody
+      {
+        override CollectGlobalSymbols
+        {
+          def symbol = ParsedExtendDeclarationSymbol(this);
+          _ = ns.Node.AddAndReport.[ExtendDeclarationSymbol](symbol, Location);
+          Body.CollectGlobalSymbols(symbol);
+        }
+        override MakeContext = Body.MakeContext(parent);
+        override Typing
+        {
+          def baseDeclarationRef = MakeBaseDeclarationRef();
+          Body.Typing(baseDeclarationRef);
+        }
+        [Cached] private MakeBaseDeclarationRef() : SymbolRef[ExtensibleDeclarationSymbol] = SymbolRef[ExtensibleDeclarationSymbol].Create(BaseName, Context.Bind(BaseName));
       }
 
     | Namespace   = "namespace"   sm QualifiedName outline_begin_before nl "{" inl NamespaceBody      d "}" outline_end_before nl
