@@ -15,8 +15,10 @@ namespace Nitra.Compiler
 {
   internal sealed class SimpleDeclarationEmitter : DeclarationEmitter
   {
-    private         _symbol : SimpleDeclarationSymbol;
-    private mutable _tb     : TypeBuilder;
+    private         _symbol      : SimpleDeclarationSymbol;
+    private mutable _baseTb      : TypeBuilder;
+    private mutable _ambiguousTb : TypeBuilder;
+    private mutable _concreteTb  : TypeBuilder;
 
     public this(environment : EmitterEnvironment, symbol : SimpleDeclarationSymbol)
     {
@@ -26,14 +28,24 @@ namespace Nitra.Compiler
 
     public override DefineTypes() : void
     {
-      assert(_tb == null);
-      _tb = NemerleEnv.Define(<[ decl:
-        public sealed class $(_symbol.Name : usesite) : $(Environment.DeclarationTypeVar : typed)
+      assert(_baseTb == null);
+      _baseTb = NemerleEnv.Define(<[ decl:
+        public abstract class $(_symbol.Name : usesite) : $(Environment.DeclarationTypeVar : typed)
+        {
+        }
+      ]>);
+
+      assert(_concreteTb == null);
+      _concreteTb = _baseTb.DefineNestedType(<[ decl:
+        public sealed class Concrete : $(_baseTb.GetMemType() : typed)
         {
           public override Parent : $(Environment.DeclarationTypeVar : typed) { get; }
           public override Span   : $(Environment.NSpanTypeVar : typed)       { get; }
         }
       ]>);
+
+      assert(_ambiguousTb == null);
+      _ambiguousTb = DefineAmbiguousDeclaration(_baseTb);
 
       def ctorParameters = SCG.List();
       ctorParameters.Add(<[ parameter: parent : $(Environment.DeclarationTypeVar : typed) ]>);
@@ -45,10 +57,24 @@ namespace Nitra.Compiler
 
       foreach (fieldSymbol in _symbol.Fields)
       {
+        _baseTb.DefineConditional(<[ decl:
+          public abstract $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+          {
+            get;
+          }
+        ]>);
+
+        _ambiguousTb.DefineConditional(<[ decl:
+          public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+          {
+            get { this.Alternatives[0].$(fieldSymbol.Name : usesite) }
+          }
+        ]>);
+
         if (fieldSymbol.HasBody)
         {
-          _tb.DefineConditional(<[ decl:
-            public $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+          _concreteTb.DefineConditional(<[ decl:
+            public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
             {
               get { $(fieldSymbol.Body.Expr) }
             }
@@ -56,23 +82,32 @@ namespace Nitra.Compiler
         }
         else
         {
-          _tb.DefineConditional(<[ decl:
-            public $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol));
+          _concreteTb.DefineConditional(<[ decl:
+            public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+            {
+              get;
+            }
           ]>);
           ctorParameters.Add(<[ parameter : $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol)) ]>);
           ctorStatements.Add(<[ this.$(fieldSymbol.Name : usesite) = $(fieldSymbol.Name : usesite) ]>);
         }
       }
 
-      _tb.DefineConditional(<[ decl:
+      _concreteTb.DefineConditional(<[ decl:
         public this(..$ctorParameters) { ..$ctorStatements }
       ]>);
     }
 
     public override Emit() : void
     {
-      assert(_tb != null);
-      _tb.Compile();
+      assert(_baseTb != null);
+      _baseTb.Compile();
+
+      assert(_concreteTb != null);
+      _concreteTb.Compile();
+
+      assert(_ambiguousTb != null);
+      _ambiguousTb.Compile();
     }
   }
 }
