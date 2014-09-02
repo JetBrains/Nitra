@@ -739,38 +739,32 @@ syntax module NitraSyntax
 
   syntax MapDeclarationMember = FieldName=Name FieldExpression=RuleMethodBody
   {
+    GetDeclarationCtorArgument(declarationSymbol : DeclarationSymbol, context : Context) : DeclarationCtorArgument
+    {
+      def fieldRef = Utils.BindByHierarchy.[NitraFieldSymbol](declarationSymbol, FieldName);
+      def value    = NemerleParser.Parse(FieldExpression, context);
+      DeclarationCtorArgument(this.Location, fieldRef, value)
+    }
   }
-  
+
   syntax MapDeclarationBody = outline_begin_before nl "{" inl Fields=MapDeclarationMember* d "}" outline_end_before nl
   {
-    CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
+    GetDeclarationCtorArguments(declarationSymbol : DeclarationSymbol, context : Context) : list[DeclarationCtorArgument]
     {
-      
-    }
-    MakeContext(parent : Context) : Context
-    {
-      parent
-    }
-    Typing() : void
-    {
-      
+      def buffer = List();
+      foreach (f in Fields)
+        buffer.Add(f.GetDeclarationCtorArgument(declarationSymbol, context));
+      buffer.ToNList()
     }
   }
 
   syntax MapDeclaration = "declare" sm DeclarationName=QualifiedName MapDeclarationBody
   {
-    CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
+    GetDeclarationCtor(context : Context) : DeclarationCtor
     {
-      MapDeclarationBody.CollectGlobalSymbols(symbol);
-    }
-    MakeContext(parent : Context) : Context
-    {
-      _ = MapDeclarationBody.MakeContext(context);
-      parent
-    }
-    Typing() : void
-    {
-      MapDeclarationBody.Typing();
+      def declarationSymbol = SymbolRef.Create(DeclarationName, context.Bind.[DeclarationSymbol](DeclarationName));
+      def arguments         = if (declarationSymbol.IsSome) MapDeclarationBody.GetDeclarationCtorArguments(declarationSymbol.Value, context) else [];
+      DeclarationCtor(this.Location, declarationSymbol, arguments)
     }
   }
 
@@ -786,7 +780,7 @@ syntax module NitraSyntax
     }
     MakeContext(parent : Context) : Context
     {
-      def context = RuleDeclarationSiteContext(parent, Symbol);
+      def context = RuleDeclarationSiteContext(parent, this.Symbol);
       _ = RuleAttributes.MakeContext(context);
       _ = SimpleRuleBody.MakeContext(context);
       parent
@@ -795,7 +789,7 @@ syntax module NitraSyntax
     Typing() : void
     {
       _ = MakeTypedRule();
-      SimpleRuleBody.Typing();
+      SimpleRuleBody.Typing(this.Symbol);
     }
   }
 
@@ -890,7 +884,7 @@ syntax module NitraSyntax
     Typing() : void
     {
       _ = MakeTypedRule();
-      SimpleRuleBody.Typing();
+      SimpleRuleBody.Typing(Symbol);
     }
   }
 
@@ -915,7 +909,7 @@ syntax module NitraSyntax
     Typing() : void
     {
       _ = MakeTypedRule();
-      SimpleRuleBody.Typing();
+      SimpleRuleBody.Typing(Symbol);
     }
   }
 
@@ -924,7 +918,7 @@ syntax module NitraSyntax
     CollectGlobalSymbols(ruleSymbol : SimpleRuleSymbol) : void = _ = ruleSymbol;
     [Cached] MakeContext(parent : Context) : Context = parent;
     GetLastLocation() : Nitra.Location;
-    Typing() : void { }
+    Typing(ruleSymbol : SimpleRuleSymbol) : void { _ = ruleSymbol }
 
     | Empty = ";"nl
       {
@@ -935,7 +929,7 @@ syntax module NitraSyntax
         override CollectGlobalSymbols = foreach (member in SimpleRuleBodyMembers) member.CollectGlobalSymbols(ruleSymbol);
         override MakeContext = FoldThrough(SimpleRuleBodyMembers, parent, _.MakeContext(_));
         override GetLastLocation = MakeLastLocation(this, OpenBrace);
-        override Typing = foreach (x in SimpleRuleBodyMembers) x.Typing();
+        override Typing = foreach (x in SimpleRuleBodyMembers) x.Typing(ruleSymbol);
       }
   }
 
@@ -943,7 +937,7 @@ syntax module NitraSyntax
   {
     CollectGlobalSymbols(ruleSymbol : SimpleRuleSymbol) : void = _ = ruleSymbol;
     [Cached] MakeContext(parent : Context) : Context = parent;
-    Typing() : void { }
+    Typing(_ruleSymbol : SimpleRuleSymbol) : void { }
 
     | RuleAlias
       {
@@ -1005,9 +999,7 @@ syntax module NitraSyntax
       }
     | MapDeclaration
       {
-        override CollectGlobalSymbols = MapDeclaration.CollectGlobalSymbols(ruleSymbol);
-        override MakeContext          = MapDeclaration.MakeContext(parent);
-        override Typing               = MapDeclaration.Typing();
+        override Typing               = _ruleSymbol.SetDeclarationCtor(MapDeclaration.GetDeclarationCtor(Context));
       }
   }
 
@@ -1186,7 +1178,7 @@ syntax module NitraSyntax
       when (Options.OperatorInfo == OperatorInfo.None)
         TryInferOperatorType(Symbol);
       when (ExtensionRuleBodyOpt.IsSome)
-        ExtensionRuleBodyOpt.Item.Typing(BaseRuleRef);
+        ExtensionRuleBodyOpt.Item.Typing(BaseRuleRef, this.Symbol);
     }
   }
 
@@ -1195,7 +1187,7 @@ syntax module NitraSyntax
     CollectGlobalSymbols(ruleSymbol : ExtensionRuleSymbol) : void = _ = ruleSymbol;
     [Cached] MakeContext(parent : Context) : Context = parent;
     GetLastLocation() : Nitra.Location;
-    Typing(_baseRule : ExtensibleRuleRef) : void { }
+    Typing(_baseRule : ExtensibleRuleRef, _ruleSymbol : ExtensionRuleSymbol) : void { }
 
     | Empty = ";"nl
       {
@@ -1204,9 +1196,9 @@ syntax module NitraSyntax
     | Block = outline_hiden outline_begin_before inl "{" inl ExtensionRuleBodyMember* d "}" outline_end_before nl  d
       {
         override CollectGlobalSymbols = foreach (member in ExtensionRuleBodyMembers) member.CollectGlobalSymbols(ruleSymbol);
-        override MakeContext = FoldThrough(ExtensionRuleBodyMembers, parent, _.MakeContext(_));
-        override GetLastLocation = MakeLastLocation(this, OpenBrace);
-        override Typing = foreach (x in ExtensionRuleBodyMembers) x.Typing(_baseRule);
+        override MakeContext          = FoldThrough(ExtensionRuleBodyMembers, parent, _.MakeContext(_));
+        override GetLastLocation      = MakeLastLocation(this, OpenBrace);
+        override Typing               = foreach (x in ExtensionRuleBodyMembers) x.Typing(_baseRule, _ruleSymbol);
       }
   }
 
@@ -1214,7 +1206,7 @@ syntax module NitraSyntax
   {
     CollectGlobalSymbols(ruleSymbol : ExtensionRuleSymbol) : void = _ = ruleSymbol;
     [Cached] MakeContext(parent : Context) : Context = parent;
-    Typing(_baseRule : ExtensibleRuleRef) : void { }
+    Typing(_baseRule : ExtensibleRuleRef, _ruleSymbol : ExtensionRuleSymbol) : void { }
 
     | RuleAlias
       {
@@ -1276,9 +1268,7 @@ syntax module NitraSyntax
       }
     | MapDeclaration
       {
-        override CollectGlobalSymbols = MapDeclaration.CollectGlobalSymbols(ruleSymbol);
-        override MakeContext          = MapDeclaration.MakeContext(parent);
-        override Typing               = MapDeclaration.Typing();
+        override Typing               = _ruleSymbol.SetDeclarationCtor(MapDeclaration.GetDeclarationCtor(Context));
       }
   }
 
