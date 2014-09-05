@@ -84,6 +84,9 @@ namespace Nitra.DebugStrategies
       rp.RecoveryFromAllErrors();
       var startSeq = rp.StartSequence;
 
+      var errorCollector = new ErrorCollectorWalker();
+      errorCollector.Walk(parseResult);
+
       UpdateEarleyParseTime();
       return parseResult.Text.Length;
       throw new NotImplementedException();
