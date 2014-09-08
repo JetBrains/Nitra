@@ -18,13 +18,13 @@ using System.Xml.Linq;
 using NB = Nemerle.Builtins;
 using SCG = System.Collections.Generic;
 
-using Nemerle.Core;
 
 //using ParsedSequenceAndSubrule2 = Nemerle.Builtins.Tuple</*Inserted tokens*/int, Nitra.Internal.Recovery.ParsedSequence, Nitra.Internal.Recovery.ParsedSubrule>;
 
 #if NITRA_RUNTIME
 namespace Nitra.Strategies
 #else
+using Nemerle.Core;
 // ReSharper disable once CheckNamespace
 
 namespace Nitra.DebugStrategies
