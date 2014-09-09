@@ -24,6 +24,25 @@ namespace Nitra.Compiler
     {
       def isVoid(rule : Rule) { rule.Type is RuleType.Void }
 
+      def makePrinter(ruleType : RuleType, title : string, astPath : PExpr, body : PExpr) : PExpr
+      {
+        def name    = Util.tmpname("PrettyPrint" + title);
+        def astType = Environment.GetAstType(ruleType);
+        _astTb.DefineConditional(<[ decl:
+          private static $(name : usesite)(writer : Nitra.PrettyPrintWriter, source : Nitra.IPrettyPrintSource, ast : $(astType : typed)) : void
+          {
+            _ = source;
+            $body
+          }
+        ]>);
+        <[
+          if ($astPath.IsAmbiguous)
+            writer.AmbiguousNode($astPath :> Nitra.IAmbiguousAst, $(title : string), source, $(name : usesite))
+          else
+            $(name : usesite)(writer, source, $astPath);
+        ]>
+      }
+
       def isRecursiveCallFromPostfixRule(calleeRef)
       {
         match (this.RuleSymbol, calleeRef)
@@ -41,7 +60,7 @@ namespace Nitra.Compiler
             {
               | String(str)                                     => <[ writer.String(source, $expr, $str); ]>
               | And | Not                                       => <[ () ]>
-              | Sequence(rules)                                 =>
+              | Sequence(rules) as sequenceRule                 =>
                 def variables  = SCG.List();
                 def statements = SCG.List();
                 foreach (r in rules with i)
@@ -57,13 +76,16 @@ namespace Nitra.Compiler
                 }
                 match (variables.Count)
                 {
-                  | 0 => ()
-                  | 1 => statements.Insert(0, <[ def $(variables[0] : usesite) = $expr ]>);
+                  | 0 => <[ { ..$statements } ]>
+                  | 1 =>
+                    statements.Insert(0, <[ def $(variables[0] : usesite) = $expr ]>);
+                    <[ { ..$statements } ]>
+
                   | _ =>
                     foreach(v in variables with index)
-                      statements.Insert(index, <[ def $(v : usesite) = $expr.$($"Item$(index + 1)" : usesite) ]>);
+                      statements.Insert(index, <[ def $(v : usesite) = ast.$($"Item$(index + 1)" : usesite) ]>);
+                    makePrinter(sequenceRule.Type, "Sequence", expr, <[ { ..$statements } ]>);
                 }
-                <[ { ..$statements } ]>
 
               | Repeat as loop when loop.IsSkipAnyPattern                => <[ writer.Token(source, $expr, true, "SkipAnyPattern"); ]>
               | Call(SymbolRef.Some(RegularRuleSymbol as ruleSymbol), _) => <[ writer.Token(source, $expr, $(ruleSymbol.CanParseEmptyString : bool), $(ruleSymbol.Name : string)); ]>
@@ -88,39 +110,41 @@ namespace Nitra.Compiler
               | Call(ruleRef, bp) when isRecursiveCallFromPostfixRule(ruleRef) => <[ $expr.PrettyPrint(writer, $bp); ]>
               | Call                                                           => <[ $expr.PrettyPrint(writer, 0); ]>
               | Repeat(_, _, rule) when isVoid(rule)                           => <[ writer.Whitespace(); ]>
-              | Repeat(0, Some(1), rule)                                       => <[ match ($expr) { | Nitra.OptionAst(IsSome = true, Item = _x) => $(loop(<[ _x ]>, rule)) | _ => () } ]>
-              | Repeat(_, _, rule)                                             => <[ foreach (_elem in $expr) $(loop(<[ _elem ]>, rule)); ]>
-              | RepeatWithSeparator(_, _, rule, separator, _) =>
+              | Repeat(0, Some(1), rule) as optionRule                         =>
+                makePrinter(optionRule.Type, "Option", expr, <[ when (ast.IsSome) $(loop(<[ ast.Item ]>, rule)) ]>);
+
+              | Repeat(_, _, rule) as listRule                                 =>
+                makePrinter(listRule.Type, "List", expr, <[ foreach (_elem in ast) $(loop(<[ _elem ]>, rule)) ]>);
+
+              | RepeatWithSeparator(_, _, rule, separator, _) as listRule =>
                 match (rule.Type, separator.Type)
                 {
                   | (Void, Void) => <[ writer.Whitespace(); ]>
                   | (_, Void) =>
-                    <[
-                      foreach (_elem in $expr with i)
+                    makePrinter(listRule.Type, "ListWithSeparatorOnlyItems", expr, <[
+                      foreach (_elem in ast with i)
                       {
                         when (i > 0)
                           $(loop(<[ _ ]>, separator));
                         $(loop(<[ _elem ]>, rule));
                       }
-                    ]>
+                    ]>);
 
                   | (Void, _) =>
-                    <[
-                      def separators = $expr;
-                      foreach (_separator in separators with i)
+                    makePrinter(listRule.Type, "ListWithSeparatorOnlySeparators", expr, <[
+                      foreach (_separator in ast with i)
                       {
                         $(loop(<[ _ ]>, rule));
                         $(loop(<[ _separator ]>, separator));
                       }
-                      unless (separators.IsEmpty)
+                      unless (ast.IsEmpty)
                         $(loop(<[ _ ]>, rule));
-                    ]>
+                    ]>);
 
                   | _ =>
-                    <[
-                      def seq        = $expr;
-                      def elems      = seq.Item1;
-                      def separators = seq.Item2;
+                    makePrinter(listRule.Type, "ListWithSeparator", expr, <[
+                      def elems      = ast.Item1;
+                      def separators = ast.Item2;
                       foreach (elem in elems with i)
                       {
                         $(loop(<[ elem ]>, rule));
@@ -130,7 +154,7 @@ namespace Nitra.Compiler
                           $(loop(<[ separator ]>, separator));
                         }
                       }
-                    ]>
+                    ]>);
                 }
             };
           result

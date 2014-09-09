@@ -84,6 +84,22 @@ namespace Nitra.Visualizer
       NewLine();
     }
 
+    public override void AmbiguousNode<T>(IAmbiguousAst ast, string ruleType, IPrettyPrintSource source, Action<PrettyPrintWriter, IPrettyPrintSource, T> printer)
+    {
+      WriteSpan(_missingNodeClass, "<# ambiguous " + ruleType + ", " + ast.Ambiguities.Count + " options");
+      NewLineAndIndent();
+      var previousTokenPos = _previousTokenPos;
+      foreach (object a in ast.Ambiguities)
+      {
+        _previousTokenPos = previousTokenPos;
+        printer(this, source, (T)a);
+        NewLine();
+      }
+      Unindent();
+      WriteSpan(_missingNodeClass, "#>");
+      NewLine();
+    }
+
     public override void NewLine()
     {
       IndentNewLine();
