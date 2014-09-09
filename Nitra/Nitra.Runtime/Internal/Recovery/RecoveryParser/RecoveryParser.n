@@ -1,8 +1,8 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
-using Nemerle.Imperative;
 using Nemerle.Extensions;
 
 using Nitra.Collections;
@@ -54,13 +54,9 @@ namespace Nitra.Internal.Recovery
       Records[textPos][root] = TokenChanges(0, 0);
       match (ParseResult.RuleParser)
       {
-        | SimpleRuleParser     as ruleParser =>
-          _ = StartParseSequence(root, textPos, ruleParser.ParsingSequence);
-
-        | ExtensibleRuleParser as ruleParser =>
-          _ = StartParseSequence(root, textPos, ruleParser.ParsingSequence);
-
-        | _ => assert3(false)
+        | SimpleRuleParser     as ruleParser => _ = StartParseSequence(root, textPos, ruleParser.ParsingSequence);
+        | ExtensibleRuleParser as ruleParser => _ = StartParseSequence(root, textPos, ruleParser.ParsingSequence);
+        | _                                  => assert3(false)
       }
       Parse();
 
@@ -78,6 +74,9 @@ namespace Nitra.Internal.Recovery
 
     private ParseToFailPos() : void
     {
+      def memoization = SCG.Dictionary();
+      def grammar = this.ParseResult.RuleParser.Grammar;
+      
       mutable maxPos;
       do
       {
@@ -104,8 +103,8 @@ namespace Nitra.Internal.Recovery
           def sequences = SCG.HashSet(Records[maxPos].Keys.Select(r => r.Sequence));
           foreach (sequence when sequence.ParsingSequence.SequenceInfo != null in sequences)
           {
-            //when (sequence.IsToken && !sequence.ParsingSequence.CanConsumeErrorTokens)
-            //  continue;
+            when (IsInsideToken(memoization, grammar, sequence) && !sequence.ParsingSequence.CanConsumeErrorTokens)
+              continue;
             foreach (subrule in sequence.ParsedSubrules.NToArray())//TODO optimize
               when (subrule.State >= 0 && subrule.End == maxPos)
               {
@@ -118,6 +117,35 @@ namespace Nitra.Internal.Recovery
         while (count < Records[maxPos].Count);
       }
       while (maxPos < MaxPos);
+    }
+
+    private static IsInsideToken(memoization : SCG.Dictionary[ParsedSequence, bool], compositeGrammar : CompositeGrammar, seq : ParsedSequence) : bool
+    {
+      mutable res;
+      when (memoization.TryGetValue(seq, out res))
+        return res;
+
+      when (seq.ParsingSequence.SequenceInfo is SequenceInfo.Ast)
+      {
+        def parser = seq.ParsingSequence.SequenceInfo.Parser;
+        res = compositeGrammar.Tokens.ContainsKey(parser) || compositeGrammar.VoidTokens.ContainsKey(parser);
+        memoization[seq] = res;
+        when (res)
+          return res;
+      }
+
+      foreach (caller in seq.Callers)
+      {
+        res = IsInsideToken(memoization, compositeGrammar, caller.Sequence);
+        when (res)
+        {
+          memoization[seq] = true;
+          return true;
+        }
+      }
+
+      memoization[seq] = false;
+      false
     }
   }
 }
