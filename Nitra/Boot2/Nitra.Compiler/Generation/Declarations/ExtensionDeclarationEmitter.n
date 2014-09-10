@@ -1,0 +1,87 @@
+﻿using Nitra.Model;
+using Nitra.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal sealed class ExtensionDeclarationEmitter : DeclarationEmitter
+  {
+    private         _parent : DeclarationEmitter;
+    private         _symbol : ExtensionDeclarationSymbol;
+    private mutable _tb     : TypeBuilder;
+
+    public this(parent : DeclarationEmitter, symbol : ExtensionDeclarationSymbol)
+    {
+      base(parent.Environment, parent.NemerleEnv);
+      this._parent = parent;
+      this._symbol = symbol;
+    }
+
+    public override DefineTypes() : void
+    {
+      assert(_tb == null);
+      _tb = _parent.DefineNestedType(<[ decl:
+        public sealed class $(_symbol.Name : usesite) : $(Environment.GetDeclarationType(_symbol.BaseDeclaration.Value) : typed)
+        {
+          public this(parent : $(Environment.DeclarationTypeVar : typed), span : $(Environment.NSpanTypeVar : typed))
+          {
+            this.Parent = parent;
+            this.Span = span;
+          }
+
+          public override Parent : $(Environment.DeclarationTypeVar : typed) { get; }
+          public override Span   : $(Environment.NSpanTypeVar : typed)       { get; }
+        }
+      ]>);
+
+      def initParameters = SCG.List();
+      def initStatements = SCG.List();
+      foreach (fieldSymbol in _symbol.Fields)
+      {
+        if (fieldSymbol.HasBody)
+        {
+          _tb.DefineConditional(<[ decl:
+            public $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+            {
+              get { $(fieldSymbol.Body.Expr) }
+            }
+          ]>);
+        }
+        else
+        {
+          def backingFieldName = Util.tmpname(fieldSymbol.Name);
+          _tb.DefineConditional(<[ decl:
+            private mutable $(backingFieldName : usesite) : $(MakeFieldType(fieldSymbol));
+          ]>);
+          _tb.DefineConditional(<[ decl:
+            public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+            {
+              get { this.$(backingFieldName : usesite) }
+            }
+          ]>);
+          initParameters.Add(<[ parameter : $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol)) ]>);
+          initStatements.Add(<[ this.$(backingFieldName : usesite) = $(fieldSymbol.Name : usesite) ]>);
+        }
+      }
+
+      _tb.DefineConditional(<[ decl:
+        public Initialize(..$initParameters) : void { ..$initStatements }
+      ]>);
+    }
+
+    public override Emit() : void
+    {
+      assert(_tb != null);
+      _tb.Compile();
+    }
+  }
+}

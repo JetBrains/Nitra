@@ -1,0 +1,117 @@
+﻿using Nitra.Model;
+using Nitra.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal sealed class SimpleDeclarationEmitter : DeclarationEmitter
+  {
+    private         _symbol      : SimpleDeclarationSymbol;
+    private mutable _baseTb      : TypeBuilder;
+    private mutable _ambiguousTb : TypeBuilder;
+    private mutable _concreteTb  : TypeBuilder;
+
+    public this(environment : EmitterEnvironment, symbol : SimpleDeclarationSymbol)
+    {
+      base(environment, environment.NamespaceOfSymbol(symbol));
+      this._symbol = symbol;
+    }
+
+    public override DefineTypes() : void
+    {
+      assert(_baseTb == null);
+      _baseTb = NemerleEnv.Define(<[ decl:
+        public abstract class $(_symbol.Name : usesite) : $(Environment.DeclarationTypeVar : typed)
+        {
+        }
+      ]>);
+
+      assert(_concreteTb == null);
+      _concreteTb = _baseTb.DefineNestedType(<[ decl:
+        public sealed class Concrete : $(_baseTb.GetMemType() : typed)
+        {
+          public this(parent : $(Environment.DeclarationTypeVar : typed), span : $(Environment.NSpanTypeVar : typed))
+          {
+            this.Parent = parent;
+            this.Span = span;
+          }
+
+          public override Parent : $(Environment.DeclarationTypeVar : typed) { get; }
+          public override Span   : $(Environment.NSpanTypeVar : typed)       { get; }
+        }
+      ]>);
+
+      assert(_ambiguousTb == null);
+      _ambiguousTb = DefineAmbiguousDeclaration(_baseTb);
+
+      def initParameters = SCG.List();
+      def initStatements = SCG.List();
+      foreach (fieldSymbol in _symbol.Fields)
+      {
+        _baseTb.DefineConditional(<[ decl:
+          public abstract $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+          {
+            get;
+          }
+        ]>);
+
+        _ambiguousTb.DefineConditional(<[ decl:
+          public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+          {
+            get { this.Ambiguities[0].$(fieldSymbol.Name : usesite) }
+          }
+        ]>);
+
+        if (fieldSymbol.HasBody)
+        {
+          _concreteTb.DefineConditional(<[ decl:
+            public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+            {
+              get { $(fieldSymbol.Body.Expr) }
+            }
+          ]>);
+        }
+        else
+        {
+          def backingFieldName = Util.tmpname(fieldSymbol.Name);
+          _concreteTb.DefineConditional(<[ decl:
+            private mutable $(backingFieldName : usesite) : $(MakeFieldType(fieldSymbol));
+          ]>);
+          _concreteTb.DefineConditional(<[ decl:
+            public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+            {
+              get { this.$(backingFieldName : usesite) }
+            }
+          ]>);
+          initParameters.Add(<[ parameter : $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol)) ]>);
+          initStatements.Add(<[ this.$(backingFieldName : usesite) = $(fieldSymbol.Name : usesite) ]>);
+        }
+      }
+
+      _concreteTb.DefineConditional(<[ decl:
+        public Initialize(..$initParameters) : void { ..$initStatements }
+      ]>);
+    }
+
+    public override Emit() : void
+    {
+      assert(_baseTb != null);
+      _baseTb.Compile();
+
+      assert(_concreteTb != null);
+      _concreteTb.Compile();
+
+      assert(_ambiguousTb != null);
+      _ambiguousTb.Compile();
+    }
+  }
+}
