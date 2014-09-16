@@ -1340,5 +1340,16 @@ namespace Nitra.Visualizer
           control.FontSize--;
       }
     }
+
+    private void _testsTreeView_CopyNodeText(object sender, RoutedEventArgs e)
+    {
+      var node = _testsTreeView.SelectedItem;
+      if (node != null)
+      {
+        var text = node.ToString();
+        Clipboard.SetData(DataFormats.Text, text);
+        Clipboard.SetData(DataFormats.UnicodeText, text);
+      }
+    }
   }
 }

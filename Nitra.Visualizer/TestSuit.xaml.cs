@@ -341,7 +341,7 @@ namespace Nitra.Visualizer
       var dialog = new OpenFileDialog
       {
         DefaultExt = ".dll",
-        Filter = "Parser library (.dll)|*.dll",
+        Filter = "Parser library (.dll)|*.dll|Parser application (.exe)|*.exe",
         Title = "Load parser"
       };
       if (dialog.ShowDialog(this) ?? false)
