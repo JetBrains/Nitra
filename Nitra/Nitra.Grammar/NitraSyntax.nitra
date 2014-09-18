@@ -792,22 +792,21 @@ syntax module NitraSyntax
   syntax MapDeclarationMember
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    GetDeclarationMappingField(declarationSymbol : DeclarationSymbol, ruleSymbol : SyntaxRuleSymbol) : DeclarationMappingField;
+    GetDeclarationMappingField(declarationSymbol : DeclarationSymbol, _ruleSymbol : SyntaxRuleSymbol) : DeclarationMappingField;
 
     | Automatic = FieldName=Name sm "<-" sm RuleFieldName=Name ";"
       {
         override GetDeclarationMappingField
         {
-          def fieldRef = Utils.BindByHierarchy.[NitraFieldSymbol](declarationSymbol, this.FieldName);
-          def rule     = Utils.LookupRule(ruleSymbol, this.RuleFieldName);
-          DeclarationMappingField.Automatic(this.Location, fieldRef, rule)
+          def fieldRef  = Utils.BindByHierarchy.[NitraFieldSymbol](declarationSymbol, this.FieldName);
+          def fieldName = this.RuleFieldName.GetText();
+          DeclarationMappingField.Automatic(this.Location, fieldRef, fieldName)
         }
       }
     | Inline = FieldName=Name sm "=" sm Code=MapDeclarationExpression
       {
         override GetDeclarationMappingField
         {
-          _ = ruleSymbol;
           def fieldRef = Utils.BindByHierarchy.[NitraFieldSymbol](declarationSymbol, this.FieldName);
           def code     = NemerleParser.Parse(this.Code, this.Context);
           DeclarationMappingField.Inline(this.Location, fieldRef, code)
@@ -816,38 +815,56 @@ syntax module NitraSyntax
     | Extension = "|" sm DeclarationName=Name RuleName=("from" sm Name)? Body=MapDeclarationBody?
       {
         override MakeContext = if (Body.IsSome) Body.Item.MakeContext(parent) else parent;
-        override GetDeclarationMappingField { _ = declarationSymbol; _ = ruleSymbol; null }
+        override GetDeclarationMappingField
+        {
+          if (declarationSymbol is ExtensibleDeclarationSymbol)
+          {
+            def ruleName              = if(this.RuleName.IsSome) this.RuleName.Item.Item2 else this.DeclarationName;
+            def currentDeclarationRef = Utils.BindByHierarchy.[DeclarationSymbol](declarationSymbol, this.DeclarationName);
+            def currentRuleRef        = Utils.BindByHierarchy.[SyntaxRuleSymbol](_ruleSymbol, ruleName);
+            when (currentDeclarationRef.IsSome && currentRuleRef.IsSome)
+            {
+              def declarationMappingBody =
+                if (this.Body.IsSome)
+                  this.Body.Item.GetDeclarationMappingBody(currentDeclarationRef, currentRuleRef.Value)
+                else
+                  DeclarationMappingBody.Delegate(this.DeclarationName.Location, currentDeclarationRef);
+              currentRuleRef.Value.SetDeclarationMappingBody(declarationMappingBody)
+            }
+          }
+          else
+          {
+            def name = declarationSymbol.Name;
+            Project.CurrentProject.Error(this.DeclarationName.Location, $"Declaration '$name' is not extensible.", -1);
+          }
+          null
+        }
       }
   }
 
   syntax MapDeclarationBody
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    GetDeclarationMappingBody(declarationSymbol : SymbolRef[DeclarationSymbol], ruleSymbol : SyntaxRuleSymbol) : DeclarationMappingBody;
+    GetDeclarationMappingBody(declarationSymbol : SymbolRef[DeclarationSymbol], _ruleSymbol : SyntaxRuleSymbol) : DeclarationMappingBody;
 
     | Delegate = ";"
       {
-        override GetDeclarationMappingBody = DeclarationMappingBody.Delegate(this.Location, declarationSymbol, Utils.LookupRuleFieldToDelegateDeclaration(this.Location, ruleSymbol));
+        override GetDeclarationMappingBody = DeclarationMappingBody.Delegate(this.Location, declarationSymbol);
       }
     | Inline = "=" sm Expr=MapDeclarationExpression
       {
-        override GetDeclarationMappingBody
-        {
-          _ = ruleSymbol;
-          DeclarationMappingBody.Inline(this.Location, declarationSymbol, NemerleParser.Parse(this.Expr, this.Context));
-        }
+        override GetDeclarationMappingBody = DeclarationMappingBody.Inline(this.Location, declarationSymbol, NemerleParser.Parse(this.Expr, this.Context));
       }
     | PerMember = outline_begin_before nl OpenBrace="{" inl Members=MapDeclarationMember* d CloseBrace="}" outline_end_before nl
       {
         override MakeContext = PassThrough(Members, parent, _.MakeContext(_));
         override GetDeclarationMappingBody
         {
-          _ = ruleSymbol;
           def initializedFields = Dictionary();
           def buffer = List();
           foreach (member in Members)
           {
-            def mappingField = member.GetDeclarationMappingField(declarationSymbol.Value, ruleSymbol);
+            def mappingField = member.GetDeclarationMappingField(declarationSymbol.Value, _ruleSymbol);
             when (mappingField != null)
             when (mappingField.Field is SymbolRef.Some(field))
             {
@@ -1127,7 +1144,12 @@ syntax module NitraSyntax
       }
     | MapDeclaration = "declare" sm DeclarationName=QualifiedName MapDeclarationBody
       {
-        override MakeContext = MapDeclarationContext(parent);
+        override MakeContext
+        {
+          def context = MapDeclarationContext(parent);
+          _ = MapDeclarationBody.MakeContext(context);
+          context
+        }
         override CollectDeclarationMappings
         {
           def declarationSymbol = SymbolRef.Create(DeclarationName, this.Context.Bind.[DeclarationSymbol](DeclarationName));
@@ -1297,7 +1319,7 @@ syntax module NitraSyntax
           def declarationSymbol = SymbolRef.Create(DeclarationName, this.Context.Bind.[DeclarationSymbol](DeclarationName));
           when (declarationSymbol.IsSome)
           {
-            def body = DeclarationMappingBody.Delegate(Location(this.Location.Source, this.BodySpan), declarationSymbol, null);
+            def body = DeclarationMappingBody.Delegate(Location(this.Location.Source, this.BodySpan), declarationSymbol);
             _ruleSymbol.SetDeclarationMappingBody(body);
           }
         }
@@ -1473,6 +1495,12 @@ syntax module NitraSyntax
       }
     | MapDeclaration = "declare" sm DeclarationName=QualifiedName MapDeclarationBody
       {
+        override MakeContext
+        {
+          def context = MapDeclarationContext(parent);
+          _ = MapDeclarationBody.MakeContext(context);
+          context
+        }
         override CollectDeclarationMappings
         {
           def declarationSymbol = SymbolRef.Create(DeclarationName, this.Context.Bind.[DeclarationSymbol](DeclarationName));

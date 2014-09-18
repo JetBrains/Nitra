@@ -7,6 +7,7 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 
+using Nitra.ProjectSystem;
 using Nitra.Internal;
 using Nitra.Model;
 using Nitra.Typing;
@@ -57,6 +58,25 @@ namespace Nitra.Compiler
       }
     }
 
+    private LookupRuleFieldToDelegateDeclaration(loc : Location) : string
+    {
+      mutable fieldToDelegateDeclaration;
+      foreach (r in this.RuleSymbol.Rule.Rules)
+      {
+        | Call(SymbolRef.Some(SyntaxRuleSymbol), _) =>
+          if (fieldToDelegateDeclaration == null)
+            fieldToDelegateDeclaration = r.FieldName
+          else
+            Project.CurrentProject.Error(loc, $"Rule '$(this.RuleSymbol.Name)' has more that one field to delegate declaration.", -1)
+
+        | _ => ()
+      }
+      when (fieldToDelegateDeclaration == null)
+        Project.CurrentProject.Error(loc, $"Rule '$(this.RuleSymbol.Name)' has no fields to delegate declaration.", -1);
+
+      fieldToDelegateDeclaration
+    }
+
     private DefineAstGetDeclarationMethod() : void
     {
       assert(_astTb != null);
@@ -64,12 +84,13 @@ namespace Nitra.Compiler
       def compileField(field : DeclarationMappingField) : PExpr
       {
         | Inline(code) => code
-        | Automatic(rule) =>
-          match (rule.Type)
+        | Automatic(ruleFieldName) =>
+          // TODO: make strict typing!
+          match (field.Field.Value.Type)
           {
-            | List   => <[ Nitra.Internal.DeclarationUtils.MakeList(parent, this.$(rule.FieldName : usesite)) ]>
-            | Option => <[ Nitra.Internal.DeclarationUtils.MakeOption(parent, this.$(rule.FieldName : usesite)) ]>
-            | _ => <[ this.$(rule.FieldName : usesite).GetDeclaration(parent) ]>
+            | List | OptionList => <[ Nitra.Internal.DeclarationUtils.MakeList(parent, this.$(ruleFieldName : usesite)) ]>
+            | Option            => <[ Nitra.Internal.DeclarationUtils.MakeOption(parent, this.$(ruleFieldName : usesite)) ]>
+            | _                 => <[ this.$(ruleFieldName : usesite).GetDeclaration(parent) ]>
           }
       }
 
@@ -81,9 +102,13 @@ namespace Nitra.Compiler
 
         def code = match (declarationMappingBody)
         {
-          | Delegate(fieldName) =>
-            assert(!string.IsNullOrEmpty(fieldName));
-            <[ this.$(fieldName : usesite).GetDeclaration(parent) ]>
+          | Delegate =>
+            // TODO: make strict typing!
+            def ruleFieldName = LookupRuleFieldToDelegateDeclaration(declarationMappingBody.Location);
+            if (string.IsNullOrEmpty(ruleFieldName))
+              <[ null ]>
+            else
+              <[ this.$(ruleFieldName : usesite).GetDeclaration(parent) ]>
 
           | PerField(fields) =>
             def values = fields.Map(f => <[ $(f.Field.Value.Name : usesite) = $(compileField(f)) ]>);
