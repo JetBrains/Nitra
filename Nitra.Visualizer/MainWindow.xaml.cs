@@ -1343,7 +1343,16 @@ namespace Nitra.Visualizer
 
     private void _testsTreeView_CopyNodeText(object sender, RoutedEventArgs e)
     {
-      var node = _testsTreeView.SelectedItem;
+      CopyTreeNodeToClipboard(_testsTreeView.SelectedItem);
+    }
+
+    private void _errorsTreeView_CopyNodeText(object sender, RoutedEventArgs e)
+    {
+      CopyTreeNodeToClipboard(((TreeViewItem)_errorsTreeView.SelectedItem).Header);
+    }
+
+    private static void CopyTreeNodeToClipboard(object node)
+    {
       if (node != null)
       {
         var text = node.ToString();
