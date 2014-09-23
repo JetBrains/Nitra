@@ -84,70 +84,13 @@ namespace Nitra.DebugStrategies
       rp.RecoveryFromAllErrors();
       var startSeq = rp.StartSequence;
 
+      if (parseResult.TerminateParsing)
+        throw new OperationCanceledException();
+
       var errorCollector = new ErrorCollectorWalker();
       errorCollector.Walk(parseResult);
 
       UpdateEarleyParseTime();
-      return parseResult.Text.Length;
-      throw new NotImplementedException();
-#if DebugOutput
-      timer.Stop();
-      Debug.WriteLine("Earley parse took: " + timer.Elapsed);
-      timer.Restart();
-#endif
-
-      //RecoverAllWays(rp);
-
-      UpdateRecoverAllWaysTime();
-#if DebugOutput
-      timer.Stop();
-      Debug.WriteLine("RecoverAllWays took: " + timer.Elapsed);
-      timer.Restart();
-#endif
-
-      if (parseResult.TerminateParsing)
-        throw new OperationCanceledException();
-
-      UpdateFindBestPathTime();
-#if DebugOutput
-      timer.Stop();
-      Debug.WriteLine("FindBestPath took: " + timer.Elapsed);
-      timer.Restart();
-#endif
-
-      if (parseResult.TerminateParsing)
-        throw new OperationCanceledException();
-
-      //var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new SubruleTokenChanges[0]) },
-      //  parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].TotalTokenChanges, memiozation);
-
-      //ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
-
-      if (parseResult.TerminateParsing)
-        throw new OperationCanceledException();
-
-      UpdateFlattenSequenceTime();
-#if DebugOutput
-      timer.Stop();
-      Debug.WriteLine("FlattenSequence took: " + timer.Elapsed);
-#endif
-
-#if DebugThreading
-      Debug.WriteLine("<<<< Strategy " + _id + " ThreadId=" + System.Threading.Thread.CurrentThread.ManagedThreadId);
-#endif
-
-      if (parseResult.TerminateParsing)
-        throw new OperationCanceledException();
-
-      var debugText = parseResult.DebugText;
-      //AstPatcher3.PatchAst(startSeq, rp, _deletedToken);
-      //var patcher = new AstPatcher(startSeq, rp, _deletedToken);
-      //patcher.PatchAst();
-      //patcher.Visualize();
-
-
-      _parseResult = null;
-
       return parseResult.Text.Length;
     }
 
