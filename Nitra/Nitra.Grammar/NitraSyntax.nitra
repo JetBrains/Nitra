@@ -172,33 +172,34 @@ syntax module NitraSyntax
 
   syntax NitraTypeArguments = "<" (NitraType; "," sm; ?)+ ">"
   {
-    Typing() : list[NType]
+    Typing(context : Context) : list[NType]
     {
       def buffer = List();
       foreach (t in this.NitraTypes.Item1)
-        buffer.Add(t.Typing()[0]);
+        buffer.Add(t.Typing(context)[0]);
       buffer.ToNList()
     }
   }
 
   syntax NitraTypeName = Identifier NitraTypeArguments?
   {
-    Typing() : TypeNamePart
+    Typing(context : Context) : TypeNamePart
     {
       def name     = this.Identifier.GetText();
-      def typeArgs = if (this.NitraTypeArgumentsOpt.IsSome) this.NitraTypeArgumentsOpt.Item.Typing() else [];
-      TypeNamePart(name, typeArgs)
+      def typeArgs = if (this.NitraTypeArgumentsOpt.IsSome) this.NitraTypeArgumentsOpt.Item.Typing(context) else [];
+      TypeNamePart(this.Location, name, typeArgs, context.GetNemerleEnvironment())
     }
   }
 
   syntax NitraType
   {
-    Typing() : NType * bool;
+    Typing(context : Context) : NType * bool;
 
     | PredefinedType
       {
         override Typing
         {
+          _ = context;
           def value = match (GetText(this.PredefinedType))
           {
             | "void"   => NPredefinedType.Void
@@ -206,7 +207,7 @@ syntax module NitraSyntax
             | "string" => NPredefinedType.String
             | _        => assert3(false)
           };
-          (NType.Predefined(value), false);
+          (NType.Predefined(this.Location, value), false);
         }
       }
     | QualifiedType  = (NitraTypeName; ".")+
@@ -215,41 +216,41 @@ syntax module NitraSyntax
         {
           def parts = List();
           foreach (t in this.NitraTypeNames.Item1)
-            parts.Add(t.Typing());
-          (NType.Qualified(parts.ToNList()), false);
+            parts.Add(t.Typing(context));
+          (NType.Qualified(this.Location, parts.ToNList()), false);
         }
       }
     | Braces         = "(" NitraType ")"
       {
-        override Typing = (this.NitraType.Typing()[0], false);
+        override Typing = (this.NitraType.Typing(context)[0], false);
       }
     | Tuple          = NitraType "*" NitraType     precedence 40  right-associative
       {
         override Typing
         {
-          def first = this.NitraType1.Typing()[0];
-          match (this.NitraType2.Typing())
+          def first = this.NitraType1.Typing(context)[0];
+          match (this.NitraType2.Typing(context))
           {
-            | (NType.Tuple(members), true) => (NType.Tuple(first :: members), true)
-            | (second, _)                  => (NType.Tuple([first, second]), true)
+            | (NType.Tuple(members), true) => (NType.Tuple(this.Location, first :: members), true)
+            | (second, _)                  => (NType.Tuple(this.Location, [first, second]), true)
           }
         }
       }
     | Func           = NitraType "->" NitraType    precedence 30  right-associative
       {
-        override Typing = (NType.Func(this.NitraType1.Typing()[0], this.NitraType2.Typing()[0]), false);
+        override Typing = (NType.Func(this.Location, this.NitraType1.Typing(context)[0], this.NitraType2.Typing(context)[0]), false);
       }
     | OptionList     = NitraType "*" precedence 50
       {
-        override Typing = (NType.OptionList(this.NitraType.Typing()[0]), false);
+        override Typing = (NType.OptionList(this.Location, this.NitraType.Typing(context)[0]), false);
       }
     | List           = NitraType "+" precedence 50
       {
-        override Typing = (NType.List(this.NitraType.Typing()[0]), false);
+        override Typing = (NType.List(this.Location, this.NitraType.Typing(context)[0]), false);
       }
     | Option         = NitraType "?" precedence 50
       {
-        override Typing = (NType.Option(this.NitraType.Typing()[0]), false);
+        override Typing = (NType.Option(this.Location, this.NitraType.Typing(context)[0]), false);
       }
   }
 
@@ -257,12 +258,17 @@ syntax module NitraSyntax
   {
     CollectGlobalSymbols(site : IMemberSite) : void
     {
-      def symbol = ParsedNitraFieldSymbol(this);
-      _ = site.Node.AddAndReport(symbol, Name.Location);
+      def symbol =
+        match (site)
+        {
+          | _ is DeclarationSymbol => ParsedDeclarationFieldSymbol(this);
+          | _                      => assert(false)
+        };
+      _ = site.Node.AddAndReport.[NitraFieldSymbol](symbol, Name.Location);
     }
     [Cached] MakeContext(parent : Context) : Context = parent;
-    [Cached] private MakeType() : NType = this.NitraType.Typing()[0];
-    [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
+    [Cached] private MakeType() : NType = this.NitraType.Typing(this.Context)[0];
+    [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, this.Context));
     Typing() : void
     {
       _ = MakeType();
