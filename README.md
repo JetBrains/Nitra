@@ -9,6 +9,6 @@ Licence - [BSD 3-Clause License](http://opensource.org/licenses/BSD-3-Clause)
 
 [Build](http://confluence.jetbrains.com/display/Nitra/Build) - building Nitra project from sources.
 
-[Example](http://confluence.jetbrains.com/display/Nitra/Calculator+sample)
+[Example](http://confluence.jetbrains.com/display/Nitra/Calculator+sample) - string calculator example
 
 [More information](http://confluence.jetbrains.com/display/Nitra)
