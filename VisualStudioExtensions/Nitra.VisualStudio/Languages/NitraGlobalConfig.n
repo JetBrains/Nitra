@@ -8,6 +8,7 @@ using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
+using Nemerle.Imperative;
 
 using System;
 using System.ComponentModel.Composition;
@@ -38,15 +39,17 @@ namespace Nitra.VisualStudio
   {
     _logger : Logger = LogManager.GetLogger(typeof(this).FullName);
 
-    public Languages : list[Language] { get; }
-
+    static _nitraConfigName             : string                      = "NitraGlobalConfig.xml";
     static _expandPropertyRegex         : Regex                       = Regex(@"\$(\w(\w|\d)*)", RegexOptions.Compiled);
     _properties                         : Hashtable[string, string]   = Hashtable();
     _languageMap                        : Hashtable[string, Language] = Hashtable();
+    mutable _languages                  : list[Language]              = [];
     _fileExtensionRegistryService       : IFileExtensionRegistryService;
     _contentTypeRegistryService         : IContentTypeRegistryService;
     _spanClassStyleBuilders             : Hashtable[string, TextFormattingRunProperties -> TextFormattingRunProperties] = Hashtable();
-    public ConfigPath                   : string { get; }
+
+    public Languages                    : list[Language] { get { _languages } }
+    public ConfigPath                   : string         { get; }
 
     [ImportingConstructor]
     public this(
@@ -54,111 +57,141 @@ namespace Nitra.VisualStudio
       fileExtensionRegistryService      : IFileExtensionRegistryService
       )
     {
-      #region read config
+      _fileExtensionRegistryService = fileExtensionRegistryService;
+      _contentTypeRegistryService   = contentTypeRegistryService;
+      _properties["Configuration"]  = Constants.Configuration;
 
-      def nitraConfigName = "NitraGlobalConfig.xml";
-      def root         = Environment.GetEnvironmentVariable("NitraPath");
-
-      _fileExtensionRegistryService      = fileExtensionRegistryService;
-      _contentTypeRegistryService        = contentTypeRegistryService;
-
-      when (root == null)
-        Error(@"You must specify path to Nitra root directory in the 'NitraPath' environment variable. For example: NitraPath=d:\ParserGenerator");
-      when (!Directory.Exists(root))
-        Error(@"Path specified in the 'NitraPath' environment variable not exists. You must specify path to Nitra root directory in the 'NitraPath' environment variable. For example: NitraPath=d:\ParserGenerator");
-
-      _properties["NitraPath"]        = root.TrimEnd('\\');
-      _properties["Configuration"] = Constants.Configuration;
-
-      ConfigPath   = Path.Combine(root, nitraConfigName);
-      def config   =
+      def root = Environment.GetEnvironmentVariable("NitraPath");
+      if (root == null)
+        ShowError(@"You must specify path to Nitra root directory in the 'NitraPath' environment variable. For example: NitraPath=d:\Nitra");
+      else if (!Directory.Exists(root))
+        ShowError(@"Path specified in the 'NitraPath' environment variable not exists. You must specify path to Nitra root directory in the 'NitraPath' environment variable. For example: NitraPath=d:\Nitra")
+      else
+      {
+        _properties["NitraPath"] = root.TrimEnd('\\');
+        ConfigPath = Path.Combine(root, _nitraConfigName);
+        ReadConfig();
+      }
+    }
+    
+    private ReadConfig() : void
+    {
+      def configElement   =
         try XElement.Load(ConfigPath)
         catch
         { e =>
-          _logger.FatalException($"Failed to read config file '$ConfigPath'", e);
-          throw;
+          _logger.ErrorException($"Failed to read config file '$ConfigPath'", e);
+          null
         }
 
-      #endregion
-
-      try
+      when (configElement != null)
       {
-        // Init Properties
-        foreach (prop in config.Element("Properties")?.Elements() ?? [])
-          _properties[prop.Name.LocalName] = prop.Value ?? "";
-
-
-        #region Init Languages
-
-        foreach (lang in config.Element("Languages")?.Elements("Language") ?? [])
+        try
         {
-          def name           = lang.Attribute("Name").Value;
-          def oldContentType = contentTypeRegistryService.GetContentType(name);
-          def fileExtentions = lang.Attribute("FileExtensions")?.Value?.SplitToList(';').RevMap(s => s.Trim().ToLowerInvariant());
+          def propertiesElement = configElement.Element("Properties");
+          when (propertiesElement != null)
+            ReadProperties(propertiesElement);
 
-          when (oldContentType != null) // remove if exists
-          {
-            foreach (extension in List(fileExtensionRegistryService.GetExtensionsForContentType(oldContentType)))
-              fileExtensionRegistryService.RemoveFileExtension(extension);
-
-            contentTypeRegistryService.RemoveContentType(name);
-          }
-
-          def contentType = contentTypeRegistryService.AddContentType(name, ["code"]);
-
-          def language =
-            Language(name, contentType, fileExtentions,
-              grammar   = lang.Attribute("Grammar").Value,
-              startRule = lang.Attribute("StartRule").Value,
-              modules   = (lang.Elements("Module") ?? []).Map(e => ExpandProperty(e.Value)));
-
-          foreach (ext in fileExtentions)
-          {
-            _languageMap[ext] = language;
-            try
-              fileExtensionRegistryService.AddFileExtension(ext, contentType);
-            catch
-            { e is InvalidOperationException =>
-              assert2(false, e.Message)
-            }
-          }
-
-          Languages ::= language;
+          def languagesElement = configElement.Element("Languages");
+          when (languagesElement != null)
+            ReadLanguages(languagesElement);
+        
+          def spanClassesElement = configElement.Element("SpanClasses");
+          when (spanClassesElement != null)
+            ReadSpanClasses(spanClassesElement);
         }
-
-        #endregion
-
-        #region Read SpanClasses
-
-        foreach (spanClass in config.Element("SpanClasses")?.Elements() ?? [])
-        {
-          def name = spanClass.Name.LocalName;
-          def foreground = spanClass.Attribute("Foreground")?.Value;
-          def background = spanClass.Attribute("Background")?.Value;
-          _spanClassStyleBuilders[name] = fun(mutable properties)
-          {
-            when (foreground != null)
-            {
-              def color = GdiColor.FromName(foreground);
-              properties = properties.SetForeground(Color.FromRgb(color.R, color.G, color.B));
-            }
-            when (background != null)
-            {
-              def color = GdiColor.FromName(background);
-              properties = properties.SetBackground(Color.FromRgb(color.R, color.G, color.B));
-            }
-            properties
-          };
+        catch
+        { e =>
+          _logger.ErrorException($"Failed to parse config file '$ConfigPath'", e);
         }
-
-        #endregion
-      }
-      catch
-      { e =>
-        _logger.FatalException($"Failed to parse config file '$ConfigPath'", e);
-        throw;
       }
     }
+
+    private ReadProperties(propertiesElement : XElement) : void
+    {
+      foreach (prop in propertiesElement.Elements())
+        _properties[prop.Name.LocalName] = prop.Value ?? "";
+    }
+
+    private ReadLanguages(languagesElement : XElement) : void
+    {
+      foreach (lang in languagesElement.Elements("Language"))
+      {
+        def nameAttr = lang.Attribute("Name");
+        when (nameAttr == null)
+          continue;
+
+        def grammarAttr = lang.Attribute("Grammar");
+        when (grammarAttr == null)
+          continue;
+
+        def startRuleAttr = lang.Attribute("StartRule");
+        when (startRuleAttr == null)
+          continue;
+
+        def fileExtensionsAttr = lang.Attribute("FileExtensions");
+        when (fileExtensionsAttr == null)
+          continue;
+
+        def moduleElements = lang.Elements("Module").ToList();
+        when (moduleElements.Count == 0)
+          continue;
+
+        def name = nameAttr.Value;
+
+        def oldContentType = _contentTypeRegistryService.GetContentType(name);
+        when (oldContentType != null) // remove if exists
+        {
+          foreach (extension in List(_fileExtensionRegistryService.GetExtensionsForContentType(oldContentType)))
+            _fileExtensionRegistryService.RemoveFileExtension(extension);
+
+          _contentTypeRegistryService.RemoveContentType(name);
+        }
+
+        def contentType    = _contentTypeRegistryService.AddContentType(name, ["code"]);
+        def fileExtensions = (fileExtensionsAttr.Value ?? "").Split(array[';'], StringSplitOptions.RemoveEmptyEntries).MapToList(s => s.Trim().ToLowerInvariant());
+        def modules        = moduleElements.MapToList(e => ExpandProperty(e.Value));
+        
+        def language = Language(name, contentType, fileExtensions, grammarAttr.Value, startRuleAttr.Value, modules);
+
+        foreach (ext in fileExtensions)
+        {
+          _languageMap[ext] = language;
+          try
+            _fileExtensionRegistryService.AddFileExtension(ext, contentType);
+          catch
+          { e is InvalidOperationException =>
+            _logger.ErrorException($"Failed to add file extension '$ext' in registry for language '$name'", e);
+          }
+        }
+
+        _languages ::= language;
+      }
+    }
+
+    private ReadSpanClasses(spanClassesElement : XElement) : void
+    {
+      foreach (spanClass in spanClassesElement.Elements())
+      {
+        def name = spanClass.Name.LocalName;
+        def foreground = spanClass.Attribute("Foreground")?.Value;
+        def background = spanClass.Attribute("Background")?.Value;
+        _spanClassStyleBuilders[name] = fun(mutable properties)
+        {
+          when (foreground != null)
+          {
+            def color = GdiColor.FromName(foreground);
+            properties = properties.SetForeground(Color.FromRgb(color.R, color.G, color.B));
+          }
+          when (background != null)
+          {
+            def color = GdiColor.FromName(background);
+            properties = properties.SetBackground(Color.FromRgb(color.R, color.G, color.B));
+          }
+          properties
+        };
+      }
+    }    
 
     public ApplySpanClassStyles(formatMap : IClassificationFormatMap, classificationTypeRegistryService : IClassificationTypeRegistryService, standardClassifications : IStandardClassificationService) : void
     {
@@ -213,14 +246,14 @@ namespace Nitra.VisualStudio
       }
       catch
       {
-        | _ is KeyNotFoundException => Error($"Configuration loading failed.\r\nProperty '$currentProperty' not defined in '$ConfigPath'."); throw;
+        | _ is KeyNotFoundException => ShowError($"Configuration loading failed.\r\nProperty '$currentProperty' not defined in '$ConfigPath'."); throw;
       }
     }
 
-    Error(msg : string) : void
+    ShowError(msg : string) : void
     {
       NitraPackage.Instance.ShowMessage(msg, MessageType.Error);
-      throw ApplicationException(msg);
+      _logger.Error(msg);
     }
   }
 }
