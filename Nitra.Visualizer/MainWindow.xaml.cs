@@ -388,7 +388,7 @@ namespace Nitra.Visualizer
         _ast = _parseResult.CreateAst();
 
       var htmlWriter = new HtmlPrettyPrintWriter(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes, "missing", "debug", "garbage");
-      _ast.PrettyPrint(htmlWriter, 0);
+      _ast.PrettyPrint(htmlWriter, 0, null);
       var html = Properties.Resources.PrettyPrintDoughnut.Replace("{prettyprint}", htmlWriter.ToString());
       prettyPrintViewer.NavigateToString(html);
     }
