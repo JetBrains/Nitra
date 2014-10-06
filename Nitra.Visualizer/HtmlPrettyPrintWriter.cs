@@ -35,7 +35,7 @@ namespace Nitra.Visualizer
       WriteSpan(_garbageClass, text);
     }
 
-    protected override void FormatToken(IPrettyPrintSource source, NSpan token, bool canBeEmpty, string ruleName)
+    protected override void FormatToken(IPrettyPrintSource source, NSpan token, bool canBeEmpty, string ruleName, SpanClass spanClass)
     {
       TryPrintGarbage(source, token);
       if (token.IsEmpty)
@@ -50,7 +50,7 @@ namespace Nitra.Visualizer
       }
     }
 
-    protected override void FormatString(IPrettyPrintSource source, NSpan token, string text)
+    protected override void FormatString(IPrettyPrintSource source, NSpan token, string text, SpanClass spanClass)
     {
       if (token.IsEmpty)
       {
@@ -68,7 +68,7 @@ namespace Nitra.Visualizer
       _lastMissing = _buffer.Length;
     }
 
-    public override void AmbiguousNode(IAmbiguousAst ast)
+    public override void AmbiguousNode(IAmbiguousAst ast, SpanClass spanClass)
     {
       WriteSpan(_missingNodeClass, "<# ambiguous " + ast.RuleDescriptor.Name + ", " + ast.Ambiguities.Count + " options");
       NewLineAndIndent();
@@ -76,7 +76,7 @@ namespace Nitra.Visualizer
       foreach (var a in ast.Ambiguities)
       {
         _previousTokenPos = previousTokenPos;
-        a.PrettyPrint(this, 0);
+        a.PrettyPrint(this, 0, spanClass);
         NewLine();
       }
       Unindent();
@@ -84,7 +84,7 @@ namespace Nitra.Visualizer
       NewLine();
     }
 
-    public override void AmbiguousNode<T>(IAmbiguousAst ast, string ruleType, IPrettyPrintSource source, Action<PrettyPrintWriter, IPrettyPrintSource, T> printer)
+    public override void AmbiguousNode<T>(IAmbiguousAst ast, string ruleType, SpanClass spanClass, IPrettyPrintSource source, Action<PrettyPrintWriter, IPrettyPrintSource, T, SpanClass> printer)
     {
       WriteSpan(_missingNodeClass, "<# ambiguous " + ruleType + ", " + ast.Ambiguities.Count + " options");
       NewLineAndIndent();
@@ -92,7 +92,7 @@ namespace Nitra.Visualizer
       foreach (object a in ast.Ambiguities)
       {
         _previousTokenPos = previousTokenPos;
-        printer(this, source, (T)a);
+        printer(this, source, (T)a, spanClass);
         NewLine();
       }
       Unindent();
