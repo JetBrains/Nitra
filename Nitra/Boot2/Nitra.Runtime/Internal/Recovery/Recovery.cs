@@ -78,11 +78,9 @@ namespace Nitra.DebugStrategies
       Debug.WriteLine(RecoveryDebug.CurrentTestName + " -----------------------------------------------------------");
 #endif
       _deletedToken.Clear();
-      var textLen = parseResult.Text.Length;
       var rp = new RecoveryParser(parseResult);
       _recoveryParser = rp;
       rp.RecoveryFromAllErrors();
-      var startSeq = rp.StartSequence;
 
       var errorCollector = new ErrorCollectorWalker();
       errorCollector.Walk(parseResult);
@@ -95,8 +93,6 @@ namespace Nitra.DebugStrategies
       Debug.WriteLine("Earley parse took: " + timer.Elapsed);
       timer.Restart();
 #endif
-
-      //RecoverAllWays(rp);
 
       UpdateRecoverAllWaysTime();
 #if DebugOutput
@@ -118,11 +114,6 @@ namespace Nitra.DebugStrategies
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
-      //var results = FlattenSequence(new FlattenSequences() { Nemerle.Collections.NList.ToList(new SubruleTokenChanges[0]) },
-      //  parseResult, startSeq, textLen, memiozation[new ParsedSequenceKey(startSeq, textLen)].TotalTokenChanges, memiozation);
-
-      //ParsePathsVisializer.PrintPaths(parseResult, _deletedToken, results);
-
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
 
@@ -138,12 +129,6 @@ namespace Nitra.DebugStrategies
 
       if (parseResult.TerminateParsing)
         throw new OperationCanceledException();
-
-      //AstPatcher3.PatchAst(startSeq, rp, _deletedToken);
-      //var patcher = new AstPatcher(startSeq, rp, _deletedToken);
-      //patcher.PatchAst();
-      //patcher.Visualize();
-
 
       _parseResult = null;
 

@@ -1,5 +1,6 @@
 ﻿using Nitra.ProjectSystem;
 using Nitra.Runtime;
+using Nitra.Runtime.Collections;
 
 using Nemerle;
 using Nemerle.Collections;
@@ -48,12 +49,13 @@ namespace Nitra.Typing
 
     public sealed override BindMany[T](path : list[Location]) : BindingResult[T]
     {
-      BindManyImpl(path)
+      | []               => assert(false, "Path is empty")
+      | name :: nameTail => BindManyImpl(name, nameTail)
     }
 
     public sealed override BindMany[T](name : Location) : BindingResult[T]
     {
-      BindManyImpl([name])
+      BindManyImpl(name, [])
     }
 
     BindByEnteredSymbol(name : Location) : list[Symbol]
@@ -103,7 +105,7 @@ namespace Nitra.Typing
         if (ParentScope != null)
           ParentScope.BindByOpenedNamespace(name)
         else
-          [];
+          GetContext.[RootContext]().Namespace.Node.BindMany(name);
       foreach (ns in OpenedNamespaces)
         match (ns.Node.BindMany(name))
         {
@@ -114,83 +116,64 @@ namespace Nitra.Typing
       result
     }
 
-    BindPathTail[T](symbol : Symbol, nameTail : list[Location]) : list[T]
+    static BindPathTail[T](symbol : Symbol, tail : list[Location], buffer : ref LightList[T]) : void
       where T: Symbol
     {
-      def bindTail(symbol : Symbol, nameTail) : list[T]
+      match (symbol)
       {
-        if (nameTail.IsEmpty)
-          match (symbol)
-          {
-            | foundSymbol is T => [foundSymbol]
-            | ambiguousSymbol is AmbiguousSymbol => ambiguousSymbol.AmbiguousList.OfTypeRevert.[T]()
-            | _ => []
-          }
-        else
-          symbol.Node.BindMany(nameTail)
-      }
+        | NamespaceOrTypeAliasSymbol(RealSymbol = realSymbol) =>
+          when (realSymbol is Some(x))
+            BindPathTail(x, tail, ref buffer);
 
-      def result =
-        match (symbol)
-        {
-          | NamespaceOrTypeAliasSymbol(RealSymbol = Some(realSymbol)) => bindTail(realSymbol, nameTail)
-          | NamespaceOrTypeAliasSymbol(RealSymbol = None)             => []
-          | _ => bindTail(symbol, nameTail)
-        };
-      result
+        | AmbiguousSymbol(AmbiguousList = ambiguities) =>
+          foreach(x in ambiguities)
+            BindPathTail(x, tail, ref buffer);
+
+        | _ =>
+          match (tail)
+          {
+            | [] =>
+              when (symbol is T)
+                buffer.Add(symbol :> T);
+
+            | name :: nameTail =>
+              foreach (x in symbol.Node.BindMany(name))
+                BindPathTail(x, nameTail, ref buffer);
+          }
+      }
     }
 
-    BindManyImpl[T](path : list[Location]) : BindingResult[T]
+    BindManyImpl[T](name : Location, nameTail : list[Location]) : BindingResult[T]
       where T: Symbol
     {
-      | [] => assert(false)
-      | name :: nameTail =>
-        //assert2(name.GetText() != "M1");
-        def loop(name, nameTail) : BindingResult[T]
+      def bindManyTails(symbols : list[Symbol], tail : list[Location]) : list[T]
+      {
+        mutable buffer;
+        foreach (x in symbols)
+          BindPathTail(x, tail, ref buffer);
+        buffer.ToNList()
+      }
+
+      def bindByOpenedNamespace(loc, name, nameTail) : BindingResult[T]
+      {
+        match (BindByOpenedNamespace(name))
         {
-          match (BindByOpenedNamespace(name))
+          | []      => BindingUtils.UnboundBindingResult(loc)
+          | symbols => BindingUtils.MakeBindingResult(loc, bindManyTails(symbols, nameTail))
+        }
+      }
+
+      def loc = if (nameTail.IsEmpty) name else nameTail.Last;
+      match (BindByEnteredSymbol(name))
+      {
+        | []      => bindByOpenedNamespace(loc, name, nameTail)
+        | symbols =>
+          match (bindManyTails(symbols, nameTail))
           {
-            | []     => BindingUtils.UnboundBindingResult(name)
-            | [one]  =>
-              match (nameTail)
-              {
-                | [] =>
-                  match (one : Symbol)
-                  {
-                    | one is T => BindingResult(name, [one], [])
-                    | _        => BindingUtils.UnboundBindingResult(name)
-                  }
-
-                | nextName :: nextNameTail => loop(nextName, nextNameTail)
-              }
-
-            | many => BindingUtils.AmbiguousBindingResult(name, many)
+            | []     => bindByOpenedNamespace(loc, name, nameTail)
+            | result => BindingUtils.MakeBindingResult(loc, result)
           }
-        }
-
-        match (BindByEnteredSymbol(name))
-        {
-          | [] =>
-            loop(name, nameTail)
-
-          | [one] when nameTail.IsEmpty with n = name
-          | [one]                       with n = path.Last =>
-            def result = BindPathTail(one, nameTail);
-
-            if (result.IsEmpty)
-            {
-              def res = loop(name, nameTail);
-
-              if (res.Candidates.IsEmpty)
-                BindingUtils.MakeBindingResult(n, result)
-              else
-                res
-            }
-            else
-              BindingUtils.MakeBindingResult(n, result)
-
-          | many => BindingUtils.AmbiguousBindingResult(name, many)
-        }
+      }
     }
   }
 }

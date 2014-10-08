@@ -172,33 +172,34 @@ syntax module NitraSyntax
 
   syntax NitraTypeArguments = "<" (NitraType; "," sm; ?)+ ">"
   {
-    Typing() : list[NType]
+    Typing(context : Context) : list[NType]
     {
       def buffer = List();
       foreach (t in this.NitraTypes.Item1)
-        buffer.Add(t.Typing()[0]);
+        buffer.Add(t.Typing(context)[0]);
       buffer.ToNList()
     }
   }
 
   syntax NitraTypeName = Identifier NitraTypeArguments?
   {
-    Typing() : TypeNamePart
+    Typing(context : Context) : TypeNamePart
     {
       def name     = this.Identifier.GetText();
-      def typeArgs = if (this.NitraTypeArgumentsOpt.IsSome) this.NitraTypeArgumentsOpt.Item.Typing() else [];
-      TypeNamePart(name, typeArgs)
+      def typeArgs = if (this.NitraTypeArgumentsOpt.IsSome) this.NitraTypeArgumentsOpt.Item.Typing(context) else [];
+      TypeNamePart(this.Location, name, typeArgs, context.GetNemerleEnvironment())
     }
   }
 
   syntax NitraType
   {
-    Typing() : NType * bool;
+    Typing(context : Context) : NType * bool;
 
     | PredefinedType
       {
         override Typing
         {
+          _ = context;
           def value = match (GetText(this.PredefinedType))
           {
             | "void"   => NPredefinedType.Void
@@ -206,7 +207,7 @@ syntax module NitraSyntax
             | "string" => NPredefinedType.String
             | _        => assert3(false)
           };
-          (NType.Predefined(value), false);
+          (NType.Predefined(this.Location, value), false);
         }
       }
     | QualifiedType  = (NitraTypeName; ".")+
@@ -215,41 +216,41 @@ syntax module NitraSyntax
         {
           def parts = List();
           foreach (t in this.NitraTypeNames.Item1)
-            parts.Add(t.Typing());
-          (NType.Qualified(parts.ToNList()), false);
+            parts.Add(t.Typing(context));
+          (NType.Qualified(this.Location, parts.ToNList()), false);
         }
       }
     | Braces         = "(" NitraType ")"
       {
-        override Typing = (this.NitraType.Typing()[0], false);
+        override Typing = (this.NitraType.Typing(context)[0], false);
       }
     | Tuple          = NitraType "*" NitraType     precedence 40  right-associative
       {
         override Typing
         {
-          def first = this.NitraType1.Typing()[0];
-          match (this.NitraType2.Typing())
+          def first = this.NitraType1.Typing(context)[0];
+          match (this.NitraType2.Typing(context))
           {
-            | (NType.Tuple(members), true) => (NType.Tuple(first :: members), true)
-            | (second, _)                  => (NType.Tuple([first, second]), true)
+            | (NType.Tuple(members), true) => (NType.Tuple(this.Location, first :: members), true)
+            | (second, _)                  => (NType.Tuple(this.Location, [first, second]), true)
           }
         }
       }
     | Func           = NitraType "->" NitraType    precedence 30  right-associative
       {
-        override Typing = (NType.Func(this.NitraType1.Typing()[0], this.NitraType2.Typing()[0]), false);
+        override Typing = (NType.Func(this.Location, this.NitraType1.Typing(context)[0], this.NitraType2.Typing(context)[0]), false);
       }
     | OptionList     = NitraType "*" precedence 50
       {
-        override Typing = (NType.OptionList(this.NitraType.Typing()[0]), false);
+        override Typing = (NType.OptionList(this.Location, this.NitraType.Typing(context)[0]), false);
       }
     | List           = NitraType "+" precedence 50
       {
-        override Typing = (NType.List(this.NitraType.Typing()[0]), false);
+        override Typing = (NType.List(this.Location, this.NitraType.Typing(context)[0]), false);
       }
     | Option         = NitraType "?" precedence 50
       {
-        override Typing = (NType.Option(this.NitraType.Typing()[0]), false);
+        override Typing = (NType.Option(this.Location, this.NitraType.Typing(context)[0]), false);
       }
   }
 
@@ -257,12 +258,17 @@ syntax module NitraSyntax
   {
     CollectGlobalSymbols(site : IMemberSite) : void
     {
-      def symbol = ParsedNitraFieldSymbol(this);
-      _ = site.Node.AddAndReport(symbol, Name.Location);
+      def symbol =
+        match (site)
+        {
+          | _ is DeclarationSymbol => ParsedDeclarationFieldSymbol(this);
+          | _                      => assert(false)
+        };
+      _ = site.Node.AddAndReport.[NitraFieldSymbol](symbol, Name.Location);
     }
     [Cached] MakeContext(parent : Context) : Context = parent;
-    [Cached] private MakeType() : NType = this.NitraType.Typing()[0];
-    [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
+    [Cached] private MakeType() : NType = this.NitraType.Typing(this.Context)[0];
+    [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, this.Context));
     Typing() : void
     {
       _ = MakeType();
@@ -328,25 +334,28 @@ syntax module NitraSyntax
     }
   }
   
-  syntax DeclarationOption = "|" sm Name Body=DeclarationBody
+  syntax DeclarationOption = "|" sm Name Body=DeclarationBody?
   {
     [Cached] MakeDeclarationSymbol() : ParsedExtensionDeclarationSymbol = ParsedExtensionDeclarationSymbol(this);
     CollectGlobalSymbols(site : IMemberSite) : void
     {
       def symbol = MakeDeclarationSymbol();
       _ = site.Node.AddAndReport.[DeclarationSymbol](symbol, Name.Location);
-      Body.CollectGlobalSymbols(symbol);
+      when (Body.IsSome)
+        Body.Item.CollectGlobalSymbols(symbol);
     }
     [Cached] MakeContext(parent : Context) : Context
     {
       def  context1 = DeclarationContext(parent, this.DeclarationSymbol);
-      def _context2 = Body.MakeContext(context1);
+      when (Body.IsSome)
+        _ = Body.Item.MakeContext(context1);
       parent
     }
     Typing(baseDeclarationRef : SymbolRef[ExtensibleDeclarationSymbol]) : void
     {
       _ = MakeBaseDeclarationRef(baseDeclarationRef);
-      Body.Typing();
+      when (Body.IsSome)
+        Body.Item.Typing();
     }
     [Cached] MakeBaseDeclarationRef(baseDeclarationRef : SymbolRef[ExtensibleDeclarationSymbol]) : SymbolRef[ExtensibleDeclarationSymbol] = baseDeclarationRef;
   }
@@ -429,19 +438,24 @@ syntax module NitraSyntax
         [Cached] private MakeBaseDeclarationRef() : SymbolRef[ExtensibleDeclarationSymbol] = SymbolRef[ExtensibleDeclarationSymbol].Create(BaseName, Context.Bind(BaseName));
       }
 
-    | MapDeclaration = "declare" sm DeclarationName=QualifiedName "from" sm RuleName=QualifiedName MapDeclarationBody
+    | MapDeclaration = "declare" sm DeclarationName=QualifiedName RuleName=(sm "from" sm QualifiedName)? MapDeclarationBody
       {
         override CollectGlobalSymbols { _ = ns; }
-        override MakeContext = parent;
+        override MakeContext
+        {
+          def context = MapDeclarationContext(parent);
+          _ = MapDeclarationBody.MakeContext(context);
+          context
+        }
         override CollectDeclarationMappings
         {
-          def ruleSymbol        = SymbolRef.Create(RuleName,        this.Context.Bind.[SyntaxRuleSymbol](RuleName));
           def declarationSymbol = SymbolRef.Create(DeclarationName, this.Context.Bind.[DeclarationSymbol](DeclarationName));
+          def ruleName          = if (RuleName.IsSome) RuleName.Item.Item2 else DeclarationName;
+          def ruleSymbol        = SymbolRef.Create(ruleName, this.Context.Bind.[SyntaxRuleSymbol](ruleName));
           when (ruleSymbol.IsSome && declarationSymbol.IsSome)
           {
-            def arguments         = MapDeclarationBody.GetDeclarationCtorArguments(declarationSymbol.Value, this.Context);
-            def declarationCtor   = DeclarationCtor(this.Location, declarationSymbol, arguments);
-            ruleSymbol.Value.SetDeclarationCtor(declarationCtor);
+            def body = MapDeclarationBody.GetDeclarationMappingBody(declarationSymbol, ruleSymbol.Value);
+            ruleSymbol.Value.SetDeclarationMappingBody(body);
           }
         }
         override Typing { }
@@ -470,7 +484,6 @@ syntax module NitraSyntax
           foreach (decl in SyntaxModuleMembers)
             decl.CollectGlobalSymbols(symbol);
         }
-        [Cached] private Options() : SyntaxModuleOptions = SyntaxModuleAttributes.Options(SyntaxModuleOptions.Empty);
         [Cached] private MakeInitialContext(contextToSave : SyntaxModuleContext) : SyntaxModuleContext = contextToSave;
         [Cached] private MakeFinalContext(contextToSave : Context) : Context = contextToSave;
         override MakeContext
@@ -506,6 +519,14 @@ syntax module NitraSyntax
       {
         override Options = inOptions.SetNeedSplicable(this, true);
       }
+    | ExplicitSpaces = AttributeName="ExplicitSpaces"
+      {
+        override Options = inOptions.SetExplicitSpaces(this, true);
+      }
+    | ImplicitSpaces = AttributeName="ImplicitSpaces"
+      {
+        override Options = inOptions.SetExplicitSpaces(this, false);
+      }
   }
 
   syntax SyntaxModuleAttributeList = "[" (SyntaxModuleAttribute; ","sm)+ "]" sm
@@ -529,7 +550,7 @@ syntax module NitraSyntax
       {
         override Options = inOptions.SetStart(this, true);
       }
-    | "Arity" "(" Digits ")" { override Options = inOptions.SetArity(this, int.Parse(GetText(Digits))); }
+    | "Arity" "(" Number ")" { override Options = inOptions.SetArity(this, Number.Value()); }
     | "Prefix"               { override Options = inOptions.SetOperatorInfo(this, OperatorInfo.Prefix); }
     | "Postfix"              { override Options = inOptions.SetOperatorInfo(this, OperatorInfo.Postfix); }
     | "Infix"                { override Options = inOptions.SetOperatorInfo(this, OperatorInfo.Infix); }
@@ -777,57 +798,122 @@ syntax module NitraSyntax
     }
   }
 
-  syntax MapDeclarationMember = FieldName=Name FieldExpression=RuleMethodBody
+  syntax MapDeclarationExpression
   {
-    GetDeclarationCtorArgument(declarationSymbol : DeclarationSymbol, context : Context) : DeclarationCtorArgument
-    {
-      def fieldRef = Utils.BindByHierarchy.[NitraFieldSymbol](declarationSymbol, FieldName);
-      def value    = NemerleParser.Parse(FieldExpression, context);
-      DeclarationCtorArgument(this.Location, fieldRef, value)
-    }
+    | Block
+    | Empty      = ";"
+    | Expression = Expression ";"
   }
 
-  syntax MapDeclarationBody = outline_begin_before nl OpenBrace="{" inl Fields=MapDeclarationMember* d CloseBrace="}" outline_end_before nl
+  syntax MapDeclarationMember
   {
-    GetDeclarationCtorArguments(declarationSymbol : DeclarationSymbol, context : Context) : list[DeclarationCtorArgument]
-    {
-      def initializedFields = Dictionary();
-      def buffer = List();
-      foreach (f in Fields)
-      {
-        def argument = f.GetDeclarationCtorArgument(declarationSymbol, context);
-        when (argument.Field is SymbolRef.Some(field))
-        {
-          def fieldName = field.Name;
-          if (field.HasBody)
-            Project.CurrentProject.Error(argument.Field.Location, $"Field '$fieldName' is not assignable.", -1);
-          else if (initializedFields.ContainsKey(field))
-          {
-            using(messages = Project.CurrentProject.RootError(argument.Field.Location, $"Duplicatate assignment of field '$fieldName'.", -1))
-              messages.Hint(initializedFields[field], "First assigned here.", -1);
-          }
-          else
-            initializedFields.Add(field, argument.Field.Location);
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    GetDeclarationMappingField(declarationSymbol : DeclarationSymbol, _ruleSymbol : SyntaxRuleSymbol) : DeclarationMappingField;
 
-          buffer.Add(argument);
+    | Automatic = FieldName=Name sm "<-" sm RuleFieldName=Name ";"
+      {
+        override GetDeclarationMappingField
+        {
+          def fieldRef  = Utils.BindByHierarchy.[NitraFieldSymbol](declarationSymbol, this.FieldName);
+          def fieldName = this.RuleFieldName.GetText();
+          DeclarationMappingField.Automatic(this.Location, fieldRef, this.RuleFieldName.Location, fieldName)
         }
       }
-
-      foreach (requiredField when !requiredField.HasBody in declarationSymbol.Fields)
+    | Inline = FieldName=Name sm "=" sm Code=MapDeclarationExpression
       {
-        def fieldName = requiredField.Name;
-        unless (initializedFields.ContainsKey(requiredField))
-          Project.CurrentProject.Error(Location(this.Location.Source, this.CloseBrace), $"Assignment of field '$fieldName' is required.", -1);
+        override GetDeclarationMappingField
+        {
+          def fieldRef = Utils.BindByHierarchy.[NitraFieldSymbol](declarationSymbol, this.FieldName);
+          def code     = NemerleParser.Parse(this.Code, this.Context);
+          DeclarationMappingField.Inline(this.Location, fieldRef, code)
+        }
       }
+    | Extension = "|" sm DeclarationName=Name RuleName=("from" sm Name)? Body=MapDeclarationBody?
+      {
+        override MakeContext = if (Body.IsSome) Body.Item.MakeContext(parent) else parent;
+        override GetDeclarationMappingField
+        {
+          if (declarationSymbol is ExtensibleDeclarationSymbol)
+          {
+            def ruleName              = if(this.RuleName.IsSome) this.RuleName.Item.Item2 else this.DeclarationName;
+            def currentDeclarationRef = Utils.BindByHierarchy.[DeclarationSymbol](declarationSymbol, this.DeclarationName);
+            def currentRuleRef        = Utils.BindByHierarchy.[SyntaxRuleSymbol](_ruleSymbol, ruleName);
+            when (currentDeclarationRef.IsSome && currentRuleRef.IsSome)
+            {
+              def declarationMappingBody =
+                if (this.Body.IsSome)
+                  this.Body.Item.GetDeclarationMappingBody(currentDeclarationRef, currentRuleRef.Value)
+                else
+                  DeclarationMappingBody.Delegate(this.DeclarationName.Location, currentDeclarationRef);
+              currentRuleRef.Value.SetDeclarationMappingBody(declarationMappingBody)
+            }
+          }
+          else
+          {
+            def name = declarationSymbol.Name;
+            Project.CurrentProject.Error(this.DeclarationName.Location, $"Declaration '$name' is not extensible.", -1);
+          }
+          null
+        }
+      }
+  }
 
-      buffer.ToNList()
-    }
+  syntax MapDeclarationBody
+  {
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    GetDeclarationMappingBody(declarationSymbol : SymbolRef[DeclarationSymbol], _ruleSymbol : SyntaxRuleSymbol) : DeclarationMappingBody;
+
+    | Delegate = ";"
+      {
+        override GetDeclarationMappingBody = DeclarationMappingBody.Delegate(this.Location, declarationSymbol);
+      }
+    | Inline = sm "=" sm Expr=MapDeclarationExpression
+      {
+        override GetDeclarationMappingBody = DeclarationMappingBody.Inline(this.Location, declarationSymbol, NemerleParser.Parse(this.Expr, this.Context));
+      }
+    | PerMember = outline_begin_before nl OpenBrace="{" inl Members=MapDeclarationMember* d CloseBrace="}" outline_end_before nl
+      {
+        override MakeContext = PassThrough(Members, parent, _.MakeContext(_));
+        override GetDeclarationMappingBody
+        {
+          def initializedFields = Dictionary();
+          def buffer = List();
+          foreach (member in Members)
+          {
+            def mappingField = member.GetDeclarationMappingField(declarationSymbol.Value, _ruleSymbol);
+            when (mappingField != null)
+            when (mappingField.Field is SymbolRef.Some(field))
+            {
+              def fieldName = field.Name;
+              if (field.HasBody)
+                Project.CurrentProject.Error(mappingField.Field.Location, $"Field '$fieldName' is not assignable.", -1);
+              else if (initializedFields.ContainsKey(field))
+              {
+                using (messages = Project.CurrentProject.RootError(mappingField.Field.Location, $"Duplicatate assignment of field '$fieldName'.", -1))
+                  messages.Hint(initializedFields[field], "First assigned here.", -1);
+              }
+              else
+                initializedFields.Add(field, mappingField.Field.Location);
+
+              buffer.Add(mappingField);
+            }
+          }
+
+          foreach (requiredField when !requiredField.HasBody in declarationSymbol.Value.Fields)
+          {
+            def fieldName = requiredField.Name;
+            unless (initializedFields.ContainsKey(requiredField))
+              Project.CurrentProject.Error(Location(this.Location.Source, this.CloseBrace), $"Assignment of field '$fieldName' is required.", -1);
+          }
+
+          DeclarationMappingBody.PerField(this.Location, declarationSymbol, buffer.ToNList())
+        }
+      }
   }
 
   syntax TokenRule = RuleAttributes "token" sm Name sm "=" sm RuleExpression SimpleRuleBody
   {
     [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedTokenRuleSymbol = ParsedTokenRuleSymbol(this, owner);
-    [Cached] private Options() : RuleDefinitionOptions = RuleAttributes.Options(RuleDefinitionOptions.CreateTokenRule());
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
     {
       def symbol = MakeSymbol(owner);
@@ -841,7 +927,7 @@ syntax module NitraSyntax
       _ = SimpleRuleBody.MakeContext(context);
       parent
     }
-    [Cached] private MakeTypedRule()   : Rule.Sequence = TypeRuleExpression(Options(), SimpleRuleBody.Context, RuleExpression.Typing(None(), 0, None(), SimpleRuleBody.Context, Options()));
+    [Cached] private MakeTypedRule()   : Rule.Sequence = TypeRuleExpression(this.Symbol.Options, SimpleRuleBody.Context, RuleExpression.Typing(None(), 0, None(), SimpleRuleBody.Context, this.Symbol.Options));
     CollectDeclarationMappings() : void = SimpleRuleBody.CollectDeclarationMappings(this.Symbol);
     Typing() : void
     {
@@ -853,7 +939,6 @@ syntax module NitraSyntax
   syntax RegexRule = RuleAttributes "regex" sm Name sm "=" sm RegexExpression RegexRuleBody
   {
     [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedRegularRuleSymbol = ParsedRegularRuleSymbol(this, owner);
-    [Cached] private Options() : RuleDefinitionOptions = RuleAttributes.Options(RuleDefinitionOptions.Empty);
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
     {
       def symbol = MakeSymbol(owner);
@@ -929,7 +1014,6 @@ syntax module NitraSyntax
   syntax SimpleRule = RuleAttributes "syntax" sm Name sm "=" sm RuleExpression SimpleRuleBody
   {
     [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedSimpleRuleSymbol = ParsedSimpleRuleSymbol(this, owner);
-    [Cached] private Options() : RuleDefinitionOptions = RuleAttributes.Options(RuleDefinitionOptions.Empty);
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
     {
       def symbol = MakeSymbol(owner);
@@ -943,7 +1027,7 @@ syntax module NitraSyntax
       _ = SimpleRuleBody.MakeContext(context);
       parent
     }
-    [Cached] private MakeTypedRule()   : Rule.Sequence = TypeRuleExpression(Options(), SimpleRuleBody.Context, RuleExpression.Typing(None(), 0, None(), SimpleRuleBody.Context, Options()));
+    [Cached] private MakeTypedRule()   : Rule.Sequence = TypeRuleExpression(this.Symbol.Options, SimpleRuleBody.Context, RuleExpression.Typing(None(), 0, None(), SimpleRuleBody.Context, this.Symbol.Options));
     CollectDeclarationMappings() : void = SimpleRuleBody.CollectDeclarationMappings(this.Symbol);
     Typing() : void
     {
@@ -955,7 +1039,6 @@ syntax module NitraSyntax
   syntax VoidRule = RuleAttributes "void" sm Name sm "=" sm RuleExpression SimpleRuleBody
   {
     [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedVoidRuleSymbol = ParsedVoidRuleSymbol(this, owner);
-    [Cached] private Options() : RuleDefinitionOptions = RuleAttributes.Options(RuleDefinitionOptions.CreateTokenRule());
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
     {
       def symbol = MakeSymbol(owner);
@@ -969,7 +1052,7 @@ syntax module NitraSyntax
       _ = SimpleRuleBody.MakeContext(context);
       parent
     }
-    [Cached] private MakeTypedRule()   : Rule.Sequence = TypeRuleExpression(Options(), SimpleRuleBody.Context, RuleExpression.Typing(None(), 0, None(), SimpleRuleBody.Context, Options()));
+    [Cached] private MakeTypedRule()   : Rule.Sequence = TypeRuleExpression(this.Symbol.Options, SimpleRuleBody.Context, RuleExpression.Typing(None(), 0, None(), SimpleRuleBody.Context, this.Symbol.Options));
     CollectDeclarationMappings() : void = SimpleRuleBody.CollectDeclarationMappings(this.Symbol);
     Typing() : void
     {
@@ -1073,12 +1156,20 @@ syntax module NitraSyntax
       }
     | MapDeclaration = "declare" sm DeclarationName=QualifiedName MapDeclarationBody
       {
+        override MakeContext
+        {
+          def context = MapDeclarationContext(parent);
+          _ = MapDeclarationBody.MakeContext(context);
+          context
+        }
         override CollectDeclarationMappings
         {
           def declarationSymbol = SymbolRef.Create(DeclarationName, this.Context.Bind.[DeclarationSymbol](DeclarationName));
-          def arguments         = if (declarationSymbol.IsSome) MapDeclarationBody.GetDeclarationCtorArguments(declarationSymbol.Value, this.Context) else [];
-          def declarationCtor   = DeclarationCtor(this.Location, declarationSymbol, arguments);
-          _ruleSymbol.SetDeclarationCtor(declarationCtor);
+          when (declarationSymbol.IsSome)
+          {
+            def body = MapDeclarationBody.GetDeclarationMappingBody(declarationSymbol, _ruleSymbol);
+            _ruleSymbol.SetDeclarationMappingBody(body);
+          }
         }
       }
   }
@@ -1086,7 +1177,6 @@ syntax module NitraSyntax
   syntax ExtensibleRule = RuleAttributes "syntax"  sm Name ExtensibleRuleBody
   {
     [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedExtensibleRuleSymbol = ParsedExtensibleRuleSymbol(this, owner);
-    [Cached] private Options() : RuleDefinitionOptions = RuleAttributes.Options(RuleDefinitionOptions.Empty);
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
     {
       def symbol = MakeSymbol(owner);
@@ -1103,7 +1193,6 @@ syntax module NitraSyntax
     CollectDeclarationMappings() : void = ExtensibleRuleBody.CollectDeclarationMappings(this.Symbol);
     Typing() : void
     {
-      _ = Options();
       _ = ExtensibleRuleBody.Typing(ExtensibleRuleRef.Some(Name.Location, false, Symbol));
     }
   }
@@ -1111,7 +1200,6 @@ syntax module NitraSyntax
   syntax ExtensibleTokenRule = RuleAttributes "token"  sm Name ExtensibleRuleBody
   {
     [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedExtensibleTokenRuleSymbol = ParsedExtensibleTokenRuleSymbol(this, owner);
-    [Cached] private Options() : RuleDefinitionOptions = RuleAttributes.Options(RuleDefinitionOptions.CreateTokenRule());
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
     {
       def symbol = MakeSymbol(owner);
@@ -1128,7 +1216,6 @@ syntax module NitraSyntax
     CollectDeclarationMappings() : void = ExtensibleRuleBody.CollectDeclarationMappings(this.Symbol);
     Typing() : void
     {
-      _ = Options();
       _ = ExtensibleRuleBody.Typing(ExtensibleRuleRef.Some(Name.Location, false, this.Symbol));
     }
   }
@@ -1233,13 +1320,16 @@ syntax module NitraSyntax
         override MakeContext          = RuleMethodMissing.MakeContext(parent);
         override Typing               = RuleMethodMissing.Typing();
       }
-    | MapDeclaration = "declare" sm DeclarationName=QualifiedName ";"
+    | MapDeclaration = "declare" sm DeclarationName=QualifiedName BodySpan=";"
       {
         override CollectDeclarationMappings
         {
           def declarationSymbol = SymbolRef.Create(DeclarationName, this.Context.Bind.[DeclarationSymbol](DeclarationName));
-          def declarationCtor   = DeclarationCtor(this.Location, declarationSymbol, []);
-          _ruleSymbol.SetDeclarationCtor(declarationCtor);
+          when (declarationSymbol.IsSome)
+          {
+            def body = DeclarationMappingBody.Delegate(Location(this.Location.Source, this.BodySpan), declarationSymbol);
+            _ruleSymbol.SetDeclarationMappingBody(body);
+          }
         }
       }
   }
@@ -1269,8 +1359,7 @@ syntax module NitraSyntax
         parent
     }
     [Cached] private MakeBaseRuleRef(baseRule : ExtensibleRuleRef)  : ExtensibleRuleRef     = baseRule;
-    [Cached] private MakeOptions()                                  : RuleDefinitionOptions = RuleAttributes.Options(BaseRuleRef.Map(r => r.Options.InheritedCopy()) ?? RuleDefinitionOptions.Empty);
-    [Cached] private MakeTypedRule()                                : Rule.Sequence         = TypeRuleExpression(Options, RuleTypingContext, RuleExpression.Typing(BaseRuleRef, PrecedenceOpt.Map(_.Value()) ?? 0, None(), RuleTypingContext, Options));
+    [Cached] private MakeTypedRule()                                : Rule.Sequence         = TypeRuleExpression(this.Symbol.Options, RuleTypingContext, RuleExpression.Typing(BaseRuleRef, PrecedenceOpt.Map(_.Value()) ?? 0, None(), RuleTypingContext, this.Symbol.Options));
     CollectDeclarationMappings() : void
     {
       when (ExtensionRuleBodyOpt.IsSome)
@@ -1279,10 +1368,9 @@ syntax module NitraSyntax
     Typing(baseRule : ExtensibleRuleRef) : void
     {
       _ = MakeBaseRuleRef(baseRule);
-      _ = MakeOptions();
       _ = MakeTypedRule();
-      when (Options.OperatorInfo == OperatorInfo.None)
-        TryInferOperatorType(Symbol);
+      when (this.Symbol.Options.OperatorInfo == OperatorInfo.None && baseRule.IsSome)
+        TryInferOperatorType(this.Symbol);
       when (ExtensionRuleBodyOpt.IsSome)
         ExtensionRuleBodyOpt.Item.Typing(BaseRuleRef, this.Symbol);
 
@@ -1295,6 +1383,7 @@ syntax module NitraSyntax
           {
             match (declarationSymbol)
             {
+              | ExtensibleDeclarationSymbol => ()
               | SimpleDeclarationSymbol as ruleDeclarationSymbol
               | ExtensionDeclarationSymbol(BaseDeclaration = SymbolRef.Some(ruleDeclarationSymbol)) =>
                 when (baseDeclarationSymbol != ruleDeclarationSymbol)
@@ -1413,12 +1502,20 @@ syntax module NitraSyntax
       }
     | MapDeclaration = "declare" sm DeclarationName=QualifiedName MapDeclarationBody
       {
+        override MakeContext
+        {
+          def context = MapDeclarationContext(parent);
+          _ = MapDeclarationBody.MakeContext(context);
+          context
+        }
         override CollectDeclarationMappings
         {
           def declarationSymbol = SymbolRef.Create(DeclarationName, this.Context.Bind.[DeclarationSymbol](DeclarationName));
-          def arguments         = if (declarationSymbol.IsSome) MapDeclarationBody.GetDeclarationCtorArguments(declarationSymbol.Value, this.Context) else [];
-          def declarationCtor   = DeclarationCtor(this.Location, declarationSymbol, arguments);
-          _ruleSymbol.SetDeclarationCtor(declarationCtor);
+          when (declarationSymbol.IsSome)
+          {
+            def body = MapDeclarationBody.GetDeclarationMappingBody(declarationSymbol, _ruleSymbol);
+            _ruleSymbol.SetDeclarationMappingBody(body);
+          }
         }
       }
   }
@@ -1662,6 +1759,18 @@ syntax module NitraSyntax
       }
   }
 
+  syntax RepeatQuantifier
+  {
+    Bounds() : RepeatBounds;
+
+    | ZeroOrMany = "*"                                { override Bounds = (0,               None());                }
+    | OneOrMany  = "+"                                { override Bounds = (1,               None());                }
+    | UpperBound = "{" sm        "," sm Number sm "}" { override Bounds = (0,               Some(Number.Value()));  }
+    | LowerBound = "{" sm Number ","           sm "}" { override Bounds = (Number.Value(),  None());                }
+    | FullBounds = "{" sm Number "," sm Number sm "}" { override Bounds = (Number1.Value(), Some(Number2.Value())); }
+    | Exact      = "{" sm Number               sm "}" { override Bounds { def x = Number.Value(); (x, Some(x)); }   }
+  }
+
   alias Separator  = RegexExpression;
 
   syntax RegexExpression
@@ -1694,15 +1803,14 @@ syntax module NitraSyntax
         override MakeContext = RegexExpression.MakeContext(parent);
         override Typing = RegularRule.Repeat(Location, 0, Some(1), this.RegexExpression.Typing());
       }
-    | ZeroOrMany              = RegexExpression "*" precedence 30
+    | Repeat              = RegexExpression RepeatQuantifier precedence 30
       {
         override MakeContext = RegexExpression.MakeContext(parent);
-        override Typing = RegularRule.Repeat(Location, 0, None(), this.RegexExpression.Typing());
-      }
-    | OneOrMany               = RegexExpression "+" precedence 30
-      {
-        override MakeContext = RegexExpression.MakeContext(parent);
-        override Typing = RegularRule.Repeat(Location, 1, None(), this.RegexExpression.Typing());
+        override Typing
+        {
+          def (lower, upper) = RepeatQuantifier.Bounds();
+          RegularRule.Repeat(Location, lower, upper, this.RegexExpression.Typing());
+        }
       }
     | Invert                  = "~" RegexExpression precedence 25
       {
@@ -1743,15 +1851,14 @@ syntax module NitraSyntax
       {
         override Typing = RegularRule.Chars(Location, InvertRange(FoldThrough(Ranges.Item1, RangeSet(), _.RangeSet(_))));
       }
-    | ZeroOrManyWithSeparator = "(" RegexExpression ";"sm Separator ")" "*"
+    | RepeatWithSeparator = "(" RegexExpression ";"sm Separator ")" RepeatQuantifier
       {
         override MakeContext  = parent |> RegexExpression.MakeContext |> Separator.MakeContext;
-        override Typing = RegularRule.RepeatWithSeparator(Location, 0, None(), RegexExpression.Typing(), Separator.Typing());
-      }
-    | OneOrManyWithSeparator  = "(" RegexExpression ";"sm Separator ")" "+"
-      {
-        override MakeContext = parent |> RegexExpression.MakeContext |> Separator.MakeContext;
-        override Typing = RegularRule.RepeatWithSeparator(Location, 1, None(), RegexExpression.Typing(), Separator.Typing());
+        override Typing
+        {
+          def (lower, upper) = RepeatQuantifier.Bounds();
+          RegularRule.RepeatWithSeparator(Location, lower, upper, RegexExpression.Typing(), Separator.Typing());
+        }
       }
   }
 
@@ -1790,23 +1897,14 @@ syntax module NitraSyntax
         }
         override InferName = RuleExpression.InferName() + "Opt";
       }
-    | ZeroOrMany                      = RuleExpression "*" precedence 30
+    | Repeat                      = RuleExpression RepeatQuantifier precedence 30
       {
         override Typing
         {
-          def rule = RuleExpression.Typing(None(), 0, None(), context, _options);
-          def type = EvaluateListRuleType(rule);
-          Rule.Repeat(this.Location, type, MakePlural(_fieldName, rule, context), 0, None(), rule);
-        }
-        override InferName = MakePlural(RuleExpression.InferName());
-      }
-    | OneOrMany                       = RuleExpression "+" precedence 30
-      {
-        override Typing
-        {
-          def rule = RuleExpression.Typing(None(), 0, None(), context, _options);
-          def type = EvaluateListRuleType(rule);
-          Rule.Repeat(this.Location, type, MakePlural(_fieldName, rule, context), 1, None(), rule);
+          def rule           = RuleExpression.Typing(None(), 0, None(), context, _options);
+          def type           = EvaluateListRuleType(rule);
+          def (lower, upper) = RepeatQuantifier.Bounds();
+          Rule.Repeat(this.Location, type, MakePlural(_fieldName, rule, context), lower, upper, rule);
         }
         override InferName = MakePlural(RuleExpression.InferName());
       }
@@ -1840,47 +1938,16 @@ syntax module NitraSyntax
         override Typing = TypeCall(_baseRule, _precedence, _fieldName, context, _options, QualifiedName, BindingPower);
         override InferName = QualifiedName.Parts().LastOrDefault("");
       }
-    | ZeroOrManyWithSeparator         = "(" RuleExpression ";"sm Separator ")" "*"
+    | RepeatWithSeparator         = "(" RuleExpression ";"sm Separator HangingOpt=(";"sm "?")? ")" RepeatQuantifier
       {
         override Typing
         {
-          def rule    = RuleExpression.Typing(None(), 0, None(), context, _options);
-          def sepRule = Separator.Typing(None(), 0, None(), context, _options);
-          def type    = EvaluateListWithSeparatorRuleType(rule, sepRule);
-          Rule.RepeatWithSeparator(this.Location, type, MakePlural(_fieldName, rule, sepRule, context), 0, None(), rule, sepRule, false);
-        }
-        override InferName = MakePlural(RuleExpression.InferName());
-      }
-    | ZeroOrManyWithHangingSeparator  = "(" RuleExpression ";"sm Separator ";"sm "?" ")" "*"
-      {
-        override Typing
-        {
-          def rule    = RuleExpression.Typing(None(), 0, None(), context, _options);
-          def sepRule = Separator.Typing(None(), 0, None(), context, _options);
-          def type    = EvaluateListWithSeparatorRuleType(rule, sepRule);
-          Rule.RepeatWithSeparator(this.Location, type, MakePlural(_fieldName, rule, sepRule, context), 0, None(), rule, sepRule, true);
-        }
-        override InferName = MakePlural(RuleExpression.InferName());
-      }
-    | OneOrManyWithSeparator          = "(" RuleExpression ";"sm Separator ")" "+"
-      {
-        override Typing
-        {
-          def rule    = RuleExpression.Typing(None(), 0, None(), context, _options);
-          def sepRule = Separator.Typing(_baseRule, 0, None(), context, _options);
-          def type    = EvaluateListWithSeparatorRuleType(rule, sepRule);
-          Rule.RepeatWithSeparator(this.Location, type, MakePlural(_fieldName, rule, sepRule, context), 1, None(), rule, sepRule, false);
-        }
-        override InferName = MakePlural(RuleExpression.InferName());
-      }
-    | OneOrManyWithHangingSeparator   = "(" RuleExpression ";"sm Separator ";"sm "?" ")" "+"
-      {
-        override Typing
-        {
-          def rule    = RuleExpression.Typing(None(), 0, None(), context, _options);
-          def sepRule = Separator.Typing(_baseRule, 0, None(), context, _options);
-          def type    = EvaluateListWithSeparatorRuleType(rule, sepRule);
-          Rule.RepeatWithSeparator(this.Location, type, MakePlural(_fieldName, rule, sepRule, context), 1, None(), rule, sepRule, true);
+          def rule           = RuleExpression.Typing(None(), 0, None(), context, _options);
+          def sepRule        = Separator.Typing(None(), 0, None(), context, _options);
+          def type           = EvaluateListWithSeparatorRuleType(rule, sepRule);
+          def (lower, upper) = RepeatQuantifier.Bounds();
+          def isHanging      = HangingOpt.IsSome;
+          Rule.RepeatWithSeparator(this.Location, type, MakePlural(_fieldName, rule, sepRule, context), lower, upper, rule, sepRule, isHanging);
         }
         override InferName = MakePlural(RuleExpression.InferName());
       }

@@ -18,9 +18,9 @@ using SCG = System.Collections.Generic;
 
 namespace Nitra.Compiler
 {
-  internal partial class RuleAstEmitter
+  internal abstract partial class RuleAstEmitter
   {
-    private DefineAstPrettyPrint() : void
+    protected DefineAstPrettyPrint(_astTb : TypeBuilder) : void
     {
       def isVoid(rule : Rule) { rule.Type is RuleType.Void }
 
@@ -29,20 +29,29 @@ namespace Nitra.Compiler
         def name    = Util.tmpname("PrettyPrint" + title);
         def astType = Environment.GetAstType(ruleType);
         _astTb.DefineConditional(<[ decl:
-          private static $(name : usesite)(writer : Nitra.PrettyPrintWriter, source : Nitra.IPrettyPrintSource, ast : $(astType : typed)) : void
+          private static $(name : usesite)(writer : Nitra.PrettyPrintWriter, source : Nitra.IPrettyPrintSource, ast : $(astType : typed), spanClass : Nitra.SpanClass) : void
           {
             _ = source;
+            _ = spanClass;
             $body
           }
         ]>);
         <[
           if ($astPath.IsAmbiguous)
-            writer.AmbiguousNode($astPath :> Nitra.IAmbiguousAst, $(title : string), source, $(name : usesite))
+            writer.AmbiguousNode($astPath :> Nitra.IAmbiguousAst, $(title : string), source, spanClass, $(name : usesite))
           else
-            $(name : usesite)(writer, source, $astPath);
+            $(name : usesite)(writer, source, $astPath, spanClass);
         ]>
       }
 
+      def makeSpanClassRef(spanClass : SpanClassSymbol) : PExpr
+      {
+        if (spanClass != null)
+          Environment.MakeSpanClassRef(spanClass)
+        else
+          <[ spanClass ]>
+      }
+      
       def isRecursiveCallFromPostfixRule(calleeRef)
       {
         match (this.RuleSymbol, calleeRef)
@@ -58,7 +67,7 @@ namespace Nitra.Compiler
           def result =
             match (rule)
             {
-              | String(str)                                     => <[ writer.String(source, $expr, $str); ]>
+              | String(str) as stringRule                       => <[ writer.String(source, $expr, $str, $(makeSpanClassRef(stringRule.SpanClass))); ]>
               | And | Not                                       => <[ () ]>
               | Sequence(rules) as sequenceRule                 =>
                 def variables  = SCG.List();
@@ -87,8 +96,8 @@ namespace Nitra.Compiler
                     makePrinter(sequenceRule.Type, "Sequence", expr, <[ { ..$statements } ]>);
                 }
 
-              | Repeat as loop when loop.IsSkipAnyPattern                => <[ writer.Token(source, $expr, true, "SkipAnyPattern"); ]>
-              | Call(SymbolRef.Some(RegularRuleSymbol as ruleSymbol), _) => <[ writer.Token(source, $expr, $(ruleSymbol.CanParseEmptyString : bool), $(ruleSymbol.Name : string)); ]>
+              | Repeat as loop when loop.IsSkipAnyPattern                            => <[ writer.Token(source, $expr, true, "SkipAnyPattern", null); ]>
+              | Call(SymbolRef.Some(RegularRuleSymbol as ruleSymbol), _) as callRule => <[ writer.Token(source, $expr, $(ruleSymbol.CanParseEmptyString : bool), $(ruleSymbol.Name : string), $(makeSpanClassRef(callRule.SpanClass))); ]>
               | Call(SymbolRef.Some(MarkerSymbol as markerSymbol), _bp) =>
                 match (markerSymbol.Node.FullNameParts)
                 {
@@ -107,11 +116,11 @@ namespace Nitra.Compiler
                   | _ => <[ writer.Whitespace(); ]>
                 }
 
-              | Call(ruleRef, bp) when isRecursiveCallFromPostfixRule(ruleRef) => <[ $expr.PrettyPrint(writer, $bp); ]>
-              | Call                                                           => <[ $expr.PrettyPrint(writer, 0); ]>
+              | Call(ruleRef, bp) when isRecursiveCallFromPostfixRule(ruleRef) => <[ $expr.PrettyPrint(writer, $bp, spanClass); ]>
+              | Call                                                           => <[ $expr.PrettyPrint(writer, 0, spanClass); ]>
               | Repeat(_, _, rule) when isVoid(rule)                           => <[ writer.Whitespace(); ]>
               | Repeat(0, Some(1), rule) as optionRule                         =>
-                makePrinter(optionRule.Type, "Option", expr, <[ when (ast.IsSome) $(loop(<[ ast.Item ]>, rule)) ]>);
+                makePrinter(optionRule.Type, "Option", expr, <[ when (ast.HasValue) $(loop(<[ ast.Value ]>, rule)) ]>);
 
               | Repeat(_, _, rule) as listRule                                 =>
                 makePrinter(listRule.Type, "List", expr, <[ foreach (_elem in ast) $(loop(<[ _elem ]>, rule)) ]>);
@@ -167,27 +176,37 @@ namespace Nitra.Compiler
       def printGarbage =
         if (this.RuleSymbol.IsToken) <[ writer.TryPrintGarbage(source, this.Location.Span); ]>
         else <[ () ]>;
+      
+      def ruleSpanClass = this.RuleSymbol.Options.SpanClassSymbol;
+      def spanClassInit =
+        if (ruleSpanClass != null)
+          <[ spanClass = $(Environment.MakeSpanClassRef(ruleSpanClass)) ]>;
+        else
+          <[ _ = spanClass ]>;
+
       def decl =
       if (this.RuleSymbol is ExtensionRuleSymbol(ExtensionType = Postfix(BindingPower = bindingPower)))
         <[ decl:
           [Nemerle.Diagnostics.CompileStatistic("PrettyPrint")]
-          public override PrettyPrint(writer : Nitra.PrettyPrintWriter, callerBindingPower : int) : void
+          public override PrettyPrint(writer : Nitra.PrettyPrintWriter, callerBindingPower : int, mutable spanClass : Nitra.SpanClass) : void
           {
+            $spanClassInit;
             def source = this.PrettyPrintSource;
             $printGarbage;
             //TODO: determine correct braces from grammar
             when (callerBindingPower > $bindingPower)
-              writer.String(source, Nitra.NSpan(0, 1), "(");
+              writer.String(source, Nitra.NSpan(0, 1), "(", null);
             ..$code;
             when (callerBindingPower > $bindingPower)
-              writer.String(source, Nitra.NSpan(0, 1), ")");
+              writer.String(source, Nitra.NSpan(0, 1), ")", null);
           }
         ]>
       else
         <[ decl:
           [Nemerle.Diagnostics.CompileStatistic("PrettyPrint")]
-          public override PrettyPrint(writer : Nitra.PrettyPrintWriter, callerBindingPower : int) : void
+          public override PrettyPrint(writer : Nitra.PrettyPrintWriter, callerBindingPower : int, mutable spanClass : Nitra.SpanClass) : void
           {
+            $spanClassInit;
             def source = this.PrettyPrintSource;
             ignore(writer, callerBindingPower, source);
             ..$code;
@@ -196,24 +215,24 @@ namespace Nitra.Compiler
       _astTb.DefineConditional(decl);
     }
 
-    private DefineMissingPrettyPrint() : void
+    protected DefineMissingPrettyPrint(_missingTb : TypeBuilder) : void
     {
       _missingTb.DefineConditional(<[ decl:
         [Nemerle.Diagnostics.CompileStatistic("PrettyPrint")]
-        public override PrettyPrint(writer : Nitra.PrettyPrintWriter, _callerBindingPower : int) : void
+        public override PrettyPrint(writer : Nitra.PrettyPrintWriter, _callerBindingPower : int, _spanClass : Nitra.SpanClass) : void
         {
           writer.MissingNode($(this.RuleSymbol.GetRuleDescriptorRef()));
         }
       ]>);
     }
 
-    private DefineAmbiguousPrettyPrint() : void
+    protected DefineAmbiguousPrettyPrint(_ambiguousTb : TypeBuilder) : void
     {
       _ambiguousTb.DefineConditional(<[ decl:
         [Nemerle.Diagnostics.CompileStatistic("PrettyPrint")]
-        public override PrettyPrint(writer : Nitra.PrettyPrintWriter, _callerBindingPower : int) : void
+        public override PrettyPrint(writer : Nitra.PrettyPrintWriter, _callerBindingPower : int, spanClass : Nitra.SpanClass) : void
         {
-          writer.AmbiguousNode(this);
+          writer.AmbiguousNode(this, spanClass);
         }
       ]>);
     }

@@ -1,0 +1,203 @@
+﻿using Nitra.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal sealed class SimpleRuleAstEmitter : RuleAstEmitter
+  {
+    mutable _baseTb        : TypeBuilder;
+    mutable _parsedAstTb   : TypeBuilder;
+    mutable _chemicalAstTb : TypeBuilder;
+    mutable _missingTb     : TypeBuilder;
+    mutable _ambiguousTb   : TypeBuilder;
+
+    public this(environment : EmitterEnvironment, ruleSymbol : SimpleRuleSymbol)
+    {
+      base(environment, ruleSymbol)
+    }
+
+    public override IsTypesDefined : bool { get { _baseTb != null } }
+
+    [Memoize]
+    public override CreateConstant(name : string, value : int) : string
+    {
+      assert(IsTypesDefined);
+      Util.CreateConstant(_parsedAstTb, name, value)
+    }
+
+    public override DefineNestedType(td : ClassMember.TypeDeclaration) : TypeBuilder
+    {
+      assert(IsTypesDefined);
+      _baseTb.DefineNestedType(td);
+    }
+
+    public override Emit() : void
+    {
+      assert(IsTypesDefined);
+
+      _baseTb.Compile();
+      _parsedAstTb.Compile();
+      _chemicalAstTb.Compile();
+      _missingTb.Compile();
+      _ambiguousTb.Compile();
+    }
+
+    public override DefineTypes(defineType : ClassMember.TypeDeclaration -> TypeBuilder) : void
+    {
+      assert(!IsTypesDefined);
+
+      Util.locate(this.RuleSymbol.FirstLocation.NLocation(),
+      {
+        def baseTypes =
+          if (this.RuleSymbol.Declaration.IsSome)
+            [ <[ $(Environment.AstTypeVar : typed) ]>, <[ Nitra.IDeclarableAst ]> ]
+          else
+            [ <[ $(Environment.AstTypeVar : typed) ]> ];
+
+        _baseTb = defineType(<[decl:
+          public new abstract partial class $(this.RuleSymbol.Name : usesite) : ..$baseTypes
+          {
+            public override RuleDescriptor : Nitra.RuleDescriptor { get { $(RuleSymbol.GetRuleDescriptorRef()) } }
+          }
+        ]>);
+
+        _parsedAstTb = _baseTb.DefineNestedType(<[decl:
+          private new sealed partial class __Parsed__Ast : $(_baseTb.GetMemType() : typed), Nitra.Internal.IAstSequenceLoader[Nitra.NSpan], Nitra.Internal.IAstSequenceLoader[Nitra.Ast]
+          {
+          }
+        ]>);
+
+        _chemicalAstTb = _baseTb.DefineNestedType(<[decl:
+          private new sealed partial class __Chemical__Ast : $(_baseTb.GetMemType() : typed)
+          {
+          }
+        ]>);
+
+        _missingTb = _baseTb.DefineNestedType(<[decl:
+          public new sealed partial class MissingAst : $(_baseTb.GetMemType() : typed)
+          {
+            public this(sourceProvider : Nitra.Runtime.ISourceSnapshotProvider, pos : int)
+            {
+              this.sourceProvider = sourceProvider;
+              this.pos            = pos;
+            }
+
+            private sourceProvider : Nitra.Runtime.ISourceSnapshotProvider;
+            private pos            : int;
+
+            public override IsMissing : bool           { get { true } }
+            public override Location  : Nitra.Location { get { Nitra.Location(this.sourceProvider.GetSource(), this.pos, this.pos) } }
+          }
+        ]>);
+
+        _ambiguousTb = _baseTb.DefineNestedType(<[decl:
+          public new sealed partial class AmbiguousAst : $(_baseTb.GetMemType() : typed), Nitra.IAmbiguousAst
+          {
+            public this(ambiguities : array[$(_baseTb.GetMemType() : typed)])
+            {
+              this.Ambiguities = ambiguities;
+            }
+
+            public override IsAmbiguous    : bool                                   { get true }
+            public override Location       : Nitra.Location                         { get { Ambiguities[0].Location } }
+            public          Ambiguities    : array[$(_baseTb.GetMemType() : typed)] { get; }
+            public          AmbiguityType  : AstAmbiguityType                       { get Nitra.AstAmbiguityType.Recovery }
+          }
+        ]>);
+      });
+    }
+
+    public override DefineMembers() : void
+    {
+      assert(IsTypesDefined);
+
+      DefineCreateMethod();
+
+      def fields = GetFields();
+      DefineAstCtorAndFields(fields, _baseTb, true);
+      DefineParsedAstCtorAndFields(fields, _parsedAstTb);
+      DefineChemicalAstCtorAndFields(fields, _chemicalAstTb, _baseTb);
+      DefineAstApplyMethod(fields, _baseTb, _chemicalAstTb, _parsedAstTb);
+      DefineSimpleRuleGetDeclarationMethod(_baseTb);
+      DefineAstPrettyPrint(_baseTb);
+      DefineSimpleRuleMethods(_baseTb);
+      DefineReadSequenceMethod(_parsedAstTb);
+
+      DefineMissingGetDeclarationMethod(_missingTb);
+      DefineMissingPrettyPrint(_missingTb);
+      DefineMissingRuleMethods(_missingTb);
+
+      DefineAmbiguousGetDeclarationMethod(_ambiguousTb);
+      DefineAmbiguousPrettyPrint(_ambiguousTb);
+      DefineAmbiguousRuleMethods(_ambiguousTb);
+    }
+
+    private DefineCreateMethod() : void
+    {
+      _baseTb.DefineConditional(<[ decl:
+        [Nemerle.Diagnostics.CompileStatistic("Ast")]
+        public static Create(pos : ref int, size : int, parseResult : Nitra.ParseResult) : $(_baseTb.GetMemType() : typed)
+        {
+          def ruleParser = parseResult.RuleParser.Grammar.GetSimpleRuleParser($(this.RuleSymbol.GetRuleDescriptorRef()));
+          if (size > 0 || ruleParser.CanParseEmptyString)
+          {
+            def astPtr = parseResult.TryGetAst(pos, ruleParser.RuleId);
+            assert(astPtr > 0);
+            $(_baseTb.GetMemType() : typed).__Parsed__Ast(ref pos, astPtr, parseResult)
+          }
+          else
+            $(_baseTb.GetMemType() : typed).MissingAst(parseResult, pos)
+        }
+      ]>);
+
+      _baseTb.DefineConditional(<[ decl:
+        [Nemerle.Diagnostics.CompileStatistic("Ast")]
+        public static Create(startPos : int, endPos : int, parseResult : Nitra.ParseResult) : $(_baseTb.GetMemType() : typed)
+        {
+          def ruleParser = parseResult.RuleParser.Grammar.GetSimpleRuleParser($(this.RuleSymbol.GetRuleDescriptorRef()));
+          if (startPos < endPos || ruleParser.CanParseEmptyString)
+          {
+            match (parseResult.TryGetRecoveredSequence(startPos, endPos, ruleParser.ParsingSequence))
+            {
+              | null =>
+                mutable pos = startPos;
+                def astPtr = parseResult.TryGetAst(pos, ruleParser.RuleId);
+                def ast = $(_baseTb.GetMemType() : typed).__Parsed__Ast(ref pos, astPtr, parseResult);
+                assert(pos == endPos);
+                ast
+
+              | Unambiguous(recoveredSubrulesIndex) => $(_baseTb.GetMemType() : typed).__Parsed__Ast(startPos, endPos, recoveredSubrulesIndex, parseResult)
+              | Ambiguous(indexes)                  =>
+                def ambiguities = array(indexes.Length);
+                foreach (recoveredSubrulesIndex in indexes with i)
+                  ambiguities[i] = $(_baseTb.GetMemType() : typed).__Parsed__Ast(startPos, endPos, recoveredSubrulesIndex, parseResult);
+                $(_ambiguousTb.GetMemType() : typed)(ambiguities)
+            }
+          }
+          else
+            $(_baseTb.GetMemType() : typed).MissingAst(parseResult, startPos)
+        }
+      ]>);
+
+      when (this.RuleSymbol.Options.IsStart)
+      {
+        _baseTb.DefineConditional(<[ decl:
+          [Nemerle.Diagnostics.CompileStatistic("Ast")]
+          public static Create(parseResult : Nitra.ParseResult) : $(_baseTb.GetMemType() : typed)
+          {
+            Create(parseResult.StartPos, parseResult.Text.Length, parseResult);
+          }
+        ]>);
+      }
+    }
+  }
+}

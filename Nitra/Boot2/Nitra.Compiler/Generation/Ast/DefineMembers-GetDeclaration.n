@@ -7,6 +7,7 @@ using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 
+using Nitra.ProjectSystem;
 using Nitra.Internal;
 using Nitra.Model;
 using Nitra.Typing;
@@ -18,9 +19,9 @@ using SCG = System.Collections.Generic;
 
 namespace Nitra.Compiler
 {
-  internal partial class RuleAstEmitter
+  internal abstract partial class RuleAstEmitter
   {
-    private GetBaseDeclarationType(declarationSymbol : DeclarationSymbol) : PExpr
+    protected GetBaseDeclarationType(declarationSymbol : DeclarationSymbol) : PExpr
     {
       | ExtensionDeclarationSymbol(BaseDeclaration = baseDeclaration) => GetBaseDeclarationType(baseDeclaration.Value)
       | ExtensibleDeclarationSymbol
@@ -28,14 +29,15 @@ namespace Nitra.Compiler
       | _ => assert(false, "Invalid declaration symbol")
     }
 
-    private GetConcreteDeclarationType(declarationSymbol : DeclarationSymbol) : PExpr
+    protected GetConcreteDeclarationType(declarationSymbol : DeclarationSymbol) : PExpr
     {
+      | ExtensibleDeclarationSymbol
       | ExtensionDeclarationSymbol  => <[ $(Environment.GetDeclarationType(declarationSymbol) : typed) ]>
       | SimpleDeclarationSymbol     => <[ $(Environment.GetDeclarationType(declarationSymbol) : typed).Concrete ]>
       | _ => assert(false, "Invalid declaration symbol")
     }
 
-    private GetAmbiguousDeclarationType(declarationSymbol : DeclarationSymbol) : PExpr
+    protected GetAmbiguousDeclarationType(declarationSymbol : DeclarationSymbol) : PExpr
     {
       | ExtensionDeclarationSymbol(BaseDeclaration = baseDeclaration) => GetAmbiguousDeclarationType(baseDeclaration.Value)
       | ExtensibleDeclarationSymbol
@@ -43,51 +45,128 @@ namespace Nitra.Compiler
       | _ => assert(false, "Invalid declaration symbol")
     }
 
-    private DefineBaseGetDeclarationMethod() : void
+    protected DefineExtensibleRuleGetDeclarationMethod(_baseTb : TypeBuilder) : void
     {
       assert(_baseTb != null);
 
-      def declarationCtor = this.RuleSymbol.GetDeclarationCtor();
-      when (declarationCtor != null)
+      def declarationMappingBody = this.RuleSymbol.GetDeclarationMappingBody();
+      when (declarationMappingBody != null)
       {
-        def baseDeclarationType     = GetBaseDeclarationType(declarationCtor.Declaration.Value);
+        def baseDeclarationType     = GetBaseDeclarationType(declarationMappingBody.Declaration.Value);
         _baseTb.DefineConditional(<[ decl:
           public abstract GetDeclaration(parent : $(Environment.DeclarationTypeVar : typed)) : $baseDeclarationType
         ]>);
       }
     }
 
-    private DefineAstGetDeclarationMethod() : void
+    private LookupRuleFieldToDelegateDeclaration(loc : Location) : string
+    {
+      mutable fieldToDelegateDeclaration;
+      foreach (r in this.RuleSymbol.Rule.Rules)
+      {
+        | Call(SymbolRef.Some(SyntaxRuleSymbol), _) =>
+          if (fieldToDelegateDeclaration == null)
+            fieldToDelegateDeclaration = r.FieldName
+          else
+            Project.CurrentProject.Error(loc, $"Rule '$(this.RuleSymbol.Name)' has more that one field to delegate declaration.", -1)
+
+        | _ => ()
+      }
+      when (fieldToDelegateDeclaration == null)
+        Project.CurrentProject.Error(loc, $"Rule '$(this.RuleSymbol.Name)' has no fields to delegate declaration.", -1);
+
+      fieldToDelegateDeclaration
+    }
+
+    private MakeAstGetDeclarationMethodBody(declarationMappingBody : DeclarationMappingBody) : PExpr
+    {
+      def compileField(field : DeclarationMappingField) : PExpr
+      {
+        | Inline(code) => code
+        | Automatic(loc, ruleFieldName) =>
+          // TODO: make strict typing!
+          Util.locate(loc.ToNemerleLocation(), 
+            match (field.Field.Value.Type)
+            {
+              | List | OptionList => <[ Nitra.Internal.DeclarationUtils.MakeList(parent, this.$(ruleFieldName : usesite)) ]>
+              | Option            => <[ Nitra.Internal.DeclarationUtils.MakeOption(parent, this.$(ruleFieldName : usesite)) ]>
+              | _                 => <[ this.$(ruleFieldName : usesite).GetDeclaration(parent) ]>
+            })
+      }
+
+      def concreteDeclarationType = GetConcreteDeclarationType(declarationMappingBody.Declaration.Value);
+
+      Util.locate(declarationMappingBody.Location.ToNemerleLocation(), 
+        match (declarationMappingBody)
+        {
+          | Delegate =>
+            // TODO: make strict typing!
+            def ruleFieldName = LookupRuleFieldToDelegateDeclaration(declarationMappingBody.Location);
+            if (string.IsNullOrEmpty(ruleFieldName))
+              <[ null ]>
+            else
+              <[ this.$(ruleFieldName : usesite).GetDeclaration(parent) ]>
+
+          | PerField(fields) =>
+            def values = fields.Map(f => <[ $(f.Field.Value.Name : usesite) = $(compileField(f)) ]>);
+            <[
+              def $("declaration" : global) = $concreteDeclarationType(parent, this.Location.Span);
+              declaration.Initialize(..$values);
+              declaration
+            ]>
+
+          | Inline(code) => code
+        });
+    }
+
+    protected DefineSimpleRuleGetDeclarationMethod(_astTb : TypeBuilder) : void
     {
       assert(_astTb != null);
 
-      def declarationCtor = this.RuleSymbol.GetDeclarationCtor();
-      when (declarationCtor != null)
+      def declarationMappingBody = this.RuleSymbol.GetDeclarationMappingBody();
+      when (declarationMappingBody != null)
       {
-        def baseDeclarationType     = GetBaseDeclarationType(declarationCtor.Declaration.Value);
-        def concreteDeclarationType = GetConcreteDeclarationType(declarationCtor.Declaration.Value);
-        def properties      = declarationCtor.Properties.Map(p => <[ $(p.Field.Value.Name : usesite) = $(p.Value) ]>);
-        _astTb.DefineConditional(<[ decl:
-          public override GetDeclaration(parent : $(Environment.DeclarationTypeVar : typed)) : $baseDeclarationType
+        def baseDeclarationType = GetBaseDeclarationType(declarationMappingBody.Declaration.Value);
+        def code = MakeAstGetDeclarationMethodBody(declarationMappingBody);
+
+        _astTb.Define(<[ decl:
+          public virtual GetDeclaration($("parent" : global) : $(Environment.DeclarationTypeVar : typed)) : $baseDeclarationType
           {
-            def declaration = $concreteDeclarationType(parent, this.Location.Span);
-            declaration.Initialize(..$properties);
-            declaration
+            $code
           }
         ]>);
       }
     }
 
-    private DefineAmbiguousGetDeclarationMethod() : void
+    protected DefineExtensionRuleGetDeclarationMethod(_astTb : TypeBuilder) : void
+    {
+      assert(_astTb != null);
+
+      def declarationMappingBody = this.RuleSymbol.GetDeclarationMappingBody();
+      when (declarationMappingBody != null)
+      {
+        def baseDeclarationType     = GetBaseDeclarationType(declarationMappingBody.Declaration.Value);
+        def code = MakeAstGetDeclarationMethodBody(declarationMappingBody);
+
+        _astTb.Define(<[ decl:
+          public override GetDeclaration($("parent" : global) : $(Environment.DeclarationTypeVar : typed)) : $baseDeclarationType
+          {
+            $code
+          }
+        ]>);
+      }
+    }
+
+    protected DefineAmbiguousGetDeclarationMethod(_ambiguousTb : TypeBuilder) : void
     {
       assert(_ambiguousTb != null);
 
-      def declarationCtor = this.RuleSymbol.GetDeclarationCtor();
-      when (declarationCtor != null)
+      def declarationMappingBody = this.RuleSymbol.GetDeclarationMappingBody();
+      when (declarationMappingBody != null)
       {
-        def baseDeclarationType      = GetBaseDeclarationType(declarationCtor.Declaration.Value);
-        def ambiguousDeclarationType = GetAmbiguousDeclarationType(declarationCtor.Declaration.Value);
-        _ambiguousTb.DefineConditional(<[ decl:
+        def baseDeclarationType      = GetBaseDeclarationType(declarationMappingBody.Declaration.Value);
+        def ambiguousDeclarationType = GetAmbiguousDeclarationType(declarationMappingBody.Declaration.Value);
+        _ambiguousTb.Define(<[ decl:
           public override GetDeclaration(parent : $(Environment.DeclarationTypeVar : typed)) : $baseDeclarationType
           {
             def ambiguities = Nitra.Internal.DeclarationUtils.GetDeclarationAmbiguities(parent, this.Ambiguities);
@@ -97,15 +176,15 @@ namespace Nitra.Compiler
       }
     }
 
-    private DefineMissingGetDeclarationMethod() : void
+    protected DefineMissingGetDeclarationMethod(_missingTb : TypeBuilder) : void
     {
       assert(_missingTb != null);
 
-      def declarationCtor = this.RuleSymbol.GetDeclarationCtor();
-      when (declarationCtor != null)
+      def declarationMappingBody = this.RuleSymbol.GetDeclarationMappingBody();
+      when (declarationMappingBody != null)
       {
-        def baseDeclarationType      = GetBaseDeclarationType(declarationCtor.Declaration.Value);
-        _missingTb.DefineConditional(<[ decl:
+        def baseDeclarationType      = GetBaseDeclarationType(declarationMappingBody.Declaration.Value);
+        _missingTb.Define(<[ decl:
           public override GetDeclaration(parent : $(Environment.DeclarationTypeVar : typed)) : $baseDeclarationType
           {
             _ = parent;
