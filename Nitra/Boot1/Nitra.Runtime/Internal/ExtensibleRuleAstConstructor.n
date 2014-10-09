@@ -18,19 +18,24 @@ namespace Nitra.Internal
       where T : Ast
     {
       def ruleParser = parseResult.RuleParser.Grammar.GetExtensibleRuleParser(ruleDescriptor, bindingPower);
-      match (parseResult.TryGetRecoveredSequence(startPos, endPos, ruleParser.ParsingSequence))
+      if (startPos < endPos || ruleParser.CanParseEmptyString)
       {
-        | null =>
-          mutable pos = startPos;
-          Create(ref pos, parseResult, bindingPower, ruleDescriptor, astFactory)
+        match (parseResult.TryGetRecoveredSequence(startPos, endPos, ruleParser.ParsingSequence))
+        {
+          | null =>
+            mutable pos = startPos;
+            Create(ref pos, endPos - startPos, parseResult, bindingPower, ruleDescriptor, astFactory)
 
-        | Unambiguous(recoveredSubrulesIndex) => CreateImpl(startPos, parseResult, ruleParser, ruleDescriptor, astFactory, recoveredSubrulesIndex)
-        | Ambiguous(indexes) =>
-          def ambiguities = array(indexes.Length);
-          foreach (recoveredSubrulesIndex in indexes with i)
-            ambiguities[i] = CreateImpl(startPos, parseResult, ruleParser, ruleDescriptor, astFactory, recoveredSubrulesIndex);
-          astFactory.CreateAmbiguous(parseResult, ruleDescriptor, startPos, endPos, ambiguities, null, AstAmbiguityType.Recovery);
+          | Unambiguous(recoveredSubrulesIndex) => CreateImpl(startPos, parseResult, ruleParser, ruleDescriptor, astFactory, recoveredSubrulesIndex)
+          | Ambiguous(indexes) =>
+            def ambiguities = array(indexes.Length);
+            foreach (recoveredSubrulesIndex in indexes with i)
+              ambiguities[i] = CreateImpl(startPos, parseResult, ruleParser, ruleDescriptor, astFactory, recoveredSubrulesIndex);
+            astFactory.CreateAmbiguous(parseResult, ruleDescriptor, startPos, endPos, ambiguities, null, AstAmbiguityType.Recovery);
+        }
       }
+      else
+        astFactory.CreateMissing(parseResult, ruleDescriptor, startPos)
     }
 
     private CreateImpl[T](startPos : int, parseResult : ParseResult, ruleParser : ExtensibleRuleParser, ruleDescriptor : ExtensibleRuleDescriptor, astFactory : IExtensibleRuleAstFactory[T], recoveredSubrulesIndex : int) : T
@@ -126,88 +131,92 @@ namespace Nitra.Internal
       resultAst
     }
 
-    public Create[T](pos : ref int, parseResult : ParseResult, bindingPower : int, ruleDescriptor : ExtensibleRuleDescriptor, astFactory : IExtensibleRuleAstFactory[T]) : T
+    public Create[T](pos : ref int, size : int, parseResult : ParseResult, bindingPower : int, ruleDescriptor : ExtensibleRuleDescriptor, astFactory : IExtensibleRuleAstFactory[T]) : T
     {
       def ruleParser = parseResult.RuleParser.Grammar.GetExtensibleRuleParser(ruleDescriptor, bindingPower);
-
-      mutable newPos;
-      mutable ast = ruleParser.FindFirstPrefix(ref pos, parseResult);
-      mutable prefixValue;
-      def prefixStartPos = pos;
-      if (ast > 0)
+      if (size > 0 || ruleParser.CanParseEmptyString)
       {
-        def prefixParserOffset = GetExtensionParserOffset(ruleParser.PrefixRules);
-
-        mutable extensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PrefixParsers, ast, prefixParserOffset);
-        newPos = pos;
-        prefixValue = astFactory.CreatePrefix(ref newPos, ast, extensionParser, parseResult);
-        ast = ruleParser.FindNextPrefix(ast, parseResult);
-        when (ast > 0)
+        mutable newPos;
+        mutable ast = ruleParser.FindFirstPrefix(ref pos, parseResult);
+        mutable prefixValue;
+        def prefixStartPos = pos;
+        if (ast > 0)
         {
-          def firstNewPos = newPos;
-          def ambiguitys = SCG.List();
-          ambiguitys.Add(prefixValue);
-          def parsers = SCG.List();
-          parsers.Add(extensionParser);
-          while (ast > 0)
+          def prefixParserOffset = GetExtensionParserOffset(ruleParser.PrefixRules);
+
+          mutable extensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PrefixParsers, ast, prefixParserOffset);
+          newPos = pos;
+          prefixValue = astFactory.CreatePrefix(ref newPos, ast, extensionParser, parseResult);
+          ast = ruleParser.FindNextPrefix(ast, parseResult);
+          when (ast > 0)
           {
-            def nextExtensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PrefixParsers, ast, prefixParserOffset);
-            newPos = pos;
-            def _nextValue = astFactory.CreatePrefix(ref newPos, ast, nextExtensionParser, parseResult);
-            assert(newPos == firstNewPos);
-            ambiguitys.Add(_nextValue);
-            parsers.Add(nextExtensionParser);
-            extensionParser = nextExtensionParser;
-            ast = ruleParser.FindNextPrefix(ast, parseResult);
+            def firstNewPos = newPos;
+            def ambiguitys = SCG.List();
+            ambiguitys.Add(prefixValue);
+            def parsers = SCG.List();
+            parsers.Add(extensionParser);
+            while (ast > 0)
+            {
+              def nextExtensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PrefixParsers, ast, prefixParserOffset);
+              newPos = pos;
+              def _nextValue = astFactory.CreatePrefix(ref newPos, ast, nextExtensionParser, parseResult);
+              assert(newPos == firstNewPos);
+              ambiguitys.Add(_nextValue);
+              parsers.Add(nextExtensionParser);
+              extensionParser = nextExtensionParser;
+              ast = ruleParser.FindNextPrefix(ast, parseResult);
+            }
+            // prefix ambiguity
+            prefixValue = astFactory.CreateAmbiguous(parseResult, ruleDescriptor, prefixStartPos, newPos, ambiguitys.ToArray(), parsers.ToArray(), AstAmbiguityType.Prefix);
           }
-          // prefix ambiguity
-          prefixValue = astFactory.CreateAmbiguous(parseResult, ruleDescriptor, prefixStartPos, newPos, ambiguitys.ToArray(), parsers.ToArray(), AstAmbiguityType.Prefix);
+          pos = newPos;
         }
-        pos = newPos;
+        else
+        {
+          // missing prefix
+          prefixValue = astFactory.CreateMissing(parseResult, ruleDescriptor, prefixStartPos);
+        }
+
+        def postfixParserOffset = GetExtensionParserOffset(ruleParser.PostfixRules);
+        mutable extensionParser;
+        mutable postfixValue;
+        while (pos < parseResult.Text.Length && { ast = ruleParser.FindFirstPostfix(ref pos, parseResult); ast > 0 })
+        {
+          extensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PostfixParsers, ast, postfixParserOffset);
+          newPos = pos;
+          postfixValue = astFactory.CreatePostfix(prefixValue, prefixStartPos, ref newPos, ast, extensionParser, parseResult);
+          when (newPos == pos)
+            break;
+          ast = ruleParser.FindNextPostfix(ast, parseResult);
+          when (ast > 0)
+          {
+            def firstNewPos = newPos;
+            def ambiguitys = SCG.List();
+            ambiguitys.Add(postfixValue);
+            def parsers = SCG.List();
+            parsers.Add(extensionParser);
+            while (ast > 0)
+            {
+              def nextExtensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PostfixParsers, ast, postfixParserOffset);
+              newPos = pos;
+              def _nextValue = astFactory.CreatePostfix(prefixValue, prefixStartPos, ref newPos, ast, nextExtensionParser, parseResult);
+              assert(newPos == firstNewPos);
+              ambiguitys.Add(_nextValue);
+              parsers.Add(nextExtensionParser);
+              extensionParser = nextExtensionParser;
+              ast = ruleParser.FindNextPostfix(ast, parseResult);
+            }
+            // postfix ambiguity
+            postfixValue = astFactory.CreateAmbiguous(parseResult, ruleDescriptor, prefixStartPos, newPos, ambiguitys.ToArray(), parsers.ToArray(), AstAmbiguityType.Postfix);
+          }
+          prefixValue = postfixValue;
+          pos = newPos;
+        }
+
+        prefixValue
       }
       else
-      {
-        // missing prefix
-        prefixValue = astFactory.CreateMissing(parseResult, ruleDescriptor, prefixStartPos);
-      }
-
-      def postfixParserOffset = GetExtensionParserOffset(ruleParser.PostfixRules);
-      mutable extensionParser;
-      mutable postfixValue;
-      while (pos < parseResult.Text.Length && { ast = ruleParser.FindFirstPostfix(ref pos, parseResult); ast > 0 })
-      {
-        extensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PostfixParsers, ast, postfixParserOffset);
-        newPos = pos;
-        postfixValue = astFactory.CreatePostfix(prefixValue, prefixStartPos, ref newPos, ast, extensionParser, parseResult);
-        when (newPos == pos)
-          break;
-        ast = ruleParser.FindNextPostfix(ast, parseResult);
-        when (ast > 0)
-        {
-          def firstNewPos = newPos;
-          def ambiguitys = SCG.List();
-          ambiguitys.Add(postfixValue);
-          def parsers = SCG.List();
-          parsers.Add(extensionParser);
-          while (ast > 0)
-          {
-            def nextExtensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PostfixParsers, ast, postfixParserOffset);
-            newPos = pos;
-            def _nextValue = astFactory.CreatePostfix(prefixValue, prefixStartPos, ref newPos, ast, nextExtensionParser, parseResult);
-            assert(newPos == firstNewPos);
-            ambiguitys.Add(_nextValue);
-            parsers.Add(nextExtensionParser);
-            extensionParser = nextExtensionParser;
-            ast = ruleParser.FindNextPostfix(ast, parseResult);
-          }
-          // postfix ambiguity
-          postfixValue = astFactory.CreateAmbiguous(parseResult, ruleDescriptor, prefixStartPos, newPos, ambiguitys.ToArray(), parsers.ToArray(), AstAmbiguityType.Postfix);
-        }
-        prefixValue = postfixValue;
-        pos = newPos;
-      }
-
-      prefixValue
+        astFactory.CreateMissing(parseResult, ruleDescriptor, pos)
     }
 
     public GetExtensionParserOffset(parsers : array[ExtensionRuleParser]) : int
