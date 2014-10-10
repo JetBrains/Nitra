@@ -21,18 +21,22 @@ namespace Nitra.Internal.Recovery
                                  public         StartPos        : int;
                                  public         ParsingSequence : ParsingSequence;
 
-    [RecordIgnore, EqualsIgnore] public         Callers         : SCG.HashSet[ParseRecord]     = SCG.HashSet();
-    [RecordIgnore, EqualsIgnore] public         ParsedSubrules  : SCG.HashSet[ParsedSubrule]   = SCG.HashSet();
-    [RecordIgnore, EqualsIgnore] public         Ends            : Hashtable[int, TokenChanges] = Hashtable();
+    [RecordIgnore, EqualsIgnore] public         Callers         : SCG.HashSet[ParseRecord]               = SCG.HashSet();
+    [RecordIgnore, EqualsIgnore] public         ParsedSubrules  : Hashtable[ParsedSubrule, TokenChanges] = Hashtable();
+    [RecordIgnore, EqualsIgnore] public         Ends            : Hashtable[int, TokenChanges]           = Hashtable();
     [RecordIgnore, EqualsIgnore] public mutable Iteration       : int = -1;
 
     public IsToken : bool { get { this.ParsingSequence.IsToken }}
     
     public RuleName : string { get { this.ParsingSequence.RuleName } }
 
-    public Add(subrule : ParsedSubrule) : void
+    public Add(subrule : ParsedSubrule, subruleTokenChanges : TokenChanges) : void
     {
-      _ = this.ParsedSubrules.Add(subrule);
+      mutable oldChanges;
+      if (ParsedSubrules.TryGetValue(subrule, out oldChanges))
+        ParsedSubrules[subrule] = TokenChanges.Min(subruleTokenChanges, oldChanges);
+      else
+        ParsedSubrules[subrule] = subruleTokenChanges;
     }
     
     public IsSubruleVoid(subrule : ParsedSubrule) : bool
@@ -87,18 +91,23 @@ namespace Nitra.Internal.Recovery
         when (newTokenChanges < oldTokenChanges)
         {
           Ends[end] = newTokenChanges;
+          //def recordsToProcessCount = this.RecoveryParser.RecordsToProcess.Count;
+          //def recordsToCompleteCount = this.RecoveryParser.RecordsToComplete.Count;
           foreach (caller in Callers)
           {
             def sequence = caller.Sequence;
-            foreach (subrule in sequence.ParsedSubrules.ToArray().SortInplace(RecoveryParser.ParsingOrderSubrulesComparison))
+            assert2(sequence.ParsedSubrules[ParsedSubrule(caller.ParsePos, end, caller.State)] > newTokenChanges);
+            sequence.ParsedSubrules[ParsedSubrule(caller.ParsePos, end, caller.State)] = newTokenChanges;
+            foreach ((subrule, subruleTokenChanges) when (subrule.End == end || subrule.Begin >= end) in sequence.ParsedSubrules.KeyValuePairs.ToArray().SortInplace(RecoveryParser.ParsingOrderSubrulesComparison))//TODO:Optimize
             {
               def subruleParseRecord = ParseRecord(sequence, subrule.State, subrule.Begin);
               mutable startChanges;
               when (RecoveryParser.Records[subrule.Begin].TryGetValue(subruleParseRecord, out startChanges))
               {
-                def subruleTokenChanges = RecoveryParser.GetSubruleTokenChanges(sequence, subrule);
                 RecoveryParser.SubruleParsed(subrule.Begin, subrule.End, subruleParseRecord, startChanges, subruleTokenChanges);
               }
+              //when (recordsToProcessCount != this.RecoveryParser.RecordsToProcess.Count || recordsToCompleteCount != this.RecoveryParser.RecordsToComplete.Count)
+              //  oldTokenChanges = oldTokenChanges;
             }
           }
         }
@@ -109,113 +118,6 @@ namespace Nitra.Internal.Recovery
         foreach (caller in Callers)
           RecoveryParser.Completion(end, caller, this);
       }
-    }
-
-    public GetNextSubrules(subrule : ParsedSubrule) : Seq[ParsedSubrule]
-    {
-      GetNextSubrules(subrule, ParsedSubrules)
-    }
-
-    public GetNextSubrules(subrule : ParsedSubrule, parsedSubrules : Seq[ParsedSubrule]) : Seq[ParsedSubrule]
-    {
-      def state = ParsingSequence.States[subrule.State];
-      parsedSubrules.Where(next => subrule.End == next.Begin && state.IsNext(next.State) && next != subrule)
-    }
-
-    public GetPrevSubrules(subrule : ParsedSubrule) : Seq[ParsedSubrule]
-    {
-      GetPrevSubrules(subrule, ParsedSubrules)
-    }
-
-    public GetPrevSubrules(subrule : ParsedSubrule, parsedSubrules : Seq[ParsedSubrule]) : Seq[ParsedSubrule]
-    {
-      def state = ParsingSequence.States[subrule.State];
-      parsedSubrules.Where(prev => prev.End == subrule.Begin && state.IsPrev(prev.State) && prev != subrule)
-    }
-
-    public GetFirstSubrules() : Seq[ParsedSubrule]
-    {
-      GetFirstSubrules(ParsedSubrules)
-    }
-
-    public GetFirstSubrules(parsedSubrules : Seq[ParsedSubrule]) : Seq[ParsedSubrule]
-    {
-      parsedSubrules.Where(p => p.Begin == StartPos && IsStartSubrule(p))
-    }
-    
-    IsStartSubrule(subrule : ParsedSubrule) : bool
-    {
-      when (subrule.Begin!= StartPos)
-        return false;
-        
-      ParsingSequence.IsStartState(subrule.State)
-    }
-    
-    public GetLastSubrules() : Seq[ParsedSubrule]
-    {
-      GetLastSubrules(ParsedSubrules)
-    }
-
-    public GetLastSubrules(parsedSubrules : Seq[ParsedSubrule]) : Seq[ParsedSubrule]
-    {
-      parsedSubrules.Where(p => Ends.Contains(p.End) && IsEndSubrule(p))
-    }
-
-    public GetLastSubrules(end : int) : Seq[ParsedSubrule]
-    {
-      GetLastSubrules(ParsedSubrules, end)
-    }
-
-    public GetLastSubrules(parsedSubrules : Seq[ParsedSubrule], end : int) : Seq[ParsedSubrule]
-    {
-      parsedSubrules.Where(p => p.End == end && IsEndSubrule(p))
-    }
-    
-    private IsEndSubrule(subrule : ParsedSubrule) : bool
-    {
-      ParsingSequence.States[subrule.State].Next.Exists(_ == -1)
-    }
-
-    public GetValidSubrules() : SCG.SortedSet[ParsedSubrule]
-    {
-      GetValidSubrulesImpl(GetLastSubrules(), ParsedSubrules)
-    }
-
-    public GetValidSubrules(end : int) : SCG.SortedSet[ParsedSubrule]
-    {
-      GetValidSubrules(ParsedSubrules, end)
-    }
-
-    public GetValidSubrules(parsedSubrules : Seq[ParsedSubrule]) : SCG.SortedSet[ParsedSubrule]
-    {
-      GetValidSubrulesImpl(GetLastSubrules(parsedSubrules), parsedSubrules)
-    }
-
-    public GetValidSubrules(parsedSubrules : Seq[ParsedSubrule], end : int) : SCG.SortedSet[ParsedSubrule]
-    {
-      GetValidSubrulesImpl(GetLastSubrules(parsedSubrules, end), parsedSubrules)
-    }
-
-    private GetValidSubrulesImpl(ends : Seq[ParsedSubrule], parsedSubrules : Seq[ParsedSubrule]) : SCG.SortedSet[ParsedSubrule]
-    {
-      def cmp  = ParsedSubrule.ComparerEndBeginIndex();
-      def res  = SCG.SortedSet(cmp);
-      def ends = SCG.SortedSet(ends, cmp);
-      while (ends.Count > 0)
-      {
-        def end = ends.Max;
-        _ = ends.Remove(end);
-        when (res.Add(end))
-        {
-          foreach (prev in GetPrevSubrules(end, parsedSubrules))
-            _ = ends.Add(prev);
-          otherwise
-          {
-            assert3(true);
-          }
-        }
-      }
-      res
     }
 
     public override ToString() : string
