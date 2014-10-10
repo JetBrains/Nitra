@@ -7,6 +7,7 @@ using ICSharpCode.AvalonEdit.Rendering;
 using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.AvalonEdit.Document;
 using System.Windows.Media;
+using ICSharpCode.AvalonEdit.Search;
 
 namespace Nitra.Visualizer
 {
@@ -15,6 +16,7 @@ namespace Nitra.Visualizer
     public NitraTextEditor()
     {
       SyntaxHighlighting = new StubHighlightingDefinition();
+      TextArea.DefaultInputHandler.NestedInputHandlers.Add(new NitraSearchInputHandler(TextArea));
     }
 
     public event EventHandler<HighlightLineEventArgs> HighlightLine;
