@@ -512,7 +512,7 @@ namespace Nitra.Visualizer
       try
       {
         var line = e.Line;
-        var spans = new List<SpanInfo>();
+        var spans = new HashSet<SpanInfo>();
         var timer = Stopwatch.StartNew();
         _parseResult.GetSpans(line.Offset, line.EndOffset, spans);
         _highlightingTimeSpan = timer.Elapsed;
