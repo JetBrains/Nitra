@@ -87,52 +87,6 @@ namespace Nitra.DebugStrategies
 
       UpdateEarleyParseTime();
       return parseResult.Text.Length;
-      throw new NotImplementedException();
-#if DebugOutput
-      timer.Stop();
-      Debug.WriteLine("Earley parse took: " + timer.Elapsed);
-      timer.Restart();
-#endif
-
-      UpdateRecoverAllWaysTime();
-#if DebugOutput
-      timer.Stop();
-      Debug.WriteLine("RecoverAllWays took: " + timer.Elapsed);
-      timer.Restart();
-#endif
-
-      if (parseResult.TerminateParsing)
-        throw new OperationCanceledException();
-
-      UpdateFindBestPathTime();
-#if DebugOutput
-      timer.Stop();
-      Debug.WriteLine("FindBestPath took: " + timer.Elapsed);
-      timer.Restart();
-#endif
-
-      if (parseResult.TerminateParsing)
-        throw new OperationCanceledException();
-
-      if (parseResult.TerminateParsing)
-        throw new OperationCanceledException();
-
-      UpdateFlattenSequenceTime();
-#if DebugOutput
-      timer.Stop();
-      Debug.WriteLine("FlattenSequence took: " + timer.Elapsed);
-#endif
-
-#if DebugThreading
-      Debug.WriteLine("<<<< Strategy " + _id + " ThreadId=" + System.Threading.Thread.CurrentThread.ManagedThreadId);
-#endif
-
-      if (parseResult.TerminateParsing)
-        throw new OperationCanceledException();
-
-      _parseResult = null;
-
-      return parseResult.Text.Length;
     }
 
     protected virtual void UpdateEarleyParseTime() { }
