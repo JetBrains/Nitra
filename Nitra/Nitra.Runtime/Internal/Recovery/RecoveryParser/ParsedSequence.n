@@ -17,18 +17,36 @@ namespace Nitra.Internal.Recovery
   [Record, StructuralEquality]
   public partial class ParsedSequence
   {
-    [EqualsIgnore]               public         RecoveryParser  : RecoveryParser;
-                                 public         StartPos        : int;
-                                 public         ParsingSequence : ParsingSequence;
+    [EqualsIgnore]               public         RecoveryParser    : RecoveryParser;
+                                 public         StartPos          : int;
+                                 public         ParsingSequence   : ParsingSequence;
+    [EqualsIgnore]               public         StartTokenChanges : TokenChanges { get; internal set; }
 
-    [RecordIgnore, EqualsIgnore] public         Callers         : SCG.HashSet[ParseRecord]               = SCG.HashSet();
-    [RecordIgnore, EqualsIgnore] public         ParsedSubrules  : Hashtable[ParsedSubrule, TokenChanges] = Hashtable();
-    [RecordIgnore, EqualsIgnore] public         Ends            : Hashtable[int, TokenChanges]           = Hashtable();
-    [RecordIgnore, EqualsIgnore] public mutable Iteration       : int = -1;
+    [RecordIgnore, EqualsIgnore] public         Callers           : SCG.HashSet[ParseRecord]               = SCG.HashSet();
+    [RecordIgnore, EqualsIgnore] public         ParsedSubrules    : Hashtable[ParsedSubrule, TokenChanges] = Hashtable();
+    [RecordIgnore, EqualsIgnore] public         Ends              : Hashtable[int, TokenChanges]           = Hashtable();
+    [RecordIgnore, EqualsIgnore] public mutable Iteration         : int = -1;
 
     public IsToken : bool { get { this.ParsingSequence.IsToken }}
     
     public RuleName : string { get { this.ParsingSequence.RuleName } }
+
+    public StartParse() : void
+    {
+      foreach (startState in ParsingSequence.StartStates)
+        RecoveryParser.StartParseSubrule(ParseRecord(this, startState, StartPos), StartTokenChanges);
+    }
+
+    public UpdateSubrules(end : int) : void
+    {
+      foreach ((subrule, subruleTokenChanges) when (subrule.End == end || subrule.Begin >= end) in ParsedSubrules.KeyValuePairs.ToArray().SortInplace(RecoveryParser.ParsingOrderSubrulesComparison))//TODO:Optimize
+      {
+        def subruleParseRecord = ParseRecord(this, subrule.State, subrule.Begin);
+        mutable startChanges;
+        when (RecoveryParser.Records[subrule.Begin].TryGetValue(subruleParseRecord, out startChanges))
+          RecoveryParser.SubruleParsed(subrule.Begin, subrule.End, subruleParseRecord, startChanges, subruleTokenChanges);
+      }
+    }
 
     public AddParsedSubrule(subrule : ParsedSubrule, subruleTokenChanges : TokenChanges) : void
     {
@@ -37,14 +55,7 @@ namespace Nitra.Internal.Recovery
         when (subruleTokenChanges < oldChanges)
         {
           ParsedSubrules[subrule] = subruleTokenChanges;
-          def end = subrule.End;
-          foreach ((subrule, subruleTokenChanges) when (subrule.End == end || subrule.Begin >= end) in ParsedSubrules.KeyValuePairs.ToArray().SortInplace(RecoveryParser.ParsingOrderSubrulesComparison))//TODO:Optimize
-          {
-            def subruleParseRecord = ParseRecord(this, subrule.State, subrule.Begin);
-            mutable startChanges;
-            when (RecoveryParser.Records[subrule.Begin].TryGetValue(subruleParseRecord, out startChanges))
-              RecoveryParser.SubruleParsed(subrule.Begin, subrule.End, subruleParseRecord, startChanges, subruleTokenChanges);
-          }
+          UpdateSubrules(subrule.End);
         }
       else
         ParsedSubrules[subrule] = subruleTokenChanges;
@@ -94,8 +105,9 @@ namespace Nitra.Internal.Recovery
           RecoveryParser.Completion(end, caller, this);
     }
 
-    public AddEnd(end : int, newTokenChanges : TokenChanges) : void
+    public AddEnd(end : int, endTokenChanges : TokenChanges) : void
     {
+      def newTokenChanges = endTokenChanges - StartTokenChanges;
       mutable oldTokenChanges;
       if (Ends.TryGetValue(end, out oldTokenChanges))
       {
