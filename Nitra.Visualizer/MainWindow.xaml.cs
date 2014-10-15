@@ -81,7 +81,6 @@ namespace Nitra.Visualizer
       _configComboBox.SelectedItem = config == "Release" ? "Release" : "Debug";
 
       _tabControl.SelectedIndex = _settings.ActiveTabIndex;
-      _findGrid.Visibility      = System.Windows.Visibility.Collapsed;
       _foldingStrategy          = new NitraFoldingStrategy();
       _textBox1Tooltip          = new ToolTip { PlacementTarget = _text };
       _parseTimer               = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
@@ -513,7 +512,7 @@ namespace Nitra.Visualizer
       try
       {
         var line = e.Line;
-        var spans = new List<SpanInfo>();
+        var spans = new HashSet<SpanInfo>();
         var timer = Stopwatch.StartNew();
         _parseResult.GetSpans(line.Offset, line.EndOffset, spans);
         _highlightingTimeSpan = timer.Elapsed;
@@ -560,114 +559,10 @@ namespace Nitra.Visualizer
       _textBox1Tooltip.IsOpen = false;
     }
 
-    private void FindCanExecute(object sender, CanExecuteRoutedEventArgs e)
-    {
-      e.CanExecute = true;
-      e.Handled = true;
-    }
-
-    private void FindExecuted(object sender, ExecutedRoutedEventArgs e)
-    {
-      _findGrid.Visibility = System.Windows.Visibility.Visible;
-      _findText.Focus();
-      e.Handled = true;
-    }
-
-    private void _findClose_Click(object sender, RoutedEventArgs e)
-    {
-      _findGrid.Visibility = System.Windows.Visibility.Collapsed;
-    }
-
     private void CommandBinding_CanExecute(object sender, CanExecuteRoutedEventArgs e)
     {
       e.CanExecute = true;
       e.Handled = true;
-    }
-
-    private void FindNext_Executed(object sender, ExecutedRoutedEventArgs e)
-    {
-      FindNext();
-    }
-
-    private void FindPrev_Executed(object sender, ExecutedRoutedEventArgs e)
-    {
-      FindPrev();
-    }
-
-    private void FindNext()
-    {
-      var option = GetMatchCaseOption();
-      var toFind = _findText.Text;
-      var text   = _text.Text;
-      var index  = _text.SelectionStart + _text.SelectionLength - 1;
-
-      do
-      {
-        if (index < text.Length)
-          index++;
-        index = text.IndexOf(toFind, index, option);
-      }
-      while (index >= 0 && !IsWholeWord(text, index, toFind.Length));
-
-      var found = index >= 0;
-      if (found)
-      {
-        _text.Select(index, toFind.Length);
-        _text.ScrollToLine(_text.TextArea.Caret.Line);
-      }
-      else
-        _status.Text = "Can't find '" + toFind + "'.";
-    }
-
-    private void FindPrev()
-    {
-      var option = GetMatchCaseOption();
-      var toFind = _findText.Text;
-      var text = _text.Text;
-      var index = _text.SelectionStart;
-
-      do
-      {
-        if (index > 0)
-          index--;
-        index = text.LastIndexOf(toFind, index, option);
-      }
-      while (index >= 0 && !IsWholeWord(text, index, toFind.Length));
-
-      var found = index >= 0;
-
-      if (found)
-      {
-        _text.Select(index, toFind.Length);
-        _text.ScrollToLine(_text.TextArea.Caret.Line);
-      }
-      else
-        _status.Text = "Can't find '" + toFind + "'.";
-    }
-
-    private bool IsWholeWord(string text, int start, int length)
-    {
-      if (!(_findMatchWholeWord.IsChecked ?? false))
-        return true;
-
-      var end = start + length - 1;
-
-      if (end < text.Length)
-        if (char.IsLetterOrDigit(text[end]) || text[end] == '_')
-          if (char.IsLetterOrDigit(text[end + 1]) || text[end + 1] == '_')
-            return false;
-
-      if (start > 0)
-        if (char.IsLetterOrDigit(text[start]) || text[start] == '_')
-          if (char.IsLetterOrDigit(text[start - 1]) || text[start - 1] == '_')
-            return false;
-
-      return true;
-    }
-
-    private StringComparison GetMatchCaseOption()
-    {
-      return _findMatchCase.IsChecked ?? false ? StringComparison.InvariantCulture : StringComparison.InvariantCultureIgnoreCase;
     }
 
     private void _tabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1239,94 +1134,6 @@ namespace Nitra.Visualizer
     private static bool IsSplicable(ParseResult parseResult)
     {
       return parseResult.RuleParser.Descriptor.Grammar.IsSplicable;
-    }
-    
-    private void FindNext_Executed_Selected(object sender, ExecutedRoutedEventArgs e)
-    {
-      FindSelected(next: true);
-    }
-
-    private void FindPrev_Executed_Selected(object sender, ExecutedRoutedEventArgs e)
-    {
-      FindSelected(next: false);
-    }
-
-    private void FindSelected(bool next)
-    {
-      if (_text.SelectionLength > 0)
-      {
-        _findText.Text = _text.SelectedText;
-        
-        if (next)
-          FindNext();
-        else
-          FindPrev();
-      }
-      else
-      {
-        var line = _text.Document.Lines[_text.TextArea.Caret.Line - 1];
-        var text = _text.Document.GetText(line.Offset, line.Length);
-        var startIndex = Math.Min(_text.TextArea.Caret.Column - 1, text.Length - 1);
-        var firstCh = text[startIndex];
-        int patternStartIndex;
-        string searchPattern = IsIdentifier(firstCh)
-          ? ExtractIdentifier(text, startIndex, out patternStartIndex)
-          : ExtractNotEmpty(text, startIndex, out patternStartIndex);
-
-        if (!string.IsNullOrWhiteSpace(searchPattern))
-        {
-          _findText.Text = searchPattern;
-          _text.Select(line.Offset + patternStartIndex, searchPattern.Length);
-
-          if (next)
-            FindNext();
-          else
-          {
-            _text.TextArea.Caret.Column = patternStartIndex + 1;
-            FindPrev();
-          }
-        }
-      }
-    }
-
-    public static string ExtractNotEmpty(string text, int startIndex, out int patternStartIndex)
-    {
-      return ExtractString(text, startIndex, char.IsWhiteSpace, out patternStartIndex);
-    }
-
-    public static string ExtractIdentifier(string text, int startIndex, out int patternStartIndex)
-    {
-      return ExtractString(text, startIndex, ch => !IsIdentifier(ch), out patternStartIndex);
-    }
-
-    public static string ExtractString(string text, int startIndex, Func<char, bool> predicate, out int patternStartIndex)
-    {
-      int i = startIndex;
-      for (; i > 0; i--)
-      {
-        var ch = text[i];
-        if (predicate(ch))
-        {
-          i++;
-          break;
-        }
-      }
-
-      int j = startIndex;
-      for (; j < text.Length; j++)
-      {
-        var ch = text[j];
-        if (predicate(ch))
-          break;
-      }
-
-      patternStartIndex = i;
-      return text.Substring(i, j - i);
-    }
-
-    private static bool IsIdentifier(char ch)
-    {
-      return char.IsLetterOrDigit(ch) || ch == '_';
     }
 
     private void _control_KeyDown_resize(object sender, KeyEventArgs e)
