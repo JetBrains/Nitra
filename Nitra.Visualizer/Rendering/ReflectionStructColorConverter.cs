@@ -21,7 +21,7 @@ namespace Nitra.Visualizer
 
       if (node.Kind == ReflectionKind.Deleted)
         return Brushes.Red;
-      
+
       if (node.Location.IsEmpty)
       {
         if (node.Info.CanParseEmptyString)

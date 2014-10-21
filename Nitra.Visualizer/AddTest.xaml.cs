@@ -59,8 +59,8 @@ namespace Nitra.Visualizer
       var path = _testSuitPath;
       var filePath = Path.Combine(path, _testName.Text) + ".test";
 
-      try 
-	    {	        
+      try
+	    {
 		    File.WriteAllText(filePath, _code);
 	    }
 	    catch (Exception ex)

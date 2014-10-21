@@ -31,8 +31,8 @@ namespace Nitra.TestsLauncher
         Console.WriteLine("The directory '" + testsLocationRoot + "' not exists.");
         return;
       }
-              
-      
+
+
       var stackSize = 20 * 1024 * (IntPtr.Size == 8 ? 8 : 1) * 1024;
       var thread = new Thread(() => Start(testsLocationRoot, config), stackSize);
       thread.Name = "Main test thread";

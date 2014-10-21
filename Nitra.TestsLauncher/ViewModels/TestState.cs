@@ -2,10 +2,10 @@
 {
   public enum TestState
   {
-    Skipped, 
+    Skipped,
     Failure,
-    Ignored, 
-    Inconclusive, 
+    Ignored,
+    Inconclusive,
     Success
   }
 }

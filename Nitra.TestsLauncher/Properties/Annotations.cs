@@ -166,7 +166,7 @@ namespace Nitra.Visualizer.Annotations
   /// <item><code>
   /// // A method that returns null if the parameter is null, and not null if the parameter is not null
   /// [ContractAnnotation("null => null; notnull => notnull")]
-  /// public object Transform(object data) 
+  /// public object Transform(object data)
   /// </code></item>
   /// <item><code>
   /// [ContractAnnotation("s:null=>false; =>true,result:notnull; =>false, result:null")]
@@ -292,7 +292,7 @@ namespace Nitra.Visualizer.Annotations
   [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = true)]
   public sealed class MeansImplicitUseAttribute : Attribute
   {
-    public MeansImplicitUseAttribute() 
+    public MeansImplicitUseAttribute()
       : this(ImplicitUseKindFlags.Default, ImplicitUseTargetFlags.Default) { }
 
     public MeansImplicitUseAttribute(ImplicitUseKindFlags useKindFlags)
@@ -311,7 +311,7 @@ namespace Nitra.Visualizer.Annotations
     [UsedImplicitly] public ImplicitUseKindFlags UseKindFlags { get; private set; }
     [UsedImplicitly] public ImplicitUseTargetFlags TargetFlags { get; private set; }
   }
-  
+
   [Flags]
   public enum ImplicitUseKindFlags
   {
@@ -443,7 +443,7 @@ namespace Nitra.Visualizer.Annotations
   /// ASP.NET MVC attribute. If applied to a parameter, indicates that
   /// the parameter is an MVC controller. If applied to a method,
   /// the MVC controller name is calculated implicitly from the context.
-  /// Use this attribute for custom wrappers similar to 
+  /// Use this attribute for custom wrappers similar to
   /// <c>System.Web.Mvc.Html.ChildActionExtensions.RenderAction(HtmlHelper, String, String)</c>
   /// </summary>
   [AttributeUsage(AttributeTargets.Parameter | AttributeTargets.Method)]
@@ -493,7 +493,7 @@ namespace Nitra.Visualizer.Annotations
 
   /// <summary>
   /// ASP.NET MVC attribute. Indicates that a parameter is an MVC display template.
-  /// Use this attribute for custom wrappers similar to 
+  /// Use this attribute for custom wrappers similar to
   /// <c>System.Web.Mvc.Html.DisplayExtensions.DisplayForModel(HtmlHelper, String)</c>
   /// </summary>
   [AttributeUsage(AttributeTargets.Parameter)]
@@ -569,7 +569,7 @@ namespace Nitra.Visualizer.Annotations
 
   /// <summary>
   /// Razor attribute. Indicates that a parameter or a method is a Razor section.
-  /// Use this attribute for custom wrappers similar to 
+  /// Use this attribute for custom wrappers similar to
   /// <c>System.Web.WebPages.WebPageBase.RenderSection(String)</c>
   /// </summary>
   [AttributeUsage(AttributeTargets.Parameter | AttributeTargets.Method, Inherited = true)]

@@ -248,7 +248,7 @@ pre
         var tokenChanges = node.TokenChanges;
         var seq = node.Seq;
         var subrule = node.Subrule;
-        
+
         bool isGarbage;
         if (deletedToken.TryGetValue(new ParsedSequenceAndSubrule(seq, subrule), out isGarbage))// TODO: Возможно здесь надо проверять значение tokenChanges.Deleted
         {

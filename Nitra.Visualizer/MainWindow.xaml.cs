@@ -62,7 +62,7 @@ namespace Nitra.Visualizer
       _settings = Settings.Default;
 
       ToolTipService.ShowDurationProperty.OverrideMetadata(
-        typeof(DependencyObject), 
+        typeof(DependencyObject),
         new FrameworkPropertyMetadata(Int32.MaxValue));
 
       InitializeComponent();
@@ -192,7 +192,7 @@ namespace Nitra.Visualizer
         if (node != null)
         {
           var selected = _reflectionTreeView.SelectedItem as ReflectionStruct;
-          
+
           if (node == selected)
             return;
 
@@ -435,7 +435,7 @@ namespace Nitra.Visualizer
     {
       this.Close();
     }
-    
+
     private void FileOpenExecuted(object sender, RoutedEventArgs e)
     {
       var dialog = new OpenFileDialog { Filter = "C# (.cs)|*.cs|Nitra (.nitra)|*.nitra|JSON (.json)|*.json|Text (.txt)|*.txt|All|*.*" };
@@ -483,7 +483,7 @@ namespace Nitra.Visualizer
         _findBestPathTime.Text    = "NA";//recovery.RecoveryPerformanceData.FindBestPathTime.ToString();
         _flattenSequenceTime.Text = "NA";//recovery.RecoveryPerformanceData.FlattenSequenceTime.ToString();
         _parseErrorCount.Text     = "NA";//recovery.RecoveryPerformanceData.ParseErrorCount.ToString(CultureInfo.InvariantCulture);
-        
+
         TryReportError();
         ShowInfo();
       }
@@ -702,7 +702,7 @@ namespace Nitra.Visualizer
     private bool ShowTestsSettingsDialog()
     {
       var dialog = new TestsSettingsWindow();
-      
+
       if (this.IsVisible)
         dialog.Owner = this;
 
@@ -929,7 +929,7 @@ namespace Nitra.Visualizer
       var test = _testsTreeView.SelectedItem as TestVm;
       if (test == null)
         return;
-      if (MessageBox.Show(this, "Do you want to delete the '" + test.Name + "' test?", "Visualizer!", MessageBoxButton.YesNo, 
+      if (MessageBox.Show(this, "Do you want to delete the '" + test.Name + "' test?", "Visualizer!", MessageBoxButton.YesNo,
         MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
         return;
 
@@ -1064,8 +1064,8 @@ namespace Nitra.Visualizer
         }
         catch (Exception ex)
         {
-          MessageBox.Show(this, "Fail to update the test '" + test.Name + "'." + Environment.NewLine + ex.GetType().Name + ":" + ex.Message, "Visualizer!", 
-            MessageBoxButton.YesNo, 
+          MessageBox.Show(this, "Fail to update the test '" + test.Name + "'." + Environment.NewLine + ex.GetType().Name + ":" + ex.Message, "Visualizer!",
+            MessageBoxButton.YesNo,
             MessageBoxImage.Error);
         }
       }

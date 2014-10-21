@@ -1,4 +1,4 @@
-using JetBrains.ReSharper.Psi.ExtensionsAPI.Tree;
+﻿using JetBrains.ReSharper.Psi.ExtensionsAPI.Tree;
 
 namespace JetBrains.Test
 {

@@ -14,7 +14,7 @@ namespace Microsoft.VisualStudio.Shell.Interop
     /// <summary>
     /// Fired before a solution open begins. Extenders can activate a solution load manager by setting <see cref="F:Microsoft.VisualStudio.Shell.Interop.__VSPROPID4.VSPROPID_ActiveSolutionLoadManager"/>.
     /// </summary>
-    /// 
+    ///
     /// <returns>
     /// If the method succeeds, it returns <see cref="F:Microsoft.VisualStudio.VSConstants.S_OK"/>. If it fails, it returns an error code.
     /// </returns>
@@ -25,7 +25,7 @@ namespace Microsoft.VisualStudio.Shell.Interop
     /// <summary>
     /// Fired when background loading of projects is beginning again after the initial solution open operation has completed.
     /// </summary>
-    /// 
+    ///
     /// <returns>
     /// If the method succeeds, it returns <see cref="F:Microsoft.VisualStudio.VSConstants.S_OK"/>. If it fails, it returns an error code.
     /// </returns>
@@ -35,7 +35,7 @@ namespace Microsoft.VisualStudio.Shell.Interop
     /// <summary>
     /// Fired before background loading a batch of projects. Normally a background batch loads a single pending project. This is a cancelable event.
     /// </summary>
-    /// 
+    ///
     /// <returns>
     /// If the method succeeds, it returns <see cref="F:Microsoft.VisualStudio.VSConstants.S_OK"/>. If it fails, it returns an error code.
     /// </returns>
@@ -46,7 +46,7 @@ namespace Microsoft.VisualStudio.Shell.Interop
     /// <summary>
     /// Fired when loading a batch of dependent projects as part of loading a solution in the background.
     /// </summary>
-    /// 
+    ///
     /// <returns>
     /// If the method succeeds, it returns <see cref="F:Microsoft.VisualStudio.VSConstants.S_OK"/>. If it fails, it returns an error code.
     /// </returns>
@@ -57,7 +57,7 @@ namespace Microsoft.VisualStudio.Shell.Interop
     /// <summary>
     /// Fired when the loading of a batch of dependent projects is complete.
     /// </summary>
-    /// 
+    ///
     /// <returns>
     /// If the method succeeds, it returns <see cref="F:Microsoft.VisualStudio.VSConstants.S_OK"/>. If it fails, it returns an error code.
     /// </returns>
@@ -68,7 +68,7 @@ namespace Microsoft.VisualStudio.Shell.Interop
     /// <summary>
     /// Fired when the solution load process is fully complete, including all background loading of projects.
     /// </summary>
-    /// 
+    ///
     /// <returns>
     /// If the method succeeds, it returns <see cref="F:Microsoft.VisualStudio.VSConstants.S_OK"/>. If it fails, it returns an error code.
     /// </returns>

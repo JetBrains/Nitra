@@ -40,10 +40,10 @@ namespace Nitra.Visualizer
 
       var root = Path.GetFullPath(_settings.TestsLocationRoot);
       _testsRootTextBlock.Text = root;
-      var paths = baseTestSuit == null 
+      var paths = baseTestSuit == null
         ? ""
         : string.Join(Environment.NewLine,
-            baseTestSuit.SynatxModules.Select(m => 
+            baseTestSuit.SynatxModules.Select(m =>
               Utils.MakeRelativePath(from: root, isFromDir: true, to: m.GetType().Assembly.Location, isToDir: false)).Distinct());
       _assemblies.Text = paths;
       UpdateSyntaxModules(paths, root);
@@ -174,8 +174,8 @@ namespace Nitra.Visualizer
     {
       var syntaxModules = _syntaxModules.ItemsSource as ObservableCollection<SyntaxModuleVm>;
 
-      var x = syntaxModules == null 
-        ? new GrammarDescriptor[0] 
+      var x = syntaxModules == null
+        ? new GrammarDescriptor[0]
         : syntaxModules.Where(m => m.IsChecked).Select(m => m.GrammarDescriptor).ToArray();
 
       return x;

@@ -73,7 +73,7 @@ namespace Nitra.ViewModels
       catch (FileNotFoundException ex)
       {
         TestState = TestState.Ignored;
-        
+
         string additionMsg = null;
 
         if (ex.FileName.EndsWith("config.xml", StringComparison.OrdinalIgnoreCase))

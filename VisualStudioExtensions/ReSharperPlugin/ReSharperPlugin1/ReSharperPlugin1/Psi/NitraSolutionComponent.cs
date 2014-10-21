@@ -61,7 +61,7 @@ namespace ReSharperPlugin1
 
           Debug.WriteLine(file.Name);
         }
-        
+
       }
     }
 
@@ -71,7 +71,7 @@ namespace ReSharperPlugin1
       var change = args.ChangeMap.GetChange<ProjectFileDocumentChange>(_solution);
       if (change != null)
       {
-        
+
       }
       //change.
       //if (change != null)

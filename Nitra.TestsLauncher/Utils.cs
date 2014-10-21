@@ -90,11 +90,11 @@ namespace Nitra.Visualizer
       //  </Config>
       var libs = syntaxModules.GroupBy(m => MakeRelativePath(from:root, isFromDir:true, to:m.GetType().Assembly.Location, isToDir:false))
         .Select(asm =>
-          new XElement("Lib", 
+          new XElement("Lib",
             new XAttribute("Path", asm.Key),
-            asm.Select(mod => 
-              new XElement("SyntaxModule", 
-                new XAttribute("Name", mod.FullName), 
+            asm.Select(mod =>
+              new XElement("SyntaxModule",
+                new XAttribute("Name", mod.FullName),
                 mod.Rules.Contains(startRule) ? new XAttribute("StartRule", startRule.Name) : null))
             ));
 

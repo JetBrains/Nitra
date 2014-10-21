@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using JetBrains.Application.DataContext;
 using JetBrains.ReSharper.Psi;
 using JetBrains.Test;
