@@ -8,7 +8,6 @@ using Microsoft.Win32;
 
 using Nemerle.Diff;
 
-using Nitra.DebugStrategies;
 using Nitra.Runtime.Reflection;
 using Nitra.ViewModels;
 using Nitra.Visualizer.Properties;
@@ -462,15 +461,12 @@ namespace Nitra.Visualizer
 
       try
       {
-        var recovery = new RecoveryVisualizer();
         _recoveryTreeView.Items.Clear();
         _errorsTreeView.Items.Clear();
         _reflectionTreeView.ItemsSource = null;
         var timer = Stopwatch.StartNew();
 
-        RecoveryDebug.CurrentTestName = null;
-
-        _parseResult = _currentTestSuit.Run(_text.Text, null, recovery.Strategy);
+        _parseResult = _currentTestSuit.Run(_text.Text, null);
 
         _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
 
@@ -481,12 +477,12 @@ namespace Nitra.Visualizer
 
         _outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
 
-        _recoveryTime.Text        = recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
-        _earleyParseTime.Text     = recovery.RecoveryPerformanceData.EarleyParseTime.ToString();
-        _recoverAllWaysTime.Text  = recovery.RecoveryPerformanceData.RecoverAllWaysTime.ToString();
-        _findBestPathTime.Text    = recovery.RecoveryPerformanceData.FindBestPathTime.ToString();
-        _flattenSequenceTime.Text = recovery.RecoveryPerformanceData.FlattenSequenceTime.ToString();
-        _parseErrorCount.Text     = recovery.RecoveryPerformanceData.ParseErrorCount.ToString(CultureInfo.InvariantCulture);
+        _recoveryTime.Text        = _currentTestSuit.TestTime.ToString();//recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
+        _earleyParseTime.Text     = "NA";//recovery.RecoveryPerformanceData.EarleyParseTime.ToString();
+        _recoverAllWaysTime.Text  = "NA";//recovery.RecoveryPerformanceData.RecoverAllWaysTime.ToString();
+        _findBestPathTime.Text    = "NA";//recovery.RecoveryPerformanceData.FindBestPathTime.ToString();
+        _flattenSequenceTime.Text = "NA";//recovery.RecoveryPerformanceData.FlattenSequenceTime.ToString();
+        _parseErrorCount.Text     = "NA";//recovery.RecoveryPerformanceData.ParseErrorCount.ToString(CultureInfo.InvariantCulture);
         
         TryReportError();
         ShowInfo();
@@ -785,12 +781,12 @@ namespace Nitra.Visualizer
     private void OnRunTests(object sender, ExecutedRoutedEventArgs e)
     {
       if (CheckTestFolder())
-        RunTests(parseResult => new Recovery().Strategy(parseResult));
+        RunTests();
       else
         MessageBox.Show(this, "Can't run tests.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
-    private void RunTests(RecoveryStrategy recoveryStrategy)
+    private void RunTests()
     {
       if (_testsTreeView.ItemsSource == null)
         return;
@@ -800,15 +796,15 @@ namespace Nitra.Visualizer
       foreach (var testSuit in testSuits)
       {
         foreach (var test in testSuit.Tests)
-          RunTest(test, recoveryStrategy);
+          RunTest(test);
 
         testSuit.TestStateChanged();
       }
     }
 
-    private void RunTest(TestVm test, RecoveryStrategy recoveryStrategy)
+    private void RunTest(TestVm test)
     {
-      test.Run(recoveryStrategy);
+      test.Run();
 
       ShowDiff(test);
     }
@@ -998,16 +994,16 @@ namespace Nitra.Visualizer
 
     private void OnRunTest(object sender, ExecutedRoutedEventArgs e)
     {
-      RunTest(parseResult => new Recovery().Strategy(parseResult));
+      RunTest();
     }
 
-    private void RunTest(RecoveryStrategy recoveryStrategy)
+    private void RunTest()
     {
       {
         var test = _testsTreeView.SelectedItem as TestVm;
         if (test != null)
         {
-          RunTest(test, recoveryStrategy);
+          RunTest(test);
           test.TestSuit.TestStateChanged();
 
           if (test.TestState == TestState.Failure)
@@ -1018,7 +1014,7 @@ namespace Nitra.Visualizer
       if (testSuit != null)
       {
         foreach (var test in testSuit.Tests)
-          RunTest(test, recoveryStrategy);
+          RunTest(test);
         testSuit.TestStateChanged();
       }
     }
@@ -1042,7 +1038,7 @@ namespace Nitra.Visualizer
 
     private void _testsTreeView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-      RunTest(parseResult => new Recovery().Strategy(parseResult));
+      RunTest();
       e.Handled = true;
     }
 

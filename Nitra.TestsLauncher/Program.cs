@@ -1,5 +1,4 @@
-﻿using Nitra.DebugStrategies;
-using Nitra.ViewModels;
+﻿using Nitra.ViewModels;
 using Nitra.Visualizer;
 
 using Nemerle.Diff;
@@ -98,7 +97,6 @@ namespace Nitra.TestsLauncher
       var testSuits = new List<TestSuitVm>();
       Utils.LoadTestSuits(testsLocationRoot, null, config, testSuits);
 
-      var recovery = new RecoveryVisualizer();
       var lastSuit = "";
       var lastTest = "";
       var maxNameLen = CalcMaxNameLen(testSuits);
@@ -125,7 +123,7 @@ namespace Nitra.TestsLauncher
           var dots = maxNameLen - test.Name.Length;
           Print(test.Name + " " + new string('.', dots) + " ");
           Console.Out.Flush();
-          test.Run(recovery.Strategy);
+          test.Run();
 
           switch (test.TestState)
           {

@@ -45,14 +45,12 @@ namespace Nitra.ViewModels
         TestState = TestState.Ignored;
     }
 
-    public ParseResult Run(RecoveryStrategy recoveryStrategy)
+    public ParseResult Run()
     {
       if (TestSuit.TestState == TestState.Ignored)
         return null;
 
-      Nitra.DebugStrategies.RecoveryDebug.CurrentTestName = Name;
-
-      var result = TestSuit.Run(Code, Gold, recoveryStrategy);
+      var result = TestSuit.Run(Code, Gold);
       if (result == null)
         return null;
 

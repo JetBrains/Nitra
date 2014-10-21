@@ -1,5 +1,4 @@
-﻿using Nitra.DebugStrategies;
-using Nitra.Visualizer;
+﻿using Nitra.Visualizer;
 using Nitra.Visualizer.Annotations;
 
 using System;
@@ -19,11 +18,10 @@ namespace Nitra.ViewModels
     public ObservableCollection<TestVm>             Tests         { get; private set; }
     public string                                   TestSuitPath  { get; set; }
     public Exception                                Exception     { get; private set; }
+    public TimeSpan                                 TestTime      { get; private set; }
 
     public string _hint;
     public override string Hint { get { return _hint; } }
-
-    public readonly Recovery Recovery = new Recovery();
 
     readonly string _rootPath;
     ParserHost _parserHost;
@@ -137,7 +135,7 @@ namespace Nitra.ViewModels
     }
 
     [CanBeNull]
-    public ParseResult Run([NotNull] string code, [CanBeNull] string gold, RecoveryStrategy recoveryStrategy)
+    public ParseResult Run([NotNull] string code, [CanBeNull] string gold)
     {
       if (_parserHost == null)
       {
@@ -149,15 +147,18 @@ namespace Nitra.ViewModels
       if (StartRule == null)
         return null;
 
+      var timer = System.Diagnostics.Stopwatch.StartNew();
       try
       {
-        var res = _parserHost.DoParsing(source, _compositeGrammar, StartRule, recoveryStrategy);
+        var res = _parserHost.DoParsing(source, _compositeGrammar, StartRule);
         this.Exception = null;
+        this.TestTime = timer.Elapsed;
         return res;
       }
       catch (Exception ex)
       {
         this.Exception = ex;
+        this.TestTime = timer.Elapsed;
         return null;
       }
     }
