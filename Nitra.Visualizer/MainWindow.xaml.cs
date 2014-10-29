@@ -1163,5 +1163,10 @@ namespace Nitra.Visualizer
         Clipboard.SetData(DataFormats.UnicodeText, text);
       }
     }
+
+    private void OnLoadSolution(object sender, ExecutedRoutedEventArgs e)
+    {
+
+    }
   }
 }

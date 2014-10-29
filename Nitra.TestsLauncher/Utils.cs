@@ -111,8 +111,8 @@ namespace Nitra.Visualizer
           if (testSuit.FullPath == path)
             testSuit.IsSelected = true; // Прикольно что по другому фокус не изменить!
           else foreach (var test in testSuit.Tests)
-              if (test.FullPath == path)
-                test.IsSelected = true;
+            if (test.FullPath == path)
+              test.IsSelected = true;
         }
         testSuits.Add(testSuit);
       }
