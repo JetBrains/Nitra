@@ -916,19 +916,6 @@ namespace Nitra.Visualizer
       }
     }
 
-    private static string GetDefaultDirectory()
-    {
-      var dir = Path.GetFullPath(Directory.GetCurrentDirectory());
-      
-      if ((Path.GetDirectoryName(dir) ?? "").Equals("Debug", StringComparison.InvariantCultureIgnoreCase))
-      {
-        dir = Path.GetFullPath(Path.Combine(dir, @"\.."));
-        if ((Path.GetDirectoryName(dir) ?? "").Equals("bin", StringComparison.InvariantCultureIgnoreCase))
-          dir = Path.GetFullPath(Path.Combine(dir, @"\.."));
-      }
-
-      return dir;
-    }
 
     private void OnRemoveTest(object sender, ExecutedRoutedEventArgs e)
     {
