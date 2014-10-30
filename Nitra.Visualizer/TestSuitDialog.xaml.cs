@@ -16,11 +16,13 @@ using Microsoft.Win32;
 
 namespace Nitra.Visualizer
 {
-  internal partial class TestSuit
+  internal partial class TestSuitDialog
   {
     const string _showAllRules       = "<Show all rules>";
     const string _showOnlyStratRules = "<Show only strat rules>";
     const string _assembiesToolTip   = "Enter paths to assemblies (one assembly per line)";
+
+    public string TestSuitName { get; private set; }
 
     readonly Settings _settings;
     bool _nameUpdate;
@@ -29,7 +31,7 @@ namespace Nitra.Visualizer
 
     readonly DispatcherTimer _timer = new DispatcherTimer();
 
-    public TestSuit(bool create, TestSuitVm baseTestSuit)
+    public TestSuitDialog(bool create, TestSuitVm baseTestSuit)
     {
       _settings = Settings.Default;
       _create   = create;
@@ -38,7 +40,7 @@ namespace Nitra.Visualizer
 
       this.Title = create ? "New test suit" : "Edit test suit";
 
-      var root = Path.GetFullPath(_settings.TestsLocationRoot);
+      var root = Path.GetFullPath(_settings.CurrentSolution);
       _testsRootTextBlock.Text = root;
       var paths = baseTestSuit == null
         ? ""
@@ -227,14 +229,14 @@ namespace Nitra.Visualizer
     void _assembliesEdit_timer_Tick(object sender, EventArgs e)
     {
       _timer.Stop();
-      UpdateSyntaxModules(_assemblies.Text, Path.GetFullPath(_settings.TestsLocationRoot));
+      UpdateSyntaxModules(_assemblies.Text, Path.GetFullPath(_settings.CurrentSolution));
     }
 
     private void MakeAllPathsRelative()
     {
       var assemblyPaths = _assemblies.Text.Trim('\n', '\r', '\t', ' ');
       var result = new List<string>();
-      var testsLocationRootFullPath = Path.GetFullPath(_settings.TestsLocationRoot);
+      var testsLocationRootFullPath = Path.GetFullPath(_settings.CurrentSolution);
       foreach (var assemblyPath in Utils.GetAssemblyPaths(assemblyPaths))
       {
         var path = Path.Combine(testsLocationRootFullPath, assemblyPath.Trim());
@@ -272,7 +274,7 @@ namespace Nitra.Visualizer
         return;
       }
 
-      var root = Path.GetFullPath(_settings.TestsLocationRoot);
+      var root = Path.GetFullPath(Path.GetDirectoryName(_settings.CurrentSolution) ?? "");
       var path = Path.Combine(root, testSuitName);
 
       if (Directory.Exists(path) && _create)
@@ -324,7 +326,7 @@ namespace Nitra.Visualizer
         var xml = Utils.MakeXml(root, syntaxModules, startRule);
         var configPath = Path.Combine(path, "config.xml");
         xml.Save(configPath);
-
+        TestSuitName = testSuitName;
       }
       catch (Exception ex)
       {
@@ -344,6 +346,7 @@ namespace Nitra.Visualizer
         Filter = "Parser library (.dll)|*.dll|Parser application (.exe)|*.exe",
         Title = "Load parser"
       };
+   
       if (dialog.ShowDialog(this) ?? false)
       {
         _assemblies.Text += Environment.NewLine + dialog.FileName;

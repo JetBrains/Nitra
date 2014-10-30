@@ -23,18 +23,20 @@ namespace Nitra.TestsLauncher
         return;
       }
 
-      var testsLocationRoot = args[0];
+      var solutinFilePath = args[0];
       var config = args[1];
 
-      if (!Directory.Exists(testsLocationRoot ?? ""))
+      if (!File.Exists(solutinFilePath ?? ""))
       {
-        Console.WriteLine("The directory '" + testsLocationRoot + "' not exists.");
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine("The solutin '" + solutinFilePath + "' not exists.");
+        Console.ResetColor();
         return;
       }
 
 
       var stackSize = 20 * 1024 * (IntPtr.Size == 8 ? 8 : 1) * 1024;
-      var thread = new Thread(() => Start(testsLocationRoot, config), stackSize);
+      var thread = new Thread(() => Start(solutinFilePath, config), stackSize);
       thread.Name = "Main test thread";
       thread.Start();
       thread.Join();
@@ -92,20 +94,17 @@ namespace Nitra.TestsLauncher
         Console.WriteLine(text.Replace("\n", "\n" + _currentIndent));
     }
 
-    static void Start(string testsLocationRoot, string config)
+    static void Start(string solutinFilePath, string config)
     {
-      var testSuits = new List<TestSuitVm>();
-      Utils.LoadTestSuits(testsLocationRoot, null, config, testSuits);
+      var solution = new SolutionVm(solutinFilePath, null, config);
+      var testSuits = solution.TestSuits;
 
-      var lastSuit = "";
-      var lastTest = "";
       var maxNameLen = CalcMaxNameLen(testSuits);
       var someTestsFailed = false;
       var someTestSuitsFailedToLoad = false;
 
       foreach (var suit in testSuits)
       {
-        lastSuit = suit.Name;
         PrintLine("Test suit: " + suit.Name);
         Indent();
 
@@ -119,7 +118,6 @@ namespace Nitra.TestsLauncher
 
         foreach (var test in suit.Tests)
         {
-          lastTest = test.Name;
           var dots = maxNameLen - test.Name.Length;
           Print(test.Name + " " + new string('.', dots) + " ");
           Console.Out.Flush();
@@ -243,7 +241,7 @@ namespace Nitra.TestsLauncher
       return gold.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
     }
 
-    private static int CalcMaxNameLen(List<TestSuitVm> testSuits)
+    private static int CalcMaxNameLen(IEnumerable<TestSuitVm> testSuits)
     {
       int maxNameLen = 0;
 

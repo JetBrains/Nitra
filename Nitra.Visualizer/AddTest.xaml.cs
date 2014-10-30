@@ -65,7 +65,7 @@ namespace Nitra.Visualizer
 	    }
 	    catch (Exception ex)
 	    {
-        MessageBox.Show(this, ex.GetType().Name + ":" + ex.Message, "Nitra Visualizer",
+        MessageBox.Show(this, ex.GetType().Name + ":" + ex.Message, Constants.AppName,
           MessageBoxButton.OK, MessageBoxImage.Error, MessageBoxResult.Cancel);
         return;
 	    }

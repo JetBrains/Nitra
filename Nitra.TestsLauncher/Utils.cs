@@ -100,22 +100,5 @@ namespace Nitra.Visualizer
 
       return new XElement("Config", libs);
     }
-
-    public static void LoadTestSuits(string testsLocationRoot, string path, string config, ICollection<TestSuitVm> testSuits)
-    {
-      foreach (var dir in Directory.GetDirectories(testsLocationRoot ?? ""))
-      {
-        var testSuit = new TestSuitVm(testsLocationRoot, dir, config);
-        if (path != null)
-        {
-          if (testSuit.FullPath == path)
-            testSuit.IsSelected = true; // Прикольно что по другому фокус не изменить!
-          else foreach (var test in testSuit.Tests)
-            if (test.FullPath == path)
-              test.IsSelected = true;
-        }
-        testSuits.Add(testSuit);
-      }
-    }
   }
 }
