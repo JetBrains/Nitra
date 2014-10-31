@@ -904,10 +904,15 @@ namespace Nitra.Visualizer
 
     private void OnAddTestSuit(object sender, ExecutedRoutedEventArgs e)
     {
+      EditTestSuit(true);
+    }
+
+    private void EditTestSuit(bool create)
+    {
       if (_solution == null)
         return;
 
-      var dialog = new TestSuitDialog(true, _currentTestSuit) { Owner = this };
+      var dialog = new TestSuitDialog(create, _currentTestSuit) { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
         var testSuit = new TestSuitVm(_solution, dialog.TestSuitName, _settings.Config);
@@ -1276,6 +1281,17 @@ namespace Nitra.Visualizer
     {
       e.CanExecute = _solution != null;
       e.Handled = true;
+    }
+
+    private void OnEditTestSuit(object sender, ExecutedRoutedEventArgs e)
+    {
+      EditTestSuit(false);
+    }
+
+    private void CommandBinding_CanOnEditTestSuit(object sender, CanExecuteRoutedEventArgs e)
+    {
+      e.Handled = true;
+      e.CanExecute = _currentTestSuit != null;
     }
   }
 }

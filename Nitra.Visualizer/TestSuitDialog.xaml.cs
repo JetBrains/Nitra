@@ -40,7 +40,7 @@ namespace Nitra.Visualizer
 
       this.Title = create ? "New test suit" : "Edit test suit";
 
-      var root = Path.GetFullPath(_settings.CurrentSolution);
+      var root = baseTestSuit.Solution.RootFolder;
       _testsRootTextBlock.Text = root;
       var paths = baseTestSuit == null
         ? ""
