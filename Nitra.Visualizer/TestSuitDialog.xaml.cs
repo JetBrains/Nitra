@@ -42,11 +42,9 @@ namespace Nitra.Visualizer
 
       var root = baseTestSuit.Solution.RootFolder;
       _testsRootTextBlock.Text = root;
-      var paths = baseTestSuit == null
-        ? ""
-        : string.Join(Environment.NewLine,
-            baseTestSuit.SynatxModules.Select(m =>
-              Utils.MakeRelativePath(from: root, isFromDir: true, to: m.GetType().Assembly.Location, isToDir: false)).Distinct());
+      var paths = string.Join(Environment.NewLine,
+        baseTestSuit.SynatxModules.Select(m =>
+          Utils.MakeRelativePath(@from: root, isFromDir: true, to: m.GetType().Assembly.Location, isToDir: false)).Distinct());
       _assemblies.Text = paths;
       UpdateSyntaxModules(paths, root);
 

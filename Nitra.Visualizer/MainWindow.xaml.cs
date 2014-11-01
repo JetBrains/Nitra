@@ -1,4 +1,5 @@
-﻿using ICSharpCode.AvalonEdit.AddIn;
+﻿using Common;
+using ICSharpCode.AvalonEdit.AddIn;
 using ICSharpCode.AvalonEdit.Document;
 using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Highlighting;
@@ -1161,11 +1162,6 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void OnLoadSolution(object sender, ExecutedRoutedEventArgs e)
-    {
-
-    }
-
     private void OnSolutionNew(object sender, ExecutedRoutedEventArgs e)
     {
       var dialog = new System.Windows.Forms.SaveFileDialog();
@@ -1188,22 +1184,17 @@ namespace Nitra.Visualizer
             return;
           }
 
-          _settings.CurrentSolution = solutionFilePath;
-          _solution = new SolutionVm(dialog.FileName, null, _settings.Config);
-          _testsTreeView.ItemsSource = _solution.TestSuits;
+          OpenSolution(solutionFilePath);
         }
       }
+    }
 
-      //var dialog = new CreateSolutionDialog();
-
-      //if (this.IsVisible)
-      //  dialog.Owner = this;
-
-      //if (dialog.ShowDialog() ?? false)
-      //{
-      //  _settings.CurrentSolution = dialog.SolutionFilePath;
-      //  _solution = new SolutionVm(dialog.SolutionFilePath, null, _settings.Config);
-      //}
+    private void OpenSolution(string solutionFilePath)
+    {
+      _settings.CurrentSolution = solutionFilePath;
+      _solution = new SolutionVm(solutionFilePath, null, _settings.Config);
+      _testsTreeView.ItemsSource = _solution.TestSuits;
+      RecentFileList.InsertFile(solutionFilePath);
     }
 
     private void OnSolutionOpen(object sender, ExecutedRoutedEventArgs e)
@@ -1218,9 +1209,7 @@ namespace Nitra.Visualizer
         //dialog.InitialDirectory = GetDefaultDirectory();
         if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
         {
-          _settings.CurrentSolution = dialog.FileName;
-          _solution = new SolutionVm(dialog.FileName, null, _settings.Config);
-          _testsTreeView.ItemsSource = _solution.TestSuits;
+          OpenSolution(dialog.FileName);
         }
       }
     }
@@ -1292,6 +1281,11 @@ namespace Nitra.Visualizer
     {
       e.Handled = true;
       e.CanExecute = _currentTestSuit != null;
+    }
+
+    private void RecentFileList_OnMenuClick(object sender, RecentFileList.MenuClickEventArgs e)
+    {
+      OpenSolution(e.Filepath);
     }
   }
 }
