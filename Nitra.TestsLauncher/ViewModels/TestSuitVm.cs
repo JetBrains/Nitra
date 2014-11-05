@@ -23,6 +23,7 @@ namespace Nitra.ViewModels
 
     public string _hint;
     public override string Hint { get { return _hint; } }
+    public string[] LibPaths { get; private set; }
 
     readonly string _rootPath;
     ParserHost _parserHost;
@@ -47,6 +48,7 @@ namespace Nitra.ViewModels
       {
         var root = XElement.Load(gonfigPath);
         var libs = root.Elements("Lib").ToList();
+        LibPaths = libs.Where(lib => lib.Attribute("Path") != null).Select(lib => lib.Attribute("Path").Value).ToArray();
         var result =
           libs.Select(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib.Attribute("Path").Value)), config)
             .Join(lib.Elements("SyntaxModule"),

@@ -28,6 +28,7 @@ namespace Nitra.Visualizer
     bool _nameUpdate;
     bool _nameChangedByUser;
     readonly bool _create;
+    private string _rootFolder;
 
     readonly DispatcherTimer _timer = new DispatcherTimer();
 
@@ -41,12 +42,30 @@ namespace Nitra.Visualizer
       this.Title = create ? "New test suit" : "Edit test suit";
 
       var root = baseTestSuit.Solution.RootFolder;
+      _rootFolder = root;
       _testsRootTextBlock.Text = root;
       var paths = string.Join(Environment.NewLine,
         baseTestSuit.SynatxModules.Select(m =>
           Utils.MakeRelativePath(@from: root, isFromDir: true, to: m.GetType().Assembly.Location, isToDir: false)).Distinct());
       _assemblies.Text = paths;
+
+      if (!create)
+      {
+        if (string.IsNullOrWhiteSpace(paths))
+        {
+          _assemblies.Text = paths = string.Join(Environment.NewLine, baseTestSuit.LibPaths);
+        }
+        this._testSuitName.Text = baseTestSuit.Name;
+      }
+
       UpdateSyntaxModules(paths, root);
+
+      var items = (ObservableCollection<SyntaxModuleVm>)_syntaxModules.ItemsSource;
+      var selectedSynatxModules = baseTestSuit.SynatxModules.Join(items, d => d, suit => suit.GrammarDescriptor, (d, suit) => suit);
+      foreach (var selectedSynatxModule in selectedSynatxModules)
+        selectedSynatxModule.IsChecked = true;
+
+      UpdateStartRules(true);
 
       _timer.Interval = TimeSpan.FromSeconds(1.3);
       _timer.Stop();
@@ -63,7 +82,7 @@ namespace Nitra.Visualizer
         {
           var path = Path.Combine(testsLocationRootFullPath, relativeAssemblyPath);
           var fullPath = Path.GetFullPath(path);
-          var grammarDescriptors = Utils.LoadAssembly(fullPath, Settings.Default.Config);
+          var grammarDescriptors = Utils.LoadAssembly(fullPath, _settings.Config);
           foreach (var grammarDescriptor in grammarDescriptors)
             syntaxModules.Add(new SyntaxModuleVm(grammarDescriptor));
         }
@@ -227,14 +246,14 @@ namespace Nitra.Visualizer
     void _assembliesEdit_timer_Tick(object sender, EventArgs e)
     {
       _timer.Stop();
-      UpdateSyntaxModules(_assemblies.Text, Path.GetFullPath(_settings.CurrentSolution));
+      UpdateSyntaxModules(_assemblies.Text, Path.GetFullPath(_rootFolder));
     }
 
     private void MakeAllPathsRelative()
     {
       var assemblyPaths = _assemblies.Text.Trim('\n', '\r', '\t', ' ');
       var result = new List<string>();
-      var testsLocationRootFullPath = Path.GetFullPath(_settings.CurrentSolution);
+      var testsLocationRootFullPath = Path.GetFullPath(_rootFolder);
       foreach (var assemblyPath in Utils.GetAssemblyPaths(assemblyPaths))
       {
         var path = Path.Combine(testsLocationRootFullPath, assemblyPath.Trim());
@@ -272,7 +291,7 @@ namespace Nitra.Visualizer
         return;
       }
 
-      var root = Path.GetFullPath(Path.GetDirectoryName(_settings.CurrentSolution) ?? "");
+      var root = Path.GetFullPath(_rootFolder);
       var path = Path.Combine(root, testSuitName);
 
       if (Directory.Exists(path) && _create)
@@ -341,6 +360,7 @@ namespace Nitra.Visualizer
       var dialog = new OpenFileDialog
       {
         DefaultExt = ".dll",
+        InitialDirectory = _rootFolder,
         Filter = "Parser library (.dll)|*.dll|Parser application (.exe)|*.exe",
         Title = "Load parser"
       };

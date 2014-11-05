@@ -912,10 +912,11 @@ namespace Nitra.Visualizer
     {
       if (_solution == null)
         return;
-
+      var currentTestSuit = _currentTestSuit;
       var dialog = new TestSuitDialog(create, _currentTestSuit) { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
+        _solution.TestSuits.Remove(currentTestSuit);
         var testSuit = new TestSuitVm(_solution, dialog.TestSuitName, _settings.Config);
         testSuit.IsSelected = true;
         _solution.Save();
