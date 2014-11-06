@@ -1,4 +1,9 @@
-﻿using Nitra.Visualizer.Properties;
+﻿using Microsoft.VisualBasic.FileIO;
+using Microsoft.Win32;
+
+using Nitra.Visualizer.Properties;
+using Nitra.ViewModels;
+
 
 using System;
 using System.IO;
@@ -10,9 +15,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using System.Xml.Linq;
-using Nitra.ViewModels;
-using Microsoft.Win32;
+
 
 namespace Nitra.Visualizer
 {
@@ -29,13 +32,15 @@ namespace Nitra.Visualizer
     bool _nameChangedByUser;
     readonly bool _create;
     private string _rootFolder;
+    private TestSuitVm _baseTestSuit;
 
     readonly DispatcherTimer _timer = new DispatcherTimer();
 
     public TestSuitDialog(bool create, TestSuitVm baseTestSuit)
     {
-      _settings = Settings.Default;
-      _create   = create;
+      _settings     = Settings.Default;
+      _create       = create;
+      _baseTestSuit = baseTestSuit;
 
       InitializeComponent();
 
@@ -65,7 +70,14 @@ namespace Nitra.Visualizer
       foreach (var selectedSynatxModule in selectedSynatxModules)
         selectedSynatxModule.IsChecked = true;
 
-      UpdateStartRules(true);
+      UpdateStartRules(baseTestSuit.StartRule == null || baseTestSuit.StartRule.IsStartRule);
+
+      if (baseTestSuit.StartRule != null)
+      {
+        foreach (var x in _startRuleComboBox.ItemsSource)
+          if (x == baseTestSuit.StartRule)
+            _startRuleComboBox.SelectedItem = x;
+      }
 
       _timer.Interval = TimeSpan.FromSeconds(1.3);
       _timer.Stop();
@@ -339,7 +351,15 @@ namespace Nitra.Visualizer
 
       try
       {
-        Directory.CreateDirectory(path);
+        if (_baseTestSuit.Name != testSuitName && Directory.Exists(_baseTestSuit.FullPath))
+        {
+          Directory.CreateDirectory(path);
+          FileSystem.CopyDirectory(_baseTestSuit.FullPath, path, UIOption.AllDialogs);
+          Directory.Delete(_baseTestSuit.FullPath, recursive: true);
+        }
+        else
+          Directory.CreateDirectory(path);
+
         var xml = Utils.MakeXml(root, syntaxModules, startRule);
         var configPath = Path.Combine(path, "config.xml");
         xml.Save(configPath);
