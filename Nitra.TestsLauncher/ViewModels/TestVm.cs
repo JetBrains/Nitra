@@ -69,6 +69,20 @@ namespace Nitra.ViewModels
       File.WriteAllText(Path.ChangeExtension(TestPath, ".gold"), gold);
     }
 
+    public void Remove()
+    {
+      var fullPath = Path.GetFullPath(this.TestPath);
+      File.Delete(fullPath);
+      var goldFullPath = Path.ChangeExtension(fullPath, ".gold");
+      if (File.Exists(goldFullPath))
+        File.Delete(goldFullPath);
+      var tests = TestSuit.Tests;
+      var index = tests.IndexOf(this);
+      tests.Remove(this);
+      if (tests.Count > 0)
+        tests[index].IsSelected = true;
+    }
+
     public override string ToString()
     {
       return Name;

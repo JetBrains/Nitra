@@ -1,4 +1,5 @@
-﻿using ICSharpCode.AvalonEdit.AddIn;
+﻿using Common;
+using ICSharpCode.AvalonEdit.AddIn;
 using ICSharpCode.AvalonEdit.Document;
 using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Highlighting;
@@ -56,6 +57,7 @@ namespace Nitra.Visualizer
     TimeSpan _highlightingTimeSpan;
     readonly Settings _settings;
     private TestSuitVm _currentTestSuit;
+    private SolutionVm _solution;
 
     public MainWindow()
     {
@@ -106,7 +108,10 @@ namespace Nitra.Visualizer
       _text.Options.IndentationSize = 2;
       _testsTreeView.SelectedValuePath = "FullPath";
 
-      LoadTests();
+      if (string.IsNullOrWhiteSpace(_settings.CurrentSolution))
+        _solution = null;
+      else
+        LoadTests();
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -115,7 +120,8 @@ namespace Nitra.Visualizer
 
       if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) != 0)
         return;
-      SelectTest(_settings.SelectedTestSuit, _settings.SelectedTest);
+      if (_solution != null)
+        SelectTest(_settings.SelectedTestSuit, _settings.SelectedTest);
     }
 
     private void Window_Closed(object sender, EventArgs e)
@@ -141,20 +147,25 @@ namespace Nitra.Visualizer
         var test = _testsTreeView.SelectedItem as TestVm;
         _settings.SelectedTest = test == null ? null : test.Name;
       }
+
+      if (_solution != null && _solution.IsDirty)
+        _solution.Save();
     }
 
     private void LoadTests()
     {
       var selected = _testsTreeView.SelectedItem as FullPathVm;
-      var path     = selected == null ? null : selected.FullPath;
-      var testSuits = new ObservableCollection<TestSuitVm>();
+      var selectedPath     = selected == null ? null : selected.FullPath;
 
-      if (!Directory.Exists(_settings.TestsLocationRoot ?? ""))
+      if (!File.Exists(_settings.CurrentSolution ?? ""))
+      {
+        MessageBox.Show(this, "Solution '" + _settings.CurrentSolution + "' not exists!");
         return;
+      }
 
-      Utils.LoadTestSuits(_settings.TestsLocationRoot, path, _settings.Config, testSuits);
-
-      _testsTreeView.ItemsSource = testSuits;
+      _solution = new SolutionVm(_settings.CurrentSolution, selectedPath, _settings.Config);
+      this.Title = _solution.Name + " - " + Constants.AppName;
+      _testsTreeView.ItemsSource = _solution.TestSuits;
     }
 
     private void textBox1_GotFocus(object sender, RoutedEventArgs e)
@@ -685,32 +696,10 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void MenuItem_Click_TestsSettings(object sender, RoutedEventArgs e)
-    {
-      if (ShowTestsSettingsDialog())
-        LoadTests();
-    }
-
     bool CheckTestFolder()
     {
-      if (Directory.Exists(_settings.TestsLocationRoot ?? ""))
+      if (File.Exists(_settings.CurrentSolution ?? ""))
         return true;
-
-      return ShowTestsSettingsDialog();
-    }
-
-    private bool ShowTestsSettingsDialog()
-    {
-      var dialog = new TestsSettingsWindow();
-
-      if (this.IsVisible)
-        dialog.Owner = this;
-
-      if (dialog.ShowDialog() ?? false)
-      {
-        _settings.TestsLocationRoot = dialog.TestsLocationRoot;
-        return true;
-      }
 
       return false;
     }
@@ -916,13 +905,24 @@ namespace Nitra.Visualizer
 
     private void OnAddTestSuit(object sender, ExecutedRoutedEventArgs e)
     {
-      if (!CheckTestFolder())
-        return;
-
-      var dialog = new TestSuit(true, _currentTestSuit) { Owner = this };
-      if (dialog.ShowDialog() ?? false)
-        LoadTests();
+      EditTestSuit(true);
     }
+
+    private void EditTestSuit(bool create)
+    {
+      if (_solution == null)
+        return;
+      var currentTestSuit = _currentTestSuit;
+      var dialog = new TestSuitDialog(create, _currentTestSuit) { Owner = this };
+      if (dialog.ShowDialog() ?? false)
+      {
+        _solution.TestSuits.Remove(currentTestSuit);
+        var testSuit = new TestSuitVm(_solution, dialog.TestSuitName, _settings.Config);
+        testSuit.IsSelected = true;
+        _solution.Save();
+      }
+    }
+
 
     private void OnRemoveTest(object sender, ExecutedRoutedEventArgs e)
     {
@@ -975,15 +975,14 @@ namespace Nitra.Visualizer
 
     private void OnRemoveTestSuit(object sender, ExecutedRoutedEventArgs e)
     {
-      if (_currentTestSuit == null)
+      if (_solution == null || _currentTestSuit == null)
         return;
 
       if (MessageBox.Show(this, "Do you want to delete the '" + _currentTestSuit.Name + "' test suit?\r\nAll test will be deleted!", "Visualizer!", MessageBoxButton.YesNo,
         MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
         return;
 
-      Directory.Delete(TestFullPath(_currentTestSuit.TestSuitPath), true);
-      LoadTests();
+      _currentTestSuit.Remove();
     }
 
     private void CommandBinding_CanRemoveTestSuit(object sender, CanExecuteRoutedEventArgs e)
@@ -1162,6 +1161,132 @@ namespace Nitra.Visualizer
         Clipboard.SetData(DataFormats.Text, text);
         Clipboard.SetData(DataFormats.UnicodeText, text);
       }
+    }
+
+    private void OnSolutionNew(object sender, ExecutedRoutedEventArgs e)
+    {
+      var dialog = new System.Windows.Forms.SaveFileDialog();
+      using (dialog)
+      {
+        dialog.CheckFileExists = false;
+        dialog.DefaultExt = "nsln";
+        dialog.Filter = "Nitra visualizer solution (*.nsln)|*.nsln";
+        //dialog.InitialDirectory = GetDefaultDirectory();
+        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        {
+          var solutionFilePath = dialog.FileName;
+          try
+          {
+            File.WriteAllText(dialog.FileName, "", Encoding.UTF8);
+          }
+          catch (Exception ex)
+          {
+            MessageBox.Show(this, "Can't create the file '" + solutionFilePath + "'.\r\n" + ex.GetType().Name + ":" + ex.Message, Constants.AppName, MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+          }
+
+          OpenSolution(solutionFilePath);
+        }
+      }
+    }
+
+    private void OpenSolution(string solutionFilePath)
+    {
+      _settings.CurrentSolution = solutionFilePath;
+      _solution = new SolutionVm(solutionFilePath, null, _settings.Config);
+      _testsTreeView.ItemsSource = _solution.TestSuits;
+      RecentFileList.InsertFile(solutionFilePath);
+    }
+
+    private void OnSolutionOpen(object sender, ExecutedRoutedEventArgs e)
+    {
+      var dialog = new System.Windows.Forms.OpenFileDialog();
+      using (dialog)
+      {
+        dialog.Multiselect = false;
+        dialog.CheckFileExists = true;
+        dialog.DefaultExt = "nsln";
+        dialog.Filter = "Nitra visualizer solution (*.nsln)|*.nsln";
+        //dialog.InitialDirectory = GetDefaultDirectory();
+        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        {
+          OpenSolution(dialog.FileName);
+        }
+      }
+    }
+
+    private ContextMenu _defaultContextMenu;
+
+    private void OnAddExistsTestSuit(object sender, ExecutedRoutedEventArgs e)
+    {
+      var unattachedTestSuits = _solution.GetUnattachedTestSuits();
+      var menu = new ContextMenu();
+      foreach (var name in unattachedTestSuits)
+      {
+        var item = new MenuItem();
+        item.Header = name;
+        item.Click += item_Click;
+        menu.Items.Add(item);
+      }
+
+      _defaultContextMenu = _testsTreeView.ContextMenu;
+      _testsTreeView.ContextMenu = menu;
+      menu.Closed += menu_Closed;
+      menu.IsOpen = true;
+    }
+
+    void menu_Closed(object sender, RoutedEventArgs e)
+    {
+      _testsTreeView.ContextMenu = _defaultContextMenu;
+    }
+
+    void item_Click(object sender, RoutedEventArgs e)
+    {
+      var rootDir = Path.GetDirectoryName(_solution.SolutinFilePath) ?? "";
+      var name = (string)((MenuItem)e.Source).Header;
+      var testSuit = new TestSuitVm(_solution, name, _settings.Config);
+      testSuit.IsSelected = true;
+      _solution.Save();
+    }
+
+    private void CommandBinding_CanAddExistsTestSuit(object sender, CanExecuteRoutedEventArgs e)
+    {
+      Debug.WriteLine("CanAddExistsTestSuit");
+      e.Handled = true;
+
+      if (_solution == null)
+      {
+        e.CanExecute = false;
+        return;
+      }
+
+      var unattachedTestSuits = _solution.GetUnattachedTestSuits();
+
+      e.CanExecute = unattachedTestSuits.Length > 0;
+
+      Debug.WriteLine("e.CanExecute = " + e.CanExecute);
+    }
+
+    private void CommandBinding_CanOnAddTestSuit(object sender, CanExecuteRoutedEventArgs e)
+    {
+      e.CanExecute = _solution != null;
+      e.Handled = true;
+    }
+
+    private void OnEditTestSuit(object sender, ExecutedRoutedEventArgs e)
+    {
+      EditTestSuit(false);
+    }
+
+    private void CommandBinding_CanOnEditTestSuit(object sender, CanExecuteRoutedEventArgs e)
+    {
+      e.Handled = true;
+      e.CanExecute = _currentTestSuit != null;
+    }
+
+    private void RecentFileList_OnMenuClick(object sender, RecentFileList.MenuClickEventArgs e)
+    {
+      OpenSolution(e.Filepath);
     }
   }
 }

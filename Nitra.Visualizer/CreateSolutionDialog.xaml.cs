@@ -18,13 +18,13 @@ namespace Nitra.Visualizer
   /// <summary>
   /// Interaction logic for TestsSettingsWindow.xaml
   /// </summary>
-  public partial class TestsSettingsWindow : Window
+  public partial class CreateSolutionDialog : Window
   {
     Settings _settings;
 
-    public string TestsLocationRoot { get; set; }
+    public string SolutionFilePath { get; set; }
 
-    public TestsSettingsWindow()
+    public CreateSolutionDialog()
     {
       InitializeComponent();
 
@@ -33,14 +33,14 @@ namespace Nitra.Visualizer
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
-      var dir = _settings.TestsLocationRoot ?? "";
+      var dir = _settings.CurrentSolution ?? "";
       if (Directory.Exists(dir))
         _testsLocationRootTextBox.Text = dir;
       else
         _testsLocationRootTextBox.Text = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Personal), "Visualizer");
     }
 
-    bool Validate_TestsLocationRoot()
+    bool Validate()
     {
       var testsLocationRoot = _testsLocationRootTextBox.Text;
 
@@ -55,7 +55,7 @@ namespace Nitra.Visualizer
 
       if (!Directory.Exists(testsLocationRootFull))
       {
-        var res = MessageBox.Show(this, "Path '" + testsLocationRootFull + "' does not exits. Create it?", "Visualizer", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        var res = MessageBox.Show(this, "Path '" + testsLocationRootFull + "' does not exits. Create it?", Constants.AppName, MessageBoxButton.YesNo, MessageBoxImage.Question);
 
         if (res == MessageBoxResult.No)
         {
@@ -66,25 +66,47 @@ namespace Nitra.Visualizer
         try
         {
           Directory.CreateDirectory(testsLocationRootFull);
-          TestsLocationRoot = testsLocationRoot;
+          SolutionFilePath = testsLocationRoot;
           return true;
         }
         catch (Exception ex)
         {
-          MessageBox.Show(this, "Can't create the folder '" + testsLocationRootFull + "'.\r\n" + ex.GetType().Name + ":" + ex.Message, "Visualizer", MessageBoxButton.OK,
+          MessageBox.Show(this, "Can't create the folder '" + testsLocationRootFull + "'.\r\n" + ex.GetType().Name + ":" + ex.Message, Constants.AppName, MessageBoxButton.OK,
             MessageBoxImage.Error);
           _testsLocationRootTextBox.Focus();
           return false;
         }
       }
 
-      TestsLocationRoot = testsLocationRoot;
+      var solutionFilePath = Path.Combine(testsLocationRoot, _solutionName.Name, ".nsln");
+
+      if (File.Exists(solutionFilePath))
+      {
+        MessageBox.Show(this, "The file '" + solutionFilePath + "' already exists!", Constants.AppName, MessageBoxButton.OK, MessageBoxImage.Error);
+        _solutionName.Focus();
+        return false;
+      }
+
+      try
+      {
+        File.WriteAllText(solutionFilePath, "");
+        File.Delete(solutionFilePath);
+      }
+      catch (Exception ex)
+      {
+        MessageBox.Show(this, "Can't create the file '" + solutionFilePath + "'.\r\n" + ex.GetType().Name + ":" + ex.Message, Constants.AppName, MessageBoxButton.OK,
+          MessageBoxImage.Error);
+        _solutionName.Focus();
+        return false;
+      }
+
+      SolutionFilePath = testsLocationRoot;
       return true;
     }
 
     private void _okButton_Click(object sender, RoutedEventArgs e)
     {
-      if (Validate_TestsLocationRoot())
+      if (Validate())
       {
         e.Handled = true;
         DialogResult = true;
@@ -110,6 +132,25 @@ namespace Nitra.Visualizer
       {
         _testsLocationRootFullPathTextBlock.Text = ex.GetType().Name + ":" + ex.Message;
         SetRedColor();
+      }
+    }
+
+    private void _solutionName_TextChanged(object sender, TextChangedEventArgs e)
+    {
+      var name = _solutionName.Text;
+      if (string.IsNullOrWhiteSpace(name))
+      {
+        _testsLocationRootFullPathTextBlock.Text = "Solution name can't be empty!";
+        SetRedColor();
+        return;
+      }
+
+      var index = name.IndexOfAny(Path.GetInvalidFileNameChars());
+      if (index >= 0)
+      {
+        _testsLocationRootFullPathTextBlock.Text = "Solution name can't contain the character '" + name[index] + "'!";
+        SetRedColor();
+        return;
       }
     }
 
