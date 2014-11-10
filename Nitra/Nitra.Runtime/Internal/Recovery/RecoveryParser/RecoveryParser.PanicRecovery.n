@@ -2,10 +2,12 @@
 
 using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -39,10 +41,10 @@ namespace Nitra.Internal.Recovery
       while (isRootRecordCompleted())
       {
         ParseToFailPos();
-        def curMaxPos = MaxPos;
+        mutable curMaxPos = MaxPos;
         when (curMaxPos == prevMaxPos)
         {
-          ///
+          curMaxPos = DeleteNextToken(grammar, curMaxPos, parseResult);
         }
         prevMaxPos = MaxPos;
         
@@ -50,50 +52,115 @@ namespace Nitra.Internal.Recovery
         def leafRecords = GetLeafTokens(records);
         _ = leafRecords;
         
-        def tokens = grammar.ParseGrammarTokens(curMaxPos, parseResult);
-        _ = tokens;
-
-        def calcFollowSet(record : ParseRecord, result : HashSet[TokenParser]) : void
+        def calcFollowSet(record : ParseRecord, result : Hashtable[TokenParser, _]) : void
         {
+          Debug.WriteLine(record);
+          
           def processNextState(parsingState : ParsingState)
           {
             def record = record;
             def result = result;
             foreach (next in parsingState.Next)
             {
-              if (next >= 0)
+              when (next >= 0)
               {
                 def nextState = record.Sequence.ParsingSequence.States[next];
                 def tokenParser = grammar.GetTokenParser(nextState.Subrule);
+                def addStopperToken(result : Hashtable[_, _], tokenParser : TokenParser)
+                {
+                  mutable value;
+                  unless (result.TryGetValue(tokenParser, out value))
+                  {
+                    value = List();
+                    result.Add(tokenParser, value);
+                  }
+                  value.Add((record, next));
+                }
                 if (tokenParser != null)
                 {
                   if (tokenParser.IsVoid)
                     processNextState(nextState);
                   else
-                    _ = result.Add(tokenParser);
+                    addStopperToken(result, tokenParser);
                 }
                 else
-                  _ = result.UnionWith(nextState.FirstTokens);
-              }
-              else
-              {
-                foreach (caller in record.Sequence.Callers)
-                  calcFollowSet(caller, result);
+                  foreach (tokenParser in nextState.FirstTokens)
+                    addStopperToken(result, tokenParser);
               }
             }
+            
+            foreach (caller in record.Sequence.Callers)
+              calcFollowSet(caller, result);
           }
           
           processNextState(record.ParsingState);
         }
         
-        def result = HashSet();
+        def stopperTokens = Hashtable();
         foreach (leafRecord in leafRecords)
-          calcFollowSet(leafRecord, result);
+          calcFollowSet(leafRecord, stopperTokens);
+          
+        def text = parseResult.Text;
+        
+        deletToken :
+        {
+          while (curMaxPos < text.Length)
+          {
+            foreach (stopperToken in stopperTokens)
+            {
+              def pos = stopperToken.Key.Parse(curMaxPos, text, parseResult);
+              when (pos > curMaxPos)
+              {
+                Parse();
+                foreach ((oldRecord, _newState) in stopperToken.Value)
+                {
+                  def record = ParseRecord(oldRecord.Sequence, oldRecord.State, curMaxPos);
+                  def tokenChanges = Records[curMaxPos][record];
+                  def subruleTokenChanges = TokenChanges(inserted = oldRecord.ParsingState.MandatoryTokenCount, deleted = 0);
+                  SubruleParsed(curMaxPos, curMaxPos, record, tokenChanges, subruleTokenChanges);
+                }
+                //InsertSubrules(curMaxPos);
+                // востановление состояния парсера, так чтобы он парсил с сабруля для которого 
+                deletToken();
+              }
+            }
+            
+            curMaxPos = DeleteNextToken(grammar, curMaxPos, parseResult);
+          }
+        }
         
         Parse();
       }
 
       BuildAst();
+    }
+    
+    DeleteNextToken(grammar : CompositeGrammar, pos : int, parseResult : ParseResult) : int
+    {
+      mutable max;
+      def tokens = grammar.ParseGrammarTokens(pos, parseResult);
+      max = if (tokens.Count > 0) tokens.Max(t => t[0]) else pos;
+      when (max > pos)
+      {
+        this.Delete(pos, max);
+        return max;
+      }
+      
+      def text = parseResult.Text;
+
+      // Удаеляем грязь по одному символу.
+      for (mutable i = pos; i < text.Length; i++)
+      {
+        def tokens = grammar.ParseGrammarTokens(i, parseResult);
+        when (tokens.Count > 0)
+        {
+          this.Delete(pos, i);
+          return i;
+        }
+      }
+      
+      this.Delete(pos, text.Length);
+      text.Length
     }
     
     
