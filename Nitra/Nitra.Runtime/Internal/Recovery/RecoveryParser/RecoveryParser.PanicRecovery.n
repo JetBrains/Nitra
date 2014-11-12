@@ -21,7 +21,6 @@ namespace Nitra.Internal.Recovery
     {
       def textPos = 0;
       Records[textPos] = Hashtable();
-      Records[ParseResult.Text.Length] = Hashtable();
       def rootParsingSequence =
         match (ParseResult.RuleParser)
         {
@@ -36,22 +35,54 @@ namespace Nitra.Internal.Recovery
       def grammar = this.ParseResult.RuleParser.Grammar;
       def parseResult = this.ParseResult;
       
-      def isRootRecordCompleted() { !Records[ParseResult.Text.Length].Contains(completeRecord) }
+      def isRootRecordCompleted() { def records = Records[ParseResult.Text.Length]; records != null && records.Contains(completeRecord) }
       mutable prevMaxPos = -1;
-      while (isRootRecordCompleted())
+      while (!isRootRecordCompleted())
       {
         ParseToFailPos();
         mutable curMaxPos = MaxPos;
         when (curMaxPos == prevMaxPos)
         {
           curMaxPos = DeleteNextToken(grammar, curMaxPos, parseResult);
+          Parse();
+          continue;
         }
         prevMaxPos = MaxPos;
         
         def records = Records[curMaxPos].MapToArrayFiltered(r => !r.Key.IsComplete && !IsInsideToken(memoization, grammar, r.Key.Sequence), r => r.Key);
         def leafRecords = GetLeafTokens(records);
-        _ = leafRecords;
         
+        Debug.IndentSize = 2;
+        Debug.WriteLine("----------------------------------------");
+        foreach (record in records)
+          PrintRecordParents(record);
+        Debug.WriteLine("++++++++++++++++++++++++++++++++++++++++");
+        foreach (record in leafRecords)
+          PrintRecordParents(record);
+        Debug.WriteLine("========================================");
+        
+        def text = parseResult.Text;
+        when (curMaxPos == text.Length)
+        {
+          while (!isRootRecordCompleted())
+          {
+            InsertSubrules(text.Length);
+            Parse();
+          }
+          break;
+        }
+        
+        def addStopperToken(record : ParseRecord, next : int, result : Hashtable[_, _], tokenParser : TokenParser)
+        {
+          mutable value;
+          unless (result.TryGetValue(tokenParser, out value))
+          {
+            value = HashSet();
+            result.Add(tokenParser, value);
+          }
+                  
+          _ = value.Add((record, next));
+        }
         def calcFollowSet(record : ParseRecord, result : Hashtable[TokenParser, _]) : void
         {
           Debug.WriteLine(record);
@@ -66,26 +97,16 @@ namespace Nitra.Internal.Recovery
               {
                 def nextState = record.Sequence.ParsingSequence.States[next];
                 def tokenParser = grammar.GetTokenParser(nextState.Subrule);
-                def addStopperToken(result : Hashtable[_, _], tokenParser : TokenParser)
-                {
-                  mutable value;
-                  unless (result.TryGetValue(tokenParser, out value))
-                  {
-                    value = List();
-                    result.Add(tokenParser, value);
-                  }
-                  value.Add((record, next));
-                }
                 if (tokenParser != null)
                 {
                   if (tokenParser.IsVoid)
                     processNextState(nextState);
                   else
-                    addStopperToken(result, tokenParser);
+                    addStopperToken(record, next, result, tokenParser);
                 }
                 else
                   foreach (tokenParser in nextState.FirstTokens)
-                    addStopperToken(result, tokenParser);
+                    addStopperToken(record, next, result, tokenParser);
               }
             }
             
@@ -98,9 +119,16 @@ namespace Nitra.Internal.Recovery
         
         def stopperTokens = Hashtable();
         foreach (leafRecord in leafRecords)
-          calcFollowSet(leafRecord, stopperTokens);
+          if (leafRecord.ParsingState.IsStart)
+          {
+            foreach (tokenParser in leafRecord.ParsingState.FirstTokens)
+              addStopperToken(leafRecord, -1, stopperTokens, tokenParser);
+            foreach (caller in leafRecord.Sequence.Callers)
+              calcFollowSet(caller, stopperTokens);
+          }
+          else
+            calcFollowSet(leafRecord, stopperTokens);
           
-        def text = parseResult.Text;
         
         deletToken :
         {
@@ -109,20 +137,35 @@ namespace Nitra.Internal.Recovery
             foreach (stopperToken in stopperTokens)
             {
               def pos = stopperToken.Key.Parse(curMaxPos, text, parseResult);
-              when (pos > curMaxPos)
+              when (pos <= curMaxPos)
+                continue;
+              
+              Parse();
+              foreach ((oldRecord, newState) in stopperToken.Value.Distinct())
               {
-                Parse();
-                foreach ((oldRecord, _newState) in stopperToken.Value)
+                when (newState < 0)
+                  break;
+                  
+                def curRecords = Records[curMaxPos];
+                def newRecord = ParseRecord(oldRecord.Sequence, oldRecord.State, curMaxPos);
+
+                def record = if (curRecords.ContainsKey(newRecord))
+                  newRecord
+                else if (oldRecord.ParsePos == oldRecord.Sequence.StartPos && oldRecord.ParsingState.IsStart)
+                  ParseRecord(Sequences[curMaxPos, oldRecord.Sequence.ParsingSequence], oldRecord.State, curMaxPos);
+                else
                 {
-                  def record = ParseRecord(oldRecord.Sequence, oldRecord.State, curMaxPos);
-                  def tokenChanges = Records[curMaxPos][record];
-                  def subruleTokenChanges = TokenChanges(inserted = oldRecord.ParsingState.MandatoryTokenCount, deleted = 0);
-                  SubruleParsed(curMaxPos, curMaxPos, record, tokenChanges, subruleTokenChanges);
+                  assert2(false);
+                  assert(false);
                 }
-                //InsertSubrules(curMaxPos);
-                // востановление состояния парсера, так чтобы он парсил с сабруля для которого 
-                deletToken();
+
+                def tokenChanges = curRecords[record];
+                def subruleTokenChanges = TokenChanges(inserted = oldRecord.ParsingState.MandatoryTokenCount, deleted = 0);
+                SubruleParsed(curMaxPos, curMaxPos, record, tokenChanges, subruleTokenChanges);
               }
+              //InsertSubrules(curMaxPos);
+              // востановление состояния парсера, так чтобы он парсил с сабруля для которого 
+              deletToken();
             }
             
             curMaxPos = DeleteNextToken(grammar, curMaxPos, parseResult);
@@ -133,6 +176,15 @@ namespace Nitra.Internal.Recovery
       }
 
       BuildAst();
+    }
+    
+    PrintRecordParents(record : ParseRecord) : void
+    {
+      Debug.WriteLine(record);
+      Debug.Indent();
+      foreach (caller in record.Sequence.Callers)
+        PrintRecordParents(caller);
+      Debug.Unindent();
     }
     
     DeleteNextToken(grammar : CompositeGrammar, pos : int, parseResult : ParseResult) : int
@@ -176,7 +228,8 @@ namespace Nitra.Internal.Recovery
       
       foreach (record in records)
         unless (parents.Contains(record))
-          result.Add(record);
+          unless (record.ParsingState.IsVoid)
+            result.Add(record);
         
       result
     }
