@@ -51,7 +51,7 @@ namespace Nitra.Visualizer
     bool _needUpdateHtmlPrettyPrint;
     bool _needUpdateTextPrettyPrint;
     bool _needUpdatePerformance;
-    Ast _ast;
+    ParseTree _ast;
     TimeSpan _parseTimeSpan;
     TimeSpan _astTimeSpan;
     TimeSpan _highlightingTimeSpan;
