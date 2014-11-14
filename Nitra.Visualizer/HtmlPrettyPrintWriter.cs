@@ -68,7 +68,7 @@ namespace Nitra.Visualizer
       _lastMissing = _buffer.Length;
     }
 
-    public override void AmbiguousNode(IAmbiguousAst ast, SpanClass spanClass)
+    public override void AmbiguousNode(IAmbiguousParseTree ast, SpanClass spanClass)
     {
       WriteSpan(_missingNodeClass, "<# ambiguous " + ast.RuleDescriptor.Name + ", " + ast.Ambiguities.Count + " options");
       NewLineAndIndent();
@@ -84,7 +84,7 @@ namespace Nitra.Visualizer
       NewLine();
     }
 
-    public override void AmbiguousNode<T>(IAmbiguousAst ast, string ruleType, IPrettyPrintSource source, SpanClass spanClass, Action<PrettyPrintWriter, IPrettyPrintSource, T, SpanClass> printer)
+    public override void AmbiguousNode<T>(IAmbiguousParseTree ast, string ruleType, IPrettyPrintSource source, SpanClass spanClass, Action<PrettyPrintWriter, IPrettyPrintSource, T, SpanClass> printer)
     {
       WriteSpan(_missingNodeClass, "<# ambiguous " + ruleType + ", " + ast.Ambiguities.Count + " options");
       NewLineAndIndent();
