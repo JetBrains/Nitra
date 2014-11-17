@@ -55,7 +55,7 @@ namespace Nitra.ViewModels
         return null;
 
       var gold = Gold;
-      var ast = result.CreateAst();
+      var ast = result.CreateParseTree();
       var prettyPrintResult = ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
       PrettyPrintResult = prettyPrintResult;
       TestState = gold == prettyPrintResult ? TestState.Success : TestState.Failure;

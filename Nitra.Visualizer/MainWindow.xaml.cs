@@ -368,7 +368,7 @@ namespace Nitra.Visualizer
       if (_ast == null)
       {
         var timer = Stopwatch.StartNew();
-        _ast = _parseResult.CreateAst();
+        _ast = _parseResult.CreateParseTree();
         _astTime.Text = (_astTimeSpan = timer.Elapsed).ToString();
       }
     }
@@ -394,7 +394,7 @@ namespace Nitra.Visualizer
         return;
 
       if (_ast == null)
-        _ast = _parseResult.CreateAst();
+        _ast = _parseResult.CreateParseTree();
 
       var htmlWriter = new HtmlPrettyPrintWriter(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes, "missing", "debug", "garbage");
       _ast.PrettyPrint(htmlWriter, 0, null);
@@ -412,7 +412,7 @@ namespace Nitra.Visualizer
         return;
 
       if (_ast == null)
-        _ast = _parseResult.CreateAst();
+        _ast = _parseResult.CreateParseTree();
 
       _prettyPrintTextBox.Text = _ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
     }
