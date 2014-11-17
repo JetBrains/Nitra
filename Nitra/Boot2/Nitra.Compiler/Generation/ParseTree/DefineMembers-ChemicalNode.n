@@ -1,0 +1,150 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+
+using Nitra.Internal;
+using Nitra.Model;
+using Nitra.Typing;
+
+using System;
+using System.Diagnostics;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal abstract partial class RuleParseTreeEmitter
+  {
+    protected DefineChemicalNodeCtorAndFields(fields : SCG.List[FieldInfo], _chemicalTb : TypeBuilder, _nodeTb : TypeBuilder) : void
+    {
+      def traverse(ruleType : RuleType, obj : PExpr) : ChemicalRuleType * PExpr
+      {
+        match (ruleType)
+        {
+          | Void                 => assert3(false)
+          | Ref(symbol)          => (ChemicalRuleType.Ast(symbol),    obj)
+          | Chars(Some(keyword)) => (ChemicalRuleType.StaticString(), <[ context.GetKeywordSpan($(keyword : string)) ]>)
+          | Chars(None)          => (ChemicalRuleType.String(),       <[ context.GetSpan($obj) ]>)
+          | Option(type) =>
+            def itemVariable = Util.tmpname("item");
+            def (itemType, itemExpr) = traverse(type, <[ $(itemVariable : usesite) ]>);
+            if (itemType is ChemicalRuleType.StaticString)
+              (ChemicalRuleType.Bool(), <[ if ($obj) Nitra.OptionParseTree.Some(Nitra.Location.Default, $itemExpr) else Nitra.OptionParseTree.None(Nitra.Location.Default) ]>)
+            else
+            {
+              def expr =
+              <[
+                match ($obj)
+                {
+                  | Some($(itemVariable : usesite)) => Nitra.OptionParseTree.Some(Nitra.Location.Default, $itemExpr)
+                  | None                            => Nitra.OptionParseTree.None(Nitra.Location.Default)
+                }
+              ]>;
+              (ChemicalRuleType.Option(itemType), expr)
+            }
+
+          | List(type) =>
+            def itemVariable = Util.tmpname("item");
+            def (itemType, itemExpr) = traverse(type, <[ $(itemVariable : usesite) ]>);
+            if (itemType is ChemicalRuleType.StaticString)
+            {
+              def expr =
+              <[
+                def items = array($obj);
+                for (mutable i = 0; i < items.Length; ++i)
+                  items[i] = $itemExpr;
+                Nitra.ConcreteListParseTree(Nitra.Location.Default, items);
+              ]>;
+              (ChemicalRuleType.Int(), expr)
+            }
+            else
+            {
+              def expr =
+              <[
+                def items = System.Collections.Generic.List();
+                foreach ($(itemVariable : usesite) in $obj)
+                  items.Add($itemExpr);
+                Nitra.ConcreteListParseTree(Nitra.Location.Default, items);
+              ]>;
+              (ChemicalRuleType.List(itemType), expr)
+            }
+
+          | Tuple(types) =>
+            def memberTypes        = SCG.List();
+            def patternVariables   = SCG.List();
+            def exprs              = SCG.List();
+
+            foreach(t in types)
+            {
+              def memberVariable = Util.tmpname("member");
+              def (memberType,  memberExpr) = traverse(t, <[ $(memberVariable : usesite) ]>);
+              unless (memberType is ChemicalRuleType.StaticString)
+              {
+                memberTypes.Add(memberType);
+                patternVariables.Add(memberVariable);
+              }
+              exprs.Add(memberExpr);
+            }
+
+            match (memberTypes.Count)
+            {
+              | 0 => (ChemicalRuleType.StaticString(),               <[ Nitra.ConcreteSequenceParseTree(Nitra.Location.Default, ..$exprs) ]>)
+              | 1 => (memberTypes[0],                                <[ def $(patternVariables[0] : usesite)                                   = $obj; Nitra.ConcreteSequenceParseTree(Nitra.Location.Default, ..$exprs) ]>)
+              | _ => (ChemicalRuleType.Tuple(memberTypes.NToList()), <[ def (..$(patternVariables.MapToList(name => <[ $(name : usesite) ]>))) = $obj; Nitra.ConcreteSequenceParseTree(Nitra.Location.Default, ..$exprs) ]>)
+            }
+        }
+      }
+
+      _chemicalTb.DefineConditional(<[ decl: private sourceProvider   : Nitra.Runtime.ISourceSnapshotProvider; ]>);
+      _chemicalTb.DefineConditional(<[ decl: private span             : Nitra.NSpan; ]>);
+      _chemicalTb.DefineConditional(<[ decl: public override Location : Nitra.Location { get { Nitra.Location(this.sourceProvider.GetSource(), this.span) } } ]>);
+
+      def ctorParameters = SCG.List();
+      ctorParameters.Add(<[ parameter: sourceProvider : Nitra.Runtime.ISourceSnapshotProvider ]>);
+      ctorParameters.Add(<[ parameter: span           : Nitra.NSpan ]>);
+
+      def ctorStatements = SCG.List();
+      ctorStatements.Add(<[ this.sourceProvider = sourceProvider ]>);
+      ctorStatements.Add(<[ this.span           = span ]>);
+
+      def createParameters = SCG.List();
+      createParameters.Add(<[ parameter: context : Nitra.Runtime.ChemicalParseTreeContext ]>);
+
+      def ctorArguments = SCG.List();
+      ctorArguments.Add(<[ context ]>);
+      ctorArguments.Add(<[ Nitra.NSpan(0, 0) ]>);
+
+      foreach (field in fields)
+      {
+        _chemicalTb.DefineConditional(<[ decl:
+          public override $(field.Name : usesite) : $(field.Type : typed) { get; }
+        ]>);
+
+        ctorParameters.Add(<[ parameter: $(field.Name : usesite) : $(field.Type : typed) ]>);
+        ctorStatements.Add(<[ this.$(field.Name : usesite) = $(field.Name : usesite) ]>);
+
+        def (parameterType, expr) = traverse(field.Rule.Type, <[ $(field.Name : usesite) ]>);
+        unless (parameterType is ChemicalRuleType.StaticString)
+          createParameters.Add(<[ parameter: $(field.Name : usesite) : $(Environment.GetParseTreeType(parameterType) : typed) ]>);
+        ctorArguments.Add(expr);
+      }
+
+      _chemicalTb.DefineConditional(<[ decl:
+        public this(..$ctorParameters) { ..$ctorStatements }
+      ]>);
+
+      _nodeTb.DefineConditional(<[ decl:
+        [Nemerle.Diagnostics.CompileStatistic("ParseTree")]
+        public static Create(..$createParameters) : $(_nodeTb.GetMemType() : typed)
+        {
+          unchecked($(_chemicalTb.GetMemType() : typed)(..$ctorArguments))
+        }
+      ]>);
+    }
+  }
+}

@@ -47,6 +47,8 @@ namespace Nitra.Internal.Recovery
       def flattenSubrules    = SCG.List();
       def walk(index)
       {
+        when (allFlattenSubrules.Count > 10)//TODO: Hack!!! terminate if too many ambiguities
+          return;
         mutable walkCalled = false;
         def (subrule, _) = subrules[index];
         def state = states[subrule.State];
@@ -166,60 +168,7 @@ namespace Nitra.Internal.Recovery
       }
     }
 
-    internal GetSubruleTokenChanges(seq : ParsedSequence, subrule : ParsedSubrule) : TokenChanges
-    {
-      def state = seq.ParsingSequence.States[subrule.State];
-      if (IsDeletedSubrule(seq, subrule))
-        TokenChanges(inserted = 0, deleted = 1);
-      else match (state)
-      {
-        | Scan when subrule.IsEmpty => TokenChanges(state.Subrule.MandatoryTokenCount, 0);
-        | Scan | Predicate          => TokenChanges(0, 0)
-        | Simple            as state1 with parsingSequence = state1.RuleParser.ParsingSequence
-        | Extensible        as state2 with parsingSequence = state2.RuleParser.ParsingSequence
-        | List              as state3 with parsingSequence = state3.Sequence
-        | ListWithSeparator as state4 with parsingSequence = state4.Sequence
-        | Subsequence       as state5 with parsingSequence = state5.Sequence =>
-          if (subrule.IsEmpty)
-            TokenChanges(inserted = parsingSequence.MandatoryTokenCount, deleted = 0);
-          else
-          {
-            mutable innerSeq;
-            if (Sequences.TryGetValue((subrule.Begin, parsingSequence), out innerSeq))
-              innerSeq.Ends[subrule.End]
-            else
-              TokenChanges(inserted = 0, deleted = 0);
-          }
-
-        | ExtensionPrefix  as prefix when subrule.IsEmpty => TokenChanges(prefix.RuleParser.MandatoryTokenCount, 0)
-        | ExtensionPrefix  as prefix =>
-          mutable minChanges = TokenChanges.Fail;
-          foreach (ruleParser in prefix.RuleParser.PrefixRules)
-          {
-            mutable innerSeq;
-            mutable changes;
-            when (Sequences.TryGetValue((subrule.Begin, ruleParser.ParsingSequence), out innerSeq) && innerSeq.Ends.TryGetValue(subrule.End, out changes))
-              minChanges = TokenChanges.Min(minChanges, changes);
-          }
-          assert(!minChanges.IsFail);
-          minChanges
-
-        | ExtensionPostfix when subrule.IsEmpty => TokenChanges(inserted = 0, deleted = 0)
-        | ExtensionPostfix as postfix =>
-          mutable minChanges = TokenChanges.Fail;
-          foreach (ruleParser when postfix.RuleParser.FirstPostfixRuleId <= ruleParser.RuleId in postfix.RuleParser.PostfixRules)
-          {
-            mutable innerSeq;
-            mutable changes;
-            when (Sequences.TryGetValue((subrule.Begin, ruleParser.ParsingSequence), out innerSeq) && innerSeq.Ends.TryGetValue(subrule.End, out changes))
-              minChanges = TokenChanges.Min(minChanges, changes);
-          }
-         assert(!minChanges.IsFail);
-         minChanges
-      }
-    }
-
-    private static SubrulesComparison : Comparison[ParsedSubrule] = (l, r) =>
+    private static SubrulesComparison : Comparison[ParsedSubrule * TokenChanges] = ((l, _), (r, _)) =>
     {
       res:
         {
@@ -243,18 +192,19 @@ namespace Nitra.Internal.Recovery
       foreach (endState in seq.ParsingSequence.EndStates)
         stateEndChanges[endState, end] = changes;
 
-      def allSubrules = seq.ParsedSubrules.ToArray().SortInplace(SubrulesComparison);
+      def allSubrules = seq.ParsedSubrules.KeyValuePairs.ToArray().SortInplace(SubrulesComparison);
       def states = seq.ParsingSequence.States;
 
       for (mutable i = allSubrules.Length - 1; i >= 0; --i)
       {
-        def subrule = allSubrules[i];
+        def (subrule, subruleChanges) = allSubrules[i];
         mutable endChanges;
         mutable startChanges;
         when (stateEndChanges.TryGetValue((subrule.State, subrule.End), out endChanges))
         when (Records[subrule.Begin].TryGetValue(ParseRecord(seq, subrule.State, subrule.Begin), out startChanges))
         {
-          def subruleChanges = GetSubruleTokenChanges(seq, subrule);
+          startChanges = startChanges - seq.StartTokenChanges;
+          //def subruleChanges = GetSubruleTokenChanges(seq, subrule);
           when (startChanges + subruleChanges == endChanges)
           {
             def state = states[subrule.State];
@@ -266,8 +216,7 @@ namespace Nitra.Internal.Recovery
         }
       }
 
-      subrules.Reverse();//TODO: ParsingOrderSubrulesComparison
-      subrules.ToArray();
+      subrules.ToArray().SortInplace(ParsingOrderSubrulesComparison);
     }
   }
 }

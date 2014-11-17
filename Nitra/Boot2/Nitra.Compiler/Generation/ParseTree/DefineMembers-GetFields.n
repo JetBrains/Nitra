@@ -1,0 +1,550 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+
+using Nitra.Internal;
+using Nitra.Model;
+using Nitra.Typing;
+
+using System;
+using System.Diagnostics;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal abstract partial class RuleParseTreeEmitter
+  {
+    protected variant FieldExpr
+    {
+      | Chars  { ExprStandardMode  : PExpr; ExprRecoveryMode : PExpr; }
+      | Tuple  { Items : list[FieldExpr] }
+      | Prefix { Expr  : PExpr }
+      | Other  { ExprStandardMode  : PExpr; ExprRecoveryMode : PExpr; }
+    }
+
+    [Record]
+    protected sealed class FieldInfo
+    {
+      public Name : string;
+      public Rule : Rule;
+      public Type : FixedType;
+      public Expr : FieldExpr;
+    }
+
+    protected GetFields() : SCG.List[FieldInfo]
+    {
+      def astPtr = AstPointer.Existing(this.RuleSymbol.Sequence, this, "astPtr");
+
+      def ruleExprs = SCG.Dictionary.[Rule, FieldExpr](Rule.ReferenceEqualityComparer);
+
+      when (this.RuleSymbol is ExtensionRuleSymbol(ExtensionType = Postfix(call, _)))
+        ruleExprs.Add(call, FieldExpr.Prefix(<[ this.prefix ]>));
+
+      def prevSubrules = SCG.List();
+      foreach (subrule in this.RuleSymbol.Sequence.NonMarkerSubrules)
+      {
+        when (IsSubruleAcceptedForAst(subrule))
+        {
+          def parentAstPtr = AstPointerScope(astPtr);
+          def valueExpr = CompileSubruleValueStandardMode(subrule, parentAstPtr);
+
+          def statementsStandardMode = SCG.List();
+          foreach (subrule in prevSubrules)
+            statementsStandardMode.Add(ParseTreeUtils.Skip(subrule, parentAstPtr));
+          statementsStandardMode.Add(valueExpr);
+
+          def statementsRecoveryMode = <[
+            if (this.astPtr == 0)
+            {
+              def _subruleStartPos = this.startPos;
+              $(CompileEmptySubruleValueRecoveryMode(subrule, true))
+            }
+            else
+            {
+              def recoveredSubrulesIndex = ~this.astPtr;
+              def (subruleStarts, parsingSequence) = parseResult.RecoveredSubrules[recoveredSubrulesIndex];
+              mutable _subruleStartPos;
+              mutable _subruleEndPos;
+              $(CompileSubruleValueRecoveryMode(subrule))
+            }
+          ]>;
+
+          def expr =
+            if (subrule.SrcRule.Type is RuleType.Chars)
+              FieldExpr.Chars(<[ { ..$statementsStandardMode } ]>, statementsRecoveryMode)
+            else
+              FieldExpr.Other(<[ { ..$statementsStandardMode } ]>, statementsRecoveryMode);
+
+          ruleExprs.Add(subrule.SrcRule, expr);
+        }
+        prevSubrules.Add(subrule);
+      }
+
+      def makeFieldExpr(rule : Rule) : FieldExpr
+      {
+        if (rule is Rule.Sequence(Rules = rules))
+        {
+          def members = SCG.List();
+          foreach (rule when !(rule.Type is RuleType.Void) in rules)
+            members.Add(makeFieldExpr(rule));
+
+          if(members.Count == 1)
+            members[0]
+          else
+            FieldExpr.Tuple(members.ToNList())
+        }
+        else
+        {
+          mutable expr;
+          unless (ruleExprs.TryGetValue(rule, out expr))
+            assert3(false);
+          expr
+        }
+      }
+
+      def fields = SCG.List();
+      foreach (rule in this.RuleSymbol.NonVoidSubRules)
+        fields.Add(FieldInfo(rule.FieldName, rule, Environment.GetParseTreeType(rule.Type), makeFieldExpr(rule)));
+      fields
+    }
+
+    protected DefineReadSequenceMethod(_parsedTb : TypeBuilder) : void
+    {
+      assert(_parsedTb != null);
+
+      def astValues(cr : SequenceCompilationResult) : bool { cr.IsNonVoid && !cr.IsSpan }
+
+      def spanValues(cr : SequenceCompilationResult) : bool { cr.IsNonVoid && cr.IsSpan }
+
+      def standardModeBody(code : PExpr) : PExpr { code }
+
+      def recoveryModeBody(code : PExpr) : PExpr
+      {
+        <[
+          def (subruleStarts, parsingSequence) = parseResult.RecoveredSubrules[recoveredSubrulesIndex];
+          mutable _subruleStartPos;
+          mutable _subruleEndPos;
+          $code;
+        ]>
+      }
+
+      def makeIdSwitch(pred : SequenceCompilationResult -> bool, selector : SequenceCompilationResult -> PExpr, body : PExpr -> PExpr) : PExpr
+      {
+        def cases = SCG.List();
+        foreach (copilationResult when pred(copilationResult) in _sequenceCompilationResults.Values with index)
+        {
+          def code = selector(copilationResult);
+          cases.Add(<[ case: | $(index : int) => $code ]>);
+        }
+        if (cases.Count > 0)
+        {
+          cases.Add(<[ case: | _ => throw System.ArgumentOutOfRangeException("id") ]>);
+          body(<[ match (id) { ..$cases } ]>)
+        }
+        else
+          <[ throw System.ArgumentOutOfRangeException("id") ]>;
+      }
+
+      _parsedTb.DefineConditional(<[ decl:
+        private __ReadSequenceAstStandardMode(id : int, pos : ref int) : Nitra.ParseTree
+          implements Nitra.Internal.IAstSequenceLoader[Nitra.ParseTree].ReadSequence
+        {
+          unchecked { _ = id; _ = pos; $(makeIdSwitch(astValues, _.CodeStandardMode, standardModeBody)) }
+        }
+      ]>);
+
+      _parsedTb.DefineConditional(<[ decl:
+        private __ReadSequenceSpanStandardMode(id : int, pos : ref int) : Nitra.NSpan
+          implements Nitra.Internal.IAstSequenceLoader[Nitra.NSpan].ReadSequence
+        {
+          unchecked { _ = id; _ = pos; $(makeIdSwitch(spanValues, _.CodeStandardMode, standardModeBody)) }
+        }
+      ]>);
+
+      _parsedTb.DefineConditional(<[ decl:
+        private __ReadSequenceAstRecoveryMode(id : int, recoveredSubrulesIndex : int) : Nitra.ParseTree
+          implements Nitra.Internal.IAstSequenceLoader[Nitra.ParseTree].ReadSequence
+        {
+          unchecked { _ = id; _ = recoveredSubrulesIndex; $(makeIdSwitch(astValues, _.CodeRecoveryMode, recoveryModeBody)) }
+        }
+      ]>);
+
+      _parsedTb.DefineConditional(<[ decl:
+        private __ReadSequenceSpanRecoveryMode(id : int, recoveredSubrulesIndex : int) : Nitra.NSpan
+          implements Nitra.Internal.IAstSequenceLoader[Nitra.NSpan].ReadSequence
+        {
+          unchecked { _ = id; _ = recoveredSubrulesIndex; $(makeIdSwitch(spanValues, _.CodeRecoveryMode, recoveryModeBody)) }
+        }
+      ]>);
+
+      _parsedTb.DefineConditional(<[ decl:
+        private __ReadEmptySequenceAst(id : int, _subruleStartPos : int) : Nitra.ParseTree
+          implements Nitra.Internal.IAstSequenceLoader[Nitra.ParseTree].ReadEmptySequence
+        {
+          unchecked { _ = id; $(makeIdSwitch(astValues, _.EmptyCodeRecoveryMode, standardModeBody)) }
+        }
+      ]>);
+
+      _parsedTb.DefineConditional(<[ decl:
+        private __ReadEmptySequenceSpan(id : int, _subruleStartPos : int) : Nitra.NSpan
+          implements Nitra.Internal.IAstSequenceLoader[Nitra.NSpan].ReadEmptySequence
+        {
+          unchecked { _ = id; $(makeIdSwitch(spanValues, _.EmptyCodeRecoveryMode, standardModeBody)) }
+        }
+      ]>);
+
+      _parsedTb.DefineConditional(<[ decl:
+        private __CreateAmbiguousSequenceAst(id : int, ambiguities : array[Nitra.ParseTree]) : Nitra.ParseTree
+          implements Nitra.Internal.IAstSequenceLoader[Nitra.ParseTree].CreateAmbiguousSequence
+        {
+          unchecked { _ = id; _ = ambiguities; $(makeIdSwitch(astValues, _.AmbiguousSequenceCode, standardModeBody)) }
+        }
+      ]>);
+
+      _parsedTb.DefineConditional(<[ decl:
+        private __CreateAmbiguousSequenceSpan(_ : int, _ : array[Nitra.NSpan]) : Nitra.NSpan
+          implements Nitra.Internal.IAstSequenceLoader[Nitra.NSpan].CreateAmbiguousSequence
+        {
+          throw System.NotSupportedException("Ambiguous NSpan is not supported")
+        }
+      ]>);
+    }
+
+    [RecordIgnore]
+    private _sequenceCompilationResults : SCG.Dictionary[SequenceCompileInfo, SequenceCompilationResult] = SCG.Dictionary();
+
+    [Record]
+    private sealed class SequenceCompilationResult
+    {
+      public Sequence : SequenceCompileInfo;
+      public Id : int;
+      public IsNonVoid : bool;
+      public IsSpan : bool;
+      public CodeStandardMode : PExpr;
+      public CodeRecoveryMode : PExpr;
+      public EmptyCodeRecoveryMode : PExpr;
+      public AmbiguousSequenceCode : PExpr;
+    }
+
+    private CompileSequence(sequence : SequenceCompileInfo) : SequenceCompilationResult
+    {
+      mutable compilationResult;
+      unless (_sequenceCompilationResults.TryGetValue(sequence, out compilationResult))
+      {
+        def nameToExpr(varName : string, _ : SubruleCompileInfo) : PExpr { <[ $(varName : usesite) ]> }
+
+        def astPointer                  = AstPointerScope(sequence, "p", this);
+        def subruleValues               = SCG.List();
+        def statementsStandardMode      = SCG.List();
+        def statementsRecoveryMode      = SCG.List();
+        def statementsEmptyRecoveryMode = SCG.List();
+
+        foreach (subrule in sequence.NonMarkerSubrules)
+        {
+          if (IsSubruleAcceptedForAst(subrule))
+          {
+            def varName = subrule.MakeVariableName("pt");
+            subruleValues.Add(varName, subrule);
+
+            statementsStandardMode.Add(<[ def $(varName : usesite) = $(CompileSubruleValueStandardMode(subrule, astPointer)) ]>);
+            statementsRecoveryMode.Add(<[ def $(varName : usesite) = $(CompileSubruleValueRecoveryMode(subrule)) ]>);
+            statementsEmptyRecoveryMode.Add(<[ def $(varName : usesite) = $(CompileEmptySubruleValueRecoveryMode(subrule, false)) ]>);
+          }
+          else
+            statementsStandardMode.Add(ParseTreeUtils.Skip(subrule, astPointer));
+        }
+
+        match (subruleValues.Count)
+        {
+          | 0 =>
+            statementsStandardMode.Add(PExpr.Error("Cannot create VOID ast"));
+            statementsRecoveryMode.Add(PExpr.Error("Cannot create VOID ast"));
+            statementsEmptyRecoveryMode.Add(PExpr.Error("Cannot create VOID ast"));
+
+          | 1 =>
+            statementsStandardMode.Add(nameToExpr(subruleValues[0]));
+            statementsRecoveryMode.Add(nameToExpr(subruleValues[0]));
+            statementsEmptyRecoveryMode.Add(nameToExpr(subruleValues[0]));
+
+          | _ =>
+            statementsStandardMode.Insert(0, <[ def sequenceStartPos = pos; ]>);
+            statementsStandardMode.Add(<[ Nitra.ConcreteSequenceParseTree(Nitra.Location(parseResult, sequenceStartPos, pos), ..$(subruleValues.MapToList(nameToExpr))) ]>);
+
+            statementsRecoveryMode.Add(<[ def sequenceStartPos = subruleStarts[0].Pos ]>);
+            statementsRecoveryMode.Add(<[ def sequenceEndPos = subruleStarts[subruleStarts.Length - 1].Pos ]>);
+            statementsRecoveryMode.Add(<[ Nitra.ConcreteSequenceParseTree(Nitra.Location(parseResult, sequenceStartPos, sequenceEndPos), ..$(subruleValues.MapToList(nameToExpr))) ]>);
+
+            statementsEmptyRecoveryMode.Add(<[ Nitra.ConcreteSequenceParseTree(Nitra.Location(parseResult, _subruleStartPos, _subruleStartPos), ..$(subruleValues.MapToList(nameToExpr))) ]>);
+        }
+
+        def id               = _sequenceCompilationResults.Count;
+        def isNonVoid        = subruleValues.Count > 0;
+        def isSpan           = subruleValues.Count == 1 && subruleValues[0][1].SrcRule.Type is RuleType.Chars;
+
+        def codeStandardMode =
+        {
+          def codeWithoutRuleParser = astPointer.Compile(<[ { ..$statementsStandardMode } ]>);
+          if (astPointer.IsAccessed())
+            <[
+              def ruleParser = parseResult.GetRuleParser(astPtr) :> $(this.RuleSymbol.GetParserClassRef());
+              $codeWithoutRuleParser
+            ]>
+          else
+            codeWithoutRuleParser;
+        };
+
+        def codeRecoveryMode      = <[ { ..$statementsRecoveryMode } ]>;
+
+        def emptyCodeRecoveryMode = <[ { ..$statementsEmptyRecoveryMode } ]>;
+
+        def ambiguousSequenceCode = match (sequence.SrcRule.Type)
+        {
+          | Void         => PExpr.Error("Cannot create ambiguous VOID ast")
+          | Chars        => PExpr.Error("Cannot create ambiguous NSPAN ast")
+          | Ref(symbol is ExtensibleRuleSymbol) => <[ $(Environment.GetParseTreeType(symbol) : typed).AmbiguousAst(Nitra.Internal.ParseTreeFactory.CastArray(ambiguities), Nitra.ParseTreeAmbiguityType.Recovery) ]>
+          | Ref(symbol)  => <[ $(Environment.GetParseTreeType(symbol) : typed).AmbiguousAst(Nitra.Internal.ParseTreeFactory.CastArray(ambiguities)) ]>
+          | List(ty)     => <[ Nitra.AmbiguousListParseTree.[$(Environment.GetParseTreeType(ty) : typed)](Nitra.Internal.ParseTreeFactory.CastArray(ambiguities)) ]>
+          | Option(ty)   => <[ Nitra.AmbiguousOptionParseTree.[$(Environment.GetParseTreeType(ty) : typed)](Nitra.Internal.ParseTreeFactory.CastArray(ambiguities)) ]>
+          | Tuple(types) => <[ Nitra.AmbiguousSequenceParseTree.[..$(types.Map(t => <[ $(Environment.GetParseTreeType(t) : typed) ]>))](Nitra.Internal.ParseTreeFactory.CastArray(ambiguities)) ]>
+        };
+
+        compilationResult = SequenceCompilationResult(sequence, id, isNonVoid, isSpan, codeStandardMode, codeRecoveryMode, emptyCodeRecoveryMode, ambiguousSequenceCode);
+        _sequenceCompilationResults[sequence] = compilationResult;
+      }
+      compilationResult
+    }
+
+    private GetArgumentsForCreateAst(compilationResult : SequenceCompilationResult) : PExpr * PExpr * int * PExpr
+    {
+      if (compilationResult.IsSpan)
+      {
+        def spanType = Environment.NSpanTypeVar;
+        (<[ $(spanType : typed) ]>, <[ $(spanType : typed) ]>, compilationResult.Id, <[ Nitra.Internal.NSpanCast.Instance ]>)
+      }
+      else
+      {
+        def loaderType = Environment.ParseTreeTypeVar;
+        def astType    = Environment.GetParseTreeType(compilationResult.Sequence.SrcRule.Type);
+        (<[ $(loaderType : typed) ]>, <[ $(astType : typed) ]>, compilationResult.Id, <[ Nitra.Internal.ParseTreeCast.[$(astType : typed)].Instance ]>)
+      }
+    }
+
+    private CompileSubruleValueStandardMode(subrule : SubruleCompileInfo, parentAstPointer : AstPointerScope) : PExpr
+    {
+      match (subrule)
+      {
+        | Empty      as subrule => ParseTreeUtils.Skip(subrule, parentAstPointer)
+        | SimpleCall as subrule =>
+          if (subrule.Symbol.Type is RuleType.Void)
+            ParseTreeUtils.Skip(subrule, parentAstPointer)
+          else
+            <[
+              pos += $(parentAstPointer.Access().GetSkip(subrule));
+              $(Environment.GetParseTreeType(subrule.Symbol) : typed).Create(ref pos, $(parentAstPointer.Access().GetSize(subrule)), parseResult);
+            ]>
+
+        | ExtensibleCall as subrule =>
+          if (subrule.Symbol.Type is RuleType.Void)
+            ParseTreeUtils.Skip(subrule, parentAstPointer)
+          else
+            <[
+              pos += $(parentAstPointer.Access().GetSkip(subrule));
+              Nitra.Internal.ExtensibleRuleParseTreeConstructor.Create.[$(Environment.GetParseTreeType(subrule.Symbol) : typed)](ref pos, $(parentAstPointer.Access().GetSize(subrule)), parseResult, $(subrule.BindingPower : int), $(subrule.Symbol.GetRuleDescriptorRef()), Nitra.Internal.DefaultExtensibleRuleParseTreeFactory.Instance);
+            ]>
+
+        | RegularCall
+        | List(IsSkipAnyPattern = true)
+        | TokenString => ParseTreeUtils.GetTokenValue(subrule, parentAstPointer, <[ Nitra.NSpan(tokenPos, pos) ]>)
+        | Option(itemSequence) as subrule =>
+          if (subrule.SrcRule.Type is RuleType.Void)
+            ParseTreeUtils.Skip(subrule, parentAstPointer)
+          else
+          {
+            def (loaderType, itemType, id, converter) = GetArgumentsForCreateAst(CompileSequence(itemSequence));
+            <[ Nitra.Internal.ParseTreeFactory.CreateOption.[$loaderType, $itemType](this.parseResult, this, $(id : int), $converter, this.astPtr, $(subrule.Offset), ref pos) ]>
+          }
+
+        | List(Rule = itemSequence) =>
+          if (subrule.SrcRule.Type is RuleType.Void)
+            ParseTreeUtils.Skip(subrule, parentAstPointer)
+          else
+          {
+            def (loaderType, itemType, id, converter) = GetArgumentsForCreateAst(CompileSequence(itemSequence));
+            <[ Nitra.Internal.ParseTreeFactory.CreateList.[$loaderType, $itemType](this.parseResult, this, $(id : int), $converter, this.astPtr, $(subrule.Offset), ref pos) ]>
+          }
+
+        | ListWithSeparator(Rule = itemSequence, Separator = separatorSequence)=>
+          match (itemSequence.SrcRule.Type, separatorSequence.SrcRule.Type)
+          {
+            | (Void, Void) => ParseTreeUtils.Skip(subrule, parentAstPointer)
+            | (_, Void) =>
+              def (itemLoaderType, itemType, itemSequenceId, itemConverter) = GetArgumentsForCreateAst(CompileSequence(itemSequence));
+              def (separatorLoaderType, _, separatorSequenceId, _)          = GetArgumentsForCreateAst(CompileSequence(separatorSequence));
+              <[ Nitra.Internal.ParseTreeFactory.CreateListWithSeparatorOnlyItems.[$itemLoaderType, $itemType, $separatorLoaderType](this.parseResult, this, $(itemSequenceId : int), $itemConverter, this, $(separatorSequenceId : int), this.astPtr, $(subrule.Offset), ref pos) ]>
+
+            | (Void, _) =>
+              def (itemLoaderType, _, itemSequenceId, _)                                        = GetArgumentsForCreateAst(CompileSequence(itemSequence));
+              def (separatorLoaderType, separatorType, separatorSequenceId, separatorConverter) = GetArgumentsForCreateAst(CompileSequence(separatorSequence));
+              <[ Nitra.Internal.ParseTreeFactory.CreateListWithSeparatorOnlySeparators.[$itemLoaderType, $separatorLoaderType, $separatorType](this.parseResult, this, $(itemSequenceId : int), this, $(separatorSequenceId : int), $separatorConverter, this.astPtr, $(subrule.Offset), ref pos) ]>
+
+            | _ =>
+              def (itemLoaderType, itemType, itemSequenceId, itemConverter)                     = GetArgumentsForCreateAst(CompileSequence(itemSequence));
+              def (separatorLoaderType, separatorType, separatorSequenceId, separatorConverter) = GetArgumentsForCreateAst(CompileSequence(separatorSequence));
+              <[ Nitra.Internal.ParseTreeFactory.CreateListWithSeparator.[$itemLoaderType, $itemType, $separatorLoaderType, $separatorType](this.parseResult, this, $(itemSequenceId : int), $itemConverter, this, $(separatorSequenceId : int), $separatorConverter, this.astPtr, $(subrule.Offset), ref pos) ]>
+          }
+
+        | Marker => <[ () ]>
+      }
+    }
+
+    private CompileSubruleValueRecoveryMode(subrule : SubruleCompileInfo) : PExpr
+    {
+      def recoveredValue = match (subrule)
+      {
+        | Empty => <[ () ]>
+        | SimpleCall as subrule =>
+          if (subrule.Symbol.Type is RuleType.Void)
+            <[ () ]>
+          else
+            <[ $(Environment.GetParseTreeType(subrule.Symbol) : typed).Create(_subruleStartPos, _subruleEndPos, parseResult) ]>
+
+        | ExtensibleCall as subrule =>
+          if (subrule.Symbol.Type is RuleType.Void)
+            <[ () ]>
+          else
+            <[
+              Nitra.Internal.ExtensibleRuleParseTreeConstructor.Create.[$(Environment.GetParseTreeType(subrule.Symbol) : typed)](_subruleStartPos, _subruleEndPos, parseResult, $(subrule.BindingPower : int), $(subrule.Symbol.GetRuleDescriptorRef()), Nitra.Internal.DefaultExtensibleRuleParseTreeFactory.Instance);
+            ]>
+
+        | RegularCall
+        | List as lst when lst.IsSkipAnyPattern
+        | TokenString    => <[ Nitra.NSpan(_subruleStartPos, _subruleEndPos) ]>
+        | Option(Rule = itemSequence) =>
+          if (subrule.SrcRule.Type is RuleType.Void)
+            <[ () ]>
+          else
+          {
+            def (loaderType, itemType, id, converter) = GetArgumentsForCreateAst(CompileSequence(itemSequence));
+            <[ Nitra.Internal.ParseTreeFactory.CreateOption.[$loaderType, $itemType](this.parseResult, this, $(id : int), $converter, parsingSequence, state, _subruleStartPos, _subruleEndPos) ]>
+          }
+
+        | List(Rule = itemSequence) =>
+          if (subrule.SrcRule.Type is RuleType.Void)
+            <[ () ]>
+          else
+          {
+            def (loaderType, itemType, id, converter) = GetArgumentsForCreateAst(CompileSequence(itemSequence));
+            <[ Nitra.Internal.ParseTreeFactory.CreateList.[$loaderType, $itemType](this.parseResult, this, $(id : int), $converter, parsingSequence, state, _subruleStartPos, _subruleEndPos) ]>
+          }
+
+        | ListWithSeparator(Rule = itemSequence, Separator = separatorSequence) =>
+          match (itemSequence.SrcRule.Type, separatorSequence.SrcRule.Type)
+          {
+            | (Void, Void) => <[ () ]>
+            | (_, Void)    =>
+              def (itemLoaderType, itemType, itemSequenceId, itemConverter) = GetArgumentsForCreateAst(CompileSequence(itemSequence));
+              <[
+                Nitra.Internal.ParseTreeFactory.CreateListWithSeparatorOnlyItems.[$itemLoaderType, $itemType](
+                  this.parseResult, this, $(itemSequenceId : int), $itemConverter, parsingSequence, state, _subruleStartPos, _subruleEndPos)
+              ]>
+
+            | (Void, _)    =>
+              def (separatorLoaderType, separatorType, separatorSequenceId, separatorConverter) = GetArgumentsForCreateAst(CompileSequence(separatorSequence));
+              <[
+                Nitra.Internal.ParseTreeFactory.CreateListWithSeparatorOnlySeparators.[$separatorLoaderType, $separatorType](
+                  this.parseResult, this, $(separatorSequenceId : int), $separatorConverter, parsingSequence, state, _subruleStartPos, _subruleEndPos)
+              ]>
+
+            | _ =>
+              def (itemLoaderType, itemType, itemSequenceId, itemConverter)                     = GetArgumentsForCreateAst(CompileSequence(itemSequence));
+              def (separatorLoaderType, separatorType, separatorSequenceId, separatorConverter) = GetArgumentsForCreateAst(CompileSequence(separatorSequence));
+              <[
+                Nitra.Internal.ParseTreeFactory.CreateListWithSeparator.[$itemLoaderType, $itemType, $separatorLoaderType, $separatorType](
+                  this.parseResult, this, $(itemSequenceId : int), $itemConverter, this, $(separatorSequenceId : int), $separatorConverter, parsingSequence, state, _subruleStartPos, _subruleEndPos)
+              ]>
+          }
+
+        | Marker => <[ () ]>
+      };
+
+      def skippedValue = CompileEmptySubruleValueRecoveryMode(subrule, true);
+
+      <[
+        def state = parsingSequence.GetEarleyState($(subrule.State : int));
+        if (Nitra.Internal.ParseTreeFactory.FindRecoveredSubrule(subruleStarts, state, out _subruleStartPos, out _subruleEndPos))
+          $recoveredValue
+        else
+          $skippedValue
+      ]>
+    }
+
+    private CompileEmptySubruleValueRecoveryMode(subrule : SubruleCompileInfo, allowEmptySpan : bool) : PExpr
+    {
+      match (subrule)
+      {
+        | Empty => <[ () ]>
+        | SimpleCall as subrule =>
+          if (subrule.Symbol.Type is RuleType.Void)
+            <[ () ]>
+          else if (allowEmptySpan)
+            <[ $(Environment.GetParseTreeType(subrule.Symbol) : typed).Create(_subruleStartPos, _subruleStartPos, parseResult) ]>
+          else
+            <[ $(Environment.GetParseTreeType(subrule.Symbol) : typed).MissingAst(parseResult, _subruleStartPos); ]>
+
+        | ExtensibleCall as subrule =>
+          if (subrule.Symbol.Type is RuleType.Void)
+            <[ () ]>
+          else
+            <[ $(Environment.GetParseTreeType(subrule.Symbol) : typed).MissingAst(parseResult, _subruleStartPos); ]>
+
+        | RegularCall
+        | List as lst when lst.IsSkipAnyPattern
+        | TokenString => <[ Nitra.NSpan(_subruleStartPos, _subruleStartPos) ]>
+
+        | Option as subrule =>
+          if (subrule.SrcRule.Type is RuleType.Void)
+            <[ () ]>
+          else
+            <[ Nitra.OptionParseTree.None(Nitra.Location(parseResult, _subruleStartPos, _subruleStartPos)) ]>
+
+        | List as lst =>
+          if (lst.SrcRule.Type is RuleType.Void)
+            <[ () ]>
+          else
+            <[ Nitra.EmptyListParseTree(Nitra.Location(parseResult, _subruleStartPos, _subruleStartPos)) ]>
+
+        | ListWithSeparator as lst =>
+          match (lst.Rule.SrcRule.Type, lst.Separator.SrcRule.Type)
+          {
+            | (Void, Void) => <[ () ]>
+            | (_, Void)    => <[ Nitra.EmptyListParseTree(Nitra.Location(parseResult, _subruleStartPos, _subruleStartPos)) ]>
+            | (Void, _)    => <[ Nitra.EmptyListParseTree(Nitra.Location(parseResult, _subruleStartPos, _subruleStartPos)) ]>
+            | _            =>
+              <[
+                Nitra.ConcreteSequenceParseTree(
+                  Nitra.Location(parseResult, _subruleStartPos, _subruleStartPos),
+                  Nitra.EmptyListParseTree(Nitra.Location(parseResult, _subruleStartPos, _subruleStartPos)),
+                  Nitra.EmptyListParseTree(Nitra.Location(parseResult, _subruleStartPos, _subruleStartPos)))
+              ]>
+          }
+
+        | Marker => <[ () ]>
+      }
+    }
+
+    public static IsSubruleAcceptedForAst(subrule : SubruleCompileInfo) : bool
+    {
+      | SimpleCall(symbol)        when symbol.Type is RuleType.Void
+      | ExtensibleCall(symbol, _) when symbol.Type is RuleType.Void
+      | Empty
+      | Marker => false
+      | _ => !(subrule.SrcRule.Type is RuleType.Void)
+    }
+  }
+}
