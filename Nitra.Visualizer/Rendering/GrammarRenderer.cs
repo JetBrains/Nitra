@@ -25,10 +25,10 @@ namespace Nitra.Visualizer.Rendering
         var reflection = rule.Reflection(rule.RuleId);
 
         // Pattern matchin emuletion :)
-        var ast = reflection as SequenceInfo.Root;
-        if (ast != null)
+        var root = reflection as SequenceInfo.Root;
+        if (root != null)
         {
-          Render(ast);
+          Render(root);
           continue;
         }
 
