@@ -68,12 +68,12 @@ namespace Nitra.Visualizer
       _lastMissing = _buffer.Length;
     }
 
-    public override void AmbiguousNode(IAmbiguousParseTree ast, SpanClass spanClass)
+    public override void AmbiguousNode(IAmbiguousParseTree ambiguousTree, SpanClass spanClass)
     {
-      WriteSpan(_missingNodeClass, "<# ambiguous " + ast.RuleDescriptor.Name + ", " + ast.Ambiguities.Count + " options");
+      WriteSpan(_missingNodeClass, "<# ambiguous " + ambiguousTree.RuleDescriptor.Name + ", " + ambiguousTree.Ambiguities.Count + " options");
       NewLineAndIndent();
       var previousTokenPos = _previousTokenPos;
-      foreach (var a in ast.Ambiguities)
+      foreach (var a in ambiguousTree.Ambiguities)
       {
         _previousTokenPos = previousTokenPos;
         a.PrettyPrint(this, 0, spanClass);
@@ -84,12 +84,12 @@ namespace Nitra.Visualizer
       NewLine();
     }
 
-    public override void AmbiguousNode<T>(IAmbiguousParseTree ast, string ruleType, IPrettyPrintSource source, SpanClass spanClass, Action<PrettyPrintWriter, IPrettyPrintSource, T, SpanClass> printer)
+    public override void AmbiguousNode<T>(IAmbiguousParseTree ambiguousTree, string ruleType, IPrettyPrintSource source, SpanClass spanClass, Action<PrettyPrintWriter, IPrettyPrintSource, T, SpanClass> printer)
     {
-      WriteSpan(_missingNodeClass, "<# ambiguous " + ruleType + ", " + ast.Ambiguities.Count + " options");
+      WriteSpan(_missingNodeClass, "<# ambiguous " + ruleType + ", " + ambiguousTree.Ambiguities.Count + " options");
       NewLineAndIndent();
       var previousTokenPos = _previousTokenPos;
-      foreach (object a in ast.Ambiguities)
+      foreach (object a in ambiguousTree.Ambiguities)
       {
         _previousTokenPos = previousTokenPos;
         printer(this, source, (T)a, spanClass);
