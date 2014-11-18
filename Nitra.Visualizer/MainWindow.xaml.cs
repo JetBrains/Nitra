@@ -51,9 +51,9 @@ namespace Nitra.Visualizer
     bool _needUpdateHtmlPrettyPrint;
     bool _needUpdateTextPrettyPrint;
     bool _needUpdatePerformance;
-    ParseTree _ast;
+    ParseTree _parseTree;
     TimeSpan _parseTimeSpan;
-    TimeSpan _astTimeSpan;
+    TimeSpan _parseTreeTimeSpan;
     TimeSpan _highlightingTimeSpan;
     readonly Settings _settings;
     private TestSuitVm _currentTestSuit;
@@ -325,7 +325,7 @@ namespace Nitra.Visualizer
       _needUpdateHtmlPrettyPrint = true;
       _needUpdateTextPrettyPrint = true;
       _needUpdatePerformance     = true;
-      _ast                       = null;
+      _parseTree                       = null;
 
       UpdateInfo();
     }
@@ -352,24 +352,24 @@ namespace Nitra.Visualizer
     private void UpdatePerformance()
     {
       _needUpdatePerformance = false;
-      if (_calcAstTime.IsChecked == true)
-        UpdateAst();
+      if (_calcParseTreeTime.IsChecked == true)
+        UpdateParseTree();
 
-      _totalTime.Text = (_parseTimeSpan + _astTimeSpan + _foldingStrategy.TimeSpan + _highlightingTimeSpan).ToString();
+      _totalTime.Text = (_parseTimeSpan + _parseTreeTimeSpan + _foldingStrategy.TimeSpan + _highlightingTimeSpan).ToString();
     }
 
-    private void UpdateAst()
+    private void UpdateParseTree()
     {
       if (_parseResult == null)
         return;
       if (IsSplicable(_parseResult))
         return;
 
-      if (_ast == null)
+      if (_parseTree == null)
       {
         var timer = Stopwatch.StartNew();
-        _ast = _parseResult.CreateParseTree();
-        _astTime.Text = (_astTimeSpan = timer.Elapsed).ToString();
+        _parseTree = _parseResult.CreateParseTree();
+        _parseTreeTime.Text = (_parseTreeTimeSpan = timer.Elapsed).ToString();
       }
     }
 
@@ -393,11 +393,11 @@ namespace Nitra.Visualizer
       if (IsSplicable(_parseResult))
         return;
 
-      if (_ast == null)
-        _ast = _parseResult.CreateParseTree();
+      if (_parseTree == null)
+        _parseTree = _parseResult.CreateParseTree();
 
       var htmlWriter = new HtmlPrettyPrintWriter(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes, "missing", "debug", "garbage");
-      _ast.PrettyPrint(htmlWriter, 0, null);
+      _parseTree.PrettyPrint(htmlWriter, 0, null);
       var html = Properties.Resources.PrettyPrintDoughnut.Replace("{prettyprint}", htmlWriter.ToString());
       prettyPrintViewer.NavigateToString(html);
     }
@@ -411,10 +411,10 @@ namespace Nitra.Visualizer
       if (IsSplicable(_parseResult))
         return;
 
-      if (_ast == null)
-        _ast = _parseResult.CreateParseTree();
+      if (_parseTree == null)
+        _parseTree = _parseResult.CreateParseTree();
 
-      _prettyPrintTextBox.Text = _ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
+      _prettyPrintTextBox.Text = _parseTree.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
     }
 
     private void textBox1_TextChanged(object sender, EventArgs e)
