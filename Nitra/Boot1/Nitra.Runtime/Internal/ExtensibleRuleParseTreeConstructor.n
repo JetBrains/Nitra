@@ -1,0 +1,234 @@
+﻿using Nitra;
+using Nitra.Runtime.Collections;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Internal
+{
+  public module ExtensibleRuleParseTreeConstructor
+  {
+    public Create[T](startPos : int, endPos : int, parseResult : ParseResult, bindingPower : int, ruleDescriptor : ExtensibleRuleDescriptor, astFactory : IExtensibleRuleParseTreeFactory[T]) : T
+      where T : ParseTree
+    {
+      def ruleParser = parseResult.RuleParser.Grammar.GetExtensibleRuleParser(ruleDescriptor, bindingPower);
+      if (startPos < endPos || ruleParser.CanParseEmptyString)
+      {
+        match (parseResult.TryGetRecoveredSequence(startPos, endPos, ruleParser.ParsingSequence))
+        {
+          | null =>
+            mutable pos = startPos;
+            Create(ref pos, endPos - startPos, parseResult, bindingPower, ruleDescriptor, astFactory)
+
+          | Unambiguous(recoveredSubrulesIndex) => CreateImpl(startPos, parseResult, ruleParser, ruleDescriptor, astFactory, recoveredSubrulesIndex)
+          | Ambiguous(indexes) =>
+            def ambiguities = array(indexes.Length);
+            foreach (recoveredSubrulesIndex in indexes with i)
+              ambiguities[i] = CreateImpl(startPos, parseResult, ruleParser, ruleDescriptor, astFactory, recoveredSubrulesIndex);
+            astFactory.CreateAmbiguous(parseResult, ruleDescriptor, startPos, endPos, ambiguities, null, ParseTreeAmbiguityType.Recovery);
+        }
+      }
+      else
+        astFactory.CreateMissing(parseResult, ruleDescriptor, startPos)
+    }
+
+    private CreateImpl[T](startPos : int, parseResult : ParseResult, ruleParser : ExtensibleRuleParser, ruleDescriptor : ExtensibleRuleDescriptor, astFactory : IExtensibleRuleParseTreeFactory[T], recoveredSubrulesIndex : int) : T
+      where T : ParseTree
+    {
+      def (subruleStarts, parsingSequence) = parseResult.RecoveredSubrules[recoveredSubrulesIndex];
+      def states = parsingSequence.States;
+
+      mutable resultAst;
+
+      for (mutable i = 0; i < subruleStarts.Length - 1; ++i)
+      {
+        def begin    = subruleStarts[i].Pos;
+        def end      = subruleStarts[i + 1].Pos;
+        def state    = states[subruleStarts[i].State];
+
+        match (state)
+        {
+          | ExtensionPrefix =>
+            assert(resultAst == null);
+
+            resultAst =
+              if (begin == end)
+                astFactory.CreateMissing(parseResult, ruleDescriptor, begin);
+              else
+              {
+                def prefixBuffer = LightList();
+                def prefixParsers = LightList();
+
+                foreach (prefix in ruleParser.PrefixRules)
+                {
+                  match (parseResult.TryGetRecoveredSequence(begin, end, prefix.ParsingSequence))
+                  {
+                    | null => ()
+                    | Unambiguous(recoveredSubrulesIndex) =>
+                      prefixBuffer.Add(astFactory.CreatePrefix(begin, end, recoveredSubrulesIndex, prefix, parseResult));
+                      prefixParsers.Add(prefix);
+
+                    | Ambiguous(indexes) =>
+                      foreach (recoveredSubrulesIndex in indexes with n)
+                      {
+                        prefixBuffer.Add(astFactory.CreatePrefix(begin, end, recoveredSubrulesIndex, prefix, parseResult));
+                        prefixParsers.Add(prefix);
+                      }
+                  }
+                }
+
+                match (prefixBuffer.Count)
+                {
+                  | 0 => assert(false)
+                  | 1 => prefixBuffer.FirstItem
+                  | _ => astFactory.CreateAmbiguous(parseResult, ruleDescriptor, begin, end, prefixBuffer.ToArray(), prefixParsers.ToArray(), ParseTreeAmbiguityType.Prefix)
+                }
+              };
+
+          | ExtensionPostfix =>
+            assert(resultAst != null);
+
+            def postfixBuffer = LightList();
+            def postfixParsers = LightList();
+
+            foreach (postfix when (postfix.RuleId >= ruleParser.FirstPostfixRuleId) in ruleParser.PostfixRules)
+            {
+              match (parseResult.TryGetRecoveredSequence(begin, end, postfix.ParsingSequence))
+              {
+                | null => ()
+                | Unambiguous(recoveredSubrulesIndex) =>
+                  postfixBuffer.Add(astFactory.CreatePostfix(resultAst, startPos, begin, end, recoveredSubrulesIndex, postfix, parseResult));
+                  postfixParsers.Add(postfix);
+
+                | Ambiguous(indexes) =>
+                  foreach (recoveredSubrulesIndex in indexes with n)
+                  {
+                    postfixBuffer.Add(astFactory.CreatePostfix(resultAst, startPos, begin, end, recoveredSubrulesIndex, postfix, parseResult));
+                    postfixParsers.Add(postfix);
+                  }
+              }
+            }
+
+            resultAst =
+              match (postfixBuffer.Count)
+              {
+                | 0 => assert(false)
+                | 1 => postfixBuffer.FirstItem
+                | _ => astFactory.CreateAmbiguous(parseResult, ruleDescriptor, begin, end, postfixBuffer.ToArray(), postfixParsers.ToArray(), ParseTreeAmbiguityType.Postfix)
+              };
+
+          | _ => assert(false, "ExtensionPrefix or ExtensionPostfix expected");
+        }
+      }
+
+      assert(resultAst != null);
+      resultAst
+    }
+
+    public Create[T](pos : ref int, size : int, parseResult : ParseResult, bindingPower : int, ruleDescriptor : ExtensibleRuleDescriptor, astFactory : IExtensibleRuleParseTreeFactory[T]) : T
+    {
+      def ruleParser = parseResult.RuleParser.Grammar.GetExtensibleRuleParser(ruleDescriptor, bindingPower);
+      if (size > 0 || ruleParser.CanParseEmptyString)
+      {
+        mutable newPos;
+        mutable ast = ruleParser.FindFirstPrefix(ref pos, parseResult);
+        mutable prefixValue;
+        def prefixStartPos = pos;
+        if (ast > 0)
+        {
+          def prefixParserOffset = GetExtensionParserOffset(ruleParser.PrefixRules);
+
+          mutable extensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PrefixParsers, ast, prefixParserOffset);
+          newPos = pos;
+          prefixValue = astFactory.CreatePrefix(ref newPos, ast, extensionParser, parseResult);
+          ast = ruleParser.FindNextPrefix(ast, parseResult);
+          when (ast > 0)
+          {
+            def firstNewPos = newPos;
+            def ambiguitys = SCG.List();
+            ambiguitys.Add(prefixValue);
+            def parsers = SCG.List();
+            parsers.Add(extensionParser);
+            while (ast > 0)
+            {
+              def nextExtensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PrefixParsers, ast, prefixParserOffset);
+              newPos = pos;
+              def _nextValue = astFactory.CreatePrefix(ref newPos, ast, nextExtensionParser, parseResult);
+              assert(newPos == firstNewPos);
+              ambiguitys.Add(_nextValue);
+              parsers.Add(nextExtensionParser);
+              extensionParser = nextExtensionParser;
+              ast = ruleParser.FindNextPrefix(ast, parseResult);
+            }
+            // prefix ambiguity
+            prefixValue = astFactory.CreateAmbiguous(parseResult, ruleDescriptor, prefixStartPos, newPos, ambiguitys.ToArray(), parsers.ToArray(), ParseTreeAmbiguityType.Prefix);
+          }
+          pos = newPos;
+        }
+        else
+        {
+          // missing prefix
+          prefixValue = astFactory.CreateMissing(parseResult, ruleDescriptor, prefixStartPos);
+        }
+
+        def postfixParserOffset = GetExtensionParserOffset(ruleParser.PostfixRules);
+        mutable extensionParser;
+        mutable postfixValue;
+        while (pos < parseResult.Text.Length && { ast = ruleParser.FindFirstPostfix(ref pos, parseResult); ast > 0 })
+        {
+          extensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PostfixParsers, ast, postfixParserOffset);
+          newPos = pos;
+          postfixValue = astFactory.CreatePostfix(prefixValue, prefixStartPos, ref newPos, ast, extensionParser, parseResult);
+          when (newPos == pos)
+            break;
+          ast = ruleParser.FindNextPostfix(ast, parseResult);
+          when (ast > 0)
+          {
+            def firstNewPos = newPos;
+            def ambiguitys = SCG.List();
+            ambiguitys.Add(postfixValue);
+            def parsers = SCG.List();
+            parsers.Add(extensionParser);
+            while (ast > 0)
+            {
+              def nextExtensionParser = GetExtensionParser(parseResult, ruleParser.ParserData.PostfixParsers, ast, postfixParserOffset);
+              newPos = pos;
+              def _nextValue = astFactory.CreatePostfix(prefixValue, prefixStartPos, ref newPos, ast, nextExtensionParser, parseResult);
+              assert(newPos == firstNewPos);
+              ambiguitys.Add(_nextValue);
+              parsers.Add(nextExtensionParser);
+              extensionParser = nextExtensionParser;
+              ast = ruleParser.FindNextPostfix(ast, parseResult);
+            }
+            // postfix ambiguity
+            postfixValue = astFactory.CreateAmbiguous(parseResult, ruleDescriptor, prefixStartPos, newPos, ambiguitys.ToArray(), parsers.ToArray(), ParseTreeAmbiguityType.Postfix);
+          }
+          prefixValue = postfixValue;
+          pos = newPos;
+        }
+
+        prefixValue
+      }
+      else
+        astFactory.CreateMissing(parseResult, ruleDescriptor, pos)
+    }
+
+    public GetExtensionParserOffset(parsers : array[ExtensionRuleParser]) : int
+    {
+      //FIXME empty array
+      if (parsers.Length > 0) parsers[0].RuleId else 0
+    }
+
+    public GetExtensionParser(parseResult : ParseResult, parsers : array[ExtensionRuleParser], astPtr : int, offset : int) : ExtensionRuleParser
+    {
+      def ruleId = parseResult.ast[astPtr + ExtensibleRuleParser.AstOfs.Id] & ExtensibleRuleParser.AstMask.Id;
+      parsers[ruleId - offset]
+    }
+  }
+}

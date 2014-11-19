@@ -1,0 +1,327 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using System;
+using SCG = System.Collections.Generic;
+
+using Nitra.Internal.Recovery;
+using Nitra.Runtime.Reflection;
+
+namespace Nitra.Internal
+{
+  public module ParseTreeFactory
+  {
+    public CreateOption[TLoader, TItem](
+      parseResult    : ParseResult,
+      itemLoader     : IAstSequenceLoader[TLoader],
+      itemSequenceId : int,
+      itemConverter  : ParseTreeCastHelper[TLoader, TItem],
+      astPtr         : int,
+      offset         : int,
+      pos            : ref int
+    ) : OptionParseTree[TItem]
+      where TLoader : IParseTree
+      where TItem   : TLoader
+    {
+      if (parseResult.GetSize(astPtr + offset) > 0)
+      {
+        def optionStartPos = pos;
+        def item           = itemLoader.ReadSequence(itemSequenceId, ref pos) |> itemConverter.Cast;
+        OptionParseTree.Some(Location(parseResult, optionStartPos, pos), item)
+      }
+      else
+        OptionParseTree.None(Location(parseResult, pos, pos))
+    }
+
+    public CreateList[TLoader, TItem](
+      parseResult    : ParseResult,
+      itemLoader     : IAstSequenceLoader[TLoader],
+      itemSequenceId : int,
+      itemConverter  : ParseTreeCastHelper[TLoader, TItem],
+      astPtr         : int,
+      offset         : int,
+      pos            : ref int
+    ) : ListParseTree[TItem]
+      where TLoader : IParseTree
+      where TItem   : TLoader
+    {
+      def listEnd = pos + parseResult.GetSize(astPtr + offset);
+      if (listEnd > pos)
+      {
+        def itemBuffer = SCG.List(16);
+        def listStartPos = pos;
+        do
+          itemLoader.ReadSequence(itemSequenceId, ref pos) |> itemConverter.Cast |> itemBuffer.Add;
+        while (pos < listEnd);
+        assert(pos == listEnd);
+
+        ConcreteListParseTree(Location(parseResult, listStartPos, listEnd), itemBuffer)
+      }
+      else
+        EmptyListParseTree(Location(parseResult, pos, pos))
+    }
+
+    public CreateListWithSeparator[TItemLoader, TItem, TSeparatorLoader, TSeparator](
+      parseResult         : ParseResult,
+      itemLoader          : IAstSequenceLoader[TItemLoader],
+      itemSequenceId      : int,
+      itemConverter       : ParseTreeCastHelper[TItemLoader, TItem],
+      separatorLoader     : IAstSequenceLoader[TSeparatorLoader],
+      separatorSequenceId : int,
+      separatorConverter  : ParseTreeCastHelper[TSeparatorLoader, TSeparator],
+      astPtr              : int,
+      offset              : int,
+      pos                 : ref int
+    ) : SequenceParseTree[ListParseTree[TItem], ListParseTree[TSeparator]]
+      where TItemLoader      : IParseTree
+      where TItem            : TItemLoader
+      where TSeparatorLoader : IParseTree
+      where TSeparator       : TSeparatorLoader
+    {
+      def listEnd = pos + parseResult.GetSize(astPtr + offset);
+      if (listEnd > pos)
+      {
+        def itemBuffer      = SCG.List(16);
+        def separatorBuffer = SCG.List(16);
+        def listStartPos    = pos;
+        def loop()
+        {
+          itemLoader.ReadSequence(itemSequenceId, ref pos) |> itemConverter.Cast |> itemBuffer.Add;
+
+          if (pos < listEnd)
+          {
+            separatorLoader.ReadSequence(separatorSequenceId, ref pos) |> separatorConverter.Cast |> separatorBuffer.Add;
+
+            if (pos < listEnd)
+              loop();
+            else
+              assert(pos == listEnd);
+          }
+          else
+            assert(pos == listEnd);
+        }
+        loop();
+
+        def loc = Location(parseResult, listStartPos, listEnd);
+        ConcreteSequenceParseTree(loc, ConcreteListParseTree(loc, itemBuffer), ConcreteListParseTree(loc, separatorBuffer))
+      }
+      else
+      {
+        def loc = Location(parseResult, pos, pos);
+        ConcreteSequenceParseTree(loc, EmptyListParseTree(loc), EmptyListParseTree(loc))
+      }
+    }
+
+    public CreateListWithSeparatorOnlyItems[TItemLoader, TItem, TSeparatorLoader](
+      parseResult         : ParseResult,
+      itemLoader          : IAstSequenceLoader[TItemLoader],
+      itemSequenceId      : int,
+      itemConverter       : ParseTreeCastHelper[TItemLoader, TItem],
+      separatorLoader     : IAstSequenceLoader[TSeparatorLoader],
+      separatorSequenceId : int,
+      astPtr              : int,
+      offset              : int,
+      pos                 : ref int
+    ) : ListParseTree[TItem]
+      where TItemLoader      : IParseTree
+      where TItem            : TItemLoader
+      where TSeparatorLoader : IParseTree
+    {
+      def listEnd = pos + parseResult.GetSize(astPtr + offset);
+      if (listEnd > pos)
+      {
+        def itemBuffer      = SCG.List(16);
+        def listStartPos    = pos;
+        def loop()
+        {
+          itemLoader.ReadSequence(itemSequenceId, ref pos) |> itemConverter.Cast |> itemBuffer.Add;
+
+          if (pos < listEnd)
+          {
+            _ = separatorLoader.ReadSequence(separatorSequenceId, ref pos);
+
+            if (pos < listEnd)
+              loop();
+            else
+              assert(pos == listEnd);
+          }
+          else
+            assert(pos == listEnd);
+        }
+        loop();
+
+        ConcreteListParseTree(Location(parseResult, listStartPos, listEnd), itemBuffer)
+      }
+      else
+        EmptyListParseTree(Location(parseResult, pos, pos))
+    }
+
+    public CreateListWithSeparatorOnlySeparators[TItemLoader, TSeparatorLoader, TSeparator](
+      parseResult         : ParseResult,
+      itemLoader          : IAstSequenceLoader[TItemLoader],
+      itemSequenceId      : int,
+      separatorLoader     : IAstSequenceLoader[TSeparatorLoader],
+      separatorSequenceId : int,
+      separatorConverter  : ParseTreeCastHelper[TSeparatorLoader, TSeparator],
+      astPtr              : int,
+      offset              : int,
+      pos                 : ref int
+    ) : ListParseTree[TSeparator]
+      where TItemLoader      : IParseTree
+      where TSeparatorLoader : IParseTree
+      where TSeparator       : TSeparatorLoader
+    {
+      def listEnd = pos + parseResult.GetSize(astPtr + offset);
+      if (listEnd > pos)
+      {
+        def separatorBuffer = SCG.List(16);
+        def listStartPos    = pos;
+        def loop()
+        {
+          _ = itemLoader.ReadSequence(itemSequenceId, ref pos);
+
+          if (pos < listEnd)
+          {
+            separatorLoader.ReadSequence(separatorSequenceId, ref pos) |> separatorConverter.Cast |> separatorBuffer.Add;
+
+            if (pos < listEnd)
+              loop();
+            else
+              assert(pos == listEnd);
+          }
+          else
+            assert(pos == listEnd);
+        }
+        loop();
+
+        ConcreteListParseTree(Location(parseResult, listStartPos, listEnd), separatorBuffer)
+      }
+      else
+        EmptyListParseTree(Location(parseResult, pos, pos))
+    }
+
+    public CreateOption[TLoader, TItem](
+      parseResult           : ParseResult,
+      itemLoader            : IAstSequenceLoader[TLoader],
+      itemSequenceId        : int,
+      itemConverter         : ParseTreeCastHelper[TLoader, TItem],
+      parentParsingSequence : ParsingSequence,
+      state                 : int,
+      startPos              : int,
+      endPos                : int
+    ) : OptionParseTree[TItem]
+      where TLoader : IParseTree
+      where TItem   : TLoader
+    {
+      def parsingSequence = (parentParsingSequence.States[state].Subrule :> SubruleInfo.Option).Rule.ParsingSequence;
+      RecoveryModeOptionParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeParseTreeReaderContext(itemLoader, itemSequenceId, itemConverter));
+    }
+
+    public CreateList[TLoader, TItem](
+      parseResult           : ParseResult,
+      itemLoader            : IAstSequenceLoader[TLoader],
+      itemSequenceId        : int,
+      itemConverter         : ParseTreeCastHelper[TLoader, TItem],
+      parentParsingSequence : ParsingSequence,
+      state                 : int,
+      startPos              : int,
+      endPos                : int
+    ) : ListParseTree[TItem]
+      where TLoader : IParseTree
+      where TItem   : TLoader
+    {
+      def parsingSequence = (parentParsingSequence.States[state].Subrule :> SubruleInfo.List).ParsingSequence;
+      RecoveryModeListParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeParseTreeReaderContext(itemLoader, itemSequenceId, itemConverter))
+    }
+
+    public CreateListWithSeparator[TItemLoader, TItem, TSeparatorLoader, TSeparator](
+      parseResult           : ParseResult,
+      itemLoader            : IAstSequenceLoader[TItemLoader],
+      itemSequenceId        : int,
+      itemConverter         : ParseTreeCastHelper[TItemLoader, TItem],
+      separatorLoader       : IAstSequenceLoader[TSeparatorLoader],
+      separatorSequenceId   : int,
+      separatorConverter    : ParseTreeCastHelper[TSeparatorLoader, TSeparator],
+      parentParsingSequence : ParsingSequence,
+      state                 : int,
+      startPos              : int,
+      endPos                : int
+    ) : SequenceParseTree[ListParseTree[TItem], ListParseTree[TSeparator]]
+      where TItemLoader      : IParseTree
+      where TItem            : TItemLoader
+      where TSeparatorLoader : IParseTree
+      where TSeparator       : TSeparatorLoader
+    {
+      def parsingSequence = (parentParsingSequence.States[state].Subrule :> SubruleInfo.ListWithSeparator).ParsingSequence;
+      RecoveryModeListWithSeparatorAstReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, (RecoveryModeParseTreeReaderContext(itemLoader, itemSequenceId, itemConverter), RecoveryModeParseTreeReaderContext(separatorLoader, separatorSequenceId, separatorConverter)))
+    }
+
+    public CreateListWithSeparatorOnlyItems[TItemLoader, TItem](
+      parseResult           : ParseResult,
+      itemLoader            : IAstSequenceLoader[TItemLoader],
+      itemSequenceId        : int,
+      itemConverter         : ParseTreeCastHelper[TItemLoader, TItem],
+      parentParsingSequence : ParsingSequence,
+      state                 : int,
+      startPos              : int,
+      endPos                : int
+    ) : ListParseTree[TItem]
+      where TItemLoader      : IParseTree
+      where TItem            : TItemLoader
+    {
+      def parsingSequence = (parentParsingSequence.States[state].Subrule :> SubruleInfo.ListWithSeparator).ParsingSequence;
+      RecoveryModeListWithSeparatorOnlyItemsParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeParseTreeReaderContext(itemLoader, itemSequenceId, itemConverter))
+    }
+
+    public CreateListWithSeparatorOnlySeparators[TSeparatorLoader, TSeparator](
+      parseResult            : ParseResult,
+      separatorLoader        : IAstSequenceLoader[TSeparatorLoader],
+      separatorSequenceId    : int,
+      separatorConverter     : ParseTreeCastHelper[TSeparatorLoader, TSeparator],
+      parentParsingSequence  : ParsingSequence,
+      state                  : int,
+      startPos               : int,
+      endPos                 : int
+    ) : ListParseTree[TSeparator]
+      where TSeparatorLoader : IParseTree
+      where TSeparator       : TSeparatorLoader
+    {
+      def parsingSequence = (parentParsingSequence.States[state].Subrule :> SubruleInfo.ListWithSeparator).ParsingSequence;
+      RecoveryModeListWithSeparatorOnlySeparatorsParseTreeReader.Instance.Read(parseResult, parsingSequence, startPos, endPos, RecoveryModeParseTreeReaderContext(separatorLoader, separatorSequenceId, separatorConverter))
+    }
+
+    public FindRecoveredSubrule(subruleStarts : array[ParseResult.SubruleStart], state : int, startPos : out int, endPos : out int) : bool
+    {
+      foreach (subruleStart when (subruleStart.State == state) in subruleStarts with i)
+      {
+        startPos = subruleStart.Pos;
+        endPos   = subruleStarts[i + 1].Pos;
+        return true;
+      }
+
+      foreach (subruleStart when (subruleStart.State > state) in subruleStarts)
+      {
+        startPos = subruleStart.Pos;
+        endPos   = startPos;
+        return false;
+      }
+
+      def subruleStart = subruleStarts[subruleStarts.Length - 1];
+      assert(subruleStart.State == -1);
+      startPos = subruleStart.Pos;
+      endPos   = startPos;
+      false
+    }
+
+    public CastArray[TConcrete](items : array[ParseTree]) : array[TConcrete]
+      where TConcrete : ParseTree
+    {
+      def result = array(items.Length);
+      Array.Copy(items, result, items.Length);
+      result
+    }
+  }
+}
