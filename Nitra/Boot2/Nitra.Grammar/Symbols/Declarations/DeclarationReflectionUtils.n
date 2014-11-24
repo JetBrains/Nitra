@@ -1,0 +1,88 @@
+﻿using Nitra.ProjectSystem;
+using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Typing
+{
+  internal module DeclarationReflectionUtils
+  {
+    public ReflectDeclarationFieldProperties(project : NitraProject, symbol : DeclarationFieldSymbol) : NType * bool
+    {
+      match (project.GetNemerleType(symbol.DeclaringDeclaration))
+      {
+        | FixedType.Class(ti, []) =>
+          mutable ntype;
+          mutable hasBody;
+          foreach (property is IProperty in ti.LookupMember(symbol.Name, false))
+          {
+            ntype = ReflectNType(project, property.GetMemType(), false);
+
+            foreach(attr in property.GetModifiers().GetCustomAttributes())
+            {
+              | <[ Nitra.Runtime.DeclarationFieldAttribute($(hasBodyValue : bool)) ]> =>
+                hasBody = hasBodyValue;
+                break;
+
+              | _ => ()
+            }
+
+            break;
+          }
+          (ntype, hasBody)
+
+        | _ => assert3(false)
+      }
+    }
+
+    public ReflectDeclarationProperties(project : NitraProject, symbol : DeclarationSymbol) : NType
+    {
+      match (project.GetNemerleType(symbol))
+      {
+        | FixedType.Class(ti, []) =>
+          mutable ntype;
+          foreach (property is IProperty in ti.LookupMember("Parent", false))
+            ntype = ReflectNType(project, property.GetMemType(), false);
+          ntype
+
+        | _ => assert3(false)
+      }
+    }
+
+    private ReflectNType(project : NitraProject, typeVar : TypeVar, isFunc : bool) : NType
+    {
+      def loc = project.MakeFakeNitraLocation(typeVar.Location);
+      match (typeVar)
+      {
+        | FixedType.Tuple(members)   when isFunc => NType.Tuple(loc, members.Map(ReflectNType(project, _, true))) // for function signatures
+        | FixedType.Void                         => NType.Predefined(loc, NPredefinedType.Void)
+        | FixedType.Fun(from, to)                => NType.Func(loc, ReflectNType(project, from, true), ReflectNType(project, to, true))
+        | FixedType.Class(ti, [])    when ti.FullName == "System.Int32"                           => NType.Predefined(loc, NPredefinedType.Int)
+        | FixedType.Class(ti, [])    when ti.FullName == "System.String"                          => NType.Predefined(loc, NPredefinedType.String)
+        | FixedType.Class(ti, [])    when ti.FullName == "Nitra.Declarations.IDeclaration"        => NType.Predefined(loc, NPredefinedType.Declaration)
+        | FixedType.Class(ti, [arg]) when ti.FullName == "Nitra.Declarations.DeclarationOption"   => NType.Option(loc, ReflectNType(project, arg, false))
+        | FixedType.Class(ti, [arg]) when ti.FullName == "Nitra.Declarations.DeclarationList"     => NType.List(loc, ReflectNType(project, arg, false))
+        | FixedType.Class(ti, args)  when ti.FullName == "Nitra.Declarations.DeclarationSequence" => NType.Tuple(loc, args.Map(ReflectNType(project, _, false)))
+        | FixedType.Class(ti, args) =>
+          def env       = ti.Manager.CoreEnv;
+          def nameParts = ti.FullName.Split(array['.']);
+          assert(nameParts.Length > 0);
+          mutable typeNameParts = [TypeNamePart(loc, nameParts[nameParts.Length - 1], args.Map(ReflectNType(project, _, false)), env)];
+          for (mutable i = nameParts.Length - 2; i >= 0; --i)
+            typeNameParts ::= TypeNamePart(loc, nameParts[i], [], env);
+          NType.Qualified(loc, typeNameParts)
+
+        | _ => assert3(false, "Failed to reflect NType from TypeVar")
+      }
+    }
+  }
+}
