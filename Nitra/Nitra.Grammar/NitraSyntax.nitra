@@ -276,6 +276,24 @@ syntax module NitraSyntax
     }
   }
 
+  syntax DeclarationInheritance = ":" sm BaseDeclarations=(QualifiedIdentifier; "," sm)+
+  {
+    Typing(context : Context) : list[AbstractDeclarationSymbol]
+    {
+      def result = List();
+      foreach (identifier in BaseDeclarations.Item1)
+      {
+        match (context.Bind.[DeclarationSymbol](identifier))
+        {
+          | SymbolRef.Some(AbstractDeclarationSymbol as declarationSymbol) => result.Add(declarationSymbol)
+          | SymbolRef.Some as symbolRef => Project.CurrentProject.Error(symbolRef.Location, "Only abstract declarations can be specified in base declarations list.", -1);
+          | _ => ()
+        }
+      }
+      result.ToNList();
+    }
+  }
+
   syntax DeclarationParent = "where" "Parent" ":" ParentType=NitraType
   {
     Typing(context : Context) : NType = this.ParentType.Typing(context)[0];
@@ -390,9 +408,45 @@ syntax module NitraSyntax
         override Typing = foreach (member in Members) member.Typing();
       }
 
-    | SimpleDeclaration = "declaration" sm Name DeclarationParent? Body=DeclarationBody
+    | AbstractDeclaration = "abstract" "declaration" sm Name DeclarationInheritance? Body=DeclarationBody
+      {
+        [Cached] private MakeDeclarationSymbol() : ParsedAbstractDeclarationSymbol = ParsedAbstractDeclarationSymbol(this);
+        [Cached] private MakeBaseDeclarations() : list[AbstractDeclarationSymbol]
+        {
+          if (DeclarationInheritanceOpt.HasValue)
+            DeclarationInheritanceOpt.Value.Typing(this.Context)
+          else
+            []
+        }
+        override CollectGlobalSymbols
+        {
+          def symbol = MakeDeclarationSymbol();
+          _ = ns.Node.AddAndReport.[DeclarationSymbol](symbol, Name.Location);
+          Body.CollectGlobalSymbols(symbol);
+        }
+        override MakeContext
+        {
+          def  context1 = DeclarationContext(parent, this.DeclarationSymbol);
+          def _context2 = Body.MakeContext(context1);
+          parent
+        }
+        override Typing
+        {
+          _ = MakeBaseDeclarations();
+          Body.Typing();
+        }
+      }
+
+    | SimpleDeclaration = "declaration" sm Name DeclarationInheritance? DeclarationParent? Body=DeclarationBody
       {
         [Cached] private MakeDeclarationSymbol() : ParsedSimpleDeclarationSymbol = ParsedSimpleDeclarationSymbol(this);
+        [Cached] private MakeBaseDeclarations() : list[AbstractDeclarationSymbol]
+        {
+          if (DeclarationInheritanceOpt.HasValue)
+            DeclarationInheritanceOpt.Value.Typing(this.Context)
+          else
+            []
+        }
         [Cached] private MakeParentType() : NType
         {
           if (DeclarationParentOpt.HasValue)
@@ -414,14 +468,22 @@ syntax module NitraSyntax
         }
         override Typing
         {
+          _ = MakeBaseDeclarations();
           _ = MakeParentType();
           Body.Typing();
         }
       }
 
-    | ExtensibleDeclaration = "declarations" sm Name DeclarationParent? Body=ExtensibleDeclarationBody
+    | ExtensibleDeclaration = "declarations" sm Name DeclarationInheritance? DeclarationParent? Body=ExtensibleDeclarationBody
       {
         [Cached] private MakeDeclarationSymbol() : ParsedExtensibleDeclarationSymbol = ParsedExtensibleDeclarationSymbol(this);
+        [Cached] private MakeBaseDeclarations() : list[AbstractDeclarationSymbol]
+        {
+          if (DeclarationInheritanceOpt.HasValue)
+            DeclarationInheritanceOpt.Value.Typing(this.Context)
+          else
+            []
+        }
         [Cached] private MakeParentType() : NType
         {
           if (DeclarationParentOpt.HasValue)
@@ -443,6 +505,7 @@ syntax module NitraSyntax
         }
         override Typing
         {
+          _ = MakeBaseDeclarations();
           _ = MakeParentType();
           Body.Typing(SymbolRef.Some(Name.Location, false, DeclarationSymbol));
         }
