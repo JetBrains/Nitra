@@ -253,6 +253,8 @@ namespace Nitra
       foreach (symbol in project.Environment.Root.GetDescendants.[ParsedExtensionRuleSymbol]())
         TypingUtils.ValidateExtensionRuleDeclarationMapping(project, symbol);
 
+      TypingUtils.CheckDeclarationSymbolCyclicHierarchy(project, project.Environment.Root.GetDescendants.[DeclarationSymbol]());
+
       // HACK: force FSM build for each regular rule symbol (shall we make new pass in regular rule typing process?)
       foreach (symbol in project.Environment.Root.GetDescendants.[ParsedRegularRuleSymbol]())
         _ = symbol.Fsm;
@@ -364,29 +366,40 @@ namespace Nitra
           declarationEmitterParents.Add(extendDeclaration, emitter);
           declarationEmitters.Add(emitter)
       }
-      def extensionDeclarations = SCG.List();
-      foreach (declaration in environment.Root.GetDescendants.[DeclarationSymbol]())
-      {
-        | ExternalAbstractDeclarationSymbol   => ()
-        | AbstractDeclarationSymbol      as s => declarationEmitters.Add(AbstractDeclarationEmitter(environment, s))
-        | ExternalSimpleDeclarationSymbol     => ()
-        | SimpleDeclarationSymbol        as s => declarationEmitters.Add(SimpleDeclarationEmitter(environment, s))
-        | ExternalExtensionDeclarationSymbol  => ()
-        | ExtensionDeclarationSymbol     as s => extensionDeclarations.Add(s);
-        | ExternalExtensibleDeclarationSymbol => ()
-        | ExtensibleDeclarationSymbol    as s =>
-          def emitter = ExtensibleDeclarationEmitter(environment, s);
-          declarationEmitterParents.Add(s, emitter);
-          declarationEmitters.Add(emitter);
 
-        | _ => ()
-      }
-      foreach (declaration in extensionDeclarations)
+      def visitedDeclarationSymbols = SCG.HashSet();
+      def makeDeclarationEmitter(declaration : DeclarationSymbol) : void
       {
-        def parent = declarationEmitterParents[declaration.BaseDeclaration.Value];
-        def emitter = ExtensionDeclarationEmitter(parent, declaration);
-        declarationEmitters.Add(emitter);
+        when (visitedDeclarationSymbols.Add(declaration))
+        {
+          foreach (baseDeclaration in declaration.BaseDeclarations)
+            makeDeclarationEmitter(baseDeclaration);
+
+          match (declaration)
+          {
+            | ExternalAbstractDeclarationSymbol   => ()
+            | AbstractDeclarationSymbol      as s => declarationEmitters.Add(AbstractDeclarationEmitter(environment, s))
+            | ExternalSimpleDeclarationSymbol     => ()
+            | SimpleDeclarationSymbol        as s => declarationEmitters.Add(SimpleDeclarationEmitter(environment, s))
+            | ExternalExtensionDeclarationSymbol  => ()
+            | ExtensionDeclarationSymbol     as s =>
+              def parent  = declarationEmitterParents[s.BaseDeclaration.Value];
+              def emitter = ExtensionDeclarationEmitter(parent, s);
+              declarationEmitters.Add(emitter);
+
+            | ExternalExtensibleDeclarationSymbol => ()
+            | ExtensibleDeclarationSymbol    as s =>
+              def emitter = ExtensibleDeclarationEmitter(environment, s);
+              declarationEmitterParents.Add(s, emitter);
+              declarationEmitters.Add(emitter);
+
+            | _ => ()
+          }
+        }
       }
+
+      foreach (declaration in environment.Root.GetDescendants.[DeclarationSymbol]())
+        makeDeclarationEmitter(declaration);
 
       def externalSymbolEmitters = Manager.GetListUserData.[ExternalSymbolEmitter]();
       def serializationEmitter   = Manager.CreateBinarySerializationEmitter(NitraBinarySerializationMessageEmitter(), NitraSymbolRefBinarySerializationEmitterExtension(environment));
@@ -437,7 +450,7 @@ namespace Nitra
       foreach (emitter in declarationEmitters)
         emitter.DefineTypes();
       foreach (emitter in declarationEmitters)
-        emitter.DefineHierarchy();
+        emitter.DefineMembers();
     }
 
     private EmitSymbols() : void
