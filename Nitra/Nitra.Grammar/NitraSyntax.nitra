@@ -10,6 +10,7 @@ using Nemerle.Collections;
 using Nemerle.Imperative;
 using Nemerle.Compiler.Parsetree;
 
+using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Linq;
@@ -254,31 +255,74 @@ syntax module NitraSyntax
       }
   }
 
-  syntax NitraField = Name ":" NitraType RuleMethodBody
+  syntax NitraField = Name ":" NitraType NitraFieldImplementationRef? RuleMethodBody
   {
+    syntax NitraFieldImplementationRef = "implements" ImplementedFieldName=QualifiedIdentifier
+    {
+      Typing(context : Context) : SymbolRef[DeclarationFieldSymbol] = context.Bind.[DeclarationFieldSymbol](ImplementedFieldName);
+    }
+
+    [Cached] MakeSymbol(site : IMemberSite) : ParsedDeclarationFieldSymbol =
+      match (site)
+      {
+        | _ is DeclarationSymbol => ParsedDeclarationFieldSymbol(this);
+        | _                      => assert(false)
+      };
     CollectGlobalSymbols(site : IMemberSite) : void
     {
-      def symbol =
-        match (site)
-        {
-          | _ is DeclarationSymbol => ParsedDeclarationFieldSymbol(this);
-          | _                      => assert(false)
-        };
+      def symbol = MakeSymbol(site);
       _ = site.Node.AddAndReport.[NitraFieldSymbol](symbol, Name.Location);
     }
     [Cached] MakeContext(parent : Context) : Context = parent;
     [Cached] private MakeType() : NType = this.NitraType.Typing(this.Context)[0];
     [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, this.Context));
+    [Cached] MakeImplementedField() : SymbolRef[DeclarationFieldSymbol]
+    {
+      if (NitraFieldImplementationRefOpt.HasValue)
+        NitraFieldImplementationRefOpt.Value.Typing(this.Context)
+      else
+        SymbolRef.None(Name.Location, false)
+    }
     Typing() : void
     {
       _ = MakeType();
       _ = MakeBody();
+      def declaringDeclaration = this.Symbol.DeclaringDeclaration;
+      def implementedFieldRef  = MakeImplementedField();
+      if (implementedFieldRef is SymbolRef.Some(implementedField))
+      {
+        def otherDeclaration = implementedField.DeclaringDeclaration;
+
+        if (declaringDeclaration : object == otherDeclaration)
+          Project.CurrentProject.Error(implementedFieldRef.Location, "Only inherited fields can be implemented.", -1);
+        else unless (declaringDeclaration.AllBaseDeclarations.Contains(otherDeclaration))
+        {
+          def thisName  = declaringDeclaration.FullName;
+          def otherName = otherDeclaration.FullName;
+          Project.CurrentProject.Error(implementedFieldRef.Location, $"Declaration '$thisName' is not subtype of declaration '$otherName'.", -1);
+        }
+      }
+      else
+      {
+        def fieldName    = this.Symbol.Name;
+        def hiddenFields = declaringDeclaration.InheritedFields.Filter(s => StringComparer.InvariantCulture.Equals(s.Name, fieldName));
+        unless (hiddenFields.IsEmpty)
+        {
+          def name = this.Symbol.FullName;
+          using (messages = Project.CurrentProject.RootError(Name.Location, $"Field '$name' hides inherited field.", -1))
+            foreach (hiddenField in hiddenFields)
+            {
+              def hiddenName = hiddenField.FullName;
+              messages.Hint(hiddenField.FirstLocation, $"Hidden field '$hiddenName'.", -1);
+            }
+        }
+      }
     }
   }
 
   syntax DeclarationInheritance = ":" sm BaseDeclarations=(QualifiedIdentifier; "," sm)+
   {
-    Typing(context : Context) : list[AbstractDeclarationSymbol]
+    Typing(context : Context) : list[DeclarationSymbol]
     {
       def result = List();
       foreach (identifier in BaseDeclarations.Item1)
@@ -411,7 +455,7 @@ syntax module NitraSyntax
     | AbstractDeclaration = "abstract" "declaration" sm Name DeclarationInheritance? Body=DeclarationBody
       {
         [Cached] private MakeDeclarationSymbol() : ParsedAbstractDeclarationSymbol = ParsedAbstractDeclarationSymbol(this);
-        [Cached] private MakeBaseDeclarations() : list[AbstractDeclarationSymbol]
+        [Cached] private MakeBaseDeclarations() : list[DeclarationSymbol]
         {
           if (DeclarationInheritanceOpt.HasValue)
             DeclarationInheritanceOpt.Value.Typing(this.Context)
@@ -440,7 +484,7 @@ syntax module NitraSyntax
     | SimpleDeclaration = "declaration" sm Name DeclarationInheritance? DeclarationParent? Body=DeclarationBody
       {
         [Cached] private MakeDeclarationSymbol() : ParsedSimpleDeclarationSymbol = ParsedSimpleDeclarationSymbol(this);
-        [Cached] private MakeBaseDeclarations() : list[AbstractDeclarationSymbol]
+        [Cached] private MakeBaseDeclarations() : list[DeclarationSymbol]
         {
           if (DeclarationInheritanceOpt.HasValue)
             DeclarationInheritanceOpt.Value.Typing(this.Context)
@@ -477,7 +521,7 @@ syntax module NitraSyntax
     | ExtensibleDeclaration = "declarations" sm Name DeclarationInheritance? DeclarationParent? Body=ExtensibleDeclarationBody
       {
         [Cached] private MakeDeclarationSymbol() : ParsedExtensibleDeclarationSymbol = ParsedExtensibleDeclarationSymbol(this);
-        [Cached] private MakeBaseDeclarations() : list[AbstractDeclarationSymbol]
+        [Cached] private MakeBaseDeclarations() : list[DeclarationSymbol]
         {
           if (DeclarationInheritanceOpt.HasValue)
             DeclarationInheritanceOpt.Value.Typing(this.Context)
