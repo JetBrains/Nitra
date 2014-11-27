@@ -1,0 +1,186 @@
+﻿using Nitra;
+using Nitra.Utils;
+using Nitra.Model;
+using Nitra.ProjectSystem;
+using Nitra.Runtime;
+using Nitra.Typing;
+using Nitra.Typing.TypingUtils;
+
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Compiler.Parsetree;
+
+using System.Collections.Generic;
+using System.Text;
+using System.Linq;
+
+namespace Nemerle
+{
+  syntax module Expressions
+  {
+    using Outline;
+    using PrettyPrint;
+    using TokenNames;
+    using StandardSpanClasses;
+    using Whitespaces;
+    using Identifiers;
+    using CStyleComments;
+
+    using Nemerle.Literals;
+    using Nemerle.NamerleIdentifiers;
+    using Nemerle.TokenNames;
+    using Nemerle.Types;
+
+    alias Name                = Identifier;
+    alias QualifiedName       = QualifiedIdentifier;
+
+    ////////////////////////////////////////////////////////////////////////////////////
+    // Arguments
+
+    regex ArgumentModfier = "ref" | "out";
+    syntax ArgumentName    = Name ":" sm;
+    syntax Argument        = ArgumentName? Modfier=(ArgumentModfier sm)? Expression;
+    syntax ArgumentList    = (Argument; ","sm)*;
+
+    //
+    ////////////////////////////////////////////////////////////////////////////////////
+
+    syntax Expression
+    {
+      // Literals
+      | BooleanLiteral
+      | RegularStringLiteral
+      | VerbatimStringLiteral
+      | RecursiveStringLiteral
+      | RealLiteral
+      | IntegerLiteral
+      | CharacterLiteral
+      | NullLiteral = "null";
+
+      | QualifiedName; // simple-name || member-access
+      | Parenthesized          = "(" Expression ")"; // parenthesized-expression
+      | Cast1                  = Expression sm ":>" sm AnyType                  precedence 110;
+      | Cast2                  = Expression sm ":" sm AnyType                   precedence 110;
+      | ThisAccess             = "this";
+      | BaseAccessMember       = "base" "." QualifiedName=QualifiedIdentifierContinuation;
+      | BaseAccessIndexer      = "base" "[" ArgumentList "]";
+      //BaseError              = "base" = Error;
+
+      // Lambdas
+      | Lambda                 = "fun" "(" FormalParameters ")" ReturnTypeOpt=(":" sm AnyType)? sm         Block;
+      | Lambda_SingleParam1    =           Name                                                 sm "=>" sm Expression;
+      | Lambda_MultyParams     =       "(" FormalParameters ")" ReturnTypeOpt=(":" sm AnyType)? sm "=>" sm Expression;
+
+
+      // Group: Primary
+      | MemberAccess1          =  Expression ^ 150 "." QualifiedName=QualifiedIdentifierContinuation; // member-access
+      | MemberAccess2          =  PredefinedType   "." QualifiedName=QualifiedIdentifierContinuation; // member-access
+      | Invocation             =  Expression ^ 150 "(" ArgumentList ")";
+      | IndexerAccess          =  Expression ^ 150 "[" ArgumentList "]";
+      | PostIncrement          =  Expression "++"                               precedence 150;
+      | PostDecrement          =  Expression "--"                               precedence 150;
+
+      // delegate-creation-expression || object-creation-expression || anonymous-object-creation-expression
+      | NewArray_1             = "array"sm "[" (Expression; "," sm; ?)+ "]";                       // array-creation-expression  (1)
+      | NewArray_2             = "array"sm "(" (Expression; "," sm; ?)+ ")";                       // array-creation-expression  (1)
+      | NewAnonymous           = "new"sm "{"sm (MemberDeclarator; ","sm; ?)* sm "}";                                          // anonymous-object-creation-expression
+
+      | TypeOf                 =  "typeof"     "(" AnyType ")";
+      | Checked                =  "checked"    Expression;
+      | Unchecked              =  "unchecked"  Expression;
+      | Default                =  "default"    "(" AnyType ")";
+      | Sizeof                 =  "sizeof"     "(" AnyType ")";
+
+      // Group: Unary
+      | Identity               = "+"  Expression                                      precedence 140;
+      | Negation               = "-"  Expression                                      precedence 140;
+      | LogicalNegation        = "!"  Expression                                      precedence 140;
+      | BitwiseNegation        = "~"  Expression                                      precedence 140;
+      | PreIncrement           = "++" Expression                                      precedence 140;
+      | PreDecrement           = "--" Expression                                      precedence 140;
+      | Addressof              = "&"  Expression                                      precedence 140;// unsafe
+      //ExplicitlyCast         = (T) Expression                                               precedence 140;
+
+      | PointerIndirection     = "*"  Expression                                      precedence 135;// pointer-indirection-expression
+
+      // Group: Multiplicative
+      | Mul                    = Expression sm "*"  sm Expression                     precedence 130; 
+      | Div                    = Expression sm "/"  sm Expression                     precedence 130;
+      | Remainder              = Expression sm "%"  sm Expression                     precedence 130;
+      // Group: Additive
+      | Add                    = Expression sm "+"  sm Expression                     precedence 120;
+      | Sub                    = Expression sm "-"  sm Expression                     precedence 120;
+      // Group: Shift
+      | ShiftLeft              = Expression sm "<<" sm Expression                     precedence 110;
+      | ShiftRight             = Expression sm ">>" sm Expression                     precedence 110;
+      // Group: Relational and type testing
+      | LessThan               = Expression sm "<"  sm Expression                     precedence 100;
+      | GreaterThan            = Expression sm ">"  sm Expression                     precedence 100;
+      | LessThanOrEqual        = Expression sm "<=" sm Expression                     precedence 100;
+      | GreaterThanOrEqual     = Expression sm ">=" sm Expression                     precedence 100;
+      | Is                     = Expression ^ 100 sm "is" sm AnyTypeNullableHack;
+      | As                     = Expression ^ 100 sm "as" sm AnyTypeNullableHack;
+      // Equality
+      | Equal                  = Expression sm "==" sm Expression                     precedence 90;
+      | NotEqual               = Expression sm "!=" sm Expression                     precedence 90;
+      // Group: Logical AND
+      | LogicalAnd             = Expression sm "&"  sm Expression                     precedence 80;
+      // Group: Logical XOR
+      | LogicalXor             = Expression sm "^"  sm Expression                     precedence 70;
+      // Group: Logical OR
+      | LogicalOr              = Expression sm "|"  sm Expression                     precedence 60;
+      // Group: Conditional AND
+      | ConditionalAnd         = Expression sm "&&" sm Expression                     precedence 50;
+      // Group: Conditional OR
+      | ConditionalOr          = Expression sm "||" sm Expression                     precedence 40;
+      // Group: Null coalescing
+      | NullCoalescing         = Expression sm "??" sm Expression                     precedence 30;
+      // Group: Assignment or anonymous function
+      | Assignment             = Expression sm "="  sm Expression                     precedence  10 right-associative;
+      | MulAssignment          = Expression sm "*=" sm Expression                     precedence  10 right-associative;
+      | DivAssignment          = Expression sm "/=" sm Expression                     precedence  10 right-associative;
+      | RemainderAssignment    = Expression sm "%=" sm Expression                     precedence  10 right-associative;
+      | AddAssignment          = Expression sm "+=" sm Expression                     precedence  10 right-associative;
+      | SubAssignment          = Expression sm "-=" sm Expression                     precedence  10 right-associative;
+      | ShiftLeftAssignment    = Expression sm "<<="sm Expression                     precedence  10 right-associative;
+      | ShiftRightAssignment   = Expression sm ">>="sm Expression                     precedence  10 right-associative;
+      | AndAssignment          = Expression sm "&=" sm Expression                     precedence  10 right-associative;
+      | XorAssignment          = Expression sm "^=" sm Expression                     precedence  10 right-associative;
+      | OrAssignment           = Expression sm "|=" sm Expression                     precedence  10 right-associative;
+
+      | Block
+      | NamedBlock       = Identifier ":" Block;
+      | If               = "if" "(" Expression ")" Expression "else" Expression;
+      | When             = "when" "(" Expression ")" Expression;
+      | Unless           = "unless" "(" Expression ")" Expression;
+      | While            = "while" "(" Expression ")" Expression;
+      | DoWhile          = "do" Expression "while" "(" Expression ")";
+      | For              = "for" "(" Initializer=Expression? ";" Condition=Expression? ";" Iterator=Expression? ")" Expression;
+      | ForEach          = "foreach" "(" Pattern "in" Expression ")" Expression;
+      | TryCatchAll      = "try" Expression "catch" Expression Finally?;
+      | TryCatchFiltered = "try" Expression "catch" MatchBody Finally?;
+      | TryFinally       = "try" Expression Finally;
+      | Match            = "match" "(" (Expression; ",")+ ")" MatchBody;
+      | DefVar           = "def"     Pattern=Expression "=" Expression;
+      | Var              = "mutable" Pattern=Expression "=" Expression;
+      | DefFuncs         = "def" FunctionHeader Block AndFunction*
+        {
+          syntax AndFunction = "and" FunctionHeader Block;
+        }
+    }
+
+    syntax Finally = "finally" Expression;
+
+    syntax Block = "{" (Expression; ";"; ?)* "}";
+    
+    syntax BlockOrMatchBody
+    {
+      | Block
+      | MatchBody
+    }
+
+    syntax MatchBody = "{" MatchEntry+ "}";
+
+    syntax MatchEntry = ("|" Pattern=Expression)+ "=>" Expression;
+  }
+}
