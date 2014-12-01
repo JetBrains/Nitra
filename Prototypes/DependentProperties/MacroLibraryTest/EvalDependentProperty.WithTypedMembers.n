@@ -3,7 +3,6 @@ using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
-using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -29,33 +28,115 @@ namespace Nitra.DependentProperties
 
       when (calc != null)
       {
+        assert2(false);
+        
         calc.Body = method.Body;
         method.Body = <[ () ]>;
-        typeBuilder.MethodBeforeStage2 += fun (o, e)
+        def onMethodBeforeStage2(_, e : StageEventArgs)
         {
-          when (e.Typer.CurrentFunction.Name != "Calc")
-            return;
-            
-          when (e.Typer.CurrentFunction.Body is FunBody.Typed(TExpr.Block(_, body)))
+          when (e.Typer.CurrentFunction.Name == "Calc")
           {
-            def walkLeftExpr(expr : TExpr) : void
+            def getPropIndex(prop : IProperty)
             {
+              def typeBuilder = typeBuilder;
+              def prop = prop :> PropertyBuilder;
+              match (typeBuilder.UserData["DependentPropertyName:" + prop.Name])
+              {
+                | index is int => index
+                | _ => -1
+              }
             }
-            def walkRightExpr(expr : TExpr) : void
+            def makeDependentPropertiesIsCalculated(expr : TExpr) : PExpr
             {
+              def checks = List();
+              def walker = ExprWalker();
+              def walk(info : ExprWalkInfo) : void
+              {
+                  match (info.Node)
+                  {
+                    | TExpr.PropertyMember as e => 
+                      def index = getPropIndex(e.prop);
+                      when (index >= 0)
+                        checks.Add(<[ $(e.obj : typed).Calculated($index) ]>);
+                    
+                    | _ => ()
+                  }
+              }
+              walker.Walk(expr, walk);
+              
+              if (checks.Count > 0)
+                <[ @&&(..$checks) ]>
+              else
+                <[ true ]>
             }
-            def loop(expr : TExpr) : void
+            def processAssignProp(assign : TExpr.Assign) : PExpr
             {
-              | TExpr.DebugInfo(e, _) => loop(e)
-              | TExpr.Assign(target, source) => walkLeftExpr(target); walkRightExpr(source);
-              | _ => walkRightExpr(expr);
-              //| _ => Message.FatalError(expr.Location, $"Unsuported expression '$expr' ($(expr.GetType().Name))")
+              match (assign.target)
+              {
+                | TExpr.PropertyMember as e =>
+                  match (getPropIndex(e.prop))
+                  {
+                    | -1 => Message.FatalError(e.Location, "You can assign only a dependent property.");
+                    | index => 
+                      match (makeDependentPropertiesIsCalculated(assign.source))
+                      {
+                        | <[ true ]> =>
+                          <[ 
+                            unless ($(e.obj : typed).Calculated($index))
+                            {
+                              $(assign : typed);
+                              context.CalculatedCountInc();
+                            } ]>;
+                          
+                        | conditions =>
+                          <[ 
+                            unless ($(e.obj : typed).Calculated($index))
+                              if ($conditions)
+                              {
+                                $(assign : typed);
+                                context.CalculatedCountInc();
+                              }
+                              else
+                                context.DeferredCountInc(); ]>;
+                      }
+                      
+                  }
+                
+                | _ => Message.FatalError(assign.target.Location, "You can assign only a dependent property.");
+              }
             }
-            assert2(true);
-            loop(body);
-            _ = body;
+            if (e.Typer.CurrentFunction.Body is FunBody.Typed(TExpr.Block(_, expr)))
+            {
+              def result = List();
+              def loop(expr : TExpr) : void
+              {
+                | TExpr.DebugInfo as e => loop(e.expr)
+                | TExpr.Sequence as e => loop(e.e1); loop(e.e2);
+                | TExpr.Assign as e => result.Add(processAssignProp(e));
+                | e =>
+                  match (makeDependentPropertiesIsCalculated(e))
+                  {
+                    | <[ true ]> => result.Add(<[  $(e : typed); ]>);
+                    | conditions =>
+                      result.Add(<[ 
+                          when ($conditions)
+                          {
+                            $(e : typed);
+                          } ]>);
+                  }
+              }
+              loop(expr);
+              typeBuilder.MethodBeforeStage2 -= onMethodBeforeStage2;
+              def code = <[ { ..$result } ]>;
+              method.Body = code;
+              method.RunBodyTyper();
+            }
+            else
+              Message.Error(e.Typer.CurrentFunction.Location, "Unsupporten dependent properties syntax.");
           }
+          _ = e.Typer;
         }
+        typeBuilder.MethodBeforeStage2 += onMethodBeforeStage2;
       }
     }
   }
