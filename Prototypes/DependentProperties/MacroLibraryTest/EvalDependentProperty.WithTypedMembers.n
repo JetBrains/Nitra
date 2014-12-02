@@ -26,6 +26,12 @@ namespace Nitra.DependentProperties
     public DoTransform(typer : Typer, typeBuilder : TypeBuilder, method : MethodBuilder) : void
     {
       Macros.DefineCTX(typer);
+      
+      def errorUnexpectedExpr[T](expr : TExpr) : T
+      {
+        Message.FatalError(expr.Location, $"Unexpected expression '$expr' $(expr.GetType().Name)")
+      }
+      
       def calc = typeBuilder.GetMethods().FindObject(m => m.Name == "Calc") :> MethodBuilder;
 
       when (calc != null)
@@ -33,6 +39,16 @@ namespace Nitra.DependentProperties
         calc.Body = method.Body;
         method.Body = <[ () ]>;
         def nodesMap = Hashtable();
+        def toKey(expr : TExpr, acc : list[IProperty] = []) : list[IProperty]
+        {
+          match (expr)
+          {
+            | TExpr.PropertyMember as e => toKey(e.obj, e.prop :: acc)
+            | TExpr.Base => acc
+            | TExpr.This => acc
+            | _ => errorUnexpectedExpr(expr)
+          }
+        }
         def onMethodBeforeStage2(_, e : StageEventArgs)
         {
           when (e.Typer.CurrentFunction.Name == "Calc")
@@ -47,7 +63,7 @@ namespace Nitra.DependentProperties
                 | _ => -1
               }
             }
-            def makeDependentPropertiesIsCalculated(expr : TExpr) : PExpr
+            def makeDependentPropertiesIsCalculated(expr : TExpr, node : Node) : PExpr
             {
               def checks = List();
               def walker = ExprWalker();
@@ -58,7 +74,18 @@ namespace Nitra.DependentProperties
                     | TExpr.PropertyMember as e => 
                       def index = getPropIndex(e.prop);
                       when (index >= 0)
+                      {
+                        def nodesMap = nodesMap;
+                        def key = toKey(e);
+                        mutable to;
+                        unless (nodesMap.TryGetValue(key, out to))
+                        {
+                          to = Node.UseProp(e);
+                          nodesMap[key] = to;
+                        }
+                        node.DependendOn.Add(to);
                         checks.Add(<[ $(e.obj : typed).Calculated($index) ]>);
+                      }
                     
                     | TExpr.Delayed => 
                       // мы не можем производить преобразование, если у нас остались объкты отложенной типизации
@@ -81,6 +108,24 @@ namespace Nitra.DependentProperties
               else
                 <[ true ]>
             }
+            def addKey(assign : TExpr.Assign) : void
+            {
+              match (assign.target)
+              {
+                | TExpr.PropertyMember as e =>
+                  match (getPropIndex(e.prop))
+                  {
+                    | -1 => Message.FatalError(e.Location, "You can assign only a dependent property.");
+                    | _ => 
+                      def key = toKey(e);
+                      def node = Node.AssignProp(assign);
+                      nodesMap[key] = node;
+                  }
+                
+                | TExpr.Delayed => assert3(false);
+                | _ => Message.FatalError(assign.target.Location, "You can assign only a dependent property.");
+              }
+            }
             def processAssignProp(assign : TExpr.Assign) : PExpr
             {
               match (assign.target)
@@ -90,8 +135,10 @@ namespace Nitra.DependentProperties
                   {
                     | -1 => Message.FatalError(e.Location, "You can assign only a dependent property.");
                     | index => 
-                      nodesMap[e] = Node.AssignProp(assign);
-                      match (makeDependentPropertiesIsCalculated(assign.source))
+                      def nodesMap = nodesMap;
+                      def key = toKey(e);
+                      def node = nodesMap[key];
+                      match (makeDependentPropertiesIsCalculated(assign.source, node))
                       {
                         | <[ true ]> =>
                           <[ 
@@ -139,31 +186,33 @@ namespace Nitra.DependentProperties
               }
               def expr = expr2.Walk(removeDelayed);
               def result = List();
-              def loop(expr : TExpr) : void
+              def addAssigns(expr : TExpr) : void
               {
                 | TExpr.Delayed => assert3(false);
-                | TExpr.DebugInfo as e => loop(e.expr)
-                | TExpr.Sequence as e => loop(e.e1); loop(e.e2);
-                | TExpr.Assign as e => result.Add(processAssignProp(e));
-                | e =>
-                  match (makeDependentPropertiesIsCalculated(e))
-                  {
-                    | <[ true ]> => result.Add(<[  $(e : typed); ]>);
-                    | conditions =>
-                      result.Add(<[ 
-                          when ($conditions)
-                          {
-                            $(e : typed);
-                          } ]>);
-                  }
+                | TExpr.DebugInfo as e => addAssigns(e.expr)
+                | TExpr.Sequence as e => addAssigns(e.e1); addAssigns(e.e2);
+                | TExpr.Assign as e => addKey(e);
+                | e => _ = errorUnexpectedExpr(e)
               }
-              loop(expr);
+              def calcDependents(expr : TExpr) : void
+              {
+                | TExpr.Delayed => assert3(false);
+                | TExpr.DebugInfo as e => calcDependents(e.expr)
+                | TExpr.Sequence as e => calcDependents(e.e1); calcDependents(e.e2);
+                | TExpr.Assign as e => result.Add(processAssignProp(e));
+                | e => _ = errorUnexpectedExpr(e)
+              }
+              addAssigns(expr);
+              calcDependents(expr);
+              
+              Node.Visualize(nodesMap.Values, typeBuilder.Name);
               
               def declarationsTypeInfo = typer.BindFixedType(<[ IDeclaration ]>).TypeInfo;
               def fields1 = typeBuilder.GetProperties();
               def fields2 = fields1.Filter(p => p.GetMemType().TypeInfo.IsDerivedFrom(declarationsTypeInfo));
+              def ty = typeBuilder.GetMemType();
               foreach (x in fields2)
-                nodesMap[x] = ;
+                nodesMap[[x]] = Node.CalcDependentProp(x, ty);
               def walkNested = fields2.Map(f => <[ this.$(f.Name : global).Calc(context) ]>);
               
               def code = <[ { ..$result } { ..$walkNested } ]>;

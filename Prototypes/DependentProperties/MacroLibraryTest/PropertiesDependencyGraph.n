@@ -2,6 +2,7 @@
 using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -9,16 +10,130 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
+using Utils.X;
+
 namespace Nitra.DependentProperties
 {
+  public enum NodeState : byte
+  {
+    | None
+    | Cycling
+    | Visited
+  }
+  
   public class PropertiesDependencyGraph
   {
     public variant Node
     {
-      | AssignProp        { Expr : TExpr; }
+      | AssignProp        { Expr : TExpr.Assign; }
+      | UseProp           { Expr : TExpr.PropertyMember; }
       | CalcDependentProp { Prop : IProperty; Type : FixedType.Class; }
       
+      public Order : int { get { _order } }
+      
+      mutable _state : NodeState;
+      mutable _order : int = -1;
+      
       public DependendOn : List[Node] = List();
+      
+      public static Visualize(nodes : Seq[Node], typeName : string) : void
+      {
+        _ = Sort(nodes);
+        
+        def name(node : Node) { node._order }
+        def label(node : Node) { DotEscape(node.ToString()) }
+        
+        def edges = List();
+        
+        foreach (node in nodes)
+          foreach (to in node.DependendOn)
+            edges.Add($<#$(name(node)) -> $(name(to))#>);
+          
+        def content = $<#
+          digraph RecoveryParser
+          {
+            rankdir=LR;
+            compound=true;
+            label="The properties dependency graph for $typeName";
+
+            ..$(nodes; "\r\n          "; n => $<#$(name(n)) [label="$(label(n))"]#>)
+
+            ..$(edges; "\r\n          ")
+          }
+        #>;
+
+        VisualizeDot(content);
+      }
+      
+      public static Sort(nodes : Seq[Node]) : bool
+      {
+        foreach (node in nodes)
+          node._state = NodeState.None;
+          
+        mutable index = 0;
+        mutable cycling = false;
+        def hasEdgeTo = HashSet();
+        
+        foreach (node in nodes)
+          foreach (to in node.DependendOn)
+            _ = hasEdgeTo.Add(to);
+        
+        foreach (node in nodes)
+          unless (hasEdgeTo.Contains(node))
+            cycling |= node.Sort(ref index);
+            
+        cycling
+      }
+      
+      /// Return: true - cycling; false - OK
+      public Sort(index : ref int) : bool
+      {
+        this._state = NodeState.Cycling;
+        
+        foreach (to in DependendOn)
+        {
+          if (to._state == NodeState.None)
+            when (to.Sort(ref index))
+              return true;
+          else when (to._state == NodeState.Cycling)
+            return true;
+        }
+        
+        this._state = NodeState.Visited;
+        this._order = index;
+        index++;
+        false
+      }
+    
+      public FindCycling(cycled : List[Node]) : void
+      {
+        def loop(node)
+        {
+          when (node._state != NodeState.Cycling)
+            return;
+          when (node : object == this)
+            return;
+            
+          cycled.Add(node);
+          
+          foreach (to in node.DependendOn)
+            when (to._state == NodeState.Cycling)
+              loop(node);
+        }
+      
+        loop(this);
+      }
+
+      public override ToString() : string
+      {
+        _order + ": " +
+        match (this)
+        {
+          | AssignProp        as x => x.Expr.ToString()
+          | UseProp           as x => x.Expr.ToString()
+          | CalcDependentProp as x => x.Prop.ToString()
+        }
+      }
     }
   }
 }
