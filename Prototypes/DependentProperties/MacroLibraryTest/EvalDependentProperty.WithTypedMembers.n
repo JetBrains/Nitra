@@ -3,6 +3,7 @@ using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -126,7 +127,7 @@ namespace Nitra.DependentProperties
                 | _ => Message.FatalError(assign.target.Location, "You can assign only a dependent property.");
               }
             }
-            def processAssignProp(assign : TExpr.Assign) : PExpr
+            def processAssignProp(assign : TExpr.Assign) : void
             {
               match (assign.target)
               {
@@ -137,28 +138,29 @@ namespace Nitra.DependentProperties
                     | index => 
                       def nodesMap = nodesMap;
                       def key = toKey(e);
-                      def node = nodesMap[key];
-                      match (makeDependentPropertiesIsCalculated(assign.source, node))
-                      {
-                        | <[ true ]> =>
-                          <[ 
-                            unless ($(e.obj : typed).Calculated($index))
-                            {
-                              $(assign : typed);
-                              context.CalculatedCountInc();
-                            } ]>;
-                          
-                        | conditions =>
-                          <[ 
-                            unless ($(e.obj : typed).Calculated($index))
-                              if ($conditions)
+                      def node = nodesMap[key] :> Node.AssignProp;
+                      node.Code =
+                        match (makeDependentPropertiesIsCalculated(assign.source, node))
+                        {
+                          | <[ true ]> =>
+                            <[ 
+                              unless ($(e.obj : typed).Calculated($index))
                               {
                                 $(assign : typed);
                                 context.CalculatedCountInc();
-                              }
-                              else
-                                context.DeferredCountInc(); ]>;
-                      }
+                              } ]>;
+                          
+                          | conditions =>
+                            <[ 
+                              unless ($(e.obj : typed).Calculated($index))
+                                if ($conditions)
+                                {
+                                  $(assign : typed);
+                                  context.CalculatedCountInc();
+                                }
+                                else
+                                  context.DeferredCountInc(); ]>;
+                        };
                       
                   }
                 
@@ -185,7 +187,6 @@ namespace Nitra.DependentProperties
                 | _ => null
               }
               def expr = expr2.Walk(removeDelayed);
-              def result = List();
               def addAssigns(expr : TExpr) : void
               {
                 | TExpr.Delayed => assert3(false);
@@ -199,23 +200,67 @@ namespace Nitra.DependentProperties
                 | TExpr.Delayed => assert3(false);
                 | TExpr.DebugInfo as e => calcDependents(e.expr)
                 | TExpr.Sequence as e => calcDependents(e.e1); calcDependents(e.e2);
-                | TExpr.Assign as e => result.Add(processAssignProp(e));
+                | TExpr.Assign as e => processAssignProp(e);
                 | e => _ = errorUnexpectedExpr(e)
               }
               addAssigns(expr);
               calcDependents(expr);
               
-              Node.Visualize(nodesMap.Values, typeBuilder.Name);
+              def graphNodes = nodesMap.Values.ToArray();
+              def cycled = Node.Sort(graphNodes);
+              
+              when (cycled)
+              {
+                def cycledNodes = Node.FindCycling(graphNodes);
+                foreach (cycledNode in cycledNodes)
+                  Message.Error(cycledNode.Location, "Is cycled.");
+                
+                return;
+              }
+              
+              def synthesizedProps = graphNodes.OfType.[Node.UseProp]();
               
               def declarationsTypeInfo = typer.BindFixedType(<[ IDeclaration ]>).TypeInfo;
-              def fields1 = typeBuilder.GetProperties();
-              def fields2 = fields1.Filter(p => p.GetMemType().TypeInfo.IsDerivedFrom(declarationsTypeInfo));
-              def ty = typeBuilder.GetMemType();
-              foreach (x in fields2)
-                nodesMap[[x]] = Node.CalcDependentProp(x, ty);
-              def walkNested = fields2.Map(f => <[ this.$(f.Name : global).Calc(context) ]>);
+              def props = typeBuilder.GetProperties();
+              def declarationProps = props.Filter(p => p.GetMemType().TypeInfo.IsDerivedFrom(declarationsTypeInfo));
+              def declarationPropNodes = declarationProps.MapToArray(p => Node.DependentProp(p));
+              foreach (declarationPropNode in declarationPropNodes)
+                nodesMap[[declarationPropNode.Prop]] = declarationPropNode;
               
-              def code = <[ { ..$result } { ..$walkNested } ]>;
+              def getRootProp(useProp : Node.UseProp) : IProperty
+              {
+                def loop(expr : TExpr) : IProperty
+                {
+                  | TExpr.PropertyMember as p => if (p.obj is TExpr.Base || p.obj is TExpr.This) p.prop else loop(p.obj)
+                  | _ => Message.FatalError(expr.Location, "Properties must only be used.")
+                }
+                
+                loop(useProp.Expr)
+              }
+              foreach (synthesizedProp in synthesizedProps)
+              {
+                def prop = getRootProp(synthesizedProp);
+                foreach (declarationProp in declarationPropNodes)
+                  when (prop : object == declarationProp.Prop)
+                    synthesizedProp.DependendOn.Add(declarationProp);
+              }
+
+              Node.Visualize(nodesMap.Values, typeBuilder.Name);
+              def nodes = nodesMap.Values.NToArray();
+              def cycled2 = Node.Sort(nodes);
+              assert2(!cycled2);
+              _ = nodes.SortInplace((l, r) => l.Order - r.Order);
+              
+              // Rendering code
+              def result = List();
+              foreach (node in nodes)
+              {
+                | AssignProp    as a => result.Add(a.Code);
+                | UseProp            => ()
+                | DependentProp as p => result.Add(<[ this.$(p.Prop.Name : global).Calc(context) ]>);
+              }
+              
+              def code = <[ { ..$result } ]>;
               calc.Body = code;
               
               
