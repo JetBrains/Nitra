@@ -62,10 +62,7 @@ namespace Nitra.Compiler
     {
       assert(_baseTb != null);
 
-      def initParameters = SCG.List();
-      def initStatements = SCG.List();
-
-      foreach (fieldSymbol in _symbol.AllFields)
+      def defineFieldInBaseTb(fieldSymbol : DeclarationFieldSymbol) : void
       {
         def baseDecl = <[ decl:
           public abstract $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol)) { get; }
@@ -73,13 +70,25 @@ namespace Nitra.Compiler
         when (CollectImplementedFields(fieldSymbol) is _ :: _ as implementedFields)
           baseDecl.ParsedImplemented = implementedFields.Map(f => <[ $(Environment.GetDeclarationType(f.DeclaringDeclaration) : typed).$(f.Name : usesite) ]>);
         _baseTb.DefineConditional(baseDecl);
+      }
 
+      def defineFieldInAmbiguousTb(fieldSymbol : DeclarationFieldSymbol) : void
+      {
         _ambiguousTb.DefineConditional(<[ decl:
           public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
           {
             get { this.Ambiguities[0].$(fieldSymbol.Name : usesite) }
           }
         ]>);
+      }
+
+      def initParameters = SCG.List();
+      def initStatements = SCG.List();
+
+      def defineSimpleField(fieldSymbol : SimpleDeclarationFieldSymbol) : void
+      {
+        defineFieldInBaseTb(fieldSymbol);
+        defineFieldInAmbiguousTb(fieldSymbol);
 
         def concreteValueExpr =
           if (fieldSymbol.HasBody)
@@ -95,7 +104,7 @@ namespace Nitra.Compiler
             initParameters.Add(<[ parameter : $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol)) ]>);
             initStatements.Add(<[ this.$(backingFieldName : usesite) = $(fieldSymbol.Name : usesite) ]>);
             _concreteTb.DefineConditional(<[ decl:
-              private mutable $(backingFieldName : usesite) : $(MakeFieldType(fieldSymbol));
+              private mutable $(backingFieldName : usesite) : $(MakeFieldType(fieldSymbol))
             ]>);
             <[ this.$(backingFieldName : usesite) ]>
           };
@@ -108,8 +117,41 @@ namespace Nitra.Compiler
         ]>);
       }
 
+      def evalStatements = SCG.List();
+
+      def defineDependentField(fieldSymbol : DependentDeclarationFieldSymbol) : void
+      {
+        defineFieldInBaseTb(fieldSymbol);
+        defineFieldInAmbiguousTb(fieldSymbol);
+
+        def backingFieldName = Util.tmpname(fieldSymbol.Name);
+
+        _concreteTb.DefineConditional(<[ decl:
+          private mutable $(backingFieldName : usesite) : $(MakeFieldType(fieldSymbol))
+        ]>);
+        _concreteTb.DefineConditional(<[ decl:
+          public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+          {
+            get { this.$(backingFieldName : usesite) }
+          }
+        ]>);
+
+        evalStatements.Add(<[ this.$(backingFieldName : usesite) = $(fieldSymbol.Body.Expr) ]>);
+      }
+
+      foreach (fieldSymbol in _symbol.AllFields)
+      {
+        | SimpleDeclarationFieldSymbol    as s => defineSimpleField(s)
+        | DependentDeclarationFieldSymbol as s => defineDependentField(s)
+        | _                                    => assert(false)
+      }
+
       _concreteTb.DefineConditional(<[ decl:
         public Initialize(..$initParameters) : void { ..$initStatements }
+      ]>);
+
+      _concreteTb.DefineConditional(<[ decl:
+        public override EvalFields(context : Nitra.Declarations.EvalDeclarationFieldsContext) : void { ..$evalStatements }
       ]>);
     }
 
