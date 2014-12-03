@@ -54,7 +54,7 @@ namespace Nitra.DependentProperties
         {
           when (e.Typer.CurrentFunction.Name == "Calc")
           {
-            def getPropIndex(prop : IProperty)
+            def getPropIndex(prop : IProperty) : int
             {
               def typeBuilder = typeBuilder;
               def prop = prop :> PropertyBuilder;
@@ -170,6 +170,25 @@ namespace Nitra.DependentProperties
             }
             if (e.Typer.CurrentFunction.Body is FunBody.Typed(TExpr.Block(_, expr2)))
             {
+              def walker = ExprWalker();
+              def checkInvalidExpre(info : ExprWalkInfo) : void
+              {
+                  match (info.Node)
+                  {
+                    | TExpr.PropertyMember
+                    | TExpr.Sequence
+                    | TExpr.Assign
+                    | TExpr.Call
+                    | TExpr.This
+                    | TExpr.Base
+                    | TExpr.DebugInfo
+                    | TExpr.Delayed => () 
+                    | TExpr as e => _ = errorUnexpectedExpr(e);
+                    | _ => ()
+                  }
+              }
+              walker.Walk(expr2, checkInvalidExpre);
+              
               def removeDelayed(expr : TExpr) : TExpr
               {
                 | PropertyMember as e => 
@@ -218,8 +237,6 @@ namespace Nitra.DependentProperties
                 return;
               }
               
-              def synthesizedProps = graphNodes.OfType.[Node.UseProp]();
-              
               def declarationsTypeInfo = typer.BindFixedType(<[ IDeclaration ]>).TypeInfo;
               def props = typeBuilder.GetProperties();
               def declarationProps = props.Filter(p => p.GetMemType().TypeInfo.IsDerivedFrom(declarationsTypeInfo));
@@ -227,29 +244,44 @@ namespace Nitra.DependentProperties
               foreach (declarationPropNode in declarationPropNodes)
                 nodesMap[[declarationPropNode.Prop]] = declarationPropNode;
               
-              def getRootProp(useProp : Node.UseProp) : IProperty
+              def getRootProp(expr : TExpr) : IProperty
               {
-                def loop(expr : TExpr) : IProperty
-                {
-                  | TExpr.PropertyMember as p => if (p.obj is TExpr.Base || p.obj is TExpr.This) p.prop else loop(p.obj)
-                  | _ => Message.FatalError(expr.Location, "Properties must only be used.")
-                }
-                
-                loop(useProp.Expr)
+                | TExpr.PropertyMember as p => if (p.obj is TExpr.Base || p.obj is TExpr.This) p.prop else getRootProp(p.obj)
+                | _ => Message.FatalError(expr.Location, "Properties must only be used.")
               }
+              
+              def synthesizedProps = graphNodes.OfType.[Node.UseProp]();
               foreach (synthesizedProp in synthesizedProps)
               {
-                def prop = getRootProp(synthesizedProp);
+                def prop = getRootProp(synthesizedProp.Expr);
                 foreach (declarationProp in declarationPropNodes)
                   when (prop : object == declarationProp.Prop)
                     synthesizedProp.DependendOn.Add(declarationProp);
               }
 
-              Node.Visualize(nodesMap.Values, typeBuilder.Name);
+              def inheritedProps = graphNodes.OfType.[Node.AssignProp]();
+              foreach (inheritedProp in inheritedProps)
+              {
+                def prop = getRootProp(inheritedProp.Expr.target);
+                foreach (declarationProp in declarationPropNodes)
+                  when (prop : object == declarationProp.Prop)
+                    declarationProp.DependendOn.Add(inheritedProp);
+              }
+
+             
               def nodes = nodesMap.Values.NToArray();
               def cycled2 = Node.Sort(nodes);
-              assert2(!cycled2);
+              when (cycled2)
+              {
+                def dependentProps = graphNodes.OfType.[Node.DependentProp]();
+                foreach (dependentProp when dependentProp.State == NodeState.Cycling in dependentProps.ToArray())
+                  _ = dependentProp.DependendOn.RemoveAll(inheritedProp => inheritedProp.State == NodeState.Cycling);
+              }
+              def cycled3 = Node.Sort(nodes);
+              assert2(!cycled3);
               _ = nodes.SortInplace((l, r) => l.Order - r.Order);
+              
+              Node.Visualize(nodesMap.Values, typeBuilder.Name);
               
               // Rendering code
               def result = List();
