@@ -12,6 +12,8 @@ using System.Collections.Generic;
 using System.Linq;
 using Nitra.DependentProperties.PropertiesDependencyGraph;
 
+using Utils.X;
+
 type Key = list[Nemerle.Compiler.IProperty];
 
 namespace Nitra.DependentProperties
@@ -177,22 +179,32 @@ namespace Nitra.DependentProperties
       expr.Walk(removeDelayed)
     }
     
-    AddDependencyOnDeclarationProperties(typeBuilder : TypeBuilder, typer : Typer, nodesMap : Hashtable[Key, Node]) : void
+    AddDependencyOnDeclarationProperties(expr : TExpr, typeBuilder : TypeBuilder, typer : Typer, nodesMap : Hashtable[Key, Node]) : void
     {
-      def graphNodes = nodesMap.Values.ToArray();
       def declarationsTypeInfo = typer.BindFixedType(<[ IDeclaration ]>).TypeInfo;
       def props = typeBuilder.GetProperties();
       def declarationProps = props.Filter(p => p.GetMemType().TypeInfo.IsDerivedFrom(declarationsTypeInfo));
-      def declarationPropNodes = declarationProps.MapToArray(p => Node.DependentProp(p));
+      def declarationPropNodes = declarationProps.MapToArray(p => Node.DeclaredProp(p));
       foreach (declarationPropNode in declarationPropNodes)
         nodesMap[[declarationPropNode.Prop]] = declarationPropNode;
+
+      def visualize(str : string) : void
+      {
+        _ = visualize;
+        def props = $<#..$(declarationProps; "\n"; p => p.Name + " : " + p.GetMemType().ToString())#>;
+        Node.Visualize(nodesMap.Values, typeBuilder.Name + str + "\n" + DotEscape(expr.ToString().Replace("DEBUG_INFO", "")) + "\n\n" + props);
+      }
               
       def getRootProp(expr : TExpr) : IProperty
       {
         | TExpr.PropertyMember as p => if (p.obj is TExpr.Base || p.obj is TExpr.This) p.prop else getRootProp(p.obj)
         | _ => Message.FatalError(expr.Location, "Properties must only be used.")
       }
-              
+
+      //Node.Visualize(nodesMap.Values, "После добавления Node.DeclaredProp()");
+      
+      def graphNodes = nodesMap.Values.ToArray();
+      
       def synthesizedProps = graphNodes.OfType.[Node.UseProp]();
       foreach (synthesizedProp in synthesizedProps)
       {
@@ -202,6 +214,8 @@ namespace Nitra.DependentProperties
             synthesizedProp.DependendOn.Add(declarationProp);
       }
 
+      //visualize(": После добавления зависимостей с синтизируемых свойств");
+      
       def inheritedProps = graphNodes.OfType.[Node.AssignProp]();
       foreach (inheritedProp in inheritedProps)
       {
@@ -211,15 +225,19 @@ namespace Nitra.DependentProperties
             declarationProp.DependendOn.Add(inheritedProp);
       }
 
+      //Node.Visualize(nodesMap.Values, "После добавления зависимостей на наследуемые свойства");
+      
       def nodes = nodesMap.Values.NToArray();
       def cycled2 = Node.Sort(nodes);
       when (cycled2)
       {
-        def dependentProps = graphNodes.OfType.[Node.DependentProp]();
-        foreach (dependentProp when dependentProp.State == NodeState.Cycling in dependentProps.ToArray())
-          _ = dependentProp.DependendOn.RemoveAll(inheritedProp => inheritedProp.State == NodeState.Cycling);
+        foreach (declarationProp when declarationProp.State == NodeState.Cycling in declarationPropNodes)
+          _ = declarationProp.DependendOn.RemoveAll(inheritedProp => inheritedProp.State == NodeState.Cycling);
       }
       def cycled3 = Node.Sort(nodes);
+      
+      //visualize(": После удаления ЗАЦИКЛИВАЮЩИХСЯ зависимостей на наследуемые свойства");
+      
       assert2(!cycled3);
     }
     
@@ -260,7 +278,7 @@ namespace Nitra.DependentProperties
           result.Add(code);
                   
         | UseProp            => ()
-        | DependentProp as p => result.Add(<[ this.$(p.Prop.Name : global).Calc(context) ]>);
+        | DeclaredProp as p => result.Add(<[ this.$(p.Prop.Name : global).Calc(context) ]>);
       }
               
       def code = <[ { ..$result } ]>;
@@ -303,7 +321,7 @@ namespace Nitra.DependentProperties
                 return;
               }
               
-              AddDependencyOnDeclarationProperties(typeBuilder, typer, nodesMap);
+              AddDependencyOnDeclarationProperties(bodyExpr, typeBuilder, typer, nodesMap);
               calc.Body = GenerateCode(nodesMap);
               typeBuilder.MethodBeforeStage2 -= onMethodBeforeStage2;
               throw RestartRunBodyTyperException();
