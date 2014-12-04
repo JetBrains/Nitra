@@ -64,9 +64,8 @@ namespace Nitra.DependentProperties
                 | _ => -1
               }
             }
-            def makeDependentPropertiesIsCalculated(expr : TExpr, node : Node) : PExpr
+            def addNodesDependentOnAssignedProperty(expr : TExpr, node : Node) : void
             {
-              def checks = List();
               def walker = ExprWalker();
               def walk(info : ExprWalkInfo) : void
               {
@@ -81,11 +80,10 @@ namespace Nitra.DependentProperties
                         mutable to;
                         unless (nodesMap.TryGetValue(key, out to))
                         {
-                          to = Node.UseProp(e);
+                          to = Node.UseProp(e, index);
                           nodesMap[key] = to;
                         }
                         node.DependendOn.Add(to);
-                        checks.Add(<[ $(e.obj : typed).Calculated($index) ]>);
                       }
                     
                     | TExpr.Delayed => 
@@ -98,16 +96,6 @@ namespace Nitra.DependentProperties
                   }
               }
               walker.Walk(expr, walk);
-              
-              if (checks.Count >= 2)
-              {
-                def result = checks.Fold(<[ true ]>, (chk, acc) => <[ $acc && $chk ]>);
-                result
-              }
-              else if (checks.Count == 1)
-                <[ $(checks[0]) ]>
-              else
-                <[ true ]>
             }
             def addKey(assign : TExpr.Assign) : void
             {
@@ -117,9 +105,9 @@ namespace Nitra.DependentProperties
                   match (getPropIndex(e.prop))
                   {
                     | -1 => Message.FatalError(e.Location, "You can assign only a dependent property.");
-                    | _ => 
+                    | index => 
                       def key = toKey(e);
-                      def node = Node.AssignProp(assign);
+                      def node = Node.AssignProp(assign, e, index);
                       nodesMap[key] = node;
                   }
                 
@@ -135,33 +123,11 @@ namespace Nitra.DependentProperties
                   match (getPropIndex(e.prop))
                   {
                     | -1 => Message.FatalError(e.Location, "You can assign only a dependent property.");
-                    | index => 
+                    | _ => 
                       def nodesMap = nodesMap;
                       def key = toKey(e);
                       def node = nodesMap[key] :> Node.AssignProp;
-                      node.Code =
-                        match (makeDependentPropertiesIsCalculated(assign.source, node))
-                        {
-                          | <[ true ]> =>
-                            <[ 
-                              unless ($(e.obj : typed).Calculated($index))
-                              {
-                                $(assign : typed);
-                                context.CalculatedCountInc();
-                              } ]>;
-                          
-                          | conditions =>
-                            <[ 
-                              unless ($(e.obj : typed).Calculated($index))
-                                if ($conditions)
-                                {
-                                  $(assign : typed);
-                                  context.CalculatedCountInc();
-                                }
-                                else
-                                  context.DeferredCountInc(); ]>;
-                        };
-                      
+                      addNodesDependentOnAssignedProperty(assign.source, node);
                   }
                 
                 | TExpr.Delayed => assert3(false);
@@ -285,7 +251,31 @@ namespace Nitra.DependentProperties
               def result = List();
               foreach (node in nodes)
               {
-                | AssignProp    as a => result.Add(a.Code);
+                | AssignProp    as a => 
+                  def code =
+                    if (a.DependendOn.Count > 0)
+                    {
+                      def conditions = a.DependendOn.Fold(<[ true ]>, (p, acc) =>  <[ $acc && $(p.Obj : typed).Calculated($(p.Index)) ]>);
+                      <[ 
+                        unless ($(a.Obj : typed).Calculated($(a.Index)))
+                          if ($conditions)
+                          {
+                            $(a.Expr : typed);
+                            context.CalculatedCountInc();
+                          }
+                          else
+                            context.DeferredCountInc(); ]>;
+                    }
+                    else
+                      <[ 
+                        unless ($(a.Obj : typed).Calculated($(a.Index)))
+                        {
+                          $(a.Expr : typed);
+                          context.CalculatedCountInc();
+                        } ]>;
+
+                  result.Add(code);
+                  
                 | UseProp            => ()
                 | DependentProp as p => result.Add(<[ this.$(p.Prop.Name : global).Calc(context) ]>);
               }
