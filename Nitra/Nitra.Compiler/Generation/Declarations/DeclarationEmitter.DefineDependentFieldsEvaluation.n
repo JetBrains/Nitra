@@ -1,0 +1,347 @@
+﻿using Nitra.Typing;
+using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal abstract partial class DeclarationEmitter
+  {
+    protected DefineDependentFieldsEvaluation(tb : TypeBuilder, dependentProps : Seq[DeclarationFieldSymbol], declaredProps : Seq[IProperty], extraCode : PExpr) : void
+    {
+      def body = SCG.List();
+      foreach (p when p.HasValue in dependentProps)
+        body.Add(Util.locate(p.Value.Expr.Location, <[ this.$(p.Name : usesite) = $(p.Value.Expr) ]>));
+      body.Add(extraCode);
+
+      tb.Define(<[ decl:
+        public override EvalFields($("context" : global) : Nitra.Declarations.EvalDeclarationFieldsContext) : void
+        {
+          ..$body
+        }
+      ]>);
+
+      def typingHandler(_ : object, args : StageEventArgs) : void
+      {
+        def func = args.Typer.CurrentFunction;
+        when (func.Name == "EvalFields")
+        {
+          try
+          {
+            if (func.Body is FunBody.Typed(TExpr.Block(_, bodyExpr)))
+            {
+              def expr       = ValidateEvalFieldsCode(bodyExpr);
+              def nodesMap   = MakeDependencyGraph(expr);
+              def graphNodes = nodesMap.Values.ToArray();
+
+              def cycled = Node.Sort(graphNodes);
+
+              if (cycled)
+              {
+                def cycledNodes = Node.FindCycling(graphNodes);
+                foreach (cycledNode in cycledNodes)
+                  Message.Error(cycledNode.Location, "Is cycled.")
+              }
+              else
+              {
+                def newGraphNodes = AddDependencyOnDeclarationProperties(graphNodes, declaredProps);
+                args.Typer.CurrentMethodBuilder.Body = GenerateCode(newGraphNodes);
+                throw RestartRunBodyTyperException()
+              }
+            }
+            else
+              Message.Error(args.Typer.CurrentFunction.Location, "Unsupported dependent properties syntax.")
+          }
+          finally
+            tb.MethodBeforeStage2 -= typingHandler
+        }
+      }
+      tb.MethodBeforeStage2 += typingHandler
+    }
+
+    private static ErrorUnexpectedExpr(expr : TExpr) : void
+    {
+      Message.FatalError(expr.Location, $"Unexpected expression '$expr' $(expr.GetType().Name)")
+    }
+
+    private static ValidateEvalFieldsCode(expr : TExpr) : TExpr
+    {
+      def walker = ExprWalker();
+      def checkInvalidExpre(info : ExprWalkInfo) : void
+      {
+        match (info.Node)
+        {
+          | TExpr.DefFunctionsIn as e 
+          | TExpr.DefValIn as e 
+          | TExpr.Block as e
+          | TExpr.Error as e
+          | TExpr.SelfTailCall as e
+          | TExpr.MultipleAssign as e
+            => ErrorUnexpectedExpr(e);
+          | _ => ()
+        }
+      }
+      walker.Walk(expr, checkInvalidExpre);
+
+      def removeDelayed(expr : TExpr) : TExpr
+      {
+        | PropertyMember as e => 
+          def newObj = e.obj.Walk(removeDelayed);
+          if (newObj : object != e.obj)
+          {
+            def res = TExpr.PropertyMember(e.Type, newObj, e.prop);
+            res.Location = e.Location;
+            res
+          }
+          else
+            e
+ 
+        | TExpr.Delayed as d when d.susp.IsResolved => d.susp.ResolutionResult
+        | _ => null
+      }
+
+      expr.Walk(removeDelayed)
+    }
+
+    private LookupDeclarationPropertySymbol(prop : IProperty) : DeclarationFieldSymbol
+    {
+      | PropertyBuilder as pb =>
+        if (pb.UserData[typeof(DeclarationFieldSymbol)] is DeclarationFieldSymbol as s)
+          s
+        else
+          null
+
+      | _ => Environment.LookupDeclarationPropertySymbol(prop)
+    }
+
+    private MakeDependencyGraph(expr : TExpr) : Hashtable[list[IProperty], Node]
+    {
+      def nodesMap = Hashtable();
+      def toKey(expr : TExpr, acc : list[IProperty] = []) : list[IProperty]
+      {
+        match (expr)
+        {
+          | TExpr.PropertyMember as e => toKey(e.obj, e.prop :: acc)
+          | TExpr.Base => acc
+          | TExpr.This => acc
+          | _ =>  ErrorUnexpectedExpr(expr); null
+        }
+      }
+
+      def addNodesDependentOnAssignedProperty(expr : TExpr, node : Node) : void
+      {
+        def walker = ExprWalker();
+        def walk(info : ExprWalkInfo) : void
+        {
+            match (info.Node)
+            {
+              | TExpr.PropertyMember as e => 
+                when (LookupDeclarationPropertySymbol(e.prop) is DependentDeclarationFieldSymbol as fieldSymbol)
+                {
+                  def nodesMap = nodesMap;
+                  def key = toKey(e);
+                  mutable to;
+                  unless (nodesMap.TryGetValue(key, out to))
+                  {
+                    to = Node.UseProp(e, fieldSymbol);
+                    nodesMap[key] = to;
+                  }
+                  node.DependendOn.Add(to);
+                }
+
+              | TExpr.Delayed => 
+                // мы не можем производить преобразование, если у нас остались объкты отложенной типизации
+                assert3(false);
+
+              | _ => ()
+            }
+        }
+        walker.Walk(expr, walk);
+      }
+      def addKey(assign : TExpr.Assign, debug : TExpr = null) : void
+      {
+        match (assign.target)
+        {
+          | TExpr.PropertyMember as e =>
+            if (LookupDeclarationPropertySymbol(e.prop) is DependentDeclarationFieldSymbol as fieldSymbol)
+            {
+              def key = toKey(e);
+              mutable existingNode;
+              if (nodesMap.TryGetValue(key, out existingNode))
+              {
+                Message.Warning(existingNode.Location, "Related message: First assingment of dependent property.");
+                Message.FatalError(e.Location, "Multiple assign of dependent property.");
+              }
+              else
+              {
+                def node = Node.AssignProp(assign, debug, e, fieldSymbol);
+                nodesMap[key] = node;
+              }
+            }
+            else
+              Message.FatalError(e.Location, "You can assign only a dependent property.");
+
+          | TExpr.Delayed => assert3(false);
+          | _ => Message.FatalError(assign.target.Location, "You can assign only a dependent property.");
+        }
+      }
+      def processAssignProp(assign : TExpr.Assign) : void
+      {
+        match (assign.target)
+        {
+          | TExpr.PropertyMember as e =>
+            if (LookupDeclarationPropertySymbol(e.prop) is DependentDeclarationFieldSymbol)
+            {
+              def nodesMap = nodesMap;
+              def key = toKey(e);
+              def node = nodesMap[key] :> Node.AssignProp;
+              addNodesDependentOnAssignedProperty(assign.source, node);
+            }
+            else
+              Message.FatalError(e.Location, "You can assign only a dependent property.");
+
+          | TExpr.Delayed => assert3(false);
+          | _ => Message.FatalError(assign.target.Location, "You can assign only a dependent property.");
+        }
+      }
+      def addAssigns(expr : TExpr, debug : TExpr = null) : void
+      {
+        match (expr)
+        {
+          | TExpr.Delayed => assert3(false);
+          | TExpr.DebugInfo as e => addAssigns(e.expr, e)
+          | TExpr.Sequence as e => addAssigns(e.e1); addAssigns(e.e2);
+          | TExpr.Assign as e => addKey(e, debug);
+          | e => ErrorUnexpectedExpr(e)
+        }
+      }
+      def calcDependents(expr : TExpr) : void
+      {
+        | TExpr.Delayed => assert3(false);
+        | TExpr.DebugInfo as e => calcDependents(e.expr)
+        | TExpr.Sequence as e => calcDependents(e.e1); calcDependents(e.e2);
+        | TExpr.Assign as e => processAssignProp(e);
+        | e => ErrorUnexpectedExpr(e)
+      }
+
+      addAssigns(expr);
+      calcDependents(expr);
+      nodesMap
+    }
+
+    private static AddDependencyOnDeclarationProperties(dependencyGraph : Seq[Node], declaredProperties : Seq[IProperty]) : Seq[Node]
+    {
+      def declaredPropNodes = SCG.List();
+      foreach (p in declaredProperties)
+        declaredPropNodes.Add(Node.DeclaredProp(p));
+
+      def newDependencyGraph = SCG.List(dependencyGraph);
+      newDependencyGraph.AddRange(declaredPropNodes);
+
+      def getRootProp(expr : TExpr) : IProperty
+      {
+        | TExpr.PropertyMember as p => if (p.obj is TExpr.Base || p.obj is TExpr.This) p.prop else getRootProp(p.obj)
+        | _ => Message.FatalError(expr.Location, "Properties must only be used.")
+      }
+
+      //Node.Visualize(nodesMap.Values, "После добавления Node.DeclaredProp()");
+
+      def synthesizedProps = newDependencyGraph.OfType.[Node.UseProp]();
+      foreach (synthesizedProp in synthesizedProps)
+      {
+        def prop = getRootProp(synthesizedProp.Expr);
+        foreach (declarationProp in declaredPropNodes)
+          when (prop : object == declarationProp.Prop)
+            synthesizedProp.DependendOn.Add(declarationProp);
+      }
+
+      //visualize(": После добавления зависимостей с синтизируемых свойств");
+
+      def inheritedProps = newDependencyGraph.OfType.[Node.AssignProp]();
+      foreach (inheritedProp in inheritedProps)
+      {
+        def prop = getRootProp(inheritedProp.Expr.target);
+        foreach (declarationProp in declaredPropNodes)
+          when (prop : object == declarationProp.Prop)
+            declarationProp.DependendOn.Add(inheritedProp);
+      }
+
+      //Node.Visualize(nodesMap.Values, "После добавления зависимостей на наследуемые свойства");
+
+      def cycled2 = Node.Sort(newDependencyGraph);
+      when (cycled2)
+      {
+        foreach (declarationProp when declarationProp.State == NodeState.Cycling in declaredPropNodes)
+          _ = declarationProp.DependendOn.RemoveAll(inheritedProp => inheritedProp.State == NodeState.Cycling);
+      }
+      def cycled3 = Node.Sort(newDependencyGraph);
+
+      //visualize(": После удаления ЗАЦИКЛИВАЮЩИХСЯ зависимостей на наследуемые свойства");
+
+      assert2(!cycled3);
+
+      newDependencyGraph
+    }
+
+    private static GenerateCode(dependencyGraph : Seq[Node]) : PExpr
+    {
+      def orderedNodes = dependencyGraph.ToArray();
+      Array.Sort(orderedNodes, (l, r) => l.Order - r.Order);
+
+      //Node.Visualize(nodesMap.Values, typeBuilder.Name);
+
+      // Rendering code
+      def result = SCG.List();
+      foreach (node in orderedNodes)
+      {
+        | AssignProp    as a => 
+          def code =
+            if (a.DependendOn.Count > 0)
+            {
+              def conditions = a.DependendOn.Fold(<[ true ]>, (p, acc) =>  <[ $acc && $(GenerateHasValueCheck(p.Obj, a.FieldSymbol)) ]>);
+              <[
+                unless ($(GenerateHasValueCheck(a.Obj, a.FieldSymbol)))
+                  if ($conditions)
+                  {
+                    $(a.Debug : typed);
+                    context.CalculatedCountInc();
+                  }
+                  else
+                    context.DeferredCountInc(); ]>;
+            }
+            else
+              <[
+                unless ($(GenerateHasValueCheck(a.Obj, a.FieldSymbol)))
+                {
+                  $(a.Expr : typed);
+                  context.CalculatedCountInc();
+                } ]>;
+
+          result.Add(code);
+
+        | UseProp         => ()
+        | DeclaredProp(p) => result.Add(<[ this.$(p.Name : global).EvalFields($("context" : global)) ]>);
+      }
+
+      def code = <[ { ..$result } ]>;
+      code
+    }
+
+    private static GenerateHasValueCheck(obj : TExpr, fieldSymbol : DependentDeclarationFieldSymbol) : PExpr
+    {
+      def index = 20;
+      <[ $(obj : typed).HasValue($(index : int)) ]>
+    }
+  }
+}
