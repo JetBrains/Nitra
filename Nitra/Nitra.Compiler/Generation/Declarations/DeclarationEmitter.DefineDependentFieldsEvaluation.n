@@ -23,7 +23,7 @@ namespace Nitra.Compiler
       def body = SCG.List();
       foreach (p when p.HasValue in dependentProps)
         body.Add(Util.locate(p.Value.Expr.Location, <[ this.$(p.Name : usesite) = $(p.Value.Expr) ]>));
-      body.Add(extraCode);
+      //body.Add(extraCode);
 
       tb.Define(<[ decl:
         public override EvalFields($("context" : global) : Nitra.Declarations.EvalDeclarationFieldsContext) : void
@@ -32,6 +32,23 @@ namespace Nitra.Compiler
         }
       ]>);
 
+      def compileGraph(methodBuilder : MethodBuilder, graphNodes : Seq[Node]) : void
+      {
+        def cycled = Node.Sort(graphNodes);
+        if (cycled)
+        {
+          def cycledNodes = Node.FindCycling(graphNodes);
+          foreach (cycledNode in cycledNodes)
+            Message.Error(cycledNode.Location, "Is cycled.")
+        }
+        else
+        {
+          def newGraphNodes = AddDependencyOnDeclarationProperties(graphNodes, declaredProps);
+          methodBuilder.Body = GenerateCode(newGraphNodes);
+          throw RestartRunBodyTyperException()
+        }
+      }
+
       def typingHandler(_ : object, args : StageEventArgs) : void
       {
         def func = args.Typer.CurrentFunction;
@@ -39,29 +56,19 @@ namespace Nitra.Compiler
         {
           try
           {
-            if (func.Body is FunBody.Typed(TExpr.Block(_, bodyExpr)))
+            match (func.Body)
             {
-              def expr       = ValidateEvalFieldsCode(bodyExpr);
-              def nodesMap   = MakeDependencyGraph(expr);
-              def graphNodes = nodesMap.Values.ToArray();
+              | FunBody.Typed(TExpr.Block(_, TExpr.Literal(Literal.Void))) =>
+                compileGraph(args.Typer.CurrentMethodBuilder, [])
 
-              def cycled = Node.Sort(graphNodes);
+              | FunBody.Typed(TExpr.Block(_, bodyExpr)) =>
+                def expr       = ValidateEvalFieldsCode(bodyExpr);
+                def nodesMap   = MakeDependencyGraph(expr);
+                def graphNodes = nodesMap.Values.ToArray();
+                compileGraph(args.Typer.CurrentMethodBuilder, graphNodes)
 
-              if (cycled)
-              {
-                def cycledNodes = Node.FindCycling(graphNodes);
-                foreach (cycledNode in cycledNodes)
-                  Message.Error(cycledNode.Location, "Is cycled.")
-              }
-              else
-              {
-                def newGraphNodes = AddDependencyOnDeclarationProperties(graphNodes, declaredProps);
-                args.Typer.CurrentMethodBuilder.Body = GenerateCode(newGraphNodes);
-                throw RestartRunBodyTyperException()
-              }
+              | _ => Message.Error(args.Typer.CurrentFunction.Location, "Unsupported dependent properties syntax.")
             }
-            else
-              Message.Error(args.Typer.CurrentFunction.Location, "Unsupported dependent properties syntax.")
           }
           finally
             tb.MethodBeforeStage2 -= typingHandler
@@ -72,6 +79,7 @@ namespace Nitra.Compiler
 
     private static ErrorUnexpectedExpr(expr : TExpr) : void
     {
+      assert2(false);
       Message.FatalError(expr.Location, $"Unexpected expression '$expr' $(expr.GetType().Name)")
     }
 
@@ -114,17 +122,6 @@ namespace Nitra.Compiler
       expr.Walk(removeDelayed)
     }
 
-    private LookupDeclarationPropertySymbol(prop : IProperty) : DependentDeclarationPropertyRef
-    {
-      | PropertyBuilder as pb =>
-        if (pb.UserData[typeof(DependentDeclarationPropertyRef)] is DependentDeclarationPropertyRef as result)
-          result
-        else
-          null
-
-      | _ => Environment.LookupDeclarationPropertySymbol(prop)
-    }
-
     private MakeDependencyGraph(expr : TExpr) : Hashtable[list[IProperty], Node]
     {
       def nodesMap = Hashtable();
@@ -147,7 +144,7 @@ namespace Nitra.Compiler
             match (info.Node)
             {
               | TExpr.PropertyMember as e =>
-                def propertyRef = LookupDeclarationPropertySymbol(e.prop);
+                def propertyRef = Environment.LookupDeclarationPropertySymbol(e.prop);
                 when (propertyRef != null)
                 {
                   def nodesMap = nodesMap;
@@ -175,7 +172,7 @@ namespace Nitra.Compiler
         match (assign.target)
         {
           | TExpr.PropertyMember as e =>
-            def propertyRef = LookupDeclarationPropertySymbol(e.prop);
+            def propertyRef = Environment.LookupDeclarationPropertySymbol(e.prop);
             if (propertyRef != null)
             {
               def key = toKey(e);
@@ -203,7 +200,7 @@ namespace Nitra.Compiler
         match (assign.target)
         {
           | TExpr.PropertyMember as e =>
-            def propertyRef = LookupDeclarationPropertySymbol(e.prop);
+            def propertyRef = Environment.LookupDeclarationPropertySymbol(e.prop);
             if (propertyRef != null)
             {
               def nodesMap = nodesMap;
@@ -312,24 +309,28 @@ namespace Nitra.Compiler
           def code =
             if (a.DependendOn.Count > 0)
             {
-              def conditions = a.DependendOn.Fold(<[ true ]>, (p, acc) =>  <[ $acc && $(GenerateHasValueCheck(p.Obj, a.PropertyRef)) ]>);
+              def conditions = a.DependendOn.Fold(<[ true ]>, (p, acc) =>  <[ $acc && $(GenerateHasValueCheck(p.Obj, p.PropertyRef)) ]>);
               <[
                 unless ($(GenerateHasValueCheck(a.Obj, a.PropertyRef)))
                   if ($conditions)
                   {
-                    $(a.Debug : typed);
+                    $(a.Debug ?? a.Expr : typed);
                     context.CalculatedCountInc();
                   }
                   else
-                    context.DeferredCountInc(); ]>;
+                    context.DeferredCountInc();
+              ]>
             }
             else
+            {
               <[
                 unless ($(GenerateHasValueCheck(a.Obj, a.PropertyRef)))
                 {
                   $(a.Expr : typed);
                   context.CalculatedCountInc();
-                } ]>;
+                }
+              ]>
+            };
 
           result.Add(code);
 
