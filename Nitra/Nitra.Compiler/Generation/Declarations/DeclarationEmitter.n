@@ -11,6 +11,7 @@ using Nemerle.Text;
 using Nemerle.Utility;
 
 using System;
+using System.Linq;
 using SCG = System.Collections.Generic;
 
 namespace Nitra.Compiler
@@ -77,36 +78,82 @@ namespace Nitra.Compiler
       tb.Define(<[ decl: public Initialize(..$parameters) : void { ..$body } ]>);
     }
 
-    protected DefineHasValueMethod(tb : TypeBuilder, inheritedPropCount : int, instancePropCount : int) : void
+    protected DefineDependentProperty(tb : TypeBuilder, fieldSymbol : DependentDeclarationFieldSymbol, index : int, bit : BitField, modifiers : NemerleModifiers) : void
     {
-      def bitFieldSize = 32;
-      def bitFieldCount = instancePropCount / bitFieldSize + if (instancePropCount % bitFieldSize > 0) 1 else 0;
-      mutable body = <[ throw System.ArgumentOutOfRangeException("index") ]>;
-      for (mutable i = bitFieldCount; i > 0; --i)
+      def backingFieldName = Util.tmpname(fieldSymbol.Name);
+
+      Util.locate(fieldSymbol.FirstLocation.ToNemerleLocation(),
       {
-        def bitField = Util.tmpname("bitField");
-        tb.Define(<[ decl: private mutable $(bitField : usesite) : int ]>);
-        
+        tb.Define(<[ decl:
+          [RecordIgnore] private mutable $(backingFieldName : usesite) : $(MakeFieldType(fieldSymbol))
+        ]>);
+
+        def mods          = AttributesAndModifiers(modifiers, [<[ Nitra.Internal.DependentPropertyAttribute($(fieldSymbol.FullName : string), $(index : int)) ]>]);
+        def assertMessage = $"Property '$(fieldSymbol.Name)' is not set";
+        tb.Define(<[ decl:
+          ..$mods $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+          {
+            get
+            {
+              unless($(bit.Read()))
+                assert3(false, $assertMessage);
+              this.$(backingFieldName : usesite)
+            }
+            set
+            {
+              unless ($(bit.Read()))
+              {
+                this.$(backingFieldName : usesite) = value;
+                $(bit.Set());
+              }
+            }
+          }
+        ]>);
+      });
+    }
+
+    protected DefineAmbiguousDependentProperty(tb : TypeBuilder, fieldSymbol : DependentDeclarationFieldSymbol, index : int) : void
+    {
+      tb.Define(<[ decl:
+        [Nitra.Internal.DependentPropertyAttribute($(fieldSymbol.FullName : string), $(index : int))]
+        public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+        {
+          get { this.Ambiguities[0].$(fieldSymbol.Name : usesite) }
+          set
+          {
+            foreach (ambiguity in this.Ambiguities)
+              ambiguity.$(fieldSymbol.Name : usesite) = value
+          }
+        }
+      ]>);
+    }
+
+    protected DefineHasValueMethod(tb : TypeBuilder, inheritedBitsCount : int) : void
+    {
+      def     fields = tb.GetBitFieldManager().GetFields().ToArray();
+      mutable body   = <[ throw System.ArgumentOutOfRangeException("index") ]>;
+      for (mutable i = fields.Length; i > 0; --i)
+      {
         body = <[
-          if (index < $(i * bitFieldSize))
-            this.$(bitField : usesite) %&& (1 << (index % $(bitFieldSize)))
+          if (index < $(i * BitFieldManager.BitFieldSize))
+            this.$(fields[i - 1] : usesite) %&& (1 << (index % $(BitFieldManager.BitFieldSize)))
           else
             $body
         ]>
       }
 
-      if (inheritedPropCount > 0)
+      if (inheritedBitsCount > 0)
       {
         tb.Define(<[ decl:
           public override HasValue(mutable index : int) : bool
           {
             unchecked
             {
-              if (index < $(inheritedPropCount : int))
+              if (index < $(inheritedBitsCount : int))
                 base.HasValue(index)
               else
               {
-                index = index - $(inheritedPropCount : int);
+                index = index - $(inheritedBitsCount : int);
                 $body;
               }
             }
