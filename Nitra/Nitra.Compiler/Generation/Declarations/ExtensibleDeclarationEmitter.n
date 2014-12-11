@@ -29,7 +29,8 @@ namespace Nitra.Compiler
     {
       assert(_baseTb == null);
 
-      def baseTypes = <[ Nitra.Declarations.Declaration[$(CompileNType(_symbol.ParentType))] ]>
+      def parentType = Environment.TypeCompiler.CompileParentType(_symbol);
+      def baseTypes = <[ Nitra.Declarations.Declaration[$(parentType : typed)] ]>
         :: _symbol.BaseDeclarations.Map(s => <[ $(Environment.GetDeclarationType(s) : typed) ]>);
 
       _baseTb = NemerleEnv.Define(<[ decl:
@@ -40,18 +41,60 @@ namespace Nitra.Compiler
       ]>);
 
       assert(_ambiguousTb == null);
-      _ambiguousTb = DefineAmbiguousDeclaration(_baseTb, _symbol.ParentType);
+      _ambiguousTb = DefineAmbiguousDeclaration(_baseTb, parentType);
     }
 
     public override DefineMembers() : void
     {
       assert(_baseTb != null);
 
-      foreach (abstractDeclaration in _symbol.BaseDeclarations)
-        foreach (fieldSymbol in abstractDeclaration.Fields)
-          _baseTb.DefineConditional(<[ decl:
-            public abstract $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol)) { get; }
-          ]>);
+      def dependentProps = SCG.List();
+
+      def defineSimpleProperty(propertySymbol : SimpleDeclarationPropertySymbol) : void
+      {
+        def propertyType     = Environment.TypeCompiler.CompileSimplePropertyType(propertySymbol);
+        def backingFieldName = Util.tmpname(propertySymbol.Name);
+
+        _baseTb.Define(<[ decl:
+          private mutable $(backingFieldName : usesite) : $(propertyType : typed)
+        ]>);
+        _baseTb.Define(<[ decl:
+          public $(propertySymbol.Name : usesite) : $(propertyType : typed)
+          {
+            get { this.$(backingFieldName : usesite) }
+            protected set { this.$(backingFieldName : usesite) = value }
+          }
+        ]>);
+
+        _ambiguousTb.Define(<[ decl:
+          public override $(propertySymbol.Name : usesite) : $(propertyType : typed)
+          {
+            get { this.Ambiguities[0].$(propertySymbol.Name : usesite) }
+          }
+        ]>);
+      }
+
+      def defineDependentProperty(propertySymbol : DependentDeclarationPropertySymbol) : void
+      {
+        def index = dependentProps.Count;
+        def bit   = _baseTb.GetBitFieldManager().Allocate();
+        assert(bit.Index == index);
+
+        dependentProps.Add(propertySymbol);
+
+        DefineDependentProperty(_baseTb, propertySymbol, index, bit, NemerleModifiers.Public | NemerleModifiers.Virtual);
+        DefineAmbiguousDependentProperty(_ambiguousTb, propertySymbol, index);
+      }
+
+      foreach (propertySymbol in _symbol.AllProperties)
+      {
+        | SimpleDeclarationPropertySymbol    as s => defineSimpleProperty(s)
+        | DependentDeclarationPropertySymbol as s => defineDependentProperty(s)
+        | _                                       => assert(false)
+      }
+
+      DefineIsPropertyEvaluatedMethod(_baseTb, 0);
+      DefineDependentPropertiesEvaluation(_baseTb, _symbol);
     }
 
     public override DefineNestedType(td : ClassMember.TypeDeclaration) : TypeBuilder

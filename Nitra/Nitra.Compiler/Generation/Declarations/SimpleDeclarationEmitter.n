@@ -30,7 +30,8 @@ namespace Nitra.Compiler
     {
       assert(_baseTb == null);
 
-      def baseTypes = <[ Nitra.Declarations.Declaration[$(CompileNType(_symbol.ParentType))] ]>
+      def parentType = Environment.TypeCompiler.CompileParentType(_symbol);
+      def baseTypes = <[ Nitra.Declarations.Declaration[$(parentType : typed)] ]>
         :: _symbol.BaseDeclarations.Map(s => <[ $(Environment.GetDeclarationType(s) : typed) ]>);
 
       _baseTb = NemerleEnv.Define(<[ decl:
@@ -43,19 +44,19 @@ namespace Nitra.Compiler
       _concreteTb = _baseTb.DefineNestedType(<[ decl:
         public sealed partial class $(ConcreteDeclarationName : usesite) : $(_baseTb.GetMemType() : typed)
         {
-          public this(parent : $(CompileNType(_symbol.ParentType)), span : $(Environment.NSpanTypeVar : typed))
+          public this(parent : $(parentType : typed), span : $(Environment.NSpanTypeVar : typed))
           {
             this.Parent = parent;
             this.Span = span;
           }
 
-          public override Parent : $(CompileNType(_symbol.ParentType)) { get; }
+          public override Parent : $(parentType : typed) { get; }
           public override Span   : $(Environment.NSpanTypeVar : typed) { get; }
         }
       ]>);
 
       assert(_ambiguousTb == null);
-      _ambiguousTb = DefineAmbiguousDeclaration(_baseTb, _symbol.ParentType);
+      _ambiguousTb = DefineAmbiguousDeclaration(_baseTb, parentType);
     }
 
     public override DefineMembers() : void
@@ -65,58 +66,60 @@ namespace Nitra.Compiler
       def initParameters = SCG.List();
       def initStatements = SCG.List();
 
-      def defineField(fieldSymbol : DeclarationFieldSymbol) : void
+      def dependentProps = SCG.List();
+
+      def defineSimpleProperty(propertySymbol : SimpleDeclarationPropertySymbol) : void
       {
-        _baseTb.DefineConditional(<[ decl:
-          public abstract $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+        def propertyType = Environment.TypeCompiler.CompileSimplePropertyType(propertySymbol);
+
+        _baseTb.Define(<[ decl:
+          public abstract $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; }
+        ]>);
+
+        _ambiguousTb.Define(<[ decl:
+          public override $(propertySymbol.Name : usesite) : $(propertyType : typed)
           {
-            get;
+            get { this.Ambiguities[0].$(propertySymbol.Name : usesite) }
           }
         ]>);
 
-        _ambiguousTb.DefineConditional(<[ decl:
-          public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
-          {
-            get { this.Ambiguities[0].$(fieldSymbol.Name : usesite) }
-          }
+        def backingFieldName = Util.tmpname(propertySymbol.Name);
+        initParameters.Add(<[ parameter : $(propertySymbol.Name : usesite) : $(propertyType : typed) ]>);
+        initStatements.Add(<[ this.$(backingFieldName : usesite) = $(propertySymbol.Name : usesite) ]>);
+        _concreteTb.Define(<[ decl:
+          private mutable $(backingFieldName : usesite) : $(propertyType : typed)
         ]>);
 
-        if (fieldSymbol.HasBody)
-        {
-          _concreteTb.DefineConditional(<[ decl:
-            public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
-            {
-              get { $(fieldSymbol.Body.Expr) }
-            }
-          ]>);
-        }
-        else
-        {
-          def backingFieldName = Util.tmpname(fieldSymbol.Name);
-          _concreteTb.DefineConditional(<[ decl:
-            private mutable $(backingFieldName : usesite) : $(MakeFieldType(fieldSymbol));
-          ]>);
-          _concreteTb.DefineConditional(<[ decl:
-            public override $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
-            {
-              get { this.$(backingFieldName : usesite) }
-            }
-          ]>);
-          initParameters.Add(<[ parameter : $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol)) ]>);
-          initStatements.Add(<[ this.$(backingFieldName : usesite) = $(fieldSymbol.Name : usesite) ]>);
-        }
+        _concreteTb.Define(<[ decl:
+          public override $(propertySymbol.Name : usesite) : $(propertyType : typed)
+          {
+            get { this.$(backingFieldName : usesite) }
+          }
+        ]>);
       }
 
-      foreach (abstractDeclaration in _symbol.BaseDeclarations)
-        foreach (fieldSymbol in abstractDeclaration.Fields)
-          defineField(fieldSymbol);
+      def defineDependentProperty(propertySymbol : DependentDeclarationPropertySymbol) : void
+      {
+        def index = dependentProps.Count;
+        def bit   = _baseTb.GetBitFieldManager().Allocate();
+        assert(bit.Index == index);
 
-      foreach (fieldSymbol in _symbol.Fields)
-        defineField(fieldSymbol);
+        dependentProps.Add(propertySymbol);
 
-      _concreteTb.DefineConditional(<[ decl:
-        public Initialize(..$initParameters) : void { ..$initStatements }
-      ]>);
+        DefineDependentProperty(_baseTb, propertySymbol, index, bit, NemerleModifiers.Public | NemerleModifiers.Virtual);
+        DefineAmbiguousDependentProperty(_ambiguousTb, propertySymbol, index);
+      }
+
+      foreach (propertySymbol in _symbol.AllProperties)
+      {
+        | SimpleDeclarationPropertySymbol    as s => defineSimpleProperty(s)
+        | DependentDeclarationPropertySymbol as s => defineDependentProperty(s)
+        | _                                       => assert(false)
+      }
+
+      DefineInitializeMethod(_concreteTb, initParameters, initStatements);
+      DefineIsPropertyEvaluatedMethod(_baseTb, 0);
+      DefineDependentPropertiesEvaluation(_baseTb, _symbol);
     }
 
     public override Emit() : void

@@ -29,16 +29,17 @@ namespace Nitra.Compiler
     public override DefineTypes() : void
     {
       assert(_tb == null);
+      def parentType = Environment.TypeCompiler.CompileParentType(_symbol);
       _tb = _parent.DefineNestedType(<[ decl:
         public sealed partial class $(_symbol.Name : usesite) : $(Environment.GetDeclarationType(_symbol.BaseDeclaration.Value) : typed)
         {
-          public this(parent : $(CompileNType(_symbol.ParentType)), span : $(Environment.NSpanTypeVar : typed))
+          public this(parent : $(parentType : typed), span : $(Environment.NSpanTypeVar : typed))
           {
             this.Parent = parent;
             this.Span = span;
           }
 
-          public override Parent : $(CompileNType(_symbol.ParentType)) { get; }
+          public override Parent : $(parentType : typed) { get; }
           public override Span   : $(Environment.NSpanTypeVar : typed) { get; }
         }
       ]>);
@@ -51,45 +52,63 @@ namespace Nitra.Compiler
       def initParameters = SCG.List();
       def initStatements = SCG.List();
 
-      def defineField(fieldSymbol : DeclarationFieldSymbol, isFromBase : bool) : void
+      def dependentProps = SCG.List();
+
+      def defineSimpleProperty(propertySymbol : SimpleDeclarationPropertySymbol) : void
       {
-        def mods = AttributesAndModifiers(if (isFromBase) NemerleModifiers.Public %| NemerleModifiers.Override else NemerleModifiers.Public, []);
-        if (fieldSymbol.HasBody)
+        def propertyType = Environment.TypeCompiler.CompileSimplePropertyType(propertySymbol);
+        if (propertySymbol.DeclaringDeclaration == _symbol)
         {
-          _tb.DefineConditional(<[ decl:
-            ..$mods $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+          def backingFieldName = Util.tmpname(propertySymbol.Name);
+          initParameters.Add(<[ parameter : $(propertySymbol.Name : usesite) : $(propertyType : typed) ]>);
+          initStatements.Add(<[ this.$(backingFieldName : usesite) = $(propertySymbol.Name : usesite) ]>);
+          _tb.Define(<[ decl:
+            private mutable $(backingFieldName : usesite) : $(propertyType : typed)
+          ]>);
+          _tb.Define(<[ decl:
+            public $(propertySymbol.Name : usesite) : $(propertyType : typed)
             {
-              get { $(fieldSymbol.Body.Expr) }
+              get { this.$(backingFieldName : usesite) }
+              protected set { this.$(backingFieldName : usesite) = value }
             }
           ]>);
         }
         else
         {
-          def backingFieldName = Util.tmpname(fieldSymbol.Name);
-          _tb.DefineConditional(<[ decl:
-            private mutable $(backingFieldName : usesite) : $(MakeFieldType(fieldSymbol));
-          ]>);
-          _tb.DefineConditional(<[ decl:
-            ..$mods $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
-            {
-              get { this.$(backingFieldName : usesite) }
-            }
-          ]>);
-          initParameters.Add(<[ parameter : $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol)) ]>);
-          initStatements.Add(<[ this.$(backingFieldName : usesite) = $(fieldSymbol.Name : usesite) ]>);
+          initParameters.Add(<[ parameter : $(propertySymbol.Name : usesite) : $(propertyType : typed) ]>);
+          initStatements.Add(<[ this.$(propertySymbol.Name : usesite) = $(propertySymbol.Name : usesite) ]>);
         }
       }
 
-      foreach (abstractDeclaration in _symbol.BaseDeclaration.Value.BaseDeclarations)
-        foreach (fieldSymbol in abstractDeclaration.Fields)
-          defineField(fieldSymbol, true);
+      mutable inheritedFieldsCount;
 
-      foreach (fieldSymbol in _symbol.Fields)
-        defineField(fieldSymbol, false);
+      def defineDependentProperty(propertySymbol : DependentDeclarationPropertySymbol) : void
+      {
+        def index = dependentProps.Count;
+        dependentProps.Add(propertySymbol);
 
-      _tb.DefineConditional(<[ decl:
-        public Initialize(..$initParameters) : void { ..$initStatements }
-      ]>);
+        if (propertySymbol.DeclaringDeclaration == _symbol)
+        {
+          def bit = _tb.GetBitFieldManager().Allocate();
+          DefineDependentProperty(_tb, propertySymbol, index, bit, NemerleModifiers.Public);
+        }
+        else
+        {
+          inheritedFieldsCount += 1;
+        }
+      }
+
+      // inherited properties comes first!
+      foreach (propertySymbol in _symbol.AllProperties)
+      {
+        | SimpleDeclarationPropertySymbol    as s => defineSimpleProperty(s)
+        | DependentDeclarationPropertySymbol as s => defineDependentProperty(s)
+        | _                                       => assert(false)
+      }
+
+      DefineInitializeMethod(_tb, initParameters, initStatements);
+      DefineIsPropertyEvaluatedMethod(_tb, inheritedFieldsCount);
+      DefineDependentPropertiesEvaluation(_tb, _symbol);
     }
 
     public override Emit() : void
