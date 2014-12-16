@@ -84,9 +84,126 @@ namespace Nitra.Compiler
           | Tuple(members)   => <[ Nitra.Declarations.DeclarationSequence[..$(members.Map(Compile))] ]>
           | Func(from, to)   => <[ $(Compile(from)) -> $(Compile(to)) ]>
           | OptionList(item)
-          | List(item)       => <[ Nitra.Declarations.DeclarationList[$(Compile(item))] ]>
+          | List(item)       => <[ $(Compile(item)).ListProxy ]>
           | Option(item)     => <[ Nitra.Declarations.DeclarationOption[$(Compile(item))] ]>
         })
+    }
+
+    public TryGetDeclarationSymbol(t : NType) : DeclarationSymbol
+    {
+      def expr      = Compile(t);
+      def fixedType = Environment.Manager.CoreEnv.BindFixedType(expr);
+      if (fixedType.TypeInfo != null)
+      {
+        def symbolPath = NString.SplitToList(fixedType.TypeInfo.FullName, array['.']);
+        match (Environment.Root.BindMany.[DeclarationSymbol](symbolPath))
+        {
+          | [one] => one
+          | _     => null
+        }
+      }
+      else null
+    }
+
+    public GetListProxy(symbol : DeclarationSymbol) : FixedType
+    {
+      def name = "_N_<ListProxy>" + symbol.FullName.Replace('.', '_');
+      def env  = Environment.Manager.CoreEnv.EnterIntoNamespace(["Nitra", "Declarations", "Internal"]);
+      if (env.LookupType([name]) is Some(t))
+        FixedType.Class(t, [])
+      else
+      {
+        def declarationType = Environment.GetDeclarationType(symbol);
+        def tb = env.Define(<[ decl:
+          internal sealed class $(name : usesite) : Nitra.Declarations.DeclarationList[$(declarationType : typed)], $(declarationType : typed).ListProxy
+          {
+            public this(parent : $(Environment.DeclarationTypeVar : typed), span : $(Environment.NSpanTypeVar : typed), items : array[$(declarationType : typed)])
+            {
+              base(parent, span, items)
+            }
+          }
+        ]>);
+
+
+//        def result0 = SCG.List();
+//        def result1 = SCG.List();
+
+        def bitFieldManager = tb.GetBitFieldManager();
+        foreach (propertySymbol is DependentDeclarationPropertySymbol in symbol.AllProperties with index)
+        {
+          def propertyType     = CompileDependentPropertyType(propertySymbol);
+          def bit              = bitFieldManager.Allocate();
+          assert(bit.Index == index);
+          def backingFieldName = Util.tmpname(propertySymbol.Name);
+          tb.Define(<[ decl:
+            [RecordIgnore] private mutable $(backingFieldName : usesite) : $(propertyType : typed)
+          ]>);
+
+          def assertMessage = $"Property '$(propertySymbol.Name)' is not set";
+          def setterMods    = DeclarationEmitter.GetDependentPropertySetterMods(propertySymbol);
+          tb.Define(<[ decl:
+            [$(DeclarationEmitter.MakeDependentPropertyAttribute(propertySymbol, index))]
+            public $(propertySymbol.Name : usesite) : $(propertyType : typed)
+            {
+              get
+              {
+                unless($(bit.Read()))
+                  assert3(false, $assertMessage);
+                this.$(backingFieldName : usesite)
+              }
+              ..$setterMods
+              set
+              {
+                unless ($(bit.Read()))
+                {
+                  this.$(backingFieldName : usesite) = value;
+                  $(bit.Set());
+                }
+              }
+            }
+          ]>);
+
+          def isEvaluatedName = DeclarationEmitter.GetIsEvaluatedPropertyName(propertySymbol);
+          tb.Define(<[ decl:
+            $(isEvaluatedName : usesite) : bool implements $(declarationType : typed).ListProxy.$(isEvaluatedName : usesite) { get { $(bit.Read()) } }
+          ]>);
+
+//          when (propertySymbol.Direction == DependentPropertyDirection.Out && propertySymbol.LinkedProperty.HasValue)
+//          {
+//            def input  = propertySymbol.LinkedProperty.Value;
+//            def output = propertySymbol;
+//            result0.Add(<[ when (hasValue($(input.Name : usesite)) && !hasValue($(output.Name : usesite))) this.$(output.Name : usesite) = this.$(input.Name : usesite); ]>);
+//          }
+//
+//          when (propertySymbol.Direction == DependentPropertyDirection.In)
+//          {
+//            result1.Add(<[ when (input.HasValue && !_items[0].input.HasValue)  _items input; ]>);
+//          }
+        }
+
+        DeclarationEmitter.DefineIsPropertyEvaluatedMethod(tb, 0);
+
+        tb.Define(<[ decl:
+          public override EvalProperties(context : Nitra.Declarations.EvalDeclarationPropertiesContext) : void
+          {
+            match (_items.Length)
+            {
+              | 0 => ()
+              | 1 =>
+                _items[0].EvalProperties(context);
+
+              | _ =>
+                foreach (item in _items)
+                {
+                  item.EvalProperties(context);
+                }
+            }
+          }
+        ]>);
+
+        _types.Add(tb);
+        FixedType.Class(tb, [])
+      }
     }
 
     private _types : SCG.List[TypeBuilder] = SCG.List();
