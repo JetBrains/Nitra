@@ -1,12 +1,10 @@
-﻿using Common;
+﻿using System.Windows.Forms;
+using Common;
 using ICSharpCode.AvalonEdit.AddIn;
 using ICSharpCode.AvalonEdit.Document;
 using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.SharpDevelop.Editor;
-
-using Microsoft.Win32;
-
 using Nemerle.Diff;
 
 using Nitra.Runtime.Reflection;
@@ -27,6 +25,19 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using CheckBox = System.Windows.Controls.CheckBox;
+using Clipboard = System.Windows.Clipboard;
+using ContextMenu = System.Windows.Controls.ContextMenu;
+using Control = System.Windows.Controls.Control;
+using DataFormats = System.Windows.DataFormats;
+using KeyEventArgs = System.Windows.Input.KeyEventArgs;
+using Label = System.Windows.Controls.Label;
+using MenuItem = System.Windows.Controls.MenuItem;
+using MessageBox = System.Windows.MessageBox;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
+using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
+using Timer = System.Timers.Timer;
+using ToolTip = System.Windows.Controls.ToolTip;
 
 namespace Nitra.Visualizer
 {
@@ -51,6 +62,7 @@ namespace Nitra.Visualizer
     bool _needUpdateHtmlPrettyPrint;
     bool _needUpdateTextPrettyPrint;
     bool _needUpdatePerformance;
+    bool _needUpdateDeclarations;
     ParseTree _parseTree;
     TimeSpan _parseTimeSpan;
     TimeSpan _parseTreeTimeSpan;
@@ -58,6 +70,7 @@ namespace Nitra.Visualizer
     readonly Settings _settings;
     private TestSuitVm _currentTestSuit;
     private SolutionVm _solution;
+    private PropertyGrid _propertyGrid;
 
     public MainWindow()
     {
@@ -325,7 +338,8 @@ namespace Nitra.Visualizer
       _needUpdateHtmlPrettyPrint = true;
       _needUpdateTextPrettyPrint = true;
       _needUpdatePerformance     = true;
-      _parseTree                       = null;
+      _needUpdateDeclarations    = true;
+      _parseTree                 = null;
 
       UpdateInfo();
     }
@@ -342,11 +356,27 @@ namespace Nitra.Visualizer
           UpdateTextPrettyPrint();
         else if (_needUpdatePerformance     && object.ReferenceEquals(_tabControl.SelectedItem, _performanceTabItem))
           UpdatePerformance();
+        else if (_needUpdateDeclarations && object.ReferenceEquals(_tabControl.SelectedItem, _declarationsTabItem))
+          UpdateDeclarations();
       }
       catch(Exception e)
       {
         Debug.Write(e);
       }
+    }
+
+    private void UpdateDeclarations()
+    {
+      if (_parseResult == null)
+        return;
+
+      _needUpdateDeclarations = false;
+
+      if (_parseTree == null)
+        _parseTree = _parseResult.CreateParseTree();
+      
+      var root = ObjectToItem("", c);
+      UpdateDeclarations(root);
     }
 
     private void UpdatePerformance()
@@ -1287,6 +1317,11 @@ namespace Nitra.Visualizer
     private void RecentFileList_OnMenuClick(object sender, RecentFileList.MenuClickEventArgs e)
     {
       OpenSolution(e.Filepath);
+    }
+
+    private void _declarationsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+      _propertyGrid.SelectedObject = ((TreeViewItem)e.NewValue).Tag;
     }
   }
 }
