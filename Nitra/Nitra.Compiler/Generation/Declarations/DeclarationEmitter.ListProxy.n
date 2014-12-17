@@ -32,22 +32,87 @@ namespace Nitra.Compiler
       ]>);
     }
 
-    protected DefineListProxyMembers(symbol : DeclarationSymbol, tb : TypeBuilder) : void
+    protected DefineListProxyMembers(symbol : DeclarationSymbol, tb : TypeBuilder, declarationProperties : SCG.Dictionary[DependentDeclarationPropertySymbol, DependentDeclarationPropertyRef]) : void
     {
       def bitFieldManager = tb.GetBitFieldManager();
+      def listProperties  = SCG.Dictionary();
       foreach (propertySymbol is DependentDeclarationPropertySymbol in symbol.AllProperties)
       {
-        def bit = bitFieldManager.Allocate();
-        DefineDependentProperty(tb, propertySymbol, bit.Index, bit, NemerleModifiers.Public, defineIsEvaluatedProperty = false)
+        def bit         = bitFieldManager.Allocate();
+        def propertyRef = DependentDeclarationPropertyRef.Compiling(propertySymbol, bit.Index, bit);
+        DefineDependentProperty(tb, propertyRef, NemerleModifiers.Public, defineIsEvaluatedProperty = false);
+        listProperties.Add(propertySymbol, propertyRef);
       }
 
       DefineIsPropertyEvaluatedMethod(tb, 0);
 
+      def linkProperties(body : SCG.List[PExpr], sourceObj : PExpr, source : DependentDeclarationPropertyRef, targetObj : PExpr, target : DependentDeclarationPropertyRef) : void
+      {
+        body.Add(<[
+          when ($(GenerateHasValueCheck(sourceObj, source)) && ! $(GenerateHasValueCheck(targetObj, target)))
+          {
+            $targetObj.$(target.Symbol.Name : usesite) = $sourceObj.$(source.Symbol.Name : usesite)
+          }
+        ]>);
+      }
+
+      def setFirstItemInputs     = SCG.List();
+      def linkEachItemProperties = SCG.List();
+      def readLastItemOutputs    = SCG.List();
+      def setEmptyListOutputs    = SCG.List();
+
+      foreach (propertySymbol is DependentDeclarationPropertySymbol in symbol.AllProperties)
+      {
+        when (propertySymbol.Direction == DependentPropertyDirection.In)
+        {
+          def listInputRef = listProperties[propertySymbol];
+          def itemInputRef = declarationProperties[propertySymbol];
+          linkProperties(setFirstItemInputs, <[ this ]>, listInputRef, <[ item ]>, itemInputRef);
+        }
+
+        when (propertySymbol.Direction == DependentPropertyDirection.In && propertySymbol.LinkedProperty.HasValue)
+        {
+          def itemInputRef  = declarationProperties[propertySymbol];
+          def itemOutputRef = declarationProperties[propertySymbol.LinkedProperty.Value];
+          linkProperties(linkEachItemProperties, <[ prevItem ]>, itemOutputRef, <[ item ]>, itemInputRef);
+        }
+
+        when (propertySymbol.Direction == DependentPropertyDirection.Out)
+        {
+          def itemOutputRef = declarationProperties[propertySymbol];
+          def listOutputRef = listProperties[propertySymbol];
+          linkProperties(readLastItemOutputs, <[ item ]>, itemOutputRef, <[ this ]>, listOutputRef);
+        }
+
+        when (propertySymbol.Direction == DependentPropertyDirection.Out && propertySymbol.LinkedProperty.HasValue)
+        {
+          def listInputRef  = listProperties[propertySymbol.LinkedProperty.Value];
+          def listOutputRef = listProperties[propertySymbol];
+          linkProperties(setEmptyListOutputs, <[ this ]>, listInputRef, <[ this ]>, listOutputRef);
+        }
+      }
+
       tb.Define(<[ decl:
         public override EvalProperties(context : Nitra.Declarations.EvalDeclarationPropertiesContext) : void
         {
-          foreach (item in _items)
+          if (_items.Length > 0)
+          {
+            mutable item = _items[0];
+            { ..$setFirstItemInputs }
             item.EvalProperties(context);
+            for (mutable i = 1; i < _items.Length; ++i)
+            {
+              def prevItem = item;
+              item = _items[i];
+              { ..$linkEachItemProperties }
+              item.EvalProperties(context);
+            }
+            { ..$readLastItemOutputs }
+          }
+          else
+          {
+            ..$setEmptyListOutputs
+          }
         }
       ]>);
     }
