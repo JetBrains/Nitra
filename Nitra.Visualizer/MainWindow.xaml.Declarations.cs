@@ -1,4 +1,7 @@
-﻿using System;
+﻿using Nitra.Declarations;
+
+using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -15,7 +18,7 @@ namespace Nitra.Visualizer
       var t = obj.GetType();
       var tvi = new TreeViewItem { Tag = obj, FontWeight = FontWeights.Normal };
 
-      var declatation = obj as IDeclatation;
+      var declatation = obj as IDeclaration;
       if (declatation != null)
       {
         var decl = declatation;
@@ -25,7 +28,7 @@ namespace Nitra.Visualizer
 
         foreach (var prop in props)//.OrderBy(p => p.Name))
         {
-          var value = prop.GetValue(declatation);
+          var value = prop.GetValue(declatation, null);
           tvi.Items.Add(ObjectToItem(prop.Name, value));
         }
       }
@@ -50,14 +53,15 @@ namespace Nitra.Visualizer
       return tvi;
     }
 
-    private void UpdateDeclarations(TreeViewItem o)
+    private void UpdateDeclarations(DeclarationRoot<IDeclaration> declarationRoot)
     {
+      var root = ObjectToItem("", declarationRoot);
       using (var d = Dispatcher.DisableProcessing())
-        _declarationsTreeView.Items.Add(o);
+        _declarationsTreeView.Items.Add(root);
       _declarationsTreeView.UpdateLayout();
     }
 
-    private static string RenderXamlForDeclaration(string name, IDeclatation declatation)
+    private static string RenderXamlForDeclaration(string name, IDeclaration declatation)
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>

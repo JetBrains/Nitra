@@ -6,7 +6,7 @@ using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.SharpDevelop.Editor;
 using Nemerle.Diff;
-
+using Nitra.Declarations;
 using Nitra.Runtime.Reflection;
 using Nitra.ViewModels;
 using Nitra.Visualizer.Properties;
@@ -374,9 +374,14 @@ namespace Nitra.Visualizer
 
       if (_parseTree == null)
         _parseTree = _parseResult.CreateParseTree();
-      
-      var root = ObjectToItem("", c);
-      UpdateDeclarations(root);
+
+// ReSharper disable once SuspiciousTypeConversion.Global
+      var root = _parseTree as IDeclarableParseTree<IDeclaration, IDeclaration>;
+      if (root != null)
+      {
+        var declarationRoot = DeclarationRoot<IDeclaration>.Create(null, root);
+        UpdateDeclarations(declarationRoot);
+      }
     }
 
     private void UpdatePerformance()
@@ -1317,11 +1322,6 @@ namespace Nitra.Visualizer
     private void RecentFileList_OnMenuClick(object sender, RecentFileList.MenuClickEventArgs e)
     {
       OpenSolution(e.Filepath);
-    }
-
-    private void _declarationsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
-    {
-      _propertyGrid.SelectedObject = ((TreeViewItem)e.NewValue).Tag;
     }
   }
 }
