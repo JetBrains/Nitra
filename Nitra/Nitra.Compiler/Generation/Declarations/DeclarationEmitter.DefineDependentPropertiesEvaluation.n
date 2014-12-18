@@ -20,80 +20,83 @@ namespace Nitra.Compiler
   {
     protected DefineDependentPropertiesEvaluation(tb : TypeBuilder, symbol : DeclarationSymbol) : void
     {
-      def body = SCG.List();
-      when ((symbol : object) is IDependentPropertyAssignmentContainer as container)
-      {
-        foreach (assignment in container.GetAssignments())
-          body.Add(Util.locate(assignment.Location.ToNemerleLocation(), <[ $(PExprUtils.FromQualifiedIdentifier(assignment.Path)) = $(assignment.Expression) ]>));
-      }
-
       Util.locate(symbol.FirstLocation.ToNemerleLocation(),
-      tb.Define(<[ decl:
-        public override EvalProperties($("context" : global) : Nitra.Declarations.EvalDeclarationPropertiesContext) : void
-        {
-          IgnoreParams();
-          ..$body
-        }
-      ]>));
-
-      def compileGraph(methodBuilder : MethodBuilder, graphNodes : Seq[Node]) : void
+      tb.Manager.MacroColors.InGlobalColor(fun()
       {
-        def cycled = Node.Sort(graphNodes);
-        if (cycled)
+        def body = SCG.List();
+        when ((symbol : object) is IDependentPropertyAssignmentContainer as container)
         {
-          def cycledNodes = Node.FindCycling(graphNodes);
-          foreach (cycledNode in cycledNodes)
-            Message.Error(cycledNode.Location, "Is cycled.");
-          otherwise assert3(false, "Cycled nodes not found");
+          foreach (assignment in container.GetAssignments())
+            body.Add(Util.locate(assignment.Location.ToNemerleLocation(), <[ $(PExprUtils.FromQualifiedIdentifier(assignment.Path)) = $(assignment.Expression) ]>));
         }
-        else
-        {
-          def props = SCG.List();
-          foreach (s is SimpleDeclarationPropertySymbol in symbol.AllProperties)
+
+        tb.Define(<[ decl:
+          public override EvalProperties($("context" : global) : Nitra.Declarations.EvalDeclarationPropertiesContext) : void
           {
-            if (tb.LookupMember(s.Name).Find(m => m is IProperty) is Some(m))
-              props.Add(m :> IProperty);
-            else
-              assert3(false, $"IProperty for symbol $s not found");
+            IgnoreParams();
+            ..$body
           }
-          def newGraphNodes = AddDependencyOnDeclarationProperties(graphNodes, props);
-          def code          = GenerateCode(newGraphNodes);
-          if (symbol is ExtensionDeclarationSymbol)
-            methodBuilder.Body = <[ base.EvalProperties($("context" : usesite)); $code ]>
+        ]>);
+
+        def compileGraph(methodBuilder : MethodBuilder, graphNodes : Seq[Node]) : void
+        {
+          def cycled = Node.Sort(graphNodes);
+          if (cycled)
+          {
+            def cycledNodes = Node.FindCycling(graphNodes);
+            foreach (cycledNode in cycledNodes)
+              Message.Error(cycledNode.Location, "Is cycled.");
+            otherwise assert3(false, "Cycled nodes not found");
+          }
           else
-            methodBuilder.Body = code;
-          throw RestartRunBodyTyperException()
-        }
-        foreach (p in methodBuilder.GetParameters())
-          p.Declaration.EverUsed = true;
-      }
-
-      def typingHandler(_ : object, args : StageEventArgs) : void
-      {
-        def func = args.Typer.CurrentFunction;
-        when (func.Name == "EvalProperties")
-        {
-          try
           {
-            match (func.Body)
+            def props = SCG.List();
+            foreach (s is SimpleDeclarationPropertySymbol in symbol.AllProperties)
             {
-              | FunBody.Typed(TExpr.Block(_, TExpr.Literal(Literal.Void))) =>
-                compileGraph(args.Typer.CurrentMethodBuilder, [])
-
-              | FunBody.Typed(TExpr.Block(_, bodyExpr)) =>
-                def expr       = ValidateEvalFieldsCode(bodyExpr);
-                def nodesMap   = MakeDependencyGraph(expr);
-                def graphNodes = nodesMap.Values.ToArray();
-                compileGraph(args.Typer.CurrentMethodBuilder, graphNodes)
-
-              | _ => Message.Error(args.Typer.CurrentFunction.Location, "Unsupported dependent properties syntax.")
+              if (tb.LookupMember(s.Name).Find(m => m is IProperty) is Some(m))
+                props.Add(m :> IProperty);
+              else
+                assert3(false, $"IProperty for symbol $s not found");
             }
+            def newGraphNodes = AddDependencyOnDeclarationProperties(graphNodes, props);
+            def code          = GenerateCode(newGraphNodes);
+            if (symbol is ExtensionDeclarationSymbol)
+              methodBuilder.Body = <[ base.EvalProperties($("context" : usesite)); $code ]>
+            else
+              methodBuilder.Body = code;
+            throw RestartRunBodyTyperException()
           }
-          finally
-            tb.MethodBeforeStage2 -= typingHandler
+          foreach (p in methodBuilder.GetParameters())
+            p.Declaration.EverUsed = true;
         }
-      }
-      tb.MethodBeforeStage2 += typingHandler
+
+        def typingHandler(_ : object, args : StageEventArgs) : void
+        {
+          def func = args.Typer.CurrentFunction;
+          when (func.Name == "EvalProperties")
+          {
+            try
+            {
+              match (func.Body)
+              {
+                | FunBody.Typed(TExpr.Block(_, TExpr.Literal(Literal.Void))) =>
+                  compileGraph(args.Typer.CurrentMethodBuilder, [])
+
+                | FunBody.Typed(TExpr.Block(_, bodyExpr)) =>
+                  def expr       = ValidateEvalFieldsCode(bodyExpr);
+                  def nodesMap   = MakeDependencyGraph(expr);
+                  def graphNodes = nodesMap.Values.ToArray();
+                  compileGraph(args.Typer.CurrentMethodBuilder, graphNodes)
+
+                | _ => Message.Error(args.Typer.CurrentFunction.Location, "Unsupported dependent properties syntax.")
+              }
+            }
+            finally
+              tb.MethodBeforeStage2 -= typingHandler
+          }
+        }
+        tb.MethodBeforeStage2 += typingHandler
+      }));
     }
 
     private static ErrorUnexpectedExpr(expr : TExpr) : void
