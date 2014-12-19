@@ -120,6 +120,8 @@ namespace Nitra.Visualizer
       _text.Options.EnableRectangularSelection = true;
       _text.Options.IndentationSize = 2;
       _testsTreeView.SelectedValuePath = "FullPath";
+      _propertyGrid = new PropertyGrid();
+      _windowsFormsHost.Child = _propertyGrid;
 
       if (string.IsNullOrWhiteSpace(_settings.CurrentSolution))
         _solution = null;
@@ -376,10 +378,10 @@ namespace Nitra.Visualizer
         _parseTree = _parseResult.CreateParseTree();
 
 // ReSharper disable once SuspiciousTypeConversion.Global
-      var root = _parseTree as IDeclarableParseTree<IDeclarationPart, IDeclaration>;
+      var root = _parseTree as IDeclarableParseTree<IDeclarationPart, IDeclarationPart>;
       if (root != null)
       {
-        var declarationRoot = DeclarationRoot<IDeclaration>.Create(null, root);
+        var declarationRoot = DeclarationRoot<IDeclarationPart>.Create(null, root);
         UpdateDeclarations(declarationRoot);
       }
     }

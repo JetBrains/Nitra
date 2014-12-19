@@ -15,45 +15,62 @@ namespace Nitra.Visualizer
   {
     public static TreeViewItem ObjectToItem(string name, object obj)
     {
-      var t = obj.GetType();
       var tvi = new TreeViewItem { Tag = obj, FontWeight = FontWeights.Normal };
 
-      var declatation = obj as IDeclaration;
-      if (declatation != null)
+      var list = obj as IDeclarationList<IDeclarationPart>;
+      if (list != null)
       {
-        var decl = declatation;
+        var xaml = RenderXamlForlist(name, list);
+        tvi.Header = XamlReader.Parse(xaml);
+        foreach (var item in list)
+          tvi.Items.Add(ObjectToItem("", item));
+        return tvi;
+      }
+
+      var option = obj as IDeclarationOption<IDeclarationPart>;
+      if (option != null)
+      {
+        if (option.HasValue)
+          tvi = ObjectToItem(name, option.Value);
+        else
+          tvi.Header = XamlReader.Parse(RenderXamlForValue(name, "&lt;None&gt;"));
+        return tvi;
+      }
+
+      var declaration = obj as IDeclarationPart;
+      if (declaration != null)
+      {
+        var t     = obj.GetType();
         var props = t.GetProperties();
-        var xaml = RenderXamlForDeclaration(name, declatation);
+        var xaml  = RenderXamlForDeclaration(name, declaration);
         tvi.Header = XamlReader.Parse(xaml);
 
         foreach (var prop in props)//.OrderBy(p => p.Name))
         {
-          var value = prop.GetValue(declatation, null);
+          switch (prop.Name)
+          {
+            case "File":
+            case "Span":
+            case "IsAmbiguous": 
+            case "Parent": continue;
+
+          }
+
+          var value = prop.GetValue(declaration, null);
           tvi.Items.Add(ObjectToItem(prop.Name, value));
         }
+        
+        return tvi;
       }
       else
       {
-        var list = obj as IList;
-        if (list != null)
-        {
-          var items = list;
-          var xaml = RenderXamlForlist(name, items);
-          tvi.Header = XamlReader.Parse(xaml);
-          foreach (var item in items)
-            tvi.Items.Add(ObjectToItem("", item));
-        }
-        else
-        {
-          var xaml = RenderXamlForValue(name, obj);
-          tvi.Header = XamlReader.Parse(xaml);
-
-        }
+        var xaml = RenderXamlForValue(name, obj);
+        tvi.Header = XamlReader.Parse(xaml);
+        return tvi;
       }
-      return tvi;
     }
 
-    private void UpdateDeclarations(DeclarationRoot<IDeclaration> declarationRoot)
+    private void UpdateDeclarations(DeclarationRoot<IDeclarationPart> declarationRoot)
     {
       var root = ObjectToItem("", declarationRoot);
       using (var d = Dispatcher.DisableProcessing())
@@ -61,7 +78,7 @@ namespace Nitra.Visualizer
       _declarationsTreeView.UpdateLayout();
     }
 
-    private static string RenderXamlForDeclaration(string name, IDeclaration declatation)
+    private static string RenderXamlForDeclaration(string name, IDeclarationPart declatation)
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
@@ -79,7 +96,7 @@ namespace Nitra.Visualizer
 </Span>";
     }
 
-    private static string RenderXamlForlist(string name, IList items)
+    private static string RenderXamlForlist(string name, IDeclarationList<IDeclarationPart> items)
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
