@@ -33,7 +33,10 @@ namespace Nitra.Visualizer
         if (option.HasValue)
           tvi = ObjectToItem(name, option.Value);
         else
-          tvi.Header = XamlReader.Parse(RenderXamlForValue(name, "&lt;None&gt;"));
+        {
+          var xaml = RenderXamlForValue(name, "&lt;None&gt;");
+          tvi.Header = XamlReader.Parse(xaml);
+        }
         return tvi;
       }
 
@@ -72,10 +75,13 @@ namespace Nitra.Visualizer
 
     private void UpdateDeclarations(DeclarationRoot<IDeclarationPart> declarationRoot)
     {
-      var root = ObjectToItem("", declarationRoot);
-      using (var d = Dispatcher.DisableProcessing())
+      var root = ObjectToItem("Root", declarationRoot.Content);
+      //using (var d = Dispatcher.DisableProcessing())
+      //{
+        _declarationsTreeView.Items.Clear();
         _declarationsTreeView.Items.Add(root);
-      _declarationsTreeView.UpdateLayout();
+      //  _declarationsTreeView.UpdateLayout();
+      //}
     }
 
     private static string RenderXamlForDeclaration(string name, IDeclarationPart declatation)
