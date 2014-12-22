@@ -1,4 +1,5 @@
-﻿using Nitra.ViewModels;
+﻿using System.Collections;
+using Nitra.ViewModels;
 using Nitra.Visualizer.Annotations;
 
 using System;
@@ -23,7 +24,7 @@ namespace Nitra.Visualizer
       assemblyFilePath = UpdatePathForConfig(assemblyFilePath, config);
 
       var assembly = Assembly.ReflectionOnlyLoadFrom(assemblyFilePath);
-      var runtime = typeof(Nitra.ParseResult).Assembly.GetName();
+      var runtime = typeof(ParseResult).Assembly.GetName();
       foreach (var reference in assembly.GetReferencedAssemblies())
       {
         if (reference.Name == runtime.Name)
@@ -58,7 +59,7 @@ namespace Nitra.Visualizer
     public static string MakeRelativePath(string from, bool isFromDir, string to, bool isToDir)
     {
       var builder = new StringBuilder(1024);
-      var result = PathRelativePathTo(builder, from, isFromDir ? FILE_ATTRIBUTE.DIRECTORY : 0, to, isToDir ? FILE_ATTRIBUTE.DIRECTORY : 0);
+      var result = PathRelativePathTo(builder, @from, isFromDir ? FILE_ATTRIBUTE.DIRECTORY : 0, to, isToDir ? FILE_ATTRIBUTE.DIRECTORY : 0);
 
       if (result)
         return builder.ToString();
@@ -88,7 +89,7 @@ namespace Nitra.Visualizer
       //    <Lib Path="../sss/Json.Grammar.dll"><SyntaxModule Name="JasonParser" /></Lib>
       //    <Lib Path="../sss/JsonEx.dll"><SyntaxModule Name="JsonEx" StartRule="Start" /></Lib>
       //  </Config>
-      var libs = syntaxModules.GroupBy(m => MakeRelativePath(from:root, isFromDir:true, to:m.GetType().Assembly.Location, isToDir:false))
+      var libs = syntaxModules.GroupBy(m => MakeRelativePath(@from:root, isFromDir:true, to:m.GetType().Assembly.Location, isToDir:false))
         .Select(asm =>
           new XElement("Lib",
             new XAttribute("Path", asm.Key),
@@ -99,6 +100,21 @@ namespace Nitra.Visualizer
             ));
 
       return new XElement("Config", libs);
+    }
+
+    public static int Count(this IEnumerable seq)
+    {
+      var collection = seq as ICollection;
+
+      if (collection != null)
+        return collection.Count;
+
+      var count = 0;
+      foreach (var x in seq)
+      {
+        count++;
+      }
+      return count;
     }
   }
 }
