@@ -1,4 +1,5 @@
-﻿using Nitra.Declarations;
+﻿using System.Windows.Input;
+using Nitra.Declarations;
 
 using System;
 using System.Collections;
@@ -13,9 +14,10 @@ namespace Nitra.Visualizer
 {
   public partial class MainWindow
   {
-    public static TreeViewItem ObjectToItem(string name, object obj)
+    public TreeViewItem ObjectToItem(string name, object obj)
     {
       var tvi = new TreeViewItem { Tag = obj, FontWeight = FontWeights.Normal };
+      tvi.MouseDoubleClick += TviOnMouseDoubleClick;
 
       var list = obj as IDeclarationList<IDeclarationPart>;
       if (list != null)
@@ -113,6 +115,23 @@ namespace Nitra.Visualizer
     private void _declarationsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
       _propertyGrid.SelectedObject = ((TreeViewItem)e.NewValue).Tag;
+    }
+
+    private void TviOnMouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+      var tvi = (TreeViewItem)sender;
+      if (!tvi.IsSelected)
+        return;
+
+      var ast = tvi.Tag as IDeclarationPart;
+      if (ast != null)
+      {
+        _text.CaretOffset = ast.Span.StartPos;
+        _text.Select(ast.Span.StartPos, ast.Span.Length);
+        var loc = new Location(_parseResult.OriginalSource, ast.Span);
+        _text.ScrollToLine(loc.StartLineColumn.Line);
+      }
+      e.Handled = true;
     }
   }
 }
