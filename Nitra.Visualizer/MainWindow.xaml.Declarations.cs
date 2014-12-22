@@ -70,9 +70,23 @@ namespace Nitra.Visualizer
       }
       else
       {
-        var xaml = RenderXamlForValue(name, obj);
-        tvi.Header = XamlReader.Parse(xaml);
-        return tvi;
+        if (obj != null)
+        {
+          var type = obj.GetType();
+          if (type.IsArray)
+          {
+            var xaml = RenderXamlForIList(name, (IList)obj);
+            tvi.Header = XamlReader.Parse(xaml);
+            foreach (var item in (IEnumerable)obj)
+              tvi.Items.Add(ObjectToItem("", item));
+            return tvi;
+          }
+        }
+        {
+          var xaml = RenderXamlForValue(name, obj);
+          tvi.Header = XamlReader.Parse(xaml);
+          return tvi;
+        }
       }
     }
 
@@ -113,9 +127,18 @@ namespace Nitra.Visualizer
 </Span>";
     }
 
+    private static string RenderXamlForIList(string name, IList items)
+    {
+      return @"
+<Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
+<Span Foreground = 'blue'>" + name + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + items.Count + @"
+</Span>";
+    }
+
     private void _declarationsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
-      _propertyGrid.SelectedObject = ((TreeViewItem)e.NewValue).Tag;
+      if (e.NewValue != null)
+        _propertyGrid.SelectedObject = ((TreeViewItem)e.NewValue).Tag;
     }
 
     private void TviOnMouseDoubleClick(object sender, MouseButtonEventArgs e)
