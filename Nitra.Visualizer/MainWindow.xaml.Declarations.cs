@@ -18,6 +18,7 @@ namespace Nitra.Visualizer
     {
       var tvi = new TreeViewItem { Tag = obj, FontWeight = FontWeights.Normal };
       tvi.MouseDoubleClick += TviOnMouseDoubleClick;
+      tvi.KeyDown += TviOnKeyDown;
 
       var list = obj as IDeclarationList<IDeclarationPart>;
       if (list != null)
@@ -119,7 +120,13 @@ namespace Nitra.Visualizer
 
     private void TviOnMouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-      var tvi = (TreeViewItem)sender;
+      SelectCodeForDeclarationPart(sender);
+      e.Handled = true;
+    }
+
+    private void SelectCodeForDeclarationPart(object sender)
+    {
+      var tvi = (TreeViewItem) sender;
       if (!tvi.IsSelected)
         return;
 
@@ -131,7 +138,15 @@ namespace Nitra.Visualizer
         var loc = new Location(_parseResult.OriginalSource, ast.Span);
         _text.ScrollToLine(loc.StartLineColumn.Line);
       }
-      e.Handled = true;
+    }
+
+    private void TviOnKeyDown(object sender, KeyEventArgs e)
+    {
+      if (e.Key == Key.Return)
+      {
+        SelectCodeForDeclarationPart(sender);
+        e.Handled = true;
+      }
     }
   }
 }
