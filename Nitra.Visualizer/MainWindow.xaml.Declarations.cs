@@ -18,6 +18,7 @@ namespace Nitra.Visualizer
     {
       var tvi = new TreeViewItem { Tag = obj, FontWeight = FontWeights.Normal };
       tvi.MouseDoubleClick += TviOnMouseDoubleClick;
+      tvi.KeyDown += TviOnKeyDown;
 
       var list = obj as IDeclarationList<IDeclarationPart>;
       if (list != null)
@@ -69,9 +70,22 @@ namespace Nitra.Visualizer
       }
       else
       {
-        var xaml = RenderXamlForValue(name, obj);
-        tvi.Header = XamlReader.Parse(xaml);
-        return tvi;
+        var items = obj as IEnumerable;
+        if (items != null)
+        {
+          var type = items.GetType();
+          var xaml = RenderXamlForSeq(name, items);
+          tvi.Header = XamlReader.Parse(xaml);
+          foreach (var item in (IEnumerable)obj)
+            tvi.Items.Add(ObjectToItem("", item));
+          return tvi;
+        }
+        else
+        {
+          var xaml = RenderXamlForValue(name, obj);
+          tvi.Header = XamlReader.Parse(xaml);
+          return tvi;
+        }
       }
     }
 
@@ -112,14 +126,31 @@ namespace Nitra.Visualizer
 </Span>";
     }
 
+
+    private static string RenderXamlForSeq(string name, IEnumerable items)
+    {
+      var count = items.Count();
+      return @"
+<Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
+<Span Foreground = 'blue'>" + name + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + count + @"
+</Span>";
+    }
+
     private void _declarationsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
-      _propertyGrid.SelectedObject = ((TreeViewItem)e.NewValue).Tag;
+      if (e.NewValue != null)
+        _propertyGrid.SelectedObject = ((TreeViewItem)e.NewValue).Tag;
     }
 
     private void TviOnMouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-      var tvi = (TreeViewItem)sender;
+      SelectCodeForDeclarationPart(sender);
+      e.Handled = true;
+    }
+
+    private void SelectCodeForDeclarationPart(object sender)
+    {
+      var tvi = (TreeViewItem) sender;
       if (!tvi.IsSelected)
         return;
 
@@ -131,7 +162,15 @@ namespace Nitra.Visualizer
         var loc = new Location(_parseResult.OriginalSource, ast.Span);
         _text.ScrollToLine(loc.StartLineColumn.Line);
       }
-      e.Handled = true;
+    }
+
+    private void TviOnKeyDown(object sender, KeyEventArgs e)
+    {
+      if (e.Key == Key.Return)
+      {
+        SelectCodeForDeclarationPart(sender);
+        e.Handled = true;
+      }
     }
   }
 }
