@@ -3,28 +3,30 @@ using Nitra.Model;
 
 using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
-using Nemerle.Compiler;
-using Nemerle.Compiler.Parsetree;
-
 using System;
-using System.Collections.Generic;
 using System.Linq;
+using SCG = System.Collections.Generic;
 
 namespace Nitra.Compiler
 {
   [Record]
-  internal abstract class DeclarationEmitter
+  internal abstract partial class DeclarationEmitter
   {
     protected static AmbiguousDeclarationName = "Ambiguous";
     protected static ConcreteDeclarationName  = "Concrete";
 
-    public Environment : EmitterEnvironment { get; }
-    public NemerleEnv  : GlobalEnv          { get; }
+    public Environment  : EmitterEnvironment { get; }
+    public NemerleEnv   : GlobalEnv          { get; }
 
     public abstract DefineTypes() : void;
+    public abstract DefineMembers() : void;
     public abstract Emit() : void;
 
     public virtual DefineNestedType(_ : ClassMember.TypeDeclaration) : TypeBuilder
@@ -32,32 +34,180 @@ namespace Nitra.Compiler
       throw NotSupportedException();
     }
 
-    protected CompileNType(t : NType) : PExpr
+    protected DefineInterfaceDependentProperty(propertySymbol : DependentDeclarationPropertySymbol, tb : TypeBuilder) : void
     {
-      NTypeCompiler.Compile(t, Environment)
+      def propertyType = Environment.TypeCompiler.CompileDependentPropertyType(propertySymbol);
+      def attribute    = MakeDependentPropertyAttribute(propertySymbol, -1);
+      match (propertySymbol.Direction)
+      {
+        | In  => tb.Define(<[ decl: [$attribute] $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; set; } ]>)
+        | Out => tb.Define(<[ decl: [$attribute] $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; }      ]>)
+      }
+      tb.Define(<[ decl: $(GetIsEvaluatedPropertyName(propertySymbol) : usesite) : bool { get; } ]>);
     }
 
-    protected MakeFieldType(fieldSymbol : NitraFieldSymbol) : PExpr
+    protected DefineAmbiguousDeclaration(baseTb : TypeBuilder, parentType : FixedType) : TypeBuilder
     {
-      NTypeCompiler.Compile(fieldSymbol.Type, Environment)
-    }
-
-    protected DefineAmbiguousDeclaration(baseTb : TypeBuilder, parentType : NType) : TypeBuilder
-    {
-      baseTb.DefineNestedType(<[ decl:
-        public sealed partial class $(AmbiguousDeclarationName : usesite) : $(baseTb.GetMemType() : typed)
-        {
-          public this(ambiguities : array[$(baseTb.GetMemType() : typed)])
+      baseTb.Manager.MacroColors.InGlobalColor(fun()
+      {
+        baseTb.DefineNestedType(<[ decl:
+          public sealed partial class $(AmbiguousDeclarationName : usesite) : $(baseTb.GetMemType() : typed)
           {
-            this.Ambiguities = ambiguities;
-          }
+            public this(ambiguities : array[$(baseTb.GetMemType() : typed)])
+            {
+              this.Ambiguities = ambiguities;
+            }
 
-          public override IsAmbiguous : bool                                  { get { true } }
-          public          Ambiguities : array[$(baseTb.GetMemType() : typed)] { get; }
-          public override Span        : $(Environment.NSpanTypeVar : typed)   { get { this.Ambiguities[0].Span   } }
-          public override Parent      : $(CompileNType(parentType))           { get { this.Ambiguities[0].Parent } }
+            public override IsAmbiguous : bool                                    { get { true } }
+            public          Ambiguities : array[$(baseTb.GetMemType() : typed)]   { get; }
+            public override Span        : $(Environment.NSpanTypeVar : typed)     { get { this.Ambiguities[0].Span   } }
+            public override Parent      : $(parentType : typed)                   { get { this.Ambiguities[0].Parent } }
+
+            public override EvalProperties(context : Nitra.Declarations.EvalDeclarationPropertiesContext) : void
+            {
+              foreach (decl in Ambiguities)
+                decl.EvalProperties(context)
+            }
+
+            public override IsPropertyEvaluated(index : int) : bool
+            {
+              this.Ambiguities[0].IsPropertyEvaluated(index)
+            }
+          }
+        ]>);
+      });
+    }
+
+    protected DefineInitializeMethod(tb : TypeBuilder, parameters : Seq[PParameter], body : Seq[PExpr]) : void
+    {
+      tb.Define(<[ decl: public Initialize(..$parameters) : void { ..$body } ]>);
+    }
+
+    public static GetDependentPropertySetterMods(propertySymbol : DependentDeclarationPropertySymbol) : AttributesAndModifiers
+    {
+      match (propertySymbol.Direction)
+      {
+        | In  => AttributesAndModifiers(NemerleModifiers.None,      [])
+        | Out => AttributesAndModifiers(NemerleModifiers.Protected, [])
+      }
+    }
+
+    protected DefineDependentProperty(tb : TypeBuilder, propertyRef : DependentDeclarationPropertyRef.Compiling, modifiers : NemerleModifiers, defineIsEvaluatedProperty : bool = true) : void
+    {
+      def propertyType     = Environment.TypeCompiler.CompileDependentPropertyType(propertyRef.Symbol);
+      def backingFieldName = Util.tmpname(propertyRef.Symbol.Name);
+      Util.locate(propertyRef.Symbol.FirstLocation.ToNemerleLocation(),
+      {
+        tb.Define(<[ decl:
+          [RecordIgnore] private mutable $(backingFieldName : usesite) : $(propertyType : typed)
+        ]>);
+
+        def mods          = AttributesAndModifiers(modifiers, [MakeDependentPropertyAttribute(propertyRef.Symbol, propertyRef.Index)]);
+        def assertMessage = $"Property '$(propertyRef.Symbol.Name)' is not set";
+        def setterMods    = GetDependentPropertySetterMods(propertyRef.Symbol);
+        tb.Define(<[ decl:
+          ..$mods $(propertyRef.Symbol.Name : usesite) : $(propertyType : typed)
+          {
+            get
+            {
+              unless($(propertyRef.Bit.Read()))
+                assert3(false, $assertMessage);
+              this.$(backingFieldName : usesite)
+            }
+            ..$setterMods
+            set
+            {
+              unless ($(propertyRef.Bit.Read()))
+              {
+                this.$(backingFieldName : usesite) = value;
+                $(propertyRef.Bit.Set());
+              }
+            }
+          }
+        ]>);
+
+        when (defineIsEvaluatedProperty && propertyRef.Symbol.DeclaringDeclaration is AbstractDeclarationSymbol)
+        {
+          def name = GetIsEvaluatedPropertyName(propertyRef.Symbol);
+          tb.Define(<[ decl:
+            $(name : usesite) : bool implements $(Environment.GetDeclarationType(propertyRef.Symbol.DeclaringDeclaration) : typed).$(name : usesite) { get { $(propertyRef.Bit.Read()) } }
+          ]>);
         }
-      ]>)
+      });
+    }
+
+    private static GetIsEvaluatedPropertyName(propertySymbol : DependentDeclarationPropertySymbol) : string
+    {
+      "Is" + propertySymbol.Name + "Evaluated"
+    }
+
+    private static MakeDependentPropertyAttribute(propertySymbol : DependentDeclarationPropertySymbol, index : int) : PExpr
+    {
+      <[ Nitra.Internal.DependentPropertyAttribute($(propertySymbol.FullName : string), $(index : int)) ]>
+    }
+
+    protected DefineAmbiguousDependentProperty(tb : TypeBuilder, propertySymbol : DependentDeclarationPropertySymbol, index : int) : void
+    {
+      def propertyType = Environment.TypeCompiler.CompileDependentPropertyType(propertySymbol);
+      def setterMods   = GetDependentPropertySetterMods(propertySymbol);
+      def attribute    = MakeDependentPropertyAttribute(propertySymbol, index);
+      tb.Define(<[ decl:
+        [$attribute]
+        public override $(propertySymbol.Name : usesite) : $(propertyType : typed)
+        {
+          get { this.Ambiguities[0].$(propertySymbol.Name : usesite) }
+          ..$setterMods
+          set
+          {
+            foreach (ambiguity in this.Ambiguities)
+              ambiguity.$(propertySymbol.Name : usesite) = value
+          }
+        }
+      ]>);
+    }
+
+    protected static DefineIsPropertyEvaluatedMethod(tb : TypeBuilder, inheritedBitsCount : int) : void
+    {
+      def     fields = tb.GetBitFieldManager().GetFields().ToArray();
+      mutable body   = <[ throw System.ArgumentOutOfRangeException("index") ]>;
+      for (mutable i = fields.Length; i > 0; --i)
+      {
+        body = <[
+          if (index < $(i * BitFieldManager.BitFieldSize))
+            this.$(fields[i - 1] : usesite) %&& (1 << (index % $(BitFieldManager.BitFieldSize)))
+          else
+            $body
+        ]>
+      }
+
+      if (inheritedBitsCount > 0)
+      {
+        tb.Define(<[ decl:
+          public override IsPropertyEvaluated(mutable index : int) : bool
+          {
+            unchecked
+            {
+              if (index < $(inheritedBitsCount : int))
+                base.IsPropertyEvaluated(index)
+              else
+              {
+                index = index - $(inheritedBitsCount : int);
+                $body;
+              }
+            }
+          }
+        ]>);
+      }
+      else
+      {
+        tb.Define(<[ decl:
+          public override IsPropertyEvaluated(index : int) : bool
+          {
+            _ = index;
+            unchecked ($body)
+          }
+        ]>);
+      }
     }
   }
 }

@@ -29,55 +29,116 @@ namespace Nitra.Compiler
     public override DefineTypes() : void
     {
       assert(_tb == null);
+
+      def baseTypes = SCG.List();
+      baseTypes.Add(<[ $(Environment.GetDeclarationType(_symbol.BaseDeclaration.Value) : typed) ]>);
+      when (_symbol.NameProperty is SymbolRef.Some(propertySymbol) when propertySymbol.DeclaringDeclaration == _symbol)
+        baseTypes.Add(<[ $(Environment.DeclarationTypeVar : typed) ]>);
+
+      def parentType = Environment.TypeCompiler.CompileParentType(_symbol);
       _tb = _parent.DefineNestedType(<[ decl:
-        public sealed partial class $(_symbol.Name : usesite) : $(Environment.GetDeclarationType(_symbol.BaseDeclaration.Value) : typed)
+        public sealed partial class $(_symbol.Name : usesite) : ..$baseTypes
         {
-          public this(parent : $(CompileNType(_symbol.ParentType)), span : $(Environment.NSpanTypeVar : typed))
+          public this(parent : $(parentType : typed), span : $(Environment.NSpanTypeVar : typed))
           {
             this.Parent = parent;
             this.Span = span;
           }
 
-          public override Parent : $(CompileNType(_symbol.ParentType)) { get; }
-          public override Span   : $(Environment.NSpanTypeVar : typed) { get; }
+          public override Parent : $(parentType : typed)                   { get; }
+          public override Span   : $(Environment.NSpanTypeVar : typed)     { get; }
         }
       ]>);
+    }
+
+    public override DefineMembers() : void
+    {
+      assert(_tb != null);
 
       def initParameters = SCG.List();
       def initStatements = SCG.List();
-      foreach (fieldSymbol in _symbol.Fields)
+
+      when (_symbol.NameProperty is SymbolRef.Some(propertySymbol))
       {
-        if (fieldSymbol.HasBody)
+        def propertyType = Environment.TypeCompiler.CompileNamePropertyType(propertySymbol);
+        initParameters.Add(<[ parameter : $(propertySymbol.Name : usesite) : $(propertyType : typed) ]>);
+        if (propertySymbol.DeclaringDeclaration == _symbol)
         {
-          _tb.DefineConditional(<[ decl:
-            [Nitra.Runtime.DeclarationFieldAttribute(true)]
-            public $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+          def backingFieldName = Util.tmpname(propertySymbol.Name);
+          initStatements.Add(<[ this.$(backingFieldName : usesite) = $(propertySymbol.Name : usesite) ]>);
+          _tb.Define(<[ decl:
+            private mutable $(backingFieldName : usesite) : $(propertyType : typed)
+          ]>);
+          _tb.Define(<[ decl:
+            public $(propertySymbol.Name : usesite) : $(propertyType : typed) implements $(Environment.DeclarationTypeVar : typed).Name
             {
-              get { $(fieldSymbol.Body.Expr) }
+              get { this.$(backingFieldName : usesite) }
             }
           ]>);
         }
         else
         {
-          def backingFieldName = Util.tmpname(fieldSymbol.Name);
-          _tb.DefineConditional(<[ decl:
-            private mutable $(backingFieldName : usesite) : $(MakeFieldType(fieldSymbol));
+          initStatements.Add(<[ this.$(propertySymbol.Name : usesite) = $(propertySymbol.Name : usesite) ]>);
+        }
+      }
+
+      def dependentProps = SCG.List();
+
+      def defineSimpleProperty(propertySymbol : SimpleDeclarationPropertySymbol) : void
+      {
+        def propertyType = Environment.TypeCompiler.CompileSimplePropertyType(propertySymbol);
+        if (propertySymbol.DeclaringDeclaration == _symbol)
+        {
+          def backingFieldName = Util.tmpname(propertySymbol.Name);
+          initParameters.Add(<[ parameter : $(propertySymbol.Name : usesite) : $(propertyType : typed) ]>);
+          initStatements.Add(<[ this.$(backingFieldName : usesite) = $(propertySymbol.Name : usesite) ]>);
+          _tb.Define(<[ decl:
+            private mutable $(backingFieldName : usesite) : $(propertyType : typed)
           ]>);
-          _tb.DefineConditional(<[ decl:
-            [Nitra.Runtime.DeclarationFieldAttribute(false)]
-            public $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol))
+          _tb.Define(<[ decl:
+            public $(propertySymbol.Name : usesite) : $(propertyType : typed)
             {
               get { this.$(backingFieldName : usesite) }
             }
           ]>);
-          initParameters.Add(<[ parameter : $(fieldSymbol.Name : usesite) : $(MakeFieldType(fieldSymbol)) ]>);
-          initStatements.Add(<[ this.$(backingFieldName : usesite) = $(fieldSymbol.Name : usesite) ]>);
+        }
+        else
+        {
+          initParameters.Add(<[ parameter : $(propertySymbol.Name : usesite) : $(propertyType : typed) ]>);
+          initStatements.Add(<[ this.$(propertySymbol.Name : usesite) = $(propertySymbol.Name : usesite) ]>);
         }
       }
 
-      _tb.DefineConditional(<[ decl:
-        public Initialize(..$initParameters) : void { ..$initStatements }
-      ]>);
+      mutable inheritedFieldsCount;
+
+      def defineDependentProperty(propertySymbol : DependentDeclarationPropertySymbol) : void
+      {
+        def index = dependentProps.Count;
+        dependentProps.Add(propertySymbol);
+
+        if (propertySymbol.DeclaringDeclaration == _symbol)
+        {
+          def bit         = _tb.GetBitFieldManager().Allocate();
+          def propertyRef = DependentDeclarationPropertyRef.Compiling(propertySymbol, index, bit);
+          DefineDependentProperty(_tb, propertyRef, NemerleModifiers.Public);
+        }
+        else
+        {
+          inheritedFieldsCount += 1;
+        }
+      }
+
+      // inherited properties comes first!
+      foreach (propertySymbol in _symbol.AllProperties)
+      {
+        | SimpleDeclarationPropertySymbol    as s => defineSimpleProperty(s)
+        | DependentDeclarationPropertySymbol as s => defineDependentProperty(s)
+        | _                                       => ()
+      }
+
+      DefineInitializeMethod(_tb, initParameters, initStatements);
+      DefineIsPropertyEvaluatedMethod(_tb, inheritedFieldsCount);
+      DefineDependentPropertiesEvaluation(_tb, _symbol);
     }
 
     public override Emit() : void

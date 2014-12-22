@@ -18,6 +18,7 @@ namespace Nitra.Compiler
     private         _symbol      : ExtensibleDeclarationSymbol;
     private mutable _baseTb      : TypeBuilder;
     private mutable _ambiguousTb : TypeBuilder;
+    private mutable _listTb      : TypeBuilder;
 
     public this(environment : EmitterEnvironment, symbol : ExtensibleDeclarationSymbol)
     {
@@ -28,15 +29,117 @@ namespace Nitra.Compiler
     public override DefineTypes() : void
     {
       assert(_baseTb == null);
+
+      def parentType = Environment.TypeCompiler.CompileParentType(_symbol);
+      def baseTypes = SCG.List();
+      baseTypes.Add(<[ Nitra.Declarations.Declaration[$(parentType : typed)] ]>);
+      foreach (baseDeclaration in _symbol.BaseDeclarations)
+        baseTypes.Add(<[ $(Environment.GetDeclarationType(baseDeclaration) : typed) ]>);
+      when (_symbol.NameProperty.HasValue)
+        baseTypes.Add(<[ $(Environment.DeclarationTypeVar : typed) ]>);
+
       _baseTb = NemerleEnv.Define(<[ decl:
-        public abstract partial class $(_symbol.Name : usesite) : Nitra.Declarations.Declaration[$(CompileNType(_symbol.ParentType))]
+        public abstract partial class $(_symbol.Name : usesite) : ..$baseTypes
         {
           protected this() { }
         }
       ]>);
 
       assert(_ambiguousTb == null);
-      _ambiguousTb = DefineAmbiguousDeclaration(_baseTb, _symbol.ParentType);
+      _ambiguousTb = DefineAmbiguousDeclaration(_baseTb, parentType);
+
+      assert(_listTb == null);
+      _listTb = DefineListProxy(_baseTb);
+    }
+
+    public override DefineMembers() : void
+    {
+      assert(_baseTb != null);
+
+      when (_symbol.NameProperty is SymbolRef.Some(propertySymbol))
+      {
+        def propertyType = Environment.TypeCompiler.CompileNamePropertyType(propertySymbol);
+        def backingFieldName = Util.tmpname(propertySymbol.Name);
+
+        _baseTb.Define(<[ decl:
+          private mutable $(backingFieldName : usesite) : $(propertyType : typed)
+        ]>);
+        _baseTb.Define(<[ decl:
+          public virtual $(propertySymbol.Name : usesite) : $(propertyType : typed)
+          {
+            get { this.$(backingFieldName : usesite) }
+            protected set { this.$(backingFieldName : usesite) = value }
+          }
+        ]>);
+        unless (propertySymbol.Name == "Name")
+        {
+          _baseTb.Define(<[ decl:
+            private $(Util.tmpname("Name") : usesite) : $(propertyType : typed) implements $(Environment.DeclarationTypeVar : typed).Name
+            {
+              get { this.$(propertySymbol.Name : usesite) }
+            }
+          ]>);
+        }
+
+        _ambiguousTb.Define(<[ decl:
+          public override $(propertySymbol.Name : usesite) : $(propertyType : typed)
+          {
+            get { this.Ambiguities[0].$(propertySymbol.Name : usesite) }
+          }
+        ]>);
+      }
+
+      def dependentProps = SCG.Dictionary();
+
+      def defineSimpleProperty(propertySymbol : SimpleDeclarationPropertySymbol) : void
+      {
+        def propertyType     = Environment.TypeCompiler.CompileSimplePropertyType(propertySymbol);
+        def backingFieldName = Util.tmpname(propertySymbol.Name);
+
+        _baseTb.Define(<[ decl:
+          private mutable $(backingFieldName : usesite) : $(propertyType : typed)
+        ]>);
+        _baseTb.Define(<[ decl:
+          public virtual $(propertySymbol.Name : usesite) : $(propertyType : typed)
+          {
+            get { this.$(backingFieldName : usesite) }
+            protected set { this.$(backingFieldName : usesite) = value }
+          }
+        ]>);
+
+        _ambiguousTb.Define(<[ decl:
+          public override $(propertySymbol.Name : usesite) : $(propertyType : typed)
+          {
+            get { this.Ambiguities[0].$(propertySymbol.Name : usesite) }
+          }
+        ]>);
+      }
+
+      def defineDependentProperty(propertySymbol : DependentDeclarationPropertySymbol) : void
+      {
+        def index = dependentProps.Count;
+        def bit   = _baseTb.GetBitFieldManager().Allocate();
+        assert(bit.Index == index);
+
+        def propertyRef = DependentDeclarationPropertyRef.Compiling(propertySymbol, index, bit);
+        dependentProps.Add(propertySymbol, propertyRef);
+
+        DefineDependentProperty(_baseTb, propertyRef, NemerleModifiers.Public | NemerleModifiers.Virtual);
+        DefineAmbiguousDependentProperty(_ambiguousTb, propertySymbol, index);
+      }
+
+      foreach (propertySymbol in _symbol.AllProperties)
+      {
+        | SimpleDeclarationPropertySymbol    as s => defineSimpleProperty(s)
+        | DependentDeclarationPropertySymbol as s => defineDependentProperty(s)
+        | _                                       => ()
+      }
+
+      DefineIsPropertyEvaluatedMethod(_baseTb, 0);
+      DefineDependentPropertiesEvaluation(_baseTb, _symbol);
+
+      assert(_listTb != null);
+      DefineListProxyMembers(_symbol, _listTb, dependentProps);
     }
 
     public override DefineNestedType(td : ClassMember.TypeDeclaration) : TypeBuilder
@@ -52,6 +155,9 @@ namespace Nitra.Compiler
 
       assert(_ambiguousTb != null);
       _ambiguousTb.Compile();
+
+      assert(_listTb != null);
+      _listTb.Compile();
     }
   }
 }

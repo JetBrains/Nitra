@@ -10,6 +10,7 @@ using Nemerle.Collections;
 using Nemerle.Imperative;
 using Nemerle.Compiler.Parsetree;
 
+using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Linq;
@@ -254,31 +255,22 @@ syntax module NitraSyntax
       }
   }
 
-  syntax NitraField = Name ":" NitraType RuleMethodBody
+  syntax DeclarationInheritance = ":" sm BaseDeclarations=(QualifiedIdentifier; "," sm)+
   {
-    CollectGlobalSymbols(site : IMemberSite) : void
+    Typing(context : Context) : list[DeclarationSymbol]
     {
-      def symbol =
-        match (site)
+      def result = List();
+      foreach (identifier in BaseDeclarations.Item1)
+      {
+        match (context.Bind.[DeclarationSymbol](identifier))
         {
-          | _ is DeclarationSymbol => ParsedDeclarationFieldSymbol(this);
-          | _                      => assert(false)
-        };
-      _ = site.Node.AddAndReport.[NitraFieldSymbol](symbol, Name.Location);
+          | SymbolRef.Some(AbstractDeclarationSymbol as declarationSymbol) => result.Add(declarationSymbol)
+          | SymbolRef.Some as symbolRef => Project.CurrentProject.Error(symbolRef.Location, "Only abstract declarations can be specified in base declarations list.", -1);
+          | _ => ()
+        }
+      }
+      result.ToNList();
     }
-    [Cached] MakeContext(parent : Context) : Context = parent;
-    [Cached] private MakeType() : NType = this.NitraType.Typing(this.Context)[0];
-    [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, this.Context));
-    Typing() : void
-    {
-      _ = MakeType();
-      _ = MakeBody();
-    }
-  }
-
-  syntax DeclarationParent = "where" "Parent" ":" ParentType=NitraType
-  {
-    Typing(context : Context) : NType = this.ParentType.Typing(context)[0];
   }
 
   syntax DeclarationBody = outline_begin_before nl "{" inl Members=DeclarationMember* d "}" outline_end_before nl
@@ -299,14 +291,122 @@ syntax module NitraSyntax
   syntax DeclarationMember
   {
     CollectGlobalSymbols(site : IMemberSite) : void;
-    [Cached] MakeContext(parent : Context) : Context;
+    [Cached] MakeContext(parent : Context) : Context = parent;
     Typing() : void;
 
-    | NitraField
+    | SimpleProperty = NameModifier="name"? Name sm ":" sm NitraType ";" nl
       {
-        override CollectGlobalSymbols = NitraField.CollectGlobalSymbols(site);
-        override MakeContext          = NitraField.MakeContext(parent);
-        override Typing               = NitraField.Typing();
+        private MakeSymbol() : DeclarationPropertySymbol
+        {
+          match (Name.Value())
+          {
+            | "Name"   => ParsedNameDeclarationPropertySymbol(this)
+            | "Parent" =>
+              when (NameModifier.HasValue)
+                Project.CurrentProject.Error(NameModifier.Location, "'name' modifier is not allowed for 'Parent' property.", -1);
+              ParsedParentDeclarationPropertySymbol(this)
+
+            | _ when NameModifier.HasValue => ParsedNameDeclarationPropertySymbol(this)
+            | _                            => ParsedSimpleDeclarationPropertySymbol(this)
+          }
+        }
+        override CollectGlobalSymbols
+        {
+          def symbol = MakeSymbol();
+          _ = site.Node.AddAndReport.[DeclarationPropertySymbol](symbol, Name.Location);
+        }
+        [Cached] private MakeType() : NType = this.NitraType.Typing(this.Context)[0];
+        override Typing
+        {
+          _ = MakeType();
+        }
+      }
+    | InProperty = "in" Name sm ":" sm NitraType ";" nl
+      {
+        [Cached] private MakeSite(site : IMemberSite) : IMemberSite = site;
+        [Cached] private MakeSymbol() : ParsedInDeclarationPropertySymbol = ParsedInDeclarationPropertySymbol(this);
+        override CollectGlobalSymbols
+        {
+          TypingUtils.CheckSpecialPropertyNames(Name);
+          _ = MakeSite(site);
+          _ = site.Node.AddAndReport.[DeclarationPropertySymbol](MakeSymbol(), Name.Location);
+        }
+        [Cached] private MakeType() : NType = this.NitraType.Typing(this.Context)[0];
+        override Typing
+        {
+          _ = MakeType();
+        }
+      }
+    | OutProperty = "out" Name sm ":" sm NitraType DependentPropertyValue
+      {
+        [Cached] private MakeSite(site : IMemberSite) : IMemberSite = site;
+        [Cached] private MakeSymbol() : ParsedOutDeclarationPropertySymbol = ParsedOutDeclarationPropertySymbol(this);
+        override CollectGlobalSymbols
+        {
+          TypingUtils.CheckSpecialPropertyNames(Name);
+          _ = MakeSite(site);
+          _ = site.Node.AddAndReport.[DeclarationPropertySymbol](MakeSymbol(), Name.Location);
+        }
+        [Cached] private MakeType() : NType = this.NitraType.Typing(this.Context)[0];
+        override Typing
+        {
+          _ = MakeType();
+          when (this.DependentPropertyValue.HasValue())
+          {
+            def assignment = DependentPropertyAssignment(this.Location, [LocatedName(Name.Location, Symbol.Name)], NemerleParser.Parse(this.DependentPropertyValue, this.Context));
+            TypingUtils.RegisterDependentPropertyAssignment(this.Site, assignment)
+          }
+        }
+      }
+    | InOutProperty = "inout" Name sm ":" sm NitraType DependentPropertyValue
+      {
+        [Cached] private MakeSite(site : IMemberSite) : IMemberSite = site;
+        [Cached] private MakeInSymbol() : ParsedAutoInDeclarationPropertySymbol = ParsedAutoInDeclarationPropertySymbol(this);
+        [Cached] private MakeOutSymbol() : ParsedAutoOutDeclarationPropertySymbol = ParsedAutoOutDeclarationPropertySymbol(this);
+        override CollectGlobalSymbols
+        {
+          TypingUtils.CheckSpecialPropertyNames(Name);
+          _ = MakeSite(site);
+          _ = site.Node.AddAndReport.[DeclarationPropertySymbol](MakeInSymbol(), Name.Location);
+          _ = site.Node.AddAndReport.[DeclarationPropertySymbol](MakeOutSymbol(), Name.Location);
+        }
+        [Cached] private MakeType() : NType = this.NitraType.Typing(this.Context)[0];
+        override Typing
+        {
+          _ = MakeType();
+          when (this.DependentPropertyValue.HasValue())
+          {
+            def assignment = DependentPropertyAssignment(this.Location, [LocatedName(Name.Location, OutSymbol.Name)], NemerleParser.Parse(this.DependentPropertyValue, this.Context));
+            TypingUtils.RegisterDependentPropertyAssignment(this.Site, assignment)
+          }
+        }
+      }
+    | PropertyAssignment = QualifiedIdentifier sm "=" sm Expression ";"
+      {
+        [Cached] private MakeSite(site : IMemberSite) : IMemberSite = site;
+        override CollectGlobalSymbols { _ = MakeSite(site) }
+        override Typing
+        {
+          def assignment = DependentPropertyAssignment(this.Location, this.QualifiedIdentifier.CalcLocations().Map(LocatedName(_)), NemerleParser.Parse(this.Expression, this.Context));
+          TypingUtils.RegisterDependentPropertyAssignment(this.Site, assignment)
+        }
+      }
+  }
+
+  syntax DependentPropertyValue
+  {
+    ValueLocation() : Nitra.Location;
+    HasValue() : bool;
+
+    | Expression = sm "=" sm Expression ";" nl
+      {
+        override ValueLocation = Expression.Location;
+        override HasValue = true;
+      }
+    | Empty = ";" nl
+      {
+        override ValueLocation = Location(this.Location.Source, this.Location.StartPos, this.Location.StartPos);
+        override HasValue = false;
       }
   }
 
@@ -316,30 +416,15 @@ syntax module NitraSyntax
     [Cached] MakeContext(parent : Context) : Context;
     Typing() : void;
 
-    | NitraField
+    | SimpleField = "not" "implemented"
       {
-        override CollectGlobalSymbols = NitraField.CollectGlobalSymbols(site);
-        override MakeContext          = NitraField.MakeContext(parent);
-        override Typing               = NitraField.Typing();
+        override CollectGlobalSymbols { _ = site }
+        override MakeContext          = parent;
+        override Typing               = ();
       }
   }
-  
-  syntax ExtensibleDeclarationBody = outline_begin_before nl "{" inl Options=DeclarationOption* d "}" outline_end_before nl
-  {
-    CollectGlobalSymbols(site : IMemberSite) : void
-    {
-      foreach (option in Options)
-        option.CollectGlobalSymbols(site);
-    }
-    [Cached] MakeContext(parent : Context) : Context = PassThrough(Options, parent, _.MakeContext(_));
-    Typing(baseDeclarationRef : SymbolRef[ExtensibleDeclarationSymbol]) : void
-    {
-      foreach (option in Options)
-        option.Typing(baseDeclarationRef);
-    }
-  }
-  
-  syntax DeclarationOption = "|" sm Name Body=DeclarationBody?
+
+  syntax DeclarationExtension = "|" sm Name Body=DeclarationBody?
   {
     [Cached] MakeDeclarationSymbol() : ParsedExtensionDeclarationSymbol = ParsedExtensionDeclarationSymbol(this);
     CollectGlobalSymbols(site : IMemberSite) : void
@@ -390,15 +475,15 @@ syntax module NitraSyntax
         override Typing = foreach (member in Members) member.Typing();
       }
 
-    | SimpleDeclaration = "declaration" sm Name DeclarationParent? Body=DeclarationBody
+    | AbstractDeclaration = "abstract" "declaration" sm Name DeclarationInheritance? Body=DeclarationBody
       {
-        [Cached] private MakeDeclarationSymbol() : ParsedSimpleDeclarationSymbol = ParsedSimpleDeclarationSymbol(this);
-        [Cached] private MakeParentType() : NType
+        [Cached] private MakeDeclarationSymbol() : ParsedAbstractDeclarationSymbol = ParsedAbstractDeclarationSymbol(this);
+        [Cached] private MakeBaseDeclarations() : list[DeclarationSymbol]
         {
-          if (DeclarationParentOpt.HasValue)
-            DeclarationParentOpt.Value.Typing(this.Context)
+          if (DeclarationInheritanceOpt.HasValue)
+            DeclarationInheritanceOpt.Value.Typing(this.Context)
           else
-            Utils.GetDefaultDeclarationParentType(Name.Location)
+            []
         }
         override CollectGlobalSymbols
         {
@@ -414,20 +499,20 @@ syntax module NitraSyntax
         }
         override Typing
         {
-          _ = MakeParentType();
+          _ = MakeBaseDeclarations();
           Body.Typing();
         }
       }
 
-    | ExtensibleDeclaration = "declarations" sm Name DeclarationParent? Body=ExtensibleDeclarationBody
+    | SimpleDeclaration = "declaration" sm Name DeclarationInheritance? Body=DeclarationBody
       {
-        [Cached] private MakeDeclarationSymbol() : ParsedExtensibleDeclarationSymbol = ParsedExtensibleDeclarationSymbol(this);
-        [Cached] private MakeParentType() : NType
+        [Cached] private MakeDeclarationSymbol() : ParsedSimpleDeclarationSymbol = ParsedSimpleDeclarationSymbol(this);
+        [Cached] private MakeBaseDeclarations() : list[DeclarationSymbol]
         {
-          if (DeclarationParentOpt.HasValue)
-            DeclarationParentOpt.Value.Typing(this.Context)
+          if (DeclarationInheritanceOpt.HasValue)
+            DeclarationInheritanceOpt.Value.Typing(this.Context)
           else
-            Utils.GetDefaultDeclarationParentType(Name.Location)
+            []
         }
         override CollectGlobalSymbols
         {
@@ -443,13 +528,81 @@ syntax module NitraSyntax
         }
         override Typing
         {
-          _ = MakeParentType();
+          _ = MakeBaseDeclarations();
+          Body.Typing();
+        }
+      }
+
+    | ExtensibleDeclaration = "declarations" sm Name DeclarationInheritance? Body
+      {
+        syntax Body = outline_begin_before nl "{" inl Members=DeclarationMember* Extensions=DeclarationExtension* d "}" outline_end_before nl
+        {
+          CollectGlobalSymbols(site : IMemberSite) : void
+          {
+            foreach (member in Members)
+              member.CollectGlobalSymbols(site);
+            foreach (extension in Extensions)
+              extension.CollectGlobalSymbols(site);
+          }
+          [Cached] MakeContext(parent : Context) : Context
+          {
+            def context1 = PassThrough(Members, parent, _.MakeContext(_));
+            def context2 = PassThrough(Extensions, context1, _.MakeContext(_));
+            context2
+          }
+          Typing(baseDeclarationRef : SymbolRef[ExtensibleDeclarationSymbol]) : void
+          {
+            foreach (member in Members)
+              member.Typing();
+            foreach (extension in Extensions)
+              extension.Typing(baseDeclarationRef);
+          }
+        }
+
+        [Cached] private MakeDeclarationSymbol() : ParsedExtensibleDeclarationSymbol = ParsedExtensibleDeclarationSymbol(this);
+        [Cached] private MakeBaseDeclarations() : list[DeclarationSymbol]
+        {
+          if (DeclarationInheritanceOpt.HasValue)
+            DeclarationInheritanceOpt.Value.Typing(this.Context)
+          else
+            []
+        }
+        override CollectGlobalSymbols
+        {
+          def symbol = MakeDeclarationSymbol();
+          _ = ns.Node.AddAndReport.[DeclarationSymbol](symbol, Name.Location);
+          Body.CollectGlobalSymbols(symbol);
+        }
+        override MakeContext
+        {
+          def  context1 = DeclarationContext(parent, this.DeclarationSymbol);
+          def _context2 = Body.MakeContext(context1);
+          parent
+        }
+        override Typing
+        {
+          _ = MakeBaseDeclarations();
           Body.Typing(SymbolRef.Some(Name.Location, false, DeclarationSymbol));
         }
       }
 
-    | ExtendDeclaration = "extend" "declarations" sm (Name sm "=" sm)? BaseName=QualifiedName Body=ExtensibleDeclarationBody
+    | ExtendDeclaration = "extend" "declarations" sm (Name sm "=" sm)? BaseName=QualifiedName Body
       {
+        syntax Body = outline_begin_before nl "{" inl Extensions=DeclarationExtension* d "}" outline_end_before nl
+        {
+          CollectGlobalSymbols(site : IMemberSite) : void
+          {
+            foreach (extension in Extensions)
+              extension.CollectGlobalSymbols(site);
+          }
+          [Cached] MakeContext(parent : Context) : Context = PassThrough(Extensions, parent, _.MakeContext(_));
+          Typing(baseDeclarationRef : SymbolRef[ExtensibleDeclarationSymbol]) : void
+          {
+            foreach (extension in Extensions)
+              extension.Typing(baseDeclarationRef);
+          }
+        }
+
         override CollectGlobalSymbols
         {
           def symbol = ParsedExtendDeclarationSymbol(this);
@@ -841,7 +994,7 @@ syntax module NitraSyntax
       {
         override GetDeclarationMappingField
         {
-          def fieldRef  = Utils.BindByHierarchy.[NitraFieldSymbol](declarationSymbol, this.FieldName);
+          def fieldRef  = TypingUtils.BindDeclarationField(declarationSymbol, this.FieldName);
           def fieldName = this.RuleFieldName.GetText();
           DeclarationMappingField.Automatic(this.Location, fieldRef, this.RuleFieldName.Location, fieldName)
         }
@@ -850,7 +1003,7 @@ syntax module NitraSyntax
       {
         override GetDeclarationMappingField
         {
-          def fieldRef = Utils.BindByHierarchy.[NitraFieldSymbol](declarationSymbol, this.FieldName);
+          def fieldRef = TypingUtils.BindDeclarationField(declarationSymbol, this.FieldName);
           def code     = NemerleParser.Parse(this.Code, this.Context);
           DeclarationMappingField.Inline(this.Location, fieldRef, code)
         }
@@ -894,6 +1047,11 @@ syntax module NitraSyntax
       {
         override GetDeclarationMappingBody = DeclarationMappingBody.Delegate(this.Location, declarationSymbol);
       }
+    | Map = sm "<-" sm QualifiedName ";"
+      {
+        override GetDeclarationMappingBody = DeclarationMappingBody.Inline(this.Location, declarationSymbol, 
+          <[ $(NemerleParser.Parse(this.QualifiedName, this.Context)).GetDeclaration(parent) ]>);
+      }
     | Inline = sm "=" sm Expr=MapDeclarationExpression
       {
         override GetDeclarationMappingBody = DeclarationMappingBody.Inline(this.Location, declarationSymbol, NemerleParser.Parse(this.Expr, this.Context));
@@ -912,7 +1070,7 @@ syntax module NitraSyntax
             when (mappingField.Field is SymbolRef.Some(field))
             {
               def fieldName = field.Name;
-              if (field.HasBody)
+              if (!(field is SimpleDeclarationPropertySymbol || field is NameDeclarationPropertySymbol))
                 Project.CurrentProject.Error(mappingField.Field.Location, $"Field '$fieldName' is not assignable.", -1);
               else if (initializedFields.ContainsKey(field))
               {
@@ -926,7 +1084,7 @@ syntax module NitraSyntax
             }
           }
 
-          foreach (requiredField when !requiredField.HasBody in declarationSymbol.Value.Fields)
+          foreach (requiredField when requiredField is SimpleDeclarationPropertySymbol in declarationSymbol.Value.AllProperties)
           {
             def fieldName = requiredField.Name;
             unless (initializedFields.ContainsKey(requiredField))
