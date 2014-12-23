@@ -265,7 +265,7 @@ syntax module NitraSyntax
         match (context.Bind.[DeclarationSymbol](identifier))
         {
           | SymbolRef.Some(AbstractDeclarationSymbol as declarationSymbol) => result.Add(declarationSymbol)
-          | SymbolRef.Some as symbolRef => Project.CurrentProject.Error(symbolRef.Location, "Only abstract declarations can be specified in base declarations list.", -1);
+          | SymbolRef.Some as symbolRef => context.Project.Error(symbolRef.Location, "Only abstract declarations can be specified in base declarations list.", -1);
           | _ => ()
         }
       }
@@ -296,14 +296,13 @@ syntax module NitraSyntax
 
     | SimpleProperty = NameModifier="name"? Name sm ":" sm NitraType ";" nl
       {
-        private MakeSymbol() : DeclarationPropertySymbol
+        private MakeSymbol(compilationMessages : ICompilerMessages) : DeclarationPropertySymbol
         {
           match (Name.Value())
           {
-            | "Name"   => ParsedNameDeclarationPropertySymbol(this)
             | "Parent" =>
               when (NameModifier.HasValue)
-                Project.CurrentProject.Error(NameModifier.Location, "'name' modifier is not allowed for 'Parent' property.", -1);
+                compilationMessages.Error(NameModifier.Location, "'name' modifier is not allowed for 'Parent' property.", -1);
               ParsedParentDeclarationPropertySymbol(this)
 
             | _ when NameModifier.HasValue => ParsedNameDeclarationPropertySymbol(this)
@@ -312,7 +311,7 @@ syntax module NitraSyntax
         }
         override CollectGlobalSymbols
         {
-          def symbol = MakeSymbol();
+          def symbol = MakeSymbol(site.Node.Project);
           _ = site.Node.AddAndReport.[DeclarationPropertySymbol](symbol, Name.Location);
         }
         [Cached] private MakeType() : NType = this.NitraType.Typing(this.Context)[0];
@@ -327,7 +326,7 @@ syntax module NitraSyntax
         [Cached] private MakeSymbol() : ParsedInDeclarationPropertySymbol = ParsedInDeclarationPropertySymbol(this);
         override CollectGlobalSymbols
         {
-          TypingUtils.CheckSpecialPropertyNames(Name);
+          TypingUtils.CheckSpecialPropertyNames(Name, site.Node.Project);
           _ = MakeSite(site);
           _ = site.Node.AddAndReport.[DeclarationPropertySymbol](MakeSymbol(), Name.Location);
         }
@@ -343,7 +342,7 @@ syntax module NitraSyntax
         [Cached] private MakeSymbol() : ParsedOutDeclarationPropertySymbol = ParsedOutDeclarationPropertySymbol(this);
         override CollectGlobalSymbols
         {
-          TypingUtils.CheckSpecialPropertyNames(Name);
+          TypingUtils.CheckSpecialPropertyNames(Name, site.Node.Project);
           _ = MakeSite(site);
           _ = site.Node.AddAndReport.[DeclarationPropertySymbol](MakeSymbol(), Name.Location);
         }
@@ -354,7 +353,7 @@ syntax module NitraSyntax
           when (this.DependentPropertyValue.HasValue())
           {
             def assignment = DependentPropertyAssignment(this.Location, [LocatedName(Name.Location, Symbol.Name)], NemerleParser.Parse(this.DependentPropertyValue, this.Context));
-            TypingUtils.RegisterDependentPropertyAssignment(this.Site, assignment)
+            TypingUtils.RegisterDependentPropertyAssignment(this.Site, assignment, this.Context.Project)
           }
         }
       }
@@ -365,7 +364,7 @@ syntax module NitraSyntax
         [Cached] private MakeOutSymbol() : ParsedAutoOutDeclarationPropertySymbol = ParsedAutoOutDeclarationPropertySymbol(this);
         override CollectGlobalSymbols
         {
-          TypingUtils.CheckSpecialPropertyNames(Name);
+          TypingUtils.CheckSpecialPropertyNames(Name, site.Node.Project);
           _ = MakeSite(site);
           _ = site.Node.AddAndReport.[DeclarationPropertySymbol](MakeInSymbol(), Name.Location);
           _ = site.Node.AddAndReport.[DeclarationPropertySymbol](MakeOutSymbol(), Name.Location);
@@ -377,7 +376,7 @@ syntax module NitraSyntax
           when (this.DependentPropertyValue.HasValue())
           {
             def assignment = DependentPropertyAssignment(this.Location, [LocatedName(Name.Location, OutSymbol.Name)], NemerleParser.Parse(this.DependentPropertyValue, this.Context));
-            TypingUtils.RegisterDependentPropertyAssignment(this.Site, assignment)
+            TypingUtils.RegisterDependentPropertyAssignment(this.Site, assignment, this.Context.Project)
           }
         }
       }
@@ -388,7 +387,7 @@ syntax module NitraSyntax
         override Typing
         {
           def assignment = DependentPropertyAssignment(this.Location, this.QualifiedIdentifier.CalcLocations().Map(LocatedName(_)), NemerleParser.Parse(this.Expression, this.Context));
-          TypingUtils.RegisterDependentPropertyAssignment(this.Site, assignment)
+          TypingUtils.RegisterDependentPropertyAssignment(this.Site, assignment, this.Context.Project)
         }
       }
   }
@@ -631,11 +630,12 @@ syntax module NitraSyntax
         {
           def declarationSymbol = SymbolRef.Create(DeclarationName, this.Context.Bind.[DeclarationSymbol](DeclarationName));
           def ruleName          = if (RuleName.HasValue) RuleName.Value.Item2 else DeclarationName;
-          def ruleSymbol        = SymbolRef.Create(ruleName, this.Context.Bind.[SyntaxRuleSymbol](ruleName));
-          when (ruleSymbol.IsSome && declarationSymbol.IsSome)
+          def ruleSymbolRef     = SymbolRef.Create(ruleName, this.Context.Bind.[SyntaxRuleSymbol](ruleName));
+          when (ruleSymbolRef.IsSome && declarationSymbol.IsSome)
           {
-            def body = MapDeclarationBody.GetDeclarationMappingBody(declarationSymbol, ruleSymbol.Value);
-            ruleSymbol.Value.SetDeclarationMappingBody(body);
+            def ruleSymbol = ruleSymbolRef.GetValue(this.Context.Project);
+            def body       = MapDeclarationBody.GetDeclarationMappingBody(declarationSymbol, ruleSymbol);
+            ruleSymbol.SetDeclarationMappingBody(body);
           }
         }
         override Typing { }
@@ -865,7 +865,7 @@ syntax module NitraSyntax
         {
           def baseRule = this.Symbol.Extend;
           when (baseRule is Some(symbol) when symbol.Options.IsTokenRule)
-            Project.CurrentProject.Error(BaseName.Location, "Can't extend token with syntax rule.", -1);
+            Context.Project.Error(BaseName.Location, "Can't extend token with syntax rule.", -1);
           foreach (m in ExtensionRules)
             m.Typing(baseRule);
         }
@@ -895,7 +895,7 @@ syntax module NitraSyntax
         {
           def baseRule = this.Symbol.Extend;
           when (baseRule is Some(symbol) when !symbol.Options.IsTokenRule)
-            Project.CurrentProject.Error(BaseName.Location, "Can't extend syntax rule with token.", -1);
+            Context.Project.Error(BaseName.Location, "Can't extend syntax rule with token.", -1);
           foreach (m in ExtensionRules)
             m.Typing(baseRule);
         }
@@ -918,13 +918,13 @@ syntax module NitraSyntax
         [Cached] private MakeSymbol(context : Context) : SpanClassSymbol
         {
           def symbol = ParsedSpanClassSymbol(this, context);
-          NitraProject.CurrentProject.AddSymbolDef(symbol, Name.Location);
+          context.Project.AddSymbolDef(symbol, Name.Location);
           symbol
         }
         [Cached] private RegularRule() : option[RegularRule] = MatchTokens.Map(t =>
         {
           def rr = t.Item2.Typing();
-          rr.ValidateRegularRule();
+          rr.ValidateRegularRule(Context.Project);
           rr
         });
         override MakeContext
@@ -949,8 +949,9 @@ syntax module NitraSyntax
         }
         override Typing
         {
-          Open.Typing().ValidateRegularRule();
-          Close.Typing().ValidateRegularRule();
+          def compilationMessages = Context.Project;
+          Open.Typing().ValidateRegularRule(compilationMessages);
+          Close.Typing().ValidateRegularRule(compilationMessages);
         }
       }
     | KeywordRegex        = "keyword" sm "regex"  sm MatchTokens=RegexExpression sm "rule" sm QualifiedName ";"nl
@@ -966,15 +967,15 @@ syntax module NitraSyntax
 
   syntax RuleAlias = "alias" sm Name sm "=" sm RuleExpression ";"nl
   {
-    [Cached] private MakeSymbol() : RuleAliasSymbol
+    [Cached] private MakeSymbol(project : Project) : RuleAliasSymbol
     {
       def symbol = ParsedRuleAliasSymbol(this);
-      NitraProject.CurrentProject.AddSymbolDef(symbol, Name.Location);
+      project.AddSymbolDef(symbol, Name.Location);
       symbol
     }
     MakeContext(parent : Context) : Context
     {
-      RuleAliasContext(parent, MakeSymbol());
+      RuleAliasContext(parent, MakeSymbol(parent.Project));
     }
   }
 
@@ -994,7 +995,7 @@ syntax module NitraSyntax
       {
         override GetDeclarationMappingField
         {
-          def fieldRef  = TypingUtils.BindDeclarationField(declarationSymbol, this.FieldName);
+          def fieldRef  = TypingUtils.BindDeclarationField(declarationSymbol, this.FieldName, Context.Project);
           def fieldName = this.RuleFieldName.GetText();
           DeclarationMappingField.Automatic(this.Location, fieldRef, this.RuleFieldName.Location, fieldName)
         }
@@ -1003,7 +1004,7 @@ syntax module NitraSyntax
       {
         override GetDeclarationMappingField
         {
-          def fieldRef = TypingUtils.BindDeclarationField(declarationSymbol, this.FieldName);
+          def fieldRef = TypingUtils.BindDeclarationField(declarationSymbol, this.FieldName, Context.Project);
           def code     = NemerleParser.Parse(this.Code, this.Context);
           DeclarationMappingField.Inline(this.Location, fieldRef, code)
         }
@@ -1013,25 +1014,28 @@ syntax module NitraSyntax
         override MakeContext = if (Body.HasValue) Body.Value.MakeContext(parent) else parent;
         override GetDeclarationMappingField
         {
+          def compilationMessages = Context.Project;
           if (declarationSymbol is ExtensibleDeclarationSymbol)
           {
             def ruleName              = if (this.RuleName.HasValue) this.RuleName.Value.Item2 else this.DeclarationName;
-            def currentDeclarationRef = Utils.BindByHierarchy.[DeclarationSymbol](declarationSymbol, this.DeclarationName);
-            def currentRuleRef        = Utils.BindByHierarchy.[SyntaxRuleSymbol](_ruleSymbol, ruleName);
-            when (currentDeclarationRef.IsSome && currentRuleRef.IsSome)
+            def currentDeclarationRef = Utils.BindByHierarchy.[DeclarationSymbol](declarationSymbol, this.DeclarationName, compilationMessages);
+            def currentRuleRef        = Utils.BindByHierarchy.[SyntaxRuleSymbol](_ruleSymbol, ruleName, compilationMessages);
+
+            when (currentDeclarationRef.IsSome)
+            when (currentRuleRef is SymbolRef.Some(currentRule))
             {
               def declarationMappingBody =
                 if (this.Body.HasValue)
-                  this.Body.Value.GetDeclarationMappingBody(currentDeclarationRef, currentRuleRef.Value)
+                  this.Body.Value.GetDeclarationMappingBody(currentDeclarationRef, currentRule)
                 else
                   DeclarationMappingBody.Delegate(this.DeclarationName.Location, currentDeclarationRef);
-              currentRuleRef.Value.SetDeclarationMappingBody(declarationMappingBody)
+              currentRule.SetDeclarationMappingBody(declarationMappingBody)
             }
           }
           else
           {
             def name = declarationSymbol.Name;
-            Project.CurrentProject.Error(this.DeclarationName.Location, $"Declaration '$name' is not extensible.", -1);
+            compilationMessages.Error(this.DeclarationName.Location, $"Declaration '$name' is not extensible.", -1);
           }
           null
         }
@@ -1041,40 +1045,43 @@ syntax module NitraSyntax
   syntax MapDeclarationBody
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    GetDeclarationMappingBody(declarationSymbol : SymbolRef[DeclarationSymbol], _ruleSymbol : SyntaxRuleSymbol) : DeclarationMappingBody;
+    GetDeclarationMappingBody(declarationSymbolRef : SymbolRef[DeclarationSymbol], _ruleSymbol : SyntaxRuleSymbol) : DeclarationMappingBody;
 
     | Delegate = ";"
       {
-        override GetDeclarationMappingBody = DeclarationMappingBody.Delegate(this.Location, declarationSymbol);
+        override GetDeclarationMappingBody = DeclarationMappingBody.Delegate(this.Location, declarationSymbolRef);
       }
     | Map = sm "<-" sm QualifiedName ";"
       {
-        override GetDeclarationMappingBody = DeclarationMappingBody.Inline(this.Location, declarationSymbol, 
+        override GetDeclarationMappingBody = DeclarationMappingBody.Inline(this.Location, declarationSymbolRef, 
           <[ $(NemerleParser.Parse(this.QualifiedName, this.Context)).GetDeclaration(parent) ]>);
       }
     | Inline = sm "=" sm Expr=MapDeclarationExpression
       {
-        override GetDeclarationMappingBody = DeclarationMappingBody.Inline(this.Location, declarationSymbol, NemerleParser.Parse(this.Expr, this.Context));
+        override GetDeclarationMappingBody = DeclarationMappingBody.Inline(this.Location, declarationSymbolRef, NemerleParser.Parse(this.Expr, this.Context));
       }
     | PerMember = outline_begin_before nl OpenBrace="{" inl Members=MapDeclarationMember* d CloseBrace="}" outline_end_before nl
       {
         override MakeContext = PassThrough(Members, parent, _.MakeContext(_));
         override GetDeclarationMappingBody
         {
+          def compilationMessages = this.Context.Project;
+          def declarationSymbol   = declarationSymbolRef.GetValue(compilationMessages);
+
           def initializedFields = Dictionary();
           def buffer = List();
           foreach (member in Members)
           {
-            def mappingField = member.GetDeclarationMappingField(declarationSymbol.Value, _ruleSymbol);
+            def mappingField = member.GetDeclarationMappingField(declarationSymbol, _ruleSymbol);
             when (mappingField != null)
             when (mappingField.Field is SymbolRef.Some(field))
             {
               def fieldName = field.Name;
               if (!(field is SimpleDeclarationPropertySymbol || field is NameDeclarationPropertySymbol))
-                Project.CurrentProject.Error(mappingField.Field.Location, $"Field '$fieldName' is not assignable.", -1);
+                compilationMessages.Error(mappingField.Field.Location, $"Field '$fieldName' is not assignable.", -1);
               else if (initializedFields.ContainsKey(field))
               {
-                using (messages = Project.CurrentProject.RootError(mappingField.Field.Location, $"Duplicatate assignment of field '$fieldName'.", -1))
+                using (messages = compilationMessages.RootError(mappingField.Field.Location, $"Duplicatate assignment of field '$fieldName'.", -1))
                   messages.Hint(initializedFields[field], "First assigned here.", -1);
               }
               else
@@ -1084,14 +1091,14 @@ syntax module NitraSyntax
             }
           }
 
-          foreach (requiredField when requiredField is SimpleDeclarationPropertySymbol in declarationSymbol.Value.AllProperties)
+          foreach (requiredField when requiredField is SimpleDeclarationPropertySymbol in declarationSymbol.AllProperties)
           {
             def fieldName = requiredField.Name;
             unless (initializedFields.ContainsKey(requiredField))
-              Project.CurrentProject.Error(Location(this.Location.Source, this.CloseBrace), $"Assignment of field '$fieldName' is required.", -1);
+              compilationMessages.Error(Location(this.Location.Source, this.CloseBrace), $"Assignment of field '$fieldName' is required.", -1);
           }
 
-          DeclarationMappingBody.PerField(this.Location, declarationSymbol, buffer.ToNList())
+          DeclarationMappingBody.PerField(this.Location, declarationSymbolRef, buffer.ToNList())
         }
       }
   }
@@ -1708,30 +1715,34 @@ syntax module NitraSyntax
   syntax RuleMethod = RuleMethodAttributes RuleMethodPrivate? Name sm "(" (RuleMethodsParam; "," sm)* ")" sm ":" sm Type RuleMethodBody
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    [Cached] private MakeSymbol(ruleSymbol : SyntaxRuleSymbol) : RuleMethod.DefinitionSymbol
+    [Cached] private MakeSymbol(ruleSymbol : SyntaxRuleSymbol, compilationMessages : ICompilerMessages) : RuleMethod.DefinitionSymbol
     {
       if (RuleMethodPrivateOpt.HasValue)
       {
         when (RuleMethodBody.IsEmpty())
-          Project.CurrentProject.Error(this.Location, "A private rule method must have a body.", -1);
+          compilationMessages.Error(this.Location, "A private rule method must have a body.", -1);
         unless (ruleSymbol is SimpleRuleSymbol || ruleSymbol is ExtensionRuleSymbol)
-          Project.CurrentProject.Error(this.Location, "A private rule method can be declared only in simple rules and extension rules.", -1);
+          compilationMessages.Error(this.Location, "A private rule method can be declared only in simple rules and extension rules.", -1);
         RuleMethod.ParsedDefPrivateSymbol(this)
       }
       else if (RuleMethodBody.IsEmpty())
       {
         unless (ruleSymbol is ExtensibleRuleSymbol)
-          Project.CurrentProject.Error(this.Location, "An abstract rule method must be defined in an extension point rule only.", -1);
+          compilationMessages.Error(this.Location, "An abstract rule method must be defined in an extension point rule only.", -1);
         RuleMethod.ParsedAbstractSymbol(this)
       }
       else
       {
         unless (ruleSymbol is SimpleRuleSymbol || ruleSymbol is ExtensibleRuleSymbol)
-          Project.CurrentProject.Error(this.Location, "A public rule method must be defined in an extension point rule or a simple rule only.", -1);
+          compilationMessages.Error(this.Location, "A public rule method must be defined in an extension point rule or a simple rule only.", -1);
         RuleMethod.ParsedDefSymbol(this)
       }
     }
-    CollectGlobalSymbols(ruleSymbol : SyntaxRuleSymbol) : void = _ = ruleSymbol.Node.AddAndReport(MakeSymbol(ruleSymbol), this.Location);
+    CollectGlobalSymbols(ruleSymbol : SyntaxRuleSymbol) : void
+    {
+      def compilationMessages = ruleSymbol.Node.Project;
+      _ = ruleSymbol.Node.AddAndReport(MakeSymbol(ruleSymbol, compilationMessages), this.Location);
+    }
     [Cached] private MakeSignature() : RuleMethod.RuleMethodSignature = RuleMethod.RuleMethodSignature(this.Location, NemerleParser.Parse(this.RuleMethodsParams.Item1, Context), NemerleParser.Parse(this.Type, Context));
     [Cached] private MakeBody()      : RuleMethod.RuleMethodBody      = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
     [Cached] private MakeIsCached()  : bool                           = RuleMethodAttributes.IsCached();
@@ -1746,14 +1757,17 @@ syntax module NitraSyntax
   syntax RuleMethodOverride = RuleMethodAttributes "override"     sm  Name RuleMethodBody
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    [Cached] private MakeSymbol() : RuleMethod.DefinitionSymbol
+    [Cached] private MakeSymbol(compilationMessages : ICompilerMessages) : RuleMethod.DefinitionSymbol
     {
       when (RuleMethodBody.IsEmpty())
-        Project.CurrentProject.Error(this.Location, "An overriding rule method must have a body.", -1);
+        compilationMessages.Error(this.Location, "An overriding rule method must have a body.", -1);
       RuleMethod.ParsedOverrideSymbol(this);
     }
-    CollectGlobalSymbols(ruleSymbol : SyntaxRuleSymbol) : void = _ = ruleSymbol.Node.AddAndReport(MakeSymbol(), this.Location);
-    [Cached] private MakeBaseRuleMethod() : SymbolRef[RuleMethod.RuleMethodSymbol]
+    CollectGlobalSymbols(ruleSymbol : SyntaxRuleSymbol) : void
+    {
+      _ = ruleSymbol.Node.AddAndReport(MakeSymbol(ruleSymbol.Node.Project), this.Location);
+    }
+    [Cached] private MakeBaseRuleMethod(compilationMessages : ICompilerMessages) : SymbolRef[RuleMethod.RuleMethodSymbol]
     {
       match (this.Symbol.DeclaringRule)
       {
@@ -1766,24 +1780,25 @@ syntax module NitraSyntax
 
             | [_] =>
               def name = Name.Value();
-              Project.CurrentProject.Error(this.Location, $"Cannot override '$name' rule method.", -1); //TODO: rewrite error message!
+              compilationMessages.Error(this.Location, $"Cannot override '$name' rule method.", -1); //TODO: rewrite error message!
               SymbolRef.None(Name.Location, false)
 
             | _ =>
               def name = Name.Value();
-              Project.CurrentProject.Error(this.Location, $"No '$name' rule method to override.", -1);
+              compilationMessages.Error(this.Location, $"No '$name' rule method to override.", -1);
               SymbolRef.None(Name.Location, false)
           }
 
         | _ =>
-          Project.CurrentProject.Error(this.Location, "An rule method can be overridden only in extending rules.", -1);
+          compilationMessages.Error(this.Location, "An rule method can be overridden only in extending rules.", -1);
           SymbolRef.None(Name.Location, false)
       }
     }
     [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
     Typing() : void
     {
-      _ = MakeBaseRuleMethod();
+      def compilationMessages = Context.Project;
+      _ = MakeBaseRuleMethod(compilationMessages);
       _ = MakeBody();
     }
   }
@@ -1791,14 +1806,18 @@ syntax module NitraSyntax
   syntax RuleMethodMissing = RuleMethodAttributes "missing"        sm  Name RuleMethodBody
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    [Cached] private MakeSymbol() : RuleMethod.RuleMethodMissingValueSymbol
+    [Cached] private MakeSymbol(compilationMessages : ICompilerMessages) : RuleMethod.RuleMethodMissingValueSymbol
     {
       when (RuleMethodBody.IsEmpty())
-        Project.CurrentProject.Error(this.Location, "A 'missing' handler must have a body.", -1);
+        compilationMessages.Error(this.Location, "A 'missing' handler must have a body.", -1);
       RuleMethod.ParsedRuleMethodMissingValueSymbol(this);
     }
-    CollectGlobalSymbols(ruleSymbol : SyntaxRuleSymbol) : void = _ = ruleSymbol.Node.AddAndReport(MakeSymbol(), this.Location);
-    [Cached] private MakeHandlingRuleMethod() : SymbolRef[RuleMethod.RuleMethodSymbol]
+    CollectGlobalSymbols(ruleSymbol : SyntaxRuleSymbol) : void
+    {
+      def compilationMessages = ruleSymbol.Node.Project;
+      _ = ruleSymbol.Node.AddAndReport(MakeSymbol(compilationMessages), this.Location);
+    }
+    [Cached] private MakeHandlingRuleMethod(compilationMessages : ICompilerMessages) : SymbolRef[RuleMethod.RuleMethodSymbol]
     {
       match (this.Symbol.DeclaringRule)
       {
@@ -1809,19 +1828,19 @@ syntax module NitraSyntax
             | [ruleMethodSymbol] => SymbolRef.Some(Name.Location, false, ruleMethodSymbol)
             | _ =>
               def name = Name.Value();
-              Project.CurrentProject.Error(this.Location, $"No '$name' rule method to handle 'missing'.", -1);
+              compilationMessages.Error(this.Location, $"No '$name' rule method to handle 'missing'.", -1);
               SymbolRef.None(Name.Location, false)
           }
 
         | _ =>
-          Project.CurrentProject.Error(this.Location, "A 'missing' handler for a rule method can be defined in simple and extensible rules.", -1);
+          compilationMessages.Error(this.Location, "A 'missing' handler for a rule method can be defined in simple and extensible rules.", -1);
           SymbolRef.None(Name.Location, false)
       }
     }
     [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
     Typing() : void
     {
-      _ = MakeHandlingRuleMethod();
+      _ = MakeHandlingRuleMethod(Context.Project);
       _ = MakeBody();
     }
   }
@@ -1887,7 +1906,7 @@ syntax module NitraSyntax
 
   syntax Range
   {
-    RangeSet(inCharSet : RangeSet) : RangeSet;
+    RangeSet(inCharSet : RangeSet, _compilationMessages : ICompilerMessages) : RangeSet;
 
     | SingleChar = CharLiteral
       {
@@ -1906,7 +1925,7 @@ syntax module NitraSyntax
             inCharSet.AddRange(cat)
           else
           {
-            Project.CurrentProject.Error(this, $"Invalid unicode category '$nameText'.", -1);
+            _compilationMessages.Error(this, $"Invalid unicode category '$nameText'.", -1);
             inCharSet
           }
         }
@@ -1999,11 +2018,19 @@ syntax module NitraSyntax
       }
     | Range                   = "[" (Range; ","sm)+ "]"
       {
-        override Typing = RegularRule.Chars(Location, [FoldThrough(Ranges.Item1, RangeSet(), _.RangeSet(_))]);
+        override Typing
+        {
+          def compilationMessages = Context.Project;
+          RegularRule.Chars(Location, [FoldThrough(Ranges.Item1, RangeSet(), _.RangeSet(_, compilationMessages))]);
+        }
       }
     | InvertedRange           = "[" "^" (Range; ","sm)+ "]"
       {
-        override Typing = RegularRule.Chars(Location, InvertRange(FoldThrough(Ranges.Item1, RangeSet(), _.RangeSet(_))));
+        override Typing
+        {
+          def compilationMessages = Context.Project;
+          RegularRule.Chars(Location, InvertRange(FoldThrough(Ranges.Item1, RangeSet(), _.RangeSet(_, compilationMessages))));
+        }
       }
     | RepeatWithSeparator = "(" RegexExpression ";"sm Separator ")" RepeatQuantifier
       {
