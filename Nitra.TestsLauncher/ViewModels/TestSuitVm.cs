@@ -161,7 +161,7 @@ namespace Nitra.ViewModels
       var timer = System.Diagnostics.Stopwatch.StartNew();
       try
       {
-        var res = _parserHost.DoParsing(source, _compositeGrammar, StartRule);
+        var res = _parserHost.DoParsing(source, _compositeGrammar, StartRule, parseToEndOfString: true);
         this.Exception = null;
         this.TestTime = timer.Elapsed;
         return res;
