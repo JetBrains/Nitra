@@ -199,10 +199,63 @@ namespace Nitra.Visualizer
       if (_doTreeOperation)
         return;
 
-      if (!object.ReferenceEquals(_tabControl.SelectedItem, _reflectionTabItem))
+      _doChangeCaretPos = true;
+      try
+      {
+        if      (object.ReferenceEquals(_tabControl.SelectedItem, _declarationsTabItem))
+          ShowAstNodeForCaret();
+        else if (object.ReferenceEquals(_tabControl.SelectedItem, _reflectionTabItem))
+          ShowParseTreeNodeForCaret();
+      }
+      finally
+      {
+        _doChangeCaretPos = false;
+      }
+    }
+
+    private void ShowAstNodeForCaret()
+    {
+      if (_declarationsTreeView.IsKeyboardFocusWithin)
         return;
 
+      if (_declarationsTreeView.Items.Count < 1)
+        return;
 
+      Debug.Assert(_declarationsTreeView.Items.Count == 1);
+
+      var result = FindNode((TreeViewItem)_declarationsTreeView.Items[0], _text.CaretOffset);
+      if (result == null)
+        return;
+
+      result.IsSelected = true;
+      result.BringIntoView();
+      //_reflectionTreeView.BringIntoView(result);
+    }
+
+    private TreeViewItem FindNode(TreeViewItem item, int pos)
+    {
+      var ast = item.Tag as IDeclarationPart;
+
+      if (ast == null)
+        return null;
+
+      if (ast.Span.IntersectsWith(pos))
+      {
+        foreach (TreeViewItem subItem in item.Items)
+        {
+          var result = FindNode(subItem, pos);
+          if (result != null)
+            return result;
+        }
+
+        return item;
+      }
+
+      return null;
+    }
+
+    private void ShowParseTreeNodeForCaret()
+    {
       if (_reflectionTreeView.ItemsSource == null)
         return;
 
@@ -210,25 +263,17 @@ namespace Nitra.Visualizer
         return;
 
 
-      _doChangeCaretPos = true;
-      try
+      var node = FindNode((ReflectionStruct[])_reflectionTreeView.ItemsSource, _text.CaretOffset);
+
+      if (node != null)
       {
-        var node = FindNode((ReflectionStruct[])_reflectionTreeView.ItemsSource, _text.CaretOffset);
+        var selected = _reflectionTreeView.SelectedItem as ReflectionStruct;
 
-        if (node != null)
-        {
-          var selected = _reflectionTreeView.SelectedItem as ReflectionStruct;
+        if (node == selected)
+          return;
 
-          if (node == selected)
-            return;
-
-          _reflectionTreeView.SelectedItem = node;
-          _reflectionTreeView.BringIntoView(node);
-        }
-      }
-      finally
-      {
-        _doChangeCaretPos = false;
+        _reflectionTreeView.SelectedItem = node;
+        _reflectionTreeView.BringIntoView(node);
       }
     }
 
