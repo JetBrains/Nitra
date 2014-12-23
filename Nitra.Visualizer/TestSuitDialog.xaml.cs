@@ -46,10 +46,13 @@ namespace Nitra.Visualizer
 
       this.Title = create ? "New test suit" : "Edit test suit";
 
-      var root = baseTestSuit.Solution.RootFolder;
+      var root = baseTestSuit != null ? baseTestSuit.Solution.RootFolder : Path.GetDirectoryName(_settings.CurrentSolution);
       _rootFolder = root;
       _testsRootTextBlock.Text = root;
-      var paths = string.Join(Environment.NewLine,
+      var paths =
+        baseTestSuit == null
+        ? "" 
+        : string.Join(Environment.NewLine,
         baseTestSuit.SynatxModules.Select(m =>
           Utils.MakeRelativePath(@from: root, isFromDir: true, to: m.GetType().Assembly.Location, isToDir: false)).Distinct());
       _assemblies.Text = paths;
@@ -60,19 +63,22 @@ namespace Nitra.Visualizer
         {
           _assemblies.Text = paths = string.Join(Environment.NewLine, baseTestSuit.LibPaths);
         }
-        this._testSuitName.Text = baseTestSuit.Name;
+        this._testSuitName.Text = baseTestSuit == null ? "" : baseTestSuit.Name;
       }
 
       UpdateSyntaxModules(paths, root);
 
       var items = (ObservableCollection<SyntaxModuleVm>)_syntaxModules.ItemsSource;
-      var selectedSynatxModules = baseTestSuit.SynatxModules.Join(items, d => d, suit => suit.GrammarDescriptor, (d, suit) => suit);
-      foreach (var selectedSynatxModule in selectedSynatxModules)
-        selectedSynatxModule.IsChecked = true;
+      if (baseTestSuit != null)
+      {
+        var selectedSynatxModules = baseTestSuit.SynatxModules.Join(items, d => d, suit => suit.GrammarDescriptor, (d, suit) => suit);
+        foreach (var selectedSynatxModule in selectedSynatxModules)
+          selectedSynatxModule.IsChecked = true;
+      }
 
-      UpdateStartRules(baseTestSuit.StartRule == null || baseTestSuit.StartRule.IsStartRule);
+      UpdateStartRules(baseTestSuit == null || baseTestSuit.StartRule == null || baseTestSuit.StartRule.IsStartRule);
 
-      if (baseTestSuit.StartRule != null)
+      if (baseTestSuit != null && baseTestSuit.StartRule != null)
       {
         foreach (var x in _startRuleComboBox.ItemsSource)
           if (x == baseTestSuit.StartRule)
@@ -351,7 +357,7 @@ namespace Nitra.Visualizer
 
       try
       {
-        if (_baseTestSuit.Name != testSuitName && Directory.Exists(_baseTestSuit.FullPath))
+        if (_baseTestSuit != null && _baseTestSuit.Name != testSuitName && Directory.Exists(_baseTestSuit.FullPath))
         {
           Directory.CreateDirectory(path);
           FileSystem.CopyDirectory(_baseTestSuit.FullPath, path, UIOption.AllDialogs);
