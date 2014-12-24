@@ -234,7 +234,7 @@ namespace Nitra.Visualizer
 
     private TreeViewItem FindNode(TreeViewItem item, int pos)
     {
-      var ast = item.Tag as IDeclarationPart;
+      var ast = item.Tag as IAst;
 
       if (ast == null)
         return null;
@@ -424,10 +424,10 @@ namespace Nitra.Visualizer
         _parseTree = _parseResult.CreateParseTree();
 
 // ReSharper disable once SuspiciousTypeConversion.Global
-      var root = _parseTree as IDeclarableParseTree<IDeclarationPart, IDeclarationPart>;
+      var root = _parseTree as IDeclarableParseTree<IAst, IAst>;
       if (root != null)
       {
-        var declarationRoot = DeclarationRoot<IDeclarationPart>.Create(null, root);
+        var declarationRoot = DeclarationRoot<IAst>.Create(null, root);
         UpdateDeclarations(declarationRoot);
       }
     }

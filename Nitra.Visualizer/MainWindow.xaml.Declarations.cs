@@ -22,7 +22,7 @@ namespace Nitra.Visualizer
       tvi.KeyDown += TviOnKeyDown;
       tvi.Expanded += TviOnExpanded;
 
-      var list = obj as IDeclarationList<IDeclarationPart>;
+      var list = obj as IDeclarationList<IAst>;
       if (list != null)
       {
         var xaml = RenderXamlForlist(name, list);
@@ -32,7 +32,7 @@ namespace Nitra.Visualizer
         return tvi;
       }
 
-      var option = obj as IDeclarationOption<IDeclarationPart>;
+      var option = obj as IDeclarationOption<IAst>;
       if (option != null)
       {
         if (option.HasValue)
@@ -45,7 +45,7 @@ namespace Nitra.Visualizer
         return tvi;
       }
 
-      var declaration = obj as IDeclarationPart;
+      var declaration = obj as IAst;
       if (declaration != null)
       {
         var xaml   = RenderXamlForDeclaration(name, declaration);
@@ -86,7 +86,7 @@ namespace Nitra.Visualizer
       var obj = tvi.Tag;
       tvi.Items.Clear();
 
-      var list = obj as IDeclarationList<IDeclarationPart>;
+      var list = obj as IDeclarationList<IAst>;
       if (list != null)
       {
         foreach (var item in list)
@@ -94,7 +94,7 @@ namespace Nitra.Visualizer
         return;
       }
 
-      var declaration = obj as IDeclarationPart;
+      var declaration = obj as IAst;
       if (declaration != null)
       {
         var t = obj.GetType();
@@ -139,7 +139,7 @@ namespace Nitra.Visualizer
       return false;
     }
 
-    private void UpdateDeclarations(DeclarationRoot<IDeclarationPart> declarationRoot)
+    private void UpdateDeclarations(DeclarationRoot<IAst> declarationRoot)
     {
       var root = ObjectToItem("Root", declarationRoot.Content);
       //using (var d = Dispatcher.DisableProcessing())
@@ -150,7 +150,7 @@ namespace Nitra.Visualizer
       //}
     }
 
-    private static string RenderXamlForDeclaration(string name, IDeclarationPart ast)
+    private static string RenderXamlForDeclaration(string name, IAst ast)
     {
       var declatation = ast as IDeclaration;
       var suffix = declatation == null ? null : (": " + declatation.Name);
@@ -170,7 +170,7 @@ namespace Nitra.Visualizer
 </Span>";
     }
 
-    private static string RenderXamlForlist(string name, IDeclarationList<IDeclarationPart> items)
+    private static string RenderXamlForlist(string name, IDeclarationList<IAst> items)
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
@@ -205,7 +205,7 @@ namespace Nitra.Visualizer
       if (!tvi.IsSelected)
         return;
 
-      var ast = tvi.Tag as IDeclarationPart;
+      var ast = tvi.Tag as IAst;
       if (ast != null)
       {
         _text.CaretOffset = ast.Span.StartPos;
