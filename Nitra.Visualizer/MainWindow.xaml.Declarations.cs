@@ -1,4 +1,5 @@
-﻿using System.Windows.Input;
+﻿using System.Reflection;
+using System.Windows.Input;
 using Nitra.Declarations;
 
 using System;
@@ -52,7 +53,7 @@ namespace Nitra.Visualizer
         var t      = obj.GetType();
         var props  = t.GetProperties();
 
-        if (props.Length > 0)
+        if (props.Any(p => !IsIgnoredProperty(p)))
           tvi.Items.Add(obj);
         
         return tvi;
@@ -101,17 +102,17 @@ namespace Nitra.Visualizer
 
         foreach (var prop in props)//.OrderBy(p => p.Name))
         {
-          switch (prop.Name)
+          if (IsIgnoredProperty(prop))
+            continue;
+          try
           {
-            case "File":
-            case "Span":
-            case "IsAmbiguous":
-            case "Parent": continue;
-
+            var value = prop.GetValue(declaration, null);
+            tvi.Items.Add(ObjectToItem(prop.Name, value));
           }
-
-          var value = prop.GetValue(declaration, null);
-          tvi.Items.Add(ObjectToItem(prop.Name, value));
+          catch (Exception e)
+          {
+            tvi.Items.Add(ObjectToItem(prop.Name, e.Message));
+          }
         }
         return;
       }
@@ -125,6 +126,19 @@ namespace Nitra.Visualizer
       }
     }
 
+    private static bool IsIgnoredProperty(PropertyInfo prop)
+    {
+      switch (prop.Name)
+      {
+        case "File":
+        case "Span":
+        case "IsAmbiguous":
+        case "Parent":
+          return true;
+      }
+      return false;
+    }
+
     private void UpdateDeclarations(DeclarationRoot<IDeclarationPart> declarationRoot)
     {
       var root = ObjectToItem("Root", declarationRoot.Content);
@@ -136,12 +150,14 @@ namespace Nitra.Visualizer
       //}
     }
 
-    private static string RenderXamlForDeclaration(string name, IDeclarationPart declatation)
+    private static string RenderXamlForDeclaration(string name, IDeclarationPart ast)
     {
+      var declatation = ast as IDeclaration;
+      var suffix = declatation == null ? null : (": " + declatation.Name);
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
 " + (string.IsNullOrWhiteSpace(name) ? null : ("<Span Foreground = 'blue'>" + name + "</Span>: "))
-             + declatation.ToXaml() + @"
+             + ast.ToXaml() + suffix + @"
 </Span>";
     }
 
