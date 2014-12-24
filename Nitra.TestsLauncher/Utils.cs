@@ -102,6 +102,19 @@ namespace Nitra.Visualizer
       return new XElement("Config", libs);
     }
 
+    public static bool IsEmpty(this IEnumerable seq)
+    {
+      var collection = seq as ICollection;
+
+      if (collection != null)
+        return collection.Count > 0;
+
+      foreach (var x in seq)
+        return true;
+
+      return false;
+    }
+
     public static int Count(this IEnumerable seq)
     {
       var collection = seq as ICollection;

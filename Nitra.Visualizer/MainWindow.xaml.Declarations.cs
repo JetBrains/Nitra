@@ -19,14 +19,15 @@ namespace Nitra.Visualizer
       var tvi = new TreeViewItem { Tag = obj, FontWeight = FontWeights.Normal };
       tvi.MouseDoubleClick += TviOnMouseDoubleClick;
       tvi.KeyDown += TviOnKeyDown;
+      tvi.Expanded += TviOnExpanded;
 
       var list = obj as IDeclarationList<IDeclarationPart>;
       if (list != null)
       {
         var xaml = RenderXamlForlist(name, list);
         tvi.Header = XamlReader.Parse(xaml);
-        foreach (var item in list)
-          tvi.Items.Add(ObjectToItem("", item));
+        if (list.Count > 0)
+          tvi.Items.Add(obj);
         return tvi;
       }
 
@@ -46,10 +47,57 @@ namespace Nitra.Visualizer
       var declaration = obj as IDeclarationPart;
       if (declaration != null)
       {
-        var t     = obj.GetType();
-        var props = t.GetProperties();
-        var xaml  = RenderXamlForDeclaration(name, declaration);
+        var xaml   = RenderXamlForDeclaration(name, declaration);
         tvi.Header = XamlReader.Parse(xaml);
+        var t      = obj.GetType();
+        var props  = t.GetProperties();
+
+        if (props.Length > 0)
+          tvi.Items.Add(obj);
+        
+        return tvi;
+      }
+
+      var items = obj as IEnumerable;
+      if (items != null)
+      {
+        var type = items.GetType();
+        var count = items.Count();
+        var xaml = RenderXamlForSeq(name, count);
+        tvi.Header = XamlReader.Parse(xaml);
+        if (count > 0)
+          tvi.Items.Add(obj);
+        return tvi;
+      }
+      else
+      {
+        var xaml = RenderXamlForValue(name, obj);
+        tvi.Header = XamlReader.Parse(xaml);
+        return tvi;
+      }
+    }
+
+    private void TviOnExpanded(object sender, RoutedEventArgs routedEventArgs)
+    {
+      routedEventArgs.Handled = true;
+
+      var tvi = (TreeViewItem)sender;
+      var obj = tvi.Tag;
+      tvi.Items.Clear();
+
+      var list = obj as IDeclarationList<IDeclarationPart>;
+      if (list != null)
+      {
+        foreach (var item in list)
+          tvi.Items.Add(ObjectToItem("", item));
+        return;
+      }
+
+      var declaration = obj as IDeclarationPart;
+      if (declaration != null)
+      {
+        var t = obj.GetType();
+        var props = t.GetProperties();
 
         foreach (var prop in props)//.OrderBy(p => p.Name))
         {
@@ -57,7 +105,7 @@ namespace Nitra.Visualizer
           {
             case "File":
             case "Span":
-            case "IsAmbiguous": 
+            case "IsAmbiguous":
             case "Parent": continue;
 
           }
@@ -65,27 +113,15 @@ namespace Nitra.Visualizer
           var value = prop.GetValue(declaration, null);
           tvi.Items.Add(ObjectToItem(prop.Name, value));
         }
-        
-        return tvi;
+        return;
       }
-      else
+
+      var items = obj as IEnumerable;
+      if (items != null)
       {
-        var items = obj as IEnumerable;
-        if (items != null)
-        {
-          var type = items.GetType();
-          var xaml = RenderXamlForSeq(name, items);
-          tvi.Header = XamlReader.Parse(xaml);
-          foreach (var item in (IEnumerable)obj)
-            tvi.Items.Add(ObjectToItem("", item));
-          return tvi;
-        }
-        else
-        {
-          var xaml = RenderXamlForValue(name, obj);
-          tvi.Header = XamlReader.Parse(xaml);
-          return tvi;
-        }
+        foreach (var item in (IEnumerable)obj)
+          tvi.Items.Add(ObjectToItem("", item));
+        return;
       }
     }
 
@@ -127,9 +163,8 @@ namespace Nitra.Visualizer
     }
 
 
-    private static string RenderXamlForSeq(string name, IEnumerable items)
+    private static string RenderXamlForSeq(string name, int count)
     {
-      var count = items.Count();
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
 <Span Foreground = 'blue'>" + name + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + count + @"

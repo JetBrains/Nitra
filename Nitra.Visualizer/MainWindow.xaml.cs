@@ -241,6 +241,7 @@ namespace Nitra.Visualizer
 
       if (ast.Span.IntersectsWith(pos))
       {
+        item.IsExpanded = true;
         foreach (TreeViewItem subItem in item.Items)
         {
           var result = FindNode(subItem, pos);
