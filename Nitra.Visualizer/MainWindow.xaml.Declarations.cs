@@ -32,7 +32,7 @@ namespace Nitra.Visualizer
         return tvi;
       }
 
-      var option = obj as IDeclarationOption<IAst>;
+      var option = obj as IAstOption<IAst>;
       if (option != null)
       {
         if (option.HasValue)
