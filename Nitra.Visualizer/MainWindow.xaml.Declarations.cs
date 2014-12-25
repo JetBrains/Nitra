@@ -22,7 +22,7 @@ namespace Nitra.Visualizer
       tvi.KeyDown += TviOnKeyDown;
       tvi.Expanded += TviOnExpanded;
 
-      var list = obj as IDeclarationList<IAst>;
+      var list = obj as IAstList<IAst>;
       if (list != null)
       {
         var xaml = RenderXamlForlist(name, list);
@@ -86,7 +86,7 @@ namespace Nitra.Visualizer
       var obj = tvi.Tag;
       tvi.Items.Clear();
 
-      var list = obj as IDeclarationList<IAst>;
+      var list = obj as IAstList<IAst>;
       if (list != null)
       {
         foreach (var item in list)
@@ -170,7 +170,7 @@ namespace Nitra.Visualizer
 </Span>";
     }
 
-    private static string RenderXamlForlist(string name, IDeclarationList<IAst> items)
+    private static string RenderXamlForlist(string name, IAstList<IAst> items)
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
