@@ -1234,15 +1234,15 @@ namespace Nitra.Visualizer
           int start = end;
           var line = _text.Document.GetLineByOffset(end);
           var lineText = _text.Document.GetText(line);
-          var offsetInLine = end - line.Offset;
+          var offsetInLine = end - 1 - line.Offset;
           for (int i = offsetInLine; i >= 0; i--)
           {
             var ch = lineText[i];
             if (!char.IsLetter(ch))
             {
-              start = line.Offset + i + 1;
               break;
             }
+            start--;
           }
           var text = _text.Text.Substring(0, start) + '\xFFFF';
           var prefix = _text.Document.GetText(start, end - start);
