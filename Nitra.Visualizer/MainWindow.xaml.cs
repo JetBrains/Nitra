@@ -1,6 +1,7 @@
 ﻿using System.Windows.Forms;
 using Common;
 using ICSharpCode.AvalonEdit.AddIn;
+using ICSharpCode.AvalonEdit.CodeCompletion;
 using ICSharpCode.AvalonEdit.Document;
 using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Highlighting;
@@ -1215,6 +1216,8 @@ namespace Nitra.Visualizer
       return parseResult.RuleParser.Descriptor.Grammar.IsSplicable;
     }
 
+    private CompletionWindow _completionWindow;
+
     private void _control_KeyDown_resize(object sender, KeyEventArgs e)
     {
       var control = sender as Control;
@@ -1224,6 +1227,41 @@ namespace Nitra.Visualizer
           control.FontSize++;
         else if (e.Key == Key.Subtract && Keyboard.Modifiers == ModifierKeys.Control)
           control.FontSize--;
+
+        if (Keyboard.Modifiers == ModifierKeys.Control && Keyboard.IsKeyDown(Key.Space))
+        {
+          int end   = _text.CaretOffset;
+          int start = end;
+          var line = _text.Document.GetLineByOffset(end);
+          var lineText = _text.Document.GetText(line);
+          var offsetInLine = end - line.Offset;
+          for (int i = offsetInLine; i >= 0; i--)
+          {
+            var ch = lineText[i];
+            if (!char.IsLetter(ch))
+            {
+              start = line.Offset + i + 1;
+              break;
+            }
+          }
+          var text = _text.Text.Substring(0, start) + '\xFFFF';
+          var prefix = _text.Document.GetText(start, end - start);
+          _currentTestSuit.Run(text, null, prefix);
+          var ex = _currentTestSuit.Exception;
+          var result = (LiteralCompletionException) ex.InnerException;
+          //MessageBox.Show(string.Join(", ", result.Literals.OrderBy(x => x)));
+
+          _completionWindow = new CompletionWindow(_text.TextArea);
+          IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
+          var span = new NSpan(start, end);
+          foreach (var literal in result.Literals)
+            data.Add(new LiteralCompletionData(span, literal));
+
+          _completionWindow.Show();
+          _completionWindow.Closed += delegate
+          { _completionWindow = null; };
+          e.Handled = true;
+        }
       }
     }
 
