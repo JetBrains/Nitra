@@ -22,7 +22,7 @@ namespace Nitra.Visualizer
       tvi.KeyDown += TviOnKeyDown;
       tvi.Expanded += TviOnExpanded;
 
-      var list = obj as IDeclarationList<IAst>;
+      var list = obj as IAstList<IAst, IDependentPropertyHost>;
       if (list != null)
       {
         var xaml = RenderXamlForlist(name, list);
@@ -32,7 +32,7 @@ namespace Nitra.Visualizer
         return tvi;
       }
 
-      var option = obj as IDeclarationOption<IAst>;
+      var option = obj as IAstOption<IAst, IDependentPropertyHost>;
       if (option != null)
       {
         if (option.HasValue)
@@ -60,7 +60,7 @@ namespace Nitra.Visualizer
       }
 
       var items = obj as IEnumerable;
-      if (items != null)
+      if (items != null && !(items is string))
       {
         var type = items.GetType();
         var count = items.Count();
@@ -86,13 +86,16 @@ namespace Nitra.Visualizer
       var obj = tvi.Tag;
       tvi.Items.Clear();
 
-      var list = obj as IDeclarationList<IAst>;
+      var list = obj as IAstList<IAst, IDependentPropertyHost>;
       if (list != null)
       {
         foreach (var item in list)
           tvi.Items.Add(ObjectToItem("", item));
         return;
       }
+
+      if (obj is IAstOption<IAst, IDependentPropertyHost>)
+        return;
 
       var declaration = obj as IAst;
       if (declaration != null)
@@ -118,7 +121,7 @@ namespace Nitra.Visualizer
       }
 
       var items = obj as IEnumerable;
-      if (items != null)
+      if (items != null && !(items is string))
       {
         foreach (var item in (IEnumerable)obj)
           tvi.Items.Add(ObjectToItem("", item));
@@ -130,6 +133,9 @@ namespace Nitra.Visualizer
     {
       switch (prop.Name)
       {
+        case "HasValue":
+          return false;
+        case "Id":
         case "File":
         case "Span":
         case "IsAmbiguous":
@@ -170,11 +176,11 @@ namespace Nitra.Visualizer
 </Span>";
     }
 
-    private static string RenderXamlForlist(string name, IDeclarationList<IAst> items)
+    private static string RenderXamlForlist(string name, IAstList<IAst, IDependentPropertyHost> items)
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-<Span Foreground = 'blue'>" + name + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + items.Count + @"
+<Span Foreground = 'blue'>" + name + @"</Span>* <Span Foreground = 'gray'>Count: </Span> " + items.Count + @"
 </Span>";
     }
 
