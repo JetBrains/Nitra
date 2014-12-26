@@ -60,7 +60,7 @@ namespace Nitra.Visualizer
       }
 
       var items = obj as IEnumerable;
-      if (items != null)
+      if (items != null && !(items is string))
       {
         var type = items.GetType();
         var count = items.Count();
@@ -94,6 +94,9 @@ namespace Nitra.Visualizer
         return;
       }
 
+      if (obj is IAstOption<IAst>)
+        return;
+
       var declaration = obj as IAst;
       if (declaration != null)
       {
@@ -118,7 +121,7 @@ namespace Nitra.Visualizer
       }
 
       var items = obj as IEnumerable;
-      if (items != null)
+      if (items != null && !(items is string))
       {
         foreach (var item in (IEnumerable)obj)
           tvi.Items.Add(ObjectToItem("", item));
@@ -130,6 +133,9 @@ namespace Nitra.Visualizer
     {
       switch (prop.Name)
       {
+        case "HasValue":
+          return false;
+        case "Id":
         case "File":
         case "Span":
         case "IsAmbiguous":
@@ -174,7 +180,7 @@ namespace Nitra.Visualizer
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-<Span Foreground = 'blue'>" + name + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + items.Count + @"
+<Span Foreground = 'blue'>" + name + @"</Span>* <Span Foreground = 'gray'>Count: </Span> " + items.Count + @"
 </Span>";
     }
 
