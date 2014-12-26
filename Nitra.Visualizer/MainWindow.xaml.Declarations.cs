@@ -94,7 +94,7 @@ namespace Nitra.Visualizer
         return;
       }
 
-      if (obj is IAstOption<IAst>)
+      if (obj is IAstOption<IAst, IDependentPropertyHost>)
         return;
 
       var declaration = obj as IAst;
