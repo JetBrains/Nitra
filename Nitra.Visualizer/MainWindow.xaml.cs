@@ -1246,10 +1246,12 @@ namespace Nitra.Visualizer
           }
           var text = _text.Text.Substring(0, start) + '\xFFFF';
           var prefix = _text.Document.GetText(start, end - start);
-          _currentTestSuit.Run(text, null, prefix);
+          _currentTestSuit.Run(text, null, start, prefix);
           var ex = _currentTestSuit.Exception;
-          var result = (LiteralCompletionException) ex.InnerException;
+          var result = ex == null ? null : (LiteralCompletionException)ex.InnerException;
           //MessageBox.Show(string.Join(", ", result.Literals.OrderBy(x => x)));
+          if (result == null)
+            return;
 
           _completionWindow = new CompletionWindow(_text.TextArea);
           IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
@@ -1258,8 +1260,8 @@ namespace Nitra.Visualizer
             data.Add(new LiteralCompletionData(span, literal));
 
           _completionWindow.Show();
-          _completionWindow.Closed += delegate
-          { _completionWindow = null; };
+          _completionWindow.Closed += 
+            delegate { _completionWindow = null; };
           e.Handled = true;
         }
       }
