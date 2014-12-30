@@ -22,7 +22,7 @@ namespace Nitra.Visualizer
       tvi.KeyDown += TviOnKeyDown;
       tvi.Expanded += TviOnExpanded;
 
-      var list = obj as IAstList<IAst, IDependentPropertyHost>;
+      var list = obj as IAstList<IAst>;
       if (list != null)
       {
         var xaml = RenderXamlForlist(name, list);
@@ -32,7 +32,7 @@ namespace Nitra.Visualizer
         return tvi;
       }
 
-      var option = obj as IAstOption<IAst, IDependentPropertyHost>;
+      var option = obj as IAstOption<IAst>;
       if (option != null)
       {
         if (option.HasValue)
@@ -86,7 +86,7 @@ namespace Nitra.Visualizer
       var obj = tvi.Tag;
       tvi.Items.Clear();
 
-      var list = obj as IAstList<IAst, IDependentPropertyHost>;
+      var list = obj as IAstList<IAst>;
       if (list != null)
       {
         foreach (var item in list)
@@ -94,7 +94,7 @@ namespace Nitra.Visualizer
         return;
       }
 
-      if (obj is IAstOption<IAst, IDependentPropertyHost>)
+      if (obj is IAstOption<IAst>)
         return;
 
       var declaration = obj as IAst;
@@ -176,7 +176,7 @@ namespace Nitra.Visualizer
 </Span>";
     }
 
-    private static string RenderXamlForlist(string name, IAstList<IAst, IDependentPropertyHost> items)
+    private static string RenderXamlForlist(string name, IAstList<IAst> items)
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
