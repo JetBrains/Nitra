@@ -12,7 +12,7 @@ namespace JetBrains.Test
   [Language(typeof(DslLanguage))]
   public class DslLanguageService : LanguageService
   {
-    private CommonIdentifierIntern _commonIdentifierIntern;
+    private readonly CommonIdentifierIntern _commonIdentifierIntern;
 
     public DslLanguageService(
       PsiLanguageType lexLanguageType, IConstantValueService constantValueService, CommonIdentifierIntern commonIdentifierIntern)
