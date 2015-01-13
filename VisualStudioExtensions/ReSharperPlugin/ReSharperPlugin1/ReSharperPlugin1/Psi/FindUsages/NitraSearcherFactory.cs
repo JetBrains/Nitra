@@ -95,7 +95,7 @@ namespace JetBrains.Nitra.FindUsages
       return EmptySearchDomain.Instance;
     }
 
-    public IEnumerable<Pair<IDeclaredElement, Predicate<FindResult>>> GetRelatedDeclaredElements(IDeclaredElement element)
+    public IEnumerable<RelatedDeclaredElement> GetRelatedDeclaredElements(IDeclaredElement element)
     {
       yield break;
     }

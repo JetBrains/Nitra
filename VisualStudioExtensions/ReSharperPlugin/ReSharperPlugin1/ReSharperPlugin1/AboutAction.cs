@@ -1,5 +1,4 @@
 ﻿using System.Windows.Forms;
-using JetBrains.ActionManagement;
 using JetBrains.Application.DataContext;
 
 namespace ReSharperPlugin1

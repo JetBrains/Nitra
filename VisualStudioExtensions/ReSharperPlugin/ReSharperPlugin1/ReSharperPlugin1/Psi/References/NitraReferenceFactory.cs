@@ -62,6 +62,11 @@ namespace ReSharperPlugin1.Psi.References
       return references;
     }
 
+    public bool HasReference(ITreeNode element, IReferenceNameContainer names)
+    {
+      return false;
+    }
+
     public bool HasReference(ITreeNode element, ICollection<string> names)
     {
       return GetReferencesImpl(element).Any();

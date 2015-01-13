@@ -11,6 +11,11 @@ namespace JetBrains.Test
       return ReferenceCollection.Empty;
     }
 
+    public ReferenceCollection GetReferences(ITreeNode element, IReferenceNameContainer names)
+    {
+      return ReferenceCollection.Empty;
+    }
+
     public bool ContainsReference(ITreeNode element, IReference reference)
     {
       return true;
