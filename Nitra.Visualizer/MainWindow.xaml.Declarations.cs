@@ -5,18 +5,21 @@ using Nitra.Declarations;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Markup;
+using Nitra.Internal;
 
 namespace Nitra.Visualizer
 {
   public partial class MainWindow
   {
-    public TreeViewItem ObjectToItem(string name, object obj)
+    public TreeViewItem ObjectToItem(PropertyInfo prop, object obj)
     {
+      string name = prop == null ? "" : prop.Name;
       var tvi = new TreeViewItem { Tag = obj, FontWeight = FontWeights.Normal };
       tvi.MouseDoubleClick += TviOnMouseDoubleClick;
       tvi.KeyDown += TviOnKeyDown;
@@ -36,10 +39,10 @@ namespace Nitra.Visualizer
       if (option != null)
       {
         if (option.HasValue)
-          tvi = ObjectToItem(name, option.Value);
+          tvi = ObjectToItem(prop, option.Value);
         else
         {
-          var xaml = RenderXamlForValue(name, "&lt;None&gt;");
+          var xaml = RenderXamlForValue(prop, "&lt;None&gt;");
           tvi.Header = XamlReader.Parse(xaml);
         }
         return tvi;
@@ -72,7 +75,7 @@ namespace Nitra.Visualizer
       }
       else
       {
-        var xaml = RenderXamlForValue(name, obj);
+        var xaml = RenderXamlForValue(prop, obj);
         tvi.Header = XamlReader.Parse(xaml);
         return tvi;
       }
@@ -90,7 +93,7 @@ namespace Nitra.Visualizer
       if (list != null)
       {
         foreach (var item in list)
-          tvi.Items.Add(ObjectToItem("", item));
+          tvi.Items.Add(ObjectToItem(null, item));
         return;
       }
 
@@ -110,11 +113,11 @@ namespace Nitra.Visualizer
           try
           {
             var value = prop.GetValue(declaration, null);
-            tvi.Items.Add(ObjectToItem(prop.Name, value));
+            tvi.Items.Add(ObjectToItem(prop, value));
           }
           catch (Exception e)
           {
-            tvi.Items.Add(ObjectToItem(prop.Name, e.Message));
+            tvi.Items.Add(ObjectToItem(prop, e.Message));
           }
         }
         return;
@@ -124,7 +127,7 @@ namespace Nitra.Visualizer
       if (items != null && !(items is string))
       {
         foreach (var item in (IEnumerable)obj)
-          tvi.Items.Add(ObjectToItem("", item));
+          tvi.Items.Add(ObjectToItem(null, item));
         return;
       }
     }
@@ -147,7 +150,9 @@ namespace Nitra.Visualizer
 
     private void UpdateDeclarations(DeclarationRoot<IAst> declarationRoot)
     {
-      var root = ObjectToItem("Root", declarationRoot.Content);
+      declarationRoot.EvalProperties();
+      var root = ObjectToItem(null, declarationRoot.Content);
+      root.Header = "Root";
       //using (var d = Dispatcher.DisableProcessing())
       //{
         _declarationsTreeView.Items.Clear();
@@ -167,11 +172,13 @@ namespace Nitra.Visualizer
 </Span>";
     }
 
-    private static string RenderXamlForValue(string name, object obj)
+    private static string RenderXamlForValue(PropertyInfo prop, object obj)
     {
+      var isDependent = prop != null && prop.IsDefined(typeof(DependentPropertyAttribute), false);
+      var color = isDependent ? "green" : "plum";
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-" + (string.IsNullOrWhiteSpace(name) ? null : ("<Bold>" + name + "</Bold>: "))
+" + (prop == null ? null : ("<Bold><Span Foreground = '" + color + "'>" + prop.Name + "</Span></Bold>: "))
              + obj + @"
 </Span>";
     }
@@ -189,7 +196,7 @@ namespace Nitra.Visualizer
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-<Span Foreground = 'blue'>" + name + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + count + @"
+<Span Foreground = 'green'>" + name + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + count + @"
 </Span>";
     }
 
