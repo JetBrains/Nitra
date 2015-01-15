@@ -175,7 +175,7 @@ namespace Nitra.Visualizer
     private static string RenderXamlForValue(PropertyInfo prop, object obj)
     {
       var isDependent = prop != null && prop.IsDefined(typeof(DependentPropertyAttribute), false);
-      var color = isDependent ? "green" : "plum";
+      var color = isDependent ? "green" : "SlateBlue";
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
 " + (prop == null ? null : ("<Bold><Span Foreground = '" + color + "'>" + prop.Name + "</Span></Bold>: "))
