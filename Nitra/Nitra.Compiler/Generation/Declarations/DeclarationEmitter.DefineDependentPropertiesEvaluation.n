@@ -26,6 +26,29 @@ namespace Nitra.Compiler
         def body = SCG.List();
         when ((symbol : object) is IDependentPropertyAssignmentContainer as container)
         {
+          def initializedOutProperties = SCG.HashSet(symbol.InitializedOutProperties);
+          when (symbol is ExtensionDeclarationSymbol(BaseDeclaration = SymbolRef.Some(baseSymbol)))
+            initializedOutProperties.UnionWith(baseSymbol.InitializedOutProperties);
+
+          foreach (p in symbol.AllProperties)
+          {
+            | DependentDeclarationPropertySymbol(Direction = Out, LinkedProperty = SymbolRef.Some(inPropertySymbol)) as outPropertySymbol when symbol is ExtensibleDeclarationSymbol =>
+              unless (initializedOutProperties.Contains(outPropertySymbol))
+              {
+                def loc = if (outPropertySymbol.DeclaringDeclaration == symbol) outPropertySymbol.FirstLocation else symbol.FirstLocation;
+                container.AddAssignment(DependentPropertyAssignment(loc, [LocatedName(symbol.FirstLocation, outPropertySymbol.Name)], <[ this.$(inPropertySymbol.Name : usesite) ]>))
+              }
+
+            | DependentDeclarationPropertySymbol(Direction = Out) as outPropertySymbol =>
+              unless (initializedOutProperties.Contains(outPropertySymbol))
+              {
+                def loc = if (outPropertySymbol.DeclaringDeclaration == symbol) outPropertySymbol.FirstLocation else symbol.FirstLocation;
+                Message.Error(loc.ToNemerleLocation(), $"Output dependent property '$(outPropertySymbol.Name)' is never assigned to");
+              }
+
+            | _ => ()
+          }
+
           foreach (assignment in container.GetAssignments())
             body.Add(Util.locate(assignment.Location.ToNemerleLocation(), <[ $(PExprUtils.FromQualifiedIdentifier(assignment.Path)) = $(assignment.Expression) ]>));
         }
@@ -58,13 +81,8 @@ namespace Nitra.Compiler
                 assert3(false, $"IProperty for symbol $s not found");
             }
             def graphNodes2 = AddDependencyOnDeclarationProperties(graphNodes, props);
-            def graphNodes3 =
-              if (symbol is ExtensibleDeclarationSymbol)
-                WireUpInoutProperties(symbol, tb, graphNodes2)
-              else
-                graphNodes2;
             //CheckOutputPropertiesAssignment(symbol, newGraphNodes);
-            def code          = GenerateCode(tb, graphNodes3);
+            def code          = GenerateCode(tb, graphNodes2);
             if (symbol is ExtensionDeclarationSymbol)
               methodBuilder.Body = <[ $code; base.EvalProperties($("context" : usesite)); ]>
             else
@@ -374,46 +392,6 @@ namespace Nitra.Compiler
 
       def code = <[ { ..$result } ]>;
       code
-    }
-
-    private WireUpInoutProperties(symbol : DeclarationSymbol, tb : TypeBuilder, dependencyGraph : Seq[Node]) : Seq[Node]
-    {
-      def initializedProps = SCG.HashSet();
-      foreach (node in dependencyGraph)
-      {
-        | AssignProp(Obj = TExpr.This, PropertyRef = propertyRef) => _ = initializedProps.Add(propertyRef.Symbol)
-        | _ => ()
-      }
-
-      def newDependencyGraph = SCG.List(dependencyGraph);
-      foreach (p in symbol.AllProperties)
-      {
-        | DependentDeclarationPropertySymbol(Direction = Out, LinkedProperty = SymbolRef.Some(inPropertySymbol)) as outPropertySymbol =>
-          unless (initializedProps.Contains(outPropertySymbol))
-          {
-            def thisType = tb.GetMemType();
-
-            def [inProperty  is IProperty] = tb.LookupMember(inPropertySymbol.Name);
-            def inPropertyMember           = TExpr.PropertyMember(thisType.TypeOfMember(inProperty), TExpr.This(thisType), inProperty);
-            def inPropertyRef              = Environment.LookupDeclarationPropertySymbol(inProperty);
-
-            def [outProperty is IProperty] = tb.LookupMember(outPropertySymbol.Name);
-            def outPropertyMember          = TExpr.PropertyMember(thisType.TypeOfMember(outProperty), TExpr.This(thisType), outProperty);
-            def outPropertyRef             = Environment.LookupDeclarationPropertySymbol(outProperty);
-
-            def useNode        = Node.UseProp(inPropertyMember, inPropertyRef);
-
-            def assignExpr     = TExpr.Assign(FixedType.Void(), outPropertyMember, inPropertyMember);
-            def assignNode     = Node.AssignProp(assignExpr, null, outPropertyMember, outPropertyRef);
-            assignNode.DependendOn.Add(useNode);
-
-            newDependencyGraph.Add(useNode);
-            newDependencyGraph.Add(assignNode);
-          }
-
-        | _ => ()
-      }
-      newDependencyGraph
     }
 
     private static GenerateHasValueCheck(obj : TExpr, propertyRef : DependentDeclarationPropertyRef) : PExpr
