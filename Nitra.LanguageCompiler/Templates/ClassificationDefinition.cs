@@ -6,13 +6,13 @@ using Microsoft.VisualStudio.Utilities;
 // ReSharper disable UnassignedField.Global
 
 [assembly: RegisterHighlighter(
-  id: XNamespaceX.XxxClassificationDefinition.Name,
+  id: XXNamespaceXX.XxxClassificationDefinition.Name,
   EffectColor = "Red",
   EffectType = EffectType.TEXT,
   Layer = HighlighterLayer.SYNTAX,
   VSPriority = VSPriority.IDENTIFIERS)]
 
-namespace XNamespaceX
+namespace XXNamespaceXX
 {
   [ClassificationType(ClassificationTypeNames = Name)]
   [Order(After = "Formal Language Priority", Before = "Natural Language Priority")]
@@ -22,7 +22,7 @@ namespace XNamespaceX
   [UserVisible(true)]
   internal class XxxClassificationDefinition : ClassificationFormatDefinition
   {
-    public const string Name = "XDisplay nameX";
+    public const string Name = "XXDisplay nameXX";
 
     public XxxClassificationDefinition()
     {
