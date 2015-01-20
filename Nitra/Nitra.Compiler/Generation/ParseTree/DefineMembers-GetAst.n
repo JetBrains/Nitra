@@ -66,58 +66,168 @@ namespace Nitra.Compiler
       path.FoldLeft(Util.locate(loc.ToNemerleLocation(), <[ this ]> : PExpr), (item, acc) => Util.locate(item.Location.ToNemerleLocation(), <[ $acc.$(item.Id : usesite) ]>));
     }
 
-    private MakeParseTreeGetAstMethodBody(syntaxMappingBody : SyntaxMappingBody) : PExpr
+    [Record]
+    private struct BuildAstResult
     {
-      def compileField(field : SyntaxMappingField) : PExpr
+      public Code            : PExpr;
+      public ConcreteList    : PExpr;
+      public AmbiguousList   : PExpr;
+      public ConcreteOption  : PExpr;
+      public AmbiguousOption : PExpr;
+
+      public this(code : PExpr)
       {
-        | Inline(code) => code
-        | Automatic(loc, ruleFieldPath) =>
-          // TODO: make strict typing!
-          def parseTreeMember = MakeParseTreeMemberAccess(loc, ruleFieldPath);
-          Util.locate(loc.ToNemerleLocation(),
-          {
-            match (field.DeclarationProperty.GetValue(Environment.Project).Type)
+        this(
+          code,
+          <[ Nitra.Declarations.AstList[Nitra.Declarations.IAst] ]>,
+          <[ Nitra.Declarations.AmbiguousAstList[Nitra.Declarations.IAst] ]>,
+          <[ Nitra.Declarations.AstOption[Nitra.Declarations.IAst] ]>,
+          <[ Nitra.Declarations.AmbiguousAstOption[Nitra.Declarations.IAst] ]>)
+      }
+    }
+
+    private DefineGetAstMethod(tb : TypeBuilder, syntaxMappingBody : SyntaxMappingBody, modifiers : NemerleModifiers) : void
+    {
+      def declarationSymbol   = syntaxMappingBody.Declaration.GetValue(Environment.Project);
+      def parentType          = Environment.TypeCompiler.CompileParentType(declarationSymbol);
+      def baseDeclarationType = GetBaseDeclarationType(declarationSymbol);
+
+      def buildAst(ruleType : RuleType, astType : NType, obj : PExpr, errorLoc : Location) : BuildAstResult
+      {
+        def reportError()
+        {
+          Environment.Project.FatalError(errorLoc, $"Cannot map '$(ruleType)' to '$(astType)'", -1)
+        }
+        match (ruleType, astType)
+        {
+          | (List(ruleItemType), List(astItemType))
+          | (List(ruleItemType), OptionList(astItemType)) =>
+            def parseTreeType     = Environment.GetParseTreeType(ruleType);
+            def parseTreeItemType = Environment.GetParseTreeType(ruleItemType);
+            def itemResult        = buildAst(ruleItemType, astItemType, <[ node ]>, errorLoc);
+            def buildAstListName  = Util.tmpname("BuildAstList");
+            tb.Define(<[ decl:
+              private static $(buildAstListName : usesite)(lst : $(parseTreeType : typed), parent : $(parentType : typed)) : $(itemResult.ConcreteList)
+              {
+                def items = array(lst.Count);
+                foreach (node in lst with index)
+                  items[index] = $(itemResult.Code);
+                $(itemResult.ConcreteList)(parent, lst.Location.Span, items)
+              }
+            ]>);
+            BuildAstResult(<[
+              def lst = $obj;
+              if (lst.IsAmbiguous)
+              {
+                def ambiguousLst = lst :> Nitra.AmbiguousListParseTree[$(parseTreeItemType : typed)];
+                def ambiguities  = array(ambiguousLst.Ambiguities.Length);
+                foreach (parseTree in ambiguousLst.Ambiguities with index)
+                  ambiguities[index] = $(buildAstListName : usesite)(parseTree, parent);
+                $(itemResult.AmbiguousList)(ambiguities)
+              }
+              else
+                $(buildAstListName : usesite)(lst, parent);
+            ]>)
+
+          | (Option(ruleItemType), Option(astItemType)) =>
+            def parseTreeType      = Environment.GetParseTreeType(ruleType);
+            def parseTreeItemType  = Environment.GetParseTreeType(ruleItemType);
+            def itemResult         = buildAst(ruleItemType, astItemType, <[ opt.Value ]>, errorLoc);
+            def buildAstOptionName = Util.tmpname("BuildAstOption");
+            tb.Define(<[ decl:
+              private static $(buildAstOptionName : usesite)(opt : $(parseTreeType : typed), parent : $(parentType : typed)) : $(itemResult.ConcreteOption)
+              {
+                if (opt.HasValue)
+                  $(itemResult.ConcreteOption)(parent, opt.Location.Span, $(itemResult.Code))
+                else
+                  $(itemResult.ConcreteOption)(parent, opt.Location.Span)
+              }
+            ]>);
+            BuildAstResult(<[
+              def opt = $obj;
+              if (opt.IsAmbiguous)
+              {
+                def ambiguousOpt = opt :> Nitra.AmbiguousOptionParseTree[$(parseTreeItemType : typed)];
+                def ambiguities  = array(ambiguousOpt.Ambiguities.Length);
+                foreach (parseTree in ambiguousOpt.Ambiguities with index)
+                  ambiguities[index] = $(buildAstOptionName : usesite)(parseTree, parent);
+                $(itemResult.AmbiguousOption)(ambiguities)
+              }
+              else
+                $(buildAstOptionName : usesite)(opt, parent);
+            ]>)
+
+          | (Ref(SyntaxRuleSymbol(Declaration = SymbolRef.Some(sourceDeclarationSymbol))), Qualified) =>
+            def targetDeclarationSymbol = Environment.TypeCompiler.TryGetDeclarationSymbol(astType);
+            if (targetDeclarationSymbol != null)
             {
-              | List(item)
-              | OptionList(item) =>
-                def symbol = Environment.TypeCompiler.TryGetDeclarationSymbol(item);
-                if (symbol != null)
-                  <[ Nitra.Internal.AstUtils.GetAstList(declaration, $parseTreeMember) ]>
-                else
-                  <[ $parseTreeMember.GetAst(declaration) ]>
-
-              | Option(item) =>
-                def symbol = Environment.TypeCompiler.TryGetDeclarationSymbol(item);
-                if (symbol != null)
-                  <[ Nitra.Internal.AstUtils.GetAstOption(declaration, $parseTreeMember) ]>
-                else
-                  <[ $parseTreeMember.GetAst(declaration) ]>
-
-              | _ => <[ $parseTreeMember.GetAst(declaration) ]>
+              if (sourceDeclarationSymbol == targetDeclarationSymbol || sourceDeclarationSymbol.AllBaseDeclarations.Contains(targetDeclarationSymbol))
+              {
+                def t = Environment.GetDeclarationType(targetDeclarationSymbol);
+                BuildAstResult(<[ $obj.GetAst(parent) ]>,
+                  <[ $(t : typed).AstList ]>, <[ $(t : typed).AmbiguousAstList ]>,
+                  <[ $(t : typed).AstOption ]>, <[ $(t : typed).AmbiguousAstOption ]>)
+              }
+              else
+                Environment.Project.FatalError(errorLoc, $"Declaration '$(sourceDeclarationSymbol.FullName)' is not subtype of declaration '$(targetDeclarationSymbol.FullName)'", -1)
             }
-          })
+            else
+              reportError()
+
+          | (Tuple(members), _) =>
+            if (members.MapI((i, m) => (i + 1, m)).Filter((_, m) => !(m is RuleType.Chars(Keyword = Some))) is [(index, nonKeyword)])
+              buildAst(nonKeyword, astType, <[ $obj.$("Item" + index.ToString() : usesite) ]>, errorLoc)
+            else
+              reportError()
+
+          | _ => reportError()
+        }
       }
 
-      def concreteDeclarationType = GetConcreteDeclarationType(syntaxMappingBody.Declaration.GetValue(Environment.Project));
+      def compileField(field : SyntaxMappingField) : PExpr
+      {
+        def declarationPropertySymbol = field.DeclarationProperty.GetValue(Environment.Project);
+        Util.locate(field.Location.ToNemerleLocation(),
+          match (field)
+          {
+            | Inline(code) => <[ $(declarationPropertySymbol.Name : usesite) = $code ]>
+            | Automatic(loc, ruleFieldPath, ruleType) =>
+              def astType         = declarationPropertySymbol.Type;
+              def parseTreeMember = MakeParseTreeMemberAccess(loc, ruleFieldPath);
+              <[ $(declarationPropertySymbol.Name : usesite) = $(buildAst(ruleType, astType, parseTreeMember, field.Location).Code) ]>
+          });
+      }
 
       Util.locate(syntaxMappingBody.Location.ToNemerleLocation(),
-        match (syntaxMappingBody)
-        {
-          | CallMember(loc, ruleFieldPath) =>
-            // TODO: make strict typing!
-            def parseTreeMember = MakeParseTreeMemberAccess(loc, ruleFieldPath);
-            Util.locate(loc.ToNemerleLocation(), <[ $parseTreeMember.GetAst(parent) ]>)
+      {
+        def code =
+          match (syntaxMappingBody)
+          {
+            | CallMember(loc, ruleFieldPath) =>
+              // TODO: make strict typing!
+              def parseTreeMember = MakeParseTreeMemberAccess(loc, ruleFieldPath);
+              <[ $parseTreeMember.GetAst(parent) ]>
 
-          | PerField(fields) =>
-            def values = fields.Map(f => <[ $(f.DeclarationProperty.GetValue(Environment.Project).Name : usesite) = $(compileField(f)) ]>);
-            <[
-              def $("declaration" : global) = $concreteDeclarationType(parent, this.Location.Span);
-              declaration.Initialize(..$values);
-              declaration
-            ]>
+            | PerField(fields) =>
+              def concreteDeclarationType = GetConcreteDeclarationType(declarationSymbol);
+              def values                  = fields.Map(compileField);
+              <[
+                def $("declaration" : global) = $concreteDeclarationType(parent, this.Location.Span);
+                declaration.Initialize(..$values);
+                declaration
+              ]>
 
-          | Inline(code) => code
-        });
+            | Inline(code) => code
+          };
+
+        def mods = AttributesAndModifiers(modifiers, []);
+        tb.Define(<[ decl:
+          ..$mods GetAst($("parent" : global) : $(parentType : typed)) : $baseDeclarationType
+          {
+            $code
+          }
+        ]>);
+      });
     }
 
     protected DefineSimpleRuleGetAstMethod(_nodeTb : TypeBuilder) : void
@@ -126,18 +236,7 @@ namespace Nitra.Compiler
 
       def syntaxMappingBody = this.RuleSymbol.GetSyntaxMappingBody();
       when (syntaxMappingBody != null)
-      {
-        def declarationSymbol   = syntaxMappingBody.Declaration.GetValue(Environment.Project);
-        def parentType          = Environment.TypeCompiler.CompileParentType(declarationSymbol);
-        def baseDeclarationType = GetBaseDeclarationType(declarationSymbol);
-        def code                = MakeParseTreeGetAstMethodBody(syntaxMappingBody);
-        _nodeTb.Define(<[ decl:
-          public virtual GetAst($("parent" : global) : $(parentType : typed)) : $baseDeclarationType
-          {
-            $code
-          }
-        ]>);
-      }
+        DefineGetAstMethod(_nodeTb, syntaxMappingBody, NemerleModifiers.Public %| NemerleModifiers.Virtual)
     }
 
     protected DefineExtensionRuleGetAstMethod(_nodeTb : TypeBuilder) : void
@@ -146,18 +245,7 @@ namespace Nitra.Compiler
 
       def syntaxMappingBody = this.RuleSymbol.GetSyntaxMappingBody();
       when (syntaxMappingBody != null)
-      {
-        def declarationSymbol   = syntaxMappingBody.Declaration.GetValue(Environment.Project);
-        def parentType          = Environment.TypeCompiler.CompileParentType(declarationSymbol);
-        def baseDeclarationType = GetBaseDeclarationType(declarationSymbol);
-        def code                = MakeParseTreeGetAstMethodBody(syntaxMappingBody);
-        _nodeTb.Define(<[ decl:
-          public override GetAst($("parent" : global) : $(parentType : typed)) : $baseDeclarationType
-          {
-            $code
-          }
-        ]>);
-      }
+        DefineGetAstMethod(_nodeTb, syntaxMappingBody, NemerleModifiers.Public %| NemerleModifiers.Override)
     }
 
     protected DefineAmbiguousGetAstMethod(_ambiguousTb : TypeBuilder) : void
