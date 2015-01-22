@@ -114,18 +114,13 @@ namespace Nitra.Compiler
       def parentType          = Environment.TypeCompiler.CompileParentType(declarationSymbol);
       def baseDeclarationType = GetBaseDeclarationType(declarationSymbol);
 
-      def buildAst(ruleType : RuleType, astType : NType, obj : PExpr, errorLoc : Location) : BuildAstResult
+      def buildAst(mappingType : SyntaxMappingType, obj : PExpr) : BuildAstResult
       {
-        def reportError()
+        match (mappingType)
         {
-          Environment.Project.FatalError(errorLoc, $"Cannot map '$(ruleType)' to '$(astType)'", -1)
-        }
-        match (ruleType, astType)
-        {
-          | (List(ruleItemType), List(astItemType))
-          | (List(ruleItemType), OptionList(astItemType)) =>
+          | List(item, ruleType) =>
             def parseTreeType     = Environment.GetParseTreeType(ruleType);
-            def itemResult        = buildAst(ruleItemType, astItemType, <[ node ]>, errorLoc);
+            def itemResult        = buildAst(item, <[ node ]>);
             def getAstListName    = Util.tmpname("GetAstList");
             tb.Define(<[ decl:
               private static $(getAstListName : usesite)(parent : $(parentType : typed), lst : $(parseTreeType : typed)) : $(itemResult.List)
@@ -149,9 +144,9 @@ namespace Nitra.Compiler
             ]>);
             BuildAstResult(<[ $(getAstListName : usesite)(parent, $obj) ]>)
 
-          | (Option(ruleItemType), Option(astItemType)) =>
+          | Option(item, ruleType) =>
             def parseTreeType      = Environment.GetParseTreeType(ruleType);
-            def itemResult         = buildAst(ruleItemType, astItemType, <[ opt.Value ]>, errorLoc);
+            def itemResult         = buildAst(item, <[ opt.Value ]>);
             def getAstOptionName   = Util.tmpname("GetAstOption");
             tb.Define(<[ decl:
               private static $(getAstOptionName : usesite)(parent : $(parentType : typed), opt : $(parseTreeType : typed)) : $(itemResult.Option)
@@ -172,25 +167,8 @@ namespace Nitra.Compiler
             ]>);
             BuildAstResult(<[ $(getAstOptionName : usesite)(parent, $obj) ]>)
 
-          | (Ref(SyntaxRuleSymbol(Declaration = SymbolRef.Some(sourceDeclarationSymbol))), Qualified) =>
-            def targetDeclarationSymbol = Environment.TypeCompiler.TryGetDeclarationSymbol(astType);
-            if (targetDeclarationSymbol != null)
-            {
-              if (sourceDeclarationSymbol == targetDeclarationSymbol || sourceDeclarationSymbol.AllBaseDeclarations.Contains(targetDeclarationSymbol))
-                BuildAstResult(<[ $obj.GetAst(parent) ]>, Environment.GetDeclarationType(targetDeclarationSymbol))
-              else
-                Environment.Project.FatalError(errorLoc, $"Declaration '$(sourceDeclarationSymbol.FullName)' is not subtype of declaration '$(targetDeclarationSymbol.FullName)'", -1)
-            }
-            else
-              reportError()
-
-          | (Tuple(members), _) =>
-            if (members.MapI((i, m) => (i + 1, m)).Filter((_, m) => !(m is RuleType.Chars(Keyword = Some))) is [(index, nonKeyword)])
-              buildAst(nonKeyword, astType, <[ $obj.$("Item" + index.ToString() : usesite) ]>, errorLoc)
-            else
-              reportError()
-
-          | _ => reportError()
+          | Ref(declarationSymbol) => BuildAstResult(<[ $obj.GetAst(parent) ]>, Environment.GetDeclarationType(declarationSymbol))
+          | Tuple(index, item)     => buildAst(item, <[ $obj.$("Item" + index.ToString() : usesite) ]>)
         }
       }
 
@@ -201,10 +179,14 @@ namespace Nitra.Compiler
           match (field)
           {
             | Inline(code) => <[ $(declarationPropertySymbol.Name : usesite) = $code ]>
-            | Automatic(loc, ruleFieldPath, ruleType) =>
-              def astType         = declarationPropertySymbol.Type;
-              def parseTreeMember = MakeParseTreeMemberAccess(loc, ruleFieldPath);
-              <[ $(declarationPropertySymbol.Name : usesite) = unchecked ($(buildAst(ruleType, astType, parseTreeMember, field.Location).Code)) ]>
+            | Automatic(loc, ruleFieldPath, mappingTypeOpt) =>
+              if (mappingTypeOpt is Some(mappingType))
+              {
+                def parseTreeMember = MakeParseTreeMemberAccess(loc, ruleFieldPath);
+                <[ $(declarationPropertySymbol.Name : usesite) = unchecked ($(buildAst(mappingType, parseTreeMember).Code)) ]>
+              }
+              else
+                assert(false, "Syntax mapping type is not defined")
           });
       }
 
