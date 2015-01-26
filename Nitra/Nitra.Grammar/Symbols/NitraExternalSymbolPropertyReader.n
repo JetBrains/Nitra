@@ -4,6 +4,7 @@ using Nitra.Model;
 using Nitra.Serialization;
 
 using Nemerle;
+using Nemerle.Extensions;
 using Nemerle.Imperative;
 using Nemerle.Collections;
 using Nemerle.Compiler;
@@ -58,26 +59,58 @@ namespace Nitra.Typing
 
     private ReflectNType(project : NitraProject, typeVar : TypeVar, isFunc : bool) : NType
     {
+      def getOuterType(ti : TypeInfo) : TypeInfo
+      {
+        def parentNode = ti.NamespaceNode.Parent;
+        if (parentNode != null)
+        {
+          def loop(_)
+          {
+            | one :: _ when one.GetNestedTypes().Contains(ti) => one
+            | _ :: tail => loop(tail)
+            | []        => null
+          }
+          loop(parentNode.LookupTypes([], false))
+        }
+        else
+          null
+      }
+
+      def makeQualified(loc : Nitra.Location, ti : TypeInfo, args : list[TypeVar]) : NType.Qualified
+      {
+        def env       = ti.Manager.CoreEnv;
+        def nameParts = ti.FullName.Split(array['.']);
+        assert(nameParts.Length > 0);
+        mutable typeNameParts = [TypeNamePart(loc, nameParts[nameParts.Length - 1], args.Map(ReflectNType(project, _, false)), env)];
+        for (mutable i = nameParts.Length - 2; i >= 0; --i)
+          typeNameParts ::= TypeNamePart(loc, nameParts[i], [], env);
+        NType.Qualified(loc, typeNameParts)
+      }
+
       def loc = project.MakeFakeNitraLocation(typeVar.Location);
       match (typeVar)
       {
         | FixedType.Tuple(members)   when isFunc => NType.Tuple(loc, members.Map(ReflectNType(project, _, true))) // for function signatures
         | FixedType.Void                         => NType.Predefined(loc, NPredefinedType.Void)
         | FixedType.Fun(from, to)                => NType.Func(loc, ReflectNType(project, from, true), ReflectNType(project, to, true))
-        | FixedType.Class(ti, [])    when ti.FullName == "System.Int32"                           => NType.Predefined(loc, NPredefinedType.Int)
-        | FixedType.Class(ti, [])    when ti.FullName == "System.String"                          => NType.Predefined(loc, NPredefinedType.String)
-        | FixedType.Class(ti, [])    when ti.FullName == "Nitra.Declarations.IDeclaration"        => NType.Predefined(loc, NPredefinedType.Declaration)
-        | FixedType.Class(ti, [arg, _]) when ti.FullName == "Nitra.Declarations.IAstOption"       => NType.Option(loc, ReflectNType(project, arg, false))
-        | FixedType.Class(ti, [arg, _]) when ti.FullName == "Nitra.Declarations.IAstList"         => NType.List(loc, ReflectNType(project, arg, false))
-        | FixedType.Class(ti, args) =>
-          def env       = ti.Manager.CoreEnv;
-          def nameParts = ti.FullName.Split(array['.']);
-          assert(nameParts.Length > 0);
-          mutable typeNameParts = [TypeNamePart(loc, nameParts[nameParts.Length - 1], args.Map(ReflectNType(project, _, false)), env)];
-          for (mutable i = nameParts.Length - 2; i >= 0; --i)
-            typeNameParts ::= TypeNamePart(loc, nameParts[i], [], env);
-          NType.Qualified(loc, typeNameParts)
+        | FixedType.Class(ti, []) when ti.FullName == "System.Int32"            => NType.Predefined(loc, NPredefinedType.Int)
+        | FixedType.Class(ti, []) when ti.FullName == "System.String"           => NType.Predefined(loc, NPredefinedType.String)
+        | FixedType.Class(ti, []) when ti.FullName == "Nitra.Declarations.IAst" => NType.Predefined(loc, NPredefinedType.Ast)
+        | FixedType.Class(ti, []) when ti.Name == "IAstOption" =>
+          def outerType = getOuterType(ti);
+          if (outerType : object != null)
+            NType.Option(loc, ReflectNType(project, FixedType.Class(outerType, []) <- Location = typeVar.Location, false))
+          else
+            makeQualified(loc, ti, [])
 
+        | FixedType.Class(ti, []) when ti.Name == "IAstList" =>
+          def outerType = getOuterType(ti);
+          if (outerType : object != null)
+            NType.List(loc, ReflectNType(project, FixedType.Class(outerType, []) <- Location = typeVar.Location, false))
+          else
+            makeQualified(loc, ti, [])
+
+        | FixedType.Class(ti, args) => makeQualified(loc, ti, args)
         | _ => assert3(false, "Failed to reflect NType from TypeVar")
       }
     }
