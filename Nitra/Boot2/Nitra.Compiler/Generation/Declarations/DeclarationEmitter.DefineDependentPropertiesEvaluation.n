@@ -26,12 +26,35 @@ namespace Nitra.Compiler
         def body = SCG.List();
         when ((symbol : object) is IDependentPropertyAssignmentContainer as container)
         {
+          def initializedOutProperties = SCG.HashSet(symbol.InitializedOutProperties);
+          when (symbol is ExtensionDeclarationSymbol(BaseDeclaration = SymbolRef.Some(baseSymbol)))
+            initializedOutProperties.UnionWith(baseSymbol.InitializedOutProperties);
+
+          foreach (p in symbol.AllProperties)
+          {
+            | DependentDeclarationPropertySymbol(Direction = Out, LinkedProperty = SymbolRef.Some(inPropertySymbol)) as outPropertySymbol when symbol is ExtensibleDeclarationSymbol =>
+              unless (initializedOutProperties.Contains(outPropertySymbol))
+              {
+                def loc = if (outPropertySymbol.DeclaringDeclaration == symbol) outPropertySymbol.FirstLocation else symbol.FirstLocation;
+                container.AddAssignment(DependentPropertyAssignment(loc, [LocatedName(symbol.FirstLocation, outPropertySymbol.Name)], <[ this.$(inPropertySymbol.Name : usesite) ]>))
+              }
+
+            | DependentDeclarationPropertySymbol(Direction = Out) as outPropertySymbol =>
+              unless (initializedOutProperties.Contains(outPropertySymbol))
+              {
+                def loc = if (outPropertySymbol.DeclaringDeclaration == symbol) outPropertySymbol.FirstLocation else symbol.FirstLocation;
+                Message.Error(loc.ToNemerleLocation(), $"Output dependent property '$(outPropertySymbol.Name)' is never assigned to");
+              }
+
+            | _ => ()
+          }
+
           foreach (assignment in container.GetAssignments())
             body.Add(Util.locate(assignment.Location.ToNemerleLocation(), <[ $(PExprUtils.FromQualifiedIdentifier(assignment.Path)) = $(assignment.Expression) ]>));
         }
 
         tb.Define(<[ decl:
-          public override EvalProperties($("context" : global) : Nitra.Declarations.EvalDeclarationPropertiesContext) : void
+          public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
           {
             ..$body
           }
@@ -57,10 +80,11 @@ namespace Nitra.Compiler
               else
                 assert3(false, $"IProperty for symbol $s not found");
             }
-            def newGraphNodes = AddDependencyOnDeclarationProperties(graphNodes, props);
-            def code          = GenerateCode(tb, newGraphNodes);
+            def graphNodes2 = AddDependencyOnDeclarationProperties(graphNodes, props);
+            //CheckOutputPropertiesAssignment(symbol, newGraphNodes);
+            def code          = GenerateCode(tb, graphNodes2);
             if (symbol is ExtensionDeclarationSymbol)
-              methodBuilder.Body = <[ base.EvalProperties($("context" : usesite)); $code ]>
+              methodBuilder.Body = <[ $code; base.EvalProperties($("context" : usesite)); ]>
             else
               methodBuilder.Body = code;
             throw RestartRunBodyTyperException()
@@ -362,7 +386,7 @@ namespace Nitra.Compiler
         | UseProp         => ()
         | DeclaredProp(p) =>
           def propertyType = tb.GetMemType().TypeOfMember(p);
-          when (propertyType.TryRequire(Environment.DeclarationPartTypeVar))
+          when (propertyType.TryRequire(Environment.AstTypeVar))
             result.Add(<[ this.$(p.Name : global).EvalProperties(context) ]>);
       }
 

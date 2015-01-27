@@ -1,0 +1,90 @@
+﻿using Nitra.Model;
+using Nitra.ProjectSystem;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Typing
+{
+  public partial module TypingUtils
+  {
+    internal MakeSyntaxMappingType(context : Context, declarationPropertyRef : SymbolRef[DeclarationPropertySymbol], ruleType : RuleType, errorLoc : Location) : option[SyntaxMappingType]
+    {
+      if (declarationPropertyRef is SymbolRef.Some(declarationProperty))
+      {
+        def compilationMessages = context.Project;
+        mutable errorReported;
+
+        def buildType(ruleType : RuleType, astType : NType) : SyntaxMappingType
+        {
+          match (ruleType, astType)
+          {
+            | (List(ruleItemType), List(astItemType))
+            | (List(ruleItemType), OptionList(astItemType)) =>
+              match (buildType(ruleItemType, astItemType))
+              {
+                | null => null
+                | t    => SyntaxMappingType.List(t, ruleType)
+              }
+
+            | (Option(ruleItemType), Option(astItemType)) =>
+              match (buildType(ruleItemType, astItemType))
+              {
+                | null => null
+                | t    => SyntaxMappingType.Option(t, ruleType)
+              }
+
+            | (Ref(SyntaxRuleSymbol(Declaration = SymbolRef.Some(sourceDeclarationSymbol))), Qualified as targetName) =>
+              def targetDeclarationRef = context.Bind.[DeclarationSymbol](targetName);
+              if (targetDeclarationRef is SymbolRef.Some(targetDeclarationSymbol))
+              {
+                if (sourceDeclarationSymbol.IsSubtypeOf(targetDeclarationSymbol))
+                  SyntaxMappingType.Ref(targetDeclarationSymbol)
+                else
+                {
+                  compilationMessages.Error(errorLoc, $"Declaration '$(sourceDeclarationSymbol.FullName)' is not subtype of declaration '$(targetDeclarationSymbol.FullName)'", -1);
+                  errorReported = true;
+                  null
+                }
+              }
+              else
+              {
+                errorReported = true;
+                null
+              }
+
+            | (Tuple(members), _) =>
+              if (members.MapI((i, m) => (i + 1, m)).Filter((_, m) => !(m is RuleType.Chars(Keyword = Some))) is [(index, nonKeyword)])
+                match (buildType(nonKeyword, astType))
+                {
+                  | null => null
+                  | t    => SyntaxMappingType.Tuple(index, t)
+                }
+              else
+                null
+
+            | _ => null
+          }
+        }
+
+        def astType = declarationProperty.Type;
+        match (buildType(ruleType, astType))
+        {
+          | null =>
+            unless (errorReported)
+              compilationMessages.Error(errorLoc, $"Cannot map '$(ruleType)' to '$(astType)'", -1);
+            None()
+
+          | t    => Some(t)
+        }
+      }
+      else None()
+    }
+  }
+}
