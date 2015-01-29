@@ -1,8 +1,10 @@
 ﻿using System.ComponentModel.Composition;
 using System.Windows.Media;
-using JetBrains.TextControl.DocumentMarkup;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Utilities;
+
+#if RESHARPER_9
+using JetBrains.TextControl.DocumentMarkup;
 // ReSharper disable UnassignedField.Global
 
 [assembly: RegisterHighlighter(
@@ -11,6 +13,8 @@ using Microsoft.VisualStudio.Utilities;
   EffectType = EffectType.TEXT,
   Layer = HighlighterLayer.SYNTAX,
   VSPriority = VSPriority.IDENTIFIERS)]
+
+#endif // RESHARPER_9
 
 namespace XXNamespaceXX
 {
