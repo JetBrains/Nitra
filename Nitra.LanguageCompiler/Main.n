@@ -1,4 +1,9 @@
-﻿using System.Text;
+﻿using CSharp.TopDeclarationsParseTree;
+using CSharp.StatementsParseTree;
+using CSharp.ExpressionsParseTree;
+
+using Nitra.Quote;
+
 using Nemerle.Collections;
 using Nemerle.Imperative;
 using Nemerle.Text;
@@ -15,6 +20,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
+
+[assembly: ImportRules(Grammar = "CSharp.SplicableTopDeclarations")]
+[assembly: ImportRules(Grammar = "CSharp.SplicableExpressions")]
 
 namespace Nitra.LanguageCompiler
 {
@@ -46,29 +55,106 @@ namespace Nitra.LanguageCompiler
       unless (success)
         return;
         
-      foreach (spanClasse in lang.SpanClasses)
-        WriteLine("span class " + spanClasse.Name + " = " + ColorToString(spanClasse.DefaultForegroundColor.Value));
-      
-      foreach (m in lang.SyntaxModules)
-        WriteLine("module: " + m.Module + if (m.RuleOpt.HasValue) " rule: " + m.RuleOpt.Value else "");
+      def vars = GetVars(lang, config);
         
       GenerateSpanClasses(lang, config);
       
       when (config.GenerateProject)
-        GenerateProject(lang, config);
-        
+        GenerateProject(lang, config, vars);
+
       WriteLine("Output Path: " + config.OutputPath);
     }
     
-    GenerateProject(lang : Language, config : CommandPromptReader) : void
+    public VsPackageTemplatePath = @"Templates\XxxVsPackage";
+
+    public DefaultVars(lang : Language, config : CommandPromptReader) : list[string * string]
+    {
+      def name = lang.Name.ToString();
+      [
+        ("XXNamespaceXX",    config.DefaultNamespace),
+        ("Xxx",              name),
+      ]
+    }
+    
+    public GetVars(lang : Language, config : CommandPromptReader) : list[string * string]
+    {
+      def guidsFileName     = "Guids.cs";
+      def templateGuidsPath = Path.Combine(VsPackageTemplatePath, guidsFileName);
+      def name              = lang.Name.ToString();
+      def prjName           = name + "VsPackage";
+      def guidsPath         = Path.Combine(config.OutputPath, prjName, guidsFileName);
+      def templateGuids     = ReadGuids(templateGuidsPath);
+      def guids             = if (config.NewGuids || !File.Exists(guidsPath)) Hashtable() else ReadGuids(guidsPath);
+      
+      def vars = DefaultVars(lang, config);
+      mutable replaces = vars;
+      
+      foreach ((templateConstName, templateGuid) in templateGuids.KeyValuePairs)
+      {
+        def constName = ExpandTemplateText(templateConstName, vars);
+        mutable guid;
+        if (guids.TryGetValue(constName, out guid))
+          unless (string.Equals(templateGuid, guid, StringComparison.InvariantCulture))
+            replaces ::= (templateGuid, guid);
+        else
+          replaces ::= (templateGuid, Guid.NewGuid().ToString("D"));
+      }
+      
+      replaces
+    }
+
+    internal sealed class CSharpCollectConstVisitor : ParseTreeVisitor
+    {
+      public Result : Hashtable[string, string] = Hashtable();
+      //private mutable _inStringGuidConst : bool;
+      //private mutable _name : string;
+      
+      public override Visit(ast : ParseTree) : ParseTree
+      {
+        quote match (ast)
+        {
+          | <# TypeMemberDeclaration: $Attributes(_) $Modifiers(_)
+            const string $Name(name) = $ConstantExpression(str is Expression.RegularStringLiteral); #> =>
+            def text = str.RegularStringLiteral.RegularStringLiteralParts.GetText();
+            Result[name.ToString()] = text;
+            ast.Apply(this)
+          //| c is TypeMemberDeclaration.Constant when c.AnyType.GetText().Trim() == "string" => 
+          //  _inStringGuidConst = true;
+          //  try c.Apply(this) finally _inStringGuidConst = false;
+          //    
+          //| c is ConstantDeclarator when _inStringGuidConst => 
+          //  def name = c.Name.GetText().Trim();
+          //  _inStringGuidConst = name.StartsWith("Guid", StringComparison.InvariantCultureIgnoreCase);
+          //
+          //  when (_inStringGuidConst)
+          //    _name = name;
+          //  
+          //  try c.Apply(this) 
+          //  finally { _inStringGuidConst = false; _name = null; }
+          | _ => ast.Apply(this)
+        }
+      }      
+    }
+      
+    public ReadGuids(sourcePath : string) : Hashtable[string, string]
+    {
+      def parserHost   = ParserHost();
+      def text         = File.ReadAllText(sourcePath);
+      def source       = SourceSnapshot(text, 0, sourcePath);
+      def parseResult  = CSharp.Main.CompilationUnit(source, parserHost);
+      def parseTree    = CSharp.MainParseTree.CompilationUnit.Create(parseResult);
+      def visitor      = CSharpCollectConstVisitor();
+      
+      _ = parseTree.Apply(visitor);
+      
+      visitor.Result
+    }
+    
+    GenerateProject(lang : Language, config : CommandPromptReader, vars : Seq[string * string]) : void
     {
       def name = lang.Name.ToString();
       def prjName = name + "VsPackage";
-      ExpandTemplates(@"Templates\XxxVsPackage",  Path.Combine(config.OutputPath, prjName), 
-          [("XXNamespaceXX",    config.DefaultNamespace),
-           ("Xxx",              name),
-           ],
-          config);
+      ExpandTemplates(VsPackageTemplatePath,  Path.Combine(config.OutputPath, prjName), vars, config);
           
       def snkPath = Path.Combine(config.OutputPath, prjName, "Key.snk");
       unless (File.Exists(snkPath))
