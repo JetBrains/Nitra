@@ -9,7 +9,7 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 
-namespace XCompanyX.XxxVsPackage
+namespace XCompanyX.XXLanguageXXVsPackage
 {
   /// <summary>
   /// This is the class that implements the package exposed by this assembly.
@@ -27,8 +27,8 @@ namespace XCompanyX.XxxVsPackage
   // This attribute is used to register the information needed to show this package
   // in the Help/About dialog of Visual Studio.
   [InstalledProductRegistration("#110", "#112", "1.0", IconResourceID = 400)]
-  [Guid(GuidList.GuidXxxVsPackagePkgString)]
-  public sealed class XxxVsPackagePackage : Package
+  [Guid(GuidList.GuidXXLanguageXXVsPackagePkgString)]
+  public sealed class XXLanguageXXVsPackagePackage : Package
   {
     /// <summary>
     /// Default constructor of the package.
@@ -37,7 +37,7 @@ namespace XCompanyX.XxxVsPackage
     /// not sited yet inside Visual Studio environment. The place to do all the other 
     /// initialization is the Initialize method.
     /// </summary>
-    public XxxVsPackagePackage()
+    public XXLanguageXXVsPackagePackage()
     {
       Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Entering constructor for: {0}", this));
     }

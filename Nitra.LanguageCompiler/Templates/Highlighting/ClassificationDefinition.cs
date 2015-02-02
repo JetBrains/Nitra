@@ -8,7 +8,7 @@ using JetBrains.TextControl.DocumentMarkup;
 // ReSharper disable UnassignedField.Global
 
 [assembly: RegisterHighlighter(
-  id: XXNamespaceXX.XxxClassificationDefinition.Name,
+  id: XXNamespaceXX.XXSpanClassNaneXXClassificationDefinition.Name,
   EffectColor = "Red",
   EffectType = EffectType.TEXT,
   Layer = HighlighterLayer.SYNTAX,
@@ -24,11 +24,11 @@ namespace XXNamespaceXX
   [Name(Name)]
   [DisplayName(Name)]
   [UserVisible(true)]
-  internal class XxxClassificationDefinition : ClassificationFormatDefinition
+  internal class XXSpanClassNaneXXClassificationDefinition : ClassificationFormatDefinition
   {
     public const string Name = "XXDisplay nameXX";
 
-    public XxxClassificationDefinition()
+    public XXSpanClassNaneXXClassificationDefinition()
     {
       DisplayName = Name;
       ForegroundColor = Colors.Red;

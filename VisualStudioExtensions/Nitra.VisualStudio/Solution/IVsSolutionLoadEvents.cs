@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+﻿#if UNIVERSAL_INTEGRATION
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Microsoft.VisualStudio.Shell.Interop
@@ -76,3 +77,4 @@ namespace Microsoft.VisualStudio.Shell.Interop
     int OnAfterBackgroundSolutionLoadComplete();
   }
 }
+#endif

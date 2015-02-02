@@ -7,11 +7,11 @@ using System.Runtime.InteropServices;
 // General Information about an assembly is controlled through the following 
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("XxxVsPackage")]
+[assembly: AssemblyTitle("XXLanguageXXVsPackage")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("XCompanyX")]
-[assembly: AssemblyProduct("XxxVsPackage")]
+[assembly: AssemblyProduct("XXLanguageXXVsPackage")]
 [assembly: AssemblyCopyright("")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]   
