@@ -2,6 +2,8 @@
 using CSharp.StatementsParseTree;
 using CSharp.ExpressionsParseTree;
 
+using Microsoft.VisualBasic.FileIO;
+
 using Nitra.Quote;
 
 using Nemerle.Collections;
@@ -14,9 +16,9 @@ using Nitra.Declarations;
 using Nitra.LanguageCompiler.Utils;
 
 using System;
-using System.Collections.Generic;
 using System.Console;
 using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -62,6 +64,9 @@ namespace Nitra.LanguageCompiler
       foreach ((var, value) in vars)
         WriteLine($"$var = $value");
         
+      CopyBinaries(lang, config);
+      CopyGrammars(lang, config);
+        
       GenerateFileAndContentTypeDefinitions(source, lang, config);
         
       GenerateSpanClasses(lang, config);
@@ -72,9 +77,37 @@ namespace Nitra.LanguageCompiler
       WriteLine("Output Path: " + config.OutputPath);
     }
     
+    CopyBinaries(lang : Language, config : CommandPromptReader) : void
+    {
+      ExternalDependences(lang, config, config.Binaries);
+    }
+    
+    CopyGrammars(lang : Language, config : CommandPromptReader) : void
+    {
+      ExternalDependences(lang, config, config.AssemblyReferences);
+    }
+    
+    ExternalDependences(lang : Language, config : CommandPromptReader, paths : list[string]) : void
+    {
+      def binPath = Path.Combine(config.OutputPath, lang.ProjectName, "ExternalDependences");
+      foreach (path in paths)
+      {
+        if (Directory.Exists(path))
+          FileSystem.CopyDirectory(path, binPath, UIOption.OnlyErrorDialogs);
+        else if (File.Exists(path))
+        {
+          def fileName = Path.GetFileName(path);
+          def outPath = Path.Combine(binPath, fileName);
+          File.Copy(path, outPath, overwrite=true);
+        }
+        else 
+          Error("File or directory '" + path + "' does not exists.");
+      }
+    }
+    
     GenerateFileAndContentTypeDefinitions(source : SourceSnapshot, lang : Language, config : CommandPromptReader) : void
     {
-      def prjName      = lang.Name + "VsPackage";
+      def prjName      = lang.ProjectName;
       def langSpecFile = config.LangSpecFile;
       def vars         = DefaultVars(lang, config);
       ExpandTemplate(@"Templates\FileAndContentTypeDefinitions\NitraContentTypeDefinition.cs",  $@"$prjName\FileAndContentTypeDefinitions\NitraContentTypeDefinition.Generated.cs", 
@@ -88,7 +121,7 @@ namespace Nitra.LanguageCompiler
         unless (fileExtension.HasValue)
         {
           def (line, col) = Location(source, fileExtension.Span).StartLineColumn;
-          Debug.WriteLine($<#$langSpecFile($line,$col): error: bad file extension.#>);
+          Error($<#$langSpecFile($line,$col): error: bad file extension.#>);
           continue;
         }
 
@@ -105,16 +138,16 @@ namespace Nitra.LanguageCompiler
       unless (isFileExtensionDefined)
       {
         def (line, col) = Location(source, lang.Name.Span).StartLineColumn;
-        Debug.WriteLine($<#$langSpecFile($line,$col): error: no file extension defined.#>);
+        Error($<#$langSpecFile($line,$col): error: no file extension defined.#>);
       }
     }
     
     public DefaultVars(lang : Language, config : CommandPromptReader) : list[string * string]
     {
-      def name = lang.Name.ToString();
       [
         ("XXNamespaceXX",    config.DefaultNamespace),
-        ("XXLanguageXX",              name),
+        ("XXLanguageXX",     lang.Name.ToString()),
+        ("XXCompanyXX",      lang.Companies.Head.Value.Trim()),
       ]
     }
     
@@ -205,7 +238,7 @@ namespace Nitra.LanguageCompiler
     
     GenerateSpanClasses(lang : Language, config : CommandPromptReader) : void
     {
-      def prjName = lang.Name + "VsPackage";
+      def prjName = lang.ProjectName;
 
       foreach (spanClasse in lang.SpanClasses)
       {
@@ -231,7 +264,7 @@ namespace Nitra.LanguageCompiler
         foreach(error in parseResult.GetErrors())
         {
           def (line, col) = error.Location.StartLineColumn;
-          Debug.WriteLine($<#$langSpecFile($line,$col): error: $(error.Message)#>);
+          Error($<#$langSpecFile($line,$col): error: $(error.Message)#>);
         }
         return null;
       }
@@ -245,7 +278,7 @@ namespace Nitra.LanguageCompiler
     Check(source : SourceSnapshot, lang : Language, config : CommandPromptReader) : bool * RuleDescriptor
     {
       mutable success = true;
-      def error(msg : string) : void { success = false; WriteLine(msg); }
+      def error(msg : string) : void { success = false; Error(msg); }
       def langSpecFile = config.LangSpecFile;
       def descriptors  = config.ModuleDescriptors;
       def modules = HashSet();
@@ -280,19 +313,33 @@ namespace Nitra.LanguageCompiler
       foreach (m in lang.SyntaxModules)
         processModule(m.Module, m.RuleOpt);
       
-      if (stratRules.Count == 0)
-        error($<#$langSpecFile($(Location(source, lang.Span).StartLineColumn)): error: No start rule defined.#>);
-      else when (stratRules.Count > 1)
-      {
-        def loc1 = Location(source, stratRules[1].Span);
-        def loc2 = Location(source, stratRules[0].Span);
-        error($<#$langSpecFile($(loc1.StartLineColumn)): error: Start rule defined twice.#>);
-        error($<#$langSpecFile($(loc2.StartLineColumn)): warning: Previous defined.#>);
-      }
-    
-      //mutable stratRuleDescriptor;
+      unless (CheckDefinedOnce(langSpecFile, source, lang, stratRules, x => x.Span, "start rule"))
+        success = false;
+      unless (CheckDefinedOnce(langSpecFile, source, lang, lang.Companies, x => x.Span, "compaty"))
+        success = false;
         
       (success, stratRuleDescriptor)
+    }
+    
+    CheckDefinedOnce[T](langSpecFile : string, source : SourceSnapshot, lang : Language, seq : Seq[T], getSpan : T -> NSpan, name : string) : bool
+    {
+      def stratRules = seq.ToArray();
+      def error(msg : string) : void { Error(msg); }
+      if (stratRules.Length == 0)
+      {
+        error($<#$langSpecFile($(Location(source, lang.Span).StartLineColumn)): error: No $name defined.#>);
+        false
+      }
+      else if (stratRules.Length > 1)
+      {
+        def loc1 = Location(source, getSpan(stratRules[1]));
+        def loc2 = Location(source, getSpan(stratRules[0]));
+        error($<#$langSpecFile($(loc1.StartLineColumn)): error: The $name defined twice.#>);
+        error($<#$langSpecFile($(loc2.StartLineColumn)): warning: Previous defined.#>);
+        false
+      }
+      else
+        true
     }
  
     ExpandTemplates(templateRootPath : string, outputPath : string, vars : Seq[string * string], config : CommandPromptReader) : void
@@ -350,13 +397,18 @@ namespace Nitra.LanguageCompiler
       File.WriteAllText(outputPath2, result, Encoding.UTF8);
       
       when (result.Contains("XX"))
-        WriteLine($<#$templatePath: error: The template contains unreplaced placeholders.#>);
+        Error($<#$templatePath: error: The template contains unreplaced placeholders.#>);
     }
   }
 }
 
 namespace Nitra
 {
+  public abstract partial class Language : AstBase[IAst]
+  {
+    public ProjectName : string { get { Name + "VsPackage"} }
+  }
+
   public abstract partial class QualifiedIdentifier : AstBase[IAst]
   {
     public sealed partial class Concrete : QualifiedIdentifier

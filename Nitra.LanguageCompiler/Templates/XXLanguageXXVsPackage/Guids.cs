@@ -2,7 +2,7 @@
 // MUST match guids.h
 using System;
 
-namespace XCompanyX.XXLanguageXXVsPackage
+namespace XXNamespaceXX
 {
     static class GuidList
     {

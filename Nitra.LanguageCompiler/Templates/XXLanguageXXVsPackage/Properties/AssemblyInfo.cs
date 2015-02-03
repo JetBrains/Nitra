@@ -10,7 +10,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTitle("XXLanguageXXVsPackage")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("XCompanyX")]
+[assembly: AssemblyCompany("XXCompanyXX")]
 [assembly: AssemblyProduct("XXLanguageXXVsPackage")]
 [assembly: AssemblyCopyright("")]
 [assembly: AssemblyTrademark("")]

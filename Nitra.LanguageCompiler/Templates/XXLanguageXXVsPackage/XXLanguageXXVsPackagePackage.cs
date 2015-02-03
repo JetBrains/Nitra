@@ -1,15 +1,18 @@
-﻿using System;
-using System.Diagnostics;
-using System.Globalization;
-using System.Runtime.InteropServices;
-using System.ComponentModel.Design;
-using Microsoft.Win32;
+﻿using Microsoft.Win32;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 
-namespace XCompanyX.XXLanguageXXVsPackage
+using Nitra.VisualStudio;
+
+using System;
+using System.ComponentModel.Design;
+using System.Diagnostics;
+using System.Globalization;
+using System.Runtime.InteropServices;
+
+namespace XXNamespaceXX
 {
   /// <summary>
   /// This is the class that implements the package exposed by this assembly.
@@ -55,6 +58,7 @@ namespace XCompanyX.XXLanguageXXVsPackage
     protected override void Initialize()
     {
       Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Entering Initialize() of: {0}", this.ToString()));
+      NitraPackage.Init(this);
       base.Initialize();
     }
     #endregion
