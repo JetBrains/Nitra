@@ -20,53 +20,159 @@ namespace CSharp
       }
   }
 
-  declaration QualifiedIdentifier
+  declarations QualifiedReference
   {
-    Alias : Reference?;
-    Parts : QualifiedIdentifierPart+;
-  }
-
-  declarations QualifiedIdentifierPart
-  {
-    Name          : Reference;
-    | Simple            {                                   }
-    | WithTypeArguments { Arguments : QualifiedIdentifier*; }
-    | WithTypeRank      { Rank      : int;                  }
+    | Simple
+      {
+        Name  : Reference;
+      }
+    | Aliased
+      {
+        Alias : Reference;
+        Name  : Reference;
+      }
+    | Qualified
+      {
+        Qualifier : QualifiedReference;
+        Name      : Reference;
+      }
+    | Generic
+      {
+        Name      : QualifiedReference;
+        Arguments : QualifiedReference+;
+      }
   }
 
   map syntax CsIdentifiers.QualifiedAlias -> Reference call Alias;
 
-  map syntax CsIdentifiers.QualifiedIdentifier -> QualifiedIdentifier
+  map syntax CsIdentifiers.QualifiedIdentifier -> QualifiedReference =
   {
-    QualifiedAliasOpt              -> Alias;
-    QualifiedIdentifierParts.Item1 -> Parts;
-  }
+    assert(QualifiedIdentifierParts.Item1.Count > 0);
 
-  map syntax CsIdentifiers.QualifiedIdentifierPart -> QualifiedIdentifierPart =
-  {
-    if (QualifiedIdentifierPartTypeArgumentsOpt.HasValue)
+    def makeSpan(pt)
     {
-      match (QualifiedIdentifierPartTypeArgumentsOpt.Value)
+      NSpan(Location.StartPos, pt.Location.EndPos)
+    }
+
+    def handleSimple(index, qidPart, parent)
+    {
+      def span = makeSpan(qidPart.Identifier);
+      if (index > 0)
       {
-        | CsIdentifiersParseTree.QualifiedIdentifierPartTypeArguments.TypeArgumentList as x =>
-          def declaration = QualifiedIdentifierPart.WithTypeArguments(parent, Location.Span);
-          declaration.Initialize(Name = Identifier.GetAst(declaration), Arguments = QualifiedIdentifier.AstList(declaration, x.AnyTypes.Location.Span, array[]));
-          declaration
-
-        | CsIdentifiersParseTree.QualifiedIdentifierPartTypeArguments.OpenTypeArguments as x =>
-          def declaration = QualifiedIdentifierPart.WithTypeRank(parent, Location.Span);
-          declaration.Initialize(Name = Identifier.GetAst(declaration), Rank = x.RankSeparators.Count);
-          declaration
-
-        | _ => assert(false)
+        def qid = QualifiedReference.Qualified(parent, span);
+        qid.Initialize(
+          Qualifier = handleGeneric(index - 1, qid),
+          Name      = qidPart.Identifier.GetAst(qid));
+        qid
+      }
+      else if (QualifiedAliasOpt.HasValue)
+      {
+        def qid = QualifiedReference.Aliased(parent, span);
+        qid.Initialize(
+          Alias = QualifiedAliasOpt.Value.GetAst(qid),
+          Name  = qidPart.Identifier.GetAst(qid));
+        qid
+      }
+      else
+      {
+        def qid = QualifiedReference.Simple(parent, span);
+        qid.Initialize(Name = qidPart.Identifier.GetAst(qid));
+        qid
       }
     }
-    else
+
+    and handleGeneric(index, parent)
     {
-      def declaration = QualifiedIdentifierPart.Simple(parent, Location.Span);
-      declaration.Initialize(Name = Identifier.GetAst(declaration));
-      declaration
+      def qidPart = QualifiedIdentifierParts.Item1[index];
+      if (qidPart.QualifiedIdentifierPartTypeArgumentsOpt.HasValue)
+      {
+        match (qidPart.QualifiedIdentifierPartTypeArgumentsOpt.Value)
+        {
+          | CsIdentifiersParseTree.QualifiedIdentifierPartTypeArguments.TypeArgumentList as x =>
+            def qid = QualifiedReference.Generic(parent, makeSpan(x));
+
+            def args = array(x.AnyTypes.Item1.Count);
+            foreach (anyType in x.AnyTypes.Item1 with index)
+              args[index] = anyType.GetAst(qid);
+
+            qid.Initialize(
+              Name      = handleSimple(index, qidPart, qid),
+              Arguments = QualifiedReference.AstList(qid, x.Location.Span, args));
+            qid
+
+          | CsIdentifiersParseTree.QualifiedIdentifierPartTypeArguments.OpenTypeArguments as x =>
+            def qid = QualifiedReference.Generic(parent, makeSpan(x));
+
+            def args = array(x.RankSeparators.Count + 1);
+            args[0] = IntrinsicUtils.CreateOpenTypeArgument(qid, NSpan(x.OpenBrace.EndPos, x.OpenBrace.EndPos));
+            foreach (rs in x.RankSeparators with index)
+              args[index + 1] = IntrinsicUtils.CreateOpenTypeArgument(qid, NSpan(rs.Location.EndPos, rs.Location.EndPos));
+
+            qid.Initialize(
+              Name      = handleSimple(index, qidPart, qid),
+              Arguments = QualifiedReference.AstList(qid, x.Location.Span, args));
+            qid
+
+          | _ => assert(false)
+        }
+      }
+      else
+        handleSimple(index, qidPart, parent);
     }
+
+    handleGeneric(QualifiedIdentifierParts.Item1.Count - 1, parent);
+  };
+
+  map syntax Types.TypeName -> QualifiedReference;
+  map syntax Types.TypeName.QualifiedName  -> QualifiedReference call QualifiedIdentifier;
+  map syntax Types.TypeName.PredefinedType -> QualifiedReference = IntrinsicUtils.CreatePredefinedTypeReference(parent, PredefinedType, GetText(PredefinedType));
+
+  map syntax Types.AnyNonArrayType -> QualifiedReference =
+  {
+    if (NullableSpecifierOpt.HasValue)
+    {
+      def qid = QualifiedReference.Generic(parent, Location.Span);
+      qid.Initialize(
+        Name      = IntrinsicUtils.CreateQualifiedReference(qid, Location.Span, array["System", "Nullable"]),
+        Arguments = QualifiedReference.AstList(qid, Location.Span, array[TypeName.GetAst(qid)]));
+      qid
+    }
+    else
+      TypeName.GetAst(parent)
+  };
+
+  map syntax Types.AnyType -> QualifiedReference =
+  {
+    def loop(index, parent)
+    {
+      if (index < 0)
+        AnyNonArrayType.GetAst(parent)
+      else
+      {
+        def ts   = TypeSpecifiers[index];
+        def span = NSpan(Location.StartPos, ts.Location.EndPos);
+        match (ts)
+        {
+          | TypesParseTree.TypeSpecifier.RankSpecifier as x =>
+            def rank = x.RankSpecifier.RankSeparators.Count + 1;
+            def qid  = QualifiedReference.Generic(parent, span);
+            qid.Initialize(
+              Name      = IntrinsicUtils.CreateQualifiedReference(qid, span, array["#Array" + rank.ToString()]),
+              Arguments = QualifiedReference.AstList(qid, span, array[loop(index - 1, qid)]));
+            qid
+
+          | TypesParseTree.TypeSpecifier.PointerSpecifier =>
+            def qid  = QualifiedReference.Generic(parent, span);
+            qid.Initialize(
+              Name      = IntrinsicUtils.CreateQualifiedReference(qid, span, array["#Pointer"]),
+              Arguments = QualifiedReference.AstList(qid, span, array[loop(index - 1, qid)]));
+            qid
+
+          | _ => assert(false)
+        }
+      }
+    }
+    loop(TypeSpecifiers.Count - 1, parent)
   };
 
   declaration ExternAliasDirective
@@ -79,11 +185,11 @@ namespace CSharp
     | Alias
       {
         Name                : Reference;
-        NamespaceOrTypeName : QualifiedIdentifier;
+        NamespaceOrTypeName : QualifiedReference;
       }
     | Open
       {
-        NamespaceOrTypeName : QualifiedIdentifier;
+        NamespaceOrTypeName : QualifiedReference;
       }
   }
 
