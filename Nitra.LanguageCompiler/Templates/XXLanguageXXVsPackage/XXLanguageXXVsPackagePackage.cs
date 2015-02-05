@@ -4,6 +4,7 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.OLE.Interop;
 using Microsoft.VisualStudio.Shell;
 
+using Nemerle.Collections;
 using Nitra.VisualStudio;
 
 using System;
@@ -27,6 +28,7 @@ namespace XXNamespaceXX
   // This attribute tells the PkgDef creation utility (CreatePkgDef.exe) that this class is
   // a package.
   [PackageRegistration(UseManagedResourcesOnly = true)]
+  [ProvideAutoLoad(UIContextGuids80.NoSolution)]
   // This attribute is used to register the information needed to show this package
   // in the Help/About dialog of Visual Studio.
   [InstalledProductRegistration("#110", "#112", "1.0", IconResourceID = 400)]
@@ -58,7 +60,14 @@ namespace XXNamespaceXX
     protected override void Initialize()
     {
       Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Entering Initialize() of: {0}", this.ToString()));
-      NitraPackage.Init(this);
+
+      var language = new Language("XXLanguageXX",
+        NitraFileExtensionsAndContentTypeDefinition.FileExtensions.NToList(),
+        XXStartSyntaxModuleXX,
+        XXStartRuleXX,
+        new[] { XXParserAssembliesXX }.NToList());
+
+      NitraPackage.Init(this, language);
       base.Initialize();
     }
     #endregion

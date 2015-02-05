@@ -3,209 +3,28 @@ using Microsoft.VisualStudio.Shell.Interop;
 
 using System;
 
-#if UNIVERSAL_INTEGRATION
-using Nitra.VisualStudio.Parsing;
-
-using Nemerle;
-using Nemerle.Late;
-using Nemerle.Collections;
-using Nemerle.Text;
-using Nemerle.Utility;
-
-using Nitra.VisualStudio.Solution;
-using System.IO;
-using System.Reflection;
-using System.ComponentModel.Design;
-using System.Runtime.InteropServices;
-using System.Collections.Generic;
-using System.Linq;
-using System.Windows.Forms;
-
-using NLog;
-
-using EnvDTE;
-using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Adornments;
-using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Shell;
-
-
-namespace Nitra.VisualStudio
-{
-  [PackageRegistration(UseManagedResourcesOnly = true)]
-  [Guid("EE439415-4A80-4181-B0A8-1233B1BBBABC")]
-  [ProvideMenuResource(1000s, 1)]
-  [ProvideAutoLoad(Constants.vsContextNoSolution)]
-  [InstalledProductRegistration(AssemblyConstants.Product, AssemblyConstants.ProductDetails, AssemblyConstants.Version)]
-  public class NitraPackage : Package, IVsInstalledProduct
-  {
-    public static mutable Instance : NitraPackage;
-
-    private mutable _statusbar       : IVsStatusbar;
-    private         _logger          : Logger = LogManager.GetLogger(typeof(this).FullName);
-    private mutable _dteEvents       : DTEEvents;
-    private mutable _solutionManager : SolutionManager;
-
-    public DataHostService : IVsDataHostService { get; private set; }
-
-    protected override Initialize() : void
-    {
-      base.Initialize();
-      _logger.Trace("Initialize");
-
-      Instance = this;
-      DataHostService = GetService(typeof(IVsDataHostService)) :> IVsDataHostService;
-
-      if (SubscribeServiceEvents())
-        _logger.Trace("SubscribeServiceEvents succeeded from Initialize method");
-      else
-      {
-        _dteEvents = (GetService(typeof(DTE)) :> DTE).Events.DTEEvents;
-        _dteEvents.OnStartupComplete += _ =>
-        {
-          if (SubscribeServiceEvents())
-            _logger.Trace("SubscribeServiceEvents succeeded from OnStartupComplete event");
-          else
-            _logger.Trace("SubscribeServiceEvents failed");
-        };
-      }
-
-      _solutionManager = SolutionManager(this);
-      _solutionManager.Init();
-    }
-
-    private SubscribeServiceEvents() : bool
-    {
-      def config = GetServiceFromServiceModel.[INitraGlobalConfig]();
-      when (config != null)
-      {
-        def isNitraSyntaxDefined = config.Languages.Where(lang => lang.Grammar == "NitraSyntax");
-        AppDomain.CurrentDomain.SetData("NitraForVisualStudio", isNitraSyntaxDefined);
-      }
-      def errorProviderFactory = GetServiceFromServiceModel.[IErrorProviderFactory]();
-      def documentFactoryService = GetServiceFromServiceModel.[ITextDocumentFactoryService]();
-      if (config != null && errorProviderFactory != null && documentFactoryService != null)
-      {
-        documentFactoryService.TextDocumentCreated += fun(_, args)
-        {
-          def document = args.TextDocument;
-          def buffer   = document.TextBuffer;
-          def ext      = Path.GetExtension(document.FilePath);
-          unless (string.IsNullOrEmpty(ext))
-          when (config.GetLanguageByExtension(ext) is VSome(language))
-          {
-            _logger.Trace("Detected language {0} for document {1}", language.Name, document.FilePath);
-            unless (buffer.ContentType.Equals(language.ContentType))
-              buffer.ChangeContentType(language.ContentType, null);
-            buffer.Properties.AddProperty(TextBufferProperties.Language, language);
-
-            def errorListManager = ErrorListManager(errorProviderFactory, buffer);
-            buffer.Properties.AddProperty(TextBufferProperties.ErrorListManager, errorListManager);
-          }
-        };
-        documentFactoryService.TextDocumentDisposed += fun (_, args)
-        {
-          def buffer = args.TextDocument.TextBuffer;
-          mutable parseAgent : ParseAgent;
-          when (buffer.Properties.TryGetProperty(TextBufferProperties.ParseAgent, out parseAgent))
-            parseAgent.Cancel();
-
-          mutable errorListManager : ErrorListManager;
-          when (buffer.Properties.TryGetProperty(TextBufferProperties.ErrorListManager, out errorListManager))
-            errorListManager.Dispose();
-        };
-        true
-      }
-      else false
-    }
-
-    public SetStatusBarText(text : string) : void
-    {
-      when (_statusbar == null)
-        _statusbar = GetService(typeof(SVsStatusbar)) :> IVsStatusbar;
-
-      when (_statusbar != null)
-        _ = _statusbar.SetText(text);
-    }
-
-    public ShowMessage(message : string, messageType : MessageType) : void
-    {
-      Utils.ShowMessage(this, message, messageType);
-    }
-
-    #region Microsoft.VisualStudio.Shell.Interop.IVsInstalledProduct  Members
-
-    public IdBmpSplash(pIdBmp : out uint) : int
-    {
-      _ = pIdBmp;
-      VSConstants.S_FALSE;
-    }
-
-    public IdIcoLogoForAboutbox(pIdIco : out uint) : int
-    {
-      _ = pIdIco;
-      VSConstants.S_FALSE;
-    }
-
-    public OfficialName(pbstrName : out string) : int
-    {
-      pbstrName = "Nitra";
-      VSConstants.S_OK;
-    }
-
-    public ProductDetails(pbstrProductDetails : out string) : int
-    {
-      pbstrProductDetails = AssemblyConstants.ProductDetails;
-      VSConstants.S_OK;
-    }
-
-    public ProductID(pbstrPID : out string) : int
-    {
-      _ = pbstrPID;
-      VSConstants.S_FALSE;
-    }
-
-    #endregion
-
-    protected override Dispose(_disposing : bool) : void
-    {
-      _solutionManager.Dispose();
-    }
-  }
-
-  internal module ServiceProviderUtils
-  {
-    public GetServiceFromServiceModel[T](this serviceProvider : IServiceProvider) : T
-    {
-      def componentModelServiceKey = Type.GetType("Microsoft.VisualStudio.ComponentModelHost.SComponentModel, Microsoft.VisualStudio.ComponentModelHost", true);
-      def componentModel           = serviceProvider.GetService(componentModelServiceKey);
-      def getServiceMethod         = componentModel.GetType().GetMethod("GetService", array[]);
-      getServiceMethod.MakeGenericMethod(array[typeof(T)]).Invoke(componentModel, array[]) :> T
-    }
-  }
-}
-#else
 namespace Nitra.VisualStudio
 {
   public class NitraPackage
   {
     public static mutable Instance : NitraPackage;
     
-    public static Init(serviceProvider : IServiceProvider) : void
+    public static Init(serviceProvider : IServiceProvider, language : Language) : void
     {
       when (Instance == null)
       {
-        Instance = NitraPackage(serviceProvider);
+        Instance = NitraPackage(serviceProvider, language);
       }
     }
     
     private mutable _statusbar : IVsStatusbar;
     public ServiceProvider : IServiceProvider { get; }
     public DataHostService : IVsDataHostService { get; private set; }
+    public Language : Language { get; private set; }
     
-    private this(serviceProvider : IServiceProvider)
+    private this(serviceProvider : IServiceProvider, language : Language)
     {
+      Language        = language;
       ServiceProvider = serviceProvider;
       DataHostService = serviceProvider.GetService(typeof(IVsDataHostService)) :> IVsDataHostService;
     }
@@ -220,4 +39,3 @@ namespace Nitra.VisualStudio
     }
   }
 }
-#endif

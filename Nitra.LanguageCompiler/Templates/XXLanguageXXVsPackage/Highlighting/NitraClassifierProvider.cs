@@ -28,22 +28,19 @@ namespace XXNamespaceXX
     [Import]
     private IClassificationTypeRegistryService ClassificationTypeRegistry { get; set; }
 
+    private Language _language;
+
     public IClassifier GetClassifier(ITextBuffer buffer)
     {
-      ParseAgent      parseAgent;
       NitraClassifier classifier;
 
       if (buffer.Properties.TryGetProperty(TextBufferProperties.NitraClassifier, out classifier))
         return classifier;
-      
-      if (Utils.TryGetOrCreateParseAgent(buffer, out parseAgent))
-      {
-        classifier = new NitraClassifier(parseAgent, buffer, ClassificationTypeRegistry);
-        buffer.Properties.AddProperty(TextBufferProperties.NitraClassifier, classifier);
-        return classifier;
-      }
 
-      return null;
+      var parseAgent = Utils.TryGetOrCreateParseAgent(buffer, NitraPackage.Instance.Language);
+      classifier = new NitraClassifier(parseAgent, buffer, ClassificationTypeRegistry);
+      buffer.Properties.AddProperty(TextBufferProperties.NitraClassifier, classifier);
+      return classifier;
     }
   }
 }

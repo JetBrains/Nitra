@@ -12,5 +12,7 @@ namespace XXNamespaceXX
     [FileExtension("XXFileExtensionXX")]
     [ContentType("XXLanguageXX")]
     internal static FileExtensionToContentTypeDefinition XXFileExtensionNameXXFileExtensionDefinition = null;
+
+    internal static string[] FileExtensions = { "FileExtensions" };
   }
 }
