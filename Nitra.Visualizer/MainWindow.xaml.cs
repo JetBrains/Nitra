@@ -425,7 +425,7 @@ namespace Nitra.Visualizer
         _parseTree = _parseResult.CreateParseTree();
 
 // ReSharper disable once SuspiciousTypeConversion.Global
-      var root = _parseTree as IMappedParseTree<IAst, IAst>;
+      var root = _parseTree as IMappedParseTree<IAst>;
       if (root != null)
       {
         var declarationRoot = DeclarationRoot<IAst>.Create(null, root);
