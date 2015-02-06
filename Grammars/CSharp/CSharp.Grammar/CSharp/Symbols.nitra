@@ -54,67 +54,61 @@ namespace CSharp
       NSpan(Location.StartPos, pt.Location.EndPos)
     }
 
-    def handleSimple(index, qidPart)
+    mutable acc;
+
+    foreach (part in QualifiedIdentifierParts.Item1)
     {
-      def span = makeSpan(qidPart.Identifier);
-      if (index > 0)
+      if (acc != null)
       {
-        QualifiedReference.Qualified(
-          Span      = span,
-          Qualifier = handleGeneric(index - 1),
-          Name      = qidPart.Identifier.GetAst())
+        acc = QualifiedReference.Qualified(
+          Span      = makeSpan(part.Identifier),
+          Qualifier = acc,
+          Name      = part.Identifier.GetAst())
       }
       else if (QualifiedAliasOpt.HasValue)
       {
-        QualifiedReference.Aliased(
-          Span  = span,
+        acc = QualifiedReference.Aliased(
+          Span  = makeSpan(part.Identifier),
           Alias = QualifiedAliasOpt.Value.GetAst(),
-          Name  = qidPart.Identifier.GetAst())
+          Name  = part.Identifier.GetAst())
       }
       else
       {
-        QualifiedReference.Simple(
-          Span = span,
-          Name = qidPart.Identifier.GetAst())
+        acc = QualifiedReference.Simple(
+          Span = makeSpan(part.Identifier),
+          Name = part.Identifier.GetAst())
       }
-    }
 
-    and handleGeneric(index)
-    {
-      def qidPart = QualifiedIdentifierParts.Item1[index];
-      if (qidPart.QualifiedIdentifierPartTypeArgumentsOpt.HasValue)
+      when (part.QualifiedIdentifierPartTypeArgumentsOpt.HasValue)
       {
-        match (qidPart.QualifiedIdentifierPartTypeArgumentsOpt.Value)
-        {
-          | CsIdentifiersParseTree.QualifiedIdentifierPartTypeArguments.TypeArgumentList as x =>
-            def args = array(x.AnyTypes.Item1.Count);
-            foreach (anyType in x.AnyTypes.Item1 with index)
-              args[index] = anyType.GetAst();
+        def typeArguments = part.QualifiedIdentifierPartTypeArgumentsOpt.Value;
+        def args =
+          match (typeArguments)
+          {
+            | CsIdentifiersParseTree.QualifiedIdentifierPartTypeArguments.TypeArgumentList as x =>
+              def args = array(x.AnyTypes.Item1.Count);
+              foreach (anyType in x.AnyTypes.Item1 with index)
+                args[index] = anyType.GetAst();
+              args
 
-            QualifiedReference.Generic(
-              Span      = makeSpan(x),
-              Name      = handleSimple(index, qidPart),
-              Arguments = QualifiedReference.AstList(x.Location.Span, args))
+            | CsIdentifiersParseTree.QualifiedIdentifierPartTypeArguments.OpenTypeArguments as x =>
+              def args = array(x.RankSeparators.Count + 1);
+              args[0] = IntrinsicUtils.CreateOpenTypeArgument(NSpan(x.OpenBrace.EndPos, x.OpenBrace.EndPos));
+              foreach (rs in x.RankSeparators with index)
+                args[index + 1] = IntrinsicUtils.CreateOpenTypeArgument(NSpan(rs.Location.EndPos, rs.Location.EndPos));
+              args
 
-          | CsIdentifiersParseTree.QualifiedIdentifierPartTypeArguments.OpenTypeArguments as x =>
-            def args = array(x.RankSeparators.Count + 1);
-            args[0] = IntrinsicUtils.CreateOpenTypeArgument(NSpan(x.OpenBrace.EndPos, x.OpenBrace.EndPos));
-            foreach (rs in x.RankSeparators with index)
-              args[index + 1] = IntrinsicUtils.CreateOpenTypeArgument(NSpan(rs.Location.EndPos, rs.Location.EndPos));
+            | _ => assert(false)
+          };
 
-            QualifiedReference.Generic(
-              Span      = makeSpan(x),
-              Name      = handleSimple(index, qidPart),
-              Arguments = QualifiedReference.AstList(x.Location.Span, args))
-
-          | _ => assert(false)
-        }
+        acc = QualifiedReference.Generic(
+          Span      = makeSpan(typeArguments),
+          Name      = acc,
+          Arguments = QualifiedReference.AstList(typeArguments.Location.Span, args))
       }
-      else
-        handleSimple(index, qidPart);
     }
 
-    handleGeneric(QualifiedIdentifierParts.Item1.Count - 1);
+    acc
   };
 
   map syntax Types.TypeName -> QualifiedReference;
@@ -123,47 +117,44 @@ namespace CSharp
 
   map syntax Types.AnyNonArrayType -> QualifiedReference =
   {
-    if (NullableSpecifierOpt.HasValue)
-    {
-      QualifiedReference.Generic(
+    mutable acc = TypeName.GetAst();
+
+    when (NullableSpecifierOpt.HasValue)
+      acc = QualifiedReference.Generic(
         Span      = Location.Span,
         Name      = IntrinsicUtils.CreateQualifiedReference(Location.Span, array["System", "Nullable"]),
-        Arguments = QualifiedReference.AstList(Location.Span, array[TypeName.GetAst()]))
-    }
-    else
-      TypeName.GetAst()
+        Arguments = QualifiedReference.AstList(Location.Span, array[acc]));
+
+    acc
   };
 
   map syntax Types.AnyType -> QualifiedReference =
   {
-    def loop(index)
+    mutable acc = AnyNonArrayType.GetAst();
+
+    foreach (ts in TypeSpecifiers)
     {
-      if (index < 0)
-        AnyNonArrayType.GetAst()
-      else
-      {
-        def ts   = TypeSpecifiers[index];
-        def span = NSpan(Location.StartPos, ts.Location.EndPos);
+      def span = NSpan(Location.StartPos, ts.Location.EndPos);
+      def name =
         match (ts)
         {
           | TypesParseTree.TypeSpecifier.RankSpecifier as x =>
             def rank = x.RankSpecifier.RankSeparators.Count + 1;
-            QualifiedReference.Generic(
-              Span      = span,
-              Name      = IntrinsicUtils.CreateQualifiedReference(span, array["#Array" + rank.ToString()]),
-              Arguments = QualifiedReference.AstList(span, array[loop(index - 1)]))
+            IntrinsicUtils.CreateQualifiedReference(span, array["#Array" + rank.ToString()])
 
           | TypesParseTree.TypeSpecifier.PointerSpecifier =>
-            QualifiedReference.Generic(
-              Span      = span,
-              Name      = IntrinsicUtils.CreateQualifiedReference(span, array["#Pointer"]),
-              Arguments = QualifiedReference.AstList(span, array[loop(index - 1)]))
+            IntrinsicUtils.CreateQualifiedReference(span, array["#Pointer"])
 
           | _ => assert(false)
-        }
-      }
+        };
+
+      acc = QualifiedReference.Generic(
+        Span      = span,
+        Name      = name,
+        Arguments = QualifiedReference.AstList(span, array[acc]))
     }
-    loop(TypeSpecifiers.Count - 1)
+
+    acc
   };
 
   declaration ExternAliasDirective
