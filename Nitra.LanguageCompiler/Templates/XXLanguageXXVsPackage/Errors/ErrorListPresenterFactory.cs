@@ -34,8 +34,8 @@ namespace XXNamespaceXX
       var errorListManager = new ErrorListManager(ErrorProviderFactory, buffer);
       buffer.Properties.AddProperty(TextBufferProperties.ErrorListManager, errorListManager);
       // Add the error list support to the just created view
-      //textView.Properties.GetOrCreateSingletonProperty<ErrorListPresenter>(() =>
-      //    new ErrorListPresenter(textView, ErrorProviderFactory, ServiceProvider)
+      //textView.Properties.GetOrCreateSingletonProperty<ErrorListManager>(() =>
+      //    new ErrorListManager(textView, ErrorProviderFactory, ServiceProvider)
       );
     }
   }
