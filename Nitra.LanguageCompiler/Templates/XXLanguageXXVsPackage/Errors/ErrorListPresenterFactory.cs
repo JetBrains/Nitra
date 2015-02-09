@@ -20,7 +20,7 @@ namespace XXNamespaceXX
   [Export(typeof(IWpfTextViewCreationListener))]
   [ContentType("XXLanguageXX")]
   [TextViewRole(PredefinedTextViewRoles.Document)]
-  class ErrorListPresenterFactory : IWpfTextViewCreationListener
+  internal class ErrorListPresenterFactory : IWpfTextViewCreationListener
   {
     [Import]
     private IErrorProviderFactory ErrorProviderFactory { get; set; }
@@ -30,12 +30,9 @@ namespace XXNamespaceXX
 
     public void TextViewCreated(IWpfTextView textView)
     {
-      var buffer = textView.TextBuffer;
-      var errorListManager = new ErrorListManager(ErrorProviderFactory, buffer);
-      buffer.Properties.AddProperty(TextBufferProperties.ErrorListManager, errorListManager);
       // Add the error list support to the just created view
-      //textView.Properties.GetOrCreateSingletonProperty<ErrorListManager>(() =>
-      //    new ErrorListManager(textView, ErrorProviderFactory, ServiceProvider)
+      textView.Properties.GetOrCreateSingletonProperty<IErrorsReporter>(() =>
+          new ErrorListPresenter(textView, ErrorProviderFactory, ServiceProvider)
       );
     }
   }
