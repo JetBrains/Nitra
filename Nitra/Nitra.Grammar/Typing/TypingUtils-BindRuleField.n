@@ -13,34 +13,38 @@ namespace Nitra.Typing
 {
   public partial module TypingUtils
   {
-    internal BindRuleField(ruleSymbol : SyntaxRuleSymbol, path : list[LocatedName], compilationMessages : ICompilerMessages) : RuleType
+    internal BindRuleField(ruleSymbol : SyntaxRuleSymbol, loc : Location, path : list[LocatedName], compilationMessages : ICompilerMessages) : option[ParseTreePath]
     {
       def eq(a : string, b : string)
       {
         String.Equals(a, b, StringComparison.InvariantCulture)
       }
 
-      def reportError(name : LocatedName) : RuleType
+      def bind(qualifier : ParseTreePath, name : LocatedName, tail : list[LocatedName]) : option[ParseTreePath]
       {
-        compilationMessages.Error(name.Location, $"Unbound name '$(name.Id)'");
-        RuleType.Void()
-      }
+        def failure() : option[ParseTreePath]
+        {
+          compilationMessages.Error(name.Location, $"Unbound name '$(name.Id)'");
+          None()
+        }
 
-      def bind(ruleType : RuleType, name : LocatedName, tail : list[LocatedName]) : RuleType
-      {
-        match (ruleType)
+        def success(ruleType : RuleType) : option[ParseTreePath]
+        {
+          def path = ParseTreePath.Member(qualifier.Location + name.Location, qualifier, name, ruleType);
+          match (tail)
+          {
+            | [] => Some(path)
+            | nextName :: nextTail => bind(path, nextName, nextTail)
+          }
+        }
+
+        match (qualifier.Type)
         {
           | Ref(symbol) =>
             def loop(rules : list[Rule])
             {
-              | [] => reportError(name)
-              | rule :: _ when eq(name.Id, rule.FieldName) =>
-                match (tail)
-                {
-                  | [] => rule.Type
-                  | nextName :: nextTail => bind(rule.Type, nextName, nextTail)
-                }
-
+              | [] => failure()
+              | rule :: _ when eq(name.Id, rule.FieldName) => success(rule.Type)
               | _ :: otherRules => loop(otherRules)
             }
             loop(symbol.NonVoidSubRules)
@@ -50,27 +54,27 @@ namespace Nitra.Typing
             {
               match (members)
               {
-                | [] => reportError(name)
-                | member :: _ when eq(name.Id, "Item" + index.ToString()) =>
-                  match (tail)
-                  {
-                    | [] => member
-                    | nextName :: nextTail => bind(member, nextName, nextTail)
-                  }
-
+                | [] => failure()
+                | member :: _ when eq(name.Id, "Item" + index.ToString()) => success(member)
                 | _ :: otherMembers => loop(otherMembers, index + 1)
               }
             }
             loop(members, 1)
 
-          | _ => reportError(name)
+          | _ => failure()
         }
       }
 
       match (path)
       {
-        | []           => assert(false, "No rule field name speciefied")
-        | name :: tail => bind(RuleType.Ref(ruleSymbol), name, tail)
+        | [] =>
+          compilationMessages.Error(loc, "No rule field name speciefied");
+          None()
+
+        | name :: tail =>
+          def thisLoc = Location(loc.Source, NSpan(loc.StartPos, loc.StartPos));
+          def path    = ParseTreePath.This(thisLoc, ruleSymbol);
+          bind(path, name, tail)
       }
     }
   }
