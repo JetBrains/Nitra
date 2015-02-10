@@ -28,7 +28,8 @@ namespace XXNamespaceXX
     [Import]
     private IClassificationTypeRegistryService ClassificationTypeRegistry { get; set; }
 
-    private Language _language;
+    [Import]
+    ITextDocumentFactoryService _textDocumentFactoryService = null;
 
     public IClassifier GetClassifier(ITextBuffer buffer)
     {
@@ -37,7 +38,7 @@ namespace XXNamespaceXX
       if (buffer.Properties.TryGetProperty(TextBufferProperties.NitraClassifier, out classifier))
         return classifier;
 
-      var parseAgent = Utils.TryGetOrCreateParseAgent(buffer, NitraPackage.Instance.Language);
+      var parseAgent = Utils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, NitraPackage.Instance.Language);
       classifier = new NitraClassifier(parseAgent, buffer, ClassificationTypeRegistry);
       buffer.Properties.AddProperty(TextBufferProperties.NitraClassifier, classifier);
       return classifier;

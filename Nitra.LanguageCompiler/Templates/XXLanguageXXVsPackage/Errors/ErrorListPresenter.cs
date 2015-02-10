@@ -10,40 +10,37 @@ using Microsoft.VisualStudio.Text.Tagging;
 using System.Timers;
 using System.Diagnostics;
 ﻿using System.Windows.Controls;
+﻿using Microsoft.VisualStudio;
+﻿using Microsoft.VisualStudio.Shell.Interop;
+﻿using Microsoft.VisualStudio.TextManager.Interop;
 ﻿using Nitra;
 ﻿using Nitra.VisualStudio;
 ﻿using Nitra.VisualStudio.Parsing;
 
-namespace XXNamespaceXX
+namespace Nitra.CSharp
 {
   /// <summary>
   /// Shows errors in the error list
   /// </summary>
   internal class ErrorListPresenter : IErrorsReporter
   {
-    private readonly IWpfTextView                     _textView;
-    private readonly SimpleTagger<ErrorTag>           _squiggleTagger;
-    private readonly ErrorListProvider                _errorListProvider;
+    private readonly ITextBuffer _textBuffer;
+    private readonly SimpleTagger<ErrorTag> _squiggleTagger;
+    private readonly ErrorListProvider _errorListProvider;
     private readonly List<TrackingTagSpan<IErrorTag>> _previousSquiggles;
-    private readonly List<ErrorTask>                  _previousErrors;
+    private readonly List<ErrorTask> _previousErrors;
+    private readonly IServiceProvider _serviceProvider;
 
-    public ErrorListPresenter(IWpfTextView textView, IErrorProviderFactory squiggleProviderFactory, IServiceProvider serviceProvider)
+    public ErrorListPresenter(ITextBuffer textBuffer, IErrorProviderFactory squiggleProviderFactory, IServiceProvider serviceProvider)
     {
-      _textView = textView;
-      textView.TextBuffer.Changed += OnTextBufferChanged;
-      textView.Closed             += OnTextViewClosed;
+      _textBuffer = textBuffer;
+      _textBuffer.Changed += OnTextBufferChanged;
 
-      _squiggleTagger    = squiggleProviderFactory.GetErrorTagger(textView.TextBuffer);
-      _errorListProvider         = new Microsoft.VisualStudio.Shell.ErrorListProvider(serviceProvider);
-      _previousErrors    = new List<ErrorTask>();
+      _serviceProvider = serviceProvider;
+      _squiggleTagger = squiggleProviderFactory.GetErrorTagger(_textBuffer);
+      _errorListProvider = new Microsoft.VisualStudio.Shell.ErrorListProvider(serviceProvider);
+      _previousErrors = new List<ErrorTask>();
       _previousSquiggles = new List<TrackingTagSpan<IErrorTag>>();
-    }
-
-    void OnTextViewClosed(object sender, EventArgs e)
-    {
-      // when a text view is closed we want to remove the corresponding errors from the error list
-      ClearErrors();
-      _errorListProvider.Dispose();
     }
 
     void OnTextBufferChanged(object sender, TextContentChangedEventArgs e)
@@ -67,11 +64,48 @@ namespace XXNamespaceXX
       ErrorTask task = source as ErrorTask;
       if (task != null)
       {
-        // move the caret to position of the error
-        _textView.Caret.MoveTo(new SnapshotPoint(_textView.TextSnapshot, _textView.TextSnapshot.GetLineFromLineNumber(task.Line).Start + task.Column));
-        // set focus to make sure the error is visible to the user
-        _textView.VisualElement.Focus();
+        OpenDocumentAndNavigateTo(task.Document, task.Line, task.Column);
       }
+    }
+
+    private void OpenDocumentAndNavigateTo(string path, int line, int column)
+    {
+      var openDoc = (IVsUIShellOpenDocument)_serviceProvider.GetService(typeof(IVsUIShellOpenDocument));
+
+      if (openDoc == null)
+        return;
+
+      IVsWindowFrame frame; // IVsWindowFrame
+      Microsoft.VisualStudio.OLE.Interop.IServiceProvider sp; // Microsoft.VisualStudio.OLE.Interop.IServiceProvider
+      IVsUIHierarchy hier; // IVsUIHierarchy
+      uint itemid; // uint
+      var logicalView = VSConstants.LOGVIEWID_Code; // Guid
+
+      if (ErrorHandler.Failed(openDoc.OpenDocumentViaProject(path, ref logicalView, out sp, out hier, out itemid, out frame)) || frame == null)
+        return;
+
+      object docData;
+      frame.GetProperty((int)__VSFPROPID.VSFPROPID_DocData, out docData);
+
+      // Get the VsTextBuffer
+      VsTextBuffer buffer = docData as VsTextBuffer;
+      if (buffer == null)
+      {
+        IVsTextLines lines; // IVsTextLines
+        var bufferProvider = docData as IVsTextBufferProvider;
+        if (bufferProvider != null)
+          ErrorHandler.ThrowOnFailure(bufferProvider.GetTextBuffer(out lines));
+      }
+
+      if (buffer == null)
+        return;
+
+      // Finally, perform the navigation.
+      var mgr = (IVsTextManager)_serviceProvider.GetService(typeof(VsTextManagerClass));
+      if (mgr == null)
+        return;
+
+      mgr.NavigateToLineAndColumn(buffer, ref logicalView, line, column, line, column);
     }
 
     private TaskErrorCategory TranslateErrorCategory(Error error)
@@ -101,26 +135,27 @@ namespace XXNamespaceXX
         foreach (var error in parseResult.GetErrors())
         {
           // creates the instance that will be added to the Error List
-          var nSpan           = error.Location.Span;
-          var span            = new Span(nSpan.StartPos, nSpan.EndPos);
-          ErrorTask task      = new ErrorTask();
-          task.Category       = TaskCategory.All;
-          task.Priority       = TaskPriority.Normal;
-          task.Document       = _textView.TextBuffer.Properties.GetProperty<ITextDocument>(typeof (ITextDocument)).FilePath;
-          task.ErrorCategory  = TranslateErrorCategory(error);
-          task.Text           = error.Message;
-          task.Line           = _textView.TextSnapshot.GetLineNumberFromPosition(span.Start);
-          task.Column         = span.Start - _textView.TextSnapshot.GetLineFromLineNumber(task.Line).Start;
-          task.Navigate       += OnTaskNavigate;
+          var nSpan = error.Location.Span;
+          var span = new Span(nSpan.StartPos, nSpan.Length);
+          ErrorTask task = new ErrorTask();
+          task.Category = TaskCategory.All;
+          task.Priority = TaskPriority.Normal;
+          task.Document = _textBuffer.Properties.GetProperty<ITextDocument>(typeof(ITextDocument)).FilePath;
+          task.ErrorCategory = TranslateErrorCategory(error);
+          task.Text = error.Message;
+          task.Line = _textBuffer.CurrentSnapshot.GetLineNumberFromPosition(span.Start);
+          task.Column = span.Start - _textBuffer.CurrentSnapshot.GetLineFromLineNumber(task.Line).Start;
+          task.Navigate += OnTaskNavigate;
           _errorListProvider.Tasks.Add(task);
           _previousErrors.Add(task);
 
-          var trackingSpan = _textView.TextSnapshot.CreateTrackingSpan(span, SpanTrackingMode.EdgeNegative);
+          var trackingSpan = _textBuffer.CurrentSnapshot.CreateTrackingSpan(span, SpanTrackingMode.EdgeNegative);
           _squiggleTagger.CreateTagSpan(trackingSpan, new ErrorTag("syntax error", error.Message));
           _previousSquiggles.Add(new TrackingTagSpan<IErrorTag>(trackingSpan, new ErrorTag("syntax error", error.Message)));
         }
       }
-      finally { _errorListProvider.ResumeRefresh(); }    }
+      finally { _errorListProvider.ResumeRefresh(); }
+    }
 
     public void ReportParseException(ParseFailedEventArgs arg)
     {
@@ -138,6 +173,12 @@ namespace XXNamespaceXX
         error.Document = arg.FileName;
         _errorListProvider.Tasks.Add(error);
       }
+    }
+
+    public void Dispose()
+    {
+      ClearErrors();
+      _errorListProvider.Dispose();
     }
   }
 }

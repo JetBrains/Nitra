@@ -12,7 +12,7 @@ using System.ComponentModel.Composition;
 using System.Linq;
 using System.Text;
 
-namespace XXNamespaceXX
+namespace Nitra.CSharp
 {
   /// <summary>
   /// Adds the error list support when the view is created
@@ -31,8 +31,8 @@ namespace XXNamespaceXX
     public void TextViewCreated(IWpfTextView textView)
     {
       // Add the error list support to the just created view
-      textView.Properties.GetOrCreateSingletonProperty<IErrorsReporter>(() =>
-          new ErrorListPresenter(textView, ErrorProviderFactory, ServiceProvider)
+      textView.TextBuffer.Properties.GetOrCreateSingletonProperty<IErrorsReporter>(() =>
+          new ErrorListPresenter(textView.TextBuffer, ErrorProviderFactory, ServiceProvider)
       );
     }
   }
