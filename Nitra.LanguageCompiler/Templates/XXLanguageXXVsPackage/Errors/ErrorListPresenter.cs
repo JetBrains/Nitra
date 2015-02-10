@@ -17,7 +17,7 @@ using System.Diagnostics;
 ﻿using Nitra.VisualStudio;
 ﻿using Nitra.VisualStudio.Parsing;
 
-namespace Nitra.CSharp
+namespace XXNamespaceXX
 {
   /// <summary>
   /// Shows errors in the error list

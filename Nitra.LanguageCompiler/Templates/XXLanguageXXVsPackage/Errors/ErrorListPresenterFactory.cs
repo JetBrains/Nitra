@@ -12,7 +12,7 @@ using System.ComponentModel.Composition;
 using System.Linq;
 using System.Text;
 
-namespace Nitra.CSharp
+namespace XXNamespaceXX
 {
   /// <summary>
   /// Adds the error list support when the view is created

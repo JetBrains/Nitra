@@ -21,7 +21,7 @@ using Nitra.VisualStudio;
 namespace XXNamespaceXX
 {
   [Export(typeof(IClassifierProvider))]
-  [ContentType("text")]
+  [ContentType("XXLanguageXX")]
   internal sealed class XXLanguageXXClassifierProvider : IClassifierProvider
   {
     /// The ClassificationTypeRegistryService is used to discover the types defined in ClassificationTypeDefinitions
@@ -29,7 +29,7 @@ namespace XXNamespaceXX
     private IClassificationTypeRegistryService ClassificationTypeRegistry { get; set; }
 
     [Import]
-    ITextDocumentFactoryService _textDocumentFactoryService = null;
+    private ITextDocumentFactoryService _textDocumentFactoryService = null;
 
     public IClassifier GetClassifier(ITextBuffer buffer)
     {
