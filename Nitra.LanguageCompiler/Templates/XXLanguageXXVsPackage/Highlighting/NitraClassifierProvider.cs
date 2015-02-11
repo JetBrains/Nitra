@@ -1,10 +1,6 @@
 ﻿using Nitra.VisualStudio.Coloring;
 using Nitra.VisualStudio.Parsing;
 
-using Nemerle;
-using Nemerle.Collections;
-using Nemerle.Utility;
-
 using System;
 using System.Collections.Generic;
 using System.IO;

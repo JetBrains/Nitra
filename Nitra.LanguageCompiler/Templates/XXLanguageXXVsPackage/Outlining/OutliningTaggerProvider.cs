@@ -2,10 +2,6 @@
 using Nitra.VisualStudio.Outlining;
 using Nitra.VisualStudio.Parsing;
 
-using Nemerle;
-using Nemerle.Collections;
-using Nemerle.Utility;
-
 using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
