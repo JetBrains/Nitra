@@ -2,6 +2,7 @@
 using Nitra.Internal;
 using Nitra.Internal.Recovery;
 using Nitra.Runtime;
+using Nitra.Runtime.Errors;
 using Nitra.Runtime.Reflection;
 
 using Nemerle;
@@ -18,6 +19,7 @@ using System.Linq;
 using System.Collections.ObjectModel;
 
 using System.Text;
+using System.Threading;
 using SCG = System.Collections.Generic;
 
 namespace Nitra
@@ -35,15 +37,93 @@ namespace Nitra
     public mutable allocated        : int;
     public mutable TerminateParsing : bool; // may be volatile?
     public         ParserHost       : ParserHost;
-    public         OriginalSource   : SourceSnapshot { get; }
-    public         StartPos         : int            { get; }
-    public         RuleParser       : RuleParser     { get; }//Rename to StartRuleParser
+    public         OriginalSource   : SourceSnapshot  { get; }
+    public         StartPos         : int             { get; }
+    public         RuleParser       : StartRuleParser { get; }//Rename to StartRuleParser
     public mutable LastParseStart   : int;
     public mutable LastParseEnd     : int;
     public         ErrorData        : SCG.List[ParseErrorData];
     private mutable _maxFailPos     : int;
     private mutable _counter        : int;
     private _errors                 : SCG.List[Error] = SCG.List();
+
+    public CompletionPrefix   : string                         { get; set; default null; }
+    public CompletionStartPos : int                            { get; set; default -1; }
+    public CancellationToken  : ValueOption[CancellationToken] { get; set; default VNone(); }
+    public ParseToEndOfString : bool                           { get; set; default true; }
+
+    public Parse() : void
+    {
+      def registration = match(this.CancellationToken)
+      {
+        | VSome(token) => VSome(token.Register(() => TerminateParsing = true))
+        | VNone        => VNone()
+      };
+      try
+      {
+        _ = Allocate(2);
+        mutable res = RuleParser.Parse(StartPos, Text, this);
+
+        def parsedToEnd = res == Text.Length;
+        when (res < 0 || !(ParseToEndOfString && parsedToEnd))
+        {
+          def maxFailPos = MaxFailPos;
+          try
+          {
+            def rp = RecoveryParser(this);
+            rp.RecoveryFromAllErrors();
+
+            res = Text.Length;
+            rawTree[ResultOffset] = res;
+
+            def errorCollector = ErrorCollectorWalker();
+            errorCollector.Walk(this);
+          }
+          catch
+          {
+            | _ is OperationCanceledException => throw;
+            | e =>
+              def error = GetParsingFailureError(maxFailPos);
+              ReportError(error);
+              throw ParsingFailureException(error.ToString(), e, this);
+          }
+        }
+        assert3(res >= 0);
+
+        rawTree[ResultOffset] = res;
+      }
+      finally
+      {
+        when (registration is VSome(registration))
+          registration.Dispose();
+      }
+    }
+
+    private GetParsingFailureError(maxFailPos : int) : ParseError
+    {
+      def isValidToken(x) { x > maxFailPos }
+
+      when (maxFailPos == Text.Length)
+        return UnexpectedEndOfFileError(Location(this, maxFailPos, maxFailPos));
+
+      def tokens = RuleParser.Grammar.ParseAllGrammarTokens(maxFailPos, this);
+      if (tokens.Any(isValidToken))
+      {
+        def longestToken = tokens.Max();
+        UnexpectedError(Location(this, maxFailPos, longestToken))
+      }
+      else
+      {
+        mutable pos = maxFailPos + 1; // range already checked
+        while (pos < Text.Length)
+        {
+          when (RuleParser.Grammar.ParseAllGrammarTokens(pos, this).Any(isValidToken))
+            break;
+          ++pos;
+        }
+        UnexpectedError(Location(this, maxFailPos, pos))
+      }
+    }
 
     [Record]
     public struct SubruleStart
@@ -94,18 +174,30 @@ namespace Nitra
       result
     }
 
-    public this(source : SourceSnapshot, startPos : int, initalSize : int, parserHost : ParserHost, ruleParser : RuleParser)
+    public this(source : SourceSnapshot, parserHost : ParserHost, descriptor : StartRuleDescriptor)
     {
+      this(source, parserHost.AddGrammar(parserHost.DefaultCompositeGrammar, descriptor.Grammar), descriptor)
+    }
+
+    public this(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : StartRuleDescriptor)
+    {
+      def ruleParser = match (descriptor)
+      {
+        | desc is SimpleRuleDescriptor     => grammar.GetSimpleRuleParser(desc)
+        | desc is ExtensibleRuleDescriptor => grammar.GetExtensibleRuleParser(desc, 0)
+        | _ => assert3(false, "DoParsing support only SimpleRuleDescriptor or ExtensibleRuleDescriptor")
+      }
+      def initalSize   = source.Text.Length * 10;
       Text             = source.Text;
       OriginalSource   = source;
-      StartPos         = startPos;
+      StartPos         = 0;
       TokenEnumerator1 = TokenEnumerator(this);
       TokenEnumerator2 = TokenEnumerator(this);
       ErrorData        = SCG.List();
       this.rawTree     = array(if (initalSize < 10) 10 else initalSize);
       this.memoize     = array(Text.Length + 1);
       this.allocated   = 0;
-      this.ParserHost  = parserHost;
+      this.ParserHost  = ruleParser.Grammar.ParserHost;
       LastParseStart   = -1;
       LastParseEnd     = -1;
       MaxFailPos       = 0;
