@@ -11,6 +11,7 @@ using Nitra.ProjectSystem;
 using Nitra.Internal;
 using Nitra.Model;
 using Nitra.Typing;
+using Nitra.Compiler.PatternMatching;
 
 using System;
 using System.Diagnostics;
@@ -189,22 +190,48 @@ namespace Nitra.Compiler
           });
       }
 
+      def compileFields(declarationSymbol : DeclarationSymbol, fields : list[SyntaxMappingField]) : PExpr
+      {
+        def concreteDeclarationType = GetConcreteDeclarationType(declarationSymbol);
+        def values                  = <[ Span = this.Location.Span ]> :: fields.Map(compileField);
+        <[ $concreteDeclarationType(..$values) ]>
+      }
+
+      def makeTopPattern(case : SyntaxMappingCase) : ParseTreePattern * SyntaxMappingCase
+      {
+        def args = case.Patterns;
+        def ctor = ParseTreeCtor.Tuple(args.Length);
+        def topPattern = ParseTreePattern.Ctor(case.Location, RuleType.Ref(RuleSymbol), ctor, args);
+        (topPattern, case)
+      }
+
+      def compileDecision(obj : PExpr, decision : Decision[_]) : PExpr
+      {
+        match (decision)
+        {
+          | Failure       => <[ assert("Match failed") ]>
+          | Success(case) =>
+            def caseDeclarationSymbol = case.Declaration.GetValue(Environment.Project);
+            compileFields(caseDeclarationSymbol, case.Fields)
+
+          | IfEq(access, ctor, t, f) =>
+            assert(false, "TODO")
+        }
+      }
+
       Util.locate(syntaxMappingBody.Location.ToNemerleLocation(),
       {
         def code =
           match (syntaxMappingBody)
           {
-            | Error => assert(false, "Syntax mapping body is not valid")
-            | CallMember(path) =>
-              def parseTreeMember = MakeParseTreeMemberAccess(path);
-              <[ $parseTreeMember.GetAst() ]>
-
-            | PerField(fields) =>
-              def concreteDeclarationType = GetConcreteDeclarationType(declarationSymbol);
-              def values                  = <[ Span = this.Location.Span ]> :: fields.Map(compileField);
-              <[ $concreteDeclarationType(..$values) ]>
-
-            | Inline(code) => code
+            | Error            => assert(false, "Syntax mapping body is not valid")
+            | CallMember(path) => <[ $(MakeParseTreeMemberAccess(path)).GetAst() ]>
+            | PerField(fields) => compileFields(declarationSymbol, fields)
+            | Inline(code)     => code
+            | Match(cases)     =>
+              def rules    = cases.Map(makeTopPattern);
+              def decision = MatchCompiler.Compile(rules);
+              compileDecision(<[ this ]>, decision)
           };
 
         def baseDeclarationType = GetBaseDeclarationType(declarationSymbol);
