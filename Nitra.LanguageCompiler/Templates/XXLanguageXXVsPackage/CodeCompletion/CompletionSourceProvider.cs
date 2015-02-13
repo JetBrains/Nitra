@@ -11,8 +11,8 @@ namespace XXNamespaceXX
 {
   [Export(typeof(ICompletionSourceProvider))]
   [ContentType("XXLanguageXX")]
-  [Name("token completion")]
-  class SchemeCompletionSourceProvider : ICompletionSourceProvider
+  [Name("XXLanguageXX token completion")]
+  class XXLanguageXXTokenCompletionSourceProvider : ICompletionSourceProvider
   {
     [Import]
     private ITextDocumentFactoryService _textDocumentFactoryService = null;
