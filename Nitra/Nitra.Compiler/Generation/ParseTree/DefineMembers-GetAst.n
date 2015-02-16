@@ -200,23 +200,57 @@ namespace Nitra.Compiler
       def makeTopPattern(case : SyntaxMappingCase) : ParseTreePattern * SyntaxMappingCase
       {
         def args = case.Patterns;
-        def ctor = ParseTreeCtor.Tuple(args.Length);
+        def ctor = ParseTreeCtor.ParseTree(args.Length);
         def topPattern = ParseTreePattern.Ctor(case.Location, RuleType.Ref(RuleSymbol), ctor, args);
         (topPattern, case)
       }
 
-      def compileDecision(obj : PExpr, decision : Decision[_]) : PExpr
+      def compileAccess(_ : Access) : PExpr
       {
-        match (decision)
-        {
-          | Failure       => <[ assert("Match failed") ]>
-          | Success(case) =>
-            def caseDeclarationSymbol = case.Declaration.GetValue(Environment.Project);
-            compileFields(caseDeclarationSymbol, case.Fields)
+        | Obj                            => <[ this ]>
+        | Sel(ListCons,   0,     access) => <[ $(compileAccess(access)).Head ]>
+        | Sel(ListCons,   1,     access) => <[ $(compileAccess(access)).Tail ]>
+        | Sel(OptionSome, 0,     access) => <[ $(compileAccess(access)).Value ]>
+        | Sel(Tuple,      index, access) => <[ $(compileAccess(access)).$("Item" + (index + 1) : usesite) ]>
+        | Sel(ParseTree,  index, access) => <[ $(compileAccess(access)).$(RuleSymbol.NonVoidSubRules.Nth(index).FieldName : usesite) ]>
+        | _ => assert(false, "Invalid access path")
+      }
 
-          | IfEq(access, ctor, t, f) =>
-            assert(false, "TODO")
+      def compileTest(n : string, ctor : ParseTreeCtor) : PExpr
+      {
+        match (ctor)
+        {
+          | ListCons   => <[ $(n : usesite).Count > 0 ]>
+          | ListNil    => <[ $(n : usesite).Count == 0 ]>
+          | OptionSome => <[ $(n : usesite).HasValue ]>
+          | OptionNone => <[ ! $(n : usesite).HasValue ]>
+          | Tuple
+          | ParseTree  => assert(false, "Check is redundant")
         }
+      }
+
+      def compileDecision(_ : Decision[_]) : PExpr
+      {
+        | Failure       => <[ assert("Match failed") ]>
+        | Success(case) =>
+          def caseDeclarationSymbol = case.Declaration.GetValue(Environment.Project);
+          compileFields(caseDeclarationSymbol, case.Fields)
+
+        | Variable(name, access, continuation) =>
+          <[
+            def $(name.Id : global) = $(compileAccess(access));
+            $(compileDecision(continuation))
+          ]>.FlattenPExpr()
+
+        | IfEq(access, ctor, t, f) =>
+          def n = Util.tmpname("parseTree");
+          <[
+            def $(n : usesite) = $(compileAccess(access));
+            if ($(compileTest(n, ctor)))
+              $(compileDecision(t))
+            else
+              $(compileDecision(f))
+          ]>
       }
 
       Util.locate(syntaxMappingBody.Location.ToNemerleLocation(),
@@ -231,7 +265,7 @@ namespace Nitra.Compiler
             | Match(cases)     =>
               def rules    = cases.Map(makeTopPattern);
               def decision = MatchCompiler.Compile(rules);
-              compileDecision(<[ this ]>, decision)
+              compileDecision(decision)
           };
 
         def baseDeclarationType = GetBaseDeclarationType(declarationSymbol);
