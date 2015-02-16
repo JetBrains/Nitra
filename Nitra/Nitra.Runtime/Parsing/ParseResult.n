@@ -6,6 +6,7 @@ using Nitra.Runtime.Errors;
 using Nitra.Runtime.Reflection;
 
 using Nemerle;
+using Nemerle.Assertions;
 using Nemerle.Imperative;
 using Nemerle.Imperative.GoTo;
 using Nemerle.Collections;
@@ -43,29 +44,48 @@ namespace Nitra
     public mutable LastParseStart   : int;
     public mutable LastParseEnd     : int;
     public         ErrorData        : SCG.List[ParseErrorData];
+    public         ParseSession     : ParseSession;
     private mutable _maxFailPos     : int;
     private mutable _counter        : int;
     private _errors                 : SCG.List[Error] = SCG.List();
 
-    public CompletionPrefix   : string                         { get; set; default null; }
-    public CompletionStartPos : int                            { get; set; default -1; }
-    public CancellationToken  : ValueOption[CancellationToken] { get; set; default VNone(); }
-    public ParseToEndOfString : bool                           { get; set; default true; }
-
-    public Parse() : void
+    public this([NotNull] parseSession : ParseSession)
     {
-      def registration = match(this.CancellationToken)
-      {
-        | VSome(token) => VSome(token.Register(() => TerminateParsing = true))
-        | VNone        => VNone()
-      };
+      def sourceSnapshot = parseSession.SourceSnapshot;
+      def text           = sourceSnapshot.Text;
+      
+      this.ParseSession     = parseSession;
+      this.Text             = text;
+      this.OriginalSource   = sourceSnapshot;
+      this.StartPos         = 0;
+      this.TokenEnumerator1 = TokenEnumerator(this);
+      this.TokenEnumerator2 = TokenEnumerator(this);
+      this.ErrorData        = SCG.List();
+      this.rawTree          = array((text.Length + 1) * 10);
+      this.memoize          = array(text.Length + 1);
+      this.allocated        = 0;
+      this.ParserHost       = parseSession.ParserHost;
+      this.LastParseStart   = -1;
+      this.LastParseEnd     = -1;
+      this.MaxFailPos       = 0;
+      this.RuleParser       = parseSession.CompositeGrammar.GetStartRuleParser(parseSession.StartRuleDescriptor);
+    }
+
+    internal Parse() : void
+    {
+      def registration = 
+        if (this.ParseSession.CancellationToken == CancellationToken.None)
+          VSome(this.ParseSession.CancellationToken.Register(() => TerminateParsing = true))
+        else
+          VNone();
+
       try
       {
         _ = Allocate(2);
         mutable res = RuleParser.Parse(StartPos, Text, this);
 
         def parsedToEnd = res == Text.Length;
-        when (res < 0 || !(ParseToEndOfString && parsedToEnd))
+        when (res < 0 || !(this.ParseSession.ParseToEndOfString && parsedToEnd))
         {
           def maxFailPos = MaxFailPos;
           try
@@ -88,7 +108,9 @@ namespace Nitra
               throw ParsingFailureException(error.ToString(), e, this);
           }
         }
-        assert3(res >= 0);
+
+        assert2(res >= 0);
+        assert(res >= 0);
 
         rawTree[ResultOffset] = res;
       }
@@ -172,29 +194,6 @@ namespace Nitra
       mutable result;
       _ = RecoveredSequences.TryGetValue((startPos, endPos, parsingSequence), out result);
       result
-    }
-
-    public this(source : SourceSnapshot, parserHost : ParserHost, descriptor : StartRuleDescriptor)
-    {
-      this(source, parserHost.AddGrammar(parserHost.DefaultCompositeGrammar, descriptor.Grammar), descriptor)
-    }
-
-    public this(source : SourceSnapshot, grammar : CompositeGrammar, descriptor : StartRuleDescriptor)
-    {
-      Text             = source.Text;
-      OriginalSource   = source;
-      StartPos         = 0;
-      TokenEnumerator1 = TokenEnumerator(this);
-      TokenEnumerator2 = TokenEnumerator(this);
-      ErrorData        = SCG.List();
-      this.rawTree     = array((source.Text.Length + 1) * 10);
-      this.memoize     = array(Text.Length + 1);
-      this.allocated   = 0;
-      this.ParserHost  = grammar.ParserHost;
-      LastParseStart   = -1;
-      LastParseEnd     = -1;
-      MaxFailPos       = 0;
-      this.RuleParser  = grammar.GetStartRuleParser(descriptor);
     }
 
     public GenerateId() : int
