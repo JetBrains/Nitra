@@ -124,7 +124,7 @@ namespace XXNamespaceXX
       //return TaskErrorCategory.Error;
     }
 
-    public void ReportParseErrors(ParseResult parseResult, ITextSnapshot snapshot)
+    public void ReportParseErrors(IParseResult parseResult, ITextSnapshot snapshot)
     {
       _errorListProvider.SuspendRefresh();
       try

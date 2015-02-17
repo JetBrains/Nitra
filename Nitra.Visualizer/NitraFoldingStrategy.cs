@@ -53,6 +53,6 @@ namespace Nitra.Visualizer
       }
     }
 
-    public ParseResult ParseResult { get; set; }
+    public IParseResult ParseResult { get; set; }
   }
 }

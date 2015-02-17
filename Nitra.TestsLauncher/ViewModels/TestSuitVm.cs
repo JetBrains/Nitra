@@ -146,7 +146,7 @@ namespace Nitra.ViewModels
     }
 
     [CanBeNull]
-    public ParseResult Run([NotNull] string code, [CanBeNull] string gold, int completionStartPos = -1, string completionPrefix = null)
+    public IParseResult Run([NotNull] string code, [CanBeNull] string gold, int completionStartPos = -1, string completionPrefix = null)
     {
       if (_parserHost == null)
       {

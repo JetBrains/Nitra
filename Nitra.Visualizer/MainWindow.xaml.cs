@@ -50,7 +50,7 @@ namespace Nitra.Visualizer
   public partial class MainWindow
   {
     bool _loading = true;
-    ParseResult _parseResult;
+    IParseResult _parseResult;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
     readonly Timer _parseTimer;
@@ -1211,9 +1211,9 @@ namespace Nitra.Visualizer
       e.Handled = true;
     }
 
-    private static bool IsSplicable(ParseResult parseResult)
+    private static bool IsSplicable(IParseResult parseResult)
     {
-      return parseResult.RuleParser.Descriptor.Grammar.IsSplicable;
+      return parseResult.ParseSession.StartRuleDescriptor.Grammar.IsSplicable;
     }
 
     private CompletionWindow _completionWindow;
