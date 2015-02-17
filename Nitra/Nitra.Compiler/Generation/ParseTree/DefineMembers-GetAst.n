@@ -221,11 +221,22 @@ namespace Nitra.Compiler
         }
       }
 
+      mutable redundantCases : SCG.HashSet[_];
+      mutable canFail        : bool;
       def compileDecision(_ : Decision[SyntaxMappingCase]) : PExpr
       {
-        | Failure => <[ assert("Match failed") ]>
-        | Success(Inline(code))                     => code
-        | Success(PerField(declarationRef, fields)) => compileFields(declarationRef.GetValue(Environment.Project), fields)
+        | Failure =>
+          canFail = true;
+          <[ assert(false, "Match failed") ]>
+
+        | Success(Inline(code) as case)                     =>
+          _ = redundantCases.Remove(case);
+          code
+
+        | Success(PerField(declarationRef, fields) as case) =>
+          _ = redundantCases.Remove(case);
+          compileFields(declarationRef.GetValue(Environment.Project), fields)
+
         | Variable(name, access, continuation) =>
           <[
             def $(name.Id : global) = $(compileAccess(access));
@@ -243,6 +254,7 @@ namespace Nitra.Compiler
           ]>
       }
 
+
       Util.locate(syntaxMappingBody.Location.ToNemerleLocation(),
       {
         def code =
@@ -253,9 +265,15 @@ namespace Nitra.Compiler
             | PerField(fields) => compileFields(declarationSymbol, fields)
             | Inline(code)     => code
             | Match(cases)     =>
-              def rules    = cases.Map(c => (c.Pattern, c));
-              def decision = MatchCompiler.Compile(rules);
-              compileDecision(decision)
+              redundantCases = SCG.HashSet(cases);
+              def rules      = cases.Map(c => (c.Pattern, c));
+              def decision   = MatchCompiler.Compile(rules);
+              def code       = compileDecision(decision);
+              when (canFail)
+                Environment.Project.Warning(syntaxMappingBody.Location, "Matching is not exhaustive.", -1);
+              foreach (case in redundantCases)
+                Environment.Project.Warning(case.Location, "Match case is redundant.", -1);
+              code
           };
 
         def baseDeclarationType = GetBaseDeclarationType(declarationSymbol);
