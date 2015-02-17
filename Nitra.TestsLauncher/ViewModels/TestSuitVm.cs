@@ -161,14 +161,14 @@ namespace Nitra.ViewModels
       var timer = System.Diagnostics.Stopwatch.StartNew();
       try
       {
-        var res = new ParseResult(source, _compositeGrammar, StartRule);
-        res.CompletionPrefix   = completionPrefix;
-        res.CompletionStartPos = completionStartPos;
-        res.ParseToEndOfString = true;
-        res.Parse();
+        var parseSession = new ParseSession(source, StartRule, _compositeGrammar);
+        parseSession.CompletionPrefix   = completionPrefix;
+        parseSession.CompletionStartPos = completionStartPos;
+        parseSession.ParseToEndOfString = true;
+        var parseResult = parseSession.Parse();
         this.Exception = null;
         this.TestTime = timer.Elapsed;
-        return res;
+        return parseResult;
       }
       catch (Exception ex)
       {
