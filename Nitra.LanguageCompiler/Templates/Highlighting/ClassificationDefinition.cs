@@ -34,7 +34,9 @@ namespace XXNamespaceXX
       ForegroundColor = Colors.Red;
     }
 
+#pragma warning disable 649
     [Export, Name(Name), BaseDefinition("formal language")]
     internal ClassificationTypeDefinition ClassificationTypeDefinition;
+#pragma warning restore 649
   }
 }

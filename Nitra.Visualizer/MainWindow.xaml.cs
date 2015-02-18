@@ -1248,7 +1248,7 @@ namespace Nitra.Visualizer
           var prefix = _text.Document.GetText(start, end - start);
           _currentTestSuit.Run(text, null, start, prefix);
           var ex = _currentTestSuit.Exception;
-          var result = ex == null ? null : (LiteralCompletionException)ex.InnerException;
+          var result = ex as LiteralCompletionException;
           //MessageBox.Show(string.Join(", ", result.Literals.OrderBy(x => x)));
           if (result == null)
             return;
