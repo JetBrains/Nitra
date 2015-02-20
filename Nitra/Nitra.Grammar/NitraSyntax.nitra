@@ -1090,13 +1090,61 @@ syntax module NitraSyntax
             buffer.Add(ParseTreeFieldInlineMapping.GetSyntaxMappingField(declarationSymbol, ruleSymbol));
         }
       }
+    | MatchCaseEmpty = "|" sm Pattern (sm "->" sm Name)?
+      {
+        override MakeContext = parent;
+        [Cached] private MakeDeclarationRef(declarationSymbolRef : SymbolRef[DeclarationSymbol]) : SymbolRef[DeclarationSymbol]
+        {
+          if (declarationSymbolRef is SymbolRef.Some(declarationSymbol))
+          {
+            if (NameOpt.HasValue)
+              TypingUtils.BindDeclarationSymbolFromMappingExtension(declarationSymbol, NameOpt.Value.Item2, this.Context)
+            else
+              this.Pattern.BindExtensionDeclaration(declarationSymbol, this.Context)
+          }
+          else
+            declarationSymbolRef
+        }
+        override CollectExtensionMappings
+        {
+          match (this.Pattern.BindExtensionRule(baseRuleSymbol, this.Context))
+          {
+            | (SymbolRef.Some(ruleSymbol), false) => simpleMappings.Add((ruleSymbol, MakeDeclarationRef(declarationSymbolRef)))
+            | (SymbolRef.Some(ruleSymbol), true)  => _ = matchingMappings.Add(ruleSymbol)
+            | _ => ()
+          }
+        }
+        override CollectSimpleMatchCases
+        {
+          def pattern                  = this.Pattern.SimpleTyping(ruleSymbol, this.Context);
+          def caseDeclatationSymbolRef = MakeDeclarationRef(declarationSymbolRef);
+          buffer.Add(SyntaxMappingCase.PerField(this.Location, pattern, caseDeclatationSymbolRef, sharedMappingFields.ToNList()))
+        }
+        override CollectExtensionBodies
+        {
+          def (ruleRef, hasPattern) = this.Pattern.BindExtensionRule(baseRuleSymbol, this.Context);
+          when (ruleRef is SymbolRef.Some(ruleSymbol))
+          {
+            def extensionDeclarationSymbolRef = MakeDeclarationRef(declarationSymbolRef);
+            if (hasPattern)
+              mappingCases.Add((ruleSymbol, SyntaxMappingCase.PerField(this.Location, this.Pattern.ExtensionTyping(ruleSymbol, this.Context), extensionDeclarationSymbolRef, [])))
+            else
+              mappingBodies.Add((ruleSymbol, SyntaxMappingBody.PerField(this.Location, extensionDeclarationSymbolRef, [])))
+          }
+        }
+      }
     | MatchCasePerField = "|" sm Pattern (sm "->" sm Name)? outline_begin_before nl OpenBrace="{" inl Members=MapSyntaxMatchCaseBodyMember* d CloseBrace="}" outline_end_before nl
       {
         override MakeContext = PassThrough(Members, parent, _.MakeContext(_));
         [Cached] private MakeDeclarationRef(declarationSymbolRef : SymbolRef[DeclarationSymbol]) : SymbolRef[DeclarationSymbol]
         {
-          if (declarationSymbolRef is SymbolRef.Some(declarationSymbol) when NameOpt.HasValue)
-            TypingUtils.BindDeclarationSymbolFromMappingExtension(declarationSymbol, NameOpt.Value.Item2, this.Context)
+          if (declarationSymbolRef is SymbolRef.Some(declarationSymbol))
+          {
+            if (NameOpt.HasValue)
+              TypingUtils.BindDeclarationSymbolFromMappingExtension(declarationSymbol, NameOpt.Value.Item2, this.Context)
+            else
+              this.Pattern.BindExtensionDeclaration(declarationSymbol, this.Context)
+          }
           else
             declarationSymbolRef
         }
@@ -1178,6 +1226,12 @@ syntax module NitraSyntax
       context.Error(this.Location, "Extension rule pattern expected", -1);
       (SymbolRef.None(this.Location, true), false)
     }
+    BindExtensionDeclaration(baseDeclarationSymbol : DeclarationSymbol, context : Context) : SymbolRef[DeclarationSymbol]
+    {
+      _ = baseDeclarationSymbol;
+      context.Error(this.Location, "Extension rule pattern expected", -1);
+      SymbolRef.None(this.Location, true)
+    }
     ExtensionTyping(ruleSymbol : ExtensionRuleSymbol, context : Context) : ParseTreePattern
     {
       IgnoreParams();
@@ -1191,14 +1245,16 @@ syntax module NitraSyntax
 
     | Identifier
       {
-        override BindExtensionRule = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), false);
-        override Typing            = PatternTyper.TypeIdentifier(this.Location, LocatedName(this.Identifier.Location), ruleType, context);
+        override BindExtensionRule        = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), false);
+        override BindExtensionDeclaration = TypingUtils.BindDeclarationSymbolFromMappingExtension(baseDeclarationSymbol, this.Identifier, context);
+        override Typing                   = PatternTyper.TypeIdentifier(this.Location, LocatedName(this.Identifier.Location), ruleType, context);
       }
     | Ctor  = Identifier "(" (Pattern; "," s)* ")"
       {
-        override BindExtensionRule = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), true);
-        override ExtensionTyping   = PatternTyper.TypeParseTreePattern(this.Location, ruleSymbol, this.Patterns.Item1, context);
-        override Typing            = PatternTyper.TypeCtor(this.Location, LocatedName(this.Identifier.Location), this.Patterns.Item1, ruleType, context);
+        override BindExtensionRule        = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), true);
+        override BindExtensionDeclaration = TypingUtils.BindDeclarationSymbolFromMappingExtension(baseDeclarationSymbol, this.Identifier, context);
+        override ExtensionTyping          = PatternTyper.TypeParseTreePattern(this.Location, ruleSymbol, this.Patterns.Item1, context);
+        override Typing                   = PatternTyper.TypeCtor(this.Location, LocatedName(this.Identifier.Location), this.Patterns.Item1, ruleType, context);
       }
     | Tuple = "(" (Pattern; "," s)* ")"
       {
@@ -1284,6 +1340,8 @@ syntax module NitraSyntax
         {
           if (ruleSymbol is ExtensibleRuleSymbol as baseRuleSymbol)
           {
+            ruleSymbol.SetSyntaxMappingBody(SyntaxMappingBody.PerField(this.Location, declarationSymbolRef, []));
+
             def mappingCases  = List();
             def mappingBodies = List();
             foreach (member in Members)
@@ -1755,22 +1813,17 @@ syntax module NitraSyntax
         override MakeContext          = RuleMethodMissing.MakeContext(parent);
         override Typing               = RuleMethodMissing.Typing();
       }
-    | MapSyntax = "map" sm DeclarationName=QualifiedName BodySpan=";"
+    | MapSyntax = "map" sm DeclarationName=QualifiedName MapSyntaxBody
       {
-        override CollectSyntaxMappings
+        override MakeContext
         {
-          def declarationRef = this.Context.Bind.[DeclarationSymbol](DeclarationName);
-          _ruleSymbol.SetDeclaration(declarationRef);
+          def context = MapDeclarationContext(parent);
+          _ = MapSyntaxBody.MakeContext(context);
+          context
         }
-        override TypeSyntaxMappings
-        {
-          def declarationRef = _ruleSymbol.Declaration;
-          when (declarationRef.IsSome)
-          {
-            def body = SyntaxMappingBody.PerField(Location(this.Location.Source, this.BodySpan), declarationRef, []);
-            _ruleSymbol.SetSyntaxMappingBody(body);
-          }
-        }
+        [Cached] private MakeDeclarationRef() : SymbolRef[DeclarationSymbol] = this.Context.Bind.[DeclarationSymbol](DeclarationName);
+        override CollectSyntaxMappings = MapSyntaxBody.CollectSyntaxMappings(MakeDeclarationRef(), _ruleSymbol);
+        override TypeSyntaxMappings    = MapSyntaxBody.TypeSyntaxMappings(MakeDeclarationRef(), _ruleSymbol);
       }
   }
 
