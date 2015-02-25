@@ -56,7 +56,12 @@ namespace Nitra.VisualStudio
 
 		public static readonly Guid GuidIWpfTextViewHost = new Guid("8C40265E-9FDB-4f54-A0FD-EBB72B7D0476");
 
-		public static ITextView ToITextView(this IVsTextView vsTextView)
+	  public static ITextView ToITextView(this IVsTextView vsTextView)
+	  {
+      return ToIWpfTextView(vsTextView);
+	  }
+
+	  public static IWpfTextView ToIWpfTextView(this IVsTextView vsTextView)
 		{
 			object obj2;
 			IVsUserData data = vsTextView as IVsUserData;

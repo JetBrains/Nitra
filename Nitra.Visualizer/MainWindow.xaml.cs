@@ -50,7 +50,7 @@ namespace Nitra.Visualizer
   public partial class MainWindow
   {
     bool _loading = true;
-    ParseResult _parseResult;
+    IParseResult _parseResult;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
     readonly Timer _parseTimer;
@@ -1211,9 +1211,9 @@ namespace Nitra.Visualizer
       e.Handled = true;
     }
 
-    private static bool IsSplicable(ParseResult parseResult)
+    private static bool IsSplicable(IParseResult parseResult)
     {
-      return parseResult.RuleParser.Descriptor.Grammar.IsSplicable;
+      return parseResult.ParseSession.StartRuleDescriptor.Grammar.IsSplicable;
     }
 
     private CompletionWindow _completionWindow;
@@ -1248,7 +1248,7 @@ namespace Nitra.Visualizer
           var prefix = _text.Document.GetText(start, end - start);
           _currentTestSuit.Run(text, null, start, prefix);
           var ex = _currentTestSuit.Exception;
-          var result = ex == null ? null : (LiteralCompletionException)ex.InnerException;
+          var result = ex as LiteralCompletionException;
           //MessageBox.Show(string.Join(", ", result.Literals.OrderBy(x => x)));
           if (result == null)
             return;

@@ -6,11 +6,11 @@ namespace Nitra.ViewModels
 {
   public class TestVm : FullPathVm
   {
-    public string     TestPath          { get; private set; }
-    public TestSuitVm TestSuit          { get; private set; }
-    public string     Name              { get { return Path.GetFileNameWithoutExtension(TestPath); } }
-    public ParseResult     Result            { get; private set; }
-    public string     PrettyPrintResult { get; private set; }
+    public string       TestPath          { get; private set; }
+    public TestSuitVm   TestSuit          { get; private set; }
+    public string       Name              { get { return Path.GetFileNameWithoutExtension(TestPath); } }
+    public IParseResult Result            { get; private set; }
+    public string       PrettyPrintResult { get; private set; }
 
     public override string Hint { get { return Code; } }
 
@@ -45,7 +45,7 @@ namespace Nitra.ViewModels
         TestState = TestState.Ignored;
     }
 
-    public ParseResult Run()
+    public IParseResult Run()
     {
       if (TestSuit.TestState == TestState.Ignored)
         return null;

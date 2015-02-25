@@ -146,7 +146,7 @@ namespace Nitra.ViewModels
     }
 
     [CanBeNull]
-    public ParseResult Run([NotNull] string code, [CanBeNull] string gold, int completionStartPos = -1, string completionPrefix = null)
+    public IParseResult Run([NotNull] string code, [CanBeNull] string gold, int completionStartPos = -1, string completionPrefix = null)
     {
       if (_parserHost == null)
       {
@@ -161,12 +161,14 @@ namespace Nitra.ViewModels
       var timer = System.Diagnostics.Stopwatch.StartNew();
       try
       {
-        _parserHost.CompletionPrefix   = completionPrefix;
-        _parserHost.CompletionStartPos = completionStartPos;
-        var res = _parserHost.DoParsing(source, _compositeGrammar, StartRule, parseToEndOfString: true);
+        var parseSession = new ParseSession(source, StartRule, _compositeGrammar);
+        parseSession.CompletionPrefix   = completionPrefix;
+        parseSession.CompletionStartPos = completionStartPos;
+        parseSession.ParseToEndOfString = true;
+        var parseResult = parseSession.Parse();
         this.Exception = null;
         this.TestTime = timer.Elapsed;
-        return res;
+        return parseResult;
       }
       catch (Exception ex)
       {

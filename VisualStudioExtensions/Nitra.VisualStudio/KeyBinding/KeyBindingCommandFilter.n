@@ -1,5 +1,13 @@
-﻿using Microsoft.VisualStudio.Text;
+﻿using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.Editor;
+using Microsoft.VisualStudio.Language.Intellisense;
+using Microsoft.VisualStudio.OLE.Interop;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
+using Microsoft.VisualStudio.VSConstants;
+
 using Nitra.Runtime.Highlighting;
 using Nitra.VisualStudio.Parsing;
 
@@ -14,9 +22,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
 
-using Microsoft.VisualStudio.OLE.Interop;
-using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Text.Editor;
+using IServiceProvider = System.IServiceProvider;
 
 namespace Nitra.VisualStudio.KeyBinding
 {
@@ -24,14 +30,27 @@ namespace Nitra.VisualStudio.KeyBinding
   {
     public IsAdded : bool { get; private set; }
 
-    private         _textView   : ITextView;
-    private mutable _nextTarget : IOleCommandTarget;
-    private         _parseAgent : ParseAgent;
+    private         _textView         : IWpfTextView;
+    private mutable _nextTarget       : IOleCommandTarget;
+    private         _parseAgent       : ParseAgent;
+    private         _serviceProvider  : IServiceProvider;
+    private         _completionBroker : ICompletionBroker;
+    private         _adaptersFactory  : IVsEditorAdaptersFactoryService;
+    private mutable _currentSession   : ICompletionSession;
 
-    public this(textViewAdapter : IVsTextView, textDocumentFactoryService : ITextDocumentFactoryService)
+    public this(
+      textViewAdapter : IVsTextView,
+      textDocumentFactoryService : ITextDocumentFactoryService,
+      serviceProvider : IServiceProvider,
+      completionBroker : ICompletionBroker,
+      adaptersFactory  : IVsEditorAdaptersFactoryService)
     {
-      _textView = textViewAdapter.ToITextView();
-      _parseAgent = Utils.TryGetOrCreateParseAgent(_textView.TextBuffer, textDocumentFactoryService, NitraPackage.Instance.Language);
+      _adaptersFactory  = adaptersFactory;
+      _serviceProvider  = serviceProvider;
+      _completionBroker = completionBroker;
+      //_textView         = textViewAdapter.ToITextView();
+      _textView         = _adaptersFactory.GetWpfTextView(textViewAdapter);
+      _parseAgent       = Utils.TryGetOrCreateParseAgent(_textView.TextBuffer, textDocumentFactoryService, NitraPackage.Instance.Language);
       AddCommandFilter(textViewAdapter);
     }
 
@@ -44,7 +63,7 @@ namespace Nitra.VisualStudio.KeyBinding
       mutable next;
       def hr = viewAdapter.AddCommandFilter(this, out next);
 
-      when (hr == VSConstants.S_OK)
+      when (hr == S_OK)
       {
         IsAdded = true;
         //you'll need the next target for Exec and QueryStatus
@@ -55,33 +74,112 @@ namespace Nitra.VisualStudio.KeyBinding
 
     public QueryStatus(pguidCmdGroup : ref Guid, cCmds : uint, prgCmds : array[OLECMD], pCmdText : IntPtr) : int
     {
+      when (pguidCmdGroup == VSStd2K)
+      {
+        match (prgCmds[0].cmdID :> VSStd2KCmdID)
+        {
+          | VSStd2KCmdID.AUTOCOMPLETE
+          | VSStd2KCmdID.SHOWMEMBERLIST
+          | VSStd2KCmdID.COMPLETEWORD => 
+            prgCmds[0].cmdf = (OLECMDF.OLECMDF_ENABLED | OLECMDF.OLECMDF_SUPPORTED) :> uint;
+            return S_OK;
+            
+          | _ => ()
+        }
+      }
+      
       _nextTarget.QueryStatus(ref pguidCmdGroup, cCmds, prgCmds, pCmdText)
     }
 
     public Exec(pguidCmdGroup : ref Guid, nCmdID : uint, nCmdexecopt : uint, pvaIn : IntPtr, pvaOut : IntPtr) : int
     {
-      when (pguidCmdGroup == VSConstants.VSStd2K)
+      when (VsShellUtilities.IsInAutomationFunction(_serviceProvider))
+        return _nextTarget.Exec(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
+
+      mutable updateFilter;
+      
+      when (pguidCmdGroup == VSStd2K)
       {
-        match (nCmdID :> VSConstants.VSStd2KCmdID)
+        def cmd = nCmdID :> VSStd2KCmdID;
+        
+        match (cmd)
         {
-          | VSConstants.VSStd2KCmdID.GOTOBRACE => OnGoToBrace(); return VSConstants.S_OK;
+          | VSStd2KCmdID.AUTOCOMPLETE
+          | VSStd2KCmdID.COMPLETEWORD => when (StartSession())     return S_OK;
+          | VSStd2KCmdID.RETURN       => when (TryComplete(false)) return S_OK;
+          | VSStd2KCmdID.TAB          => when (TryComplete(true))  return S_OK;
+          | VSStd2KCmdID.BACKSPACE    => updateFilter = true;
+          | VSStd2KCmdID.CANCEL       => when (Cancel())           return S_OK;
+          | VSStd2KCmdID.GOTOBRACE    => OnGoToBrace();            return S_OK;
+          | VSStd2KCmdID.TYPECHAR     =>
+            def typedChar = (Marshal.GetObjectForNativeVariant(pvaIn) :> ushort) :> char;
+            when (char.IsWhiteSpace(typedChar) || char.IsPunctuation(typedChar))
+              unless (TryComplete(false))
+                updateFilter = true;
           | _ => assert2(true);
         }
 
       }
 
-      //mutable typedChar = char.MinValue;
-      //when (pguidCmdGroup == VSConstants.VSStd2K && nCmdID == VSConstants.VSStd2KCmdID.TYPECHAR :> uint)
-      //{
-      //  typedChar = Marshal.GetObjectForNativeVariant(pvaIn) :> char;
-      //  when (typedChar.Equals('+'))
-      //  {
-      //  }
-      //}
+      def result = _nextTarget.Exec(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
+      
+      when (updateFilter)
+        Filter();
+        
+      result
+    }
+    
+    StartSession() : bool
+    {
+      when (_currentSession != null)
+        return false;
 
-      _nextTarget.Exec(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
+      def caret = _textView.Caret.Position.BufferPosition;
+      def snapshot = caret.Snapshot;
+
+      _currentSession = _completionBroker.CreateCompletionSession(_textView, snapshot.CreateTrackingPoint(caret, PointTrackingMode.Positive), true);
+      _currentSession.Dismissed += _ => _currentSession = null;
+      _currentSession.Start();
+
+      true
+    }
+    
+    Filter() : void
+    {
+      when (_currentSession == null)
+        return;
+
+      _currentSession.SelectedCompletionSet.Filter();
+      _currentSession.SelectedCompletionSet.SelectBestMatch();
+      _currentSession.SelectedCompletionSet.Recalculate();
+    }
+    
+    TryComplete(force : bool) : bool
+    {
+      when (_currentSession == null)
+        return false;
+
+      if (!_currentSession.SelectedCompletionSet.SelectionStatus.IsSelected && !force)
+      {
+        _currentSession.Dismiss();
+        false
+      }
+      else
+      {
+        _currentSession.Commit();
+        true
+      }
     }
 
+    Cancel() : bool
+    {
+      when (_currentSession == null)
+        return false;
+
+      _currentSession.Dismiss();
+      true
+    }
+    
     OnGoToBrace() : void
     {
       when (_parseAgent.LastResult == null)
