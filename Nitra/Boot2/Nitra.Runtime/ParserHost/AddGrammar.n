@@ -1,6 +1,8 @@
 ﻿using Nitra.Runtime.Reflection;
+
 using Nemerle;
 using Nemerle.Assertions;
+using Nemerle.Imperative;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -8,40 +10,28 @@ using Nitra.Internal;
 using Nitra.Runtime;
 
 using System;
-using System.Collections.ObjectModel;
-using SCG = System.Collections.Generic;
+using System.Collections.Concurrent;
 
 namespace Nitra
 {
-  public partial class ParserHost
+  public partial sealed class ParserHost
   {
-    // System.Collections.Hashtable по тому что:
-    // Hashtable is thread safe for use by multiple reader threads and a single writing thread.
-    // It is thread safe for multi-thread use when only one of the threads perform write (update) operations,
-    // which allows for lock-free reads provided that the writers are serialized to the Hashtable.
-    private _grammarSetCache : System.Collections.Hashtable = System.Collections.Hashtable();
-
-    private _compositeGrammars : Hashtable[Set[GrammarDescriptor], CompositeGrammar] = Hashtable();
+    private _grammarSetCache   : ConcurrentDictionary[ulong,                  CompositeGrammar] = ConcurrentDictionary();
+    private _compositeGrammars : ConcurrentDictionary[Set[GrammarDescriptor], CompositeGrammar] = ConcurrentDictionary();
 
     private mutable volatile _allRules : array[object] = array(1);//Root recovery stack frame id.
 
-    [Record]
-    private class Key
+    public MakeCompositeGrammar(grammarDescriptors : Seq[GrammarDescriptor]) : CompositeGrammar
     {
-      public CompositeGrammar : CompositeGrammar { get; }
-      public GrammarDescriptor : GrammarDescriptor { get; }
-      public override GetHashCode() : int { CompositeGrammar.GetHashCode() ^ GrammarDescriptor.GetHashCode() }
-      public override Equals(that : object) : bool
-      {
-        def that = that :> Key;
-        object.ReferenceEquals(CompositeGrammar, that.CompositeGrammar) && object.ReferenceEquals(GrammarDescriptor, that.GrammarDescriptor);
-      }
-    }
+      mutable res;
 
-    public MakeCompositeGrammar(grammarDescriptors : SCG.IEnumerable[GrammarDescriptor]) : CompositeGrammar
-    {
+      def parent   = DefaultCompositeGrammar;
+      def grammars = MakeGrammarDescriptorClosure(parent.Grammars, grammarDescriptors);
+      when (_compositeGrammars.TryGetValue(grammars, out res))
+        return res;
+
       lock (_syncRoot)
-        grammarDescriptors.Fold(DefaultCompositeGrammar, (grammarDescriptor, parent) => AddGrammar(parent, grammarDescriptor))
+        grammarDescriptors.Fold(parent, (grammarDescriptor, acc) => AddGrammar(acc, grammarDescriptor))
     }
 
     public MakeCompositeGrammar(grammarDescriptor : GrammarDescriptor) : CompositeGrammar
@@ -49,50 +39,68 @@ namespace Nitra
       AddGrammar(DefaultCompositeGrammar, grammarDescriptor)
     }
 
-    public AddGrammar(parent : CompositeGrammar, grammarDescriptor : GrammarDescriptor) : CompositeGrammar
+    internal AddGrammar(parent : CompositeGrammar, grammarDescriptor : GrammarDescriptor) : CompositeGrammar
       requires object.ReferenceEquals(parent.ParserHost, this)
     {
       if (parent.Grammars.Contains(grammarDescriptor))
         parent
       else
       {
+        mutable res;
+        def key = MakeKey(parent, grammarDescriptor);
+
+        when (_grammarSetCache.TryGetValue(key, out res))
+          return res;
+
+        def grammars = MakeGrammarDescriptorClosure(parent.Grammars, grammarDescriptor);
+        when (_compositeGrammars.TryGetValue(grammars, out res))
+          return res;
+
         lock (_syncRoot)
         {
-          def key = Key(parent, grammarDescriptor);
-          def res = _grammarSetCache[key];
-          if (res == null)
+          unless (_grammarSetCache.TryGetValue(key, out res))
           {
-            mutable grammars = parent.Grammars;
-            def addGrammar(descriptor)
+            unless (_compositeGrammars.TryGetValue(grammars, out res))
             {
-              when (!grammars.Contains(descriptor))
-              {
-                grammars = grammars.Add(descriptor);
-                foreach (descriptor in descriptor.Dependencies)
-                  addGrammar(descriptor);
-              }
-            }
-            addGrammar(grammarDescriptor);
-
-            def res = if (_compositeGrammars.Contains(grammars))
-              _compositeGrammars[grammars]
-            else
-            {
-              def res = CompositeGrammar(this, grammars, _allRules.Length);
-              def newAllRules = array(_allRules.Length + res.RuleParserMap.Count);
+              def newGrammar = CompositeGrammar(this, grammars, _allRules.Length);
+              def newAllRules = array(_allRules.Length + newGrammar.RuleParserMap.Count);
               _allRules.CopyTo(newAllRules, 0);
-              res.RuleParserMap.CopyTo(newAllRules, _allRules.Length);
+              newGrammar.RuleParserMap.CopyTo(newAllRules, _allRules.Length);
               _allRules = newAllRules;
-              _compositeGrammars.Add(grammars, res);
-              res
+              _compositeGrammars[grammars] = newGrammar;
+
+              res = newGrammar
             }
-            _grammarSetCache.Add(key, res);
-            res
+            _grammarSetCache[key] = res;
           }
-          else
-            res :> CompositeGrammar;
+          res
         }
       }
+    }
+
+    private static MakeKey(compisiteGrammar : CompositeGrammar, grammarDescriptor : GrammarDescriptor) : ulong
+    {
+      unchecked
+      {
+        ((compisiteGrammar.RuntimeId :> ulong) << 32) | (grammarDescriptor.RuntimeId :> ulong)
+      }
+    }
+
+    private static MakeGrammarDescriptorClosure(mutable grammars : Set[GrammarDescriptor], descriptors : Seq[GrammarDescriptor]) : Set[GrammarDescriptor]
+    {
+      foreach (descriptor in descriptors)
+        grammars = MakeGrammarDescriptorClosure(grammars, descriptor);
+      grammars
+    }
+
+    private static MakeGrammarDescriptorClosure(mutable grammars : Set[GrammarDescriptor], descriptor : GrammarDescriptor) : Set[GrammarDescriptor]
+    {
+      unless (grammars.Contains(descriptor))
+      {
+        grammars = grammars.Add(descriptor);
+        grammars = MakeGrammarDescriptorClosure(grammars, descriptor.Dependencies)
+      }
+      grammars
     }
   }
 }
