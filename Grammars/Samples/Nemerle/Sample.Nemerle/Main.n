@@ -3,6 +3,9 @@ using Nitra;
 using Nemerle.Text;
 using Nemerle.Utility;
 
+using Nitra.Internal;
+using Nitra.Runtime;
+using Nitra.Runtime.Reflection;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -14,30 +17,32 @@ using SCG = System.Collections.Generic;
 
 public partial abstract class N2Parser
 {
-  _grammarDescriptors : Dictionary[string, GrammarDescriptor] = Init();
-
-  static Init() : Dictionary[string, GrammarDescriptor]
+  private class UsingImportDeclarationWalker : WalkerBase[int]
   {
-    def value = AppDomain.CurrentDomain.GetData("ExternalGrammars");
-    def grammarDescriptors =
-      if (value == null && _globalGrammarDescriptors != null)
-        _globalGrammarDescriptors
-      else
-        (value :> array[GrammarDescriptor] ?? array(0)).ToDictionary(_.FullName);
+    public Name : SCG.List[string] = SCG.List();
 
-    grammarDescriptors
+    private static IdentifierDescriptor : object = N2Parser.GrammarDescriptorImpl.StaticDescriptor.Rules.First(r => r.Name == "Identifier");
+
+    public override OnRegularCall(ruleInfo : SubruleInfo.RegularCall, startPos : int, endPos : int, parseResult : IParseResult, context : int) : void
+    {
+      IgnoreParams();
+      when (ruleInfo.Descriptor : object == IdentifierDescriptor)
+      {
+        Name.Add(parseResult.ParseSession.SourceSnapshot.Text.Substring(startPos, endPos - startPos))
+      }
+    }
+
+    public override OnSimpleCall(ruleInfo : SubruleInfo.SimpleCall, startPos : int, endPos : int, parseResult : IParseResult, context : int) : void
+    {
+      WalkSimple(startPos, endPos, ruleInfo.RuleParser, parseResult, context);
+    }
   }
 
-  internal static mutable _globalGrammarDescriptors : Hashtable[string, GrammarDescriptor];
-
-  // FIXME: currently does not work
-  UsingImportDeclarationHandler(usingImport : N2ParserParseTree.NamespaceMember.UsingImportDeclaration) : void
+  UsingImportDeclarationHandler(rawTreePtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : IParseResult, grammar : CompositeGrammar) : CompositeGrammar
   {
-    mutable grammarDescriptor;
-    if (_grammarDescriptors.TryGetValue(usingImport.QualifiedIdentifier.Path, out grammarDescriptor))
-      ()//Parser.AddGrammar(grammarDescriptor);
-    else
-      ();
+    def walker = UsingImportDeclarationWalker();
+    walker.WalkPrefix(rawTreePtr, startPos, endPos, ruleParser, parseResult, 0);
+    grammar
   }
 
   // FIXME: currently does not work
@@ -72,8 +77,6 @@ module Program
 {
   Main() : void
   {
-    InitGrammars();
-
     def test(code : string) : void
     {
       def parserHost = ParserHost();
@@ -144,25 +147,5 @@ namespace Ns1
 using Y;
     #>);
     _ = ReadKey();
-  }
-
-  static InitGrammars() : void
-  {
-    def globalGrammarDescriptors = Hashtable();
-
-    def path               = Path.GetDirectoryName(Uri(Assembly.GetExecutingAssembly().CodeBase).LocalPath);
-    def files              = Directory.GetFiles(path, "*.dll");
-    def standardAssemblies = HashSet(array["Nemerle.dll", "Nemerle.Compiler.dll", "Nitra.Runtime.dll", "Boot.Nitra.Runtime.dll", "Boot.Nitra.Core.dll", "Nitra.Compiler.dll"]);
-
-    // Обрабатываем файлы не входящие в список сборок самого немерла (стандратные сборки).
-    // В них точно не может быть парсеров.
-    foreach (file when !standardAssemblies.Contains(file) in files)
-    {
-      def assembly = Assembly.LoadFrom(file);
-      foreach(grammar in GrammarDescriptor.GetDescriptors(assembly))
-        globalGrammarDescriptors.Add(grammar.FullName, grammar);
-    }
-
-    N2Parser._globalGrammarDescriptors = globalGrammarDescriptors;
   }
 }
