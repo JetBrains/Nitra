@@ -8,6 +8,6 @@ namespace XXNamespaceXX
 {
   public class Constants
   {
-    public const string ErrorClassificationTypeName = "NitraError";
+    public const string ErrorClassificationTypeName = "XXLanguageXXError";
   }
 }
