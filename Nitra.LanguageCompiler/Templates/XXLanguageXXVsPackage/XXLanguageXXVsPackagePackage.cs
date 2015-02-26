@@ -8,6 +8,7 @@ using Nemerle.Collections;
 using Nitra.VisualStudio;
 
 using System;
+using System.IO;
 using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Globalization;
@@ -35,6 +36,26 @@ namespace XXNamespaceXX
   [Guid(GuidList.GuidXXLanguageXXVsPackagePkgString)]
   public sealed class XXLanguageXXVsPackagePackage : Package
   {
+    internal static Language Language { get; private set; }
+
+    static XXLanguageXXVsPackagePackage()
+    {
+      var path = GetPlaginPath();
+      Language = new Language("XXLanguageXX",
+        NitraFileExtensionsAndContentTypeDefinition.FileExtensions.NToList(),
+        XXStartSyntaxModuleXX,
+        XXStartRuleXX,
+        new[] { XXParserAssembliesXX }.NToList());
+    }
+
+    public static string GetPlaginPath()
+    {
+      var codeBase = typeof(XXLanguageXXVsPackagePackage).Assembly.CodeBase;
+      var uri = new UriBuilder(codeBase);
+      var path = Uri.UnescapeDataString(uri.Path);
+      return Path.GetDirectoryName(path) + @"\";
+    }
+
     /// <summary>
     /// Default constructor of the package.
     /// Inside this method you can place any initialization code that does not require 
@@ -47,11 +68,8 @@ namespace XXNamespaceXX
       Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Entering constructor for: {0}", this));
     }
 
-
-
     /////////////////////////////////////////////////////////////////////////////
     // Overridden Package Implementation
-    #region Package Members
 
     /// <summary>
     /// Initialization of the package; this method is called right after the package is sited, so this is the place
@@ -61,15 +79,8 @@ namespace XXNamespaceXX
     {
       Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Entering Initialize() of: {0}", this.ToString()));
 
-      var language = new Language("XXLanguageXX",
-        NitraFileExtensionsAndContentTypeDefinition.FileExtensions.NToList(),
-        XXStartSyntaxModuleXX,
-        XXStartRuleXX,
-        new[] { XXParserAssembliesXX }.NToList());
-
-      NitraPackage.Init(this, language);
+      NitraPackage.Init(this);
       base.Initialize();
     }
-    #endregion
   }
 }
