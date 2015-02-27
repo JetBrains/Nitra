@@ -13,28 +13,37 @@ using System.Reflection;
 using System.Console;
 using System.Linq;
 
+using System.Text;
 using SCG = System.Collections.Generic;
 
 public partial abstract class N2Parser
 {
   private class UsingImportDeclarationWalker : WalkerBase[int]
   {
-    public Name : SCG.List[string] = SCG.List();
+    public Name : StringBuilder = StringBuilder();
 
     private static IdentifierDescriptor : object = N2Parser.GrammarDescriptorImpl.StaticDescriptor.Rules.First(r => r.Name == "Identifier");
+    private static QualifiedIdentifierDescriptor : object = N2Parser.GrammarDescriptorImpl.StaticDescriptor.Rules.First(r => r.Name == "QualifiedIdentifier");
 
     public override OnRegularCall(ruleInfo : SubruleInfo.RegularCall, startPos : int, endPos : int, parseResult : IParseResult, context : int) : void
     {
       IgnoreParams();
       when (ruleInfo.Descriptor : object == IdentifierDescriptor)
       {
-        Name.Add(parseResult.ParseSession.SourceSnapshot.Text.Substring(startPos, endPos - startPos))
+        _ = Name.Append(parseResult.ParseSession.SourceSnapshot.Text, startPos, endPos - startPos).Append(".")
       }
     }
 
     public override OnSimpleCall(ruleInfo : SubruleInfo.SimpleCall, startPos : int, endPos : int, parseResult : IParseResult, context : int) : void
     {
-      WalkSimple(startPos, endPos, ruleInfo.RuleParser, parseResult, context);
+      if (ruleInfo.RuleParser.Descriptor : object == QualifiedIdentifierDescriptor)
+      {
+        _ = Name.Clear();
+        WalkSimple(startPos, endPos, ruleInfo.RuleParser, parseResult, context);
+        Name.Length = Name.Length - 1;
+      }
+      else
+        WalkSimple(startPos, endPos, ruleInfo.RuleParser, parseResult, context);
     }
   }
 
@@ -42,7 +51,11 @@ public partial abstract class N2Parser
   {
     def walker = UsingImportDeclarationWalker();
     walker.WalkPrefix(rawTreePtr, startPos, endPos, ruleParser, parseResult, 0);
-    grammar
+    mutable descriptor;
+    if (_grammarDescriptors.TryGetValue(walker.Name.ToString(), out descriptor))
+      grammar.ParserHost.AddGrammar(grammar, descriptor);
+    else
+      grammar
   }
 
   // FIXME: currently does not work
@@ -55,6 +68,27 @@ public partial abstract class N2Parser
   NamespaceScopeEnd(_ : bool) : void
   {
     //Parser.PopState();
+  }
+
+  _grammarDescriptors : Dictionary[string, GrammarDescriptor] = InitGrammars();
+  public InitGrammars() : Dictionary[string, GrammarDescriptor]
+  {
+    def globalGrammarDescriptors = Hashtable();
+
+    def path               = Path.GetDirectoryName(Uri(Assembly.GetExecutingAssembly().CodeBase).LocalPath);
+    def files              = Directory.GetFiles(path, "*.dll");
+    def standardAssemblies = HashSet(array["Nemerle.dll", "Nemerle.Compiler.dll", "Nitra.Runtime.dll", "Boot.Nitra.Runtime.dll", "Boot.Nitra.Core.dll", "Nitra.Compiler.dll"]);
+
+    // Обрабатываем файлы не входящие в список сборок самого немерла (стандратные сборки).
+    // В них точно не может быть парсеров.
+    foreach (file when !standardAssemblies.Contains(file) in files)
+    {
+      def assembly = Assembly.LoadFrom(file);
+      foreach (grammar in GrammarDescriptor.GetDescriptors(assembly))
+        globalGrammarDescriptors.Add(grammar.FullName, grammar);
+    }
+
+    globalGrammarDescriptors;
   }
 }
 
@@ -107,7 +141,7 @@ module Program
     test(<#
 namespace Ns1
 {
-  using NitraParserExtension1;
+  using N2ParserExtension1;
   type X =
     A.
     B;
@@ -123,7 +157,7 @@ namespace Ns1
     test(<#
 namespace Ns1
 {
-  using NitraParserExtensions.N2ParserExtension1
+  using N2ParserExtension1
   type X - A.B;
 }
     #>);
@@ -131,7 +165,7 @@ namespace Ns1
     test(<#
 namespace Ns1
 {
-  using NitraParserExtensions.N2ParserExtension1;
+  using N2ParserExtension1;
   type X - A.B;
 }
     #>);
@@ -141,7 +175,7 @@ namespace Ns1
 {
   namespace Ns2
   {
-    using NitraParserExtensions.N2ParserExtension1;
+    using N2ParserExtension1;
     type X = A.B;
   }
 using Y;
