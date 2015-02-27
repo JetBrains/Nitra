@@ -2,9 +2,11 @@
 using Nitra.Internal;
 using Nitra.Internal.Recovery;
 using Nitra.Runtime;
+using Nitra.Runtime.Errors;
 using Nitra.Runtime.Reflection;
 
 using Nemerle;
+using Nemerle.Assertions;
 using Nemerle.Imperative;
 using Nemerle.Imperative.GoTo;
 using Nemerle.Collections;
@@ -18,11 +20,12 @@ using System.Linq;
 using System.Collections.ObjectModel;
 
 using System.Text;
+using System.Threading;
 using SCG = System.Collections.Generic;
 
 namespace Nitra
 {
-  public partial class ParseResult : IPrettyPrintSource, ISourceSnapshotProvider
+  public partial class ParseResult : IParseResult, IPrettyPrintSource, ISourceSnapshotProvider
   {
     public static RawTreeParsedState = ~int.MaxValue;
 
@@ -35,23 +38,114 @@ namespace Nitra
     public mutable allocated        : int;
     public mutable TerminateParsing : bool; // may be volatile?
     public         ParserHost       : ParserHost;
-    public         OriginalSource   : SourceSnapshot { get; }
-    public         StartPos         : int            { get; }
-    public         RuleParser       : RuleParser     { get; }//Rename to StartRuleParser
+    public         OriginalSource   : SourceSnapshot  { get; }
+    public         StartPos         : int             { get; }
+    public         RuleParser       : StartRuleParser { get; }//Rename to StartRuleParser
     public mutable LastParseStart   : int;
     public mutable LastParseEnd     : int;
     public         ErrorData        : SCG.List[ParseErrorData];
+    public         ParseSession     : ParseSession    { get; }
     private mutable _maxFailPos     : int;
     private mutable _counter        : int;
     private _errors                 : SCG.List[Error] = SCG.List();
 
-    [Record]
-    public struct SubruleStart
+    public this([NotNull] parseSession : ParseSession)
     {
-      /// Начало соотвестствующего подправила
-      public Pos   : int;
-      public State : int;
-      public override ToString() : string { $"Pos=$Pos, State=$State" }
+      def sourceSnapshot = parseSession.SourceSnapshot;
+      def text           = sourceSnapshot.Text;
+      
+      this.ParseSession     = parseSession;
+      this.Text             = text;
+      this.OriginalSource   = sourceSnapshot;
+      this.StartPos         = 0;
+      this.TokenEnumerator1 = TokenEnumerator(this);
+      this.TokenEnumerator2 = TokenEnumerator(this);
+      this.ErrorData        = SCG.List();
+      this.rawTree          = array((text.Length + 1) * 10);
+      this.memoize          = array(text.Length + 1);
+      this.allocated        = 0;
+      this.ParserHost       = parseSession.CompositeGrammar.ParserHost;
+      this.LastParseStart   = -1;
+      this.LastParseEnd     = -1;
+      this.MaxFailPos       = 0;
+      this.RuleParser       = parseSession.CompositeGrammar.GetStartRuleParser(parseSession.StartRuleDescriptor);
+    }
+
+    internal Parse() : void
+    {
+      def registration = 
+        if (this.ParseSession.CancellationToken == CancellationToken.None)
+          VSome(this.ParseSession.CancellationToken.Register(() => TerminateParsing = true))
+        else
+          VNone();
+
+      try
+      {
+        _ = Allocate(2);
+        mutable res = RuleParser.Parse(StartPos, Text, this);
+
+        def parsedToEnd = res == Text.Length;
+        when (res < 0 || !(this.ParseSession.ParseToEndOfString && parsedToEnd) || ParseSession.CompletionStartPos >= 0)
+        {
+          def maxFailPos = MaxFailPos;
+          try
+          {
+            def rp = RecoveryParser(this);
+            rp.RecoveryFromAllErrors();
+
+            res = Text.Length;
+            rawTree[ResultOffset] = res;
+
+            def errorCollector = ErrorCollectorWalker();
+            errorCollector.Walk(this);
+          }
+          catch
+          {
+            | _ is LiteralCompletionException => throw;
+            | _ is OperationCanceledException => throw;
+            | e =>
+              def error = GetParsingFailureError(maxFailPos);
+              ReportError(error);
+              throw ParsingFailureException(error.ToString(), e, this);
+          }
+        }
+
+        assert2(res >= 0);
+        assert(res >= 0);
+
+        rawTree[ResultOffset] = res;
+      }
+      finally
+      {
+        when (registration is VSome(registration))
+          registration.Dispose();
+      }
+    }
+
+    private GetParsingFailureError(maxFailPos : int) : ParseError
+    {
+      def isValidToken(x) { x > maxFailPos }
+
+      when (maxFailPos == Text.Length)
+        return UnexpectedEndOfFileError(Location(this, maxFailPos, maxFailPos));
+
+      def tokens = RuleParser.Grammar.ParseAllGrammarTokens(maxFailPos, this);
+      if (tokens.Any(isValidToken))
+      {
+        def longestToken = tokens.Max();
+        UnexpectedError(Location(this, maxFailPos, longestToken))
+      }
+      else
+      {
+        mutable pos = maxFailPos + 1; // range already checked
+        while (pos < Text.Length)
+        {
+          when (RuleParser.Grammar.ParseAllGrammarTokens(pos, this).Any(isValidToken))
+            break;
+          ++pos;
+        }
+        UnexpectedError(Location(this, maxFailPos, pos))
+      }
     }
 
     [Record]
@@ -92,24 +186,6 @@ namespace Nitra
       mutable result;
       _ = RecoveredSequences.TryGetValue((startPos, endPos, parsingSequence), out result);
       result
-    }
-
-    public this(source : SourceSnapshot, startPos : int, initalSize : int, parserHost : ParserHost, ruleParser : RuleParser)
-    {
-      Text             = source.Text;
-      OriginalSource   = source;
-      StartPos         = startPos;
-      TokenEnumerator1 = TokenEnumerator(this);
-      TokenEnumerator2 = TokenEnumerator(this);
-      ErrorData        = SCG.List();
-      this.rawTree     = array(if (initalSize < 10) 10 else initalSize);
-      this.memoize     = array(Text.Length + 1);
-      this.allocated   = 0;
-      this.ParserHost  = parserHost;
-      LastParseStart   = -1;
-      LastParseEnd     = -1;
-      MaxFailPos       = 0;
-      this.RuleParser  = ruleParser;
     }
 
     public GenerateId() : int

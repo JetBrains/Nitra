@@ -10,6 +10,7 @@ using Nemerle.Utility;
 
 using System;
 using System.Diagnostics;
+using System.Threading;
 using System.Linq;
 
 using System.Xml.Linq;
@@ -20,17 +21,21 @@ namespace Nitra
 #if !PARSER_DEBUG
   //[DebuggerStepThroughAttribute]
 #endif
-  public class CompositeGrammar
+  public sealed class CompositeGrammar
   {
-    public Grammars                 : Set[GrammarDescriptor];
-    public ParserHost               : ParserHost;
-    public SimpleRuleParsers        : Hashtable[SimpleRuleDescriptor, SimpleRuleParser];
-    public ExtensibleRules          : Hashtable[ExtensibleRuleDescriptor, ExtensibleRuleParserData] = Hashtable();
-    public Tokens                   : SCG.Dictionary[object, TokenParser] = SCG.Dictionary();
-    public VoidTokens               : SCG.Dictionary[object, TokenParser] = SCG.Dictionary();
+    private static mutable _idCounter : int = 0;
 
-    public StartID                  : int;
-    public RuleParserMap            : SCG.List[object] = SCG.List();
+    internal RuntimeId              : int { get; }
+
+    public  Grammars                 : Set[GrammarDescriptor];
+    public  ParserHost               : ParserHost;
+    private SimpleRuleParsers        : Hashtable[SimpleRuleDescriptor, SimpleRuleParser];
+    private ExtensibleRules          : Hashtable[ExtensibleRuleDescriptor, ExtensibleRuleParserData] = Hashtable();
+    private Tokens                   : SCG.Dictionary[object, TokenParser] = SCG.Dictionary();
+    private VoidTokens               : SCG.Dictionary[object, TokenParser] = SCG.Dictionary();
+
+    private  RuleIdOffset            : int;
+    internal RuleParserMap           : SCG.List[object] = SCG.List();
 
     public Simples     : Seq[SimpleRuleParser];
     public Prefixs     : Seq[ExtensionRuleParser];
@@ -39,22 +44,34 @@ namespace Nitra
 
     public NewRuleId(ruleParser : object) : int
     {
-      def id = StartID + RuleParserMap.Count;
+      def id = RuleIdOffset + RuleParserMap.Count;
       RuleParserMap.Add(ruleParser);
       id
     }
 
+    public Add(grammarDescriptor : GrammarDescriptor) : CompositeGrammar
+    {
+      this.ParserHost.AddGrammar(this, grammarDescriptor)
+    }
+
+    private this()
+    {
+      RuntimeId = Interlocked.Increment(ref _idCounter)
+    }
+
     internal this(parserHost : ParserHost)
     {
-      StartID = 0;
+      this();
+      RuleIdOffset = 0;
       Grammars = Set();
       SimpleRuleParsers = Hashtable();
       ParserHost = parserHost;
     }
 
-    internal this(parserHost : ParserHost, grammars : Set[GrammarDescriptor], startID : int)
+    internal this(parserHost : ParserHost, grammars : Set[GrammarDescriptor], ruleIdOffset : int)
     {
-      StartID = startID;
+      this();
+      RuleIdOffset = ruleIdOffset;
       Grammars = grammars;
       ParserHost = parserHost;
 
@@ -348,14 +365,24 @@ namespace Nitra
         visitExtensible(parserData.Parsers[0]);
     }
 
-    public GetExtensibleRuleParser(rd : ExtensibleRuleDescriptor, bindingPower : int) : Internal.ExtensibleRuleParser
+    public GetExtensibleRuleParser(rd : ExtensibleRuleDescriptor, bindingPower : int) : ExtensibleRuleParser
     {
       ExtensibleRules[rd].GetParser(bindingPower)
     }
 
-    public GetSimpleRuleParser(rd : SimpleRuleDescriptor) : Internal.SimpleRuleParser
+    public GetSimpleRuleParser(rd : SimpleRuleDescriptor) : SimpleRuleParser
     {
       SimpleRuleParsers[rd]
+    }
+
+    public GetStartRuleParser(descriptor : StartRuleDescriptor) : StartRuleParser
+    {
+      match (descriptor)
+      {
+        | desc is SimpleRuleDescriptor     => GetSimpleRuleParser(desc)
+        | desc is ExtensibleRuleDescriptor => GetExtensibleRuleParser(desc, 0)
+        | _ => assert3(false, "GetStartRuleParser support only SimpleRuleDescriptor or ExtensibleRuleDescriptor")
+      }
     }
 
     public ParseAllNonVoidGrammarTokens(pos : int, parseResult : ParseResult) : SCG.HashSet[int]
@@ -419,6 +446,11 @@ namespace Nitra
         throw OperationCanceledException();
 
       results
+    }
+
+    public IsVoidToken(parser : object) : bool
+    {
+      Tokens.ContainsKey(parser) || VoidTokens.ContainsKey(parser)
     }
 
     private static HtmlTemplate = @"
