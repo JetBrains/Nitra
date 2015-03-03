@@ -13,7 +13,7 @@ namespace Sample.Json.Cs
       if (args.Length > 0)
         text = File.ReadAllText(args[0]);
 
-      var parseResult = JsonParser.Start(new SourceSnapshot(text), new ParserHost());
+      var parseResult = JsonParser.Start(new SourceSnapshot(text));
 
       if (parseResult.IsSuccess)
       {
