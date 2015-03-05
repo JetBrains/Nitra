@@ -137,6 +137,7 @@ syntax module NitraSyntax
     [Cached] MakeContext(parent : Context) : Context = NamespaceBody.MakeContext(parent);
     CollectSyntaxMappings() : void = NamespaceBody.CollectSyntaxMappings();
     TypeSyntaxMappings() : void = NamespaceBody.TypeSyntaxMappings();
+    TypeDeclarations() : void = NamespaceBody.TypeDeclarations();
     Typing() : void = NamespaceBody.Typing();
   }
 
@@ -156,6 +157,7 @@ syntax module NitraSyntax
     }
     CollectSyntaxMappings() : void = foreach (topDecl in NamespaceMembers) topDecl.CollectSyntaxMappings();
     TypeSyntaxMappings() : void = foreach (topDecl in NamespaceMembers) topDecl.TypeSyntaxMappings();
+    TypeDeclarations() : void = foreach (topDecl in NamespaceMembers) topDecl.TypeDeclarations();
     Typing() : void = foreach (topDecl in NamespaceMembers) topDecl.Typing();
   }
 
@@ -277,24 +279,18 @@ syntax module NitraSyntax
 
   syntax DeclarationBody = outline_begin_before nl "{" inl Members=DeclarationMember* d "}" outline_end_before nl
   {
-    CollectGlobalSymbols(site : IMemberSite) : void
-    {
-      foreach (member in Members)
-        member.CollectGlobalSymbols(site);
-    }
+    CollectGlobalSymbols(site : IMemberSite) : void = foreach (member in Members) member.CollectGlobalSymbols(site);
     [Cached] MakeContext(parent : Context) : Context = PassThrough(Members, parent, _.MakeContext(_));
-    Typing() : void
-    {
-      foreach (member in Members)
-        member.Typing();
-    }
+    Typing() : void = foreach (member in Members) member.Typing();
+    TypeProperties() : void = foreach (member in Members) member.TypeProperties();
   }
-  
+
   syntax DeclarationMember
   {
     CollectGlobalSymbols(site : IMemberSite) : void;
     [Cached] MakeContext(parent : Context) : Context = parent;
     Typing() : void;
+    TypeProperties() : void {}
 
     | SimpleProperty = NameModifier="name"? Name sm ":" sm NitraType ";" nl
       {
@@ -403,12 +399,15 @@ syntax module NitraSyntax
             _ = site.Node.AddAndReport.[DeclarationPropertySymbol](symbol, Name.Location);
           }
           [Cached] MakeType() : NType = this.NitraType.Typing(this.Context)[0];
-          [Cached] MakeProjectionSource(projectionSource : SymbolRef[DeclarationPropertySymbol]) : SymbolRef[DeclarationPropertySymbol] = projectionSource;
           [Cached] MakeContext(parent : Context) : Context = parent;
-          Typing(projectionSource : SymbolRef[DeclarationPropertySymbol]) : void
+          [Cached] MakeProjectionType(t : DeclarationPropertyProjectionType) : DeclarationPropertyProjectionType = t;
+          Typing() : void
           {
             _ = MakeType();
-            _ = MakeProjectionSource(projectionSource);
+          }
+          TypeProjection(projectionSource : SimpleDeclarationPropertySymbol, baseType : DeclarationSymbol) : void
+          {
+            _ = MakeProjectionType(MakeDeclarationPropertyProjectionType(this.Type, projectionSource, baseType, this.Context))
           }
         }
 
@@ -419,11 +418,11 @@ syntax module NitraSyntax
           foreach (property in Properties) property.CollectGlobalSymbols(site);
         }
         override MakeContext = FoldThrough(Properties, parent, _.MakeContext(_));
-        override Typing
+        override Typing = foreach (property in Properties) property.Typing();
+        override TypeProperties
         {
-          def projectionSource = TypingUtils.BindDeclarationProperty(this.DeclaringDeclaration, this.Name, this.Context);
-          foreach (property in Properties)
-            property.Typing(projectionSource);
+          def (projectionSource, baseType) = BindDeclarationPropertyProjectionSource(this.DeclaringDeclaration, this.Name, this.Context);
+          foreach (property in Properties) property.TypeProjection(projectionSource, baseType)
         }
       }
   }
@@ -482,6 +481,7 @@ syntax module NitraSyntax
       when (Body.HasValue)
         Body.Value.Typing();
     }
+    TypeProperties() : void = when (Body.HasValue) Body.Value.TypeProperties();
     [Cached] MakeBaseDeclarationRef(baseDeclarationRef : SymbolRef[ExtensibleDeclarationSymbol]) : SymbolRef[ExtensibleDeclarationSymbol] = baseDeclarationRef;
   }
 
@@ -491,6 +491,7 @@ syntax module NitraSyntax
     [Cached] MakeContext(parent : Context) : Context;
     CollectSyntaxMappings() : void {}
     TypeSyntaxMappings() : void {}
+    TypeDeclarations() : void {}
     Typing() : void;
 
     | Symbol      = "symbol"      sm Name outline_begin_before nl "{" inl Members=SymbolMember*      d "}" outline_end_before nl
@@ -538,6 +539,7 @@ syntax module NitraSyntax
           _ = MakeBaseDeclarations();
           Body.Typing();
         }
+        override TypeDeclarations = Body.TypeProperties();
       }
 
     | SimpleDeclaration = "declaration" sm Name DeclarationInheritance? Body=DeclarationBody
@@ -567,6 +569,7 @@ syntax module NitraSyntax
           _ = MakeBaseDeclarations();
           Body.Typing();
         }
+        override TypeDeclarations = Body.TypeProperties();
       }
 
     | ExtensibleDeclaration = "declarations" sm Name DeclarationInheritance? Body
@@ -593,6 +596,7 @@ syntax module NitraSyntax
             foreach (extension in Extensions)
               extension.Typing(baseDeclarationRef);
           }
+          TypeDeclarations() : void = foreach (extension in Extensions) extension.TypeProperties();
         }
 
         [Cached] private MakeDeclarationSymbol() : ParsedExtensibleDeclarationSymbol = ParsedExtensibleDeclarationSymbol(this);
@@ -620,6 +624,7 @@ syntax module NitraSyntax
           _ = MakeBaseDeclarations();
           Body.Typing(SymbolRef.Some(Name.Location, false, DeclarationSymbol));
         }
+        override TypeDeclarations = Body.TypeDeclarations();
       }
 
     | ExtendDeclaration = "extend" "declarations" sm (Name sm "=" sm)? BaseName=QualifiedName Body
@@ -637,6 +642,7 @@ syntax module NitraSyntax
             foreach (extension in Extensions)
               extension.Typing(baseDeclarationRef);
           }
+          TypeDeclarations() : void = foreach (extension in Extensions) extension.TypeProperties();
         }
 
         override CollectGlobalSymbols
@@ -651,6 +657,7 @@ syntax module NitraSyntax
           def baseDeclarationRef = MakeBaseDeclarationRef();
           Body.Typing(baseDeclarationRef);
         }
+        override TypeDeclarations = Body.TypeDeclarations();
         [Cached] private MakeBaseDeclarationRef() : SymbolRef[ExtensibleDeclarationSymbol] = SymbolRef[ExtensibleDeclarationSymbol].Create(BaseName, Context.Bind(BaseName));
       }
 
