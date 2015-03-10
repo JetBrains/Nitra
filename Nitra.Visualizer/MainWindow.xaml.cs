@@ -429,8 +429,8 @@ namespace Nitra.Visualizer
       if (root != null)
       {
         var file = new ProjectSystem.FakeFile(_parseResult.OriginalSource);
-        var declarationRoot = DeclarationRoot<IAst>.Create(file, root);
-        UpdateDeclarations(declarationRoot);
+        var astRoot = AstRoot<IAst>.Create(file, root);
+        UpdateDeclarations(astRoot);
       }
     }
 
