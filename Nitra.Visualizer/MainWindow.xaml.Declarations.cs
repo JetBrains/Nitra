@@ -148,10 +148,10 @@ namespace Nitra.Visualizer
       return false;
     }
 
-    private void UpdateDeclarations(DeclarationRoot<IAst> declarationRoot)
+    private void UpdateDeclarations(AstRoot<IAst> astRoot)
     {
-      declarationRoot.EvalProperties();
-      var root = ObjectToItem(null, declarationRoot.Content);
+      astRoot.EvalProperties();
+      var root = ObjectToItem(null, astRoot.Content);
       root.Header = "Root";
       //using (var d = Dispatcher.DisableProcessing())
       //{

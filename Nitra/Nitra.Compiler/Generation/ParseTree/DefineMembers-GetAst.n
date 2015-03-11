@@ -11,6 +11,7 @@ using Nitra.ProjectSystem;
 using Nitra.Internal;
 using Nitra.Model;
 using Nitra.Typing;
+using Nitra.Compiler.PatternMatching;
 
 using System;
 using System.Diagnostics;
@@ -62,7 +63,7 @@ namespace Nitra.Compiler
 
     private static MakeParseTreeMemberAccess(path : ParseTreePath) : PExpr
     {
-      Util.locate(path.Location.ToNemerleLocation(),
+      Util.locate(path.Location.NLocation(),
         match(path)
         {
           | This                       => <[ this ]>
@@ -178,7 +179,7 @@ namespace Nitra.Compiler
       def compileField(field : SyntaxMappingField) : PExpr
       {
         def declarationPropertySymbol = field.DeclarationProperty.GetValue(Environment.Project);
-        Util.locate(field.Location.ToNemerleLocation(),
+        Util.locate(field.Location.NLocation(),
           match (field)
           {
             | Error        => assert(false, "Syntax mapping field is not valid")
@@ -189,22 +190,88 @@ namespace Nitra.Compiler
           });
       }
 
-      Util.locate(syntaxMappingBody.Location.ToNemerleLocation(),
+      def compileFields(declarationSymbol : DeclarationSymbol, fields : list[SyntaxMappingField]) : PExpr
+      {
+        def concreteDeclarationType = GetConcreteDeclarationType(declarationSymbol);
+        def values                  = <[ Span = this.Location.Span ]> :: fields.Map(compileField);
+        <[ $concreteDeclarationType(..$values) ]>
+      }
+
+      def compileAccess(_ : Access) : PExpr
+      {
+        | Obj                            => <[ this ]>
+        | Sel(ListCons,   0,     access) => <[ $(compileAccess(access)).Head ]>
+        | Sel(ListCons,   1,     access) => <[ $(compileAccess(access)).Tail ]>
+        | Sel(OptionSome, 0,     access) => <[ $(compileAccess(access)).Value ]>
+        | Sel(Tuple,      index, access) => <[ $(compileAccess(access)).$("Item" + (index + 1) : usesite) ]>
+        | Sel(ParseTree,  index, access) => <[ $(compileAccess(access)).$(RuleSymbol.NonVoidSubRules.Nth(index).FieldName : usesite) ]>
+        | _ => assert(false, "Invalid access path")
+      }
+
+      def compileTest(n : string, ctor : ParseTreeCtor) : PExpr
+      {
+        match (ctor)
+        {
+          | ListCons   => <[ $(n : usesite).Count > 0 ]>
+          | ListNil    => <[ $(n : usesite).Count == 0 ]>
+          | OptionSome => <[ $(n : usesite).HasValue ]>
+          | OptionNone => <[ ! $(n : usesite).HasValue ]>
+          | Tuple
+          | ParseTree  => assert(false, "Check is redundant")
+        }
+      }
+
+      mutable redundantCases : SCG.HashSet[_];
+      mutable canFail        : bool;
+      def compileDecision(_ : Decision[SyntaxMappingCase]) : PExpr
+      {
+        | Failure =>
+          canFail = true;
+          <[ assert(false, "Match failed") ]>
+
+        | Success(Inline(code) as case)                     =>
+          _ = redundantCases.Remove(case);
+          code
+
+        | Success(PerField(declarationRef, fields) as case) =>
+          _ = redundantCases.Remove(case);
+          compileFields(declarationRef.GetValue(Environment.Project), fields)
+
+        | Variable(name, access, continuation) =>
+          <[
+            def $(name.Id : global) = $(compileAccess(access));
+            $(compileDecision(continuation))
+          ]>.FlattenPExpr()
+
+        | IfEq(access, ctor, t, f) =>
+          def n = Util.tmpname("parseTree");
+          <[
+            def $(n : usesite) = $(compileAccess(access));
+            if ($(compileTest(n, ctor)))
+              $(compileDecision(t))
+            else
+              $(compileDecision(f))
+          ]>
+      }
+
+
+      Util.locate(syntaxMappingBody.Location.NLocation(),
       {
         def code =
           match (syntaxMappingBody)
           {
-            | Error => assert(false, "Syntax mapping body is not valid")
-            | CallMember(path) =>
-              def parseTreeMember = MakeParseTreeMemberAccess(path);
-              <[ $parseTreeMember.GetAst() ]>
-
-            | PerField(fields) =>
-              def concreteDeclarationType = GetConcreteDeclarationType(declarationSymbol);
-              def values                  = <[ Span = this.Location.Span ]> :: fields.Map(compileField);
-              <[ $concreteDeclarationType(..$values) ]>
-
-            | Inline(code) => code
+            | PerField(fields) => compileFields(declarationSymbol, fields)
+            | Inline(code)     => code
+            | Match(cases)     =>
+              redundantCases = SCG.HashSet(cases);
+              def rules      = cases.Map(c => (c.Pattern, c));
+              def decision   = MatchCompiler.Compile(rules);
+              def code       = compileDecision(decision);
+              when (canFail)
+                Environment.Project.Warning(syntaxMappingBody.Location, "Matching is not exhaustive.", -1);
+              foreach (case in redundantCases)
+                Environment.Project.Warning(case.Location, "Match case is redundant.", -1);
+              code
           };
 
         def baseDeclarationType = GetBaseDeclarationType(declarationSymbol);

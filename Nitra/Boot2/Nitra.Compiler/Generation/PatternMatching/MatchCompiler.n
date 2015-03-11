@@ -1,0 +1,139 @@
+﻿using Nitra.Model;
+using Nitra.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Text;
+
+namespace Nitra.Compiler.PatternMatching
+{
+  internal module MatchCompiler
+  {
+    private type Context = list[ParseTreeCtor * list[Termd]];
+
+    private Augment(ctx : Context, dsc : Termd) : Context
+    {
+      match (ctx)
+      {
+        | [] => []
+        | (con, args) :: rest => (con, dsc :: args) :: rest
+      }
+    }
+
+    private Norm(ctx : Context) : Context
+    {
+      | [] => []
+      | (con, args) :: rest => Augment(rest, Termd.Pos(con, args.Rev()))
+    }
+
+    private AddNeg(nonset : Termd, con : ParseTreeCtor) : Termd.Neg
+    {
+      match (nonset)
+      {
+        | Neg(cons) as neg when cons.Contains(con) => neg
+        | Neg(cons) =>
+          assert(cons.Length + 1 < Math.Max(int.MaxValue, con.Span));
+          Termd.Neg(con :: cons);
+ 
+        | Pos => assert(false)
+      }
+    }
+
+    private BuildDsc(ctx : Context, dsc : Termd, work : list[list[ParseTreePattern] * list[Access] * list[Termd]]) : Termd
+    {
+      match (ctx, work)
+      {
+        | ([], []) => dsc
+        | ((con, args) :: rest, (_, _, dargs) :: work) =>
+          BuildDsc(rest, Termd.Pos(con, NList.RevAppend(args, dsc :: dargs)), work)
+
+        | _ => assert(false)
+      }
+    }
+
+    private Fail[T](dsc : Termd, rules : list[ParseTreePattern * T]) : Decision[T]
+    {
+      match (rules)
+      {
+        | []                       => Decision.Failure()
+        | (pat1, rhs1) :: rulerest => Match(pat1, Access.Obj(), dsc, [], [], rhs1, rulerest)
+      }
+    }
+
+    private Succeed[T](ctx : Context, works : list[list[ParseTreePattern] * list[Access] * list[Termd]], rhs : T, rules : list[ParseTreePattern * T]) : Decision[T]
+    {
+      match (works)
+      {
+        | []                                                  => Decision.Success(rhs)
+        | ([], [], []) :: workr                               => Succeed(Norm(ctx), workr, rhs, rules)
+        | (pat1 :: patr, obj1 :: objr, dsc1 :: dscr) :: workr => Match(pat1, obj1, dsc1, ctx, (patr, objr, dscr) :: workr, rhs, rules)
+        | _ => assert3(false)
+      }
+    }
+
+    private enum MatchResult
+    {
+      | Yes
+      | No
+      | MayBe
+    }
+
+    private StaticMatch(pcon : ParseTreeCtor, term : Termd) : MatchResult
+    {
+      match (term)
+      {
+        | Neg(nonset) when nonset.Contains(pcon)          => MatchResult.No
+        | Neg(nonset) when pcon.Span == nonset.Length + 1 => MatchResult.Yes
+        | Pos(scon, _)                                    => if (pcon == scon) MatchResult.Yes else MatchResult.No
+        | _ => MatchResult.MayBe
+      }
+    }
+
+    private Match[T](pat : ParseTreePattern, obj : Access, dsc : Termd, ctx : Context, work : list[list[ParseTreePattern] * list[Access] * list[Termd]], rhs : T, rules : list[ParseTreePattern * T]) : Decision[T]
+    {
+      match (pat)
+      {
+        | Var(name) =>
+          def continuation = Succeed(Augment(ctx, dsc), work, rhs, rules);
+          if (pat.IsWildcard)
+            continuation
+          else
+            Decision.Variable(name, obj, continuation)
+
+        | Ctor(pcon, pargs) =>
+          def result = StaticMatch(pcon, dsc);
+          if (result == MatchResult.No)
+            Fail(BuildDsc(ctx, dsc, work), rules)
+          else
+          {
+            mutable oargs = [];
+            for (mutable i = pcon.Arity - 1; i >= 0; --i)
+              oargs ::= Access.Sel(pcon, i, obj);
+
+            def dargs =
+              match (dsc)
+              {
+                | Neg => Termd.MakeAnyList(pcon.Arity)
+                | Pos(_, dargs) => dargs
+              };
+
+            def success = Succeed((pcon, []) :: ctx, (pargs, oargs, dargs) :: work, rhs, rules);
+
+            if (result == MatchResult.Yes)
+              success
+            else
+              Decision.IfEq(obj, pcon, success, Fail(BuildDsc(ctx, AddNeg(dsc, pcon), work), rules))
+          }
+      }
+    }
+
+    public Compile[T](allmrules : list[ParseTreePattern * T]) : Decision[T]
+    {
+      Fail(Termd.Any, allmrules)
+    }
+  }
+}

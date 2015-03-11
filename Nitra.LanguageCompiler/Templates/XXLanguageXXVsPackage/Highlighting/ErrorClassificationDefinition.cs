@@ -11,13 +11,14 @@ namespace XXNamespaceXX
   [Export(typeof(EditorFormatDefinition))]
   [ClassificationType(ClassificationTypeNames = Constants.ErrorClassificationTypeName)]
   [Name(Constants.ErrorClassificationTypeName)]
+  [DisplayName("XXLanguageXX Error")]
   [UserVisible(true)]
   [Order(Before = Priority.Default)]
   public sealed class ErrorClassificationDefinition : ClassificationFormatDefinition
   {
     public ErrorClassificationDefinition()
     {
-      this.DisplayName = Constants.ErrorClassificationTypeName;
+      this.DisplayName = "XXLanguageXX Error";
       this.BackgroundColor = Colors.Red;
       this.ForegroundColor = Colors.White;
     }

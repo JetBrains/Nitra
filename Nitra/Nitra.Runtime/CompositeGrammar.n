@@ -10,6 +10,7 @@ using Nemerle.Utility;
 
 using System;
 using System.Diagnostics;
+using System.Threading;
 using System.Linq;
 
 using System.Xml.Linq;
@@ -20,41 +21,45 @@ namespace Nitra
 #if !PARSER_DEBUG
   //[DebuggerStepThroughAttribute]
 #endif
-  public class CompositeGrammar
+  public sealed class CompositeGrammar
   {
-    public Grammars                 : Set[GrammarDescriptor];
-    public ParserHost               : ParserHost;
-    public SimpleRuleParsers        : Hashtable[SimpleRuleDescriptor, SimpleRuleParser];
-    public ExtensibleRules          : Hashtable[ExtensibleRuleDescriptor, ExtensibleRuleParserData] = Hashtable();
-    public Tokens                   : SCG.Dictionary[object, TokenParser] = SCG.Dictionary();
-    public VoidTokens               : SCG.Dictionary[object, TokenParser] = SCG.Dictionary();
+    private static mutable _idCounter : int = 0;
 
-    public StartID                  : int;
-    public RuleParserMap            : SCG.List[object] = SCG.List();
+    internal RuntimeId               : int { get; }
+
+    public  Grammars                 : Set[GrammarDescriptor];
+    public  ParserHost               : ParserHost;
+    private SimpleRuleParsers        : Hashtable[SimpleRuleDescriptor, SimpleRuleParser];
+    private ExtensibleRules          : Hashtable[ExtensibleRuleDescriptor, ExtensibleRuleParserData] = Hashtable();
+    private Tokens                   : SCG.Dictionary[object, TokenParser] = SCG.Dictionary();
+    private VoidTokens               : SCG.Dictionary[object, TokenParser] = SCG.Dictionary();
 
     public Simples     : Seq[SimpleRuleParser];
     public Prefixs     : Seq[ExtensionRuleParser];
     public Postfixs    : Seq[ExtensionRuleParser];
     public Extensibles : Seq[ExtensibleRuleParser];
 
-    public NewRuleId(ruleParser : object) : int
+    public Add(grammarDescriptor : GrammarDescriptor) : CompositeGrammar
     {
-      def id = StartID + RuleParserMap.Count;
-      RuleParserMap.Add(ruleParser);
-      id
+      this.ParserHost.AddGrammar(this, grammarDescriptor)
+    }
+
+    private this()
+    {
+      RuntimeId = Interlocked.Increment(ref _idCounter)
     }
 
     internal this(parserHost : ParserHost)
     {
-      StartID = 0;
+      this();
       Grammars = Set();
       SimpleRuleParsers = Hashtable();
       ParserHost = parserHost;
     }
 
-    internal this(parserHost : ParserHost, grammars : Set[GrammarDescriptor], startID : int)
+    internal this(parserHost : ParserHost, grammars : Set[GrammarDescriptor], ruleIdBuilder : RuleIdBuilder)
     {
-      StartID = startID;
+      this();
       Grammars = grammars;
       ParserHost = parserHost;
 
@@ -74,18 +79,18 @@ namespace Nitra
       foreach (extensibleRule in rules.OfType.[ExtensibleRuleDescriptor]())
       {
         def (prefixDescriptors, postfixDescriptors) = extensionRuleDescriptors.GetValueOrDefault(extensibleRule, (array[], array[]));
-        ExtensibleRules[extensibleRule] = ExtensibleRuleParserData(this, extensibleRule, prefixDescriptors, postfixDescriptors);
+        ExtensibleRules[extensibleRule] = ExtensibleRuleParserData(this, extensibleRule, prefixDescriptors, postfixDescriptors, ruleIdBuilder);
       }
 
       SimpleRuleParsers = Hashtable(rules
         .OfType.[SimpleRuleDescriptor]()
-        .Map(rd => (rd, rd.NewParser(this))));
+        .Map(rd => (rd, rd.NewParser(this, ruleIdBuilder))));
 
       foreach (extensibleRule in ExtensibleRules)
-        extensibleRule.Value.Init();
+        extensibleRule.Value.Init(ruleIdBuilder);
 
       foreach (kv in SimpleRuleParsers)
-        kv.Value.Init();
+        kv.Value.Init(ruleIdBuilder);
 
       foreach (extensibleRule in ExtensibleRules)
         _ = GetExtensibleRuleParser(extensibleRule.Key, 0);
@@ -348,12 +353,12 @@ namespace Nitra
         visitExtensible(parserData.Parsers[0]);
     }
 
-    public GetExtensibleRuleParser(rd : ExtensibleRuleDescriptor, bindingPower : int) : Internal.ExtensibleRuleParser
+    public GetExtensibleRuleParser(rd : ExtensibleRuleDescriptor, bindingPower : int) : ExtensibleRuleParser
     {
       ExtensibleRules[rd].GetParser(bindingPower)
     }
 
-    public GetSimpleRuleParser(rd : SimpleRuleDescriptor) : Internal.SimpleRuleParser
+    public GetSimpleRuleParser(rd : SimpleRuleDescriptor) : SimpleRuleParser
     {
       SimpleRuleParsers[rd]
     }
@@ -429,6 +434,11 @@ namespace Nitra
         throw OperationCanceledException();
 
       results
+    }
+
+    public IsVoidToken(parser : object) : bool
+    {
+      Tokens.ContainsKey(parser) || VoidTokens.ContainsKey(parser)
     }
 
     private static HtmlTemplate = @"

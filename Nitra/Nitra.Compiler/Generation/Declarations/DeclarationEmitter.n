@@ -88,7 +88,7 @@ namespace Nitra.Compiler
     {
       def propertyType     = Environment.TypeCompiler.CompileDependentPropertyType(propertyRef.Symbol);
       def backingFieldName = Util.tmpname(propertyRef.Symbol.Name);
-      Util.locate(propertyRef.Symbol.FirstLocation.ToNemerleLocation(),
+      Util.locate(propertyRef.Symbol.FirstLocation.NLocation(),
       {
         tb.Define(<[ decl:
           [RecordIgnore] private mutable $(backingFieldName : usesite) : $(propertyType : typed)
@@ -224,6 +224,104 @@ namespace Nitra.Compiler
         ]>
       }
       body
+    }
+
+    protected CompileProjection(properties : SCG.List[ProjectedDeclarationPropertySymbol], result : SCG.List[PExpr]) : void
+    {
+      def locFromExpr(astExpr : PExpr) : PExpr
+      {
+        // File property is unavailable in current state
+        <[ Nitra.Location($(Environment.AstTypeVar : typed).AstContext.File.GetSource(), $astExpr.Span) ]>
+      }
+      def locFromName(name : string) : PExpr { locFromExpr(<[ $(name : usesite) ]>) }
+
+      foreach (g in properties.GroupBy(p => p.ProjectionType.ProjectionSource))
+      {
+        def projectionSource = g.Key;
+        def init = SCG.List();
+        def body = SCG.List();
+        def end  = SCG.List();
+        foreach (property in g)
+        {
+          match (property.ProjectionType)
+          {
+            | List =>
+              def concreteType = Environment.GetDeclarationType(property.ProjectionType.TargetDeclaration);
+              def bufferName = Util.tmpname("list");
+              init.Add(<[ def $(bufferName : usesite) = System.Collections.Generic.List.[$(concreteType : typed)]() ]>);
+              body.Add(<[
+                match (item)
+                {
+                  | concreteItem is $(concreteType : typed) => $(bufferName : usesite).Add(concreteItem)
+                  | _ => ()
+                }
+              ]>);
+              end.Add(<[ this.$(property.Name : usesite) = $(concreteType : typed).AstList(this.$(projectionSource.Name : usesite).Span, $(bufferName : usesite).ToArray()); ]>);
+              end.Add(<[ this.$(property.Name : usesite).SetParent(this); ]>);
+
+            | Option =>
+              def targetName   = property.ProjectionType.TargetDeclaration.FullName;
+              def concreteType = Environment.GetDeclarationType(property.ProjectionType.TargetDeclaration);
+              def bufferName   = Util.tmpname("option");
+              init.Add(<[ mutable $(bufferName : usesite) : $(concreteType : typed) ]>);
+              body.Add(<[
+                match (item)
+                {
+                  | concreteItem is $(concreteType : typed) =>
+                    if ($(bufferName : usesite) : object == null)
+                      $(bufferName : usesite) = concreteItem
+                    else
+                      using (root = $(Environment.AstTypeVar : typed).AstContext.CompilerMessages.RootError($(locFromName("concreteItem")), $$"Duplicate definition of '$targetName'."))
+                      {
+                        root.Hint($(locFromName(bufferName)), "First defined here.")
+                      }
+
+                  | _ => ()
+                }
+              ]>);
+              end.Add(<[
+                this.$(property.Name : usesite) =
+                  if ($(bufferName : usesite) : object != null)
+                    $(concreteType : typed).AstOption(this.$(projectionSource.Name : usesite).Span, $(bufferName : usesite))
+                  else
+                    $(concreteType : typed).AstOption(this.$(projectionSource.Name : usesite).Span)
+              ]>);
+              end.Add(<[ this.$(property.Name : usesite).SetParent(this); ]>);
+
+            | Single =>
+              def targetName   = property.ProjectionType.TargetDeclaration.FullName;
+              def concreteType = Environment.GetDeclarationType(property.ProjectionType.TargetDeclaration);
+              def bufferName   = Util.tmpname("single");
+              init.Add(<[ mutable $(bufferName : usesite) : $(concreteType : typed) ]>);
+              body.Add(<[
+                match (item)
+                {
+                  | concreteItem is $(concreteType : typed) =>
+                    if ($(bufferName : usesite) : object == null)
+                      $(bufferName : usesite) = concreteItem
+                    else
+                      using (root = $(Environment.AstTypeVar : typed).AstContext.CompilerMessages.RootError($(locFromName("concreteItem")), $$"Duplicate definition of '$targetName'."))
+                      {
+                        root.Hint($(locFromName(bufferName)), "First defined here.")
+                      }
+
+                  | _ => ()
+                }
+              ]>);
+              end.Add(<[
+                if ($(bufferName : usesite) : object != null)
+                  this.$(property.Name : usesite) = $(bufferName : usesite)
+                else
+                  $(Environment.AstTypeVar : typed).AstContext.CompilerMessages.Error($(locFromExpr(<[ this.$(projectionSource.Name : usesite) ]>)), $$"Missing definition of '$targetName'.")
+              ]>);
+
+            | Error  => assert(false)
+          }
+        }
+        result.AddRange(init);
+        result.Add(<[ foreach (item in this.$(projectionSource.Name : usesite)) { ..$body } ]>);
+        result.AddRange(end);
+      }
     }
   }
 }

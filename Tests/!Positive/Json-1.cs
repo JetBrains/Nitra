@@ -190,8 +190,7 @@ namespace Sample.Json.Cs
     static void Test(string text)
     {
       var source = new SourceSnapshot(text);
-      var parserHost = new ParserHost();
-      var parseResult = JsonParser.Start(source, parserHost);
+      var parseResult = JsonParser.Start(source);
       if (parseResult.IsSuccess)
       {
         var pt = parseResult.CreateParseTree();

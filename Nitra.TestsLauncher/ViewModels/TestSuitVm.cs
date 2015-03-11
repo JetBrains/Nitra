@@ -26,7 +26,6 @@ namespace Nitra.ViewModels
     public string[] LibPaths { get; private set; }
 
     readonly string _rootPath;
-    ParserHost _parserHost;
     private CompositeGrammar _compositeGrammar;
 
     public XElement Xml { get { return Utils.MakeXml(_rootPath, SynatxModules, StartRule); } }
@@ -148,11 +147,8 @@ namespace Nitra.ViewModels
     [CanBeNull]
     public IParseResult Run([NotNull] string code, [CanBeNull] string gold, int completionStartPos = -1, string completionPrefix = null)
     {
-      if (_parserHost == null)
-      {
-        _parserHost = new ParserHost();
-        _compositeGrammar = _parserHost.MakeCompositeGrammar(SynatxModules);
-      }
+      _compositeGrammar = ParserHost.Instance.MakeCompositeGrammar(SynatxModules);
+
       var source = new SourceSnapshot(code);
 
       if (StartRule == null)

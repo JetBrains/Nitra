@@ -1,0 +1,146 @@
+﻿using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+
+using G = NitraSyntaxParseTree;
+
+namespace Nitra.Typing
+{
+  internal module PatternTyper
+  {
+    public TypeParseTreePattern(location : Location, ruleSymbol : SyntaxRuleSymbol, patterns : ListParseTree[G.Pattern], context : Context) : ParseTreePattern
+    {
+      def ruleTypes = ruleSymbol.NonVoidSubRules.Map(_.Type);
+      def args      = PatternTyper.TypeSequence(ruleTypes, patterns, context);
+      ParseTreePattern.ParseTree(location, ruleSymbol, args)
+    }
+
+    public TypeSequence(ruleTypes : list[RuleType], patterns : ListParseTree[G.Pattern], context : Context) : list[ParseTreePattern]
+    {
+      using (ruleTypeSeq = ruleTypes.GetEnumerator(), patternSeq = patterns.GetEnumerator())
+      {
+        def loop(result, errorReported)
+        {
+          match (ruleTypeSeq.MoveNext(), patternSeq.MoveNext())
+          {
+            | (false, false) => result
+            | (true,   true) => loop(patternSeq.Current.Typing(ruleTypeSeq.Current, context) :: result, errorReported)
+            | (false,  true) =>
+              unless (errorReported)
+                context.Error(patternSeq.Current.Location + patterns.Location.FromEnd(), $"Too many patterns specified, needed $(ruleTypes.Length), got $(patterns.Count).", -1);
+              result
+
+            | (true, false) =>
+              unless (errorReported)
+              unless (result is [ParseTreePattern(IsWildcard = true)]) // treat single '_' as sequence of '_' with proper length
+                context.Error(patterns.Location, $"Too few patterns specified, needed $(ruleTypes.Length), got $(patterns.Count).", -1);
+              loop(ParseTreePattern.Wildcard(patterns.Location.FromEnd(), ruleTypeSeq.Current) :: result, true)
+          }
+        }
+        loop([], false).Rev()
+      }
+    }
+
+    private TryBindCtor(identifier : LocatedName) : ParseTreeCtor
+    {
+      match (identifier.Id)
+      {
+        | "Some" => ParseTreeCtor.OptionSome()
+        | "None" => ParseTreeCtor.OptionNone()
+        | "Cons" => ParseTreeCtor.ListCons()
+        | "Nil"  => ParseTreeCtor.ListNil()
+        | _      => null
+      }
+    }
+
+    private ReportTypeMismatch(location : Location, ruleType : RuleType, ctor : ParseTreeCtor, context : Context) : ParseTreePattern
+    {
+      context.Error(location, $"Expected '$(ruleType)' found '$(ctor)'.", -1);
+      ParseTreePattern.Wildcard(location, ruleType)
+    }
+
+    public TypeIdentifier(location : Location, identifier : LocatedName, ruleType : RuleType, context : Context) : ParseTreePattern
+    {
+      def makeArgument = ParseTreePattern.Wildcard(location.FromEnd(), _);
+      match (ruleType, TryBindCtor(identifier))
+      {
+        | (_,                 null)  => ParseTreePattern.Var(location, ruleType, identifier)
+        | (Tuple,             Tuple) => assert(false, "Tuples not supported here")
+        | (Option(valueType), OptionSome   as ctor) with args = [makeArgument(valueType)]
+        | (Option,            OptionNone   as ctor) with args = []
+        | (List(itemType),    ListCons     as ctor) with args = [makeArgument(itemType), makeArgument(ruleType)]
+        | (List,              ListNil      as ctor) with args = [] =>
+          ParseTreePattern.Ctor(location, ruleType, ctor, args)
+
+        | (_, ctor) => ReportTypeMismatch(location, ruleType, ctor, context)
+      }
+    }
+
+    public TypeCtor(location : Location, identifier : LocatedName, patterns : ListParseTree[G.Pattern], ruleType : RuleType, context : Context) : ParseTreePattern
+    {
+      match (ruleType, TryBindCtor(identifier))
+      {
+        | (_, null) =>
+          context.Error(identifier.Location, $"Unbound name '$(identifier.Id)'.", -1);
+          ParseTreePattern.Wildcard(location, ruleType)
+
+        | (Tuple,             Tuple) => assert(false, "Tuples not supported here")
+        | (Option(valueType), OptionSome   as ctor) with args = TypeSequence([valueType], patterns, context)
+        | (Option,            OptionNone   as ctor) with args = TypeSequence([], patterns, context)
+        | (List(itemType),    ListCons     as ctor) with args = TypeSequence([itemType, ruleType], patterns, context)
+        | (List,              ListNil      as ctor) with args = TypeSequence([], patterns, context) =>
+          ParseTreePattern.Ctor(location, ruleType, ctor, args)
+
+        | (_, ctor) => ReportTypeMismatch(location, ruleType, ctor, context)
+      }
+    }
+
+    public TypeTuple(location : Location, patterns : ListParseTree[G.Pattern], ruleType : RuleType, context : Context) : ParseTreePattern
+    {
+      def ctor = ParseTreeCtor.Tuple(patterns.Count);
+      if (ruleType is Tuple(members))
+        ParseTreePattern.Ctor(location, ruleType, ctor, TypeSequence(members, patterns, context))
+      else
+        ReportTypeMismatch(location, ruleType, ctor, context)
+    }
+
+    public TypeList1(location : Location, pattern1 : G.Pattern, pattern2 : G.Pattern, ruleType : RuleType, context : Context) : ParseTreePattern
+    {
+      def ctor = ParseTreeCtor.ListCons();
+      if (ruleType is List(itemType))
+        ParseTreePattern.Ctor(location, ruleType, ctor, TypeSequence([itemType, ruleType], ConcreteListParseTree(location, array[pattern1, pattern2]), context))
+      else
+        ReportTypeMismatch(location, ruleType, ctor, context)
+    }
+
+    public TypeList2(location : Location, patterns : ListParseTree[G.Pattern], ruleType : RuleType, context : Context) : ParseTreePattern
+    {
+      if (ruleType is List(itemType))
+      {
+        def loop(index : int) : ParseTreePattern
+        {
+          if (index < patterns.Count)
+          {
+            def item = patterns[index].Typing(itemType, context);
+            def tail = loop(index + 1);
+            ParseTreePattern.Ctor(item.Location + tail.Location, ruleType, ParseTreeCtor.ListCons(), [item, tail])
+          }
+          else
+            ParseTreePattern.Ctor(location.FromEnd(), ruleType, ParseTreeCtor.ListNil(), [])
+        }
+        loop(0)
+      }
+      else
+      {
+        def ctor = if (patterns.Count > 0) ParseTreeCtor.ListCons() else ParseTreeCtor.ListNil();
+        ReportTypeMismatch(location, ruleType, ctor, context)
+      }
+    }
+  }
+}

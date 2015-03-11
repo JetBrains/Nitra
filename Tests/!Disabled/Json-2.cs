@@ -35,8 +35,7 @@ namespace Sample.Json.Cs
     static void Test(string text)
     {
       var source = new SourceSnapshot(text);
-      var parserHost = new ParserHost();
-      var parseResult = JsonParser.Start(source, parserHost);
+      var parseResult = JsonParser.Start(source);
 
       var ast = JsonParserAstWalkers.Start(parseResult);
       Console.WriteLine("Pretty print: " + ast.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes));

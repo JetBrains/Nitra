@@ -428,8 +428,9 @@ namespace Nitra.Visualizer
       var root = _parseTree as IMappedParseTree<IAst>;
       if (root != null)
       {
-        var declarationRoot = DeclarationRoot<IAst>.Create(null, root);
-        UpdateDeclarations(declarationRoot);
+        var file = new ProjectSystem.FakeFile(_parseResult.OriginalSource);
+        var astRoot = AstRoot<IAst>.Create(file, root);
+        UpdateDeclarations(astRoot);
       }
     }
 

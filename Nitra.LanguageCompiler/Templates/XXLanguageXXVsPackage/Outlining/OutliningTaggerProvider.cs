@@ -32,7 +32,7 @@ namespace XXNamespaceXX
       if (buffer.Properties.TryGetProperty(TextBufferProperties.OutliningTagger, out tagger))
         return (ITagger<T>)tagger;
 
-      var parseAgent = Utils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, NitraPackage.Instance.Language);
+      var parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, XXLanguageXXVsPackagePackage.Language);
       tagger = new OutliningTagger(parseAgent, buffer);
       buffer.Properties.AddProperty(TextBufferProperties.OutliningTagger, tagger);
       return (ITagger<T>)tagger;
