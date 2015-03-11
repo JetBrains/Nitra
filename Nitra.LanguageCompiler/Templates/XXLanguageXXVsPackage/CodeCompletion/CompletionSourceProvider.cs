@@ -22,7 +22,7 @@ namespace XXNamespaceXX
 
     public ICompletionSource TryCreateCompletionSource(ITextBuffer textBuffer)
     {
-      return new NitraCompletionSource(textBuffer, _textDocumentFactoryService, _navigatorService, XXLanguageXXVsPackagePackage.Language);
+      return new NitraCompletionSource(textBuffer, _textDocumentFactoryService, _navigatorService, XXLanguageXXVsPackage.Language);
     }
   }
 }

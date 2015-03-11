@@ -34,7 +34,7 @@ namespace XXNamespaceXX
       if (buffer.Properties.TryGetProperty(TextBufferProperties.NitraClassifier, out classifier))
         return classifier;
 
-      var parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, XXLanguageXXVsPackagePackage.Language);
+      var parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, XXLanguageXXVsPackage.Language);
       classifier = new NitraClassifier(parseAgent, buffer, ClassificationTypeRegistry);
       buffer.Properties.AddProperty(TextBufferProperties.NitraClassifier, classifier);
       return classifier;

@@ -30,7 +30,7 @@ namespace Nitra.CSharp
 
     public void VsTextViewCreated(IVsTextView textViewAdapter)
     {
-      new KeyBindingCommandFilter(textViewAdapter, _textDocumentFactoryService, _serviceProvider, _completionBroker, _adaptersFactory, XXLanguageXXVsPackagePackage.Language);
+      new KeyBindingCommandFilter(textViewAdapter, _textDocumentFactoryService, _serviceProvider, _completionBroker, _adaptersFactory, XXLanguageXXVsPackage.Language);
     }
   }
 }

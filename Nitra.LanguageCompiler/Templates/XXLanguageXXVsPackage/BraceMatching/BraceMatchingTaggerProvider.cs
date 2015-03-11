@@ -28,7 +28,7 @@ namespace XXNamespaceXX
       if (buffer.Properties.TryGetProperty(TextBufferProperties.BraceMatchingTagger, out braceMatchingTagger))
         return (ITagger<T>)braceMatchingTagger;
 
-      var parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, XXLanguageXXVsPackagePackage.Language);
+      var parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, XXLanguageXXVsPackage.Language);
       var tagger = new BraceMatchingTagger(Constants.ErrorClassificationTypeName, parseAgent, textView, buffer);
       buffer.Properties.AddProperty(TextBufferProperties.BraceMatchingTagger, tagger);
       return (ITagger<T>)tagger;
