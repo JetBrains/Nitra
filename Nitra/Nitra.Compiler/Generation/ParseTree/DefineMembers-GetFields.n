@@ -51,11 +51,14 @@ namespace Nitra.Compiler
       {
         when (IsSubruleAcceptedForParseTree(subrule))
         {
-          def valueExpr = CompileSubruleValueStandardMode(subrule, parentRawTreePtr);
+          mutable needRuleParserStandardMode;
+          def valueExpr = CompileSubruleValueStandardMode(subrule, parentRawTreePtr, ref needRuleParserStandardMode);
 
           def statementsStandardMode = SCG.List();
           foreach (subrule in prevSubrules)
             statementsStandardMode.Add(ParseTreeUtils.Skip(subrule, parentRawTreePtr));
+          when (needRuleParserStandardMode)
+            statementsStandardMode.Add(MakeRuleParserDefinition());
           statementsStandardMode.Add(valueExpr);
 
           def statementsRecoveryMode = <[
@@ -244,6 +247,8 @@ namespace Nitra.Compiler
         def statementsRecoveryMode      = SCG.List();
         def statementsEmptyRecoveryMode = SCG.List();
 
+        mutable needRuleParserStandardMode;
+
         foreach (subrule in sequence.NonMarkerSubrules)
         {
           if (IsSubruleAcceptedForParseTree(subrule))
@@ -251,7 +256,7 @@ namespace Nitra.Compiler
             def varName = subrule.MakeVariableName("pt");
             subruleValues.Add(varName, subrule);
 
-            statementsStandardMode.Add(<[ def $(varName : usesite) = $(CompileSubruleValueStandardMode(subrule, rawTreePointer)) ]>);
+            statementsStandardMode.Add(<[ def $(varName : usesite) = $(CompileSubruleValueStandardMode(subrule, rawTreePointer, ref needRuleParserStandardMode)) ]>);
             statementsRecoveryMode.Add(<[ def $(varName : usesite) = $(CompileSubruleValueRecoveryMode(subrule)) ]>);
             statementsEmptyRecoveryMode.Add(<[ def $(varName : usesite) = $(CompileEmptySubruleValueRecoveryMode(subrule, false)) ]>);
           }
@@ -289,10 +294,10 @@ namespace Nitra.Compiler
         def codeStandardMode =
         {
           def codeWithoutRuleParser = ParseTreeUtils.DeclareRawTreePointer(rawTreePointer, <[ { ..$statementsStandardMode } ]>);
-          if (rawTreePointer.IsAccessed)
+          if (rawTreePointer.IsAccessed || needRuleParserStandardMode)
             <[
-              def ruleParser = parseResult.GetRuleParser(rawTreePtr) :> $(this.RuleSymbol.GetParserClassRef());
-              $codeWithoutRuleParser
+              $(MakeRuleParserDefinition());
+              $codeWithoutRuleParser;
             ]>.FlattenPExpr()
           else
             codeWithoutRuleParser;
@@ -319,6 +324,11 @@ namespace Nitra.Compiler
       compilationResult
     }
 
+    private MakeRuleParserDefinition() : PExpr
+    {
+      <[ def ruleParser = parseResult.GetRuleParser(rawTreePtr) :> $(this.RuleSymbol.GetParserClassRef()) ]>
+    }
+
     private GetArgumentsForCreateParseTree(compilationResult : SequenceCompilationResult) : PExpr * PExpr * int * PExpr
     {
       if (compilationResult.IsSpan)
@@ -334,7 +344,7 @@ namespace Nitra.Compiler
       }
     }
 
-    private CompileSubruleValueStandardMode(subrule : SubruleCompileInfo, parentRawTreePointer : RawTreePointer) : PExpr
+    private CompileSubruleValueStandardMode(subrule : SubruleCompileInfo, parentRawTreePointer : RawTreePointer, needRuleParser : ref bool) : PExpr
     {
       match (subrule)
       {
@@ -352,10 +362,20 @@ namespace Nitra.Compiler
           if (subrule.Symbol.Type is RuleType.Void)
             ParseTreeUtils.Skip(subrule, parentRawTreePointer)
           else
+          {
+            needRuleParser = true;
             <[
               pos += $(parentRawTreePointer.GetSkip(subrule));
-              Nitra.Internal.ExtensibleRuleParseTreeConstructor.Create.[$(Environment.GetParseTreeType(subrule.Symbol) : typed)](ref pos, $(parentRawTreePointer.GetSize(subrule)), parseResult, $(subrule.BindingPower : int), $(subrule.Symbol.GetRuleDescriptorRef()), Nitra.Internal.DefaultExtensibleRuleParseTreeFactory.Instance);
+              Nitra.Internal.ExtensibleRuleParseTreeConstructor.Create.[$(Environment.GetParseTreeType(subrule.Symbol) : typed)](
+                ref pos,
+                $(parentRawTreePointer.GetSize(subrule)),
+                parseResult,
+                $(subrule.BindingPower : int),
+                $(subrule.Symbol.GetRuleDescriptorRef()),
+                ruleParser.Grammar,
+                Nitra.Internal.DefaultExtensibleRuleParseTreeFactory.Instance);
             ]>
+          }
 
         | RegularCall
         | List(IsSkipAnyPattern = true)
@@ -418,7 +438,14 @@ namespace Nitra.Compiler
             <[ () ]>
           else
             <[
-              Nitra.Internal.ExtensibleRuleParseTreeConstructor.Create.[$(Environment.GetParseTreeType(subrule.Symbol) : typed)](_subruleStartPos, _subruleEndPos, parseResult, $(subrule.BindingPower : int), $(subrule.Symbol.GetRuleDescriptorRef()), Nitra.Internal.DefaultExtensibleRuleParseTreeFactory.Instance);
+              Nitra.Internal.ExtensibleRuleParseTreeConstructor.Create.[$(Environment.GetParseTreeType(subrule.Symbol) : typed)](
+                _subruleStartPos,
+                _subruleEndPos,
+                parseResult,
+                $(subrule.BindingPower : int),
+                $(subrule.Symbol.GetRuleDescriptorRef()),
+                parsingSequence.Grammar,
+                Nitra.Internal.DefaultExtensibleRuleParseTreeFactory.Instance);
             ]>
 
         | RegularCall
