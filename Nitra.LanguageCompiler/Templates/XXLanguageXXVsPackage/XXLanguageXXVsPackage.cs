@@ -34,11 +34,11 @@ namespace XXNamespaceXX
   // in the Help/About dialog of Visual Studio.
   [InstalledProductRegistration("#110", "#112", "1.0", IconResourceID = 400)]
   [Guid(GuidList.GuidXXLanguageXXVsPackagePkgString)]
-  public sealed class XXLanguageXXVsPackagePackage : Package
+  public sealed class XXLanguageXXVsPackage : Package
   {
     internal static Language Language { get; private set; }
 
-    static XXLanguageXXVsPackagePackage()
+    static XXLanguageXXVsPackage()
     {
       var path = GetPlaginPath();
       Language = new Language("XXLanguageXX",
@@ -50,7 +50,7 @@ namespace XXNamespaceXX
 
     public static string GetPlaginPath()
     {
-      var codeBase = typeof(XXLanguageXXVsPackagePackage).Assembly.CodeBase;
+      var codeBase = typeof(XXLanguageXXVsPackage).Assembly.CodeBase;
       var uri = new UriBuilder(codeBase);
       var path = Uri.UnescapeDataString(uri.Path);
       return Path.GetDirectoryName(path) + @"\";
@@ -63,7 +63,7 @@ namespace XXNamespaceXX
     /// not sited yet inside Visual Studio environment. The place to do all the other 
     /// initialization is the Initialize method.
     /// </summary>
-    public XXLanguageXXVsPackagePackage()
+    public XXLanguageXXVsPackage()
     {
       Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Entering constructor for: {0}", this));
     }

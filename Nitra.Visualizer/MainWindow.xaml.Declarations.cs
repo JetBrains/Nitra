@@ -12,6 +12,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Markup;
 using Nitra.Internal;
+using Nitra.ProjectSystem;
 
 namespace Nitra.Visualizer
 {
@@ -150,7 +151,7 @@ namespace Nitra.Visualizer
 
     private void UpdateDeclarations(AstRoot<IAst> astRoot)
     {
-      astRoot.EvalProperties();
+      astRoot.EvalProperties(new DebugCompilerMessages()); // TODO: display messages in GUI
       var root = ObjectToItem(null, astRoot.Content);
       root.Header = "Root";
       //using (var d = Dispatcher.DisableProcessing())
