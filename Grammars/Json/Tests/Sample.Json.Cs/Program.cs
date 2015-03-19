@@ -13,11 +13,11 @@ namespace Sample.Json.Cs
       if (args.Length > 0)
         text = File.ReadAllText(args[0]);
 
-      var parseResult = JsonParser.Start(new SourceSnapshot(text));
+      var parseResult = JsonParser.Start.Parse(new SourceSnapshot(text));
 
       if (parseResult.IsSuccess)
       {
-        var ast = JsonParserParseTree.Start.Create(parseResult);
+        var ast = JsonParserParseTree.Start.CreateParseTree(parseResult);
         Console.WriteLine("Pretty print: " + ast);
         Console.WriteLine();
       }
