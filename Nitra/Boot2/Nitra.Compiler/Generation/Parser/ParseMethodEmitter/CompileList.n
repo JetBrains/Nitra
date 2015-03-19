@@ -17,7 +17,56 @@ namespace Nitra.Compiler
 {
   internal partial class ParseMethodEmitter : MethodEmitter
   {
-    public CompileSkipAny(code : SCG.List[PExpr], subrule : SubruleCompileInfo.List) : void
+    public override CompileList(code : SCG.List[PExpr], subrule : SubruleCompileInfo.List) : void
+    {
+      | _ when subrule.IsSkipAnyPattern              => CompileListSkipAny                    (code, subrule)
+      | _ when subrule.IsDynamicSyntaxExtentionPoint => CompileListDynamicSyntaxExtentionPoint(code, subrule)
+      | _                                            => CompileListNormal                     (code, subrule)
+    }
+
+    public CompileListDynamicSyntaxExtentionPoint(code : SCG.List[PExpr], subrule : SubruleCompileInfo.List) : void
+    {
+      assert2(subrule.Rule.Subrules.Length == 1);
+      assert2((subrule.MinCount, subrule.MaxCount) is (0, None));
+
+      def headPredicateCode = CompilePredicate(subrule.HeadPredicates, GotoFailParseLabel(subrule));
+      def callInfo          = subrule.Rule.NonMarkerSubrules[0] :> SubruleCompileInfo.ExtensibleCall;
+
+      code.Add(<[
+        $(ParseLabel(subrule));
+          _ = $(subrule.ToString());
+          $headPredicateCode;
+          $(AllocateParentRawTree(subrule));
+        $(RecoveryLabel(subrule));
+          when (true)
+          {
+            def startPos = $CurTextPos;
+            def parseSession = parseResult.ParseSession;
+            def startGrammar = parseSession.CurrentGrammar;
+            mutable currentGrammar = startGrammar;
+            mutable currentParser = $(Owner.MakeParserName(callInfo.Symbol, callInfo.BindingPower) : global);
+            while ($(CurTextPos) < text.Length)
+            {
+              newPos = currentParser.Parse($(CurTextPos), text, parseResult);
+              if (newPos >= 0)
+              {
+                $(CurTextPos) = newPos;
+                when (parseSession.CurrentGrammar : object != currentGrammar)
+                {
+                  currentGrammar = parseSession.CurrentGrammar;
+                  currentParser = currentGrammar.GetExtensibleRuleParser($(callInfo.Symbol.GetRuleDescriptorRef()), $(callInfo.BindingPower));
+                }
+              }
+              else break;
+            }
+            $(RawTreePtr(subrule.Owner).Set(subrule, <[ $CurTextPos - startPos ]>));
+            parseSession.CurrentGrammar = startGrammar;
+          }
+          $(GotoContinueParseLabel(subrule));
+      ]>);
+    }
+
+    public CompileListSkipAny(code : SCG.List[PExpr], subrule : SubruleCompileInfo.List) : void
     {
       assert3(subrule.Rule.Subrules.Length == 1);
       def headPredicateCode = CompilePredicate(subrule.HeadPredicates, GotoFailParseLabel(subrule));
@@ -53,15 +102,8 @@ namespace Nitra.Compiler
       ]>);
     }
 
-    public override CompileList(code : SCG.List[PExpr], subrule : SubruleCompileInfo.List) : void
+    public CompileListNormal(code : SCG.List[PExpr], subrule : SubruleCompileInfo.List) : void
     {
-      when (subrule.IsSkipAnyPattern)
-      {
-        CompileSkipAny(code, subrule);
-        return;
-      }
-      assert2(!subrule.IsDynamicSyntaxExtender);
-
       CompileFunction(subrule.Rule);
       def localVariableEmitter = LocalVariableEmitter();
       def stateData = ListStateData(localVariableEmitter, subrule);
