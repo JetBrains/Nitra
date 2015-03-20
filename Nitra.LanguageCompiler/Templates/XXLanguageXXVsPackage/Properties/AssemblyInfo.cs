@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
 [assembly: AssemblyTitle("XXLanguageXXVsPackage")]
-[assembly: AssemblyDescription("")]
+[assembly: AssemblyDescription("XXDescriptionXX")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("XXCompanyXX")]
 [assembly: AssemblyProduct("XXLanguageXXVsPackage")]
