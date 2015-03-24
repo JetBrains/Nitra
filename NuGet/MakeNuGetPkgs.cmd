@@ -8,7 +8,6 @@ set Properties=Configuration=%Configuration%;Solution=%Solution%;version=%versio
 
 echo Star %0
 echo version='%version%'
-dir
 mkdir %Output%
 %NuGet% pack %Solution%\Nitra\Nitra.Core\Nitra.Core.nproj -OutputDirectory %Output% -Properties "%Properties%" -IncludeReferencedProjects
 %NuGet% pack %Solution%\NuGet\Nitra.Compiler.nuspec       -OutputDirectory %Output% -Properties "%Properties%"
