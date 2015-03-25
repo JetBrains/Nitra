@@ -53,7 +53,7 @@ namespace Nitra.ViewModels
             .Join(lib.Elements("SyntaxModule"),
               m => m.FullName,
               m => m.Attribute("Name").Value,
-              (m, info) => new { Module = m, StartRule = GetStratRule(info.Attribute("StartRule"), m) }));
+              (m, info) => new { Module = m, StartRule = GetStartRule(info.Attribute("StartRule"), m) }));
 
 
 
@@ -115,7 +115,7 @@ namespace Nitra.ViewModels
     }
 
 
-    private static StartRuleDescriptor GetStratRule(XAttribute startRule, GrammarDescriptor m)
+    private static StartRuleDescriptor GetStartRule(XAttribute startRule, GrammarDescriptor m)
     {
       return startRule == null ? null : m.Rules.OfType<StartRuleDescriptor>().First(r => r.Name == startRule.Value);
     }
@@ -157,10 +157,11 @@ namespace Nitra.ViewModels
       var timer = System.Diagnostics.Stopwatch.StartNew();
       try
       {
-        var parseSession = new ParseSession(source, StartRule, _compositeGrammar);
-        parseSession.CompletionPrefix   = completionPrefix;
-        parseSession.CompletionStartPos = completionStartPos;
-        parseSession.ParseToEndOfString = true;
+        var parseSession = new ParseSession(source, StartRule,
+          compositeGrammar:   _compositeGrammar,
+          completionPrefix:   completionPrefix,
+          completionStartPos: completionStartPos,
+          parseToEndOfString: true);
         var parseResult = parseSession.Parse();
         this.Exception = null;
         this.TestTime = timer.Elapsed;

@@ -1,0 +1,260 @@
+﻿using Nitra.Typing;
+using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal abstract partial class AstEmitter
+  {
+    internal sealed class CollectionEmitter
+    {
+      public Owner  : AstEmitter;
+      public Symbol : AstSymbol;
+
+      public this(owner : AstEmitter, symbol : AstSymbol)
+      {
+        Owner  = owner;
+        Symbol = symbol;
+      }
+
+      mutable _listTb            : TypeBuilder;
+      mutable _concreteListTb    : TypeBuilder;
+      mutable _ambiguousListTb   : TypeBuilder;
+
+      mutable _optionTb          : TypeBuilder;
+      mutable _concreteOptionTb  : TypeBuilder;
+      mutable _ambiguousOptionTb : TypeBuilder;
+
+      public DefineTypes(ownerTb : TypeBuilder) : void
+      {
+        assert(_listTb == null);
+
+        def spanType   = Owner.Environment.NSpanTypeVar;
+        def itemType   = Owner.Environment.GetAstType(Symbol);
+
+        _listTb = ownerTb.DefineNestedType(<[ decl:
+          new public interface IAstList : Nitra.Declarations.IAstList[$(itemType : typed)]
+          {
+          }
+        ]>);
+
+        def listType = _listTb.GetMemType();
+
+        _concreteListTb = ownerTb.DefineNestedType(<[ decl:
+          new public sealed class AstList : Nitra.Declarations.AstList[$(itemType : typed)], $(listType : typed)
+          {
+            public this(span : $(spanType : typed), params items : array[$(itemType : typed)])
+            {
+              base(span, items);
+            }
+          }
+        ]>);
+
+        _ambiguousListTb = ownerTb.DefineNestedType(<[ decl:
+          new public sealed class AmbiguousAstList : Nitra.Declarations.AmbiguousAstList[$(itemType : typed)], $(listType : typed)
+          {
+            public this(ambiguities : array[$(listType : typed)])
+            {
+              base((ambiguities : object) :> array[Nitra.Declarations.IAstList[$(itemType : typed)]]);
+            }
+            public new Ambiguities : array[$(listType : typed)] { get { base.Ambiguities :> array[$(listType : typed)] } }
+          }
+        ]>);
+
+        _optionTb = ownerTb.DefineNestedType(<[ decl:
+          new public interface IAstOption : Nitra.Declarations.IAstOption[$(itemType : typed)]
+          {
+          }
+        ]>);
+
+        def optionType = _optionTb.GetMemType();
+
+        _concreteOptionTb = ownerTb.DefineNestedType(<[ decl:
+          new public sealed class AstOption : Nitra.Declarations.AstOption[$(itemType : typed)], $(optionType : typed)
+          {
+            public this(span : $(spanType : typed))
+            {
+              base(span);
+            }
+            public this(span : $(spanType : typed), value : $(itemType : typed))
+            {
+              base(span, value);
+            }
+          }
+        ]>);
+
+        _ambiguousOptionTb = ownerTb.DefineNestedType(<[ decl:
+          new public sealed class AmbiguousAstOption : Nitra.Declarations.AmbiguousAstOption[$(itemType : typed)], $(optionType : typed)
+          {
+            public this(ambiguities : array[$(optionType : typed)])
+            {
+              base((ambiguities : object) :> array[Nitra.Declarations.IAstOption[$(itemType : typed)]]);
+            }
+            public new Ambiguities : array[$(optionType : typed)] { get { base.Ambiguities :> array[$(optionType : typed)] } }
+          }
+        ]>);
+      }
+
+      public DefineMembers(astProperties : SCG.Dictionary[DependentAstPropertySymbol, DependentAstPropertyRef]) : void
+      {
+        assert(_listTb != null);
+
+        Util.locate(Symbol.FirstLocation.NLocation(),
+        Owner.Environment.Manager.MacroColors.InGlobalColor(fun()
+        {
+          DefineCollectionEvalProperties(_listTb, _concreteListTb, _ambiguousListTb, astProperties,
+            fun (setFirstItemInputs, linkEachItemProperties, readLastItemOutputs, setEmptyListOutputs)
+            {
+              <[
+                if (_items.Length > 0)
+                {
+                  mutable item = _items[0];
+                  ..$setFirstItemInputs;
+                  item.EvalProperties(context);
+                  for (mutable i = 1; i < _items.Length; ++i)
+                  {
+                    def prevItem = item;
+                    _ = prevItem;
+                    item = _items[i];
+                    ..$linkEachItemProperties;
+                    item.EvalProperties(context);
+                  }
+                  ..$readLastItemOutputs
+                }
+                else
+                {
+                  ..$setEmptyListOutputs
+                }
+              ]>
+            });
+
+          DefineCollectionEvalProperties(_optionTb, _concreteOptionTb, _ambiguousOptionTb, astProperties,
+            fun (setFirstItemInputs, _linkEachItemProperties, readLastItemOutputs, setEmptyListOutputs)
+            {
+              <[
+                if (this.HasValue)
+                {
+                  def item = this._value;
+                  ..$setFirstItemInputs;
+                  item.EvalProperties(context);
+                  ..$readLastItemOutputs;
+                }
+                else { ..$setEmptyListOutputs }
+              ]>
+            });
+        }));
+      }
+
+      private DefineCollectionEvalProperties(
+        tb                    : TypeBuilder,
+        concreteTb            : TypeBuilder,
+        ambiguousTb           : TypeBuilder,
+        astProperties : SCG.Dictionary[DependentAstPropertySymbol, DependentAstPropertyRef],
+        define : SCG.List[PExpr] * SCG.List[PExpr] * SCG.List[PExpr] * SCG.List[PExpr] -> PExpr) : void
+      {
+        def dependentProperties = Symbol.AllProperties.OfType.[DependentAstPropertySymbol]().ToArray();
+        when (dependentProperties.Length == 0)
+          return;
+
+        def bits                 = concreteTb.GetBitFieldManager();
+        def collectionProperties = SCG.Dictionary();
+        foreach (propertySymbol in dependentProperties)
+        {
+          Owner.DefineInterfaceDependentProperty(propertySymbol, tb);
+          def bit          = bits.Allocate();
+          def propertyRef = DependentAstPropertyRef.Compiling(propertySymbol, bit.Index, bit);
+          Owner.DefineDependentProperty(concreteTb, propertyRef, NemerleModifiers.Public, defineIsEvaluatedProperty = false);
+
+          Owner.DefineAmbiguousDependentProperty(ambiguousTb, propertyRef, NemerleModifiers.Public);
+
+          def name = GetIsEvaluatedPropertyName(propertySymbol);
+          concreteTb.Define(<[ decl: public $(name : usesite) : bool { get { $(bit.Read()) } } ]>);
+          ambiguousTb.Define(<[ decl: public $(name : usesite) : bool { get { this.Ambiguities[0].$(name : usesite) } } ]>);
+
+          collectionProperties.Add(propertySymbol, propertyRef);
+        }
+
+        DefineIsPropertyEvaluatedMethod(concreteTb, NemerleModifiers.Override);
+
+        def linkProperties(body : SCG.List[PExpr], sourceObj : PExpr, source : DependentAstPropertyRef, targetObj : PExpr, target : DependentAstPropertyRef) : void
+        {
+          body.Add(<[
+            when ($(GenerateHasValueCheck(sourceObj, source)) && ! $(GenerateHasValueCheck(targetObj, target)))
+            {
+              $targetObj.$(target.Symbol.Name : usesite) = $sourceObj.$(source.Symbol.Name : usesite)
+            }
+          ]>);
+        }
+
+        def setFirstItemInputs     = SCG.List();
+        def linkEachItemProperties = SCG.List();
+        def readLastItemOutputs    = SCG.List();
+        def setEmptyListOutputs    = SCG.List();
+
+        foreach (propertySymbol in dependentProperties)
+        {
+          when (propertySymbol.Direction == DependentPropertyDirection.In)
+          {
+            def listInputRef = collectionProperties[propertySymbol];
+            def itemInputRef = astProperties[propertySymbol];
+            linkProperties(setFirstItemInputs, <[ this ]>, listInputRef, <[ item ]>, itemInputRef);
+          }
+
+          when (propertySymbol.Direction == DependentPropertyDirection.In && propertySymbol.LinkedProperty.HasValue)
+          {
+            def itemInputRef  = astProperties[propertySymbol];
+            def itemOutputRef = astProperties[propertySymbol.LinkedProperty.GetValue(Owner.Environment.Project)];
+            linkProperties(linkEachItemProperties, <[ prevItem ]>, itemOutputRef, <[ item ]>, itemInputRef);
+          }
+
+          when (propertySymbol.Direction == DependentPropertyDirection.Out)
+          {
+            def itemOutputRef = astProperties[propertySymbol];
+            def listOutputRef = collectionProperties[propertySymbol];
+            linkProperties(readLastItemOutputs, <[ item ]>, itemOutputRef, <[ this ]>, listOutputRef);
+          }
+
+          when (propertySymbol.Direction == DependentPropertyDirection.Out && propertySymbol.LinkedProperty.HasValue)
+          {
+            def listInputRef  = collectionProperties[propertySymbol.LinkedProperty.GetValue(Owner.Environment.Project)];
+            def listOutputRef = collectionProperties[propertySymbol];
+            linkProperties(setEmptyListOutputs, <[ this ]>, listInputRef, <[ this ]>, listOutputRef);
+          }
+        }
+
+        def body = define(setFirstItemInputs, linkEachItemProperties, readLastItemOutputs, setEmptyListOutputs);
+
+        concreteTb.Define(<[ decl:
+          public override EvalProperties(context : Nitra.Declarations.DependentPropertyEvalContext) : void
+          {
+            $body
+          }
+        ]>);
+      }
+
+      public Emit() : void
+      {
+        assert(_listTb != null);
+
+        _listTb.Compile();
+        _concreteListTb.Compile();
+        _ambiguousListTb.Compile();
+        _optionTb.Compile();
+        _concreteOptionTb.Compile();
+        _ambiguousOptionTb.Compile();
+      }
+    }
+  }
+}

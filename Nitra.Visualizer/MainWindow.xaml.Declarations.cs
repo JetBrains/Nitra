@@ -224,7 +224,7 @@ namespace Nitra.Visualizer
       {
         _text.CaretOffset = ast.Span.StartPos;
         _text.Select(ast.Span.StartPos, ast.Span.Length);
-        var loc = new Location(_parseResult.OriginalSource, ast.Span);
+        var loc = new Location(_parseResult.SourceSnapshot, ast.Span);
         _text.ScrollToLine(loc.StartLineColumn.Line);
       }
     }
