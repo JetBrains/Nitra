@@ -10,5 +10,5 @@ set Properties=Configuration=%Configuration%;Platform=x86%VersionAttr%
 
 echo Properties=%Properties%
 
-%NuGet% pack %ProjectDir%\XXLanguageXXVsPackage.csproj -OutputDirectory %Output% -Properties "%Properties%" 
+%NuGet% pack %ProjectDir%\XXLanguageXXVsPackage.nuspec -OutputDirectory %Output% -Properties "%Properties%" 
 echo End of %0
