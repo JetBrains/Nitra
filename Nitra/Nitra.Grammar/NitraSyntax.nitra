@@ -453,6 +453,16 @@ syntax module NitraSyntax
     [Cached] MakeBaseAstRef(baseAstRef : SymbolRef[ExtensibleAstSymbol]) : SymbolRef[ExtensibleAstSymbol] = baseAstRef;
   }
 
+  syntax AstModifier
+  {
+    IsAbstract(acc : bool, isExtensible : bool, compilerMessages : ICompilerMessages) : bool                                          { IgnoreParams(); acc }
+    Cardinality(acc : AstCardinality, isDeclaration : bool, isAbstract : bool, compilerMessages : ICompilerMessages) : AstCardinality { IgnoreParams(); acc }
+
+    | Abstract = "abstract" { override IsAbstract  = TypingUtils.TypeAstModifier_IsAbstract(this, acc, isExtensible, compilerMessages); }
+    | Optional = "optional" { override Cardinality = TypingUtils.TypeAstModifier_Cardinality(this, acc, isDeclaration, isAbstract, compilerMessages, AstCardinality.Optional); }
+    | Multiple = "multiple" { override Cardinality = TypingUtils.TypeAstModifier_Cardinality(this, acc, isDeclaration, isAbstract, compilerMessages, AstCardinality.Multiple); }
+  }
+
   syntax NamespaceMember
   {
     CollectGlobalSymbols(ns : NamespaceSymbol) : void;
@@ -466,26 +476,26 @@ syntax module NitraSyntax
       {
         syntax Header
         {
-          IsDeclaration() : bool;
-          IsAbstract() : bool;
-          | Ast         = AbstractOpt="abstract"? "ast"         { override IsDeclaration = false; override IsAbstract = AbstractOpt.HasValue; }
-          | Declaration = AbstractOpt="abstract"? "declaration" { override IsDeclaration = true;  override IsAbstract = AbstractOpt.HasValue; }
+          Modifiers(compilerMessages : ICompilerMessages) : bool * bool * AstCardinality;
+          | Ast         = AstModifier* "ast"         { override Modifiers = TypingUtils.TypeAstModifiers(this.AstModifiers, false, false, compilerMessages); }
+          | Declaration = AstModifier* "declaration" { override Modifiers = TypingUtils.TypeAstModifiers(this.AstModifiers, false, true,  compilerMessages); }
         }
 
-        [Cached] private MakeAstSymbol() : AstSymbol
+        [Cached] private MakeAstSymbol(compilerMessages : ICompilerMessages) : AstSymbol
         {
-          match (Header.IsDeclaration(), Header.IsAbstract())
+          def (isDeclaration, isAbstract, cardinality) = this.Header.Modifiers(compilerMessages);
+          if (isAbstract)
           {
-            | (false, false) => ParsedSimpleAstSymbol(this)
-            | (false, true)  => ParsedAbstractAstSymbol(this)
-            | (true,  false) => ParsedSimpleDeclarationSymbol(this)
-            | (true,  true)  => ParsedAbstractDeclarationSymbol(this)
+            assert(cardinality == AstCardinality.Single);
+            ParsedAbstractAstSymbol(this, isDeclaration)
           }
+          else
+            ParsedSimpleAstSymbol(this, isDeclaration, cardinality)
         }
-        [Cached] private MakeBaseAsts() : list[AstSymbol] = TypingUtils.TypeAstInheritance(this.AstInheritanceOpt, this.Context, this.Header.IsDeclaration());
+        [Cached] private MakeBaseAsts() : list[AstSymbol] = TypingUtils.TypeAstInheritance(this.AstInheritanceOpt, this.Context, this.AstSymbol.IsDeclaration);
         override CollectGlobalSymbols
         {
-          def symbol = MakeAstSymbol();
+          def symbol = MakeAstSymbol(ns.Node.Project);
           _ = ns.Node.AddAndReport.[AstSymbol](symbol, Name.Location);
           Body.CollectGlobalSymbols(symbol :> IMemberSite);
         }
@@ -507,9 +517,9 @@ syntax module NitraSyntax
       {
         syntax Header
         {
-          IsDeclaration() : bool;
-          | Ast         = "asts"         { override IsDeclaration = false; }
-          | Declaration = "declarations" { override IsDeclaration = true;  }
+          Modifiers(compilerMessages : ICompilerMessages) : bool * bool * AstCardinality;
+          | Ast         = AstModifier* "asts"         { override Modifiers = TypingUtils.TypeAstModifiers(this.AstModifiers, true, false, compilerMessages); }
+          | Declaration = AstModifier* "declarations" { override Modifiers = TypingUtils.TypeAstModifiers(this.AstModifiers, true, true,  compilerMessages); }
         }
 
         syntax Body = outline_begin_before nl "{" inl Members=AstMember* Extensions=ExtensionAst* d "}" outline_end_before nl
@@ -537,11 +547,16 @@ syntax module NitraSyntax
           }
         }
 
-        [Cached] private MakeAstSymbol() : ParsedExtensibleAstSymbol = ParsedExtensibleAstSymbol(this);
-        [Cached] private MakeBaseAsts() : list[AstSymbol] = TypingUtils.TypeAstInheritance(this.AstInheritanceOpt, this.Context, this.Header.IsDeclaration());
+        [Cached] private MakeAstSymbol(compilerMessages : ICompilerMessages) : ParsedExtensibleAstSymbol
+        {
+          def (isDeclaration, isAbstract, cardinality) = this.Header.Modifiers(compilerMessages);
+          assert(isAbstract == false);
+          ParsedExtensibleAstSymbol(this, isDeclaration, cardinality)
+        }
+        [Cached] private MakeBaseAsts() : list[AstSymbol] = TypingUtils.TypeAstInheritance(this.AstInheritanceOpt, this.Context, this.AstSymbol.IsDeclaration);
         override CollectGlobalSymbols
         {
-          def symbol = MakeAstSymbol();
+          def symbol = MakeAstSymbol(ns.Node.Project);
           _ = ns.Node.AddAndReport.[AstSymbol](symbol, Name.Location);
           Body.CollectGlobalSymbols(symbol);
         }
