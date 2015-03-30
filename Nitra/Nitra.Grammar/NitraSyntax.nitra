@@ -114,12 +114,13 @@ syntax module NitraSyntax
   {
     Value() : string = GetText(IdentifierBody);
     Identifier() : Nitra.Model.Identifier = Nitra.Model.Identifier(this, IdentifierBody);
+    LocatedName() : LocatedName = LocatedName(this.Location);
   }
 
   [ExplicitSpaces]
   syntax QualifiedIdentifier              = Names=(Identifier; s "." s)+
   {
-    Identifiers() : list[LocatedName] = Names.Item1.MapToList(x => LocatedName(x.Location));
+    Identifiers() : list[LocatedName] = Names.Item1.MapToList(_.LocatedName());
     Parts() : list[string] = Names.Item1.MapToList(_.Value());
     CalcLocation() : Nitra.Location
     {
@@ -176,15 +177,11 @@ syntax module NitraSyntax
       }
   }
 
-  syntax NitraTypeArguments = "<" (NitraType; "," sm; ?)+ ">"
+  syntax NitraTypeArguments
   {
-    Typing(context : Context) : list[NType]
-    {
-      def buffer = LightList();
-      foreach (t in this.NitraTypes.Item1)
-        buffer.Add(t.Typing(context)[0]);
-      buffer.ToNList()
-    }
+    Typing(context : Context) : list[NType];
+    | Corners = "<" (NitraType; "," sm; ?)+ ">" { override Typing = this.NitraTypes.Item1.MapToList(t => t.Typing(context)[0]); }
+    | Braces  = "[" (NitraType; "," sm; ?)+ "]" { override Typing = this.NitraTypes.Item1.MapToList(t => t.Typing(context)[0]); }
   }
 
   syntax NitraTypeName = Identifier NitraTypeArguments?
@@ -1278,13 +1275,13 @@ syntax module NitraSyntax
       {
         override BindExtensionRule        = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), false);
         override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(baseAstSymbol, this.Identifier, context);
-        override Typing                   = PatternTyper.TypeIdentifier(this.Location, LocatedName(this.Identifier.Location), ruleType, context);
+        override Typing                   = PatternTyper.TypeIdentifier(this.Location, this.Identifier.LocatedName(), ruleType, context);
       }
     | Ctor  = Identifier "(" (Pattern; "," s)* ")"
       {
         override BindExtensionRule        = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), true);
         override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(baseAstSymbol, this.Identifier, context);
-        override Typing                   = PatternTyper.TypeCtor(this.Location, LocatedName(this.Identifier.Location), this.Patterns.Item1, ruleType, context);
+        override Typing                   = PatternTyper.TypeCtor(this.Location, this.Identifier.LocatedName(), this.Patterns.Item1, ruleType, context);
         override ExtensionTyping
         {
           def pattern = PatternTyper.TypeParseTreePattern(this.Location, ruleSymbol, this.Patterns.Item1, context);
@@ -2023,7 +2020,11 @@ syntax module NitraSyntax
       }
   }
 
-  syntax RuleMethodsParam = Name sm ":" sm Type;
+  syntax RuleMethodsParam = Name sm ":" sm Type=NitraType
+  {
+    Typing(context : Context) : RuleMethod.RuleMethodParameter = RuleMethod.RuleMethodParameter(this.Location, this.Name.LocatedName(), this.Type.Typing(context)[0]);
+  }
+
   token RuleMethodPrivate = "private" sm;
 
   syntax RuleMethodAttribute
@@ -2054,7 +2055,7 @@ syntax module NitraSyntax
     }
   }
 
-  syntax RuleMethod = RuleMethodAttributes RuleMethodPrivate? Name sm "(" (RuleMethodsParam; "," sm)* ")" sm ":" sm Type RuleMethodBody
+  syntax RuleMethod = RuleMethodAttributes RuleMethodPrivate? Name sm "(" (RuleMethodsParam; "," sm)* ")" sm ":" sm Type=NitraType RuleMethodBody
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
     [Cached] private MakeSymbol(ruleSymbol : SyntaxRuleSymbol, compilerMessages : ICompilerMessages) : RuleMethod.DefinitionSymbol
@@ -2085,7 +2086,13 @@ syntax module NitraSyntax
       def compilerMessages = ruleSymbol.Node.Project;
       _ = ruleSymbol.Node.AddAndReport(MakeSymbol(ruleSymbol, compilerMessages), this.Location);
     }
-    [Cached] private MakeSignature() : RuleMethod.RuleMethodSignature = RuleMethod.RuleMethodSignature(this.Location, NemerleParser.Parse(this.RuleMethodsParams.Item1, Context), NemerleParser.Parse(this.Type, Context));
+    [Cached] private MakeSignature() : RuleMethod.RuleMethodSignature
+    {
+      def context    = this.Context;
+      def parameters = this.RuleMethodsParams.Item1.MapToList(_.Typing(context));
+      def (type, _)  = this.Type.Typing(context);
+      RuleMethod.RuleMethodSignature(this.Location, parameters, type);
+    }
     [Cached] private MakeBody()      : RuleMethod.RuleMethodBody      = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
     [Cached] private MakeIsCached()  : bool                           = RuleMethodAttributes.IsCached();
     Typing() : void
@@ -2211,17 +2218,6 @@ syntax module NitraSyntax
         override BodyLocation = this.Location.FromStart();
         override IsEmpty = true;
       }
-  }
-
-  syntax TypeParams = "[" (Type; ","sm)+ "]";
-  syntax SimpleName = Identifier TypeParams?;
-
-  syntax Type
-  {
-    | PredefinedType
-    | SimpleName
-    | Qualified = Type "." SimpleName precedence 20;
-    | Pointer   = Type "*" Type       precedence 10;
   }
 
   syntax Block = outline_hiden outline_begin_before nl "{" inl (Expression; ";" nl)* ";"* nl d "}" outline_end_before nl;
