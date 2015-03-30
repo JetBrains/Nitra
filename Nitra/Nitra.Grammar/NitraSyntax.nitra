@@ -427,12 +427,16 @@ syntax module NitraSyntax
       }
   }
 
-  syntax ExtensionAst = "|" sm Name Body=AstBody?
+  syntax ExtensionAst = "|" sm AstModifier* Name Body=AstBody?
   {
-    [Cached] MakeAstSymbol() : ParsedExtensionAstSymbol = ParsedExtensionAstSymbol(this);
-    CollectGlobalSymbols(site : IMemberSite) : void
+    [Cached] MakeAstSymbol(isDeclaration : bool, compilerMessages : ICompilerMessages) : ParsedExtensionAstSymbol
     {
-      def symbol = MakeAstSymbol();
+      def (_, _, cardinality) = TypingUtils.TypeAstModifiers(this.AstModifiers, true, isDeclaration, compilerMessages);
+      ParsedExtensionAstSymbol(this, isDeclaration, cardinality);
+    }
+    CollectGlobalSymbols(site : IMemberSite, isDeclaration : bool) : void
+    {
+      def symbol = MakeAstSymbol(isDeclaration, site.Node.Project);
       _ = site.Node.AddAndReport.[AstSymbol](symbol, Name.Location);
       when (Body.HasValue)
         Body.Value.CollectGlobalSymbols(symbol);
@@ -518,17 +522,17 @@ syntax module NitraSyntax
       {
         syntax Header
         {
-          Modifiers(compilerMessages : ICompilerMessages) : bool * bool * AstCardinality;
-          | Ast         = AstModifier* "asts"         { override Modifiers = TypingUtils.TypeAstModifiers(this.AstModifiers, true, false, compilerMessages); }
-          | Declaration = AstModifier* "declarations" { override Modifiers = TypingUtils.TypeAstModifiers(this.AstModifiers, true, true,  compilerMessages); }
+          IsDeclaration() : bool;
+          | Ast         = "asts"         { override IsDeclaration = false; }
+          | Declaration = "declarations" { override IsDeclaration = true; }
         }
 
         syntax Body = outline_begin_before nl "{" inl Members=AstMember* Extensions=ExtensionAst* d "}" outline_end_before nl
         {
-          CollectGlobalSymbols(site : IMemberSite) : void
+          CollectGlobalSymbols(site : IMemberSite, isDeclaration : bool) : void
           {
             foreach (member in Members) member.CollectGlobalSymbols(site);
-            foreach (extension in Extensions) extension.CollectGlobalSymbols(site);
+            foreach (extension in Extensions) extension.CollectGlobalSymbols(site, isDeclaration);
           }
           [Cached] MakeContext(parent : Context) : Context
           {
@@ -548,18 +552,13 @@ syntax module NitraSyntax
           }
         }
 
-        [Cached] private MakeAstSymbol(compilerMessages : ICompilerMessages) : ParsedExtensibleAstSymbol
-        {
-          def (isDeclaration, isAbstract, cardinality) = this.Header.Modifiers(compilerMessages);
-          assert(isAbstract == false);
-          ParsedExtensibleAstSymbol(this, isDeclaration, cardinality)
-        }
+        [Cached] private MakeAstSymbol() : ParsedExtensibleAstSymbol = ParsedExtensibleAstSymbol(this, this.Header.IsDeclaration());
         [Cached] private MakeBaseAsts() : list[AstSymbol] = TypingUtils.TypeAstInheritance(this.AstInheritanceOpt, this.Context, this.AstSymbol.IsDeclaration);
         override CollectGlobalSymbols
         {
-          def symbol = MakeAstSymbol(ns.Node.Project);
+          def symbol = MakeAstSymbol();
           _ = ns.Node.AddAndReport.[AstSymbol](symbol, Name.Location);
-          Body.CollectGlobalSymbols(symbol);
+          Body.CollectGlobalSymbols(symbol, symbol.IsDeclaration);
         }
         override MakeContext
         {
@@ -586,10 +585,10 @@ syntax module NitraSyntax
 
         syntax Body = outline_begin_before nl "{" inl Extensions=ExtensionAst* d "}" outline_end_before nl
         {
-          CollectGlobalSymbols(site : IMemberSite) : void
+          CollectGlobalSymbols(site : IMemberSite, isDeclaration : bool) : void
           {
             foreach (extension in Extensions)
-              extension.CollectGlobalSymbols(site);
+              extension.CollectGlobalSymbols(site, isDeclaration);
           }
           [Cached] MakeContext(parent : Context) : Context = PassThrough(Extensions, parent, _.MakeContext(_));
           Typing(baseAstRef : SymbolRef[ExtensibleAstSymbol]) : void
@@ -602,14 +601,21 @@ syntax module NitraSyntax
 
         override CollectGlobalSymbols
         {
-          def symbol = if (Header.IsDeclaration()) ParsedExtendDeclarationSymbol(this) else ParsedExtendAstSymbol(this);
+          def isDeclaration = Header.IsDeclaration();
+          def symbol = ParsedExtendAstSymbol(this, isDeclaration);
           _ = ns.Node.AddAndReport.[ExtendAstSymbol](symbol, Location);
-          Body.CollectGlobalSymbols(symbol);
+          Body.CollectGlobalSymbols(symbol, isDeclaration);
         }
         override MakeContext = Body.MakeContext(parent);
         override Typing
         {
           def baseAstRef = MakeBaseAstRef();
+          when (baseAstRef is SymbolRef.Some(baseAst))
+          when (baseAst.IsDeclaration != this.Header.IsDeclaration())
+          {
+            def baseType = if (baseAst.IsDeclaration) "declaration" else "ast";
+            this.Context.Error(this.Header, $"Expected 'extend $baseType'.");
+          }
           Body.Typing(baseAstRef);
         }
         override TypeAst = Body.TypeAst();
