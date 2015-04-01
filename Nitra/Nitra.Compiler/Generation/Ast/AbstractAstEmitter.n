@@ -18,6 +18,7 @@ namespace Nitra.Compiler
   {
     private         _symbol            : AbstractAstSymbol;
     private mutable _tb                : TypeBuilder;
+    private mutable _ambiguousTb       : TypeBuilder;
     private         _collectionEmitter : CollectionEmitter;
 
     public this(environment : EmitterEnvironment, symbol : AbstractAstSymbol)
@@ -33,6 +34,8 @@ namespace Nitra.Compiler
       {
         assert(_tb == null);
 
+        def parentType = Environment.TypeCompiler.CompileParentType(_symbol);
+
         def baseTypes = SCG.List();
         if (_symbol.IsDeclaration)
           baseTypes.Add(<[ $(Environment.DeclarationTypeVar : typed) ]>)
@@ -47,6 +50,9 @@ namespace Nitra.Compiler
           }
         ]>);
 
+        assert(_ambiguousTb == null);
+        _ambiguousTb = DefineAmbiguousAst(_tb, parentType);
+
         _collectionEmitter.DefineTypes(_tb);
       })
     }
@@ -54,23 +60,49 @@ namespace Nitra.Compiler
     public override DefineMembers() : void
     {
       assert(_tb != null);
-      foreach (s in _symbol.Properties)
+
+      def dependentProps = SCG.Dictionary();
+
+      foreach (s in _symbol.AllProperties)
       {
         | SimpleAstPropertySymbol as propertySymbol =>
           def propertyType = Environment.TypeCompiler.CompileSimplePropertyType(propertySymbol);
-          _tb.Define(<[ decl: $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; } ]>)
+
+          when (propertySymbol.DeclaringAst == _symbol)
+            _tb.Define(<[ decl: $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; } ]>);
+
+          _ambiguousTb.Define(<[ decl:
+            public $(propertySymbol.Name : usesite) : $(propertyType : typed)
+            {
+              get { this.Ambiguities[0].$(propertySymbol.Name : usesite) }
+            }
+          ]>);
 
         | ProjectedAstPropertySymbol as propertySymbol =>
           def propertyType = Environment.TypeCompiler.CompileProjectedPropertyType(propertySymbol);
-          _tb.Define(<[ decl: $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; } ]>)
 
-        | DependentAstPropertySymbol as propertySymbol => DefineInterfaceDependentProperty(propertySymbol, _tb)
+          when (propertySymbol.DeclaringAst == _symbol)
+            _tb.Define(<[ decl: $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; } ]>);
+
+          _ambiguousTb.Define(<[ decl:
+              public $(propertySymbol.Name : usesite) : $(propertyType : typed)
+              {
+                get { this.Ambiguities[0].$(propertySymbol.Name : usesite) } 
+              }
+          ]>);
+
+        | DependentAstPropertySymbol as propertySymbol =>
+          def propertyRef = DependentAstPropertyRef.Reflected(propertySymbol, -1);  
+          dependentProps.Add(propertySymbol, propertyRef);
+
+          when (propertySymbol.DeclaringAst == _symbol)
+            DefineInterfaceDependentProperty(propertySymbol, _tb);
+
+          DefineAmbiguousDependentProperty(_ambiguousTb, propertyRef, NemerleModifiers.Public);
+
         | _ => assert(false)
       }
 
-      def dependentProps = _symbol.AllProperties
-        .OfType.[DependentAstPropertySymbol]()
-        .ToDictionary(p => p, DependentAstPropertyRef.Reflected(_, -1));
       _collectionEmitter.DefineMembers(dependentProps);
     }
 
@@ -78,6 +110,9 @@ namespace Nitra.Compiler
     {
       assert(_tb != null);
       _tb.Compile();
+
+      assert(_ambiguousTb != null);
+      _ambiguousTb.Compile();
 
       _collectionEmitter.Emit();
     }
