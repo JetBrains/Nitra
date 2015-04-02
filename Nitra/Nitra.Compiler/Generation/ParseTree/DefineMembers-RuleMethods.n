@@ -106,16 +106,25 @@ namespace Nitra.Compiler
         Util.locate(method.FirstLocation.NLocation(),
           match (method)
           {
-            | RuleMethod.AbstractSymbol  (Signature = signature) when !ruleMethodsWithErrorHandler.Contains(method)
-            | RuleMethod.DefPrivateSymbol(Signature = signature) when !ruleMethodsWithErrorHandler.Contains(method)
-            | RuleMethod.DefSymbol       (Signature = signature) when !ruleMethodsWithErrorHandler.Contains(method) =>
-              def msg = $"An attempt to access '$(method.Name)' rule method of '$(this.RuleSymbol.Name)' rule which contains a parse error. Implement the 'missing' handler for this rule method.";
-              _missingTb.Define(<[ decl:
-                public override $(method.Name : usesite)(..$(MakeParams(signature))) : $(MakeReturnType(signature))
+            | RuleMethod.AbstractSymbol  (Signature = signature, AstRef = astRef, IsCached = isCached) when !ruleMethodsWithErrorHandler.Contains(method)
+            | RuleMethod.DefPrivateSymbol(Signature = signature, AstRef = astRef, IsCached = isCached) when !ruleMethodsWithErrorHandler.Contains(method)
+            | RuleMethod.DefSymbol       (Signature = signature, AstRef = astRef, IsCached = isCached) when !ruleMethodsWithErrorHandler.Contains(method) =>
+              def code =
+                if (astRef is SymbolRef.Some(ast))
                 {
-                  IgnoreParams();
-                  throw System.NotImplementedException($(msg : string));
+                  def body = <[ IgnoreParams(); $(GetMissingOrAmbiguousAstCtor(ast, signature.Type))(Nitra.NSpan(this.pos, this.pos)) ]>;
+                  def flags = NemerleModifiers.Public %| NemerleModifiers.Override;
+                  def body2 = if (isCached) addCaching(_missingTb, method.Name, MakeReturnType(signature), body, flags) else body;
+                  body2 // recursion is impossible
                 }
+                else
+                {
+                  def msg = $"An attempt to access '$(method.Name)' rule method of '$(this.RuleSymbol.Name)' rule which contains a parse error. Implement the 'missing' handler for this rule method.";
+                  <[ IgnoreParams(); throw System.NotImplementedException($(msg : string)); ]>
+                };
+
+              _missingTb.Define(<[ decl:
+                public override $(method.Name : usesite)(..$(MakeParams(signature))) : $(MakeReturnType(signature)) $code
               ]>);
 
             | RuleMethod.RuleMethodMissingValueSymbol(Body = body, HandlingRuleMethod = handlingField) =>
@@ -135,21 +144,48 @@ namespace Nitra.Compiler
         Util.locate(method.FirstLocation.NLocation(),
           match (method)
           {
-            | RuleMethod.AbstractSymbol  (Signature = signature)
-            | RuleMethod.DefPrivateSymbol(Signature = signature)
-            | RuleMethod.DefSymbol       (Signature = signature) =>
-              def msg = $"An attempt to access '$(method.Name)' rule method of '$(this.RuleSymbol.Name)' rule which contains ambiguous node.";
-              _ambiguousTb.Define(<[ decl:
-                public override $(method.Name : usesite)(..$(MakeParams(signature))) : $(MakeReturnType(signature))
+            | RuleMethod.AbstractSymbol  (Signature = signature, AstRef = astRef, IsCached = isCached)
+            | RuleMethod.DefPrivateSymbol(Signature = signature, AstRef = astRef, IsCached = isCached)
+            | RuleMethod.DefSymbol       (Signature = signature, AstRef = astRef, IsCached = isCached) =>
+              def code =
+                if (astRef is SymbolRef.Some(ast))
                 {
-                  IgnoreParams();
-                  throw System.NotImplementedException($(msg : string));
+                  def body =
+                    <[
+                      def ptAmbiguities  = this.Ambiguities;
+                      def astAmbiguities = array(ptAmbiguities.Length);
+                      for (mutable i = 0; i < ptAmbiguities.Length; ++i)
+                        astAmbiguities[i] = ptAmbiguities[i].$(method.Name : usesite)(..$(signature.Params.Map(p => <[ $(p.Name.Id : usesite) ]>)));
+                      $(GetMissingOrAmbiguousAstCtor(ast, signature.Type))(astAmbiguities)
+                    ]>;
+                  def flags = NemerleModifiers.Public %| NemerleModifiers.Override;
+                  def body2 = if (isCached) addCaching(_ambiguousTb, method.Name, MakeReturnType(signature), body, flags) else body;
+                  body2 // recursion check is redundant
                 }
+                else
+                {
+                  def msg = $"An attempt to access '$(method.Name)' rule method of '$(this.RuleSymbol.Name)' rule which contains ambiguous node.";
+                  <[ IgnoreParams(); throw System.NotImplementedException($(msg : string)); ]>
+                };
+
+              _ambiguousTb.Define(<[ decl:
+                public override $(method.Name : usesite)(..$(MakeParams(signature))) : $(MakeReturnType(signature)) $code
               ]>);
 
             | _ => ()
           }
         )
+      }
+    }
+
+    private GetMissingOrAmbiguousAstCtor(ast : AstSymbol, actualType : NType) : PExpr
+    {
+      match (actualType)
+      {
+        | Option            => <[ $(GetBaseAstType(ast)).AmbiguousOption ]>
+        | OptionList | List => <[ $(GetBaseAstType(ast)).AmbiguousList ]>
+        | Qualified         => GetAmbiguousAstType(ast)
+        | _                 => assert(false)
       }
     }
 
