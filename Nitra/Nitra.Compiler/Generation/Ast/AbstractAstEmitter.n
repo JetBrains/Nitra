@@ -92,18 +92,100 @@ namespace Nitra.Compiler
           ]>);
 
         | DependentAstPropertySymbol as propertySymbol =>
-          def propertyRef = DependentAstPropertyRef.Reflected(propertySymbol, -1);  
+          def propertyRef = DependentAstPropertyRef.Reflected(propertySymbol, -1);
           dependentProps.Add(propertySymbol, propertyRef);
 
           when (propertySymbol.DeclaringAst == _symbol)
             DefineInterfaceDependentProperty(propertySymbol, _tb);
 
-          DefineAmbiguousDependentProperty(_ambiguousTb, propertyRef, NemerleModifiers.Public);
+          DefineAmbiguousDependentProperty(propertyRef);
 
         | _ => assert(false)
       }
 
       _collectionEmitter.DefineMembers(dependentProps);
+    }
+
+    private DefineAmbiguousDependentProperty(propertyRef : DependentAstPropertyRef) : void
+    {
+      def propertyType    = Environment.TypeCompiler.CompileDependentPropertyType(propertyRef.Symbol);
+      def name            = propertyRef.Symbol.Name;
+      def isEvaluatedName = GetIsEvaluatedPropertyName(propertyRef.Symbol);
+      def mods            = AttributesAndModifiers(NemerleAttributes.Public, [MakeDependentPropertyAttribute(propertyRef.Symbol, propertyRef.Index)]);
+      match (propertyRef.Symbol.Direction)
+      {
+        | In  =>
+          def backingFieldName = Util.tmpname(propertyRef.Symbol.Name);
+          def hasValueBit = _ambiguousTb.GetBitFieldManager().Allocate();
+          _ambiguousTb.Define(<[ decl:  private mutable $(backingFieldName : usesite) : $(propertyType : typed) ]>);
+          _ambiguousTb.Define(<[ decl:
+            ..$mods $(name : usesite) : $(propertyType : typed)
+            {
+              get
+              {
+                if (this.IsAmbiguous)
+                  this.Ambiguities[0].$(name : usesite)
+                else
+                {
+                  unless ($(hasValueBit.Read()))
+                    $(MakeAccessAssertion(propertyRef));
+                  this.$(backingFieldName : usesite)
+                }
+              }
+              set
+              {
+                if (this.IsAmbiguous)
+                  foreach (ambiguity in this.Ambiguities)
+                    ambiguity.$(name : usesite) = value;
+                else unless ($(hasValueBit.Read()))
+                {
+                  this.$(backingFieldName : usesite) = value;
+                  $(hasValueBit.Set());
+                }
+              }
+            }
+          ]>);
+
+          _ambiguousTb.Define(<[ decl:
+            public $(isEvaluatedName : usesite) : bool
+            {
+              get
+              {
+                if (this.IsAmbiguous)
+                  this.Ambiguities[0].$(isEvaluatedName : usesite)
+                else
+                  $(hasValueBit.Read())
+              }
+            }
+          ]>);
+
+        | Out =>
+          _ambiguousTb.Define(<[ decl:
+            ..$mods $(name : usesite) : $(propertyType : typed)
+            {
+              get
+              {
+                if (this.IsAmbiguous)
+                  this.Ambiguities[0].$(name : usesite)
+                else
+                  $(MakeAccessAssertion(propertyRef));
+              }
+            }
+          ]>);
+
+          _ambiguousTb.Define(<[ decl:
+            public $(isEvaluatedName : usesite) : bool
+            {
+              get
+              {
+                if (this.IsAmbiguous)
+                  this.Ambiguities[0].$(isEvaluatedName : usesite)
+                else
+                  false
+              }
+            }
+          ]>);
+      }
     }
 
     public override Emit() : void
