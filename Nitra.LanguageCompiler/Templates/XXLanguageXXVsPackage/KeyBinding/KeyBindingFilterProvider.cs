@@ -14,7 +14,7 @@ using System.ComponentModel.Composition;
 
 using IServiceProvider = System.IServiceProvider;
 
-namespace Nitra.CSharp
+namespace XXNamespaceXX
 {
   [Export(typeof(IVsTextViewCreationListener))]
   [ContentType("XXLanguageXX")]
