@@ -1,4 +1,11 @@
-﻿using Nitra.VisualStudio;
+﻿using Microsoft.VisualStudio.Data.Core;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Adornments;
+using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Text.Tagging;
+using Microsoft.VisualStudio.Utilities;
+
+using Nitra.VisualStudio;
 using Nitra.VisualStudio.Outlining;
 using Nitra.VisualStudio.Parsing;
 
@@ -7,13 +14,6 @@ using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Linq;
 
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Adornments;
-using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Text.Tagging;
-using Microsoft.VisualStudio.Utilities;
-
-
 namespace XXNamespaceXX
 {
   [Export(typeof(ITaggerProvider))]
@@ -21,9 +21,7 @@ namespace XXNamespaceXX
   [TagType(typeof(IOutliningRegionTag))]
   internal sealed class OutliningTaggerProvider : ITaggerProvider
   {
-
-    [Import]
-    private ITextDocumentFactoryService _textDocumentFactoryService = null;
+    [Import] ITextDocumentFactoryService _textDocumentFactoryService = null;
 
     public ITagger<T> CreateTagger<T>(ITextBuffer buffer)
       where T : ITag
@@ -32,7 +30,7 @@ namespace XXNamespaceXX
       if (buffer.Properties.TryGetProperty(TextBufferProperties.OutliningTagger, out tagger))
         return (ITagger<T>)tagger;
 
-      var parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, XXLanguageXXVsPackage.Language);
+      var parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, NitraVsUtils.GetGlobalProvider<IVsDataHostService>(), XXLanguageXXVsPackage.Language);
       tagger = new OutliningTagger(parseAgent, buffer);
       buffer.Properties.AddProperty(TextBufferProperties.OutliningTagger, tagger);
       return (ITagger<T>)tagger;
