@@ -61,35 +61,60 @@ namespace Nitra.Compiler
     {
       assert(_tb != null);
 
+      def missingBody = SCG.List();
+      missingBody.Add(<[ this.Span = span ]>);
+
       def dependentProps = SCG.Dictionary();
+
+      def implementSimpleProperty(propertySymbol : AstPropertySymbol, propertyType : FixedType) : string
+      {
+        def name = propertySymbol.Name;
+        when (propertySymbol.DeclaringAst == _symbol)
+          _tb.Define(<[ decl: $(name : usesite) : $(propertyType : typed) { get; } ]>);
+
+        def backingFieldName = Util.tmpname(name);
+        _ambiguousTb.Define(<[ decl: private $(backingFieldName : usesite) : $(propertyType : typed) ]>);
+        _ambiguousTb.Define(<[ decl:
+          public $(name : usesite) : $(propertyType : typed)
+          {
+            get
+            {
+              if (this.IsAmbiguous)
+                this.Ambiguities[0].$(name : usesite)
+              else
+                this.$(backingFieldName : usesite)
+            }
+          }
+        ]>);
+        backingFieldName
+      }
 
       foreach (s in _symbol.AllProperties)
       {
         | SimpleAstPropertySymbol as propertySymbol =>
-          def propertyType = Environment.TypeCompiler.CompileSimplePropertyType(propertySymbol);
+          def propertyType     = Environment.TypeCompiler.CompileSimplePropertyType(propertySymbol);
+          def backingFieldName = implementSimpleProperty(propertySymbol, propertyType.Type);
+          match (propertyType)
+          {
+            | Ast         =>
+              when (propertySymbol.AstRef is SymbolRef.Some(ast))
+              {
+                missingBody.Add(<[ this.$(backingFieldName : usesite) = $(GetMissingOrAmbiguousAstCtor(Environment, ast, propertySymbol.Type))(span) ]>);
+                missingBody.Add(<[ this.$(backingFieldName : usesite).SetParent(this) ]>);
+              }
 
-          when (propertySymbol.DeclaringAst == _symbol)
-            _tb.Define(<[ decl: $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; } ]>);
-
-          _ambiguousTb.Define(<[ decl:
-            public $(propertySymbol.Name : usesite) : $(propertyType : typed)
-            {
-              get { this.Ambiguities[0].$(propertySymbol.Name : usesite) }
-            }
-          ]>);
+            | ParsedValue => missingBody.Add(<[ this.$(backingFieldName : usesite) = Nitra.ParsedValue(span.StartPos) ]>);
+            | Span        => missingBody.Add(<[ this.$(backingFieldName : usesite) = span ]>);
+          }
 
         | ProjectedAstPropertySymbol as propertySymbol =>
-          def propertyType = Environment.TypeCompiler.CompileProjectedPropertyType(propertySymbol);
-
-          when (propertySymbol.DeclaringAst == _symbol)
-            _tb.Define(<[ decl: $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; } ]>);
-
-          _ambiguousTb.Define(<[ decl:
-              public $(propertySymbol.Name : usesite) : $(propertyType : typed)
-              {
-                get { this.Ambiguities[0].$(propertySymbol.Name : usesite) } 
-              }
-          ]>);
+          def propertyType     = Environment.TypeCompiler.CompileProjectedPropertyType(propertySymbol);
+          def backingFieldName = implementSimpleProperty(propertySymbol, propertyType);
+          when (propertySymbol.ProjectionType is Some(projectionType))
+          {
+            missingBody.Add(<[ this.$(backingFieldName : usesite) = $(GetMissingOrAmbiguousAstCtor(Environment, projectionType))(span) ]>);
+            missingBody.Add(<[ this.$(backingFieldName : usesite).SetParent(this) ]>);
+          }
 
         | DependentAstPropertySymbol as propertySymbol =>
           def propertyRef = DependentAstPropertyRef.Reflected(propertySymbol, -1);
@@ -104,6 +129,10 @@ namespace Nitra.Compiler
       }
 
       _collectionEmitter.DefineMembers(dependentProps);
+
+      _ambiguousTb.Define(<[ decl:
+        public this(span : Nitra.NSpan) { ..$missingBody }
+      ]>);
     }
 
     private DefineAmbiguousDependentProperty(propertyRef : DependentAstPropertyRef) : void
