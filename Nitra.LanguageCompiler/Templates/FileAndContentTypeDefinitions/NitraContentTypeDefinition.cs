@@ -12,5 +12,7 @@ namespace XXNamespaceXX
     [Name("XXLanguageXX")]
     [BaseDefinition("text")]
     public static ContentTypeDefinition XXLanguageXXContentTypeDefinition = null;
+
+    internal static string[] FileExtensions = { "XXFileExtensionsXX" };
   }
 }

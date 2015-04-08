@@ -79,7 +79,6 @@ namespace XXNamespaceXX
     {
       Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Entering Initialize() of: {0}", this.ToString()));
 
-      NitraPackage.Init(this);
       base.Initialize();
     }
   }

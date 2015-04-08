@@ -261,20 +261,7 @@ syntax module NitraSyntax
 
   syntax AstInheritance = ":" sm BaseAsts=(QualifiedIdentifier; "," sm)+
   {
-    Typing(context : Context) : list[AstSymbol]
-    {
-      def result = LightList();
-      foreach (identifier in BaseAsts.Item1)
-      {
-        match (context.Bind.[AstSymbol](identifier))
-        {
-          | SymbolRef.Some(AbstractAstSymbol as astSymbol) => result.Add(astSymbol)
-          | SymbolRef.Some as symbolRef => context.Error(symbolRef, "Only abstract declarations can be specified in base declarations list.");
-          | _ => ()
-        }
-      }
-      result.ToNList();
-    }
+    Typing(context : Context, isDeclaration : bool) : list[AstSymbol] = TypingUtils.BindAstInheritanceList(this.BaseAsts.Item1, context, isDeclaration);
   }
 
   syntax AstBody = outline_begin_before nl "{" inl Members=AstMember* d "}" outline_end_before nl
@@ -292,24 +279,19 @@ syntax module NitraSyntax
     Typing() : void;
     TypeProperties() : void {}
 
-    | SimpleProperty = NameModifier="name"? Name sm ":" sm NitraType ";" nl
+    | SimpleProperty = Name sm ":" sm NitraType ";" nl
       {
-        private MakeSymbol(compilationMessages : ICompilerMessages) : AstPropertySymbol
+        private MakeSymbol() : AstPropertySymbol
         {
           match (Name.Value())
           {
-            | "Parent" =>
-              when (NameModifier.HasValue)
-                compilationMessages.Error(NameModifier, "'name' modifier is not allowed for 'Parent' property.");
-              ParsedParentAstPropertySymbol(this)
-
-            | _ when NameModifier.HasValue => ParsedNameAstPropertySymbol(this)
-            | _                            => ParsedSimpleAstPropertySymbol(this)
+            | "Parent" => ParsedParentAstPropertySymbol(this)
+            | _        => ParsedSimpleAstPropertySymbol(this)
           }
         }
         override CollectGlobalSymbols
         {
-          def symbol = MakeSymbol(site.Node.Project);
+          def symbol = MakeSymbol();
           _ = site.Node.AddAndReport.[AstPropertySymbol](symbol, Name.Location);
         }
         [Cached] private MakeType() : NType = this.NitraType.Typing(this.Context)[0];
@@ -480,21 +462,32 @@ syntax module NitraSyntax
     TypeAst() : void {}
     Typing() : void;
 
-    | AbstractAst = "abstract" "declaration" sm Name AstInheritance? Body=AstBody
+    | SimpleAst = Header sm Name AstInheritance? Body=AstBody
       {
-        [Cached] private MakeAstSymbol() : ParsedAbstractAstSymbol = ParsedAbstractAstSymbol(this);
-        [Cached] private MakeBaseAsts() : list[AstSymbol]
+        syntax Header
         {
-          if (AstInheritanceOpt.HasValue)
-            AstInheritanceOpt.Value.Typing(this.Context)
-          else
-            []
+          IsDeclaration() : bool;
+          IsAbstract() : bool;
+          | Ast         = AbstractOpt="abstract"? "ast"         { override IsDeclaration = false; override IsAbstract = AbstractOpt.HasValue; }
+          | Declaration = AbstractOpt="abstract"? "declaration" { override IsDeclaration = true;  override IsAbstract = AbstractOpt.HasValue; }
         }
+
+        [Cached] private MakeAstSymbol() : AstSymbol
+        {
+          match (Header.IsDeclaration(), Header.IsAbstract())
+          {
+            | (false, false) => ParsedSimpleAstSymbol(this)
+            | (false, true)  => ParsedAbstractAstSymbol(this)
+            | (true,  false) => ParsedSimpleDeclarationSymbol(this)
+            | (true,  true)  => ParsedAbstractDeclarationSymbol(this)
+          }
+        }
+        [Cached] private MakeBaseAsts() : list[AstSymbol] = TypingUtils.TypeAstInheritance(this.AstInheritanceOpt, this.Context, this.Header.IsDeclaration());
         override CollectGlobalSymbols
         {
           def symbol = MakeAstSymbol();
           _ = ns.Node.AddAndReport.[AstSymbol](symbol, Name.Location);
-          Body.CollectGlobalSymbols(symbol);
+          Body.CollectGlobalSymbols(symbol :> IMemberSite);
         }
         override MakeContext
         {
@@ -510,38 +503,15 @@ syntax module NitraSyntax
         override TypeAst = Body.TypeProperties();
       }
 
-    | SimpleAst = "declaration" sm Name AstInheritance? Body=AstBody
+    | ExtensibleAst = Header sm Name AstInheritance? Body
       {
-        [Cached] private MakeAstSymbol() : ParsedSimpleAstSymbol = ParsedSimpleAstSymbol(this);
-        [Cached] private MakeBaseAsts() : list[AstSymbol]
+        syntax Header
         {
-          if (AstInheritanceOpt.HasValue)
-            AstInheritanceOpt.Value.Typing(this.Context)
-          else
-            []
+          IsDeclaration() : bool;
+          | Ast         = "asts"         { override IsDeclaration = false; }
+          | Declaration = "declarations" { override IsDeclaration = true;  }
         }
-        override CollectGlobalSymbols
-        {
-          def symbol = MakeAstSymbol();
-          _ = ns.Node.AddAndReport.[AstSymbol](symbol, Name.Location);
-          Body.CollectGlobalSymbols(symbol);
-        }
-        override MakeContext
-        {
-          def  context1 = AstContext(parent, this.AstSymbol);
-          def _context2 = Body.MakeContext(context1);
-          parent
-        }
-        override Typing
-        {
-          _ = MakeBaseAsts();
-          Body.Typing();
-        }
-        override TypeAst = Body.TypeProperties();
-      }
 
-    | ExtensibleAst = "declarations" sm Name AstInheritance? Body
-      {
         syntax Body = outline_begin_before nl "{" inl Members=AstMember* Extensions=ExtensionAst* d "}" outline_end_before nl
         {
           CollectGlobalSymbols(site : IMemberSite) : void
@@ -568,13 +538,7 @@ syntax module NitraSyntax
         }
 
         [Cached] private MakeAstSymbol() : ParsedExtensibleAstSymbol = ParsedExtensibleAstSymbol(this);
-        [Cached] private MakeBaseAsts() : list[AstSymbol]
-        {
-          if (AstInheritanceOpt.HasValue)
-            AstInheritanceOpt.Value.Typing(this.Context)
-          else
-            []
-        }
+        [Cached] private MakeBaseAsts() : list[AstSymbol] = TypingUtils.TypeAstInheritance(this.AstInheritanceOpt, this.Context, this.Header.IsDeclaration());
         override CollectGlobalSymbols
         {
           def symbol = MakeAstSymbol();
@@ -595,8 +559,15 @@ syntax module NitraSyntax
         override TypeAst = Body.TypeAst();
       }
 
-    | ExtendAst = "extend" "declarations" sm (Name sm "=" sm)? BaseName=QualifiedName Body
+    | ExtendAst = Header sm (Name sm "=" sm)? BaseName=QualifiedName Body
       {
+        syntax Header
+        {
+          IsDeclaration() : bool;
+          | Ast         = "extend" "asts"         { override IsDeclaration = false; }
+          | Declaration = "extend" "declarations" { override IsDeclaration = true;  }
+        }
+
         syntax Body = outline_begin_before nl "{" inl Extensions=ExtensionAst* d "}" outline_end_before nl
         {
           CollectGlobalSymbols(site : IMemberSite) : void
@@ -615,7 +586,7 @@ syntax module NitraSyntax
 
         override CollectGlobalSymbols
         {
-          def symbol = ParsedExtendAstSymbol(this);
+          def symbol = if (Header.IsDeclaration()) ParsedExtendDeclarationSymbol(this) else ParsedExtendAstSymbol(this);
           _ = ns.Node.AddAndReport.[ExtendAstSymbol](symbol, Location);
           Body.CollectGlobalSymbols(symbol);
         }

@@ -58,6 +58,8 @@ namespace Nitra.LanguageCompiler
       unless (success)
         return;
 
+      //assert2(false);
+        
       def vars = GetVars(lang, config);
 
       foreach ((var, value) in vars)
@@ -67,13 +69,29 @@ namespace Nitra.LanguageCompiler
       CopyGrammars(lang, config);
       GenerateFileAndContentTypeDefinitions(lang, config);
       GenerateSpanClasses(lang, config);
-
-      when (config.GenerateProject)
-        GenerateProject(lang, config, vars);
+      GenerateProject(lang, config, vars);
 
       WriteLine("Output Path: " + config.OutputPath);
     }
 
+    MakeXXFilesXXVar(lang : Language, config : CommandPromptReader) : string * string
+    {
+      def binPath = GetExternalDependencesOutputPath(lang, config);
+      def files = List();
+
+      foreach (file in Enumerable.Concat(config.AssemblyReferences, config.Binaries))
+      {
+        def path = Path.Combine(binPath, Path.GetFileName(file));
+        unless (File.Exists(path))
+          config.CompilerMessages.Error(Location.Default, "File '" + path + "' does not exists.");
+        def pathWithWildcards = Path.ChangeExtension(path, ".???");
+        files.Add($<#    <file src="$(pathWithWildcards)" target="lib\net45\" />#>);
+      }
+      
+      def filesContent  = $<#..$(files; "\r\n")#>;
+      ("XXFilesXX", filesContent)
+    }
+    
     CopyBinaries(lang : Language, config : CommandPromptReader) : void
     {
       ExternalDependences(lang, config, config.Binaries);
@@ -84,9 +102,14 @@ namespace Nitra.LanguageCompiler
       ExternalDependences(lang, config, config.AssemblyReferences);
     }
 
+    GetExternalDependencesOutputPath(lang : Language, config : CommandPromptReader) : string
+    {
+      Path.Combine(config.OutputPath, lang.ProjectName, "ExternalDependences")
+    }
+    
     ExternalDependences(lang : Language, config : CommandPromptReader, paths : list[string]) : void
     {
-      def binPath = Path.Combine(config.OutputPath, lang.ProjectName, "ExternalDependences");
+      def binPath = GetExternalDependencesOutputPath(lang, config);
       
       unless (Directory.Exists(binPath))
         _ = Directory.CreateDirectory(binPath);
@@ -100,6 +123,13 @@ namespace Nitra.LanguageCompiler
           def fileName = Path.GetFileName(path);
           def outPath = Path.Combine(binPath, fileName);
           File.Copy(path, outPath, overwrite=true);
+          def pdbPath = Path.ChangeExtension(path, ".pdb");
+          when (File.Exists(path))
+          {
+            def pdbFileName = Path.GetFileName(pdbPath);
+            def pdbOutPath = Path.Combine(binPath, pdbFileName);
+            File.Copy(pdbPath, pdbOutPath, overwrite=true);
+          }
         }
         else 
           config.CompilerMessages.Error(Location.Default, "File or directory '" + path + "' does not exists.");
@@ -125,7 +155,7 @@ namespace Nitra.LanguageCompiler
         fileExtensions.Add(ext);
       }
 
-      def fileExtensionsReplacement = (<#"FileExtensions"#>, $<#..$(fileExtensions; ", "; e => "\"" + e + "\"")#>);
+      def fileExtensionsReplacement = (<#"XXFileExtensionsXX"#>, $<#..$(fileExtensions; ", "; e => "\"" + e + "\"")#>);
 
       ExpandTemplate(@"Templates\FileAndContentTypeDefinitions\NitraContentTypeDefinition.cs",  $@"$prjName\FileAndContentTypeDefinitions\NitraContentTypeDefinition.Generated.cs", 
         fileExtensionsReplacement :: vars,
@@ -141,6 +171,7 @@ namespace Nitra.LanguageCompiler
         ("XXNamespaceXX",                config.DefaultNamespace),
         ("XXLanguageXX",                 lang.Name.ToString()),
         ("XXCompanyXX",                  lang.Company.Name.Value.Trim()),
+        ("XXCompanyIdXX",                lang.Company.Name.Value.Trim().Replace("   ", "").Replace("  ", "").Replace(" ", "")),
         ("XXDescriptionXX",              lang.Description.Text.Value.Trim()),
         ("XXAuthorsXX",                  lang.Authors.Text.Value.Trim()),
         ("XXCopyrightXX",                lang.Copyright.Text.Value.Trim()),
@@ -149,6 +180,7 @@ namespace Nitra.LanguageCompiler
         ("XXParserAssembliesXX",         $<#..$(assemblyReferences; ", "; a => <#path + @"#> + a + <#"#>)#>),
         ("XXStartSyntaxModuleXX",        <#@"#> + startSyntaxModule.Module + <#"#>),
         ("XXStartRuleXX",                <#@"#> + startSyntaxModule.StartRule + <#"#>),
+        MakeXXFilesXXVar(lang, config),
       ]
     }
 
@@ -166,15 +198,20 @@ namespace Nitra.LanguageCompiler
       //assert2(false);
       def pkgConfigPath     = Path.Combine(VsPackageTemplatePath, "packages.config");
       def pkgConfig         = File.ReadAllText(pkgConfigPath);
-      def versionRegex      = Text.RegularExpressions.Regex(<#.+id="Nitra.Core" version="([^"]+)"#>);
+      def versionRegex      = Text.RegularExpressions.Regex(<#.+id="Nitra.Core"\s+version="([^"]+)"#>);
       def result            = versionRegex.Match(pkgConfig);
-      when (result.Success)
+      if (result.Success)
       {
         def oldVersion         = result.Groups[1].Value;
         def newVersion         = typeof(NSpan).Assembly.GetName().Version.ToString();
         replaces ::= (oldVersion, newVersion);
       }
-
+      else
+      {
+        def configSnapshot = SourceSnapshot("", -1, pkgConfigPath);
+        def loc = Location(configSnapshot, 0);
+        config.CompilerMessages.Error(loc, <#Version for Nitra.Core not found.#>);
+      }
 
       foreach ((templateConstName, templateGuid) in templateGuids.KeyValuePairs)
       {
