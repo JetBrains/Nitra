@@ -1,4 +1,5 @@
-﻿using Microsoft.VisualStudio.Language.Intellisense;
+﻿using Microsoft.VisualStudio.Data.Core;
+using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Operations;
 using Microsoft.VisualStudio.Utilities;
@@ -14,15 +15,12 @@ namespace XXNamespaceXX
   [Name("XXLanguageXX token completion")]
   class XXLanguageXXTokenCompletionSourceProvider : ICompletionSourceProvider
   {
-    [Import]
-    private ITextDocumentFactoryService _textDocumentFactoryService = null;
-
-    [Import]
-    private ITextStructureNavigatorSelectorService _navigatorService = null;
+    [Import] ITextDocumentFactoryService            _textDocumentFactoryService = null;
+    [Import] ITextStructureNavigatorSelectorService _navigatorService           = null;
 
     public ICompletionSource TryCreateCompletionSource(ITextBuffer textBuffer)
     {
-      return new NitraCompletionSource(textBuffer, _textDocumentFactoryService, _navigatorService, XXLanguageXXVsPackage.Language);
+      return new NitraCompletionSource(textBuffer, _textDocumentFactoryService, _navigatorService, NitraVsUtils.GetGlobalProvider<IVsDataHostService>(), XXLanguageXXVsPackage.Language);
     }
   }
 }

@@ -22,17 +22,14 @@ namespace XXNamespaceXX
   [TextViewRole(PredefinedTextViewRoles.Document)]
   internal class ErrorListPresenterFactory : IWpfTextViewCreationListener
   {
-    [Import]
-    private IErrorProviderFactory ErrorProviderFactory { get; set; }
-
-    [Import(typeof(SVsServiceProvider))]
-    private IServiceProvider ServiceProvider { get; set; }
+    [Import]                             IErrorProviderFactory _errorProviderFactory = null;
+    [Import(typeof(SVsServiceProvider))] IServiceProvider      _serviceProviderServiceProvider = null;
 
     public void TextViewCreated(IWpfTextView textView)
     {
       // Add the error list support to the just created view
       textView.TextBuffer.Properties.GetOrCreateSingletonProperty<IErrorsReporter>(() =>
-          new ErrorListPresenter(textView.TextBuffer, ErrorProviderFactory, ServiceProvider)
+          new ErrorListPresenter(textView.TextBuffer, _errorProviderFactory, _serviceProviderServiceProvider)
       );
     }
   }

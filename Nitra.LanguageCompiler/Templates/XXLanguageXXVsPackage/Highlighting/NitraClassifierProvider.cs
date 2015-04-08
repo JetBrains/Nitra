@@ -1,4 +1,11 @@
-﻿using Nitra.VisualStudio.Coloring;
+﻿using Nitra.VisualStudio;
+using Microsoft.VisualStudio.Data.Core;
+using Microsoft.VisualStudio.Text.Adornments;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Classification;
+using Microsoft.VisualStudio.Utilities;
+
+using Nitra.VisualStudio.Coloring;
 using Nitra.VisualStudio.Parsing;
 
 using System;
@@ -8,12 +15,6 @@ using System.Linq;
 using System.Text;
 using System.ComponentModel.Composition;
 
-using Microsoft.VisualStudio.Text.Adornments;
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Classification;
-using Microsoft.VisualStudio.Utilities;
-using Nitra.VisualStudio;
-
 namespace XXNamespaceXX
 {
   [Export(typeof(IClassifierProvider))]
@@ -21,11 +22,8 @@ namespace XXNamespaceXX
   internal sealed class XXLanguageXXClassifierProvider : IClassifierProvider
   {
     /// The ClassificationTypeRegistryService is used to discover the types defined in ClassificationTypeDefinitions
-    [Import]
-    private IClassificationTypeRegistryService ClassificationTypeRegistry { get; set; }
-
-    [Import]
-    private ITextDocumentFactoryService _textDocumentFactoryService = null;
+    [Import] IClassificationTypeRegistryService  _classificationTypeRegistry = null;
+    [Import] ITextDocumentFactoryService         _textDocumentFactoryService = null;
 
     public IClassifier GetClassifier(ITextBuffer buffer)
     {
@@ -34,8 +32,9 @@ namespace XXNamespaceXX
       if (buffer.Properties.TryGetProperty(TextBufferProperties.NitraClassifier, out classifier))
         return classifier;
 
-      var parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, XXLanguageXXVsPackage.Language);
-      classifier = new NitraClassifier(parseAgent, buffer, ClassificationTypeRegistry);
+      var dataHostService = NitraVsUtils.GetGlobalProvider<IVsDataHostService>();
+      var parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, dataHostService, XXLanguageXXVsPackage.Language);
+      classifier = new NitraClassifier(parseAgent, buffer, _classificationTypeRegistry, dataHostService);
       buffer.Properties.AddProperty(TextBufferProperties.NitraClassifier, classifier);
       return classifier;
     }
