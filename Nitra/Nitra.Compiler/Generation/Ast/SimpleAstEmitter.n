@@ -17,9 +17,8 @@ namespace Nitra.Compiler
   internal sealed class SimpleAstEmitter : AstEmitter
   {
     private         _symbol            : SimpleAstSymbol;
-    private mutable _baseTb            : TypeBuilder;
+    private mutable _tb                : TypeBuilder;
     private mutable _ambiguousTb       : TypeBuilder;
-    private mutable _concreteTb        : TypeBuilder;
     private         _collectionEmitter : CollectionEmitter;
 
     public this(environment : EmitterEnvironment, symbol : SimpleAstSymbol)
@@ -33,7 +32,7 @@ namespace Nitra.Compiler
     {
       Util.locate(_symbol.FirstLocation.NLocation(),
       {
-        assert(_baseTb == null);
+        assert(_tb == null);
 
         def parentType = Environment.TypeCompiler.CompileParentType(_symbol);
 
@@ -44,39 +43,31 @@ namespace Nitra.Compiler
         when (_symbol.IsDeclaration)
           baseTypes.Add(<[ $(Environment.DeclarationTypeVar : typed) ]>);
 
-        _baseTb = NemerleEnv.Define(<[ decl:
-          public abstract partial class $(_symbol.Name : usesite) : ..$baseTypes
+        _tb = NemerleEnv.Define(<[ decl:
+          public partial class $(_symbol.Name : usesite) : ..$baseTypes
           {
-          }
-        ]>);
-
-        assert(_concreteTb == null);
-        _concreteTb = _baseTb.DefineNestedType(<[ decl:
-          public sealed partial class $(ConcreteAstName : usesite) : $(_baseTb.GetMemType() : typed)
-          {
+            private this() {}
           }
         ]>);
 
         assert(_ambiguousTb == null);
-        _ambiguousTb = DefineAmbiguousAst(_baseTb);
+        _ambiguousTb = DefineAmbiguousAst(_tb);
 
-        _collectionEmitter.DefineTypes(_baseTb);
+        _collectionEmitter.DefineTypes(_tb);
       });
     }
 
     public override DefineMembers() : void
     {
-      assert(_baseTb != null);
+      assert(_tb != null);
 
-      def thisType = _baseTb.GetMemType();
+      def thisType = _tb.GetMemType();
 
       def initParameters = SCG.List();
       initParameters.Add(<[ parameter: Span : $(Environment.NSpanTypeVar : typed) ]>);
 
       def initStatements = SCG.List();
       initStatements.Add(<[ this.Span = Span ]>);
-
-      def initStatementsTail = SCG.List();
 
       def missingBody = SCG.List();
       missingBody.Add(<[ this.Span = span ]>);
@@ -91,12 +82,12 @@ namespace Nitra.Compiler
         initParameters.Add(<[ parameter : $(name : usesite) : $(propertyType.Type : typed) ]>);
         initStatements.Add(<[ this.$(name : usesite) = $(name : usesite) ]>);
 
-        DefineSimpleProperty(name, propertyType.Type, _baseTb, _ambiguousTb);
+        DefineSimpleProperty(name, propertyType.Type, _tb, _ambiguousTb);
 
         match (propertyType)
         {
           | Ast         =>
-            initStatementsTail.Add(<[ this.$(name : usesite).SetParent(this) ]>);
+            initStatements.Add(<[ this.$(name : usesite).SetParent(this) ]>);
             if (propertyType.Type.Equals(thisType))
               missingBody.Add(<[ this.$(name : usesite) = this ]>);
             else when (propertySymbol.AstRef is SymbolRef.Some(ast))
@@ -113,13 +104,13 @@ namespace Nitra.Compiler
       def defineDependentProperty(propertySymbol : DependentAstPropertySymbol) : void
       {
         def index = dependentProps.Count;
-        def bit   = _baseTb.GetBitFieldManager().Allocate();
+        def bit   = _tb.GetBitFieldManager().Allocate();
         assert(bit.Index == index);
 
         def propertyRef = DependentAstPropertyRef.Compiling(propertySymbol, index, bit);
         dependentProps.Add(propertySymbol, propertyRef);
 
-        DefineDependentProperty(_baseTb, propertyRef, NemerleModifiers.Public | NemerleModifiers.Virtual);
+        DefineDependentProperty(_tb, propertyRef, NemerleModifiers.Public | NemerleModifiers.Virtual);
         DefineAmbiguousDependentProperty(_ambiguousTb, propertyRef, NemerleModifiers.Public | NemerleModifiers.Override);
       }
 
@@ -129,7 +120,7 @@ namespace Nitra.Compiler
       {
         def name         = propertySymbol.Name;
         def propertyType = Environment.TypeCompiler.CompileProjectedPropertyType(propertySymbol);
-        DefineSimpleProperty(name, propertyType, _baseTb, _ambiguousTb);
+        DefineSimpleProperty(name, propertyType, _tb, _ambiguousTb);
         projectedProps.Add(propertySymbol);
 
         if (propertyType.Equals(thisType))
@@ -149,11 +140,9 @@ namespace Nitra.Compiler
         | _ => ()
       }
 
-      initStatements.AddRange(initStatementsTail);
-
       CompileProjection(projectedProps, initStatements);
 
-      _concreteTb.Define(<[ decl:
+      _tb.Define(<[ decl:
         public this(..$initParameters) { ..$initStatements }
       ]>);
 
@@ -161,19 +150,16 @@ namespace Nitra.Compiler
         public this(span : Nitra.NSpan) { ..$missingBody }
       ]>);
 
-      DefineIsPropertyEvaluatedMethod(_baseTb, NemerleModifiers.Override);
-      DefineDependentPropertiesEvaluation(_baseTb, _symbol);
+      DefineIsPropertyEvaluatedMethod(_tb, NemerleModifiers.Override);
+      DefineDependentPropertiesEvaluation(_tb, _symbol);
 
       _collectionEmitter.DefineMembers(dependentProps);
     }
 
     public override Emit() : void
     {
-      assert(_baseTb != null);
-      _baseTb.Compile();
-
-      assert(_concreteTb != null);
-      _concreteTb.Compile();
+      assert(_tb != null);
+      _tb.Compile();
 
       assert(_ambiguousTb != null);
       _ambiguousTb.Compile();
