@@ -19,8 +19,7 @@ namespace Nitra.Compiler
   [Record]
   internal abstract partial class AstEmitter
   {
-    protected static AmbiguousAstName = "Ambiguous";
-    protected static ConcreteAstName  = "Concrete";
+    public static AmbiguousAstName = "AmbiguousOrMissing";
 
     public Environment  : EmitterEnvironment { get; }
     public NemerleEnv   : GlobalEnv          { get; }
@@ -46,42 +45,61 @@ namespace Nitra.Compiler
       tb.Define(<[ decl: $(GetIsEvaluatedPropertyName(propertySymbol) : usesite) : bool { get; } ]>);
     }
 
-    protected DefineAmbiguousAst(baseTb : TypeBuilder, parentType : FixedType) : TypeBuilder
+    protected DefineAmbiguousAst(baseTb : TypeBuilder, baseType : PExpr = null) : TypeBuilder
     {
-      baseTb.Manager.MacroColors.InGlobalColor(fun()
-      {
-        baseTb.DefineNestedType(<[ decl:
-          public sealed partial class $(AmbiguousAstName : usesite) : $(baseTb.GetMemType() : typed), Nitra.Declarations.IAmbiguousAst
+      def baseTypes = SCG.List();
+      when (baseType != null)
+        baseTypes.Add(baseType);
+      baseTypes.Add(<[ $(baseTb.GetMemType() : typed) ]>);
+      baseTypes.Add(<[ Nitra.Declarations.IAmbiguousAst ]>);
+
+      baseTb.DefineNestedType(<[ decl:
+        new public sealed partial class $(AmbiguousAstName : usesite) : ..$baseTypes
+        {
+          public this(ambiguities : array[$(baseTb.GetMemType() : typed)])
           {
-            public this(ambiguities : array[$(baseTb.GetMemType() : typed)])
+            assert(ambiguities != null);
+            this.Span        = ambiguities[0].Span;
+            this.Ambiguities = ambiguities;
+          }
+
+          public override IsAmbiguous : bool                                    { get { this.Ambiguities != null } }
+          public override IsMissing   : bool                                    { get { this.Ambiguities == null } }
+          public          Ambiguities : array[$(baseTb.GetMemType() : typed)]   { get; }
+
+          private AmbiguitiesImpl : array[$(Environment.AstTypeVar : typed)] implements Nitra.Declarations.IAmbiguousAst.Ambiguities
+          {
+            get
             {
-              this.Ambiguities = ambiguities;
-            }
-
-            public override IsAmbiguous : bool                                    { get { true } }
-            public          Ambiguities : array[$(baseTb.GetMemType() : typed)]   { get; }
-            public override Span        : $(Environment.NSpanTypeVar : typed)     { get { this.Ambiguities[0].Span   } }
-            public override Parent      : $(parentType : typed)                   { get { this.Ambiguities[0].Parent } protected set { _ = value; throw System.NotSupportedException() } }
-
-            private AmbiguitiesImpl : array[Nitra.Declarations.IAst] implements Nitra.Declarations.IAmbiguousAst.Ambiguities { get { this.Ambiguities :> array[Nitra.Declarations.IAst] } }
-
-            public override EvalProperties(context : Nitra.Declarations.DependentPropertyEvalContext) : void
-            {
-              Nitra.Internal.AstUtils.EvalAmbiguitiesProperties(context, this.AmbiguitiesImpl);
-            }
-
-            public override IsPropertyEvaluated(index : int) : bool
-            {
-              this.Ambiguities[0].IsPropertyEvaluated(index)
-            }
-
-            public override SetParent(newParent : Nitra.Declarations.IAst) : void
-            {
-              Nitra.Internal.AstUtils.SetAmbiguitiesParent(newParent, this.AmbiguitiesImpl);
+              assert(this.IsAmbiguous);
+              this.Ambiguities :> array[$(Environment.AstTypeVar : typed)]
             }
           }
-        ]>);
-      });
+
+          public override EvalProperties(context : Nitra.Declarations.DependentPropertyEvalContext) : void
+          {
+            if (this.IsAmbiguous)
+              Nitra.Internal.AstUtils.EvalAmbiguitiesProperties(context, this)
+            else
+              base.EvalProperties(context)
+          }
+
+          public override IsPropertyEvaluated(index : int) : bool
+          {
+            if (this.IsAmbiguous)
+              this.Ambiguities[0].IsPropertyEvaluated(index)
+            else
+              base.IsPropertyEvaluated(index)
+          }
+
+          public override SetParent(newParent : $(Environment.AstTypeVar : typed)) : void
+          {
+            base.SetParent(newParent);
+            when (this.IsAmbiguous)
+              Nitra.Internal.AstUtils.SetAmbiguitiesParent(newParent, this);
+          }
+        }
+      ]>);
     }
 
     protected DefineDependentProperty(tb : TypeBuilder, propertyRef : DependentAstPropertyRef.Compiling, modifiers : NemerleModifiers, defineIsEvaluatedProperty : bool = true) : void
@@ -95,7 +113,6 @@ namespace Nitra.Compiler
         ]>);
 
         def mods          = AttributesAndModifiers(modifiers, [MakeDependentPropertyAttribute(propertyRef.Symbol, propertyRef.Index)]);
-        def assertMessage = $"Property '$(propertyRef.Symbol.Name)' is not set";
         def setterMods    =
           match (propertyRef.Symbol.Direction)
           {
@@ -108,7 +125,7 @@ namespace Nitra.Compiler
             get
             {
               unless($(propertyRef.Bit.Read()))
-                assert3(false, $assertMessage);
+                $(MakeAccessAssertion(propertyRef));
               this.$(backingFieldName : usesite)
             }
             ..$setterMods
@@ -133,40 +150,86 @@ namespace Nitra.Compiler
       });
     }
 
-    private static GetIsEvaluatedPropertyName(propertySymbol : DependentAstPropertySymbol) : string
+    protected static GetIsEvaluatedPropertyName(propertySymbol : DependentAstPropertySymbol) : string
     {
       "Is" + propertySymbol.Name + "Evaluated"
     }
 
-    private static MakeDependentPropertyAttribute(propertySymbol : DependentAstPropertySymbol, index : int) : PExpr
+    protected static MakeAccessAssertion(propertyRef : DependentAstPropertyRef) : PExpr
+    {
+      def assertMessage = $"Property '$(propertyRef.Symbol.Name)' is not set";
+      <[ assert3(false, $(assertMessage : string)); ]>
+    }
+
+    protected static MakeDependentPropertyAttribute(propertySymbol : DependentAstPropertySymbol, index : int) : PExpr
     {
       <[ Nitra.Internal.DependentPropertyAttribute($(propertySymbol.FullName : string), $(index : int)) ]>
+    }
+
+    protected static DefineSimpleProperty(name : string, type : FixedType, baseTb : TypeBuilder, ambiguousTb : TypeBuilder) : void
+    {
+      baseTb.Define(<[ decl: public virtual $(name : usesite) : $(type : typed) { get; protected set; } ]>);
+      ambiguousTb.Define(<[ decl:
+        public override $(name : usesite) : $(type : typed)
+        {
+          get
+          {
+            if (this.IsAmbiguous)
+              this.Ambiguities[0].$(name : usesite)
+            else
+              base.$(name : usesite)
+          }
+          protected set
+          {
+            if (this.IsAmbiguous)
+              throw System.InvalidOperationException()
+            else
+              base.$(name : usesite) = value
+          }
+        }
+      ]>);
     }
 
     protected DefineAmbiguousDependentProperty(tb : TypeBuilder, propertyRef : DependentAstPropertyRef, modifiers : NemerleModifiers) : void
     {
       def propertyType = Environment.TypeCompiler.CompileDependentPropertyType(propertyRef.Symbol);
+      def name         = propertyRef.Symbol.Name;
       def mods         = AttributesAndModifiers(modifiers, [MakeDependentPropertyAttribute(propertyRef.Symbol, propertyRef.Index)]);
       match (propertyRef.Symbol.Direction)
       {
         | In  =>
           tb.Define(<[ decl:
-            ..$mods $(propertyRef.Symbol.Name : usesite) : $(propertyType : typed)
+            ..$mods $(name : usesite) : $(propertyType : typed)
             {
-              get { this.Ambiguities[0].$(propertyRef.Symbol.Name : usesite) }
+              get
+              {
+                if (this.IsAmbiguous)
+                  this.Ambiguities[0].$(name : usesite)
+                else
+                  base.$(name : usesite)
+              }
               set
               {
-                foreach (ambiguity in this.Ambiguities)
-                  ambiguity.$(propertyRef.Symbol.Name : usesite) = value
+                if (this.IsAmbiguous)
+                  foreach (ambiguity in this.Ambiguities)
+                    ambiguity.$(name : usesite) = value;
+                else
+                  base.$(name : usesite) = value;
               }
             }
           ]>);
 
         | Out =>
           tb.Define(<[ decl:
-            ..$mods $(propertyRef.Symbol.Name : usesite) : $(propertyType : typed)
+            ..$mods $(name : usesite) : $(propertyType : typed)
             {
-              get { this.Ambiguities[0].$(propertyRef.Symbol.Name : usesite) }
+              get
+              {
+                if (this.IsAmbiguous)
+                  this.Ambiguities[0].$(name : usesite)
+                else
+                  base.$(name : usesite)
+              }
             }
           ]>);
       }
@@ -235,7 +298,7 @@ namespace Nitra.Compiler
       }
       def locFromName(name : string) : PExpr { locFromExpr(<[ $(name : usesite) ]>) }
 
-      foreach (g in properties.GroupBy(p => p.ProjectionType.ProjectionSource))
+      foreach (g in properties.Where(p => p.ProjectionType.IsSome).GroupBy(p => p.ProjectionType.Value.ProjectionSource))
       {
         def projectionSource = g.Key;
         def init = SCG.List();
@@ -243,12 +306,12 @@ namespace Nitra.Compiler
         def end  = SCG.List();
         foreach (property in g)
         {
-          match (property.ProjectionType)
+          match (property.ProjectionType.Value)
           {
-            | OptionList with canBeEmpty = true
-            | List       with canBeEmpty = false =>
-              def targetName   = property.ProjectionType.TargetAst.FullName;
-              def concreteType = Environment.GetAstType(property.ProjectionType.TargetAst);
+            | OptionList as projectionType with canBeEmpty = true
+            | List       as projectionType with canBeEmpty = false =>
+              def targetName   = projectionType.TargetAst.FullName;
+              def concreteType = Environment.GetAstType(projectionType.TargetAst);
               def bufferName = Util.tmpname("list");
               init.Add(<[ def $(bufferName : usesite) = System.Collections.Generic.List.[$(concreteType : typed)]() ]>);
               body.Add(<[
@@ -268,9 +331,9 @@ namespace Nitra.Compiler
                 ]>);
               }
 
-            | Option =>
-              def targetName   = property.ProjectionType.TargetAst.FullName;
-              def concreteType = Environment.GetAstType(property.ProjectionType.TargetAst);
+            | Option as projectionType =>
+              def targetName   = projectionType.TargetAst.FullName;
+              def concreteType = Environment.GetAstType(projectionType.TargetAst);
               def bufferName   = Util.tmpname("option");
               init.Add(<[ mutable $(bufferName : usesite) : $(concreteType : typed) ]>);
               body.Add(<[
@@ -297,9 +360,9 @@ namespace Nitra.Compiler
               ]>);
               end.Add(<[ this.$(property.Name : usesite).SetParent(this); ]>);
 
-            | Single =>
-              def targetName   = property.ProjectionType.TargetAst.FullName;
-              def concreteType = Environment.GetAstType(property.ProjectionType.TargetAst);
+            | Single as projectionType =>
+              def targetName   = projectionType.TargetAst.FullName;
+              def concreteType = Environment.GetAstType(projectionType.TargetAst);
               def bufferName   = Util.tmpname("single");
               init.Add(<[ mutable $(bufferName : usesite) : $(concreteType : typed) ]>);
               body.Add(<[
@@ -323,13 +386,43 @@ namespace Nitra.Compiler
                 else
                   Nitra.Declarations.AstContext.CompilerMessages.Error($(locFromExpr(<[ this.$(projectionSource.Name : usesite) ]>)), $$"Missing definition of '$targetName'.")
               ]>);
-
-            | Error  => assert(false)
           }
         }
         result.AddRange(init);
         result.Add(<[ foreach (item in this.$(projectionSource.Name : usesite)) { ..$body } ]>);
         result.AddRange(end);
+      }
+    }
+
+    public static GetMissingAstCtor(environment : EmitterEnvironment, ast : AstSymbol, actualType : NType) : PExpr
+    {
+      match (actualType)
+      {
+        | Option            => <[ $(environment.GetAstType(ast) : typed).AstOption ]>
+        | OptionList | List => <[ $(environment.GetAstType(ast) : typed).AstList ]>
+        | Qualified         => environment.GetAmbiguousAstType(ast)
+        | _                 => assert(false)
+      }
+    }
+
+    public static GetAmbiguousAstCtor(environment : EmitterEnvironment, ast : AstSymbol, actualType : NType) : PExpr
+    {
+      match (actualType)
+      {
+        | Option            => <[ $(environment.GetAstType(ast) : typed).AmbiguousAstOption ]>
+        | OptionList | List => <[ $(environment.GetAstType(ast) : typed).AmbiguousAstList ]>
+        | Qualified         => environment.GetAmbiguousAstType(ast)
+        | _                 => assert(false)
+      }
+    }
+
+    public static GetMissingAstCtor(environment : EmitterEnvironment, projectionType : AstPropertyProjectionType) : PExpr
+    {
+      match (projectionType)
+      {
+        | Option            => <[ $(environment.GetAstType(projectionType.TargetAst) : typed).AstOption ]>
+        | OptionList | List => <[ $(environment.GetAstType(projectionType.TargetAst) : typed).AstList ]>
+        | Single            => environment.GetAmbiguousAstType(projectionType.TargetAst)
       }
     }
   }

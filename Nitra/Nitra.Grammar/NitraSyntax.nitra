@@ -24,30 +24,21 @@ syntax module NitraSyntax
   using Whitespaces;
   using Identifiers;
   using CStyleComments;
+  using NitraLiterals;
 
-  literal Prefix              = "\\u";
-  literal DodDot              = "..";
-  literal Op                  = ".";
-  literal Pipe                = "|";
-
-  braces "(", ")";
-  braces "{", "}";
-  braces "[", "]";
+  literal Pipe = "|";
 
   keyword regex IdentifierStartCharacter (IdentifierPartCharacters | '-')* rule S;
 
   alias Name            = Identifier;
   alias QualifiedName   = QualifiedIdentifier;
-  alias NamespaceOrType = QualifiedIdentifier;
-  alias Char            = Any;
-  alias GrammarName     = QualifiedIdentifier;
-  alias BaseName        = QualifiedIdentifier;
 
   regex PredefinedType = "void" | "int" | "string";
 
-  regex Keyword = "as" | "syntax" | "declaration" | "declarations" | "extend" | "symbol" | "module"
-                | "marker" | "token" | "field" | "span" | "alias" | "regex" | "literal"
-                | "in" | "out" | "rule" | "precedence" | "using" | "namespace" | PredefinedType;
+  regex Keyword = "as" | "syntax" | "declaration" | "declarations" | "ast" | "asts" | "extend" | "module"
+                | "marker" | "map" | "token" | "field" | "span" | "alias" | "regex" | "literal" | "decompose"
+                | "multiple" | "optional" | "abstract" | "in" | "out" | "inout" | "class"
+                | "rule" | "precedence" | "using" | "namespace" | PredefinedType;
 
   extend token IgnoreToken
   {
@@ -55,70 +46,17 @@ syntax module NitraSyntax
     | [SpanClass(Comment)] MultiLineComment;
   }
 
-  regex HexDigit                  = ['0'..'9', 'a'..'f', 'A'..'F'];
-  regex ReservedStringChar        = "\"" | "\\";
-  regex ReservedCharChar          = "\'" | "\\";
-
-  [SpanClass(String)]
-  token StringLiteral                    = "\""  StringPart* "\""
-  {
-    Value() : string = FoldThrough(StringParts, StringBuilder(), _.Value(_)).ToString();
-  }
-
-  token StringPart
-  {
-    Value(sb : StringBuilder) : StringBuilder;
-
-    | UnicodeEscapeSequence = "\\u" HexDigit HexDigit HexDigit HexDigit
-      {
-        override Value = sb.Append(HexToChar(this, HexDigit1.StartPos, HexDigit4.EndPos));
-      }
-    | EscapeSequence        = "\\"  Char
-      {
-        override Value = sb.Append(UnescapeChar(FirstChar(Char)));
-      }
-    | Simple                = Chars=(!ReservedStringChar !NewLine Any)+
-      {
-        override Value = sb.Append(this.GetText());
-      }
-  }
-
-  [SpanClass(Char)]
-  token CharLiteral                      = "\'"  CharPart "\'" { Value() : char = CharPart.Value(); }
-
-  token CharPart
-  {
-    Value() : char;
-
-    | Simple                = !ReservedCharChar Char
-      {
-        override Value = FirstChar(this.Char);
-      }
-    | UnicodeEscapeSequence = "\\u" HexDigit HexDigit HexDigit HexDigit
-      {
-        override Value = HexToChar(this, HexDigit1.StartPos, HexDigit4.EndPos);
-      }
-    | EscapeSequence        = "\\" Char
-      {
-        override Value = UnescapeChar(FirstChar(this.Char));
-      }
-  }
-
-  regex Digits = ['0'..'9']+;
-
-  [SpanClass(Number)]
-  token Number = Digits { Value() : int = DecToInt(this, Digits.StartPos, Digits.EndPos); }
-
   token Identifier                       = !(Keyword !IdentifierPartCharacters) IdentifierBody
   {
     Value() : string = GetText(IdentifierBody);
     Identifier() : Nitra.Model.Identifier = Nitra.Model.Identifier(this, IdentifierBody);
+    LocatedName() : LocatedName = LocatedName(this.Location);
   }
 
   [ExplicitSpaces]
   syntax QualifiedIdentifier              = Names=(Identifier; s "." s)+
   {
-    Identifiers() : list[LocatedName] = Names.Item1.MapToList(x => LocatedName(x.Location));
+    Identifiers() : list[LocatedName] = Names.Item1.MapToList(_.LocatedName());
     Parts() : list[string] = Names.Item1.MapToList(_.Value());
     CalcLocation() : Nitra.Location
     {
@@ -165,34 +103,33 @@ syntax module NitraSyntax
   {
     [Cached] MakeContext(parent : Context) : Context;
 
-    | UsingOpen  = "using" sm NamespaceOrType ";" nl
+    | UsingOpen  = "using" sm NamespaceOrType=QualifiedName ";" nl
       {
         override MakeContext = OpenNamespaceOrTypeContext(parent, NamespaceOrType);
       }
-    | UsingAlias = "using" Name sm "=" sm NamespaceOrType ";" nl
+    | UsingAlias = "using" Name sm "=" sm NamespaceOrType=QualifiedName ";" nl
       {
         override MakeContext = NamespaceOrTypeAliasContext(parent, Name, NamespaceOrType);
       }
   }
 
-  syntax NitraTypeArguments = "<" (NitraType; "," sm; ?)+ ">"
+  syntax NitraTypeArguments
   {
-    Typing(context : Context) : list[NType]
-    {
-      def buffer = LightList();
-      foreach (t in this.NitraTypes.Item1)
-        buffer.Add(t.Typing(context)[0]);
-      buffer.ToNList()
-    }
+    Typing(context : Context) : list[NType];
+    | Corners = "<" (NitraType; "," sm; ?)+ ">" { override Typing = this.NitraTypes.Item1.MapToList(t => t.Typing(context)[0]); }
+    | Braces  = "[" (NitraType; "," sm; ?)+ "]" { override Typing = this.NitraTypes.Item1.MapToList(t => t.Typing(context)[0]); }
   }
 
   syntax NitraTypeName = Identifier NitraTypeArguments?
   {
     Typing(context : Context) : TypeNamePart
     {
-      def name     = this.Identifier.GetText();
-      def typeArgs = if (this.NitraTypeArgumentsOpt.HasValue) this.NitraTypeArgumentsOpt.Value.Typing(context) else [];
-      TypeNamePart(this.Location, name, typeArgs, context.GetNemerleEnvironment())
+      def name = this.Identifier.GetText();
+      def env  = context.GetNemerleEnvironment();
+      if (this.NitraTypeArgumentsOpt.HasValue)
+        TypeNamePart(this.Identifier.Location + this.NitraTypeArgumentsOpt.Location, name, this.NitraTypeArgumentsOpt.Value.Typing(context), env)
+      else
+        TypeNamePart(this.Identifier.Location, name, [], env)
     }
   }
 
@@ -295,9 +232,11 @@ syntax module NitraSyntax
           _ = site.Node.AddAndReport.[AstPropertySymbol](symbol, Name.Location);
         }
         [Cached] private MakeType() : NType = this.NitraType.Typing(this.Context)[0];
+        [Cached] private MakeAstRef() : SymbolRef[AstSymbol] = TypingUtils.EvalRuleMethodAstRef(this.Context, this.Type);
         override Typing
         {
           _ = MakeType();
+          _ = MakeAstRef();
         }
       }
     | InProperty = "in" Name sm ":" sm NitraType ";" nl
@@ -382,7 +321,7 @@ syntax module NitraSyntax
           }
           [Cached] MakeType() : NType = this.NitraType.Typing(this.Context)[0];
           [Cached] MakeContext(parent : Context) : Context = parent;
-          [Cached] MakeProjectionType(t : AstPropertyProjectionType) : AstPropertyProjectionType = t;
+          [Cached] MakeProjectionType(t : option[AstPropertyProjectionType]) : option[AstPropertyProjectionType] = t;
           Typing() : void
           {
             _ = MakeType();
@@ -426,12 +365,16 @@ syntax module NitraSyntax
       }
   }
 
-  syntax ExtensionAst = "|" sm Name Body=AstBody?
+  syntax ExtensionAst = "|" sm AstModifier* Name Body=AstBody?
   {
-    [Cached] MakeAstSymbol() : ParsedExtensionAstSymbol = ParsedExtensionAstSymbol(this);
-    CollectGlobalSymbols(site : IMemberSite) : void
+    [Cached] MakeAstSymbol(isDeclaration : bool, compilerMessages : ICompilerMessages) : ParsedExtensionAstSymbol
     {
-      def symbol = MakeAstSymbol();
+      def (_, _, cardinality) = TypingUtils.TypeAstModifiers(this.AstModifiers, true, isDeclaration, compilerMessages);
+      ParsedExtensionAstSymbol(this, isDeclaration, cardinality);
+    }
+    CollectGlobalSymbols(site : IMemberSite, isDeclaration : bool) : void
+    {
+      def symbol = MakeAstSymbol(isDeclaration, site.Node.Project);
       _ = site.Node.AddAndReport.[AstSymbol](symbol, Name.Location);
       when (Body.HasValue)
         Body.Value.CollectGlobalSymbols(symbol);
@@ -453,6 +396,16 @@ syntax module NitraSyntax
     [Cached] MakeBaseAstRef(baseAstRef : SymbolRef[ExtensibleAstSymbol]) : SymbolRef[ExtensibleAstSymbol] = baseAstRef;
   }
 
+  token AstModifier
+  {
+    IsAbstract(acc : bool, isExtensible : bool, compilerMessages : ICompilerMessages) : bool                                          { IgnoreParams(); acc }
+    Cardinality(acc : AstCardinality, isDeclaration : bool, isAbstract : bool, compilerMessages : ICompilerMessages) : AstCardinality { IgnoreParams(); acc }
+
+    | Abstract = "abstract" sm { override IsAbstract  = TypingUtils.TypeAstModifier_IsAbstract(this, acc, isExtensible, compilerMessages); }
+    | Optional = "optional" sm { override Cardinality = TypingUtils.TypeAstModifier_Cardinality(this, acc, isDeclaration, isAbstract, compilerMessages, AstCardinality.Optional); }
+    | Multiple = "multiple" sm { override Cardinality = TypingUtils.TypeAstModifier_Cardinality(this, acc, isDeclaration, isAbstract, compilerMessages, AstCardinality.Multiple); }
+  }
+
   syntax NamespaceMember
   {
     CollectGlobalSymbols(ns : NamespaceSymbol) : void;
@@ -466,27 +419,34 @@ syntax module NitraSyntax
       {
         syntax Header
         {
-          IsDeclaration() : bool;
-          IsAbstract() : bool;
-          | Ast         = AbstractOpt="abstract"? "ast"         { override IsDeclaration = false; override IsAbstract = AbstractOpt.HasValue; }
-          | Declaration = AbstractOpt="abstract"? "declaration" { override IsDeclaration = true;  override IsAbstract = AbstractOpt.HasValue; }
+          Modifiers(compilerMessages : ICompilerMessages) : bool * bool * AstCardinality;
+          | Ast         = AstModifier* "ast"         { override Modifiers = TypingUtils.TypeAstModifiers(this.AstModifiers, false, false, compilerMessages); }
+          | Declaration = AstModifier* "declaration" { override Modifiers = TypingUtils.TypeAstModifiers(this.AstModifiers, false, true,  compilerMessages); }
         }
 
-        [Cached] private MakeAstSymbol() : AstSymbol
+        [Cached] private MakeAstSymbol(compilerMessages : ICompilerMessages) : AstSymbol
         {
-          match (Header.IsDeclaration(), Header.IsAbstract())
+          def (isDeclaration, isAbstract, cardinality) = this.Header.Modifiers(compilerMessages);
+          if (isAbstract)
           {
-            | (false, false) => ParsedSimpleAstSymbol(this)
-            | (false, true)  => ParsedAbstractAstSymbol(this)
-            | (true,  false) => ParsedSimpleDeclarationSymbol(this)
-            | (true,  true)  => ParsedAbstractDeclarationSymbol(this)
+            assert(cardinality == AstCardinality.Single);
+            ParsedAbstractAstSymbol(this, isDeclaration)
           }
+          else
+            ParsedSimpleAstSymbol(this, isDeclaration, cardinality)
         }
-        [Cached] private MakeBaseAsts() : list[AstSymbol] = TypingUtils.TypeAstInheritance(this.AstInheritanceOpt, this.Context, this.Header.IsDeclaration());
+        [Cached] private MakeBaseAsts() : list[AstSymbol] = TypingUtils.TypeAstInheritance(this.AstInheritanceOpt, this.Context, this.AstSymbol.IsDeclaration);
+        [Cached] private MakeNamePropertyType() : NType = Utils.MakeAstNamePropertyType(this.Name.Location, this.Context);
+        [Cached] private MakeNamePropertyAstRef() : SymbolRef[AstSymbol] = TypingUtils.EvalRuleMethodAstRef(this.Context, this.NamePropertyType);
         override CollectGlobalSymbols
         {
-          def symbol = MakeAstSymbol();
+          def symbol = MakeAstSymbol(ns.Node.Project);
           _ = ns.Node.AddAndReport.[AstSymbol](symbol, Name.Location);
+          when (symbol is SimpleAstSymbol(IsDeclaration = true))
+          {
+            def namePropertySymbol = ParsedSimpleNameAstPropertySymbol(this);
+            _ = symbol.Node.AddAndReport.[AstPropertySymbol](namePropertySymbol, Name.Location);
+          }
           Body.CollectGlobalSymbols(symbol :> IMemberSite);
         }
         override MakeContext
@@ -498,6 +458,11 @@ syntax module NitraSyntax
         override Typing
         {
           _ = MakeBaseAsts();
+          when (AstSymbol is SimpleAstSymbol(IsDeclaration = true))
+          {
+            _ = MakeNamePropertyType();
+            _ = MakeNamePropertyAstRef();
+          }
           Body.Typing();
         }
         override TypeAst = Body.TypeProperties();
@@ -509,15 +474,15 @@ syntax module NitraSyntax
         {
           IsDeclaration() : bool;
           | Ast         = "asts"         { override IsDeclaration = false; }
-          | Declaration = "declarations" { override IsDeclaration = true;  }
+          | Declaration = "declarations" { override IsDeclaration = true; }
         }
 
         syntax Body = outline_begin_before nl "{" inl Members=AstMember* Extensions=ExtensionAst* d "}" outline_end_before nl
         {
-          CollectGlobalSymbols(site : IMemberSite) : void
+          CollectGlobalSymbols(site : IMemberSite, isDeclaration : bool) : void
           {
             foreach (member in Members) member.CollectGlobalSymbols(site);
-            foreach (extension in Extensions) extension.CollectGlobalSymbols(site);
+            foreach (extension in Extensions) extension.CollectGlobalSymbols(site, isDeclaration);
           }
           [Cached] MakeContext(parent : Context) : Context
           {
@@ -537,13 +502,20 @@ syntax module NitraSyntax
           }
         }
 
-        [Cached] private MakeAstSymbol() : ParsedExtensibleAstSymbol = ParsedExtensibleAstSymbol(this);
-        [Cached] private MakeBaseAsts() : list[AstSymbol] = TypingUtils.TypeAstInheritance(this.AstInheritanceOpt, this.Context, this.Header.IsDeclaration());
+        [Cached] private MakeAstSymbol() : ParsedExtensibleAstSymbol = ParsedExtensibleAstSymbol(this, this.Header.IsDeclaration());
+        [Cached] private MakeBaseAsts() : list[AstSymbol] = TypingUtils.TypeAstInheritance(this.AstInheritanceOpt, this.Context, this.AstSymbol.IsDeclaration);
+        [Cached] private MakeNamePropertyType() : NType = Utils.MakeAstNamePropertyType(this.Name.Location, this.Context);
+        [Cached] private MakeNamePropertyAstRef() : SymbolRef[AstSymbol] = TypingUtils.EvalRuleMethodAstRef(this.Context, this.NamePropertyType);
         override CollectGlobalSymbols
         {
           def symbol = MakeAstSymbol();
           _ = ns.Node.AddAndReport.[AstSymbol](symbol, Name.Location);
-          Body.CollectGlobalSymbols(symbol);
+          when (symbol.IsDeclaration)
+          {
+            def namePropertySymbol = ParsedExtensibleNameAstPropertySymbol(this);
+            _ = symbol.Node.AddAndReport.[AstPropertySymbol](namePropertySymbol, Name.Location);
+          }
+          Body.CollectGlobalSymbols(symbol, symbol.IsDeclaration);
         }
         override MakeContext
         {
@@ -554,6 +526,11 @@ syntax module NitraSyntax
         override Typing
         {
           _ = MakeBaseAsts();
+          when (AstSymbol.IsDeclaration)
+          {
+            _ = MakeNamePropertyType();
+            _ = MakeNamePropertyAstRef();
+          }
           Body.Typing(SymbolRef.Some(Name.Location, false, AstSymbol));
         }
         override TypeAst = Body.TypeAst();
@@ -570,10 +547,10 @@ syntax module NitraSyntax
 
         syntax Body = outline_begin_before nl "{" inl Extensions=ExtensionAst* d "}" outline_end_before nl
         {
-          CollectGlobalSymbols(site : IMemberSite) : void
+          CollectGlobalSymbols(site : IMemberSite, isDeclaration : bool) : void
           {
             foreach (extension in Extensions)
-              extension.CollectGlobalSymbols(site);
+              extension.CollectGlobalSymbols(site, isDeclaration);
           }
           [Cached] MakeContext(parent : Context) : Context = PassThrough(Extensions, parent, _.MakeContext(_));
           Typing(baseAstRef : SymbolRef[ExtensibleAstSymbol]) : void
@@ -586,21 +563,28 @@ syntax module NitraSyntax
 
         override CollectGlobalSymbols
         {
-          def symbol = if (Header.IsDeclaration()) ParsedExtendDeclarationSymbol(this) else ParsedExtendAstSymbol(this);
+          def isDeclaration = Header.IsDeclaration();
+          def symbol = ParsedExtendAstSymbol(this, isDeclaration);
           _ = ns.Node.AddAndReport.[ExtendAstSymbol](symbol, Location);
-          Body.CollectGlobalSymbols(symbol);
+          Body.CollectGlobalSymbols(symbol, isDeclaration);
         }
         override MakeContext = Body.MakeContext(parent);
         override Typing
         {
           def baseAstRef = MakeBaseAstRef();
+          when (baseAstRef is SymbolRef.Some(baseAst))
+          when (baseAst.IsDeclaration != this.Header.IsDeclaration())
+          {
+            def baseType = if (baseAst.IsDeclaration) "declaration" else "ast";
+            this.Context.Error(this.Header, $"Expected 'extend $baseType'.");
+          }
           Body.Typing(baseAstRef);
         }
         override TypeAst = Body.TypeAst();
-        [Cached] private MakeBaseAstRef() : SymbolRef[ExtensibleAstSymbol] = SymbolRef[ExtensibleAstSymbol].Create(BaseName, Context.Bind(BaseName));
+        [Cached] private MakeBaseAstRef() : SymbolRef[ExtensibleAstSymbol] = this.Context.Bind.[ExtensibleAstSymbol](BaseName);
       }
 
-    | MapSyntax = "map" "syntax" sm RuleName=QualifiedName sm "->" sm AstName=QualifiedName MapSyntaxBody
+    | MapSyntax = "map" sm "syntax" sm RuleName=QualifiedName sm "->" sm AstName=QualifiedName MapSyntaxBody
       {
         override CollectGlobalSymbols { _ = ns; }
         override MakeContext
@@ -610,7 +594,7 @@ syntax module NitraSyntax
           context
         }
         [Cached] private MakeAstSymbolRef() : SymbolRef[AstSymbol] = this.Context.Bind.[AstSymbol](AstName);
-        [Cached] private MakeSyntaxRuleRef()  : SymbolRef[SyntaxRuleSymbol]  = this.Context.Bind.[SyntaxRuleSymbol](RuleName);
+        [Cached] private MakeSyntaxRuleRef() : SymbolRef[SyntaxRuleSymbol]  = this.Context.Bind.[SyntaxRuleSymbol](RuleName);
         override CollectSyntaxMappings
         {
           def astSymbolRef = MakeAstSymbolRef();
@@ -665,16 +649,8 @@ syntax module NitraSyntax
           parent
         }
         [Cached] private MakeTokenLiteralNames() : Map[string, Nitra.Model.Identifier] = FoldThrough(SyntaxModuleMembers, Map(), _.GetTokenLiteralNames(_));
-        override CollectSyntaxMappings
-        {
-          foreach (decl in SyntaxModuleMembers)
-            decl.CollectSyntaxMappings();
-        }
-        override TypeSyntaxMappings
-        {
-          foreach (decl in SyntaxModuleMembers)
-            decl.TypeSyntaxMappings();
-        }
+        override CollectSyntaxMappings = foreach (decl in SyntaxModuleMembers) decl.CollectSyntaxMappings();
+        override TypeSyntaxMappings    = foreach (decl in SyntaxModuleMembers) decl.TypeSyntaxMappings();
         override Typing
         {
           _ = MakeTokenLiteralNames();
@@ -689,18 +665,9 @@ syntax module NitraSyntax
     Options(inOptions : SyntaxModuleOptions) : SyntaxModuleOptions = inOptions;
     [Cached] MakeContext(_parent : Context) : Context = _parent;
 
-    | Splicable = AttributeName="Splicable"
-      {
-        override Options = inOptions.SetNeedSplicable(this, true);
-      }
-    | ExplicitSpaces = AttributeName="ExplicitSpaces"
-      {
-        override Options = inOptions.SetExplicitSpaces(this, true);
-      }
-    | ImplicitSpaces = AttributeName="ImplicitSpaces"
-      {
-        override Options = inOptions.SetExplicitSpaces(this, false);
-      }
+    | Splicable      = AttributeName="Splicable"      { override Options = inOptions.SetNeedSplicable(this, true); }
+    | ExplicitSpaces = AttributeName="ExplicitSpaces" { override Options = inOptions.SetExplicitSpaces(this, true); }
+    | ImplicitSpaces = AttributeName="ImplicitSpaces" { override Options = inOptions.SetExplicitSpaces(this, false); }
   }
 
   syntax SyntaxModuleAttributeList = "[" (SyntaxModuleAttribute; ","sm)+ "]" sm
@@ -720,10 +687,7 @@ syntax module NitraSyntax
     Options(inOptions : RuleDefinitionOptions) : RuleDefinitionOptions = inOptions;
     [Cached] MakeContext(_parent : Context) : Context = _parent;
 
-    | Start                  = AttributeName="StartRule"
-      {
-        override Options = inOptions.SetStart(this, true);
-      }
+    | Start                  = AttributeName="StartRule" { override Options = inOptions.SetStart(this, true); }
     | "Arity" "(" Number ")" { override Options = inOptions.SetArity(this, Number.Value()); }
     | "Prefix"               { override Options = inOptions.SetOperatorInfo(this, OperatorInfo.Prefix); }
     | "Postfix"              { override Options = inOptions.SetOperatorInfo(this, OperatorInfo.Postfix); }
@@ -732,46 +696,16 @@ syntax module NitraSyntax
       {
         override Options = Context.Bind.[SpanClassSymbol](Class).Map(inOptions.SetSpanClass(Class, _)) ?? inOptions;
       }
-    | ExplicitSpaces         = AttributeName="ExplicitSpaces"
-      {
-        override Options = inOptions.SetExplicitSpaces(this, true);
-      }
-    | ImplicitSpaces         = AttributeName="ImplicitSpaces"
-      {
-        override Options = inOptions.SetExplicitSpaces(this, false);
-      }
-    | SuppressTrailingSpaces = AttributeName="SuppressTrailingSpaces"
-      {
-        override Options = inOptions.SetSuppressTrailingSpaces(this, true);
-      }
-    | AllowTrailingSpaces    = AttributeName="AllowTrailingSpaces"
-      {
-        override Options = inOptions.SetSuppressTrailingSpaces(this, false);
-      }
-    | NoParseTree            = AttributeName="NoParseTree"
-      {
-        override Options = inOptions.SetNoParseTree(this, true);
-      }
-    | KeyToken               = AttributeName="Key"
-      {
-        override Options = inOptions.SetKeyToken(this, true);
-      }
-    | Keyword               = AttributeName="Keyword"
-      {
-        override Options = inOptions.SetKeyword(this, true);
-      }
-    | Identifier            = AttributeName="Identifier"
-      {
-        override Options = inOptions.SetIdentifier(this, true);
-      }
-    | DynamicSyntaxExtender = AttributeName="DynamicSyntaxExtender"
-      {
-        override Options = inOptions.SetDynamicSyntaxExtender(this, true);
-      }
-    | DynamicSyntaxExtentionPoint = AttributeName="DynamicSyntaxExtentionPoint"
-      {
-        override Options = inOptions.SetDynamicSyntaxExtentionPoint(this, true);
-      }
+    | ExplicitSpaces              = AttributeName="ExplicitSpaces"              { override Options = inOptions.SetExplicitSpaces(this, true); }
+    | ImplicitSpaces              = AttributeName="ImplicitSpaces"              { override Options = inOptions.SetExplicitSpaces(this, false); }
+    | SuppressTrailingSpaces      = AttributeName="SuppressTrailingSpaces"      { override Options = inOptions.SetSuppressTrailingSpaces(this, true); }
+    | AllowTrailingSpaces         = AttributeName="AllowTrailingSpaces"         { override Options = inOptions.SetSuppressTrailingSpaces(this, false); }
+    | NoParseTree                 = AttributeName="NoParseTree"                 { override Options = inOptions.SetNoParseTree(this, true); }
+    | KeyToken                    = AttributeName="Key"                         { override Options = inOptions.SetKeyToken(this, true); }
+    | Keyword                     = AttributeName="Keyword"                     { override Options = inOptions.SetKeyword(this, true); }
+    | Identifier                  = AttributeName="Identifier"                  { override Options = inOptions.SetIdentifier(this, true); }
+    | DynamicSyntaxExtender       = AttributeName="DynamicSyntaxExtender"       { override Options = inOptions.SetDynamicSyntaxExtender(this, true); }
+    | DynamicSyntaxExtentionPoint = AttributeName="DynamicSyntaxExtentionPoint" { override Options = inOptions.SetDynamicSyntaxExtentionPoint(this, true); }
   }
 
   syntax RuleAttributeList = "[" (RuleAttribute; ","sm)+ "]" sm
@@ -849,9 +783,16 @@ syntax module NitraSyntax
       {
         override CollectGlobalSymbols = _ = owner.Node.AddAndReport(ParsedMarkerSymbol(Name, owner), Location);
       }
-    | ExtendSyntax        = "extend"  sm "syntax" sm (Name sm "=" sm)? BaseName outline_begin_before nl "{" inl ExtensionRule* d "}" outline_end_before nl
+    | ExtendRule          = Header sm (Name sm "=" sm)? BaseName=QualifiedName outline_begin_before nl "{" inl ExtensionRule* d "}" outline_end_before nl
       {
-        [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedExtendSyntaxSymbol = ParsedExtendSyntaxSymbol(this, owner);
+        syntax Header
+        {
+          IsToken() : bool;
+          | Token  = "extend" sm "token"  { override IsToken = true;  }
+          | Syntax = "extend" sm "syntax" { override IsToken = false; }
+        }
+
+        [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedExtendSyntaxSymbol = ParsedExtendSyntaxSymbol(this, owner, this.Header.IsToken());
         override CollectGlobalSymbols
         {
           def symbol = MakeSymbol(owner);
@@ -865,56 +806,18 @@ syntax module NitraSyntax
           _ = FoldThrough(ExtensionRules, context, _.MakeContext(_));
           parent
         }
-        override CollectSyntaxMappings
-        {
-          foreach (m in ExtensionRules)
-            m.CollectSyntaxMappings();
-        }
-        override TypeSyntaxMappings
-        {
-          foreach (m in ExtensionRules)
-            m.TypeSyntaxMappings();
-        }
+        override CollectSyntaxMappings = foreach (m in ExtensionRules) m.CollectSyntaxMappings();
+        override TypeSyntaxMappings = foreach (m in ExtensionRules) m.TypeSyntaxMappings();
+        [Cached] private MakeBaseRuleRef() : SymbolRef[ExtensibleRuleSymbol] = this.Context.Bind.[ExtensibleRuleSymbol](BaseName);
         override Typing
         {
-          def baseRule = this.Symbol.Extend;
-          when (baseRule is Some(symbol) when symbol.Options.IsTokenRule)
-            this.Context.Error(BaseName, "Can't extend token with syntax rule.");
-          foreach (m in ExtensionRules)
-            m.Typing(baseRule);
-        }
-      }
-    | ExtendToken         = "extend"  sm "token"  sm (Name sm "=" sm)? BaseName outline_begin_before nl "{" inl ExtensionRule* d "}" outline_end_before nl
-      {
-        [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedExtendTokenSymbol = ParsedExtendTokenSymbol(this, owner);
-        override CollectGlobalSymbols
-        {
-          def symbol = MakeSymbol(owner);
-          _ = owner.Node.AddAndReport.[ExtendSyntaxSymbol](symbol, Location);
-          foreach (rule in ExtensionRules)
-            rule.CollectGlobalSymbols(symbol);
-        }
-        override MakeContext
-        {
-          def context = RuleDeclarationSiteContext(parent, Symbol);
-          _ = FoldThrough(ExtensionRules, context, _.MakeContext(_));
-          parent
-        }
-        override CollectSyntaxMappings
-        {
-          foreach (m in ExtensionRules)
-            m.CollectSyntaxMappings();
-        }
-        override TypeSyntaxMappings
-        {
-          foreach (m in ExtensionRules)
-            m.TypeSyntaxMappings();
-        }
-        override Typing
-        {
-          def baseRule = this.Symbol.Extend;
-          when (baseRule is Some(symbol) when !symbol.Options.IsTokenRule)
-            this.Context.Error(BaseName, "Can't extend syntax rule with token.");
+          def baseRule = MakeBaseRuleRef();
+          when (baseRule is Some(symbol) when symbol.Options.IsTokenRule != this.Symbol.IsToken)
+          {
+            def msg = if (symbol.Options.IsTokenRule) "Can't extend token with syntax rule."
+                      else "Can't extend syntax rule with token.";
+            this.Context.Error(BaseName, msg);
+          }
           foreach (m in ExtensionRules)
             m.Typing(baseRule);
         }
@@ -957,21 +860,6 @@ syntax module NitraSyntax
           _ = RegularRule();
         }
       }
-    | BracePair           = "braces"  sm Open=RegexExpression "," sm Close=RegexExpression                  ";"nl
-      {
-        override MakeContext
-        {
-          def context = BracePairContext(parent, Open, Close);
-          _ = Open.MakeContext(context);
-          _ = Close.MakeContext(context);
-          context
-        }
-        override Typing
-        {
-          Open.Typing().ValidateRegularRule(this.Context);
-          Close.Typing().ValidateRegularRule(this.Context);
-        }
-      }
     | KeywordRegex        = "keyword" sm "regex"  sm MatchTokens=RegexExpression sm "rule" sm QualifiedName ";"nl
       {
         override MakeContext
@@ -1006,38 +894,42 @@ syntax module NitraSyntax
   syntax ParseTreeFieldAutoMapping = RuleFieldPath=QualifiedName sm "->" sm AstPropertyName=Name ";"
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol, variables : Dictionary[string, ParseTreePattern.Var]) : SyntaxMappingField
+    GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol, variables : Dictionary[string, ParseTreePattern.Var]) : option[SyntaxMappingField]
     {
-      def astPropertyRef = TypingUtils.BindAstProperty(astSymbol, this.AstPropertyName, this.Context);
-      def parseTreePathOpt       = TypingUtils.BindRuleField(ruleSymbol, this.RuleFieldPath, variables, this.Context);
-      when (astPropertyRef is SymbolRef.Some(astProperty))
+      def astPropertyRef   = TypingUtils.BindAstProperty(astSymbol, this.AstPropertyName, this.Context);
+      def parseTreePathOpt = TypingUtils.BindRuleField(ruleSymbol, this.RuleFieldPath, variables, this.Context);
+      when (astPropertyRef is SymbolRef.Some(astProperty) as astPropertyRef)
       when (parseTreePathOpt is Some(parseTreePath))
       {
         def syntaxMappingTypeOpt = TypingUtils.MakeSyntaxMappingType(Context, astProperty, parseTreePath, this.Location);
         when (syntaxMappingTypeOpt is Some(syntaxMappingType))
-          return SyntaxMappingField.Automatic(this.Location, astPropertyRef, parseTreePath, syntaxMappingType);
+          return Some(SyntaxMappingField.Automatic(this.Location, astPropertyRef, parseTreePath, syntaxMappingType));
       }
-      SyntaxMappingField.Error(this.Location, astPropertyRef)
+      None()
     }
   }
 
   syntax ParseTreeFieldInlineMapping = FieldName=Name sm "=" sm Code=MapSyntaxExpression
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol, variables : Dictionary[string, ParseTreePattern.Var]) : SyntaxMappingField
+    GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol, variables : Dictionary[string, ParseTreePattern.Var]) : option[SyntaxMappingField]
     {
       _ = ruleSymbol;
       _ = variables;
-      def fieldRef = TypingUtils.BindAstProperty(astSymbol, this.FieldName, this.Context);
-      def code     = NemerleParser.Parse(this.Code, this.Context);
-      SyntaxMappingField.Inline(this.Location, fieldRef, code)
+      def astPropertyRef = TypingUtils.BindAstProperty(astSymbol, this.FieldName, this.Context);
+      if (astPropertyRef is SymbolRef.Some as astPropertyRef)
+      {
+        def code = NemerleParser.Parse(this.Code, this.Context);
+        Some(SyntaxMappingField.Inline(this.Location, astPropertyRef, code))
+      }
+      else None()
     }
   }
 
   syntax MapSyntaxMatchCaseBodyMember
   {
     MakeContext(parent : Context) : Context;
-    GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol, variables : Dictionary[string, ParseTreePattern.Var]) : SyntaxMappingField;
+    GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol, variables : Dictionary[string, ParseTreePattern.Var]) : option[SyntaxMappingField];
 
     | ParseTreeFieldAutoMapping
       {
@@ -1065,7 +957,8 @@ syntax module NitraSyntax
         override CollectMappingFields
         {
           when (astSymbolRef is SymbolRef.Some(astSymbol))
-            buffer.Add(ParseTreeFieldAutoMapping.GetSyntaxMappingField(astSymbol, ruleSymbol, Dictionary()));
+          when (ParseTreeFieldAutoMapping.GetSyntaxMappingField(astSymbol, ruleSymbol, Dictionary()) is Some(mappingField))
+            buffer.Add(mappingField);
         }
       }
     | ParseTreeFieldInlineMapping
@@ -1074,18 +967,19 @@ syntax module NitraSyntax
         override CollectMappingFields
         {
           when (astSymbolRef is SymbolRef.Some(astSymbol))
-            buffer.Add(ParseTreeFieldInlineMapping.GetSyntaxMappingField(astSymbol, ruleSymbol, Dictionary()));
+          when (ParseTreeFieldInlineMapping.GetSyntaxMappingField(astSymbol, ruleSymbol, Dictionary()) is Some(mappingField))
+            buffer.Add(mappingField);
         }
       }
-    | MatchCaseEmpty = "|" sm Pattern (sm "->" sm Name)?
+    | MatchCaseEmpty = "|" sm Pattern (sm "->" sm QualifiedName)?
       {
         override MakeContext = parent;
         [Cached] private MakeAstSymbolRef(astSymbolRef : SymbolRef[AstSymbol]) : SymbolRef[AstSymbol]
         {
           if (astSymbolRef is SymbolRef.Some(astSymbol))
           {
-            if (NameOpt.HasValue)
-              TypingUtils.BindAstSymbolFromMappingExtension(astSymbol, NameOpt.Value.Item2, this.Context)
+            if (QualifiedNameOpt.HasValue)
+              TypingUtils.BindAstSymbolFromMappingExtension(QualifiedNameOpt.Location, astSymbol, QualifiedNameOpt.Value.Item2.CalcLocations(), this.Context)
             else
               this.Pattern.BindExtensionAst(astSymbol, this.Context)
           }
@@ -1125,15 +1019,15 @@ syntax module NitraSyntax
           }
         }
       }
-    | MatchCasePerField = "|" sm Pattern (sm "->" sm Name)? outline_begin_before nl OpenBrace="{" inl Members=MapSyntaxMatchCaseBodyMember* d CloseBrace="}" outline_end_before nl
+    | MatchCasePerField = "|" sm Pattern (sm "->" sm QualifiedName)? outline_begin_before nl OpenBrace="{" inl Members=MapSyntaxMatchCaseBodyMember* d CloseBrace="}" outline_end_before nl
       {
         override MakeContext = PassThrough(Members, parent, _.MakeContext(_));
         [Cached] private MakeAstSymbolRef(astSymbolRef : SymbolRef[AstSymbol]) : SymbolRef[AstSymbol]
         {
           if (astSymbolRef is SymbolRef.Some(astSymbol))
           {
-            if (NameOpt.HasValue)
-              TypingUtils.BindAstSymbolFromMappingExtension(astSymbol, NameOpt.Value.Item2, this.Context)
+            if (QualifiedNameOpt.HasValue)
+              TypingUtils.BindAstSymbolFromMappingExtension(QualifiedNameOpt.Location, astSymbol, QualifiedNameOpt.Value.Item2.CalcLocations(), this.Context)
             else
               this.Pattern.BindExtensionAst(astSymbol, this.Context)
           }
@@ -1156,7 +1050,8 @@ syntax module NitraSyntax
           def caseDeclatationSymbolRef = MakeAstSymbolRef(astSymbolRef);
           when (caseDeclatationSymbolRef is SymbolRef.Some(astSymbol))
             foreach (member in Members)
-              mappingFields.Add(member.GetSyntaxMappingField(astSymbol, ruleSymbol, variables));
+              when (member.GetSyntaxMappingField(astSymbol, ruleSymbol, variables) is Some(mappingField))
+                mappingFields.Add(mappingField);
           buffer.Add(SyntaxMappingCase.PerField(this.Location, pattern, caseDeclatationSymbolRef, mappingFields.ToNList()))
         }
         override CollectExtensionBodies
@@ -1166,7 +1061,8 @@ syntax module NitraSyntax
             when (astSymbolRef is SymbolRef.Some(astSymbol))
             {
               foreach (member in Members)
-                mappingFields.Add(member.GetSyntaxMappingField(astSymbol, ruleSymbol, variables));
+                when (member.GetSyntaxMappingField(astSymbol, ruleSymbol, variables) is Some(mappingField))
+                  mappingFields.Add(mappingField);
 
               def errorLoc = Location(this.Location.Source, this.CloseBrace);
               TypingUtils.CheckRequiredAstProperties(astSymbol, mappingFields, errorLoc, this.Context);
@@ -1255,14 +1151,14 @@ syntax module NitraSyntax
     | Identifier
       {
         override BindExtensionRule        = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), false);
-        override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(baseAstSymbol, this.Identifier, context);
-        override Typing                   = PatternTyper.TypeIdentifier(this.Location, LocatedName(this.Identifier.Location), ruleType, context);
+        override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(this.Identifier.Location, baseAstSymbol, [this.Identifier.Location], context);
+        override Typing                   = PatternTyper.TypeIdentifier(this.Location, this.Identifier.LocatedName(), ruleType, context);
       }
     | Ctor  = Identifier "(" (Pattern; "," s)* ")"
       {
         override BindExtensionRule        = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), true);
-        override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(baseAstSymbol, this.Identifier, context);
-        override Typing                   = PatternTyper.TypeCtor(this.Location, LocatedName(this.Identifier.Location), this.Patterns.Item1, ruleType, context);
+        override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(this.Identifier.Location, baseAstSymbol, [this.Identifier.Location], context);
+        override Typing                   = PatternTyper.TypeCtor(this.Location, this.Identifier.LocatedName(), this.Patterns.Item1, ruleType, context);
         override ExtensionTyping
         {
           def pattern = PatternTyper.TypeParseTreePattern(this.Location, ruleSymbol, this.Patterns.Item1, context);
@@ -2001,17 +1897,18 @@ syntax module NitraSyntax
       }
   }
 
-  syntax RuleMethodsParam = Name sm ":" sm Type;
+  syntax RuleMethodsParam = Name sm ":" sm Type=NitraType
+  {
+    Typing(context : Context) : RuleMethod.RuleMethodParameter = RuleMethod.RuleMethodParameter(this.Location, this.Name.LocatedName(), this.Type.Typing(context)[0]);
+  }
+
   token RuleMethodPrivate = "private" sm;
 
   syntax RuleMethodAttribute
   {
     IsCached() : bool;
 
-    | Cached = AttributeName="Cached"
-      {
-        override IsCached = true;
-      }
+    | Cached = AttributeName="Cached" { override IsCached = true; }
   }
   syntax RuleMethodAttributeList = "[" (RuleMethodAttribute; ",")+ "]" nl
   {
@@ -2032,62 +1929,70 @@ syntax module NitraSyntax
     }
   }
 
-  syntax RuleMethod = RuleMethodAttributes RuleMethodPrivate? Name sm "(" (RuleMethodsParam; "," sm)* ")" sm ":" sm Type RuleMethodBody
+  syntax RuleMethod = RuleMethodAttributes RuleMethodPrivate? Name sm "(" (RuleMethodsParam; "," sm)* ")" sm ":" sm Type=NitraType RuleMethodBody
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    [Cached] private MakeSymbol(ruleSymbol : SyntaxRuleSymbol, compilationMessages : ICompilerMessages) : RuleMethod.DefinitionSymbol
+    [Cached] private MakeSymbol(ruleSymbol : SyntaxRuleSymbol, compilerMessages : ICompilerMessages) : RuleMethod.DefinitionSymbol
     {
       if (RuleMethodPrivateOpt.HasValue)
       {
         when (RuleMethodBody.IsEmpty())
-          compilationMessages.Error(this, "A private rule method must have a body.");
+          compilerMessages.Error(this, "A private rule method must have a body.");
         unless (ruleSymbol is SimpleRuleSymbol || ruleSymbol is ExtensionRuleSymbol)
-          compilationMessages.Error(this, "A private rule method can be declared only in simple rules and extension rules.");
+          compilerMessages.Error(this, "A private rule method can be declared only in simple rules and extension rules.");
         RuleMethod.ParsedDefPrivateSymbol(this)
       }
       else if (RuleMethodBody.IsEmpty())
       {
         unless (ruleSymbol is ExtensibleRuleSymbol)
-          compilationMessages.Error(this, "An abstract rule method must be defined in an extension point rule only.");
+          compilerMessages.Error(this, "An abstract rule method must be defined in an extension point rule only.");
         RuleMethod.ParsedAbstractSymbol(this)
       }
       else
       {
         unless (ruleSymbol is SimpleRuleSymbol || ruleSymbol is ExtensibleRuleSymbol)
-          compilationMessages.Error(this, "A public rule method must be defined in an extension point rule or a simple rule only.");
+          compilerMessages.Error(this, "A public rule method must be defined in an extension point rule or a simple rule only.");
         RuleMethod.ParsedDefSymbol(this)
       }
     }
     CollectGlobalSymbols(ruleSymbol : SyntaxRuleSymbol) : void
     {
-      def compilationMessages = ruleSymbol.Node.Project;
-      _ = ruleSymbol.Node.AddAndReport(MakeSymbol(ruleSymbol, compilationMessages), this.Location);
+      def compilerMessages = ruleSymbol.Node.Project;
+      _ = ruleSymbol.Node.AddAndReport(MakeSymbol(ruleSymbol, compilerMessages), this.Location);
     }
-    [Cached] private MakeSignature() : RuleMethod.RuleMethodSignature = RuleMethod.RuleMethodSignature(this.Location, NemerleParser.Parse(this.RuleMethodsParams.Item1, Context), NemerleParser.Parse(this.Type, Context));
-    [Cached] private MakeBody()      : RuleMethod.RuleMethodBody      = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
-    [Cached] private MakeIsCached()  : bool                           = RuleMethodAttributes.IsCached();
+    [Cached] private MakeSignature() : RuleMethod.RuleMethodSignature
+    {
+      def context    = this.Context;
+      def parameters = this.RuleMethodsParams.Item1.MapToList(_.Typing(context));
+      def (type, _)  = this.Type.Typing(context);
+      RuleMethod.RuleMethodSignature(this.Location, parameters, type);
+    }
+    [Cached] private MakeBody()     : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
+    [Cached] private MakeIsCached() : bool                      = RuleMethodAttributes.IsCached();
+    [Cached] private MakeAstRef()   : SymbolRef[AstSymbol]      = TypingUtils.EvalRuleMethodAstRef(this.Context, this.Signature.Type);
     Typing() : void
     {
       _ = MakeSignature();
       _ = MakeBody();
       _ = MakeIsCached();
+      _ = MakeAstRef();
     }
   }
 
   syntax RuleMethodOverride = RuleMethodAttributes "override"     sm  Name RuleMethodBody
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    [Cached] private MakeSymbol(compilationMessages : ICompilerMessages) : RuleMethod.DefinitionSymbol
+    [Cached] private MakeSymbol(compilerMessages : ICompilerMessages) : RuleMethod.DefinitionSymbol
     {
       when (RuleMethodBody.IsEmpty())
-        compilationMessages.Error(this, "An overriding rule method must have a body.");
+        compilerMessages.Error(this, "An overriding rule method must have a body.");
       RuleMethod.ParsedOverrideSymbol(this);
     }
     CollectGlobalSymbols(ruleSymbol : SyntaxRuleSymbol) : void
     {
       _ = ruleSymbol.Node.AddAndReport(MakeSymbol(ruleSymbol.Node.Project), this.Location);
     }
-    [Cached] private MakeBaseRuleMethod(compilationMessages : ICompilerMessages) : SymbolRef[RuleMethod.RuleMethodSymbol]
+    [Cached] private MakeBaseRuleMethod(compilerMessages : ICompilerMessages) : SymbolRef[RuleMethod.RuleMethodSymbol]
     {
       match (this.Symbol.DeclaringRule)
       {
@@ -2100,17 +2005,17 @@ syntax module NitraSyntax
 
             | [_] =>
               def name = Name.Value();
-              compilationMessages.Error(this, $"Cannot override '$name' rule method."); //TODO: rewrite error message!
+              compilerMessages.Error(this, $"Cannot override '$name' rule method."); //TODO: rewrite error message!
               SymbolRef.None(Name.Location, false)
 
             | _ =>
               def name = Name.Value();
-              compilationMessages.Error(this, $"No '$name' rule method to override.");
+              compilerMessages.Error(this, $"No '$name' rule method to override.");
               SymbolRef.None(Name.Location, false)
           }
 
         | _ =>
-          compilationMessages.Error(this, "An rule method can be overridden only in extending rules.");
+          compilerMessages.Error(this, "An rule method can be overridden only in extending rules.");
           SymbolRef.None(Name.Location, false)
       }
     }
@@ -2125,18 +2030,18 @@ syntax module NitraSyntax
   syntax RuleMethodMissing = RuleMethodAttributes "missing"        sm  Name RuleMethodBody
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    [Cached] private MakeSymbol(compilationMessages : ICompilerMessages) : RuleMethod.RuleMethodMissingValueSymbol
+    [Cached] private MakeSymbol(compilerMessages : ICompilerMessages) : RuleMethod.RuleMethodMissingValueSymbol
     {
       when (RuleMethodBody.IsEmpty())
-        compilationMessages.Error(this, "A 'missing' handler must have a body.");
+        compilerMessages.Error(this, "A 'missing' handler must have a body.");
       RuleMethod.ParsedRuleMethodMissingValueSymbol(this);
     }
     CollectGlobalSymbols(ruleSymbol : SyntaxRuleSymbol) : void
     {
-      def compilationMessages = ruleSymbol.Node.Project;
-      _ = ruleSymbol.Node.AddAndReport(MakeSymbol(compilationMessages), this.Location);
+      def compilerMessages = ruleSymbol.Node.Project;
+      _ = ruleSymbol.Node.AddAndReport(MakeSymbol(compilerMessages), this.Location);
     }
-    [Cached] private MakeHandlingRuleMethod(compilationMessages : ICompilerMessages) : SymbolRef[RuleMethod.RuleMethodSymbol]
+    [Cached] private MakeHandlingRuleMethod(compilerMessages : ICompilerMessages) : SymbolRef[RuleMethod.RuleMethodSymbol]
     {
       match (this.Symbol.DeclaringRule)
       {
@@ -2147,12 +2052,12 @@ syntax module NitraSyntax
             | [ruleMethodSymbol] => SymbolRef.Some(Name.Location, false, ruleMethodSymbol)
             | _ =>
               def name = Name.Value();
-              compilationMessages.Error(this, $"No '$name' rule method to handle 'missing'.");
+              compilerMessages.Error(this, $"No '$name' rule method to handle 'missing'.");
               SymbolRef.None(Name.Location, false)
           }
 
         | _ =>
-          compilationMessages.Error(this, "A 'missing' handler for a rule method can be defined in simple and extensible rules.");
+          compilerMessages.Error(this, "A 'missing' handler for a rule method can be defined in simple and extensible rules.");
           SymbolRef.None(Name.Location, false)
       }
     }
@@ -2191,37 +2096,26 @@ syntax module NitraSyntax
       }
   }
 
-  syntax TypeParams = "[" (Type; ","sm)+ "]";
-  syntax SimpleName = Identifier TypeParams?;
-
-  syntax Type
-  {
-    | PredefinedType
-    | SimpleName
-    | Qualified = Type "." SimpleName precedence 20;
-    | Pointer   = Type "*" Type       precedence 10;
-  }
-
   syntax Block = outline_hiden outline_begin_before nl "{" inl (Expression; ";" nl)* ";"* nl d "}" outline_end_before nl;
-  syntax Parentheses = "(" Expression? ")";
 
-  syntax Content
+  syntax Expression = Body=ContentOrText+
   {
-    | Block;
-    | IgnoreToken+;
-    | CharLiteral;
-    | StringLiteral;
-    | Parentheses;
-    | "fold" sm Identifier "(" Expression ";" (Expression; ";"sm)+ ")";
-  }
+    syntax Content
+    {
+      | Block;
+      | IgnoreToken+;
+      | CharLiteral;
+      | StringLiteral;
+      | Parentheses = "(" Expression? ")";
+      | "fold" sm Identifier "(" Expression ";" (Expression; ";"sm)+ ")";
+    }
 
-  syntax ExpressionContent
-  {
-    | Content1 = Content;
-    | Content2 = (!";" !")" !"}" !Content Any)+;
+    syntax ContentOrText
+    {
+      | Content;
+      | Text = (!";" !")" !"}" !Content Any)+;
+    }
   }
-
-  syntax Expression = ExpressionContent+;
 
   syntax Range
   {
@@ -2253,7 +2147,7 @@ syntax module NitraSyntax
 
   syntax RepeatQuantifier
   {
-    Bounds() : RepeatBounds;
+    Bounds() : int * option[int];
 
     | ZeroOrMany = "*"                                { override Bounds = (0,               None());                }
     | OneOrMany  = "+"                                { override Bounds = (1,               None());                }
@@ -2324,11 +2218,7 @@ syntax module NitraSyntax
       }
     | Call                    = QualifiedName
       {
-        override Typing
-        {
-          def ruleRef = SymbolRef.Create(QualifiedName, Context.Bind(QualifiedName));
-          RegularRule.Call(Location, ruleRef)
-        }
+        override Typing = RegularRule.Call(Location, this.Context.Bind.[RegularRuleSymbol](QualifiedName));
       }
     | Rounds                  = "(" RegexExpression ")"
       {
@@ -2339,16 +2229,16 @@ syntax module NitraSyntax
       {
         override Typing
         {
-          def compilationMessages = this.Context;
-          RegularRule.Chars(Location, [FoldThrough(Ranges.Item1, RangeSet(), _.RangeSet(_, compilationMessages))]);
+          def compilerMessages = this.Context;
+          RegularRule.Chars(Location, [FoldThrough(Ranges.Item1, RangeSet(), _.RangeSet(_, compilerMessages))]);
         }
       }
     | InvertedRange           = "[" "^" (Range; ","sm)+ "]"
       {
         override Typing
         {
-          def compilationMessages = this.Context;
-          RegularRule.Chars(Location, InvertRange(FoldThrough(Ranges.Item1, RangeSet(), _.RangeSet(_, compilationMessages))));
+          def compilerMessages = this.Context;
+          RegularRule.Chars(Location, InvertRange(FoldThrough(Ranges.Item1, RangeSet(), _.RangeSet(_, compilerMessages))));
         }
       }
     | RepeatWithSeparator = "(" RegexExpression ";"sm Separator ")" RepeatQuantifier
