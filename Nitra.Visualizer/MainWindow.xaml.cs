@@ -283,9 +283,8 @@ namespace Nitra.Visualizer
     {
       foreach (ReflectionStruct node in items)
       {
-        if (node.Location.StartPos <= p && p < node.Location.EndPos)
+        if (node.Span.StartPos <= p && p < node.Span.EndPos) // IntersectsWith(p) includes EndPos
         {
-
           if (node.Children.Count == 0)
             return node;
 
@@ -1187,10 +1186,10 @@ namespace Nitra.Visualizer
       _doTreeOperation = true;
       try
       {
-        _text.TextArea.Caret.Offset = node.Location.StartPos;
+        _text.TextArea.Caret.Offset = node.Span.StartPos;
         _text.ScrollTo(_text.TextArea.Caret.Line, _text.TextArea.Caret.Line);
         _text.TextArea.AllowCaretOutsideSelection();
-        _text.Select(node.Location.StartPos, node.Location.Length);
+        _text.Select(node.Span.StartPos, node.Span.Length);
       }
       finally
       {
