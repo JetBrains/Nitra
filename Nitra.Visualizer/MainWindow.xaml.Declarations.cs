@@ -13,6 +13,7 @@ using System.Windows.Controls;
 using System.Windows.Markup;
 using Nitra.Internal;
 using Nitra.ProjectSystem;
+using Nitra.Runtime.Reflection;
 
 namespace Nitra.Visualizer
 {
@@ -236,6 +237,13 @@ namespace Nitra.Visualizer
         SelectCodeForDeclarationPart(sender);
         e.Handled = true;
       }
+    }
+
+    private void CopyReflectionText(object sender, RoutedEventArgs e)
+    {
+      var reflectionStruct = _reflectionTreeView.SelectedItem as ReflectionStruct;
+      if (reflectionStruct != null)
+        CopyTreeNodeToClipboard(reflectionStruct.Description);
     }
   }
 }
