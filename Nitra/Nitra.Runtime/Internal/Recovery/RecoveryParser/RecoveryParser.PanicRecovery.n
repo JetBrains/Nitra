@@ -28,7 +28,8 @@ namespace Nitra.Internal.Recovery
           | ExtensibleRuleParser as ruleParser => ruleParser.ParsingSequence
           | _                                  => assert3(false)
         };
-      def completeRecord = ParseRecord(StartParseSequence(textPos, rootParsingSequence, TokenChanges.None), -1, ParseResult.Text.Length);
+      def rootSeq        = StartParseSequence(textPos, rootParsingSequence, TokenChanges.None);
+      def completeRecord = ParseRecord(rootSeq, -1, ParseResult.Text.Length);
       Parse();
 
       def memoization = SCG.Dictionary();
@@ -53,13 +54,13 @@ namespace Nitra.Internal.Recovery
         def leafRecords = GetLeafTokens(records);
         
         Debug.IndentSize = 2;
-        Debug.WriteLine("----------------------------------------");
-        foreach (record in records)
-          PrintRecordParents(record);
-        Debug.WriteLine("++++++++++++++++++++++++++++++++++++++++");
-        foreach (record in leafRecords)
-          PrintRecordParents(record);
-        Debug.WriteLine("========================================");
+        //Debug.WriteLine("----------------------------------------");
+        //foreach (record in records)
+        //  PrintRecordParents(record);
+        //Debug.WriteLine("++++++++++++++++++++++++++++++++++++++++");
+        //foreach (record in leafRecords)
+        //  PrintRecordParents(record);
+        //Debug.WriteLine("========================================");
         
         def text = parseResult.Text;
         when (curMaxPos == text.Length)
@@ -145,29 +146,56 @@ namespace Nitra.Internal.Recovery
               {
                 when (newState < 0)
                   break;
+                def newRecord = ParseRecord(oldRecord.Sequence, newState, curMaxPos);
                   
-                def curRecords = Records[curMaxPos];
-                def newRecord = ParseRecord(oldRecord.Sequence, oldRecord.State, curMaxPos);
-
-                def record = if (curRecords.ContainsKey(newRecord))
-                  newRecord
-                else if (oldRecord.ParsePos == oldRecord.Sequence.StartPos && oldRecord.ParsingState.IsStart)
-                  ParseRecord(Sequences[curMaxPos, oldRecord.Sequence.ParsingSequence], oldRecord.State, curMaxPos);
-                else
+                def callees = HashSet();
+                foreach (leafRecord in leafRecords)
                 {
-                  assert2(false);
-                  assert(false);
-                }
+                  def isCallee(leafRecord : ParseRecord, oldRecord : ParseRecord,  callees : HashSet[ParseRecord])
+                  {
 
-                def tokenChanges = curRecords[record];
-                def subruleTokenChanges = TokenChanges(inserted = oldRecord.ParsingState.MandatoryTokenCount, deleted = 0);
-                SubruleParsed(curMaxPos, curMaxPos, record, tokenChanges, subruleTokenChanges);
+                    if (leafRecord == oldRecord)
+                      true
+                    else
+                    {
+                      mutable ok = false;
+                      
+                      foreach (caller in leafRecord.Callers)
+                        when (isCallee(caller, oldRecord, callees))
+                          ok = true;
+                        
+                      when (ok)
+                        _ = callees.Add(leafRecord);
+                      
+                      ok
+                    }
+                  }
+                  
+                  _ = isCallee(leafRecord, oldRecord, callees);
+                }
+                def curRecords = Records[curMaxPos];
+                def toProcess = SCG.Queue(callees);
+                def processed = SCG.HashSet();
+                toProcess.Enqueue(oldRecord);
+                while (toProcess.Count > 0)
+                {
+                  def record = toProcess.Dequeue();
+                  when (record.ParsePos == curMaxPos && !record.IsComplete && processed.Add(record) && record != newRecord)
+                  {
+                    def tokenChanges = curRecords[record];
+                    def subruleTokenChanges = TokenChanges(inserted = record.ParsingState.MandatoryTokenCount, deleted = 0);
+                    SubruleParsed(curMaxPos, curMaxPos, record, tokenChanges, subruleTokenChanges);
+                    foreach (nextState in record.ParsingState.Next)
+                      toProcess.Enqueue(record.Next(nextState, curMaxPos));
+                  }
+                }
               }
               //InsertSubrules(curMaxPos);
               // востановление состояния парсера, так чтобы он парсил с сабруля для которого 
-              deletToken();
             }
-            
+            Parse();
+            when (this.MaxPos > curMaxPos)
+              deletToken();
             curMaxPos = DeleteNextToken(grammar, curMaxPos, parseResult);
           }
         }
