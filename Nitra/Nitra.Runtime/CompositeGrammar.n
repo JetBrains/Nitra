@@ -111,6 +111,7 @@ namespace Nitra
       foreach (ruleParser in Extensibles) ruleParser.ParsingSequence = ParsingSequence.CreateExtensible(ruleParser, ruleIdBuilder, this);
 
       CollectTokens();
+      CollectFirstTokens(ruleIdBuilder);
     }
 
     private InitMandatoryTokenCount() : void
@@ -295,6 +296,64 @@ namespace Nitra
           }
     }
 
+    private CollectFirstTokens(ruleIdBuilder : RuleIdBuilder) : void
+    {
+      mutable updated = true;
+      def updateTokens(parsingSequence : ParsingSequence)
+      {
+        def count = parsingSequence.FirstTokens.Count;
+        foreach (state in parsingSequence.States)
+        {
+          | Predicate                  => ()
+          | Simple               (ruleParser)
+          | Extensible           (ruleParser)
+          | DynamicExtensibleItem(ruleParser) =>
+            def tokenParser = GetTokenParser(state.Subrule);
+            if (tokenParser == null)
+              state.FirstTokens.UnionWith(ruleParser.ParsingSequence.FirstTokens);
+            else
+              _ = state.FirstTokens.Add(tokenParser);
+          
+          | ListWithSeparator(seq)
+          | Subsequence      (seq, _)
+          | List             (seq)
+          | DynamicExtensible(seq) =>
+            def tokenParser = GetTokenParser(state.Subrule);
+            if (tokenParser == null)
+            {
+              updateTokens(seq);
+              state.FirstTokens.UnionWith(seq.FirstTokens);
+            }
+            else
+              _ = state.FirstTokens.Add(tokenParser);
+
+          | Scan              as state =>
+            def tokenParser = GetTokenParser(state.Subrule);
+            when (tokenParser != null)
+              _ = state.FirstTokens.Add(tokenParser);
+
+          | ExtensionPrefix  as state =>
+            foreach (parser in state.RuleParser.PrefixRules)
+              state.FirstTokens.UnionWith(parser.ParsingSequence.FirstTokens);
+
+          | ExtensionPostfix as state =>
+            foreach (parser when state.RuleParser.FirstPostfixRuleId <= parser.RuleId in state.RuleParser.PostfixRules)
+              state.FirstTokens.UnionWith(parser.ParsingSequence.FirstTokens);
+        }
+        foreach (state when state != -1 in parsingSequence.StartStates)
+            parsingSequence.FirstTokens.UnionWith(ruleIdBuilder.GetParsingState(state).FirstTokens);
+        updated = updated || count != parsingSequence.FirstTokens.Count;
+      }
+      while (updated)
+      {
+        updated = false;
+        foreach (ruleParser in Simples)     unless (ruleParser.IsTokenRule) updateTokens(ruleParser.ParsingSequence);
+        foreach (ruleParser in Prefixs)     unless (ruleParser.IsTokenRule) updateTokens(ruleParser.ParsingSequence);
+        foreach (ruleParser in Postfixs)    unless (ruleParser.IsTokenRule) updateTokens(ruleParser.ParsingSequence);
+        foreach (ruleParser in Extensibles) unless (ruleParser.IsTokenRule) updateTokens(ruleParser.ParsingSequence);
+      }
+    }
+
     private InitTokens() : void
     {
       def simpleVisited = SCG.HashSet();
@@ -358,6 +417,36 @@ namespace Nitra
         visitExtensible(parserData.Parsers[0]);
     }
 
+    public GetTokenParser(subrule : SubruleInfo) : TokenParser
+    {
+      def getToken(isVoid : bool, key : object)
+      {
+        def tokens = if (isVoid) VoidTokens else Tokens;
+        mutable token;
+        if (tokens.TryGetValue(key, out token)) token else null;
+      }
+      match (subrule)
+      {
+        | ExtensibleCall    as subrule =>
+          if (subrule.RuleParser.IsTokenRule)
+            getToken(subrule.RuleParser.IsVoid, subrule.RuleParser);
+          else
+            null
+
+        | SimpleCall        as subrule =>
+          if (subrule.RuleParser.IsTokenRule)
+            getToken(subrule.RuleParser.IsVoid, subrule.RuleParser);
+          else
+            null
+
+        | TokenString       as subrule => getToken(false, subrule.Str);
+        | RegularCall       as subrule =>
+          getToken(subrule.Descriptor.IsVoid, subrule.Descriptor);
+
+        | _ => null
+      }
+    }
+    
     public GetExtensibleRuleParser(rd : ExtensibleRuleDescriptor, bindingPower : int) : ExtensibleRuleParser
     {
       ExtensibleRules[rd].GetParser(bindingPower)
