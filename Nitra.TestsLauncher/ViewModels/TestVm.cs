@@ -45,12 +45,12 @@ namespace Nitra.ViewModels
         TestState = TestState.Ignored;
     }
 
-    public IParseResult Run()
+    public IParseResult Run(bool usePanicRecoveryAlgorithm)
     {
       if (TestSuit.TestState == TestState.Ignored)
         return null;
 
-      var result = TestSuit.Run(Code, Gold);
+      var result = TestSuit.Run(Code, Gold, usePanicRecoveryAlgorithm: usePanicRecoveryAlgorithm);
       if (result == null)
         return null;
 

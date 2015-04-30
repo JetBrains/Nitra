@@ -561,7 +561,7 @@ namespace Nitra.Visualizer
         _reflectionTreeView.ItemsSource = null;
         var timer = Stopwatch.StartNew();
 
-        _parseResult = _currentTestSuit.Run(_text.Text, null);
+        _parseResult = _currentTestSuit.Run(_text.Text, usePanicRecoveryAlgorithm: _usePanicRecoveryAlgorithmCheckBox.IsChecked == true);
 
         _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
 
@@ -877,7 +877,7 @@ namespace Nitra.Visualizer
 
     private void RunTest(TestVm test)
     {
-      test.Run();
+      test.Run(usePanicRecoveryAlgorithm: _usePanicRecoveryAlgorithmCheckBox.IsChecked == true);
 
       ShowDiff(test);
     }
@@ -1411,6 +1411,11 @@ namespace Nitra.Visualizer
     private void RecentFileList_OnMenuClick(object sender, RecentFileList.MenuClickEventArgs e)
     {
       OpenSolution(e.Filepath);
+    }
+
+    private void OnUsePanicRecovery(object sender, ExecutedRoutedEventArgs e)
+    {
+      OnRepars(null, null);
     }
   }
 }
