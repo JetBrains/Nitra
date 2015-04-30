@@ -26,8 +26,8 @@ namespace Nitra.Compiler
     {
       assert(_baseTb != null);
 
-      def syntaxMappingBody = this.RuleSymbol.GetSyntaxMappingBody();
-      when (syntaxMappingBody != null)
+      def expr = this.RuleSymbol.GetSyntaxMappingExpr();
+      when (expr != null)
       {
         def astType = GetGetAstMethodReturnType();
         _baseTb.DefineConditional(<[ decl:
@@ -64,17 +64,15 @@ namespace Nitra.Compiler
       public AmbiguousOption : PExpr { get { if (AstType != null) <[ $(AstType : typed).AmbiguousAstOption ]> else <[ Nitra.Declarations.AmbiguousAstOption[Nitra.Declarations.IAst] ]> } }
     }
 
-    private DefineGetAstMethod(tb : TypeBuilder, syntaxMappingBody : SyntaxMappingBody, modifiers : NemerleModifiers) : void
+    private CompileSyntaxMapping(expr : SyntaxMappingExpr, tb : TypeBuilder) : PExpr
     {
-      def astSymbol = syntaxMappingBody.Ast.GetValue(Environment.Project);
-
-      def buildAst(mappingType : SyntaxMappingType, obj : PExpr) : BuildAstResult
+      def compileConversion(mappingType : SyntaxMappingType, obj : PExpr) : BuildAstResult
       {
         match (mappingType)
         {
           | List(item, ruleType) =>
             def parseTreeType     = Environment.GetParseTreeType(ruleType);
-            def itemResult        = buildAst(item, <[ node ]>);
+            def itemResult        = compileConversion(item, <[ node ]>);
             def getAstListName    = Util.tmpname("GetAstList");
             tb.Define(<[ decl:
               private static $(getAstListName : usesite)(lst : $(parseTreeType : typed)) : $(itemResult.List)
@@ -100,7 +98,7 @@ namespace Nitra.Compiler
 
           | Option(item, ruleType) =>
             def parseTreeType      = Environment.GetParseTreeType(ruleType);
-            def itemResult         = buildAst(item, <[ opt.Value ]>);
+            def itemResult         = compileConversion(item, <[ opt.Value ]>);
             def getAstOptionName   = Util.tmpname("GetAstOption");
             tb.Define(<[ decl:
               private static $(getAstOptionName : usesite)(opt : $(parseTreeType : typed)) : $(itemResult.Option)
@@ -121,138 +119,131 @@ namespace Nitra.Compiler
             ]>);
             BuildAstResult(<[ $(getAstOptionName : usesite)( $obj) ]>)
 
-          | Ref(astSymbol) => BuildAstResult(<[ $obj.GetAst() ]>, Environment.GetAstType(astSymbol))
-          | Tuple(index, item)     => buildAst(item, <[ $obj.$("Item" + index.ToString() : usesite) ]>)
+          | Ref(astSymbol)     => BuildAstResult(<[ $obj.GetAst() ]>, Environment.GetAstType(astSymbol))
+          | Tuple(index, item) => compileConversion(item, <[ $obj.$("Item" + index.ToString() : usesite) ]>)
         }
       }
 
       def compileField(field : SyntaxMappingField) : PExpr
       {
-        def astPropertySymbol = field.AstProperty.Symbol;
-        Util.locate(field.Location.NLocation(),
-          match (field)
-          {
-            | Inline(code) => <[ $(astPropertySymbol.Name : usesite) = $code ]>
-            | Automatic(path, mappingType) =>
-              def parseTreeMember = MakeParseTreeMemberAccess(path);
-              <[ $(astPropertySymbol.Name : usesite) = unchecked ($(buildAst(mappingType, parseTreeMember).Code)) ]>
-          });
+        def name  = field.Property.Name;
+        def value = CompileSyntaxMapping(field.Expr, tb);
+        <[ $(name : usesite) = $value ]>
       }
 
-      def compileFields(astSymbol : AstSymbol, fields : list[SyntaxMappingField]) : PExpr
+      def compileMatch(path : ParseTreePath, cases : list[SyntaxMappingCase]) : PExpr
       {
-        def astType = Environment.GetAstType(astSymbol);
-        def values  = <[ Span = this.Span ]> :: fields.Map(compileField);
-        <[ $(astType : typed)(..$values) ]>
-      }
-
-      def compileAccess(_ : Access) : PExpr
-      {
-        | Obj                            => <[ this ]>
-        | Sel(ListCons,   0,     access) => <[ $(compileAccess(access)).Head ]>
-        | Sel(ListCons,   1,     access) => <[ $(compileAccess(access)).Tail ]>
-        | Sel(OptionSome, 0,     access) => <[ $(compileAccess(access)).Value ]>
-        | Sel(Tuple,      index, access) => <[ $(compileAccess(access)).$("Item" + (index + 1) : usesite) ]>
-        | Sel(ParseTree,  index, access) => <[ $(compileAccess(access)).$(RuleSymbol.NonVoidSubRules.Nth(index).FieldName : usesite) ]>
-        | _ => assert(false, "Invalid access path")
-      }
-
-      def compileTest(n : string, ctor : ParseTreeCtor) : PExpr
-      {
-        match (ctor)
+        def compileAccess(_ : Access) : PExpr
         {
-          | ListCons   => <[ $(n : usesite).Count > 0 ]>
-          | ListNil    => <[ $(n : usesite).Count == 0 ]>
-          | OptionSome => <[ $(n : usesite).HasValue ]>
-          | OptionNone => <[ ! $(n : usesite).HasValue ]>
-          | Tuple
-          | ParseTree  => assert(false, "Check is redundant")
+          | Obj                            => MakeParseTreeMemberAccess(path)
+          | Sel(ListCons,   0,     access) => <[ $(compileAccess(access)).Head ]>
+          | Sel(ListCons,   1,     access) => <[ $(compileAccess(access)).Tail ]>
+          | Sel(OptionSome, 0,     access) => <[ $(compileAccess(access)).Value ]>
+          | Sel(Tuple,      index, access) => <[ $(compileAccess(access)).$("Item" + (index + 1) : usesite) ]>
+          | Sel(ParseTree,  index, access) => <[ $(compileAccess(access)).$(RuleSymbol.NonVoidSubRules.Nth(index).FieldName : usesite) ]>
+          | _ => assert(false, "Invalid access path")
         }
-      }
 
-      mutable redundantCases : SCG.HashSet[_];
-      mutable canFail        : bool;
-      def compileDecision(_ : Decision[SyntaxMappingCase]) : PExpr
-      {
-        | Failure =>
-          canFail = true;
-          <[ assert(false, "Match failed") ]>
-
-        | Success(Inline(code) as case)                     =>
-          _ = redundantCases.Remove(case);
-          code
-
-        | Success(PerField(astSymbolRef, fields) as case) =>
-          _ = redundantCases.Remove(case);
-          compileFields(astSymbolRef.GetValue(Environment.Project), fields)
-
-        | Variable(name, access, continuation) =>
-          <[
-            def $(name.Id : global) = $(compileAccess(access));
-            $(compileDecision(continuation))
-          ]>.FlattenPExpr()
-
-        | IfEq(access, ctor, t, f) =>
-          def n = Util.tmpname("parseTree");
-          <[
-            def $(n : usesite) = $(compileAccess(access));
-            if ($(compileTest(n, ctor)))
-              $(compileDecision(t))
-            else
-              $(compileDecision(f))
-          ]>
-      }
-
-
-      Util.locate(syntaxMappingBody.Location.NLocation(),
-      {
-        def code =
-          match (syntaxMappingBody)
+        def compileTest(n : string, ctor : ParseTreeCtor) : PExpr
+        {
+          match (ctor)
           {
-            | PerField(fields) => compileFields(astSymbol, fields)
-            | Inline(code)     => code
-            | Match(cases)     =>
-              redundantCases = SCG.HashSet(cases);
-              def rules      = cases.Map(c => (c.Pattern, c));
-              def decision   = MatchCompiler.Compile(rules);
-              def code       = compileDecision(decision);
-              when (canFail)
-                Environment.Project.Warning(syntaxMappingBody, "Matching is not exhaustive.");
-              foreach (case in redundantCases)
-                Environment.Project.Warning(case, "Match case is redundant.");
-              code
-          };
+            | ListCons   => <[ $(n : usesite).Count > 0 ]>
+            | ListNil    => <[ $(n : usesite).Count == 0 ]>
+            | OptionSome => <[ $(n : usesite).HasValue ]>
+            | OptionNone => <[ ! $(n : usesite).HasValue ]>
+            | Tuple
+            | ParseTree  => assert(false, "Check is redundant")
+          }
+        }
 
-        def astType = GetGetAstMethodReturnType();
-        def mods    = AttributesAndModifiers(modifiers, []);
-        tb.Define(<[ decl: ..$mods GetAst() : $astType { $code } ]>);
+        def     redundantCases : SCG.HashSet[_] = SCG.HashSet(cases);
+        mutable canFail        : bool;
+        def compileDecision(_ : Decision[SyntaxMappingCase]) : PExpr
+        {
+          | Failure =>
+            canFail = true;
+            <[ assert(false, "Match failed") ]>
+
+          | Success(case)                     =>
+            _ = redundantCases.Remove(case);
+            CompileSyntaxMapping(case.Expr, tb)
+
+          | Variable(name, access, continuation) =>
+            <[
+              def $(name.Id : global) = $(compileAccess(access));
+              $(compileDecision(continuation))
+            ]>.FlattenPExpr()
+
+          | IfEq(access, ctor, t, f) =>
+            def n = Util.tmpname("parseTree");
+            <[
+              def $(n : usesite) = $(compileAccess(access));
+              if ($(compileTest(n, ctor)))
+                $(compileDecision(t))
+              else
+                $(compileDecision(f))
+            ]>
+        }
+
+        def rules      = cases.Map(c => (c.Pattern, c));
+        def decision   = MatchCompiler.Compile(rules);
+        def code       = compileDecision(decision);
+        when (canFail)
+          Environment.Project.Warning(expr, "Matching is not exhaustive.");
+        foreach (case in redundantCases)
+          Environment.Project.Warning(case, "Match case is redundant.");
+        code
+      }
+
+      Util.locate(expr.Location.NLocation(),
+      {
+        match (expr)
+        {
+          | Code(code)                               => code
+          | AstCtor(path, astSymbol, args)           => <[ $(Environment.GetAstType(astSymbol) : typed)(Span = $(MakeParseTreeMemberAccess(path)).Span, ..$(args.Map(compileField))) ]>
+          | ListCtor(path, astSymbol, [])            => <[ $(Environment.GetAstType(astSymbol) : typed).AstList($(MakeParseTreeMemberAccess(path)).Span) ]>
+          | ListCtor(path, astSymbol, items)         => <[ $(Environment.GetAstType(astSymbol) : typed).AstList($(MakeParseTreeMemberAccess(path)).Span, ..$(items.Map(CompileSyntaxMapping(_, tb)))) ]>
+          | OptionCtor(path, astSymbol, Some(value)) => <[ $(Environment.GetAstType(astSymbol) : typed).AstOption($(MakeParseTreeMemberAccess(path)).Span, $(CompileSyntaxMapping(value, tb))) ]>
+          | OptionCtor(path, astSymbol, None())      => <[ $(Environment.GetAstType(astSymbol) : typed).AstOption($(MakeParseTreeMemberAccess(path)).Span) ]>
+          | Conversion(path, mappingType)            => compileConversion(mappingType, MakeParseTreeMemberAccess(path)).Code
+          | Match(path, cases)                       => compileMatch(path, cases)
+        }
       });
+    }
+
+    private DefineGetAstMethod(tb : TypeBuilder, expr : SyntaxMappingExpr, modifiers : NemerleModifiers) : void
+    {
+      def astType = GetGetAstMethodReturnType();
+      def mods    = AttributesAndModifiers(modifiers, []);
+      def code    = CompileSyntaxMapping(expr, tb);
+      tb.Define(<[ decl: ..$mods GetAst() : $astType { $code } ]>);
     }
 
     protected DefineSimpleRuleGetAstMethod(_nodeTb : TypeBuilder) : void
     {
       assert(_nodeTb != null);
 
-      def syntaxMappingBody = this.RuleSymbol.GetSyntaxMappingBody();
-      when (syntaxMappingBody != null)
-        DefineGetAstMethod(_nodeTb, syntaxMappingBody, NemerleModifiers.Public %| NemerleModifiers.Virtual)
+      def expr = this.RuleSymbol.GetSyntaxMappingExpr();
+      when (expr != null)
+        DefineGetAstMethod(_nodeTb, expr, NemerleModifiers.Public %| NemerleModifiers.Virtual)
     }
 
     protected DefineExtensionRuleGetAstMethod(_nodeTb : TypeBuilder) : void
     {
       assert(_nodeTb != null);
 
-      def syntaxMappingBody = this.RuleSymbol.GetSyntaxMappingBody();
-      when (syntaxMappingBody != null)
-        DefineGetAstMethod(_nodeTb, syntaxMappingBody, NemerleModifiers.Public %| NemerleModifiers.Override)
+      def expr = this.RuleSymbol.GetSyntaxMappingExpr();
+      when (expr != null)
+        DefineGetAstMethod(_nodeTb, expr, NemerleModifiers.Public %| NemerleModifiers.Override)
     }
 
     protected DefineAmbiguousOrMissingGetAstMethod(_ambiguousOrMissingTb : TypeBuilder) : void
     {
       assert(_ambiguousOrMissingTb != null);
 
-      def syntaxMappingBody = this.RuleSymbol.GetSyntaxMappingBody();
-      when (syntaxMappingBody != null)
+      def expr = this.RuleSymbol.GetSyntaxMappingExpr();
+      when (expr != null)
       {
         def astType = GetGetAstMethodReturnType();
         _ambiguousOrMissingTb.Define(<[ decl:

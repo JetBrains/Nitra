@@ -593,21 +593,22 @@ syntax module NitraSyntax
           _ = MapSyntaxBody.MakeContext(context);
           context
         }
-        [Cached] private MakeAstSymbolRef() : SymbolRef[AstSymbol] = this.Context.Bind.[AstSymbol](AstName);
+        [Cached] private MakeAstType() : AstType = TypingUtils.MakeAstType(this.AstName, this.Context);
         [Cached] private MakeSyntaxRuleRef() : SymbolRef[SyntaxRuleSymbol]  = this.Context.Bind.[SyntaxRuleSymbol](RuleName);
         override CollectSyntaxMappings
         {
-          def astSymbolRef = MakeAstSymbolRef();
-          def ruleSymbolRef  = MakeSyntaxRuleRef();
+          def astType       = MakeAstType();
+          def ruleSymbolRef = MakeSyntaxRuleRef();
           when (ruleSymbolRef is SymbolRef.Some(ruleSymbol))
-            MapSyntaxBody.CollectSyntaxMappings(astSymbolRef, ruleSymbol);
+            MapSyntaxBody.CollectSyntaxMappings(astType, ruleSymbol);
         }
         override TypeSyntaxMappings
         {
-          def astSymbolRef = MakeAstSymbolRef();
-          def ruleSymbolRef  = MakeSyntaxRuleRef();
+          def astType       = MakeAstType();
+          def ruleSymbolRef = MakeSyntaxRuleRef();
           when (ruleSymbolRef is SymbolRef.Some(ruleSymbol))
-            MapSyntaxBody.TypeSyntaxMappings(astSymbolRef, ruleSymbol);
+          when (astType is AstType.Ast(astSymbol))
+            MapSyntaxBody.TypeSyntaxMappings(astSymbol, ruleSymbol);
         }
         override Typing { }
       }
@@ -885,42 +886,83 @@ syntax module NitraSyntax
     }
   }
 
-  syntax MapSyntaxExpression
+  syntax MapSyntaxCode
   {
     | Block
     | Expression = Expression ";"
   }
 
-  syntax ParseTreeFieldAutoMapping = RuleFieldPath=QualifiedName sm "->" sm AstPropertyName=Name ";"
+  syntax MapSyntaxExpression
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol, variables : Dictionary[string, ParseTreePattern.Var]) : option[SyntaxMappingField]
-    {
-      def astPropertyRef   = TypingUtils.BindAstProperty(astSymbol, this.AstPropertyName, this.Context);
-      def parseTreePathOpt = TypingUtils.BindRuleField(ruleSymbol, this.RuleFieldPath, variables, this.Context);
-      when (astPropertyRef is SymbolRef.Some(astProperty) as astPropertyRef)
-      when (parseTreePathOpt is Some(parseTreePath))
+    Typing(ruleSymbol : SyntaxRuleSymbol, astProperty : AstPropertySymbol) : option[SyntaxMappingExpr] = None();
+
+    | Conversion = QualifiedName
       {
-        def syntaxMappingTypeOpt = TypingUtils.MakeSyntaxMappingType(Context, astProperty, parseTreePath, this.Location);
-        when (syntaxMappingTypeOpt is Some(syntaxMappingType))
-          return Some(SyntaxMappingField.Automatic(this.Location, astPropertyRef, parseTreePath, syntaxMappingType));
+        override Typing
+        {
+          def pathOpt = TypingUtils.BindRuleField(ruleSymbol, this.QualifiedName, this.Context);
+          when (pathOpt is Some(path))
+          {
+            def conversionOpt = TypingUtils.MakeSyntaxMappingType(Context, astProperty, path, this.Location);
+            when (conversionOpt is Some(conversion))
+              return Some(SyntaxMappingExpr.Conversion(this.Location, path, conversion));
+          }
+          None()
+        }
+      }
+    | Ast        = QualifiedName outline_begin_before nl OpenBrace="{" inl Members=MapSyntaxExpressionAstMember* d CloseBrace="}" outline_end_before nl
+    | List       = "[" (MapSyntaxExpression; ",")* "]"
+    | OptionSome = "Some" "(" MapSyntaxExpression ")"
+    | OptionNone = "None" "(" ")"
+  }
+
+  syntax MapSyntaxExpressionAstMember
+  {
+    MakeContext(parent : Context) : Context;
+
+    | ParseTreeFieldExpressionMapping
+      {
+        override MakeContext = ParseTreeFieldExpressionMapping.MakeContext(parent);
+      }
+    | ParseTreeFieldCodeMapping
+      {
+        override MakeContext = ParseTreeFieldCodeMapping.MakeContext(parent);
+      }
+  }
+
+  syntax ParseTreeFieldExpressionMapping = Expr=MapSyntaxExpression sm "->" sm AstPropertyName=Name ";"
+  {
+    [Cached] MakeContext(parent : Context) : Context
+    {
+      _ = Expr.MakeContext(parent);
+      parent
+    }
+    GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol) : option[SyntaxMappingField]
+    {
+      def astPropertyRef = TypingUtils.BindAstProperty(astSymbol, this.AstPropertyName, this.Context);
+      when (astPropertyRef is SymbolRef.Some(astProperty))
+      {
+        def exprOpt = this.Expr.Typing(ruleSymbol, astProperty);
+        when (exprOpt is Some(expr))
+          return Some(SyntaxMappingField(this.Location, astProperty, expr));
       }
       None()
     }
   }
 
-  syntax ParseTreeFieldInlineMapping = FieldName=Name sm "=" sm Code=MapSyntaxExpression
+  syntax ParseTreeFieldCodeMapping = FieldName=Name sm "=" sm Code=MapSyntaxCode
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol, variables : Dictionary[string, ParseTreePattern.Var]) : option[SyntaxMappingField]
+    GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol) : option[SyntaxMappingField]
     {
       _ = ruleSymbol;
-      _ = variables;
       def astPropertyRef = TypingUtils.BindAstProperty(astSymbol, this.FieldName, this.Context);
-      if (astPropertyRef is SymbolRef.Some as astPropertyRef)
+      if (astPropertyRef is SymbolRef.Some(astProperty))
       {
         def code = NemerleParser.Parse(this.Code, this.Context);
-        Some(SyntaxMappingField.Inline(this.Location, astPropertyRef, code))
+        def expr = SyntaxMappingExpr.Code(this.Code.Location, code);
+        Some(SyntaxMappingField(this.Location, astProperty, expr))
       }
       else None()
     }
@@ -929,173 +971,179 @@ syntax module NitraSyntax
   syntax MapSyntaxMatchCaseBodyMember
   {
     MakeContext(parent : Context) : Context;
-    GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol, variables : Dictionary[string, ParseTreePattern.Var]) : option[SyntaxMappingField];
+    GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol) : option[SyntaxMappingField];
 
-    | ParseTreeFieldAutoMapping
+    | ParseTreeFieldExpressionMapping
       {
-        override MakeContext           = ParseTreeFieldAutoMapping.MakeContext(parent);
-        override GetSyntaxMappingField = ParseTreeFieldAutoMapping.GetSyntaxMappingField(astSymbol, ruleSymbol, variables);
+        override MakeContext           = ParseTreeFieldExpressionMapping.MakeContext(parent);
+        override GetSyntaxMappingField = ParseTreeFieldExpressionMapping.GetSyntaxMappingField(astSymbol, ruleSymbol);
       }
-    | ParseTreeFieldInlineMapping
+    | ParseTreeFieldCodeMapping
       {
-        override MakeContext           = ParseTreeFieldInlineMapping.MakeContext(parent);
-        override GetSyntaxMappingField = ParseTreeFieldInlineMapping.GetSyntaxMappingField(astSymbol, ruleSymbol, variables);
+        override MakeContext           = ParseTreeFieldCodeMapping.MakeContext(parent);
+        override GetSyntaxMappingField = ParseTreeFieldCodeMapping.GetSyntaxMappingField(astSymbol, ruleSymbol);
       }
   }
 
   syntax MapSyntaxBodyMember
   {
     [Cached] MakeContext(parent : Context) : Context;
-    CollectMappingFields(astSymbolRef : SymbolRef[AstSymbol], ruleSymbol : SyntaxRuleSymbol, buffer : List[SyntaxMappingField]) : void { IgnoreParams() }
-    CollectExtensionMappings(astSymbolRef : SymbolRef[AstSymbol], baseRuleSymbol : ExtensibleRuleSymbol, simpleMappings : List[ExtensionRuleSymbol * SymbolRef[AstSymbol]], matchingMappings : HashSet[ExtensionRuleSymbol]) : void { IgnoreParams() }
-    CollectSimpleMatchCases(astSymbolRef : SymbolRef[AstSymbol], ruleSymbol : SyntaxRuleSymbol, sharedMappingFields : List[SyntaxMappingField], buffer : List[SyntaxMappingCase]) : void { IgnoreParams() }
-    CollectExtensionBodies(astSymbolRef : SymbolRef[AstSymbol], baseRuleSymbol : ExtensibleRuleSymbol, mappingCases : List[ExtensionRuleSymbol * SyntaxMappingCase], mappingBodies : List[ExtensionRuleSymbol * SyntaxMappingBody]) : void { IgnoreParams() }
+    CollectMappingFields(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol, buffer : List[SyntaxMappingField]) : void { IgnoreParams() }
+    CollectExtensionMappings(baseRuleSymbol : ExtensibleRuleSymbol, simpleMappings : List[ExtensionRuleSymbol], matchingMappings : HashSet[ExtensionRuleSymbol]) : void { IgnoreParams() }
+    CollectSimpleMatchCases(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol, sharedMappingFields : List[SyntaxMappingField], buffer : List[SyntaxMappingCase]) : void { IgnoreParams() }
+    CollectExtensionBodies(astSymbol : AstSymbol, baseRuleSymbol : ExtensibleRuleSymbol, mappingCases : List[ExtensionRuleSymbol * SyntaxMappingCase], mappingBodies : List[ExtensionRuleSymbol * SyntaxMappingExpr]) : void { IgnoreParams() }
 
-    | ParseTreeFieldAutoMapping
+    | ParseTreeFieldExpressionMapping
       {
-        override MakeContext          = ParseTreeFieldAutoMapping.MakeContext(parent);
+        override MakeContext          = ParseTreeFieldExpressionMapping.MakeContext(parent);
         override CollectMappingFields
         {
-          when (astSymbolRef is SymbolRef.Some(astSymbol))
-          when (ParseTreeFieldAutoMapping.GetSyntaxMappingField(astSymbol, ruleSymbol, Dictionary()) is Some(mappingField))
+          when (ParseTreeFieldExpressionMapping.GetSyntaxMappingField(astSymbol, ruleSymbol) is Some(mappingField))
             buffer.Add(mappingField);
         }
       }
-    | ParseTreeFieldInlineMapping
+    | ParseTreeFieldCodeMapping
       {
-        override MakeContext          = ParseTreeFieldInlineMapping.MakeContext(parent);
+        override MakeContext          = ParseTreeFieldCodeMapping.MakeContext(parent);
         override CollectMappingFields
         {
-          when (astSymbolRef is SymbolRef.Some(astSymbol))
-          when (ParseTreeFieldInlineMapping.GetSyntaxMappingField(astSymbol, ruleSymbol, Dictionary()) is Some(mappingField))
+          when (ParseTreeFieldCodeMapping.GetSyntaxMappingField(astSymbol, ruleSymbol) is Some(mappingField))
             buffer.Add(mappingField);
         }
       }
     | MatchCaseEmpty = "|" sm Pattern (sm "->" sm QualifiedName)?
       {
-        override MakeContext = parent;
-        [Cached] private MakeAstSymbolRef(astSymbolRef : SymbolRef[AstSymbol]) : SymbolRef[AstSymbol]
+        override MakeContext = ParseTreePatternVariableContext(parent);
+        [Cached] private MakeAstSymbolRef(astSymbol : AstSymbol) : SymbolRef[AstSymbol]
         {
-          if (astSymbolRef is SymbolRef.Some(astSymbol))
-          {
-            if (QualifiedNameOpt.HasValue)
-              TypingUtils.BindAstSymbolFromMappingExtension(QualifiedNameOpt.Location, astSymbol, QualifiedNameOpt.Value.Item2.CalcLocations(), this.Context)
-            else
-              this.Pattern.BindExtensionAst(astSymbol, this.Context)
-          }
+          if (QualifiedNameOpt.HasValue)
+            TypingUtils.BindAstSymbolFromMappingExtension(QualifiedNameOpt.Location, astSymbol, QualifiedNameOpt.Value.Item2.CalcLocations(), this.Context)
           else
-            astSymbolRef
+            this.Pattern.BindExtensionAst(astSymbol, this.Context)
         }
         override CollectExtensionMappings
         {
           match (this.Pattern.BindExtensionRule(baseRuleSymbol, this.Context))
           {
-            | (SymbolRef.Some(ruleSymbol), false) => simpleMappings.Add((ruleSymbol, MakeAstSymbolRef(astSymbolRef)))
+            | (SymbolRef.Some(ruleSymbol), false) => simpleMappings.Add(ruleSymbol)
             | (SymbolRef.Some(ruleSymbol), true)  => _ = matchingMappings.Add(ruleSymbol)
             | _ => ()
           }
         }
         override CollectSimpleMatchCases
         {
-          def (pattern, _)             = this.Pattern.SimpleTyping(ruleSymbol, this.Context);
-          def caseDeclatationSymbolRef = MakeAstSymbolRef(astSymbolRef);
-          buffer.Add(SyntaxMappingCase.PerField(this.Location, pattern, caseDeclatationSymbolRef, sharedMappingFields.ToNList()))
+          def pattern          = this.Pattern.SimpleTyping(ruleSymbol, this.Context);
+          def caseAstSymbolRef = MakeAstSymbolRef(astSymbol);
+          when (caseAstSymbolRef is SymbolRef.Some(caseAstSymbol))
+          {
+            def expr = SyntaxMappingExpr.AstCtor(this.Location, ParseTreePath.This(this.Location, ruleSymbol), caseAstSymbol, sharedMappingFields.ToNList());
+            buffer.Add(SyntaxMappingCase(this.Location, pattern, expr))
+          }
         }
         override CollectExtensionBodies
         {
           def (ruleRef, hasPattern) = this.Pattern.BindExtensionRule(baseRuleSymbol, this.Context);
           when (ruleRef is SymbolRef.Some(ruleSymbol))
           {
-            def extensionAstSymbolRef = MakeAstSymbolRef(astSymbolRef);
-            when (extensionAstSymbolRef is SymbolRef.Some(astSymbol))
+            def extensionAstSymbolRef = MakeAstSymbolRef(astSymbol);
+            when (extensionAstSymbolRef is SymbolRef.Some(extensionAstSymbol))
             {
               def errorLoc = this.Location.FromEnd();
-              TypingUtils.CheckRequiredAstProperties(astSymbol, [], errorLoc, this.Context);
+              TypingUtils.CheckRequiredAstProperties(extensionAstSymbol, [], errorLoc, this.Context);
+
+              def expr = SyntaxMappingExpr.AstCtor(this.Location, ParseTreePath.This(this.Location, ruleSymbol), extensionAstSymbol, []);
+              if (hasPattern)
+                mappingCases.Add((ruleSymbol, SyntaxMappingCase(this.Location, this.Pattern.ExtensionTyping(ruleSymbol, this.Context), expr)))
+              else
+                mappingBodies.Add((ruleSymbol, expr))
             }
-            if (hasPattern)
-              mappingCases.Add((ruleSymbol, SyntaxMappingCase.PerField(this.Location, this.Pattern.ExtensionTyping(ruleSymbol, this.Context)[0], extensionAstSymbolRef, [])))
-            else
-              mappingBodies.Add((ruleSymbol, SyntaxMappingBody.PerField(this.Location, extensionAstSymbolRef, [])))
           }
         }
       }
     | MatchCasePerField = "|" sm Pattern (sm "->" sm QualifiedName)? outline_begin_before nl OpenBrace="{" inl Members=MapSyntaxMatchCaseBodyMember* d CloseBrace="}" outline_end_before nl
       {
-        override MakeContext = PassThrough(Members, parent, _.MakeContext(_));
-        [Cached] private MakeAstSymbolRef(astSymbolRef : SymbolRef[AstSymbol]) : SymbolRef[AstSymbol]
+        override MakeContext
         {
-          if (astSymbolRef is SymbolRef.Some(astSymbol))
-          {
-            if (QualifiedNameOpt.HasValue)
-              TypingUtils.BindAstSymbolFromMappingExtension(QualifiedNameOpt.Location, astSymbol, QualifiedNameOpt.Value.Item2.CalcLocations(), this.Context)
-            else
-              this.Pattern.BindExtensionAst(astSymbol, this.Context)
-          }
+          def context = ParseTreePatternVariableContext(parent);
+          foreach (member in Members)
+            _ = member.MakeContext(context);
+          context
+        }
+        [Cached] private MakeAstSymbolRef(astSymbol : AstSymbol) : SymbolRef[AstSymbol]
+        {
+          if (QualifiedNameOpt.HasValue)
+            TypingUtils.BindAstSymbolFromMappingExtension(QualifiedNameOpt.Location, astSymbol, QualifiedNameOpt.Value.Item2.CalcLocations(), this.Context)
           else
-            astSymbolRef
+            this.Pattern.BindExtensionAst(astSymbol, this.Context)
         }
         override CollectExtensionMappings
         {
           match (this.Pattern.BindExtensionRule(baseRuleSymbol, this.Context))
           {
-            | (SymbolRef.Some(ruleSymbol), false) => simpleMappings.Add((ruleSymbol, MakeAstSymbolRef(astSymbolRef)))
+            | (SymbolRef.Some(ruleSymbol), false) => simpleMappings.Add(ruleSymbol)
             | (SymbolRef.Some(ruleSymbol), true)  => _ = matchingMappings.Add(ruleSymbol)
             | _ => ()
           }
         }
         override CollectSimpleMatchCases
         {
-          def (pattern, variables)     = this.Pattern.SimpleTyping(ruleSymbol, this.Context);
-          def mappingFields            = List(sharedMappingFields);
-          def caseDeclatationSymbolRef = MakeAstSymbolRef(astSymbolRef);
-          when (caseDeclatationSymbolRef is SymbolRef.Some(astSymbol))
+          def pattern          = this.Pattern.SimpleTyping(ruleSymbol, this.Context);
+          def mappingFields    = List(sharedMappingFields);
+          def caseAstSymbolRef = MakeAstSymbolRef(astSymbol);
+          when (caseAstSymbolRef is SymbolRef.Some(caseAstSymbol))
+          {
             foreach (member in Members)
-              when (member.GetSyntaxMappingField(astSymbol, ruleSymbol, variables) is Some(mappingField))
+              when (member.GetSyntaxMappingField(caseAstSymbol, ruleSymbol) is Some(mappingField))
                 mappingFields.Add(mappingField);
-          buffer.Add(SyntaxMappingCase.PerField(this.Location, pattern, caseDeclatationSymbolRef, mappingFields.ToNList()))
+
+            def expr = SyntaxMappingExpr.AstCtor(this.Location, ParseTreePath.This(this.Location, ruleSymbol), caseAstSymbol, mappingFields.ToNList());
+            buffer.Add(SyntaxMappingCase(this.Location, pattern, expr))
+          }
         }
         override CollectExtensionBodies
         {
-          def getMappingFields(astSymbolRef, ruleSymbol, variables, mappingFields)
+          def getMappingFields(extensionAstSymbol, ruleSymbol)
           {
-            when (astSymbolRef is SymbolRef.Some(astSymbol))
-            {
-              foreach (member in Members)
-                when (member.GetSyntaxMappingField(astSymbol, ruleSymbol, variables) is Some(mappingField))
-                  mappingFields.Add(mappingField);
+            def mappingFields = List();
+            foreach (member in Members)
+              when (member.GetSyntaxMappingField(extensionAstSymbol, ruleSymbol) is Some(mappingField))
+                mappingFields.Add(mappingField);
 
-              def errorLoc = Location(this.Location.Source, this.CloseBrace);
-              TypingUtils.CheckRequiredAstProperties(astSymbol, mappingFields, errorLoc, this.Context);
-            }
+            def errorLoc = Location(this.Location.Source, this.CloseBrace);
+            TypingUtils.CheckRequiredAstProperties(extensionAstSymbol, mappingFields, errorLoc, this.Context);
+            mappingFields.ToNList()
           }
 
           def (ruleRef, hasPattern) = this.Pattern.BindExtensionRule(baseRuleSymbol, this.Context);
           when (ruleRef is SymbolRef.Some(ruleSymbol))
           {
-            def extensionAstSymbolRef = MakeAstSymbolRef(astSymbolRef);
-            def mappingFields                 = List();
-            if (hasPattern)
+            def extensionAstSymbolRef = MakeAstSymbolRef(astSymbol);
+            when (extensionAstSymbolRef is SymbolRef.Some(extensionAstSymbol))
             {
-              def (pattern, variables)          = this.Pattern.ExtensionTyping(ruleSymbol, this.Context);
-              getMappingFields(extensionAstSymbolRef, ruleSymbol, variables, mappingFields);
-              mappingCases.Add((ruleSymbol, SyntaxMappingCase.PerField(this.Location, pattern, extensionAstSymbolRef, mappingFields.ToNList())))
-            }
-            else
-            {
-              getMappingFields(extensionAstSymbolRef, ruleSymbol, Dictionary(), mappingFields);
-              mappingBodies.Add((ruleSymbol, SyntaxMappingBody.PerField(this.Location, extensionAstSymbolRef, mappingFields.ToNList())))
+              if (hasPattern)
+              {
+                def pattern       = this.Pattern.ExtensionTyping(ruleSymbol, this.Context);
+                def mappingFields = getMappingFields(extensionAstSymbol, ruleSymbol);
+                def expr          = SyntaxMappingExpr.AstCtor(this.Location, ParseTreePath.This(this.Location, ruleSymbol), extensionAstSymbol, mappingFields);
+                mappingCases.Add((ruleSymbol, SyntaxMappingCase(this.Location, pattern, expr)))
+              }
+              else
+              {
+                def mappingFields = getMappingFields(extensionAstSymbol, ruleSymbol);
+                mappingBodies.Add((ruleSymbol, SyntaxMappingExpr.AstCtor(this.Location, ParseTreePath.This(this.Location, ruleSymbol), extensionAstSymbol, mappingFields)))
+              }
             }
           }
         }
       }
-    | MatchCaseInline = "|" sm Pattern sm "=" sm Expr=MapSyntaxExpression
+    | MatchCaseInline = "|" sm Pattern sm "=" sm Code=MapSyntaxCode
       {
-        [Cached] override MakeContext = parent;
+        [Cached] override MakeContext = ParseTreePatternVariableContext(parent);
         override CollectExtensionMappings
         {
           match (this.Pattern.BindExtensionRule(baseRuleSymbol, this.Context))
           {
-            | (SymbolRef.Some(ruleSymbol), false) => simpleMappings.Add((ruleSymbol, astSymbolRef))
+            | (SymbolRef.Some(ruleSymbol), false) => simpleMappings.Add(ruleSymbol)
             | (SymbolRef.Some(ruleSymbol), true)  => _ = matchingMappings.Add(ruleSymbol)
             | _ => ()
           }
@@ -1103,18 +1151,21 @@ syntax module NitraSyntax
         override CollectSimpleMatchCases
         {
           _ = sharedMappingFields;
-          _ = astSymbolRef;
-          def (pattern, _) = this.Pattern.SimpleTyping(ruleSymbol, this.Context);
-          def code         = NemerleParser.Parse(this.Expr, this.Context);
-          buffer.Add(SyntaxMappingCase.Inline(this.Location, pattern, code))
+          _ = astSymbol;
+          def pattern = this.Pattern.SimpleTyping(ruleSymbol, this.Context);
+          def code    = NemerleParser.Parse(this.Code, this.Context);
+          def expr    = SyntaxMappingExpr.Code(this.Code.Location, code);
+          buffer.Add(SyntaxMappingCase(this.Location, pattern, expr))
         }
         override CollectExtensionBodies
         {
-          def code = NemerleParser.Parse(this.Expr, this.Context);
+          _ = astSymbol;
+          def code = NemerleParser.Parse(this.Code, this.Context);
+          def expr = SyntaxMappingExpr.Code(this.Code.Location, code);
           match (this.Pattern.BindExtensionRule(baseRuleSymbol, this.Context))
           {
-            | (SymbolRef.Some(ruleSymbol), true)  => mappingCases.Add((ruleSymbol, SyntaxMappingCase.Inline(this.Location, this.Pattern.ExtensionTyping(ruleSymbol, this.Context)[0], code)))
-            | (SymbolRef.Some(ruleSymbol), false) => mappingBodies.Add((ruleSymbol, SyntaxMappingBody.Inline(this.Location, astSymbolRef, code)))
+            | (SymbolRef.Some(ruleSymbol), true)  => mappingCases.Add((ruleSymbol, SyntaxMappingCase(this.Location, this.Pattern.ExtensionTyping(ruleSymbol, this.Context), expr)))
+            | (SymbolRef.Some(ruleSymbol), false) => mappingBodies.Add((ruleSymbol, expr))
             | _ => ()
           }
         }
@@ -1135,16 +1186,14 @@ syntax module NitraSyntax
       context.Error(this, "Extension rule pattern expected");
       SymbolRef.None(this.Location, true)
     }
-    ExtensionTyping(ruleSymbol : ExtensionRuleSymbol, context : Context) : ParseTreePattern * Dictionary[string, ParseTreePattern.Var]
+    ExtensionTyping(ruleSymbol : ExtensionRuleSymbol, context : Context) : ParseTreePattern
     {
       IgnoreParams();
       assert(false)
     }
-    SimpleTyping(ruleSymbol : SyntaxRuleSymbol, context : Context) : ParseTreePattern * Dictionary[string, ParseTreePattern.Var]
+    SimpleTyping(ruleSymbol : SyntaxRuleSymbol, context : Context) : ParseTreePattern
     {
-      def pattern   = PatternTyper.TypeParseTreePattern(this.Location, ruleSymbol, ConcreteListParseTree(this.Location, array[this]), context);
-      def variables = TypingUtils.CollectPatternVariables(pattern, context);
-      (pattern, variables)
+      PatternTyper.TypeParseTreePattern(this.Location, ruleSymbol, ConcreteListParseTree(this.Location, array[this]), context);
     }
     Typing(ruleType : RuleType, context : Context) : ParseTreePattern;
 
@@ -1159,22 +1208,12 @@ syntax module NitraSyntax
         override BindExtensionRule        = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), true);
         override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(this.Identifier.Location, baseAstSymbol, [this.Identifier.Location], context);
         override Typing                   = PatternTyper.TypeCtor(this.Location, this.Identifier.LocatedName(), this.Patterns.Item1, ruleType, context);
-        override ExtensionTyping
-        {
-          def pattern = PatternTyper.TypeParseTreePattern(this.Location, ruleSymbol, this.Patterns.Item1, context);
-          def variables = TypingUtils.CollectPatternVariables(pattern, context);
-          (pattern, variables)
-        }
+        override ExtensionTyping          = PatternTyper.TypeParseTreePattern(this.Location, ruleSymbol, this.Patterns.Item1, context);
       }
     | Tuple = "(" (Pattern; "," s)* ")"
       {
         override Typing       = PatternTyper.TypeTuple(this.Location, this.Patterns.Item1, ruleType, context);
-        override SimpleTyping
-        {
-          def pattern   = PatternTyper.TypeParseTreePattern(this.Location, ruleSymbol, this.Patterns.Item1, context);
-          def variables = TypingUtils.CollectPatternVariables(pattern, context);
-          (pattern, variables)
-        }
+        override SimpleTyping = PatternTyper.TypeParseTreePattern(this.Location, ruleSymbol, this.Patterns.Item1, context);
       }
     | List1 = Pattern ^ 10 s "::" s Pattern ^ 11
       {
@@ -1189,98 +1228,104 @@ syntax module NitraSyntax
   syntax MapSyntaxBody
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    CollectSyntaxMappings(astSymbolRef : SymbolRef[AstSymbol], ruleSymbol : SyntaxRuleSymbol) : void;
-    TypeSyntaxMappings(astSymbolRef : SymbolRef[AstSymbol], ruleSymbol : SyntaxRuleSymbol) : void;
+    CollectSyntaxMappings(astType : AstType, ruleSymbol : SyntaxRuleSymbol) : void;
+    TypeSyntaxMappings(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol) : void;
 
     | Empty = ";"
       {
-        override CollectSyntaxMappings = ruleSymbol.SetAst(astSymbolRef);
+        override CollectSyntaxMappings = ruleSymbol.SetAst(astType);
         override TypeSyntaxMappings
         {
-          when (astSymbolRef is SymbolRef.Some(astSymbol))
           unless (ruleSymbol is ExtensibleRuleSymbol)
             TypingUtils.CheckRequiredAstProperties(astSymbol, [], this.Location, this.Context);
-          def body = SyntaxMappingBody.PerField(this.Location, astSymbolRef, []);
-          ruleSymbol.SetSyntaxMappingBody(body);
+          def body = SyntaxMappingExpr.AstCtor(this.Location, ParseTreePath.This(this.Location, ruleSymbol), astSymbol, []);
+          ruleSymbol.SetSyntaxMappingExpr(body);
         }
       }
-    | Inline = sm "=" sm Expr=MapSyntaxExpression
+    | Inline = sm "=" sm Code=MapSyntaxCode
       {
-        override CollectSyntaxMappings = ruleSymbol.SetAst(astSymbolRef);
+        override CollectSyntaxMappings = ruleSymbol.SetAst(astType);
         override TypeSyntaxMappings
         {
-          def code = NemerleParser.Parse(this.Expr, this.Context);
-          def body = SyntaxMappingBody.Inline(this.Location, astSymbolRef, code);
-          ruleSymbol.SetSyntaxMappingBody(body);
+          _ = astSymbol;
+          def code = NemerleParser.Parse(this.Code, this.Context);
+          def body = SyntaxMappingExpr.Code(this.Location, code);
+          ruleSymbol.SetSyntaxMappingExpr(body);
         }
       }
     | PerMember = outline_begin_before nl OpenBrace="{" inl Members=MapSyntaxBodyMember* d CloseBrace="}" outline_end_before nl
       {
-        override MakeContext = PassThrough(Members, parent, _.MakeContext(_));
+        override MakeContext
+        {
+          def context = parent;
+          foreach (member in Members)
+            _ = member.MakeContext(context);
+          context
+        }
         override CollectSyntaxMappings
         {
-          ruleSymbol.SetAst(astSymbolRef);
+          ruleSymbol.SetAst(astType);
           when (ruleSymbol is ExtensibleRuleSymbol as baseRuleSymbol)
           {
             def simpleMappings   = List();
             def matchingMappings = HashSet();
 
             foreach (member in Members)
-              member.CollectExtensionMappings(astSymbolRef, baseRuleSymbol, simpleMappings, matchingMappings);
+              member.CollectExtensionMappings(baseRuleSymbol, simpleMappings, matchingMappings);
 
-            foreach ((extensionRuleSymbol, extensionAstSymbolRef) in simpleMappings)
-              extensionRuleSymbol.SetAst(extensionAstSymbolRef);
+            foreach (extensionRuleSymbol in simpleMappings)
+              extensionRuleSymbol.SetAst(astType);
 
             foreach (extensionRuleSymbol in matchingMappings)
-              extensionRuleSymbol.SetAst(astSymbolRef);
+              extensionRuleSymbol.SetAst(astType);
           }
         }
         override TypeSyntaxMappings
         {
           if (ruleSymbol is ExtensibleRuleSymbol as baseRuleSymbol)
           {
-            ruleSymbol.SetSyntaxMappingBody(SyntaxMappingBody.PerField(this.Location, astSymbolRef, []));
+            ruleSymbol.SetSyntaxMappingExpr(SyntaxMappingExpr.AstCtor(this.Location, ParseTreePath.This(this.Location, ruleSymbol), astSymbol, []));
 
             def mappingCases  = List();
             def mappingBodies = List();
             foreach (member in Members)
-              member.CollectExtensionBodies(astSymbolRef, baseRuleSymbol, mappingCases, mappingBodies);
+              member.CollectExtensionBodies(astSymbol, baseRuleSymbol, mappingCases, mappingBodies);
 
             foreach ((extensionRuleSymbol, body) in mappingBodies)
-              extensionRuleSymbol.SetSyntaxMappingBody(body);
+              extensionRuleSymbol.SetSyntaxMappingExpr(body);
 
             foreach (item in mappingCases.GroupBy(tup => tup[0], tup => tup[1]))
             {
               def extensionRuleSymbol = item.Key;
               def mappingCases        = NList.ToList(item);
-              def body                = SyntaxMappingBody.Match(this.Location, astSymbolRef, mappingCases);
-              extensionRuleSymbol.SetSyntaxMappingBody(body)
+              def path                = ParseTreePath.This(this.Location, extensionRuleSymbol);
+              def expr                = SyntaxMappingExpr.Match(this.Location, path, mappingCases);
+              extensionRuleSymbol.SetSyntaxMappingExpr(expr)
             }
           }
           else
           {
             def mappingFields = List();
             foreach (member in Members)
-              member.CollectMappingFields(astSymbolRef, ruleSymbol, mappingFields);
+              member.CollectMappingFields(astSymbol, ruleSymbol, mappingFields);
 
             def mappingCases = List();
             foreach (member in Members)
-              member.CollectSimpleMatchCases(astSymbolRef, ruleSymbol, mappingFields, mappingCases);
+              member.CollectSimpleMatchCases(astSymbol, ruleSymbol, mappingFields, mappingCases);
 
-            def body =
-              if (mappingCases.Count > 0)
-                SyntaxMappingBody.Match(this.Location, astSymbolRef, mappingCases.ToNList())
-              else
-              {
-                when (astSymbolRef is SymbolRef.Some(astSymbol))
-                {
-                  def errorLoc = Location(this.Location.Source, this.CloseBrace);
-                  TypingUtils.CheckRequiredAstProperties(astSymbol, mappingFields, errorLoc, this.Context);
-                }
-                SyntaxMappingBody.PerField(this.Location, astSymbolRef, mappingFields.ToNList());
-              }
-
-            ruleSymbol.SetSyntaxMappingBody(body)
+            if (mappingCases.Count > 0)
+            {
+              def path = ParseTreePath.This(this.Location, ruleSymbol);
+              def expr = SyntaxMappingExpr.Match(this.Location, path, mappingCases.ToNList());
+              ruleSymbol.SetSyntaxMappingExpr(expr)
+            }
+            else
+            {
+              def errorLoc = Location(this.Location.Source, this.CloseBrace);
+              TypingUtils.CheckRequiredAstProperties(astSymbol, mappingFields, errorLoc, this.Context);
+              def expr = SyntaxMappingExpr.AstCtor(this.Location, ParseTreePath.This(this.Location, ruleSymbol), astSymbol, mappingFields.ToNList());
+              ruleSymbol.SetSyntaxMappingExpr(expr)
+            }
           }
         }
       }
@@ -1555,9 +1600,14 @@ syntax module NitraSyntax
           _ = MapSyntaxBody.MakeContext(context);
           context
         }
-        [Cached] private MakeAstSymbolRef() : SymbolRef[AstSymbol] = this.Context.Bind.[AstSymbol](AstName);
-        override CollectSyntaxMappings = MapSyntaxBody.CollectSyntaxMappings(MakeAstSymbolRef(), _ruleSymbol);
-        override TypeSyntaxMappings    = MapSyntaxBody.TypeSyntaxMappings(MakeAstSymbolRef(), _ruleSymbol);
+        [Cached] private MakeAstType() : AstType = TypingUtils.MakeAstType(this.AstName, this.Context);
+        override CollectSyntaxMappings = MapSyntaxBody.CollectSyntaxMappings(MakeAstType(), _ruleSymbol);
+        override TypeSyntaxMappings
+        {
+          def astType = MakeAstType();
+          when (astType is AstType.Ast(astSymbol))
+            MapSyntaxBody.TypeSyntaxMappings(astSymbol, _ruleSymbol);
+        }
       }
   }
 
@@ -1727,9 +1777,14 @@ syntax module NitraSyntax
           _ = MapSyntaxBody.MakeContext(context);
           context
         }
-        [Cached] private MakeAstSymbolRef() : SymbolRef[AstSymbol] = this.Context.Bind.[AstSymbol](AstName);
-        override CollectSyntaxMappings = MapSyntaxBody.CollectSyntaxMappings(MakeAstSymbolRef(), _ruleSymbol);
-        override TypeSyntaxMappings    = MapSyntaxBody.TypeSyntaxMappings(MakeAstSymbolRef(), _ruleSymbol);
+        [Cached] private MakeAstType() : AstType = TypingUtils.MakeAstType(this.AstName, this.Context);
+        override CollectSyntaxMappings = MapSyntaxBody.CollectSyntaxMappings(MakeAstType(), _ruleSymbol);
+        override TypeSyntaxMappings
+        {
+          def astType = MakeAstType();
+          when (astType is AstType.Ast(astSymbol))
+            MapSyntaxBody.TypeSyntaxMappings(astSymbol, _ruleSymbol);
+        }
       }
   }
 
@@ -1885,15 +1940,20 @@ syntax module NitraSyntax
       }
     | MapSyntax = "map" sm AstName=QualifiedName MapSyntaxBody
       {
-        [Cached] private MakeAstSymbolRef() : SymbolRef[AstSymbol] = this.Context.Bind.[AstSymbol](AstName);
+        [Cached] private MakeAstType() : AstType = TypingUtils.MakeAstType(this.AstName, this.Context);
         override MakeContext
         {
           def context = MapSyntaxContext(parent);
           _ = MapSyntaxBody.MakeContext(context);
           context
         }
-        override CollectSyntaxMappings = MapSyntaxBody.CollectSyntaxMappings(MakeAstSymbolRef(), _ruleSymbol);
-        override TypeSyntaxMappings    = MapSyntaxBody.TypeSyntaxMappings(MakeAstSymbolRef(), _ruleSymbol);
+        override CollectSyntaxMappings = MapSyntaxBody.CollectSyntaxMappings(MakeAstType(), _ruleSymbol);
+        override TypeSyntaxMappings
+        {
+          def astType = MakeAstType();
+          when (astType is AstType.Ast(astSymbol))
+            MapSyntaxBody.TypeSyntaxMappings(astSymbol, _ruleSymbol);
+        }
       }
   }
 
