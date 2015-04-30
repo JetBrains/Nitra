@@ -157,13 +157,13 @@ namespace Nitra.ViewModels
       var timer = System.Diagnostics.Stopwatch.StartNew();
       try
       {
-        var parseSession = new ParseSession(source, StartRule,
+        var parseSession = new ParseSession(StartRule,
           compositeGrammar:   _compositeGrammar,
           completionPrefix:   completionPrefix,
           completionStartPos: completionStartPos,
           parseToEndOfString: true,
           onRecovery: usePanicRecoveryAlgorithm ? ParseSession.PanicRecovery : ParseSession.SmartRecovery);
-        var parseResult = parseSession.Parse();
+        var parseResult = parseSession.Parse(source);
         this.Exception = null;
         this.TestTime = timer.Elapsed;
         return parseResult;
