@@ -162,7 +162,7 @@ namespace Nitra.ViewModels
           completionPrefix:   completionPrefix,
           completionStartPos: completionStartPos,
           parseToEndOfString: true,
-          onRecovery: usePanicRecoveryAlgorithm ? ParseSession.PanicRecover : ParseSession.SmartRecover);
+          onRecovery: usePanicRecoveryAlgorithm ? ParseSession.PanicRecovery : ParseSession.SmartRecovery);
         var parseResult = parseSession.Parse();
         this.Exception = null;
         this.TestTime = timer.Elapsed;
