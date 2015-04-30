@@ -1,4 +1,5 @@
 ﻿using Nitra.ProjectSystem;
+using Nitra.Model;
 
 using Nemerle;
 using Nemerle.Collections;
@@ -11,18 +12,44 @@ namespace Nitra.Typing
 {
   public partial module TypingUtils
   {
-    internal ValidateExtensionRuleAstMapping(ruleSymbol : ParsedExtensionRuleSymbol, compilerMessages : ICompilerMessages) : void
+    public ValidateExtensionRuleAstMapping(project : NitraProject) : void
     {
-      when (ruleSymbol.BaseRule is SymbolRef.Some(baseRuleSymbol))
+      def checkConversion(astType : AstType, conversion : SyntaxMappingType) : bool
       {
-        match (baseRuleSymbol.Ast, ruleSymbol.Ast)
+        | (_, Tuple(_, item)) => checkConversion(astType, item)
+        | (Ast(baseSymbol),        Ref(concreteSymbol))
+        | (Option(baseSymbol),     Option(Ref(concreteSymbol), _))
+        | (List(baseSymbol),       List(Ref(concreteSymbol), _))
+        | (OptionList(baseSymbol), List(Ref(concreteSymbol), _)) => concreteSymbol.IsSubtypeOf(baseSymbol)
+        | _ => false
+      }
+
+      def checkExpression(astType : AstType, expr : SyntaxMappingExpr) : void
+      {
+        | (_, Code) => ()
+        | (_, Conversion(_, conversion)) when checkConversion(astType, conversion) => ()
+        | (_, Match(_, cases)) => foreach (case in cases) checkExpression(astType, case.Expr)
+        | (Ast(baseSymbol),        AstCtor(concreteSymbol, _) as expr)
+        | (Option(baseSymbol),     OptionCtor(concreteSymbol, _) as expr)
+        | (List(baseSymbol),       ListCtor(concreteSymbol, _) as expr)
+        | (OptionList(baseSymbol), ListCtor(concreteSymbol, _) as expr) =>
+          unless (concreteSymbol.IsSubtypeOf(baseSymbol))
+            project.Error(expr, $"Declaration '$(concreteSymbol.FullName)' is not subtype of declaration '$(baseSymbol.FullName)'.");
+
+        | (baseAst, expr) => project.Error(expr, $"Declaration mapping of type '$baseAst' is required.");
+      }
+
+      foreach (ruleSymbol in project.RootNamespace.Node.GetDescendants.[ParsedExtensionRuleSymbol]())
+      {
+        when (ruleSymbol.BaseRule is SymbolRef.Some(baseRuleSymbol))
         {
-          | (Void,    Void)    => ()
-          | (Void,    ruleAst) => compilerMessages.Error(ruleAst, $"Base rule '$(baseRuleSymbol.FullName)' does not have declaration mapping.");
-          | (baseAst, Void)    => compilerMessages.Error(ruleSymbol.FirstLocation, $"Declaration mapping of type '$baseAst' is required.");
-          | (baseAst, ruleAst) =>
-            unless (ruleAst.IsSubtypeOf(baseAst))
-              compilerMessages.Error(ruleAst, $"Declaration '$ruleAst' is not subtype of declaration '$baseAst'.");
+          match (baseRuleSymbol.Ast, ruleSymbol.GetSyntaxMappingExpr())
+          {
+            | (Void,    null) => ()
+            | (Void,    expr) => project.Error(expr, $"Base rule '$(baseRuleSymbol.FullName)' does not have declaration mapping.")
+            | (baseAst, null) => project.Error(ruleSymbol.FirstLocation, $"Declaration mapping of type '$baseAst' is required.")
+            | (baseAst, expr) => checkExpression(baseAst, expr)
+          }
         }
       }
     }
