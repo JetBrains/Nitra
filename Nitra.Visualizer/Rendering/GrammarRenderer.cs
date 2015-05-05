@@ -32,14 +32,14 @@ namespace Nitra.Visualizer.Rendering
           continue;
         }
 
-        var list = reflection as SequenceInfo.List;
+        var list = reflection as SequenceInfo.ListItem;
         if (list != null)
         {
           Render(list);
           continue;
         }
 
-        var listWithSeparatorRule = reflection as SequenceInfo.ListWithSeparatorRule;
+        var listWithSeparatorRule = reflection as SequenceInfo.ListWithSeparatorItem;
         if (listWithSeparatorRule != null)
         {
           Render(listWithSeparatorRule);
@@ -69,12 +69,12 @@ namespace Nitra.Visualizer.Rendering
 
     }
 
-    public void Render(SequenceInfo.List info)
+    public void Render(SequenceInfo.ListItem info)
     {
       var name = info.RuleName;
     }
 
-    public void Render(SequenceInfo.ListWithSeparatorRule info)
+    public void Render(SequenceInfo.ListWithSeparatorItem info)
     {
       var name = info.RuleName;
     }
