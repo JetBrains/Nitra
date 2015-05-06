@@ -1155,7 +1155,7 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void OnRepars(object sender, ExecutedRoutedEventArgs e)
+    private void OnReparse(object sender, ExecutedRoutedEventArgs e)
     {
       Dispatcher.Invoke(new Action(DoParse));
     }
@@ -1415,7 +1415,7 @@ namespace Nitra.Visualizer
 
     private void OnUsePanicRecovery(object sender, ExecutedRoutedEventArgs e)
     {
-      OnRepars(null, null);
+      OnReparse(null, null);
     }
   }
 }
