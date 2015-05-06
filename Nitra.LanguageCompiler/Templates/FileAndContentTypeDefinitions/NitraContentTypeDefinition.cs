@@ -57,7 +57,7 @@ namespace XXNamespaceXX
 
     protected override PsiLanguageType PsiLanguageType
     {
-      get { return null/*XXLanguageXXLanguage.Instance*/; }
+      get { return UnknownLanguage.Instance; }
     }
 
     public override IconId Icon
