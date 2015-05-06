@@ -121,7 +121,7 @@ namespace Nitra.TestsLauncher
           var dots = maxNameLen - test.Name.Length;
           Print(test.Name + " " + new string('.', dots) + " ");
           Console.Out.Flush();
-          test.Run(usePanicRecoveryAlgorithm: false);
+          test.Run(recoveryAlgorithm: RecoveryAlgorithm.Smart);
 
           switch (test.TestState)
           {

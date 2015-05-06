@@ -145,7 +145,7 @@ namespace Nitra.ViewModels
     }
 
     [CanBeNull]
-    public IParseResult Run([NotNull] string code, [CanBeNull] string gold = null, int completionStartPos = -1, string completionPrefix = null, bool usePanicRecoveryAlgorithm = false)
+    public IParseResult Run([NotNull] string code, [CanBeNull] string gold = null, int completionStartPos = -1, string completionPrefix = null, RecoveryAlgorithm recoveryAlgorithm = RecoveryAlgorithm.Smart)
     {
       _compositeGrammar = ParserHost.Instance.MakeCompositeGrammar(SynatxModules);
 
@@ -161,8 +161,13 @@ namespace Nitra.ViewModels
           compositeGrammar:   _compositeGrammar,
           completionPrefix:   completionPrefix,
           completionStartPos: completionStartPos,
-          parseToEndOfString: true,
-          onRecovery: usePanicRecoveryAlgorithm ? ParseSession.PanicRecovery : ParseSession.SmartRecovery);
+          parseToEndOfString: true);
+        switch (recoveryAlgorithm)
+        {
+          case RecoveryAlgorithm.Smart: parseSession.OnRecovery = ParseSession.SmartRecovery; break;
+          case RecoveryAlgorithm.Panic: parseSession.OnRecovery = ParseSession.PanicRecovery; break;
+          case RecoveryAlgorithm.FirstError: parseSession.OnRecovery = ParseSession.FirsrErrorRecovery; break;
+        }
         var parseResult = parseSession.Parse(source);
         this.Exception = null;
         this.TestTime = timer.Elapsed;

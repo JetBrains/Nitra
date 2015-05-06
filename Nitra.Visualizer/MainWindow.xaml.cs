@@ -546,6 +546,17 @@ namespace Nitra.Visualizer
       Dispatcher.Invoke(new Action(DoParse));
     }
 
+    private RecoveryAlgorithm GetRecoveryAlgorithm()
+    {
+      if (_recoveryAlgorithmSmart.IsChecked == true)
+        return RecoveryAlgorithm.Smart;
+      if (_recoveryAlgorithmPanic.IsChecked == true)
+        return RecoveryAlgorithm.Panic;
+      if (_recoveryAlgorithmFirstError.IsChecked == true)
+        return RecoveryAlgorithm.FirstError;
+      return RecoveryAlgorithm.Smart;
+    }
+
     private void DoParse()
     {
       if (_doTreeOperation)
@@ -561,7 +572,7 @@ namespace Nitra.Visualizer
         _reflectionTreeView.ItemsSource = null;
         var timer = Stopwatch.StartNew();
 
-        _parseResult = _currentTestSuit.Run(_text.Text, usePanicRecoveryAlgorithm: _usePanicRecoveryAlgorithmCheckBox.IsChecked == true);
+        _parseResult = _currentTestSuit.Run(_text.Text, recoveryAlgorithm: GetRecoveryAlgorithm());
 
         _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
 
@@ -877,7 +888,7 @@ namespace Nitra.Visualizer
 
     private void RunTest(TestVm test)
     {
-      test.Run(usePanicRecoveryAlgorithm: _usePanicRecoveryAlgorithmCheckBox.IsChecked == true);
+      test.Run(recoveryAlgorithm: GetRecoveryAlgorithm());
 
       ShowDiff(test);
     }
