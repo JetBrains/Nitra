@@ -1,4 +1,7 @@
-﻿using Microsoft.VisualStudio.Text.Classification;
+﻿using JetBrains.Annotations;
+using JetBrains.ReSharper.Psi;
+
+using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Utilities;
 
 using System.ComponentModel.Composition;
@@ -57,7 +60,7 @@ namespace XXNamespaceXX
 
     protected override PsiLanguageType PsiLanguageType
     {
-      get { return UnknownLanguage.Instance; }
+      get { return XXLanguageXXLanguage.Instance; }
     }
 
     public override IconId Icon
@@ -72,6 +75,30 @@ namespace XXNamespaceXX
     public override ILexerFactory GetMixedLexerFactory(ISolution solution, IBuffer buffer, IPsiSourceFile sourceFile = null)
     {
       return null;
+    }
+  }
+
+  [LanguageDefinition(Name)]
+  public class XXLanguageXXLanguage : KnownLanguage
+  {
+    private new const string Name = "XXLanguageXX";
+
+    [UsedImplicitly]
+    public static XXLanguageXXLanguage Instance;
+
+    protected XXLanguageXXLanguage()
+      : base(Name, Name)
+    {
+    }
+
+    protected XXLanguageXXLanguage([NotNull] string name)
+      : base(name, name)
+    {
+    }
+
+    protected XXLanguageXXLanguage([NotNull] string name, [NotNull] string presentableName)
+      : base(name, presentableName)
+    {
     }
   }
 }
