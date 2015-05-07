@@ -47,80 +47,69 @@ namespace Nitra.Compiler
         })
     }
 
-    [Record]
-    private struct BuildAstResult
-    {
-      public Code    : PExpr;
-      public AstType : FixedType;
-
-      public this(code : PExpr) { this(code, null) }
-
-      public List            : PExpr { get { if (AstType != null) <[ $(AstType : typed).IAstList ]>           else <[ Nitra.Declarations.IAstList[Nitra.Declarations.IAst] ]> } }
-      public ConcreteList    : PExpr { get { if (AstType != null) <[ $(AstType : typed).AstList ]>            else <[ Nitra.Declarations.AstList[Nitra.Declarations.IAst] ]> } }
-      public AmbiguousList   : PExpr { get { if (AstType != null) <[ $(AstType : typed).AmbiguousAstList ]>   else <[ Nitra.Declarations.AmbiguousAstList[Nitra.Declarations.IAst] ]> } }
-
-      public Option          : PExpr { get { if (AstType != null) <[ $(AstType : typed).IAstOption ]>         else <[ Nitra.Declarations.IAstOption[Nitra.Declarations.IAst] ]> } }
-      public ConcreteOption  : PExpr { get { if (AstType != null) <[ $(AstType : typed).AstOption ]>          else <[ Nitra.Declarations.AstOption[Nitra.Declarations.IAst] ]> } }
-      public AmbiguousOption : PExpr { get { if (AstType != null) <[ $(AstType : typed).AmbiguousAstOption ]> else <[ Nitra.Declarations.AmbiguousAstOption[Nitra.Declarations.IAst] ]> } }
-    }
-
     private CompileSyntaxMapping(expr : SyntaxMappingExpr, tb : TypeBuilder) : PExpr
     {
-      def compileConversion(mappingType : SyntaxMappingType, obj : PExpr) : BuildAstResult
+      def compileConversion(mappingType : SyntaxMappingType, obj : PExpr) : PExpr
       {
+        def compileTupleAccess(obj : PExpr, access : list[int]) : PExpr
+        {
+          mutable acc = obj;
+          foreach (x in access)
+            acc = <[ $acc.$("Item" + x : usesite) ]>;
+          acc
+        }
         match (mappingType)
         {
-          | List(item, ruleType) =>
-            def parseTreeType     = Environment.GetParseTreeType(ruleType);
-            def itemResult        = compileConversion(item, <[ node ]>);
-            def getAstListName    = Util.tmpname("GetAstList");
+          | CreateList(symbol, itemAccess) =>
+            def astType        = Environment.GetAstType(symbol);
+            def parseTreeType  = Environment.GetParseTreeType(mappingType.Source);
+            def getAstListName = Util.tmpname("GetAstList");
             tb.Define(<[ decl:
-              private static $(getAstListName : usesite)(lst : $(parseTreeType : typed)) : $(itemResult.List)
+              private static $(getAstListName : usesite)(lst : $(parseTreeType : typed)) : $(astType : typed).IAstList
               {
                 unchecked
                 {
                   if (lst.IsAmbiguous)
                   {
                     def ambiguities  = Nitra.Internal.AstUtils.GetAstAmbiguities(lst :> Nitra.IAmbiguousParseTree, $(getAstListName : usesite));
-                    $(itemResult.AmbiguousList)(ambiguities)
+                    $(astType : typed).AmbiguousAstList(ambiguities)
                   }
                   else
                   {
                     def items = array(lst.Count);
                     foreach (node in lst with index)
-                      items[index] = $(itemResult.Code);
-                    $(itemResult.ConcreteList)(lst.Span, items)
+                      items[index] = $(compileTupleAccess(<[ node ]>, itemAccess)).GetAst();
+                    $(astType : typed).AstList(lst.Span, items)
                   }
                 }
               }
             ]>);
-            BuildAstResult(<[ $(getAstListName : usesite)($obj) ]>)
+            <[ $(getAstListName : usesite)($(compileTupleAccess(obj, mappingType.TupleAccess))) ]>
 
-          | Option(item, ruleType) =>
-            def parseTreeType      = Environment.GetParseTreeType(ruleType);
-            def itemResult         = compileConversion(item, <[ opt.Value ]>);
-            def getAstOptionName   = Util.tmpname("GetAstOption");
+          | CreateOption(symbol, valueAccess) =>
+            def astType          = Environment.GetAstType(symbol);
+            def parseTreeType    = Environment.GetParseTreeType(mappingType.Source);
+            def getAstOptionName = Util.tmpname("GetAstOption");
             tb.Define(<[ decl:
-              private static $(getAstOptionName : usesite)(opt : $(parseTreeType : typed)) : $(itemResult.Option)
+              private static $(getAstOptionName : usesite)(opt : $(parseTreeType : typed)) : $(astType : typed).IAstOption
               {
                 unchecked
                 {
                   if (opt.IsAmbiguous)
                   {
                     def ambiguities  = Nitra.Internal.AstUtils.GetAstAmbiguities(opt :> Nitra.IAmbiguousParseTree, $(getAstOptionName : usesite));
-                    $(itemResult.AmbiguousOption)(ambiguities)
+                    $(astType : typed).AmbiguousAstOption(ambiguities)
                   }
                   else if (opt.HasValue)
-                    $(itemResult.ConcreteOption)(opt.Span, $(itemResult.Code))
+                    $(astType : typed).AstOption(opt.Span, $(compileTupleAccess(<[ opt.Value ]>, valueAccess)).GetAst())
                   else
-                    $(itemResult.ConcreteOption)(opt.Span)
+                    $(astType : typed).AstOption(opt.Span)
                 }
               }
             ]>);
-            BuildAstResult(<[ $(getAstOptionName : usesite)( $obj) ]>)
+            <[ $(getAstOptionName : usesite)($(compileTupleAccess(obj, mappingType.TupleAccess))) ]>
 
-          | Ref(astSymbol)     => BuildAstResult(<[ $obj.GetAst() ]>, Environment.GetAstType(astSymbol))
-          | Tuple(index, item) => compileConversion(item, <[ $obj.$("Item" + index.ToString() : usesite) ]>)
+          | CallGetAst => <[ $obj.GetAst() ]>
         }
       }
 
@@ -200,14 +189,14 @@ namespace Nitra.Compiler
       {
         match (expr)
         {
-          | Code(code)                               => code
+          | Code(code)                         => code
           | AstCtor(astSymbol, args)           => <[ $(Environment.GetAstType(astSymbol) : typed)(Span = this.Span, ..$(args.Map(compileField))) ]>
           | ListCtor(astSymbol, [])            => <[ $(Environment.GetAstType(astSymbol) : typed).AstList(this.Span) ]>
           | ListCtor(astSymbol, items)         => <[ $(Environment.GetAstType(astSymbol) : typed).AstList(this.Span, ..$(items.Map(CompileSyntaxMapping(_, tb)))) ]>
           | OptionCtor(astSymbol, Some(value)) => <[ $(Environment.GetAstType(astSymbol) : typed).AstOption(this.Span, $(CompileSyntaxMapping(value, tb))) ]>
           | OptionCtor(astSymbol, None())      => <[ $(Environment.GetAstType(astSymbol) : typed).AstOption(this.Span) ]>
-          | Conversion(path, mappingType)            => compileConversion(mappingType, MakeParseTreeMemberAccess(path)).Code
-          | Match(path, cases)                       => compileMatch(path, cases)
+          | Conversion(path, mappingType)      => compileConversion(mappingType, MakeParseTreeMemberAccess(path))
+          | Match(path, cases)                 => compileMatch(path, cases)
         }
       });
     }
