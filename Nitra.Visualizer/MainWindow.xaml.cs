@@ -74,8 +74,7 @@ namespace Nitra.Visualizer
     private SolutionVm _solution;
     private readonly PropertyGrid _propertyGrid;
     private readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
-    private List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
-    private static readonly HighlightingColor _braceColor = new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkGray) };
+    private List<ITextMarker> _matchedBrackets = new List<ITextMarker>();
 
     public MainWindow()
     {
@@ -211,11 +210,28 @@ namespace Nitra.Visualizer
       if (_parseResult == null)
         return;
 
+      if (_matchedBrackets.Count > 0)
+      {
+        foreach (var marker in _matchedBrackets)
+          _textMarkerService.Remove(marker);
+        _matchedBrackets.Clear();
+      }
+
       var context = new MatchBracketsWalker.Context(caretPos);
       _matchBracketsWalker.Walk(_parseResult, context);
-      _matchedBrackets = context.Brackets;
-      if (_matchedBrackets == null || _matchedBrackets.Count != context.Brackets.Count)
-        _text.TextArea.TextView.Redraw(); 
+      if (context.Brackets != null)
+      {
+        foreach (var bracket in context.Brackets)
+        {
+          var marker1 = _textMarkerService.Create(bracket.OpenBracket.StartPos, bracket.OpenBracket.Length);
+          marker1.BackgroundColor = Colors.LightGray;
+          _matchedBrackets.Add(marker1);
+
+          var marker2 = _textMarkerService.Create(bracket.CloseBracket.StartPos, bracket.CloseBracket.Length);
+          marker2.BackgroundColor = Colors.LightGray;
+          _matchedBrackets.Add(marker2);
+        }
+      }
     }
 
     private void ShowNodeForCaret()
@@ -659,27 +675,8 @@ namespace Nitra.Visualizer
             e.Sections.Add(section);
           }
         }
-
-        foreach (var matchedBracket in _matchedBrackets)
-        {
-          AddHighlightSection(e, line, matchedBracket.OpenBracket);
-          AddHighlightSection(e, line, matchedBracket.CloseBracket);
-        }
       }
       catch (Exception ex) { Debug.WriteLine(ex.GetType().Name + ":" + ex.Message); }
-    }
-
-    private static void AddHighlightSection(HighlightLineEventArgs e, DocumentLine line, NSpan bracket)
-    {
-      var startOffset = Math.Max(line.Offset, bracket.StartPos);
-      var endOffset = Math.Min(line.EndOffset, bracket.EndPos);
-      var section = new HighlightedSection
-      {
-        Offset = startOffset,
-        Length = endOffset - startOffset,
-        Color  = _braceColor
-      };
-      e.Sections.Add(section);
     }
 
     private void textBox1_MouseHover(object sender, MouseEventArgs e)
