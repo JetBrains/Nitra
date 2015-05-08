@@ -3,6 +3,7 @@ using Nitra.Visualizer.Annotations;
 
 using System;
 using System.Collections.ObjectModel;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -14,16 +15,17 @@ namespace Nitra.ViewModels
   {
     public SolutionVm Solution { get; private set; }
     public string Name { get; private set; }
-    public ObservableCollection<GrammarDescriptor>  SynatxModules { get; private set; }
-    public StartRuleDescriptor                      StartRule     { get; private set; }
-    public ObservableCollection<TestVm>             Tests         { get; private set; }
-    public string                                   TestSuitPath  { get; set; }
-    public Exception                                Exception     { get; private set; }
-    public TimeSpan                                 TestTime      { get; private set; }
+    public ObservableCollection<GrammarDescriptor>  SynatxModules    { get; private set; }
+    public StartRuleDescriptor                      StartRule        { get; private set; }
+    public ObservableCollection<TestVm>             Tests            { get; private set; }
+    public string                                   TestSuitPath     { get; set; }
+    public Exception                                Exception        { get; private set; }
+    public TimeSpan                                 TestTime         { get; private set; }
 
     public string _hint;
     public override string Hint { get { return _hint; } }
     public string[] LibPaths { get; private set; }
+    public IEnumerable<GrammarDescriptor> AllSynatxModules { get; private set; }
 
     readonly string _rootPath;
     private CompositeGrammar _compositeGrammar;
@@ -48,6 +50,7 @@ namespace Nitra.ViewModels
         var root = XElement.Load(gonfigPath);
         var libs = root.Elements("Lib").ToList();
         LibPaths = libs.Where(lib => lib.Attribute("Path") != null).Select(lib => lib.Attribute("Path").Value).ToArray();
+        AllSynatxModules = LibPaths.SelectMany(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib)), config)).ToArray();
         var result =
           libs.Select(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib.Attribute("Path").Value)), config)
             .Join(lib.Elements("SyntaxModule"),
@@ -145,7 +148,7 @@ namespace Nitra.ViewModels
     }
 
     [CanBeNull]
-    public IParseResult Run([NotNull] string code, [CanBeNull] string gold, int completionStartPos = -1, string completionPrefix = null)
+    public IParseResult Run([NotNull] string code, [CanBeNull] string gold = null, int completionStartPos = -1, string completionPrefix = null, RecoveryAlgorithm recoveryAlgorithm = RecoveryAlgorithm.Smart)
     {
       _compositeGrammar = ParserHost.Instance.MakeCompositeGrammar(SynatxModules);
 
@@ -157,12 +160,19 @@ namespace Nitra.ViewModels
       var timer = System.Diagnostics.Stopwatch.StartNew();
       try
       {
-        var parseSession = new ParseSession(source, StartRule,
+        var parseSession = new ParseSession(StartRule,
           compositeGrammar:   _compositeGrammar,
           completionPrefix:   completionPrefix,
           completionStartPos: completionStartPos,
-          parseToEndOfString: true);
-        var parseResult = parseSession.Parse();
+          parseToEndOfString: true,
+          dynamicExtensions:  AllSynatxModules);
+        switch (recoveryAlgorithm)
+        {
+          case RecoveryAlgorithm.Smart: parseSession.OnRecovery = ParseSession.SmartRecovery; break;
+          case RecoveryAlgorithm.Panic: parseSession.OnRecovery = ParseSession.PanicRecovery; break;
+          case RecoveryAlgorithm.FirstError: parseSession.OnRecovery = ParseSession.FirsrErrorRecovery; break;
+        }
+        var parseResult = parseSession.Parse(source);
         this.Exception = null;
         this.TestTime = timer.Elapsed;
         return parseResult;

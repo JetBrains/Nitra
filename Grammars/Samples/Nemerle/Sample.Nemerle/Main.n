@@ -31,7 +31,7 @@ public partial abstract class N2Parser
       IgnoreParams();
       when (ruleInfo.Descriptor : object == IdentifierDescriptor)
       {
-        _ = Name.Append(parseResult.ParseSession.SourceSnapshot.Text, startPos, endPos - startPos).Append(".")
+        _ = Name.Append(parseResult.SourceSnapshot.Text, startPos, endPos - startPos).Append(".")
       }
     }
 
@@ -52,48 +52,12 @@ public partial abstract class N2Parser
   {
     def walker = UsingImportDeclarationWalker();
     walker.WalkPrefix(rawTreePtr, startPos, endPos, ruleParser, parseResult, 0);
-    mutable descriptor;
-    if (_grammarDescriptors.TryGetValue(walker.Name.ToString(), out descriptor))
+    
+    def descriptor = (parseResult :> ParseResult).TryGetDynamicSyntaxExtension(walker.Name.ToString());
+    if (descriptor != null)
       grammar.Add(descriptor);
     else
       grammar
-  }
-
-  // FIXME: currently does not work
-  NamespaceScopeBegin() : void
-  {
-    //Parser.PushState();
-  }
-
-  // FIXME: currently does not work
-  NamespaceScopeEnd(_ : bool) : void
-  {
-    //Parser.PopState();
-  }
-
-  _grammarDescriptors : Dictionary[string, GrammarDescriptor] = InitGrammars();
-  public InitGrammars() : Dictionary[string, GrammarDescriptor]
-  {
-    def globalGrammarDescriptors = Hashtable();
-
-    def path               = Path.GetDirectoryName(Uri(Assembly.GetExecutingAssembly().CodeBase).LocalPath);
-    def files              = Directory.GetFiles(path, "*.dll");
-    def standardAssemblies = HashSet(array["Nemerle.dll", "Nemerle.Compiler.dll", "Nitra.Runtime.dll", "Boot.Nitra.Runtime.dll", "Boot.Nitra.Core.dll", "Nitra.Compiler.dll"]);
-
-    // Обрабатываем файлы не входящие в список сборок самого немерла (стандратные сборки).
-    // В них точно не может быть парсеров.
-    foreach (file when !standardAssemblies.Contains(file) in files)
-    {
-      def assembly = Assembly.LoadFrom(file);
-      foreach (grammar in GrammarDescriptor.GetDescriptors(assembly))
-      {
-        // throws exception
-        // globalGrammarDescriptors.Add(grammar.FullName, grammar);
-        globalGrammarDescriptors[grammar.FullName] = grammar;
-      }
-    }
-
-    globalGrammarDescriptors;
   }
 }
 
@@ -114,21 +78,45 @@ public partial module N2ParserParseTree
 
 module Program
 {
+  LoadDynamicExtentionGrammars() : Seq[GrammarDescriptor]
+  {
+    def dynamicExtentionGrammars = List();
+
+    def path               = Path.GetDirectoryName(Uri(Assembly.GetExecutingAssembly().CodeBase).LocalPath);
+    def files              = Directory.GetFiles(path, "*.dll");
+    def standardAssemblies = HashSet(array["Nemerle.dll", "Nemerle.Compiler.dll", "Nitra.Runtime.dll", "Boot.Nitra.Runtime.dll", "Boot.Nitra.Core.dll", "Nitra.Compiler.dll"]);
+
+    // Обрабатываем файлы не входящие в список сборок самого немерла (стандратные сборки).
+    // В них точно не может быть парсеров.
+    foreach (file when !standardAssemblies.Contains(file) in files)
+    {
+      def assembly = Assembly.LoadFrom(file);
+      foreach (grammar in GrammarDescriptor.GetDescriptors(assembly))
+        dynamicExtentionGrammars.Add(grammar);
+    }
+
+    dynamicExtentionGrammars
+  }
+
   Main() : void
   {
-    def messages       = ConsoleCompilerMessages();
-    def prettyPrintOpt = PrettyPrintOptions.DebugIndent %| PrettyPrintOptions.MissingNodes;
+    def messages                   = ConsoleCompilerMessages();
+    def prettyPrintOpt             = PrettyPrintOptions.DebugIndent %| PrettyPrintOptions.MissingNodes;
+    def parseSession               = ParseSession(N2Parser.CompilationUnit);
+    parseSession.DynamicExtensions = LoadDynamicExtentionGrammars();
     def test(code : string) : void
     {
       try
       {
-        def source = SourceSnapshot(code);
-        def parseResult = N2Parser.CompilationUnit.Parse(source);
+        def parseResult = parseSession.Parse(code);
         if (parseResult.IsSuccess)
           WriteLine("OK:");
         else
+        {
+          WriteLine("Error:");
           foreach (error in parseResult.GetErrors())
             messages.Error(error.Location, error.Message);
+        }
         def parseTree = N2ParserParseTree.CompilationUnit.CreateParseTree(parseResult);
         Console.BackgroundColor = ConsoleColor.DarkGray;
         Console.ForegroundColor = ConsoleColor.White;
@@ -171,7 +159,7 @@ namespace Ns1
 
   namespace Ns2
   {
-    namespace Ns2 { type X = C; }
+    namespace Ns3 { type X  C; }
     using Ns3;
   }
 }
@@ -202,6 +190,31 @@ namespace Ns1
     type X = A.B;
   }
 using Y;
+    #>);
+
+    test(<#
+namespace Ns1
+{
+  [Asd]
+  !test test!
+  class Asd
+  {
+  }
+  namespace Ns2
+  {
+    using N2ParserExtension1;
+    [Asd]
+    !test test!
+    class Asd
+    {
+    }
+  }
+  [Asd]
+  !test test!
+  class Asd
+  {
+  }
+}
     #>);
     _ = ReadKey();
   }
