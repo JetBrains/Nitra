@@ -26,6 +26,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Nitra.Runtime.Highlighting;
 using CheckBox = System.Windows.Controls.CheckBox;
 using Clipboard = System.Windows.Clipboard;
 using ContextMenu = System.Windows.Controls.ContextMenu;
@@ -71,7 +72,10 @@ namespace Nitra.Visualizer
     readonly Settings _settings;
     private TestSuitVm _currentTestSuit;
     private SolutionVm _solution;
-    private PropertyGrid _propertyGrid;
+    private readonly PropertyGrid _propertyGrid;
+    private readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
+    private List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
+    private static readonly HighlightingColor _braceColor = new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkGray) };
 
     public MainWindow()
     {
@@ -105,11 +109,16 @@ namespace Nitra.Visualizer
 
       _highlightingStyles = new Dictionary<string, HighlightingColor>
       {
-        { "Keyword",  new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Blue) } },
-        { "Comment",  new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "Number",   new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Magenta) } },
-        { "Operator", new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
-        { "String",   new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
+        { "Keyword",          new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Blue) } },
+        { "Comment",          new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
+        { "InlineComment",    new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
+        { "MultilineComment", new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
+        { "Number",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Magenta) } },
+        { "Operator",         new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
+        { "String",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
+        { "StringEx",         new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
+        { "Char",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Red) } },
+        { "Marker",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.LightBlue) } },
       };
 
       _foldingManager    = FoldingManager.Install(_text.TextArea);
@@ -191,8 +200,22 @@ namespace Nitra.Visualizer
 
     void Caret_PositionChanged(object sender, EventArgs e)
     {
-      _pos.Text = _text.CaretOffset.ToString(CultureInfo.InvariantCulture);
+      var caretPos = _text.CaretOffset;
+      _pos.Text = caretPos.ToString(CultureInfo.InvariantCulture);
+      TryHighlightBraces(caretPos);
       ShowNodeForCaret();
+    }
+
+    private void TryHighlightBraces(int caretPos)
+    {
+      if (_parseResult == null)
+        return;
+
+      var context = new MatchBracketsWalker.Context(caretPos);
+      _matchBracketsWalker.Walk(_parseResult, context);
+      _matchedBrackets = context.Brackets;
+      if (_matchedBrackets == null || _matchedBrackets.Count != context.Brackets.Count)
+        _text.TextArea.TextView.Redraw(); 
     }
 
     private void ShowNodeForCaret()
@@ -636,8 +659,27 @@ namespace Nitra.Visualizer
             e.Sections.Add(section);
           }
         }
+
+        foreach (var matchedBracket in _matchedBrackets)
+        {
+          AddHighlightSection(e, line, matchedBracket.OpenBracket);
+          AddHighlightSection(e, line, matchedBracket.CloseBracket);
+        }
       }
       catch (Exception ex) { Debug.WriteLine(ex.GetType().Name + ":" + ex.Message); }
+    }
+
+    private static void AddHighlightSection(HighlightLineEventArgs e, DocumentLine line, NSpan bracket)
+    {
+      var startOffset = Math.Max(line.Offset, bracket.StartPos);
+      var endOffset = Math.Min(line.EndOffset, bracket.EndPos);
+      var section = new HighlightedSection
+      {
+        Offset = startOffset,
+        Length = endOffset - startOffset,
+        Color  = _braceColor
+      };
+      e.Sections.Add(section);
     }
 
     private void textBox1_MouseHover(object sender, MouseEventArgs e)
