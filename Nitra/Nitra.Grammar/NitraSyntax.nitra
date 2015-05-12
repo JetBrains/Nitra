@@ -1607,56 +1607,6 @@ syntax module NitraSyntax
     Typing() : void                = this.RuleBody.Typing();
   }
 
-  syntax ExtensionRule = "|" sm RuleAttributes (Name "=")? RuleExpression Precedence? RuleBody?
-  {
-    syntax Precedence = "precedence" sm Number RightAssociative=("right-associative")?
-    {
-      Value() : int = if (RightAssociative.HasValue) -Number.Value() else Number.Value();
-    }
-
-    [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedExtensionRuleSymbol = ParsedExtensionRuleSymbol(this, owner);
-    CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
-    {
-      match (owner : object)
-      {
-        | ExtensibleRuleSymbol
-        | ExtendSyntaxSymbol => ()
-        | _ => owner.Node.Project.Error(this, "Extension rule declaration is not allowed here.")
-      }
-      def symbol = MakeSymbol(owner);
-      _ = owner.Node.AddAndReport.[RuleDefSymbol](symbol, Location);
-      when (RuleBodyOpt.HasValue)
-        RuleBodyOpt.Value.CollectGlobalSymbols(symbol);
-    }
-    [Cached] MakeContext(parent : Context) : Context
-    {
-      def context = RuleDeclarationSiteContext(parent, Symbol);
-      _ = RuleAttributes.MakeContext(context);
-      _ = MakeRuleTypingContext(context);
-      parent
-    }
-    [Cached] private MakeRuleTypingContext(parent : Context) : Context
-    {
-      if (RuleBodyOpt.HasValue)
-        RuleBodyOpt.Value.MakeContext(parent)
-      else
-        parent
-    }
-    [Cached] private MakeBaseRuleRef(baseRule : ExtensibleRuleRef)  : ExtensibleRuleRef     = baseRule;
-    [Cached] private MakeTypedRule()                                : Rule.Sequence         = TypeRuleExpression(this.Symbol.Options, RuleTypingContext, RuleExpression.Typing(BaseRuleRef, PrecedenceOpt.Map(_.Value()) ?? 0, None(), RuleTypingContext, this.Symbol.Options));
-    CollectSyntaxMappings() : void = when (this.RuleBodyOpt.HasValue) this.RuleBodyOpt.Value.CollectSyntaxMappings();
-    TypeSyntaxMappings() : void    = when (this.RuleBodyOpt.HasValue) this.RuleBodyOpt.Value.TypeSyntaxMappings();
-    Typing(baseRule : ExtensibleRuleRef) : void
-    {
-      _ = MakeBaseRuleRef(baseRule);
-      _ = MakeTypedRule();
-      when (this.Symbol.Options.OperatorInfo == OperatorInfo.None && baseRule.IsSome)
-        TryInferOperatorType(this.Symbol);
-      when (this.RuleBodyOpt.HasValue)
-        this.RuleBodyOpt.Value.Typing();
-    }
-  }
-
   syntax RuleBody
   {
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void = _ = owner;
@@ -1741,21 +1691,61 @@ syntax module NitraSyntax
         override TypeSyntaxMappings   = ExtensibleRule.TypeSyntaxMappings();
         override Typing               = ExtensibleRule.Typing();
       }
-    | ExtensionRule
+    | ExtensionRule = "|" sm RuleAttributes (Name "=")? RuleExpression Precedence? RuleBody?
       {
-        [Cached] private MakeOwner(owner : IRuleDeclarationSite) : IRuleDeclarationSite = owner;
-        override CollectGlobalSymbols = ExtensionRule.CollectGlobalSymbols(MakeOwner(owner));
-        override MakeContext          = ExtensionRule.MakeContext(parent);
-        override CollectSyntaxMappings = ExtensionRule.CollectSyntaxMappings();
-        override TypeSyntaxMappings   = ExtensionRule.TypeSyntaxMappings();
+        syntax Precedence = "precedence" sm Number RightAssociative=("right-associative")?
+        {
+          Value() : int = if (RightAssociative.HasValue) -Number.Value() else Number.Value();
+        }
+
+        [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedExtensionRuleSymbol = ParsedExtensionRuleSymbol(this, owner);
+        override CollectGlobalSymbols
+        {
+          match (owner : object)
+          {
+            | ExtensibleRuleSymbol
+            | ExtendSyntaxSymbol => ()
+            | _ => owner.Node.Project.Error(this, "Extension rule declaration is not allowed here.")
+          }
+          def symbol = MakeSymbol(owner);
+          _ = owner.Node.AddAndReport.[RuleDefSymbol](symbol, Location);
+          when (RuleBodyOpt.HasValue)
+            RuleBodyOpt.Value.CollectGlobalSymbols(symbol);
+        }
+        override MakeContext
+        {
+          def context = RuleDeclarationSiteContext(parent, Symbol);
+          _ = RuleAttributes.MakeContext(context);
+          _ = MakeRuleTypingContext(context);
+          parent
+        }
+        [Cached] private MakeRuleTypingContext(parent : Context) : Context
+        {
+          if (RuleBodyOpt.HasValue)
+            RuleBodyOpt.Value.MakeContext(parent)
+          else
+            parent
+        }
+        [Cached] private MakeBaseRuleRef() : ExtensibleRuleRef
+        {
+          match (this.Symbol.DeclarationSite)
+          {
+            | s is ExtensibleRuleSymbol => SymbolRef.Some(s.FirstLocation, false, s)
+            | s is ExtendSyntaxSymbol   => s.Extend
+            | owner                     => SymbolRef.None(owner.FirstLocation, false)
+          }
+        }
+        [Cached] private MakeTypedRule() : Rule.Sequence = TypeRuleExpression(this.Symbol.Options, RuleTypingContext, RuleExpression.Typing(BaseRuleRef, PrecedenceOpt.Map(_.Value()) ?? 0, None(), RuleTypingContext, this.Symbol.Options));
+        override CollectSyntaxMappings = when (this.RuleBodyOpt.HasValue) this.RuleBodyOpt.Value.CollectSyntaxMappings();
+        override TypeSyntaxMappings    = when (this.RuleBodyOpt.HasValue) this.RuleBodyOpt.Value.TypeSyntaxMappings();
         override Typing
         {
-          match (this.Owner)
-          {
-            | s is ExtensibleRuleSymbol => this.ExtensionRule.Typing(SymbolRef.Some(s.FirstLocation, false, s))
-            | s is ExtendSyntaxSymbol   => this.ExtensionRule.Typing(s.Extend)
-            | owner                     => this.ExtensionRule.Typing(SymbolRef.None(owner.FirstLocation, false))
-          }
+          def baseRule = MakeBaseRuleRef();
+          _ = MakeTypedRule();
+          when (this.Symbol.Options.OperatorInfo == OperatorInfo.None && baseRule.IsSome)
+            TryInferOperatorType(this.Symbol);
+          when (this.RuleBodyOpt.HasValue)
+            this.RuleBodyOpt.Value.Typing();
         }
       }
     | MapSyntax = "map" sm AstName=NitraType MapSyntaxBody
