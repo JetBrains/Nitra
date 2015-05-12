@@ -74,7 +74,8 @@ namespace Nitra.Visualizer
     private SolutionVm _solution;
     private readonly PropertyGrid _propertyGrid;
     private readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
-    private List<ITextMarker> _matchedBrackets = new List<ITextMarker>();
+    private List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
+    private List<MatchBracketsWalker.MatchBrackets> _matchedBrackets; 
 
     public MainWindow()
     {
@@ -210,28 +211,36 @@ namespace Nitra.Visualizer
       if (_parseResult == null)
         return;
 
-      if (_matchedBrackets.Count > 0)
+      if (_matchedBracketsMarkers.Count > 0)
       {
-        foreach (var marker in _matchedBrackets)
+        foreach (var marker in _matchedBracketsMarkers)
           _textMarkerService.Remove(marker);
-        _matchedBrackets.Clear();
+        _matchedBracketsMarkers.Clear();
       }
 
       var context = new MatchBracketsWalker.Context(caretPos);
       _matchBracketsWalker.Walk(_parseResult, context);
+      _matchedBrackets = context.Brackets;
+
       if (context.Brackets != null)
       {
         foreach (var bracket in context.Brackets)
         {
           var marker1 = _textMarkerService.Create(bracket.OpenBracket.StartPos, bracket.OpenBracket.Length);
           marker1.BackgroundColor = Colors.LightGray;
-          _matchedBrackets.Add(marker1);
+          marker1.Deleted += marker1_Deleted;
+          _matchedBracketsMarkers.Add(marker1);
 
           var marker2 = _textMarkerService.Create(bracket.CloseBracket.StartPos, bracket.CloseBracket.Length);
           marker2.BackgroundColor = Colors.LightGray;
-          _matchedBrackets.Add(marker2);
+          marker2.Deleted += marker1_Deleted;
+          _matchedBracketsMarkers.Add(marker2);
         }
       }
+    }
+
+    void marker1_Deleted(object sender, EventArgs e)
+    {
     }
 
     private void ShowNodeForCaret()
@@ -355,6 +364,7 @@ namespace Nitra.Visualizer
           _errorsTreeView.Items.Add(errorNode);
 
           var marker = _textMarkerService.Create(0, _text.Text.Length);
+          marker.Tag = "Error";
           marker.MarkerType = TextMarkerType.SquigglyUnderline;
           marker.MarkerColor = Colors.Purple;
           marker.ToolTip = msg;
@@ -545,6 +555,7 @@ namespace Nitra.Visualizer
       if (_loading)
         return;
 
+      _parseResult = null; // prevent calculations on outdated ParseResult
       _parseTimer.Stop();
       _textBox1Tooltip.IsOpen = false;
       _parseTimer.Start();
@@ -629,6 +640,7 @@ namespace Nitra.Visualizer
         _flattenSequenceTime.Text = "NA";//recovery.RecoveryPerformanceData.FlattenSequenceTime.ToString();
         _parseErrorCount.Text     = "NA";//recovery.RecoveryPerformanceData.ParseErrorCount.ToString(CultureInfo.InvariantCulture);
 
+        TryHighlightBraces(_text.CaretOffset);
         TryReportError();
         ShowInfo();
       }
@@ -642,7 +654,7 @@ namespace Nitra.Visualizer
 
     private void ClearMarkers()
     {
-      _textMarkerService.RemoveAll(_ => true);
+      _textMarkerService.RemoveAll(marker => marker.Tag == (object)"Error");
     }
 
     private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)
@@ -1278,9 +1290,12 @@ namespace Nitra.Visualizer
         else if (e.Key == Key.Subtract && Keyboard.Modifiers == ModifierKeys.Control)
           control.FontSize--;
 
-        if (Keyboard.Modifiers == ModifierKeys.Control && Keyboard.IsKeyDown(Key.Space))
+        if (Keyboard.Modifiers != ModifierKeys.Control)
+          return;
+
+        if (Keyboard.IsKeyDown(Key.Space))
         {
-          int end   = _text.CaretOffset;
+          int end = _text.CaretOffset;
           int start = end;
           var line = _text.Document.GetLineByOffset(end);
           var lineText = _text.Document.GetText(line);
@@ -1310,11 +1325,35 @@ namespace Nitra.Visualizer
             data.Add(new LiteralCompletionData(span, literal));
 
           _completionWindow.Show();
-          _completionWindow.Closed += 
+          _completionWindow.Closed +=
             delegate { _completionWindow = null; };
           e.Handled = true;
         }
+        else if (e.Key == Key.Oem6) // Oem6 - '}'
+          TryMatchBraces();
       }
+    }
+
+    private void TryMatchBraces()
+    {
+      var pos = _text.CaretOffset;
+      foreach (var bracket in _matchedBrackets)
+      {
+        if (TryMatchBrace(bracket.OpenBracket, pos, bracket.CloseBracket.EndPos))
+          break;
+        if (TryMatchBrace(bracket.CloseBracket, pos, bracket.OpenBracket.StartPos))
+          break;
+      }
+    }
+
+    private bool TryMatchBrace(NSpan brace, int pos, int gotoPos)
+    {
+      if (!brace.IntersectsWith(pos))
+        return false;
+
+      _text.CaretOffset = gotoPos;
+      _text.ScrollToLine(_text.TextArea.Caret.Line);
+      return true;
     }
 
     private void _testsTreeView_CopyNodeText(object sender, RoutedEventArgs e)
