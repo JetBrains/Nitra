@@ -1573,6 +1573,11 @@ syntax module NitraSyntax
 
   syntax ExtensionRule = "|" sm RuleAttributes (Name "=")? RuleExpression Precedence? RuleBody?
   {
+    syntax Precedence = "precedence" sm Number RightAssociative=("right-associative")?
+    {
+      Value() : int = if (RightAssociative.HasValue) -Number.Value() else Number.Value();
+    }
+
     [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedExtensionRuleSymbol = ParsedExtensionRuleSymbol(this, owner);
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
     {
@@ -1637,7 +1642,7 @@ syntax module NitraSyntax
   syntax RuleBodyMember
   {
     CollectGlobalSymbols(owner : IRuleDeclarationSite) : void = _ = owner;
-    MakeContext(parent : Context) : Context;
+    [Cached] MakeContext(parent : Context) : Context;
     CollectSyntaxMappings(_ruleSymbol : RuleDefSymbol) : void { }
     TypeSyntaxMappings(_ruleSymbol : RuleDefSymbol) : void { }
     Typing(_ruleSymbol : RuleDefSymbol) : void { }
@@ -1708,34 +1713,15 @@ syntax module NitraSyntax
             ExtensionRule.Typing(SymbolRef.None(_ruleSymbol.FirstLocation, false))
         }
       }
-    | RuleMethod
-      {
-        override CollectGlobalSymbols = RuleMethod.CollectGlobalSymbols(owner);
-        override MakeContext          = RuleMethod.MakeContext(parent);
-        override Typing               = RuleMethod.Typing();
-      }
-    | RuleMethodOverride
-      {
-        override CollectGlobalSymbols = RuleMethodOverride.CollectGlobalSymbols(owner);
-        override MakeContext          = RuleMethodOverride.MakeContext(parent);
-        override Typing               = RuleMethodOverride.Typing();
-      }
-    | RuleMethodMissing
-      {
-        override CollectGlobalSymbols = RuleMethodMissing.CollectGlobalSymbols(owner);
-        override MakeContext          = RuleMethodMissing.MakeContext(parent);
-        override Typing               = RuleMethodMissing.Typing();
-      }
     | MapSyntax = "map" sm AstName=NitraType MapSyntaxBody
       {
-        [Cached] private MakeThisContext(parent : Context) : Context
+        override MakeContext
         {
           def context = MapSyntaxContext(parent);
           _ = MapSyntaxBody.MakeContext(context);
           context
         }
-        [Cached] private MakeAstType() : AstType = TypingUtils.NTypeToAstTypeWithMessage(this.AstName, this.ThisContext);
-        override MakeContext           = MakeThisContext(parent);
+        [Cached] private MakeAstType() : AstType = TypingUtils.NTypeToAstTypeWithMessage(this.AstName, this.Context);
         override CollectSyntaxMappings
         {
           if (_ruleSymbol is SyntaxRuleSymbol as s)
@@ -1749,217 +1735,211 @@ syntax module NitraSyntax
             MapSyntaxBody.TypeSyntaxMappings(MakeAstType(), s);
         }
       }
+    | RuleMethod = RuleMethodAttributes RuleMethodPrivate? Name sm "(" (RuleMethodsParam; "," sm)* ")" sm ":" sm Type=NitraType RuleMethodBody
+      {
+        syntax RuleMethodsParam = Name sm ":" sm Type=NitraType
+        {
+          Typing(context : Context) : RuleMethod.RuleMethodParameter = RuleMethod.RuleMethodParameter(this.Location, this.Name.Identifier(), this.Type.Typing(context)[0]);
+        }
+
+        token RuleMethodPrivate = "private" sm;
+
+        override MakeContext = parent;
+        [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : RuleMethod.DefinitionSymbol
+        {
+          def compilerMessages = owner.Node.Project;
+          match (owner)
+          {
+            | ruleSymbol is SyntaxRuleSymbol =>
+              if (RuleMethodPrivateOpt.HasValue)
+              {
+                when (RuleMethodBody.IsEmpty())
+                  compilerMessages.Error(this, "A private rule method must have a body.");
+                unless (ruleSymbol is SimpleRuleSymbol || ruleSymbol is ExtensionRuleSymbol)
+                  compilerMessages.Error(this, "A private rule method can be declared only in simple rules and extension rules.");
+                RuleMethod.ParsedDefPrivateSymbol(this)
+              }
+              else if (RuleMethodBody.IsEmpty())
+              {
+                unless (ruleSymbol is ExtensibleRuleSymbol)
+                  compilerMessages.Error(this, "An abstract rule method must be defined in an extension point rule only.");
+                RuleMethod.ParsedAbstractSymbol(this)
+              }
+              else
+              {
+                unless (ruleSymbol is SimpleRuleSymbol || ruleSymbol is ExtensibleRuleSymbol)
+                  compilerMessages.Error(this, "A public rule method must be defined in an extension point rule or a simple rule only.");
+                RuleMethod.ParsedDefSymbol(this)
+              }
+
+            | _ => compilerMessages.Error(this, "Rule method is not allowed here."); null
+          }
+        }
+        override CollectGlobalSymbols
+        {
+          def symbol = MakeSymbol(owner);
+          when (symbol != null)
+            _ = owner.Node.AddAndReport(symbol, this.Location);
+        }
+        [Cached] private MakeSignature() : RuleMethod.RuleMethodSignature
+        {
+          def context    = this.Context;
+          def parameters = this.RuleMethodsParams.Item1.MapToList(_.Typing(context));
+          def (type, _)  = this.Type.Typing(context);
+          RuleMethod.RuleMethodSignature(this.Location, parameters, type);
+        }
+        [Cached] private MakeBody()     : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
+        [Cached] private MakeIsCached() : bool                      = RuleMethodAttributes.IsCached();
+        [Cached] private MakeAstType()  : AstType                   = TypingUtils.NTypeToAstType(this.Signature.Type, this.Context);
+        override Typing
+        {
+          when (this.Symbol != null)
+          {
+            _ = MakeSignature();
+            _ = MakeBody();
+            _ = MakeIsCached();
+            _ = MakeAstType();
+          }
+        }
+      }
+    | RuleMethodOverride = RuleMethodAttributes "override"     sm  Name RuleMethodBody
+      {
+        override MakeContext = parent;
+        [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : RuleMethod.DefinitionSymbol
+        {
+          def compilerMessages = owner.Node.Project;
+          match (owner)
+          {
+            | _ is SyntaxRuleSymbol =>
+              when (RuleMethodBody.IsEmpty())
+                compilerMessages.Error(this, "An overriding rule method must have a body.");
+              RuleMethod.ParsedOverrideSymbol(this)
+
+            | _ => compilerMessages.Error(this, "Rule method is not allowed here."); null
+          }
+        }
+        override CollectGlobalSymbols
+        {
+          def symbol = MakeSymbol(owner);
+          when (symbol != null)
+            _ = owner.Node.AddAndReport(symbol, this.Location);
+        }
+        [Cached] private MakeBaseRuleMethod(compilerMessages : ICompilerMessages) : SymbolRef[RuleMethod.RuleMethodSymbol]
+        {
+          match (this.Symbol.DeclaringRule)
+          {
+            | ExtensionRuleSymbol(BaseRule = SymbolRef.Some(baseRuleSymbol)) =>
+              match (baseRuleSymbol.Node.BindMany.[RuleMethod.DefinitionSymbol](Name.Location))
+              {
+                | [RuleMethod.DefSymbol      as baseRuleMethodSymbol]
+                | [RuleMethod.AbstractSymbol as baseRuleMethodSymbol] =>
+                  SymbolRef.Some(Name.Location, false, baseRuleMethodSymbol)
+
+                | [_] =>
+                  def name = Name.Value();
+                  compilerMessages.Error(this, $"Cannot override '$name' rule method."); //TODO: rewrite error message!
+                  SymbolRef.None(Name.Location, false)
+
+                | _ =>
+                  def name = Name.Value();
+                  compilerMessages.Error(this, $"No '$name' rule method to override.");
+                  SymbolRef.None(Name.Location, false)
+              }
+
+            | _ =>
+              compilerMessages.Error(this, "An rule method can be overridden only in extending rules.");
+              SymbolRef.None(Name.Location, false)
+          }
+        }
+        [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
+        override Typing
+        {
+          when (this.Symbol != null)
+          {
+            _ = MakeBaseRuleMethod(this.Context);
+            _ = MakeBody();
+          }
+        }
+      }
+    | RuleMethodMissing = RuleMethodAttributes "missing"        sm  Name RuleMethodBody
+      {
+        override MakeContext = parent;
+        [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : RuleMethod.RuleMethodMissingValueSymbol
+        {
+          def compilerMessages = owner.Node.Project;
+          match (owner)
+          {
+            | _ is SyntaxRuleSymbol =>
+              when (RuleMethodBody.IsEmpty())
+                compilerMessages.Error(this, "A 'missing' handler must have a body.");
+              RuleMethod.ParsedRuleMethodMissingValueSymbol(this);
+
+            | _ => compilerMessages.Error(this, "Rule method is not allowed here."); null
+          }
+        }
+        override CollectGlobalSymbols
+        {
+          def symbol = MakeSymbol(owner);
+          when (symbol != null)
+            _ = owner.Node.AddAndReport(symbol, this.Location);
+        }
+        [Cached] private MakeHandlingRuleMethod(compilerMessages : ICompilerMessages) : SymbolRef[RuleMethod.RuleMethodSymbol]
+        {
+          match (this.Symbol.DeclaringRule)
+          {
+            | ExtensibleRuleSymbol as targetRuleSymbol
+            | SimpleRuleSymbol     as targetRuleSymbol =>
+              match (targetRuleSymbol.Node.BindMany.[RuleMethod.DefinitionSymbol](Name.Location))
+              {
+                | [ruleMethodSymbol] => SymbolRef.Some(Name.Location, false, ruleMethodSymbol)
+                | _ =>
+                  def name = Name.Value();
+                  compilerMessages.Error(this, $"No '$name' rule method to handle 'missing'.");
+                  SymbolRef.None(Name.Location, false)
+              }
+
+            | _ =>
+              compilerMessages.Error(this, "A 'missing' handler for a rule method can be defined in simple and extensible rules.");
+              SymbolRef.None(Name.Location, false)
+          }
+        }
+        [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
+        override Typing
+        {
+          when (this.Symbol != null)
+          {
+            _ = MakeHandlingRuleMethod(this.Context);
+            _ = MakeBody();
+          }
+        }
+      }
   }
 
-  syntax RuleMethodsParam = Name sm ":" sm Type=NitraType
-  {
-    Typing(context : Context) : RuleMethod.RuleMethodParameter = RuleMethod.RuleMethodParameter(this.Location, this.Name.Identifier(), this.Type.Typing(context)[0]);
-  }
-
-  token RuleMethodPrivate = "private" sm;
-
-  syntax RuleMethodAttribute
-  {
-    IsCached() : bool;
-
-    | Cached = AttributeName="Cached" { override IsCached = true; }
-  }
-  syntax RuleMethodAttributeList = "[" (RuleMethodAttribute; ",")+ "]" nl
-  {
-    IsCached() : bool
-    {
-      foreach(x when x.IsCached() in RuleMethodAttributes.Item1)
-        return true;
-      false
-    }
-  }
   syntax RuleMethodAttributes = RuleMethodAttributeList*
   {
+    syntax RuleMethodAttribute
+    {
+      IsCached() : bool;
+
+      | Cached = AttributeName="Cached" { override IsCached = true; }
+    }
+
+    syntax RuleMethodAttributeList = "[" (RuleMethodAttribute; ",")+ "]" nl
+    {
+      IsCached() : bool
+      {
+        foreach(x when x.IsCached() in RuleMethodAttributes.Item1)
+          return true;
+        false
+      }
+    }
+
     IsCached() : bool
     {
       foreach(x when x.IsCached() in RuleMethodAttributeLists)
         return true;
       false
     }
-  }
-
-  syntax RuleMethod = RuleMethodAttributes RuleMethodPrivate? Name sm "(" (RuleMethodsParam; "," sm)* ")" sm ":" sm Type=NitraType RuleMethodBody
-  {
-    [Cached] MakeContext(parent : Context) : Context = parent;
-    [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : RuleMethod.DefinitionSymbol
-    {
-      def compilerMessages = owner.Node.Project;
-      match (owner)
-      {
-        | ruleSymbol is SyntaxRuleSymbol =>
-          if (RuleMethodPrivateOpt.HasValue)
-          {
-            when (RuleMethodBody.IsEmpty())
-              compilerMessages.Error(this, "A private rule method must have a body.");
-            unless (ruleSymbol is SimpleRuleSymbol || ruleSymbol is ExtensionRuleSymbol)
-              compilerMessages.Error(this, "A private rule method can be declared only in simple rules and extension rules.");
-            RuleMethod.ParsedDefPrivateSymbol(this)
-          }
-          else if (RuleMethodBody.IsEmpty())
-          {
-            unless (ruleSymbol is ExtensibleRuleSymbol)
-              compilerMessages.Error(this, "An abstract rule method must be defined in an extension point rule only.");
-            RuleMethod.ParsedAbstractSymbol(this)
-          }
-          else
-          {
-            unless (ruleSymbol is SimpleRuleSymbol || ruleSymbol is ExtensibleRuleSymbol)
-              compilerMessages.Error(this, "A public rule method must be defined in an extension point rule or a simple rule only.");
-            RuleMethod.ParsedDefSymbol(this)
-          }
-
-        | _ => compilerMessages.Error(this, "Rule method is not allowed here."); null
-      }
-    }
-    CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
-    {
-      def symbol = MakeSymbol(owner);
-      when (symbol != null)
-        _ = owner.Node.AddAndReport(symbol, this.Location);
-    }
-    [Cached] private MakeSignature() : RuleMethod.RuleMethodSignature
-    {
-      def context    = this.Context;
-      def parameters = this.RuleMethodsParams.Item1.MapToList(_.Typing(context));
-      def (type, _)  = this.Type.Typing(context);
-      RuleMethod.RuleMethodSignature(this.Location, parameters, type);
-    }
-    [Cached] private MakeBody()     : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
-    [Cached] private MakeIsCached() : bool                      = RuleMethodAttributes.IsCached();
-    [Cached] private MakeAstType()  : AstType                   = TypingUtils.NTypeToAstType(this.Signature.Type, this.Context);
-    Typing() : void
-    {
-      when (this.Symbol != null)
-      {
-        _ = MakeSignature();
-        _ = MakeBody();
-        _ = MakeIsCached();
-        _ = MakeAstType();
-      }
-    }
-  }
-
-  syntax RuleMethodOverride = RuleMethodAttributes "override"     sm  Name RuleMethodBody
-  {
-    [Cached] MakeContext(parent : Context) : Context = parent;
-    [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : RuleMethod.DefinitionSymbol
-    {
-      def compilerMessages = owner.Node.Project;
-      match (owner)
-      {
-        | _ is SyntaxRuleSymbol =>
-          when (RuleMethodBody.IsEmpty())
-            compilerMessages.Error(this, "An overriding rule method must have a body.");
-          RuleMethod.ParsedOverrideSymbol(this)
-
-        | _ => compilerMessages.Error(this, "Rule method is not allowed here."); null
-      }
-    }
-    CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
-    {
-      def symbol = MakeSymbol(owner);
-      when (symbol != null)
-        _ = owner.Node.AddAndReport(symbol, this.Location);
-    }
-    [Cached] private MakeBaseRuleMethod(compilerMessages : ICompilerMessages) : SymbolRef[RuleMethod.RuleMethodSymbol]
-    {
-      match (this.Symbol.DeclaringRule)
-      {
-        | ExtensionRuleSymbol(BaseRule = SymbolRef.Some(baseRuleSymbol)) =>
-          match (baseRuleSymbol.Node.BindMany.[RuleMethod.DefinitionSymbol](Name.Location))
-          {
-            | [RuleMethod.DefSymbol      as baseRuleMethodSymbol]
-            | [RuleMethod.AbstractSymbol as baseRuleMethodSymbol] =>
-              SymbolRef.Some(Name.Location, false, baseRuleMethodSymbol)
-
-            | [_] =>
-              def name = Name.Value();
-              compilerMessages.Error(this, $"Cannot override '$name' rule method."); //TODO: rewrite error message!
-              SymbolRef.None(Name.Location, false)
-
-            | _ =>
-              def name = Name.Value();
-              compilerMessages.Error(this, $"No '$name' rule method to override.");
-              SymbolRef.None(Name.Location, false)
-          }
-
-        | _ =>
-          compilerMessages.Error(this, "An rule method can be overridden only in extending rules.");
-          SymbolRef.None(Name.Location, false)
-      }
-    }
-    [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
-    Typing() : void
-    {
-      when (this.Symbol != null)
-      {
-        _ = MakeBaseRuleMethod(this.Context);
-        _ = MakeBody();
-      }
-    }
-  }
-
-  syntax RuleMethodMissing = RuleMethodAttributes "missing"        sm  Name RuleMethodBody
-  {
-    [Cached] MakeContext(parent : Context) : Context = parent;
-    [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : RuleMethod.RuleMethodMissingValueSymbol
-    {
-      def compilerMessages = owner.Node.Project;
-      match (owner)
-      {
-        | _ is SyntaxRuleSymbol =>
-          when (RuleMethodBody.IsEmpty())
-            compilerMessages.Error(this, "A 'missing' handler must have a body.");
-          RuleMethod.ParsedRuleMethodMissingValueSymbol(this);
-
-        | _ => compilerMessages.Error(this, "Rule method is not allowed here."); null
-      }
-    }
-    CollectGlobalSymbols(owner : IRuleDeclarationSite) : void
-    {
-      def symbol = MakeSymbol(owner);
-      when (symbol != null)
-        _ = owner.Node.AddAndReport(symbol, this.Location);
-    }
-    [Cached] private MakeHandlingRuleMethod(compilerMessages : ICompilerMessages) : SymbolRef[RuleMethod.RuleMethodSymbol]
-    {
-      match (this.Symbol.DeclaringRule)
-      {
-        | ExtensibleRuleSymbol as targetRuleSymbol
-        | SimpleRuleSymbol     as targetRuleSymbol =>
-          match (targetRuleSymbol.Node.BindMany.[RuleMethod.DefinitionSymbol](Name.Location))
-          {
-            | [ruleMethodSymbol] => SymbolRef.Some(Name.Location, false, ruleMethodSymbol)
-            | _ =>
-              def name = Name.Value();
-              compilerMessages.Error(this, $"No '$name' rule method to handle 'missing'.");
-              SymbolRef.None(Name.Location, false)
-          }
-
-        | _ =>
-          compilerMessages.Error(this, "A 'missing' handler for a rule method can be defined in simple and extensible rules.");
-          SymbolRef.None(Name.Location, false)
-      }
-    }
-    [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
-    Typing() : void
-    {
-      when (this.Symbol != null)
-      {
-        _ = MakeHandlingRuleMethod(this.Context);
-        _ = MakeBody();
-      }
-    }
-  }
-
-  syntax Precedence = "precedence" sm Number RightAssociative=("right-associative")?
-  {
-    Value() : int = if (RightAssociative.HasValue) -Number.Value() else Number.Value();
   }
 
   syntax RuleMethodBody
