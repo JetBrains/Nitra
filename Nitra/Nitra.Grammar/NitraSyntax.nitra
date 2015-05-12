@@ -904,7 +904,7 @@ syntax module NitraSyntax
   syntax MapSyntaxExpression
   {
     [Cached] MakeContext(parent : Context) : Context;
-    Typing(ruleSymbol : SyntaxRuleSymbol, astType : AstType) : ValueOption[SyntaxMappingExpr];
+    Typing(ruleSymbol : SyntaxRuleSymbol, astType : AstType) : SyntaxMappingExpr;
 
     | Conversion = QualifiedName
       {
@@ -916,9 +916,9 @@ syntax module NitraSyntax
           {
             def conversionOpt = TypingUtils.MakeSyntaxMappingType(this.Context, path.Type, astType, this.Location);
             when (conversionOpt is VSome(conversion))
-              return VSome(SyntaxMappingExpr.Conversion(this.Location, path, conversion));
+              return SyntaxMappingExpr.Conversion(this.Location, path, conversion);
           }
-          VNone()
+          SyntaxMappingExpr.Error(this)
         }
       }
     | Ast        = QualifiedName outline_begin_before nl OpenBrace="{" inl Members=MapSyntaxExpressionAstMember* d CloseBrace="}" outline_end_before nl
@@ -943,19 +943,19 @@ syntax module NitraSyntax
                     mappingFields.Add(mappingField);
                 def errorLoc = Location(this.Location.Source, this.CloseBrace);
                 TypingUtils.CheckRequiredAstProperties(astSymbol, mappingFields, errorLoc, this.Context);
-                return VSome(SyntaxMappingExpr.AstCtor(this.Location, astSymbol, mappingFields.ToNList()))
+                return SyntaxMappingExpr.AstCtor(this.Location, astSymbol, mappingFields.ToNList())
               }
               else
               {
                 def sourceName = astSymbol.FullName;
                 def targetName = targetSymbol.FullName;
                 this.Context.Error(astSymbolRef, $"Declaration '$sourceName' is not subtype of declaration '$targetName'");
-                return VNone()
+                return SyntaxMappingExpr.Error(this)
               }
             }
           }
           this.Context.Error(this, $"Expected ast type '$astType'");
-          VNone()
+          SyntaxMappingExpr.Error(this)
         }
       }
     | List       = "[" (ItemExpr=MapSyntaxExpression; ",")* "]"
@@ -969,13 +969,12 @@ syntax module NitraSyntax
               def itemType = AstType.Ast(astType.Location, astSymbol);
               def items = List();
               foreach (itemExpr in this.ItemExprs.Item1)
-                when (itemExpr.Typing(ruleSymbol, itemType) is VSome(item))
-                  items.Add(item);
-              VSome(SyntaxMappingExpr.ListCtor(this.Location, astSymbol, items.ToNList()))
+                items.Add(itemExpr.Typing(ruleSymbol, itemType));
+              SyntaxMappingExpr.ListCtor(this.Location, astSymbol, items.ToNList())
 
             | _ =>
               this.Context.Error(this, $"Expected ast type '$astType' got list");
-              VNone()
+              SyntaxMappingExpr.Error(this)
           }
         }
       }
@@ -991,15 +990,13 @@ syntax module NitraSyntax
           if (astType is AstType.Option(astSymbol))
           {
             def valueType = AstType.Ast(astType.Location, astSymbol);
-            if (this.ValueExpr.Typing(ruleSymbol, valueType) is VSome(item))
-              VSome(SyntaxMappingExpr.OptionCtor(this.Location, astSymbol, Some(item)))
-            else
-              VNone()
+            def value     = this.ValueExpr.Typing(ruleSymbol, valueType);
+            SyntaxMappingExpr.OptionCtor(this.Location, astSymbol, Some(value))
           }
           else
           {
             this.Context.Error(this, $"Expected ast type '$astType' got option.Some");
-            VNone()
+            SyntaxMappingExpr.Error(this)
           }
         }
       }
@@ -1011,7 +1008,7 @@ syntax module NitraSyntax
           _ = ruleSymbol;
           unless (astType is AstType.Option(_))
             this.Context.Error(this, $"Expected ast type '$astType' got option.None");
-          VNone()
+          SyntaxMappingExpr.Error(this)
         }
       }
   }
@@ -1054,9 +1051,8 @@ syntax module NitraSyntax
         }
         else
         {
-          def exprOpt = this.Expr.Typing(ruleSymbol, astType);
-          when (exprOpt is VSome(expr))
-            return VSome(SyntaxMappingField(this.Location, astProperty, expr));
+          def expr = this.Expr.Typing(ruleSymbol, astType);
+          return VSome(SyntaxMappingField(this.Location, astProperty, expr));
         }
       }
       VNone()
@@ -1141,9 +1137,8 @@ syntax module NitraSyntax
         {
           _ = sharedMappingFields;
           def patternExpr = pattern.SimpleTyping(ruleSymbol, this.Context);
-          def exprOpt     = this.Expr.Typing(ruleSymbol, astType);
-          when (exprOpt is VSome(expr))
-            buffer.Add(SyntaxMappingCase(this.Location, patternExpr, expr))
+          def expr        = this.Expr.Typing(ruleSymbol, astType);
+          buffer.Add(SyntaxMappingCase(this.Location, patternExpr, expr))
         }
         override CollectExtensionBodies
         {
@@ -1151,14 +1146,12 @@ syntax module NitraSyntax
           {
             | (SymbolRef.Some(ruleSymbol), true) =>
               def patternExpr = pattern.ExtensionTyping(ruleSymbol, this.Context);
-              def exprOpt = this.Expr.Typing(ruleSymbol, astType);
-              when (exprOpt is VSome(expr))
-                mappingCases.Add((ruleSymbol, SyntaxMappingCase(this.Location, patternExpr, expr)))
+              def expr        = this.Expr.Typing(ruleSymbol, astType);
+              mappingCases.Add((ruleSymbol, SyntaxMappingCase(this.Location, patternExpr, expr)))
 
             | (SymbolRef.Some(ruleSymbol), false) =>
-              def exprOpt = this.Expr.Typing(ruleSymbol, astType);
-              when (exprOpt is VSome(expr))
-                mappingBodies.Add((ruleSymbol, expr))
+              def expr = this.Expr.Typing(ruleSymbol, astType);
+              mappingBodies.Add((ruleSymbol, expr))
 
             | _ => ()
           }
@@ -1329,13 +1322,8 @@ syntax module NitraSyntax
                 ruleSymbol.SetSyntaxMappingExpr(expr);
 
               | List(astSymbol)
-              | OptionList(astSymbol) =>
-                def expr = SyntaxMappingExpr.ListCtor(this.Location, astSymbol, []);
-                ruleSymbol.SetSyntaxMappingExpr(expr);
-
-              | Option(astSymbol) =>
-                def expr = SyntaxMappingExpr.OptionCtor(this.Location, astSymbol, None());
-                ruleSymbol.SetSyntaxMappingExpr(expr);
+              | OptionList(astSymbol) => ruleSymbol.SetSyntaxMappingExpr(SyntaxMappingExpr.ListCtor(this.Location, astSymbol, []));
+              | Option(astSymbol)     => ruleSymbol.SetSyntaxMappingExpr(SyntaxMappingExpr.OptionCtor(this.Location, astSymbol, None()));
 
               | Void => ()
             }
@@ -1353,11 +1341,7 @@ syntax module NitraSyntax
           if (ruleSymbol is ExtensibleRuleSymbol)
             this.Context.Error(this, "Mapping expression is not valid on extensible rules")
           else
-          {
-            def exprOpt = this.Expr.Typing(ruleSymbol, astType);
-            when (exprOpt is VSome(expr))
-              ruleSymbol.SetSyntaxMappingExpr(expr);
-          }
+            ruleSymbol.SetSyntaxMappingExpr(this.Expr.Typing(ruleSymbol, astType))
         }
       }
     | Inline = sm "=" sm Code=MapSyntaxCode
