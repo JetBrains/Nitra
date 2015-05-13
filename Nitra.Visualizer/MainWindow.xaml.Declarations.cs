@@ -1,6 +1,8 @@
-﻿using System.Reflection;
+﻿using Nitra.Declarations;
+using Nitra.Runtime.Binding;
+
+using System.Reflection;
 using System.Windows.Input;
-using Nitra.Declarations;
 
 using System;
 using System.Collections;
@@ -152,6 +154,12 @@ namespace Nitra.Visualizer
 
     private void UpdateDeclarations(AstRoot<IAst> astRoot)
     {
+      dynamic ast = astRoot.Content;
+      try
+      {
+        ast.DefScopeIn = new Scope.Table();
+      }
+      catch {  }
       astRoot.EvalProperties(new DebugCompilerMessages()); // TODO: display messages in GUI
       var root = ObjectToItem(null, astRoot.Content);
       root.Header = "Root";
