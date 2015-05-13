@@ -75,7 +75,8 @@ namespace Nitra.Visualizer
     private readonly PropertyGrid _propertyGrid;
     private readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
     private List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
-    private List<MatchBracketsWalker.MatchBrackets> _matchedBrackets; 
+    private List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
+    private const string ErrorMarkerTag = "Error";
 
     public MainWindow()
     {
@@ -228,19 +229,13 @@ namespace Nitra.Visualizer
         {
           var marker1 = _textMarkerService.Create(bracket.OpenBracket.StartPos, bracket.OpenBracket.Length);
           marker1.BackgroundColor = Colors.LightGray;
-          marker1.Deleted += marker1_Deleted;
           _matchedBracketsMarkers.Add(marker1);
 
           var marker2 = _textMarkerService.Create(bracket.CloseBracket.StartPos, bracket.CloseBracket.Length);
           marker2.BackgroundColor = Colors.LightGray;
-          marker2.Deleted += marker1_Deleted;
           _matchedBracketsMarkers.Add(marker2);
         }
       }
-    }
-
-    void marker1_Deleted(object sender, EventArgs e)
-    {
     }
 
     private void ShowNodeForCaret()
@@ -364,7 +359,7 @@ namespace Nitra.Visualizer
           _errorsTreeView.Items.Add(errorNode);
 
           var marker = _textMarkerService.Create(0, _text.Text.Length);
-          marker.Tag = "Error";
+          marker.Tag = ErrorMarkerTag;
           marker.MarkerType = TextMarkerType.SquigglyUnderline;
           marker.MarkerColor = Colors.Purple;
           marker.ToolTip = msg;
@@ -654,7 +649,7 @@ namespace Nitra.Visualizer
 
     private void ClearMarkers()
     {
-      _textMarkerService.RemoveAll(marker => marker.Tag == (object)"Error");
+      _textMarkerService.RemoveAll(marker => marker.Tag == (object)ErrorMarkerTag);
     }
 
     private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)
