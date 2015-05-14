@@ -23,6 +23,9 @@ namespace Nitra.Visualizer
   {
     public TreeViewItem ObjectToItem(PropertyInfo prop, object obj)
     {
+      if (obj is Symbol2)
+      {
+      }
       string name = prop == null ? "" : prop.Name;
       var tvi = new TreeViewItem { Tag = obj, FontWeight = FontWeights.Normal };
       tvi.MouseDoubleClick += TviOnMouseDoubleClick;
@@ -81,6 +84,12 @@ namespace Nitra.Visualizer
       {
         var xaml = RenderXamlForValue(prop, obj);
         tvi.Header = XamlReader.Parse(xaml);
+
+        var t     = obj.GetType();
+        var props = t.GetProperties();
+        if (!(obj is string || t.IsPrimitive) && props.Any(p => !IsIgnoredProperty(p)))
+          tvi.Items.Add(obj);
+
         return tvi;
       }
     }
@@ -134,6 +143,30 @@ namespace Nitra.Visualizer
           tvi.Items.Add(ObjectToItem(null, item));
         return;
       }
+
+      {
+        var t = obj.GetType();
+        
+        if (obj is string || t.IsPrimitive)
+          return;
+
+        var props = t.GetProperties();
+
+        foreach (var prop in props) //.OrderBy(p => p.Name))
+        {
+          if (IsIgnoredProperty(prop))
+            continue;
+          try
+          {
+            var value = prop.GetValue(obj, null);
+            tvi.Items.Add(ObjectToItem(prop, value));
+          }
+          catch (Exception e)
+          {
+            tvi.Items.Add(ObjectToItem(prop, e.Message));
+          }
+        }
+      }
     }
 
     private static bool IsIgnoredProperty(PropertyInfo prop)
@@ -157,7 +190,7 @@ namespace Nitra.Visualizer
       dynamic ast = astRoot.Content;
       try
       {
-        ast.DefScopeIn = new Scope.Table();
+        ast.NamespaceIn = NamespaceSymbol.RootNamespace;
       }
       catch {  }
       astRoot.EvalProperties(new DebugCompilerMessages()); // TODO: display messages in GUI
@@ -171,13 +204,18 @@ namespace Nitra.Visualizer
       //}
     }
 
+    public static string Escape(string str)
+    {
+      return str.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+    }
+
     private static string RenderXamlForDeclaration(string name, IAst ast)
     {
       var declatation = ast as IDeclaration;
-      var suffix = declatation == null ? null : (": " + declatation.Name);
+      var suffix = declatation == null ? null : (": " + Escape(declatation.Name.Text));
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-" + (string.IsNullOrWhiteSpace(name) ? null : ("<Span Foreground = 'blue'>" + name + "</Span>: "))
+" + (string.IsNullOrWhiteSpace(name) ? null : ("<Span Foreground = 'blue'>" + Escape(name) + "</Span>: "))
              + ast.ToXaml() + suffix + @"
 </Span>";
     }
@@ -188,8 +226,8 @@ namespace Nitra.Visualizer
       var color = isDependent ? "green" : "SlateBlue";
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-" + (prop == null ? null : ("<Bold><Span Foreground = '" + color + "'>" + prop.Name + "</Span></Bold>: "))
-             + obj + @"
+" + (prop == null ? null : ("<Bold><Span Foreground = '" + color + "'>" + Escape(prop.Name) + "</Span></Bold>: "))
+             + Escape(obj.ToString()) + @"
 </Span>";
     }
 
@@ -197,7 +235,7 @@ namespace Nitra.Visualizer
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-<Span Foreground = 'blue'>" + name + @"</Span>* <Span Foreground = 'gray'>Count: </Span> " + items.Count + @"
+<Span Foreground = 'blue'>" + Escape(name) + @"</Span>* <Span Foreground = 'gray'>Count: </Span> " + items.Count + @"
 </Span>";
     }
 
@@ -206,14 +244,17 @@ namespace Nitra.Visualizer
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-<Span Foreground = 'green'>" + name + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + count + @"
+<Span Foreground = 'green'>" + Escape(name) + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + count + @"
 </Span>";
     }
 
     private void _declarationsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
       if (e.NewValue != null)
-        _propertyGrid.SelectedObject = ((TreeViewItem)e.NewValue).Tag;
+      {
+        _propertyGrid.SelectedObject = ((TreeViewItem) e.NewValue).Tag;
+        _objectType.Text = _propertyGrid.SelectedObject.GetType().FullName;
+      }
     }
 
     private void TviOnMouseDoubleClick(object sender, MouseButtonEventArgs e)
