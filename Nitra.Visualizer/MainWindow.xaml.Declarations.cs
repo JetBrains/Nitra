@@ -85,7 +85,10 @@ namespace Nitra.Visualizer
         var xaml = RenderXamlForValue(prop, obj);
         tvi.Header = XamlReader.Parse(xaml);
 
-        var t     = obj.GetType();
+        if (obj == null)
+          return tvi;
+
+        var t = obj.GetType();
         var props = t.GetProperties();
         if (!(obj is string || t.IsPrimitive) && props.Any(p => !IsIgnoredProperty(p)))
           tvi.Items.Add(obj);
@@ -222,6 +225,8 @@ namespace Nitra.Visualizer
 
     private static string RenderXamlForValue(PropertyInfo prop, object obj)
     {
+      if (obj == null)
+        obj = "<null>";
       var isDependent = prop != null && prop.IsDefined(typeof(DependentPropertyAttribute), false);
       var color = isDependent ? "green" : "SlateBlue";
       return @"
@@ -252,8 +257,9 @@ namespace Nitra.Visualizer
     {
       if (e.NewValue != null)
       {
-        _propertyGrid.SelectedObject = ((TreeViewItem) e.NewValue).Tag;
-        _objectType.Text = _propertyGrid.SelectedObject.GetType().FullName;
+        var obj = ((TreeViewItem) e.NewValue).Tag;
+        _propertyGrid.SelectedObject = obj;
+        _objectType.Text = obj == null ? "<null>" : obj.GetType().FullName;
       }
     }
 
