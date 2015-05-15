@@ -127,7 +127,7 @@ namespace Nitra
       def isValidToken(x) { x > maxFailPos }
 
       when (maxFailPos == Text.Length)
-        return UnexpectedEndOfFileError(Location(this, maxFailPos, maxFailPos));
+        return UnexpectedEndOfFileError(Location(this, maxFailPos));
 
       def tokens = RuleParser.Grammar.ParseAllGrammarTokens(maxFailPos, this);
       if (tokens.Any(isValidToken))
@@ -295,6 +295,25 @@ namespace Nitra
       rawTreePtr;
     }
 
+    public FindFirstGrammar(pos : int, descriptor : RuleDescriptor, next : out int) : CompositeGrammar
+    {
+      next = memoize[pos];
+      FindNextGrammar(descriptor, ref next);
+    }
+
+    public FindNextGrammar(descriptor : RuleDescriptor, next : ref int) : CompositeGrammar
+    {
+      while (next > 0)
+      {
+        def id = rawTree[next + ExtensibleRuleParser.RawTreeOfs.Id] & ExtensibleRuleParser.RawTreeMask.Id;
+        next = rawTree[next + ExtensibleRuleParser.RawTreeOfs.Next];
+        def parser = ParserHost.RuleParsers[id];
+        when (parser.Descriptor : object == descriptor)
+          return parser.Grammar;
+      }
+      null
+    }
+
     public TryGetPrefix(pos : ref int, prefixRawTreePtr : ref int) : int
     {
       mutable bestResult = rawTree[prefixRawTreePtr + ExtensibleRuleParser.PrefixOfs.List];
@@ -457,42 +476,12 @@ namespace Nitra
 
     public CreateParseTree() : Nitra.ParseTree
     {
-      //FIXME: rewrite without reflection
-      def parseTreeType = ReflectionHelper.GetBaseParseTreeType(this.RuleParser.Descriptor);
-      match (this.RuleParser.Descriptor)
-      {
-        | SimpleRuleDescriptor =>
-          def createMethod = parseTreeType.GetMethod("Create", array[typeof(int), typeof(int), typeof(ParseResult)]);
-          createMethod.Invoke(null, array[this.StartPos : object, this.ParseEnd : object, this]) :> ParseTree
-
-        | ExtensibleRuleDescriptor as descriptor =>
-          def factory = typeof(DefaultExtensibleRuleParseTreeFactory[_]).MakeGenericType(parseTreeType).GetField("Instance").GetValue(null);
-          def type    = typeof(ExtensibleRuleParseTreeConstructor);
-          def method  = type.GetMethods().First(m => m.Name == "Create" && m.GetParameters().Length == 6);
-          def createMethod  = method.MakeGenericMethod(parseTreeType);
-          createMethod.Invoke(null, array[this.StartPos : object, this.ParseEnd : object, this, 0, descriptor, factory]) :> ParseTree
-
-        | _ => assert(false)
-      }
+      (this.RuleParser.Descriptor :> StartRuleDescriptor).CreateParseTree(this.StartPos, this.ParseEnd, this, this.RuleParser.Grammar)
     }
 
     public CreateSplicableParseTree[T](splicableParseTreeBuilder : ISplicableParseTreeBuilder[T]) : T
     {
-      def ruleDescriptor  = this.RuleParser.Descriptor;
-      match (ruleDescriptor)
-      {
-        | SimpleRuleDescriptor =>
-          def grammarAssembly = ruleDescriptor.Grammar.GetType().Assembly;
-          def walkerType      = grammarAssembly.GetType(ruleDescriptor.Grammar.FullName + "ParseTreeWalker", throwOnError = true);
-          def method          = walkerType.GetMethod(ruleDescriptor.Name.Replace('.', '_')).MakeGenericMethod(typeof(T));
-          method.Invoke(null, array[StartPos : object, this, splicableParseTreeBuilder]) :> T
-
-        | ExtensibleRuleDescriptor as d =>
-          mutable pos = StartPos;
-          ExtensibleRuleParseTreeConstructor.Create(ref pos, 1, this, 0, d, splicableParseTreeBuilder)
-
-        | _ => assert(false)
-      }
+      (this.RuleParser.Descriptor :> StartRuleDescriptor).CreateSplicableParseTree(this.StartPos, this, this.RuleParser.Grammar, splicableParseTreeBuilder)
     }
 
     public GetSpans(startPos : int, endPos : int, spans : SCG.HashSet[SpanInfo]) : void
@@ -534,7 +523,7 @@ namespace Nitra
       _errors.ToArray()
     }
 
-    public GetRuleParser(rawTreePtr : int) : object
+    public GetRuleParser(rawTreePtr : int) : IParserInfo
     {
       def ruleId = this.rawTree[rawTreePtr] & ExtensibleRuleParser.RawTreeMask.Id;
       this.ParserHost.RuleParsers[ruleId]
