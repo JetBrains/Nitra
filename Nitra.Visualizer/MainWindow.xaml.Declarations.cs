@@ -190,20 +190,16 @@ namespace Nitra.Visualizer
     private void UpdateDeclarations(AstRoot<IAst> astRoot)
     {
       dynamic ast = astRoot.Content;
-      try
-      {
-        ast.NamespaceIn = NamespaceSymbol.RootNamespace;
-      }
-      catch {  }
+      //try
+      //{
+      //  ast.NamespaceIn = NamespaceSymbol.RootNamespace;
+      //}
+      //catch {  }
       astRoot.EvalProperties(new DebugCompilerMessages()); // TODO: display messages in GUI
       var root = ObjectToItem(null, astRoot.Content);
       root.Header = "Root";
-      //using (var d = Dispatcher.DisableProcessing())
-      //{
-        _declarationsTreeView.Items.Clear();
-        _declarationsTreeView.Items.Add(root);
-      //  _declarationsTreeView.UpdateLayout();
-      //}
+      _declarationsTreeView.Items.Clear();
+      _declarationsTreeView.Items.Add(root);
     }
 
     public static string Escape(string str)

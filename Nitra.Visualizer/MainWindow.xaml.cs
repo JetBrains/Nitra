@@ -382,6 +382,7 @@ namespace Nitra.Visualizer
         {
           var location = error.Location;
           var marker = _textMarkerService.Create(location.StartPos, location.Length);
+          marker.Tag = ErrorMarkerTag;
           marker.MarkerType = TextMarkerType.SquigglyUnderline;
           marker.MarkerColor = Colors.Red;
           string text;
