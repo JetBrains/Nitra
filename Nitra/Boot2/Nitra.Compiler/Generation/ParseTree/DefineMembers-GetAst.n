@@ -22,41 +22,15 @@ namespace Nitra.Compiler
 {
   internal abstract partial class RuleParseTreeEmitter
   {
-    protected GetBaseDeclarationType(declarationSymbol : DeclarationSymbol) : PExpr
-    {
-      | ExtensionDeclarationSymbol(BaseDeclaration = baseDeclaration) => GetBaseDeclarationType(baseDeclaration.GetValue(Environment.Project))
-      | ExtensibleDeclarationSymbol
-      | SimpleDeclarationSymbol => <[ $(Environment.GetDeclarationType(declarationSymbol) : typed) ]>
-      | _ => assert(false, "Invalid declaration symbol")
-    }
-
-    protected GetConcreteDeclarationType(declarationSymbol : DeclarationSymbol) : PExpr
-    {
-      | ExtensibleDeclarationSymbol
-      | ExtensionDeclarationSymbol  => <[ $(Environment.GetDeclarationType(declarationSymbol) : typed) ]>
-      | SimpleDeclarationSymbol     => <[ $(Environment.GetDeclarationType(declarationSymbol) : typed).Concrete ]>
-      | _ => assert(false, "Invalid declaration symbol")
-    }
-
-    protected GetAmbiguousDeclarationType(declarationSymbol : DeclarationSymbol) : PExpr
-    {
-      | ExtensionDeclarationSymbol(BaseDeclaration = baseDeclaration) => GetAmbiguousDeclarationType(baseDeclaration.GetValue(Environment.Project))
-      | ExtensibleDeclarationSymbol
-      | SimpleDeclarationSymbol     => <[ $(Environment.GetDeclarationType(declarationSymbol) : typed).Ambiguous ]>
-      | _ => assert(false, "Invalid declaration symbol")
-    }
-
     protected DefineExtensibleRuleGetAstMethod(_baseTb : TypeBuilder) : void
     {
       assert(_baseTb != null);
 
-      def syntaxMappingBody = this.RuleSymbol.GetSyntaxMappingBody();
-      when (syntaxMappingBody != null)
+      unless (this.RuleSymbol.Ast is AstType.Void)
       {
-        def declarationSymbol   = syntaxMappingBody.Declaration.GetValue(Environment.Project);
-        def baseDeclarationType = GetBaseDeclarationType(declarationSymbol);
+        def astType = GetGetAstMethodReturnType();
         _baseTb.DefineConditional(<[ decl:
-          public abstract GetAst() : $baseDeclarationType
+          public abstract GetAst() : $astType
         ]>);
       }
     }
@@ -67,272 +41,268 @@ namespace Nitra.Compiler
         match(path)
         {
           | This                       => <[ this ]>
-          | Variable(name, _)          => <[ $(name.Id : usesite) ]>
-          | Member(qualifier, name, _) => <[ $(MakeParseTreeMemberAccess(qualifier)).$(name.Id : usesite) ]>
+          | Variable(name, _)          => <[ $(name.Value : usesite) ]>
+          | Member(qualifier, name, _) => <[ $(MakeParseTreeMemberAccess(qualifier)).$(name.Value : usesite) ]>
         })
     }
 
-    [Record]
-    private struct BuildAstResult
+    private CompileSyntaxMapping(expr : SyntaxMappingExpr, tb : TypeBuilder) : PExpr
     {
-      public Code            : PExpr;
-      public DeclarationType : FixedType;
-
-      public this(code : PExpr)
+      def compileConversion(mappingType : SyntaxMappingType, obj : PExpr) : PExpr
       {
-        this(code, null)
-      }
-
-      public List            : PExpr
-      {
-        get { if (DeclarationType != null) <[ $(DeclarationType : typed).IAstList ]>           else <[ Nitra.Declarations.IAstList[Nitra.Declarations.IAst] ]> }
-      }
-
-      public ConcreteList    : PExpr
-      {
-        get { if (DeclarationType != null) <[ $(DeclarationType : typed).AstList ]>            else <[ Nitra.Declarations.AstList[Nitra.Declarations.IAst] ]> }
-      }
-
-      public AmbiguousList   : PExpr
-      {
-        get { if (DeclarationType != null) <[ $(DeclarationType : typed).AmbiguousAstList ]>   else <[ Nitra.Declarations.AmbiguousAstList[Nitra.Declarations.IAst] ]> }
-      }
-
-      public Option          : PExpr
-      {
-        get { if (DeclarationType != null) <[ $(DeclarationType : typed).IAstOption ]>         else <[ Nitra.Declarations.IAstOption[Nitra.Declarations.IAst] ]> }
-      }
-
-      public ConcreteOption  : PExpr
-      {
-        get { if (DeclarationType != null) <[ $(DeclarationType : typed).AstOption ]>          else <[ Nitra.Declarations.AstOption[Nitra.Declarations.IAst] ]> }
-      }
-
-      public AmbiguousOption : PExpr
-      {
-        get { if (DeclarationType != null) <[ $(DeclarationType : typed).AmbiguousAstOption ]> else <[ Nitra.Declarations.AmbiguousAstOption[Nitra.Declarations.IAst] ]> }
-      }
-    }
-
-    private DefineGetAstMethod(tb : TypeBuilder, syntaxMappingBody : SyntaxMappingBody, modifiers : NemerleModifiers) : void
-    {
-      def declarationSymbol = syntaxMappingBody.Declaration.GetValue(Environment.Project);
-
-      def buildAst(mappingType : SyntaxMappingType, obj : PExpr) : BuildAstResult
-      {
+        def compileTupleAccess(obj : PExpr, access : list[int]) : PExpr
+        {
+          mutable acc = obj;
+          foreach (x in access)
+            acc = <[ $acc.$("Item" + x : usesite) ]>;
+          acc
+        }
         match (mappingType)
         {
-          | List(item, ruleType) =>
-            def parseTreeType     = Environment.GetParseTreeType(ruleType);
-            def itemResult        = buildAst(item, <[ node ]>);
-            def getAstListName    = Util.tmpname("GetAstList");
+          | CallGetAst => <[ $obj.GetAst() ]>
+          | CreateList(symbol, itemAccess) =>
+            def astType        = Environment.GetAstType(symbol);
+            def parseTreeType  = Environment.GetParseTreeType(mappingType.Source);
+            def getAstListName = Util.tmpname("GetAstList");
             tb.Define(<[ decl:
-              private static $(getAstListName : usesite)(lst : $(parseTreeType : typed)) : $(itemResult.List)
+              private static $(getAstListName : usesite)(lst : $(parseTreeType : typed)) : $(astType : typed).IAstList
               {
                 unchecked
                 {
                   if (lst.IsAmbiguous)
                   {
                     def ambiguities  = Nitra.Internal.AstUtils.GetAstAmbiguities(lst :> Nitra.IAmbiguousParseTree, $(getAstListName : usesite));
-                    $(itemResult.AmbiguousList)(ambiguities)
+                    $(astType : typed).AmbiguousAstList(ambiguities)
                   }
                   else
                   {
                     def items = array(lst.Count);
                     foreach (node in lst with index)
-                      items[index] = $(itemResult.Code);
-                    $(itemResult.ConcreteList)(lst.Location.Span, items)
+                      items[index] = $(compileTupleAccess(<[ node ]>, itemAccess)).GetAst();
+                    $(astType : typed).AstList(lst.Span, items)
                   }
                 }
               }
             ]>);
-            BuildAstResult(<[ $(getAstListName : usesite)($obj) ]>)
+            <[ $(getAstListName : usesite)($(compileTupleAccess(obj, mappingType.TupleAccess))) ]>
 
-          | Option(item, ruleType) =>
-            def parseTreeType      = Environment.GetParseTreeType(ruleType);
-            def itemResult         = buildAst(item, <[ opt.Value ]>);
-            def getAstOptionName   = Util.tmpname("GetAstOption");
+          | CreateOption(symbol, valueAccess) =>
+            def astType          = Environment.GetAstType(symbol);
+            def parseTreeType    = Environment.GetParseTreeType(mappingType.Source);
+            def getAstOptionName = Util.tmpname("GetAstOption");
             tb.Define(<[ decl:
-              private static $(getAstOptionName : usesite)(opt : $(parseTreeType : typed)) : $(itemResult.Option)
+              private static $(getAstOptionName : usesite)(opt : $(parseTreeType : typed)) : $(astType : typed).IAstOption
               {
                 unchecked
                 {
                   if (opt.IsAmbiguous)
                   {
                     def ambiguities  = Nitra.Internal.AstUtils.GetAstAmbiguities(opt :> Nitra.IAmbiguousParseTree, $(getAstOptionName : usesite));
-                    $(itemResult.AmbiguousOption)(ambiguities)
+                    $(astType : typed).AmbiguousAstOption(ambiguities)
                   }
                   else if (opt.HasValue)
-                    $(itemResult.ConcreteOption)(opt.Location.Span, $(itemResult.Code))
+                    $(astType : typed).AstOption(opt.Span, $(compileTupleAccess(<[ opt.Value ]>, valueAccess)).GetAst())
                   else
-                    $(itemResult.ConcreteOption)(opt.Location.Span)
+                    $(astType : typed).AstOption(opt.Span)
                 }
               }
             ]>);
-            BuildAstResult(<[ $(getAstOptionName : usesite)( $obj) ]>)
+            <[ $(getAstOptionName : usesite)($(compileTupleAccess(obj, mappingType.TupleAccess))) ]>
 
-          | Ref(declarationSymbol) => BuildAstResult(<[ $obj.GetAst() ]>, Environment.GetDeclarationType(declarationSymbol))
-          | Tuple(index, item)     => buildAst(item, <[ $obj.$("Item" + index.ToString() : usesite) ]>)
+          | ConcatLists(symbol, itemAccess) =>
+            def astType        = Environment.GetAstType(symbol);
+            def parseTreeType  = Environment.GetParseTreeType(mappingType.Source);
+            def getAstListName = Util.tmpname("GetAstList");
+            tb.DefineConditional(<[ decl:
+              private static $(getAstListName : usesite)(lst : $(parseTreeType : typed)) : $(astType : typed).IAstList
+              {
+                unchecked
+                {
+                  if (lst.IsAmbiguous)
+                  {
+                    def ambiguities  = Nitra.Internal.AstUtils.GetAstAmbiguities(lst :> Nitra.IAmbiguousParseTree, $(getAstListName : usesite));
+                    $(astType : typed).AmbiguousAstList(ambiguities)
+                  }
+                  else
+                  {
+                    def items = System.Collections.Generic.List();
+                    foreach (node in lst)
+                    {
+                      def ast = $(compileTupleAccess(<[ node ]>, itemAccess)).GetAst();
+                      items.AddRange(ast);
+                    }
+                    $(astType : typed).AstList(lst.Span, items.ToArray())
+                  }
+                }
+              }
+            ]>);
+            <[ $(getAstListName : usesite)($(compileTupleAccess(obj, mappingType.TupleAccess))) ]>
+
+          | ConcatOptions(symbol, valueAccess) =>
+            def astType        = Environment.GetAstType(symbol);
+            def parseTreeType  = Environment.GetParseTreeType(mappingType.Source);
+            def getAstListName = Util.tmpname("GetAstList");
+            tb.Define(<[ decl:
+              private static $(getAstListName : usesite)(lst : $(parseTreeType : typed)) : $(astType : typed).IAstList
+              {
+                unchecked
+                {
+                  if (lst.IsAmbiguous)
+                  {
+                    def ambiguities  = Nitra.Internal.AstUtils.GetAstAmbiguities(lst :> Nitra.IAmbiguousParseTree, $(getAstListName : usesite));
+                    $(astType : typed).AmbiguousAstList(ambiguities)
+                  }
+                  else
+                  {
+                    def items = System.Collections.Generic.List();
+                    foreach (node in lst)
+                    {
+                      def ast = $(compileTupleAccess(<[ node ]>, valueAccess)).GetAst();
+                      when (ast.HasValue)
+                        items.Add(ast.Value);
+                    }
+                    $(astType : typed).AstList(lst.Span, items.ToArray())
+                  }
+                }
+              }
+            ]>);
+            <[ $(getAstListName : usesite)($(compileTupleAccess(obj, mappingType.TupleAccess))) ]>
         }
       }
 
       def compileField(field : SyntaxMappingField) : PExpr
       {
-        def declarationPropertySymbol = field.DeclarationProperty.GetValue(Environment.Project);
-        Util.locate(field.Location.NLocation(),
-          match (field)
-          {
-            | Error        => assert(false, "Syntax mapping field is not valid")
-            | Inline(code) => <[ $(declarationPropertySymbol.Name : usesite) = $code ]>
-            | Automatic(path, mappingType) =>
-              def parseTreeMember = MakeParseTreeMemberAccess(path);
-              <[ $(declarationPropertySymbol.Name : usesite) = unchecked ($(buildAst(mappingType, parseTreeMember).Code)) ]>
-          });
+        def name  = field.Property.Name;
+        def value = CompileSyntaxMapping(field.Expr, tb);
+        <[ $(name : usesite) = $value ]>
       }
 
-      def compileFields(declarationSymbol : DeclarationSymbol, fields : list[SyntaxMappingField]) : PExpr
+      def compileMatch(path : ParseTreePath, cases : list[SyntaxMappingCase]) : PExpr
       {
-        def concreteDeclarationType = GetConcreteDeclarationType(declarationSymbol);
-        def values                  = <[ Span = this.Location.Span ]> :: fields.Map(compileField);
-        <[ $concreteDeclarationType(..$values) ]>
-      }
-
-      def compileAccess(_ : Access) : PExpr
-      {
-        | Obj                            => <[ this ]>
-        | Sel(ListCons,   0,     access) => <[ $(compileAccess(access)).Head ]>
-        | Sel(ListCons,   1,     access) => <[ $(compileAccess(access)).Tail ]>
-        | Sel(OptionSome, 0,     access) => <[ $(compileAccess(access)).Value ]>
-        | Sel(Tuple,      index, access) => <[ $(compileAccess(access)).$("Item" + (index + 1) : usesite) ]>
-        | Sel(ParseTree,  index, access) => <[ $(compileAccess(access)).$(RuleSymbol.NonVoidSubRules.Nth(index).FieldName : usesite) ]>
-        | _ => assert(false, "Invalid access path")
-      }
-
-      def compileTest(n : string, ctor : ParseTreeCtor) : PExpr
-      {
-        match (ctor)
+        def compileAccess(_ : Access) : PExpr
         {
-          | ListCons   => <[ $(n : usesite).Count > 0 ]>
-          | ListNil    => <[ $(n : usesite).Count == 0 ]>
-          | OptionSome => <[ $(n : usesite).HasValue ]>
-          | OptionNone => <[ ! $(n : usesite).HasValue ]>
-          | Tuple
-          | ParseTree  => assert(false, "Check is redundant")
+          | Obj                            => MakeParseTreeMemberAccess(path)
+          | Sel(ListCons,   0,     access) => <[ $(compileAccess(access)).Head ]>
+          | Sel(ListCons,   1,     access) => <[ $(compileAccess(access)).Tail ]>
+          | Sel(OptionSome, 0,     access) => <[ $(compileAccess(access)).Value ]>
+          | Sel(Tuple,      index, access) => <[ $(compileAccess(access)).$("Item" + (index + 1) : usesite) ]>
+          | Sel(ParseTree,  index, access) => <[ $(compileAccess(access)).$(RuleSymbol.NonVoidSubRules.Nth(index).FieldName : usesite) ]>
+          | _ => assert(false, "Invalid access path")
         }
-      }
 
-      mutable redundantCases : SCG.HashSet[_];
-      mutable canFail        : bool;
-      def compileDecision(_ : Decision[SyntaxMappingCase]) : PExpr
-      {
-        | Failure =>
-          canFail = true;
-          <[ assert(false, "Match failed") ]>
-
-        | Success(Inline(code) as case)                     =>
-          _ = redundantCases.Remove(case);
-          code
-
-        | Success(PerField(declarationRef, fields) as case) =>
-          _ = redundantCases.Remove(case);
-          compileFields(declarationRef.GetValue(Environment.Project), fields)
-
-        | Variable(name, access, continuation) =>
-          <[
-            def $(name.Id : global) = $(compileAccess(access));
-            $(compileDecision(continuation))
-          ]>.FlattenPExpr()
-
-        | IfEq(access, ctor, t, f) =>
-          def n = Util.tmpname("parseTree");
-          <[
-            def $(n : usesite) = $(compileAccess(access));
-            if ($(compileTest(n, ctor)))
-              $(compileDecision(t))
-            else
-              $(compileDecision(f))
-          ]>
-      }
-
-
-      Util.locate(syntaxMappingBody.Location.NLocation(),
-      {
-        def code =
-          match (syntaxMappingBody)
+        def compileTest(n : string, ctor : ParseTreeCtor) : PExpr
+        {
+          match (ctor)
           {
-            | PerField(fields) => compileFields(declarationSymbol, fields)
-            | Inline(code)     => code
-            | Match(cases)     =>
-              redundantCases = SCG.HashSet(cases);
-              def rules      = cases.Map(c => (c.Pattern, c));
-              def decision   = MatchCompiler.Compile(rules);
-              def code       = compileDecision(decision);
-              when (canFail)
-                Environment.Project.Warning(syntaxMappingBody.Location, "Matching is not exhaustive.", -1);
-              foreach (case in redundantCases)
-                Environment.Project.Warning(case.Location, "Match case is redundant.", -1);
-              code
-          };
+            | ListCons   => <[ $(n : usesite).Count > 0 ]>
+            | ListNil    => <[ $(n : usesite).Count == 0 ]>
+            | OptionSome => <[ $(n : usesite).HasValue ]>
+            | OptionNone => <[ ! $(n : usesite).HasValue ]>
+            | Tuple
+            | ParseTree  => assert(false, "Check is redundant")
+          }
+        }
 
-        def baseDeclarationType = GetBaseDeclarationType(declarationSymbol);
-        def mods                = AttributesAndModifiers(modifiers, []);
-        tb.Define(<[ decl: ..$mods GetAst() : $baseDeclarationType { $code } ]>);
+        def     redundantCases : SCG.HashSet[_] = SCG.HashSet(cases);
+        mutable canFail        : bool;
+        def compileDecision(_ : Decision[SyntaxMappingCase]) : PExpr
+        {
+          | Failure =>
+            canFail = true;
+            <[ assert(false, "Match failed") ]>
+
+          | Success(case)                     =>
+            _ = redundantCases.Remove(case);
+            CompileSyntaxMapping(case.Expr, tb)
+
+          | Variable(name, access, continuation) =>
+            <[
+              def $(name.Value : global) = $(compileAccess(access));
+              $(compileDecision(continuation))
+            ]>.FlattenPExpr()
+
+          | IfEq(access, ctor, t, f) =>
+            def n = Util.tmpname("parseTree");
+            <[
+              def $(n : usesite) = $(compileAccess(access));
+              if ($(compileTest(n, ctor)))
+                $(compileDecision(t))
+              else
+                $(compileDecision(f))
+            ]>
+        }
+
+        def rules      = cases.Map(c => (c.Pattern, c));
+        def decision   = MatchCompiler.Compile(rules);
+        def code       = compileDecision(decision);
+        when (canFail)
+          Environment.Project.Warning(expr, "Matching is not exhaustive.");
+        foreach (case in redundantCases)
+          Environment.Project.Warning(case, "Match case is redundant.");
+        code
+      }
+
+      Util.locate(expr.Location.NLocation(),
+      {
+        match (expr)
+        {
+          | Code(code)                         => code
+          | AstCtor(astSymbol, args)           => <[ $(Environment.GetAstType(astSymbol) : typed)(Span = this.Span, ..$(args.Map(compileField))) ]>
+          | ListCtor(astSymbol, [])            => <[ $(Environment.GetAstType(astSymbol) : typed).AstList(this.Span) ]>
+          | ListCtor(astSymbol, items)         => <[ $(Environment.GetAstType(astSymbol) : typed).AstList(this.Span, ..$(items.Map(CompileSyntaxMapping(_, tb)))) ]>
+          | OptionCtor(astSymbol, Some(value)) => <[ $(Environment.GetAstType(astSymbol) : typed).AstOption(this.Span, $(CompileSyntaxMapping(value, tb))) ]>
+          | OptionCtor(astSymbol, None())      => <[ $(Environment.GetAstType(astSymbol) : typed).AstOption(this.Span) ]>
+          | Conversion(path, mappingType)      => compileConversion(mappingType, MakeParseTreeMemberAccess(path))
+          | Match(path, cases)                 => compileMatch(path, cases)
+        }
       });
+    }
+
+    private DefineGetAstMethod(tb : TypeBuilder, expr : SyntaxMappingExpr, modifiers : NemerleModifiers) : void
+    {
+      def astType = GetGetAstMethodReturnType();
+      def mods    = AttributesAndModifiers(modifiers, []);
+      def code    = CompileSyntaxMapping(expr, tb);
+      tb.Define(<[ decl: ..$mods GetAst() : $astType { $code } ]>);
     }
 
     protected DefineSimpleRuleGetAstMethod(_nodeTb : TypeBuilder) : void
     {
       assert(_nodeTb != null);
 
-      def syntaxMappingBody = this.RuleSymbol.GetSyntaxMappingBody();
-      when (syntaxMappingBody != null)
-        DefineGetAstMethod(_nodeTb, syntaxMappingBody, NemerleModifiers.Public %| NemerleModifiers.Virtual)
+      def expr = this.RuleSymbol.GetSyntaxMappingExpr();
+      when (expr != null)
+        DefineGetAstMethod(_nodeTb, expr, NemerleModifiers.Public %| NemerleModifiers.Virtual)
     }
 
     protected DefineExtensionRuleGetAstMethod(_nodeTb : TypeBuilder) : void
     {
       assert(_nodeTb != null);
 
-      def syntaxMappingBody = this.RuleSymbol.GetSyntaxMappingBody();
-      when (syntaxMappingBody != null)
-        DefineGetAstMethod(_nodeTb, syntaxMappingBody, NemerleModifiers.Public %| NemerleModifiers.Override)
+      def expr = this.RuleSymbol.GetSyntaxMappingExpr();
+      when (expr != null)
+        DefineGetAstMethod(_nodeTb, expr, NemerleModifiers.Public %| NemerleModifiers.Override)
     }
 
-    protected DefineAmbiguousGetAstMethod(_ambiguousTb : TypeBuilder) : void
+    protected DefineAmbiguousOrMissingGetAstMethod(_ambiguousOrMissingTb : TypeBuilder) : void
     {
-      assert(_ambiguousTb != null);
+      assert(_ambiguousOrMissingTb != null);
 
-      def syntaxMappingBody = this.RuleSymbol.GetSyntaxMappingBody();
-      when (syntaxMappingBody != null)
+      def astType = this.RuleSymbol.Ast;
+      unless (astType is AstType.Void)
       {
-        def declarationSymbol        = syntaxMappingBody.Declaration.GetValue(Environment.Project);
-        def baseDeclarationType      = GetBaseDeclarationType(declarationSymbol);
-        def ambiguousDeclarationType = GetAmbiguousDeclarationType(declarationSymbol);
-        _ambiguousTb.Define(<[ decl:
-          public override GetAst() : $baseDeclarationType
+        _ambiguousOrMissingTb.Define(<[ decl:
+          public override GetAst() : $(GetGetAstMethodReturnType())
           {
-            def ambiguities = Nitra.Internal.AstUtils.GetAstAmbiguities(this.Ambiguities);
-            $ambiguousDeclarationType(ambiguities)
+            if (this.IsAmbiguous)
+            {
+              def astAmbiguities = Nitra.Internal.AstUtils.GetAstAmbiguities(this.ambiguities);
+              $(AstEmitter.GetAmbiguousAstCtor(Environment, astType))(astAmbiguities)
+            }
+            else
+              $(AstEmitter.GetMissingAstCtor(Environment, astType))($(Environment.NSpanTypeVar : typed)(this.pos))
           }
-        ]>);
-      }
-    }
-
-    protected DefineMissingGetAstMethod(_missingTb : TypeBuilder) : void
-    {
-      assert(_missingTb != null);
-
-      def syntaxMappingBody = this.RuleSymbol.GetSyntaxMappingBody();
-      when (syntaxMappingBody != null)
-      {
-        def declarationSymbol   = syntaxMappingBody.Declaration.GetValue(Environment.Project);
-        def baseDeclarationType = GetBaseDeclarationType(declarationSymbol);
-        _missingTb.Define(<[ decl:
-          public override GetAst() : $baseDeclarationType
-          {
-            null
-          }
-        ]>);
+        ]>)
       }
     }
   }

@@ -105,12 +105,13 @@ namespace Nitra
 
       InitMandatoryTokenCount();
 
-      foreach (ruleParser in Simples)     ruleParser.ParsingSequence = ParsingSequence.CreateSimple(ruleParser);
-      foreach (ruleParser in Prefixs)     ruleParser.ParsingSequence = ParsingSequence.CreateExtension(ruleParser);
-      foreach (ruleParser in Postfixs)    ruleParser.ParsingSequence = ParsingSequence.CreateExtension(ruleParser);
-      foreach (ruleParser in Extensibles) ruleParser.ParsingSequence = ParsingSequence.CreateExtensible(ruleParser);
+      foreach (ruleParser in Simples)     ruleParser.ParsingSequence = ParsingSequence.CreateSimple(ruleParser, ruleIdBuilder, this);
+      foreach (ruleParser in Prefixs)     ruleParser.ParsingSequence = ParsingSequence.CreateExtension(ruleParser, ruleIdBuilder, this);
+      foreach (ruleParser in Postfixs)    ruleParser.ParsingSequence = ParsingSequence.CreateExtension(ruleParser, ruleIdBuilder, this);
+      foreach (ruleParser in Extensibles) ruleParser.ParsingSequence = ParsingSequence.CreateExtensible(ruleParser, ruleIdBuilder, this);
 
       CollectTokens();
+      CollectFirstTokens(ruleIdBuilder);
     }
 
     private InitMandatoryTokenCount() : void
@@ -154,8 +155,8 @@ namespace Nitra
             | ListItem => assert(false)
             | Empty | RegularCall | TokenString | ExtensibleCall | SimpleCall => ()
             | Option            as subrule => initSequenceInfo(subrule.Rule);
-            | List              as subrule => initSequenceInfo(subrule.Rule);
-            | ListWithSeparator as subrule => initSequenceInfo(subrule.Rule); initSequenceInfo(subrule.Separator);
+            | List              as subrule => initSequenceInfo(subrule.Item);
+            | ListWithSeparator as subrule => initSequenceInfo(subrule.Item); initSequenceInfo(subrule.Separator);
             | Marker                       => assert(false);
           }
         }
@@ -198,17 +199,17 @@ namespace Nitra
                 0;
 
               | List              as subrule =>
-                updateSequenceInfo(subrule.Rule);
-                mulT(subrule.Rule.MandatoryTokenCount, subrule.Min);
+                updateSequenceInfo(subrule.Item);
+                mulT(subrule.Item.MandatoryTokenCount, subrule.Min);
 
               | ListWithSeparator as subrule =>
-                updateSequenceInfo(subrule.Rule);
+                updateSequenceInfo(subrule.Item);
                 updateSequenceInfo(subrule.Separator);
                 match (subrule.Min)
                 {
                   | 0 => 0
-                  | 1 => subrule.Rule.MandatoryTokenCount
-                  | c => addT(mulT(subrule.Rule.MandatoryTokenCount, c),  mulT(subrule.Separator.MandatoryTokenCount, (c - 1)))
+                  | 1 => subrule.Item.MandatoryTokenCount
+                  | c => addT(mulT(subrule.Item.MandatoryTokenCount, c),  mulT(subrule.Separator.MandatoryTokenCount, (c - 1)))
                 }
 
               | Marker                       => assert(false);
@@ -257,15 +258,20 @@ namespace Nitra
           | Extensible        as state => _ = state.RuleParser.ParsingSequence.Callers.Add(ParsingCallerInfo(parsingSequence, state.Id)); when (state.RuleParser.IsTokenRule) addToken(state, state.RuleParser)
           | List              as state1 with (seq = state1.Sequence, id = state1.Id)
           | ListWithSeparator as state2 with (seq = state2.Sequence, id = state2.Id)
-          | Subsequence       as state3 with (seq = state3.Sequence, id = state3.Id) => _ = seq.Callers.Add(ParsingCallerInfo(parsingSequence, id)); updateTokens(seq);
+          | Subsequence       as state3 with (seq = state3.Sequence, id = state3.Id)
+          | DynamicExtensible as state4 with (seq = state4.Sequence, id = state4.Id) => _ = seq.Callers.Add(ParsingCallerInfo(parsingSequence, id)); updateTokens(seq);
           | Scan              as state =>
-            match (state.Subrule)
+            match (state.SubruleInfo)
             {
               | RegularCall as subrule => addToken(state, subrule.Descriptor)
               | TokenString as subrule => addToken(state, subrule.Str)
               | Empty                  => ()
               | _                      => assert3(false)
             }
+
+          | DynamicExtensibleItem as state =>
+            foreach (parser in state.RuleParser.PrefixRules)
+              _ = parser.ParsingSequence.Callers.Add(ParsingCallerInfo(parsingSequence, state.Id));
 
           | ExtensionPrefix  as state =>
             foreach (parser in state.RuleParser.PrefixRules)
@@ -290,6 +296,64 @@ namespace Nitra
           }
     }
 
+    private CollectFirstTokens(ruleIdBuilder : RuleIdBuilder) : void
+    {
+      mutable updated = true;
+      def updateTokens(parsingSequence : ParsingSequence)
+      {
+        def count = parsingSequence.FirstTokens.Count;
+        foreach (state in parsingSequence.States)
+        {
+          | Predicate                  => ()
+          | Simple               (ruleParser)
+          | Extensible           (ruleParser)
+          | DynamicExtensibleItem(ruleParser) =>
+            def tokenParser = GetTokenParser(state.SubruleInfo);
+            if (tokenParser == null)
+              state.FirstTokens.UnionWith(ruleParser.ParsingSequence.FirstTokens);
+            else
+              _ = state.FirstTokens.Add(tokenParser);
+          
+          | ListWithSeparator(seq)
+          | Subsequence      (seq, _)
+          | List             (seq)
+          | DynamicExtensible(seq) =>
+            def tokenParser = GetTokenParser(state.SubruleInfo);
+            if (tokenParser == null)
+            {
+              updateTokens(seq);
+              state.FirstTokens.UnionWith(seq.FirstTokens);
+            }
+            else
+              _ = state.FirstTokens.Add(tokenParser);
+
+          | Scan              as state =>
+            def tokenParser = GetTokenParser(state.SubruleInfo);
+            when (tokenParser != null)
+              _ = state.FirstTokens.Add(tokenParser);
+
+          | ExtensionPrefix  as state =>
+            foreach (parser in state.RuleParser.PrefixRules)
+              state.FirstTokens.UnionWith(parser.ParsingSequence.FirstTokens);
+
+          | ExtensionPostfix as state =>
+            foreach (parser when state.RuleParser.FirstPostfixRuleId <= parser.RuleId in state.RuleParser.PostfixRules)
+              state.FirstTokens.UnionWith(parser.ParsingSequence.FirstTokens);
+        }
+        foreach (state when state != -1 in parsingSequence.StartStates)
+            parsingSequence.FirstTokens.UnionWith(ruleIdBuilder.GetParsingState(state).FirstTokens);
+        updated = updated || count != parsingSequence.FirstTokens.Count;
+      }
+      while (updated)
+      {
+        updated = false;
+        foreach (ruleParser in Simples)     unless (ruleParser.IsTokenRule) updateTokens(ruleParser.ParsingSequence);
+        foreach (ruleParser in Prefixs)     unless (ruleParser.IsTokenRule) updateTokens(ruleParser.ParsingSequence);
+        foreach (ruleParser in Postfixs)    unless (ruleParser.IsTokenRule) updateTokens(ruleParser.ParsingSequence);
+        foreach (ruleParser in Extensibles) unless (ruleParser.IsTokenRule) updateTokens(ruleParser.ParsingSequence);
+      }
+    }
+
     private InitTokens() : void
     {
       def simpleVisited = SCG.HashSet();
@@ -300,8 +364,8 @@ namespace Nitra
         {
           | ListItem                     => assert(false);
           | Option            as subrule => visit(subrule.Rule);
-          | List              as subrule => visit(subrule.Rule);
-          | ListWithSeparator as subrule => visit(subrule.Rule);  visit(subrule.Separator);
+          | List              as subrule => visit(subrule.Item);
+          | ListWithSeparator as subrule => visit(subrule.Item);  visit(subrule.Separator);
           | ExtensibleCall    as subrule => visitExtensible(subrule.RuleParser);
           | SimpleCall        as subrule => visitSimple(subrule.RuleParser);
           | TokenString       as subrule => Tokens[subrule.Str]        = TokenParser.TokenString(subrule.Str);
@@ -353,6 +417,36 @@ namespace Nitra
         visitExtensible(parserData.Parsers[0]);
     }
 
+    public GetTokenParser(subrule : SubruleInfo) : TokenParser
+    {
+      def getToken(isVoid : bool, key : object)
+      {
+        def tokens = if (isVoid) VoidTokens else Tokens;
+        mutable token;
+        if (tokens.TryGetValue(key, out token)) token else null;
+      }
+      match (subrule)
+      {
+        | ExtensibleCall    as subrule =>
+          if (subrule.RuleParser.IsTokenRule)
+            getToken(subrule.RuleParser.IsVoid, subrule.RuleParser);
+          else
+            null
+
+        | SimpleCall        as subrule =>
+          if (subrule.RuleParser.IsTokenRule)
+            getToken(subrule.RuleParser.IsVoid, subrule.RuleParser);
+          else
+            null
+
+        | TokenString       as subrule => getToken(false, subrule.Str);
+        | RegularCall       as subrule =>
+          getToken(subrule.Descriptor.IsVoid, subrule.Descriptor);
+
+        | _ => null
+      }
+    }
+    
     public GetExtensibleRuleParser(rd : ExtensibleRuleDescriptor, bindingPower : int) : ExtensibleRuleParser
     {
       ExtensibleRules[rd].GetParser(bindingPower)
@@ -577,10 +671,10 @@ a:visited, a:link, a:active
 
           | Option            as r => renderSubSequence(parent, r.Rule, suppressParentheses=false); parent.Add("?");
           | ListItem          as _r => assert2(false); assert(false);
-          | List              as r => renderSubSequence(parent, r.Rule, suppressParentheses=false); parent.Add(if (r.Min > 0) "+" else "*");
+          | List              as r => renderSubSequence(parent, r.Item, suppressParentheses=false); parent.Add(if (r.Min > 0) "+" else "*");
           | ListWithSeparator as r =>
             parent.Add("(");
-            renderSubSequence(parent, r.Rule, suppressParentheses=true);
+            renderSubSequence(parent, r.Item, suppressParentheses=true);
             parent.Add("; ");
             renderSubSequence(parent, r.Separator, suppressParentheses=true);
             when (r.HangingSeparator)

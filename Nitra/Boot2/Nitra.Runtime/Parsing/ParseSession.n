@@ -29,40 +29,40 @@ namespace Nitra
   {
     public static DeafultRecoveryTimeout : TimeSpan = TimeSpan.FromMilliseconds(200);
 
-    public this(
-      [NotNull] sourceSnapshot      : SourceSnapshot,
-                startRuleDescriptor : StartRuleDescriptor,
-                compositeGrammar    : CompositeGrammar  = null,
-                completionPrefix    : string            = null,
-                completionStartPos  : int               = -1,
-                cancellationToken   : CancellationToken = default(CancellationToken),
-                parseToEndOfString  : bool              = true,
-                recoveryTimeout     : TimeSpan          = default(TimeSpan))
+    public this(startRuleDescriptor : StartRuleDescriptor,
+                compositeGrammar    : CompositeGrammar       = null,
+                completionPrefix    : string                 = null,
+                completionStartPos  : int                    = -1,
+                cancellationToken   : CancellationToken      = default(CancellationToken),
+                parseToEndOfString  : bool                   = true,
+                recoveryTimeout     : TimeSpan               = default(TimeSpan),
+                onRecovery          : Action[IParseResult]   = null,
+                dynamicExtensions   : Seq[GrammarDescriptor] = null)
     {
-      this._compositeGrammar    = compositeGrammar;
-      this._sourceSnapshot      = sourceSnapshot;
-      this._startRuleDescriptor = startRuleDescriptor;
-      this._completionPrefix    = completionPrefix;
-      this._completionStartPos  = completionStartPos;
-      this._cancellationToken   = cancellationToken;
-      this._parseToEndOfString  = parseToEndOfString;
-      this._recoveryTimeout     = if (recoveryTimeout == default(TimeSpan)) DeafultRecoveryTimeout else recoveryTimeout;
+      _compositeGrammar    = compositeGrammar;
+      _startRuleDescriptor = startRuleDescriptor;
+      _completionPrefix    = completionPrefix;
+      _completionStartPos  = completionStartPos;
+      _cancellationToken   = cancellationToken;
+      _parseToEndOfString  = parseToEndOfString;
+      _recoveryTimeout     = if (recoveryTimeout == default(TimeSpan)) DeafultRecoveryTimeout else recoveryTimeout;
+      _onRecovery          = onRecovery;
+      DynamicExtensions    = dynamicExtensions;
     }
 
-    public SourceText          : string              { get { _sourceSnapshot.Text } set { Check();                        _sourceSnapshot      = SourceSnapshot(value); } }
-    public SourceSnapshot      : SourceSnapshot      { get { _sourceSnapshot      } set { Check(); assert(value != null); _sourceSnapshot      = value; } }
-    public StartRuleDescriptor : StartRuleDescriptor { get { _startRuleDescriptor } set { Check();                        _startRuleDescriptor = value; } }
-    public CompositeGrammar    : CompositeGrammar    { get { _compositeGrammar    } set { Check();                        _compositeGrammar    = value; } }
-    public CompletionPrefix    : string              { get { _completionPrefix    } set { Check();                        _completionPrefix    = value; } }
-    public CompletionStartPos  : int                 { get { _completionStartPos  } set { Check();                        _completionStartPos  = value; } }
-    public CancellationToken   : CancellationToken   { get { _cancellationToken   } set { Check();                        _cancellationToken   = value; } }
-    public ParseToEndOfString  : bool                { get { _parseToEndOfString  } set { Check();                        _parseToEndOfString  = value; } }
-    public RecoveryTimeout     : TimeSpan            { get { _recoveryTimeout     } set { Check();                        _recoveryTimeout     = value; } }
-    public CurrentGrammar      : CompositeGrammar    { get; set; }
+    public StartRuleDescriptor : StartRuleDescriptor    { get { _startRuleDescriptor } set { Check();                        _startRuleDescriptor = value; } }
+    public CompositeGrammar    : CompositeGrammar       { get { _compositeGrammar    } set { Check();                        _compositeGrammar    = value; } }
+    public CompletionPrefix    : string                 { get { _completionPrefix    } set { Check();                        _completionPrefix    = value; } }
+    public CompletionStartPos  : int                    { get { _completionStartPos  } set { Check();                        _completionStartPos  = value; } }
+    public CancellationToken   : CancellationToken      { get { _cancellationToken   } set { Check();                        _cancellationToken   = value; } }
+    public ParseToEndOfString  : bool                   { get { _parseToEndOfString  } set { Check();                        _parseToEndOfString  = value; } }
+    public RecoveryTimeout     : TimeSpan               { get { _recoveryTimeout     } set { Check();                        _recoveryTimeout     = value; } }
+    public OnRecovery          : Action[IParseResult]   { get { _onRecovery          } set { Check();                        _onRecovery          = value; } }
+    public DynamicExtensions   : Seq[GrammarDescriptor] { get { _dynamicExtensions   } set { Check(); _dynamicExtensionsMap = value?.ToDictionary(d => d.FullName); _dynamicExtensions = value; } }
+    public CurrentGrammar      : CompositeGrammar       { get;                         set;                                                                  }
 
     Check() : void { assert(!_parsingInProgress, "The property can not be changed during parsing."); }
 
-    [DebuggerBrowsable(DebuggerBrowsableState.Never)] mutable _sourceSnapshot      : SourceSnapshot;
     [DebuggerBrowsable(DebuggerBrowsableState.Never)] mutable _startRuleDescriptor : StartRuleDescriptor;
     [DebuggerBrowsable(DebuggerBrowsableState.Never)] mutable _compositeGrammar    : CompositeGrammar;
     [DebuggerBrowsable(DebuggerBrowsableState.Never)] mutable _completionPrefix    : string;
@@ -71,18 +71,35 @@ namespace Nitra
     [DebuggerBrowsable(DebuggerBrowsableState.Never)] mutable _parseToEndOfString  : bool;
     [DebuggerBrowsable(DebuggerBrowsableState.Never)] mutable _parsingInProgress   : bool;
     [DebuggerBrowsable(DebuggerBrowsableState.Never)] mutable _recoveryTimeout     : TimeSpan;
+    [DebuggerBrowsable(DebuggerBrowsableState.Never)] mutable _onRecovery          : Action[IParseResult];
+    [DebuggerBrowsable(DebuggerBrowsableState.Never)] mutable _dynamicExtensions   : Seq[GrammarDescriptor];
 
-    public Parse() : IParseResult
+    [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+    internal mutable _dynamicExtensionsMap : SCG.Dictionary[string, GrammarDescriptor];
+
+    public static SmartRecovery      : Action[IParseResult] = parseResult => RecoveryParser(parseResult).RecoveryFromAllErrors();
+    public static PanicRecovery      : Action[IParseResult] = parseResult => RecoveryParser(parseResult).PanicRecovery();
+    public static FirsrErrorRecovery : Action[IParseResult] = parseResult => RecoveryParser(parseResult).FirstErrorRecovery();
+    
+    public Parse(sourceText : string) : IParseResult
+    {
+      Parse(SourceSnapshot(sourceText))
+    }
+    
+    public Parse(sourceSnapshot : SourceSnapshot) : IParseResult
       requires this.StartRuleDescriptor != null
     {
       when (this.CompositeGrammar == null)
         this.CompositeGrammar = ParserHost.Instance.DefaultCompositeGrammar.Add(this.StartRuleDescriptor.Grammar);
-
+        
+      when (_onRecovery == null)
+        _onRecovery = SmartRecovery;
+        
       CurrentGrammar = CompositeGrammar;
       _parsingInProgress = true;
       try
       {
-        def parseResult = ParseResult(this);
+        def parseResult = ParseResult(this, sourceSnapshot);
         parseResult.Parse();
         parseResult
       }

@@ -37,30 +37,26 @@ namespace Nitra
     public mutable memoize          : array[int];
     public mutable allocated        : int;
     public mutable TerminateParsing : bool; // may be volatile?
-    public         ParserHost       : ParserHost;
-    public         OriginalSource   : SourceSnapshot  { get; }
+    public         ParserHost       : ParserHost      { get; }
+    public         SourceSnapshot   : SourceSnapshot  { get; }
     public         StartPos         : int             { get; }
     public         RuleParser       : StartRuleParser { get; }//Rename to StartRuleParser
     public mutable LastParseStart   : int;
     public mutable LastParseEnd     : int;
-    public         ErrorData        : SCG.List[ParseErrorData];
     public         ParseSession     : ParseSession    { get; }
     private mutable _maxFailPos     : int;
-    private mutable _counter        : int;
     private _errors                 : SCG.List[Error] = SCG.List();
 
-    public this([NotNull] parseSession : ParseSession)
+    public this([NotNull] parseSession : ParseSession, [NotNull] sourceSnapshot : SourceSnapshot)
     {
-      def sourceSnapshot = parseSession.SourceSnapshot;
-      def text           = sourceSnapshot.Text;
-      
+      def text              = sourceSnapshot.Text;
+
       this.ParseSession     = parseSession;
       this.Text             = text;
-      this.OriginalSource   = sourceSnapshot;
+      this.SourceSnapshot   = sourceSnapshot;
       this.StartPos         = 0;
       this.TokenEnumerator1 = TokenEnumerator(this);
       this.TokenEnumerator2 = TokenEnumerator(this);
-      this.ErrorData        = SCG.List();
       this.rawTree          = array((text.Length + 1) * 10);
       this.memoize          = array(text.Length + 1);
       this.allocated        = 0;
@@ -73,53 +69,52 @@ namespace Nitra
 
     internal Parse() : void
     {
-      def registration = 
-        if (this.ParseSession.CancellationToken == CancellationToken.None)
-          VSome(this.ParseSession.CancellationToken.Register(() => TerminateParsing = true))
-        else
-          VNone();
+      if (this.ParseSession.CancellationToken == CancellationToken.None)
+        ParseImpl()
+      else
+        using (this.ParseSession.CancellationToken.Register(CancelParsing))
+          ParseImpl()
+    }
 
-      try
+    private CancelParsing() : void
+    {
+      TerminateParsing = true
+    }
+
+    private ParseImpl() : void
+    {
+      _ = Allocate(2);
+      mutable res = RuleParser.Parse(StartPos, Text, this);
+
+      def parsedToEnd = res == Text.Length;
+      when (res < 0 || !(this.ParseSession.ParseToEndOfString && parsedToEnd) || ParseSession.CompletionStartPos >= 0)
       {
-        _ = Allocate(2);
-        mutable res = RuleParser.Parse(StartPos, Text, this);
-
-        def parsedToEnd = res == Text.Length;
-        when (res < 0 || !(this.ParseSession.ParseToEndOfString && parsedToEnd) || ParseSession.CompletionStartPos >= 0)
+        def maxFailPos = MaxFailPos;
+        try
         {
-          def maxFailPos = MaxFailPos;
-          try
-          {
-            def rp = RecoveryParser(this);
-            rp.RecoveryFromAllErrors();
+          this.ParseSession.OnRecovery(this);
 
-            res = Text.Length;
-            rawTree[ResultOffset] = res;
+          res = Text.Length;
+          rawTree[ResultOffset] = res;
 
-            def errorCollector = ErrorCollectorWalker();
-            errorCollector.Walk(this);
-          }
-          catch
-          {
-            | _ is LiteralCompletionException => throw;
-            | _ is OperationCanceledException => throw;
-            | e =>
-              def error = GetParsingFailureError(maxFailPos);
-              ReportError(error);
-              throw ParsingFailureException(error.ToString(), e, this);
-          }
+          def errorCollector = ErrorCollectorWalker();
+          errorCollector.Walk(this);
         }
-
-        assert2(res >= 0);
-        assert(res >= 0);
-
-        rawTree[ResultOffset] = res;
+        catch
+        {
+          | _ is LiteralCompletionException => throw;
+          | _ is OperationCanceledException => throw;
+          | e =>
+            def error = GetParsingFailureError(maxFailPos);
+            ReportError(error);
+            throw ParsingFailureException(error.ToString(), e, this);
+        }
       }
-      finally
-      {
-        when (registration is VSome(registration))
-          registration.Dispose();
-      }
+
+      assert2(res >= 0);
+      assert(res >= 0);
+
+      rawTree[ResultOffset] = res;
     }
 
     private GetParsingFailureError(maxFailPos : int) : ParseError
@@ -188,12 +183,6 @@ namespace Nitra
       result
     }
 
-    public GenerateId() : int
-    {
-      _counter++;
-      _counter
-    }
-
     public MaxFailPos : int
     {
       get { _maxFailPos }
@@ -214,7 +203,8 @@ namespace Nitra
         def sb3 = StringBuilder();
         def appendIndex(len : int, i : int)
         {
-          _ = sb3.Append(('0' + (i / 10)) :> char, len);
+          def h = (i / 10);
+          _ = sb3.Append(if (h < 10) ('0' + h) :> char else ('A' + h - 10) :> char, len);
           _ = sb2.Append(('0' + (i % 10)) :> char, len);
         }
         def addEsc(ch : string, i : int) : void
@@ -319,13 +309,9 @@ namespace Nitra
       mutable bestResult = rawTree[prefixRawTreePtr + ExtensibleRuleParser.PrefixOfs.List];
       when (bestResult < 0)
       {
-        def error = ErrorData[~bestResult];
-        when (error.Skip.Length == 0)
-          return -1;//правило восстановилось пустым.
-        pos += error.Skip.Length; // грязь
         prefixRawTreePtr = GetRawTree(pos, rawTree[prefixRawTreePtr + ExtensibleRuleParser.PrefixOfs.Id] & ExtensibleRuleParser.RawTreeMask.Id);
         bestResult = rawTree[prefixRawTreePtr + ExtensibleRuleParser.PrefixOfs.List]; // исходная ссылка на дерево разбора
-        assert3(bestResult >= 0 || ErrorData[~bestResult].Skip.Length == 0);
+        assert3(bestResult >= 0);
         when (bestResult == 0)
           bestResult = -1;
       }
@@ -337,13 +323,9 @@ namespace Nitra
       mutable bestResult = rawTree[postfixRawTreePtr + ExtensibleRuleParser.PostfixOfs.List];
       when (bestResult < 0)
       {
-        def error = ErrorData[~bestResult];
-        when (error.Skip.Length == 0)
-          return -1;//правило восстановилось пустым.
-        pos += error.Skip.Length; // грязь
         postfixRawTreePtr = GetRawTree(pos, rawTree[postfixRawTreePtr + ExtensibleRuleParser.PostfixOfs.Id] & ExtensibleRuleParser.RawTreeMask.Id);
         bestResult = rawTree[postfixRawTreePtr + ExtensibleRuleParser.PostfixOfs.List]; // исходная ссылка на дерево разбора
-        assert3(bestResult >= 0 || ErrorData[~bestResult].Skip.Length == 0);
+        assert3(bestResult >= 0);
         when (bestResult == 0)
           bestResult = -1;
       }
@@ -373,52 +355,7 @@ namespace Nitra
       else if (size == int.MinValue)
         0
       else
-      {
-        def error = ErrorData[~size];
-        error.Skip.Length + error.Data
-      }
-    }
-
-    public GetSkip(sizePos : int) : int
-    {
-      def size = rawTree[sizePos];
-      if (size >= 0)
-        0
-      else if (size == int.MinValue)
-        0
-      else
-      {
-        def error = ErrorData[~size];
-        error.Skip.Length
-      }
-    }
-
-    public GetSkipAndSize(sizePos : int) : int * int
-    {
-      def size = rawTree[sizePos];
-      if (size >= 0)
-        (0, size)
-      else if (size == int.MinValue)
-        (0, 0)
-      else
-      {
-        def error = ErrorData[~size];
-        (error.Skip.Length, error.Data)
-      }
-    }
-
-    public GetSkipAndSize2(sizePos : int) : int
-    {
-      def size = rawTree[sizePos];
-      if (size >= 0)
-        size
-      else if (size == int.MinValue)
-        0
-      else
-      {
-        def error = ErrorData[~size];
-        ~(error.Skip.Length + error.Data)
-      }
+        assert(false, "Skip not supported")
     }
 
     public GetRawTreeSize(rawTreePtr : int, sequenceInfo : SequenceInfo) : int
@@ -562,7 +499,16 @@ namespace Nitra
 
     private GetSource() : SourceSnapshot implements ISourceSnapshotProvider.GetSource
     {
-      OriginalSource
+      SourceSnapshot
+    }
+    
+    public TryGetDynamicSyntaxExtension(syntaxModuleFullName : string) : GrammarDescriptor
+    {
+      mutable descriptor;
+      if (this.ParseSession._dynamicExtensionsMap?.TryGetValue(syntaxModuleFullName, out descriptor))
+        descriptor
+      else
+        null
     }
   }
 }

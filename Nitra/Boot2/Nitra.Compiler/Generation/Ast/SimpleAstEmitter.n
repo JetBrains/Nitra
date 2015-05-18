@@ -1,0 +1,163 @@
+﻿using Nitra.Model;
+using Nitra.Typing;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal sealed class SimpleAstEmitter : AstEmitter
+  {
+    private         _symbol            : SimpleAstSymbol;
+    private mutable _tb                : TypeBuilder;
+    private mutable _ambiguousTb       : TypeBuilder;
+    private         _collectionEmitter : CollectionEmitter;
+
+    public this(environment : EmitterEnvironment, symbol : SimpleAstSymbol)
+    {
+      base(environment, environment.NamespaceOfSymbol(symbol));
+      this._symbol = symbol;
+      this._collectionEmitter = CollectionEmitter(this, symbol);
+    }
+
+    public override DefineTypes() : void
+    {
+      Util.locate(_symbol.FirstLocation.NLocation(),
+      {
+        assert(_tb == null);
+
+        def parentType = Environment.TypeCompiler.CompileParentType(_symbol);
+
+        def baseTypes = SCG.List();
+        baseTypes.Add(<[ Nitra.Declarations.AstBase[$(parentType : typed)] ]>);
+        foreach (baseAst in _symbol.BaseAsts)
+          baseTypes.Add(<[ $(Environment.GetAstType(baseAst) : typed) ]>);
+        when (_symbol.IsDeclaration)
+          baseTypes.Add(<[ $(Environment.DeclarationTypeVar : typed) ]>);
+
+        _tb = NemerleEnv.Define(<[ decl:
+          public partial class $(_symbol.Name : usesite) : ..$baseTypes
+          {
+            private this() {}
+          }
+        ]>);
+
+        assert(_ambiguousTb == null);
+        _ambiguousTb = DefineAmbiguousAst(_tb);
+
+        _collectionEmitter.DefineTypes(_tb);
+      });
+    }
+
+    public override DefineMembers() : void
+    {
+      assert(_tb != null);
+
+      def thisType = _tb.GetMemType();
+
+      def initParameters = SCG.List();
+      initParameters.Add(<[ parameter: Span : $(Environment.NSpanTypeVar : typed) ]>);
+
+      def initStatements = SCG.List();
+      initStatements.Add(<[ this.Span = Span ]>);
+
+      def missingBody = SCG.List();
+      missingBody.Add(<[ this.Span = span ]>);
+
+      def dependentProps = SCG.Dictionary();
+
+      def defineSimpleProperty(propertySymbol : SimpleAstPropertySymbol) : void
+      {
+        def name             = propertySymbol.Name;
+        def propertyType     = Environment.TypeCompiler.CompileSimplePropertyType(propertySymbol);
+
+        initParameters.Add(<[ parameter : $(name : usesite) : $(propertyType.Type : typed) ]>);
+        initStatements.Add(<[ this.$(name : usesite) = $(name : usesite) ]>);
+
+        DefineSimpleProperty(name, propertyType.Type, _tb, _ambiguousTb);
+
+        match (propertyType)
+        {
+          | Ast         =>
+            if (propertyType.Type.Equals(thisType))
+              missingBody.Add(<[ this.$(name : usesite) = this ]>);
+            else unless (propertySymbol.AstType is AstType.Void)
+              missingBody.Add(<[ this.$(name : usesite) = $(GetMissingAstCtor(Environment, propertySymbol.AstType))(span) ]>);
+
+          | ParsedValue => missingBody.Add(<[ this.$(name : usesite) = Nitra.ParsedValue(span.StartPos) ]>);
+          | Span        => missingBody.Add(<[ this.$(name : usesite) = span ]>);
+        }
+      }
+
+      def defineDependentProperty(propertySymbol : DependentAstPropertySymbol) : void
+      {
+        def index = dependentProps.Count;
+        def bit   = _tb.GetBitFieldManager().Allocate();
+        assert(bit.Index == index);
+
+        def propertyRef = DependentAstPropertyRef.Compiling(propertySymbol, index, bit);
+        dependentProps.Add(propertySymbol, propertyRef);
+
+        DefineDependentProperty(_tb, propertyRef, NemerleModifiers.Public | NemerleModifiers.Virtual);
+        DefineAmbiguousDependentProperty(_ambiguousTb, propertyRef, NemerleModifiers.Public | NemerleModifiers.Override);
+      }
+
+      def projectedProps = SCG.List();
+
+      def defineProjectedProperty(propertySymbol : ProjectedAstPropertySymbol) : void
+      {
+        def name         = propertySymbol.Name;
+        def propertyType = Environment.TypeCompiler.CompileProjectedPropertyType(propertySymbol);
+        DefineSimpleProperty(name, propertyType, _tb, _ambiguousTb);
+        projectedProps.Add(propertySymbol);
+
+        if (propertyType.Equals(thisType))
+          missingBody.Add(<[ this.$(name : usesite) = this ]>);
+        else when (propertySymbol.ProjectionType is Some(projectionType))
+          missingBody.Add(<[ this.$(name : usesite) = $(GetMissingAstCtor(Environment, projectionType))(span) ]>);
+      }
+
+      foreach (propertySymbol in _symbol.AllProperties)
+      {
+        | SimpleAstPropertySymbol    as s => defineSimpleProperty(s)
+        | DependentAstPropertySymbol as s => defineDependentProperty(s)
+        | ProjectedAstPropertySymbol as s => defineProjectedProperty(s)
+        | _ => ()
+      }
+
+      CompileProjection(projectedProps, initStatements);
+
+      _tb.Define(<[ decl:
+        public this(..$initParameters) { ..$initStatements }
+      ]>);
+
+      _ambiguousTb.Define(<[ decl:
+        public this(span : $(Environment.NSpanTypeVar : typed)) { ..$missingBody }
+      ]>);
+
+      DefineIsPropertyEvaluatedMethod(_tb, NemerleModifiers.Override);
+      DefineDependentPropertiesEvaluation(_tb, _symbol);
+
+      _collectionEmitter.DefineMembers(dependentProps);
+    }
+
+    public override Emit() : void
+    {
+      assert(_tb != null);
+      _tb.Compile();
+
+      assert(_ambiguousTb != null);
+      _ambiguousTb.Compile();
+
+      _collectionEmitter.Emit();
+    }
+  }
+}
