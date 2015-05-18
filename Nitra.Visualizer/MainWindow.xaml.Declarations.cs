@@ -144,7 +144,6 @@ namespace Nitra.Visualizer
         case "File":
         case "Span":
         case "IsAmbiguous":
-        case "Parent":
           return true;
       }
       return false;
