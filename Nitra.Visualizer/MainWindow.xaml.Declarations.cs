@@ -253,8 +253,9 @@ namespace Nitra.Visualizer
       if (e.NewValue != null)
       {
         var obj = ((TreeViewItem) e.NewValue).Tag;
+        var id = obj.GetHashCode();
         _propertyGrid.SelectedObject = obj;
-        _objectType.Text = obj == null ? "<null>" : obj.GetType().FullName;
+        _objectType.Text = obj == null ? "<null>" : obj.GetType().FullName + " [" + id + "]";
       }
     }
 
