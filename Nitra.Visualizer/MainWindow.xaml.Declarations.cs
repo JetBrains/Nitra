@@ -190,13 +190,14 @@ namespace Nitra.Visualizer
     private void UpdateDeclarations(AstRoot<IAst> astRoot)
     {
       _declarationsTreeView.Items.Clear();
-      //dynamic ast = astRoot.Content;
-      //try
-      //{
-      //  ast.NamespaceIn = NamespaceSymbol.RootNamespace;
-      //}
-      //catch {  }
-      astRoot.EvalProperties(new DebugCompilerMessages()); // TODO: display messages in GUI
+      // TODO: display messages in GUI
+      var compilerMessages = new DebugCompilerMessages();
+      // ReSharper disable once SuspiciousTypeConversion.Global
+      var projectSupport = astRoot.Content as IProjectSupport;
+      if (projectSupport != null)
+        projectSupport.RefreshProject(new [] { astRoot.Content }, compilerMessages);
+      else
+        astRoot.EvalProperties(compilerMessages);
       var root = ObjectToItem(null, astRoot.Content);
       root.Header = "Root";
       _declarationsTreeView.Items.Add(root);
