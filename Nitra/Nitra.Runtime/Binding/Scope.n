@@ -14,39 +14,108 @@ using System.Linq;
 namespace Nitra.Runtime.Binding
 {
   [Record]
-  public class Symbol2
+  public abstract class Symbol2
   {
     public Name : IReference { get; }
+    public abstract FullName : string { get; }
+    public abstract Kind : string { get; }
     [RecordIgnore] public Declarations : list [IDeclaration] { get; set; default []; }
     
-    public override ToString() : string { Name?.Text + " (symbol)" }
+    public override ToString() : string { Name?.Text + " (" + Kind + ")" }
+  }
+
+    [Record]
+  public abstract class HierarchicalBaseSymbol : Symbol2
+  {
+    public Parent : HierarchicalSymbol { get; }
+
+    public override FullName : string
+    {
+      get
+      {
+        def loop(node : this, sb : Text.StringBuilder) : void
+        {
+          when (node.Parent != null)
+          {
+            loop(node.Parent, sb);
+            when (node.Parent.Parent != null)
+              _ = sb.Append('.');
+            _ = sb.Append(node.Name);
+          }
+        }
+        
+        def sb = Text.StringBuilder();
+        loop(this, sb);
+        sb.ToString()
+      }
+    }
+  }
+
+  [Record]
+  public class AmbiguousHierarchicalSymbol : HierarchicalBaseSymbol
+  {
+    public override Kind : string { get { "ambiguous symbol" } }
+    
+    public Ambiguous : list[HierarchicalSymbol] { get; set; }
+   
+    public override ToString() : string { $<#$Kind: ..$(Ambiguous; " "; _.FullName)#>  }
   }
   
+  [Record]
+  public abstract class HierarchicalSymbol : HierarchicalBaseSymbol
+  {
+    [RecordIgnore] public Scope : Scope.Table { get; set; default Scope.Table(); }
+
+    public DefineNestedSymbol(symbol : HierarchicalSymbol) : void
+    {
+      mutable old;
+      when (Scope.NameTable.TryGetValue(symbol.Name.Id, out old))
+      {
+        AstContext.CompilerMessages.Error(symbol.Name, 
+          $"The $(Kind) '$(FullName)' already contains a definition for '$(symbol.Name)'");
+
+        if (old is AmbiguousHierarchicalSymbol as amb)
+          amb.Ambiguous ::= symbol;
+        else
+          Scope.NameTable[Name.Id] = AmbiguousHierarchicalSymbol(old.Name, symbol.Parent, [old :> HierarchicalSymbol, symbol]);
+
+        return;
+      }
+          
+      Scope.NameTable.Add(symbol.Name.Id, symbol);
+    }
+  }
+
   public variant Scope
   {
     | Table
       {
-        public NameTable : Hashtable[IReference, Symbol2] { get; }
+        public NameTable : Hashtable[int, Symbol2] { get; }
         
         public this() { NameTable = Hashtable(); }
         
-        public Define(symbol : Symbol2/*, _declaration : IDeclaration*/) : void
+        public GetOrDefineSymbol(symbol : Symbol2) : Symbol2
         {
           mutable old;
-          when (NameTable.TryGetValue(symbol.Name, out old))
-          {
-            // TODO: Report error messages.Error()
-            //def project = declaration.File.Project;
-            //project.Error(declaration.Name, "....");
-            return;
-          }
+          when (NameTable.TryGetValue(symbol.Name.Id, out old))
+            return old;
           
-          NameTable.Add(symbol.Name, symbol);
+          NameTable.Add(symbol.Name.Id, symbol);
+          symbol
+        }
+        
+        public TryGetSymbol(name : IReference) : Symbol2
+        {
+          mutable old;
+          when (NameTable.TryGetValue(name.Id, out old))
+            return old;
+          
+          null
         }
         
         public override ToString() : string
         {
-          $"Scope.Table: { ..$(NameTable.Keys) }"
+          $<#Scope.Table: { ..$(NameTable.Keys; ", "; StringIndex.GetText) }#>
         }
       }
     | Union  { public Scopes : list[Scope] { get; } }

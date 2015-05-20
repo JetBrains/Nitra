@@ -464,6 +464,7 @@ namespace Nitra.Visualizer
         return;
 
       _needUpdateDeclarations = false;
+      _declarationsTreeView.Items.Clear();
 
       if (_parseTree == null)
         _parseTree = _parseResult.CreateParseTree();

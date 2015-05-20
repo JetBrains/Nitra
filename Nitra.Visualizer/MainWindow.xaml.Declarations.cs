@@ -23,7 +23,7 @@ namespace Nitra.Visualizer
   {
     public TreeViewItem ObjectToItem(PropertyInfo prop, object obj)
     {
-      if (obj is Symbol2)
+      if (obj is IReference)
       {
       }
       string name = prop == null ? "" : prop.Name;
@@ -56,7 +56,7 @@ namespace Nitra.Visualizer
       }
 
       var declaration = obj as IAst;
-      if (declaration != null)
+      if (declaration != null && !(obj is IReference))
       {
         var xaml   = RenderXamlForDeclaration(name, declaration);
         tvi.Header = XamlReader.Parse(xaml);
@@ -85,7 +85,7 @@ namespace Nitra.Visualizer
         var xaml = RenderXamlForValue(prop, obj);
         tvi.Header = XamlReader.Parse(xaml);
 
-        if (obj == null)
+        if (obj == null || obj is IReference)
           return tvi;
 
         var t = obj.GetType();
@@ -117,7 +117,7 @@ namespace Nitra.Visualizer
         return;
 
       var declaration = obj as IAst;
-      if (declaration != null)
+      if (declaration != null && !(obj is IReference))
       {
         var t = obj.GetType();
         var props = t.GetProperties();
@@ -149,8 +149,8 @@ namespace Nitra.Visualizer
 
       {
         var t = obj.GetType();
-        
-        if (obj is string || t.IsPrimitive)
+
+        if (obj is string || t.IsPrimitive || obj is IReference)
           return;
 
         var props = t.GetProperties();
@@ -189,7 +189,8 @@ namespace Nitra.Visualizer
 
     private void UpdateDeclarations(AstRoot<IAst> astRoot)
     {
-      dynamic ast = astRoot.Content;
+      _declarationsTreeView.Items.Clear();
+      //dynamic ast = astRoot.Content;
       //try
       //{
       //  ast.NamespaceIn = NamespaceSymbol.RootNamespace;
@@ -198,7 +199,6 @@ namespace Nitra.Visualizer
       astRoot.EvalProperties(new DebugCompilerMessages()); // TODO: display messages in GUI
       var root = ObjectToItem(null, astRoot.Content);
       root.Header = "Root";
-      _declarationsTreeView.Items.Clear();
       _declarationsTreeView.Items.Add(root);
     }
 
@@ -253,8 +253,9 @@ namespace Nitra.Visualizer
       if (e.NewValue != null)
       {
         var obj = ((TreeViewItem) e.NewValue).Tag;
+        var id = obj.GetHashCode();
         _propertyGrid.SelectedObject = obj;
-        _objectType.Text = obj == null ? "<null>" : obj.GetType().FullName;
+        _objectType.Text = obj == null ? "<null>" : obj.GetType().FullName + " [" + id + "]";
       }
     }
 
