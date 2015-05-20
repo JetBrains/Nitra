@@ -24,6 +24,14 @@ namespace Nitra.Runtime.Binding
     public override ToString() : string { Name?.Text + " (" + Kind + ")" }
   }
 
+  [Record]
+  public abstract class AliasSymbol : Symbol2
+  {
+    public Scope : Scope { get; }
+    public override FullName : string { get { Name.Text } }
+    public override Kind : string { get { "alias" } }
+  }
+  
     [Record]
   public abstract class HierarchicalBaseSymbol : Symbol2
   {
@@ -120,7 +128,92 @@ namespace Nitra.Runtime.Binding
       }
     | Union  { public Scopes : list[Scope] { get; } }
     | Hide   { public Scope  : Scope       { get; } public Hidden : Scope { get; } }
-    | Filter { public Scope  : Scope       { get; } public Predicate : Symbol -> bool { get; } }
+    | Filter { public Scope  : Scope       { get; } public Predicate : Symbol2 -> bool { get; } }
     | Nil
+    
+    public Bind(references : IList[IReference]) : option[Symbol2]
+    {
+      when (references.Count == 0)
+        return None();
+        
+      def report(reference : IReference, sym : Symbol2, bindResult : Seq[Symbol2]) : option[Symbol2]
+      {
+        match (bindResult.Count())
+        {
+          | 1 => assert2(false); assert(false)
+          | 0 when sym == null => AstContext.CompilerMessages.Error(reference, $<#Cannot resolve symbol '$reference'.#>);
+          | 0 => AstContext.CompilerMessages.Error(reference, $<#The symbol '$reference' does not exist in the $(sym.Kind) '$(sym.FullName)'.#>);
+          | _ => AstContext.CompilerMessages.Error(reference, $<#Ambiguous reference '$reference': ..$(bindResult; ", "; _.FullName).#>);
+        }
+        None()
+      }
+      def bindMembers(references : IList[IReference], i : int, sym : Symbol2) : option[Symbol2]
+      {
+        def currentRef = references[i];
+        match (sym)
+        {
+          | AmbiguousHierarchicalSymbol as s => report(currentRef, sym, s.Ambiguous)
+          | HierarchicalSymbol          as h with scope = h.Scope
+          | AliasSymbol                 as a with scope = a.Scope =>
+            def bindResult = scope.Bind(currentRef);
+            when (bindResult.Count != 1)
+              return report(currentRef, sym, bindResult);
+
+            if (i + 1 < references.Count)
+              bindMembers(references, i + 1, bindResult[0])
+            else
+              Some(bindResult[0])
+              
+            | _ when i + 1 == references.Count => Some(sym)
+            | _ => AstContext.CompilerMessages.Error(currentRef, $<#Binded symbol '$(sym.FullName)' has unsupported symbol kind '$(sym.Kind)'.#>); None()
+        }
+      }
+      def first = references[0];
+      def firstResult = Bind(first);
+      def firstResultCount = firstResult.Count;
+      match (firstResultCount)
+      {
+        | 1 when references.Count > 1 => bindMembers(references, 1, firstResult[0])
+        | 1 => Some(firstResult[0])
+        | _ => report(first, null, firstResult)
+      }
+    }
+    
+    public Bind(reference : IReference) : List[Symbol2]
+    {
+      def results = List(2);
+      Bind(reference, results);
+      results
+    }
+    
+    private Bind(reference : IReference, results : List[Symbol2]) : void
+    {
+      match (this)
+      {
+        | Table as s =>
+          mutable result;
+          when (s.NameTable.TryGetValue(reference.Id, out result))
+            results.Add(result);
+          
+        | Union as s => 
+          foreach (scope in s.Scopes)
+            scope.Bind(reference, results);
+
+        | Hide as s => 
+          def binded = results.Count;
+          s.Scope.Bind(reference, results);
+          when (binded == results.Count)
+            s.Hidden.Bind(reference, results);
+        
+        | Filter as s =>
+          def notFilteredResults = List();
+          s.Scope.Bind(reference, notFilteredResults);
+          foreach (sym in notFilteredResults)
+            when (s.Predicate(sym))
+              results.Add(sym);
+          
+        | Nil => ()
+      }
+    }
   }
 }
