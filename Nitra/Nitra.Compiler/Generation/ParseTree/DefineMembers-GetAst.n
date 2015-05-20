@@ -46,6 +46,61 @@ namespace Nitra.Compiler
         })
     }
 
+    private CompileParseTreeMemberAccess(path : ParseTreePath, tb : TypeBuilder, astType : AstType, compile : PExpr -> PExpr) : PExpr
+    {
+      def needsBuffer(_ : ParseTreePath) : bool
+      {
+        | This               => false
+        | Variable           => false
+        | Member(This, _, _) => false
+        | Member(_, _, _)    => true
+      }
+
+      def compileAccess(path : ParseTreePath, compile : PExpr -> PExpr) : PExpr
+      {
+        def loc = path.Location.NLocation();
+        match (path)
+        {
+          | This                       => compile(Util.locate(loc, <[ this ]>))
+          | Variable(name, _)          => compile(Util.locate(loc, <[ $(name.Value : usesite) ]>))
+          | Member(This, name, _)      => compile(Util.locate(loc, <[ this.$(name.Value : usesite) ]>))
+          | Member(qualifier, name, _) =>
+            def parseTreeType = Environment.GetParseTreeType(qualifier.Type);
+            def methodName    = Util.tmpname("Get_" + name);
+            tb.Define(<[ decl:
+              private static $(methodName : usesite)(parseTree : $(parseTreeType : typed), buffer : ref Nemerle.Collections.LightList[$(Environment.GetAstType(astType))]) : void
+              {
+                if (parseTree.IsAmbiguous)
+                {
+                  foreach (item in (parseTree :> Nitra.IAmbiguousParseTree).Ambiguities)
+                    $(methodName : usesite)(item :> $(parseTreeType : typed), ref buffer)
+                }
+                else unless (parseTree.IsMissing)
+                  $(compile(<[ parseTree.$(name.Value : usesite) ]>))
+              }
+            ]>);
+            compileAccess(qualifier, expr => Util.locate(loc, <[ $(methodName : usesite)($expr, ref buffer) ]>))
+        }
+      }
+
+      if (needsBuffer(path))
+      {
+        def code = compileAccess(path, expr => <[ buffer.Add($(compile(expr))) ]>);
+        <[
+          mutable buffer = Nemerle.Collections.LightList();
+          $code;
+          match (buffer.Count)
+          {
+            | 0 => $(AstEmitter.GetMissingAstCtor(Environment, astType))(this.File, this.Span)
+            | 1 => buffer.FirstItem
+            | _ => $(AstEmitter.GetAmbiguousAstCtor(Environment, astType))(buffer.ToArray())
+          }
+        ]>
+      }
+      else
+        compileAccess(path, compile)
+    }
+
     private CompileSyntaxMapping(expr : SyntaxMappingExpr, tb : TypeBuilder) : PExpr
     {
       def compileConversion(mappingType : SyntaxMappingType, obj : PExpr) : PExpr
@@ -181,7 +236,7 @@ namespace Nitra.Compiler
       {
         def compileAccess(_ : Access) : PExpr
         {
-          | Obj                            => MakeParseTreeMemberAccess(path)
+          | Obj                            => MakeParseTreeMemberAccess(path) // TODO: rewrite with CompileParseTreeMemberAccess approach
           | Sel(ListCons,   0,     access) => <[ $(compileAccess(access)).Head ]>
           | Sel(ListCons,   1,     access) => <[ $(compileAccess(access)).Tail ]>
           | Sel(OptionSome, 0,     access) => <[ $(compileAccess(access)).Value ]>
@@ -252,7 +307,7 @@ namespace Nitra.Compiler
           | ListCtor(astSymbol, items)         => <[ $(Environment.GetAstType(astSymbol) : typed).AstList(this, ..$(items.Map(CompileSyntaxMapping(_, tb)))) ]>
           | OptionCtor(astSymbol, Some(value)) => <[ $(Environment.GetAstType(astSymbol) : typed).AstOption(this, $(CompileSyntaxMapping(value, tb))) ]>
           | OptionCtor(astSymbol, None())      => <[ $(Environment.GetAstType(astSymbol) : typed).AstOption(this) ]>
-          | Conversion(path, mappingType)      => compileConversion(mappingType, MakeParseTreeMemberAccess(path))
+          | Conversion(path, astType, mapping) => CompileParseTreeMemberAccess(path, tb, astType, compileConversion(mapping, _))
           | Match(path, cases)                 => compileMatch(path, cases)
         }
       });
