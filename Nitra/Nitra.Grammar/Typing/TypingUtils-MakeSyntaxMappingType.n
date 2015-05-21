@@ -24,21 +24,9 @@ namespace Nitra.Typing
         }
       }
 
-      def incompartibleTypesError(sourceAstSymbol : AstSymbol, targetAstSymbol : AstSymbol) : ValueOption[SyntaxMappingType]
-      {
-        context.Error(errorLoc, $"Declaration '$(sourceAstSymbol.FullName)' is not subtype of declaration '$(targetAstSymbol.FullName)'");
-        VNone()
-      }
-
       def genericError() : ValueOption[SyntaxMappingType]
       {
         context.Error(errorLoc, $"Cannot map '$(sourceRuleType)' to '$(targetAstType)'");
-        VNone()
-      }
-
-      def ruleHasNoMapping(ruleSymbol : SyntaxRuleSymbol) : ValueOption[SyntaxMappingType]
-      {
-        context.Error(errorLoc, $"Rule '$(ruleSymbol.FullName)' has no AST mapping");
         VNone()
       }
 
@@ -54,88 +42,78 @@ namespace Nitra.Typing
         else (ruleType, [])
       }
 
+      def selectMapping(ruleSymbol : SyntaxRuleSymbol, pred : AstType -> ValueOption[SyntaxMappingType]) : ValueOption[SyntaxMappingType]
+      {
+        if (ruleSymbol.SyntaxMappings is _ :: _)
+        {
+          mutable candidates : list[SyntaxMappingSymbol * SyntaxMappingType] = [];
+          foreach (syntaxMapping in ruleSymbol.SyntaxMappings)
+            when (pred(syntaxMapping.ReturnType) is VSome(mapping))
+              candidates ::= (syntaxMapping, mapping);
+
+          match (candidates)
+          {
+            | [(_, one)] => VSome(one)
+            | [] =>
+              context.Error(errorLoc, $"Rule '$(ruleSymbol.FullName)' has no compatible AST mapping.");
+              VNone()
+
+            | (_, first) :: _ =>
+              using (root = context.RootError(errorLoc, $"Ambiguous '$(ruleSymbol.FullName)' AST mapping."))
+                foreach ((syntaxMapping, _) in candidates)
+                  root.Hint(syntaxMapping.FirstLocation, "AST mapping ambiguity.");
+
+              VSome(first)
+          }
+        }
+        else
+        {
+          context.Error(errorLoc, $"Rule '$(ruleSymbol.FullName)' has no AST mapping");
+          VNone()
+        }
+      }
+
       def (ruleType, tupleAccess) = makeTupleAccess(sourceRuleType);
       match (ruleType, targetAstType)
       {
         | (List(itemType),       List(targetAstSymbol))
         | (List(itemType), OptionList(targetAstSymbol)) =>
-          match (makeTupleAccess(itemType))
-          {
-            | (Ref(SyntaxRuleSymbol(SyntaxMappings = []) as ruleSymbol), _)               => ruleHasNoMapping(ruleSymbol)
-            | (Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings)),   itemTupleAccess) =>
-              mutable candidates : list[SyntaxMappingType] = [];
-              foreach (syntaxMapping in syntaxMappings)
-              {
-                match (syntaxMapping.ReturnType)
-                {
-                  | Void => ()
-                  | Ast(sourceAstSymbol) =>
-                    when (sourceAstSymbol.IsSubtypeOf(targetAstSymbol))
-                      candidates ::= SyntaxMappingType.CreateList(ruleType, tupleAccess, targetAstSymbol, itemTupleAccess)
+          if (makeTupleAccess(itemType) is (Ref(SyntaxRuleSymbol as ruleSymbol), itemTupleAccess))
+            selectMapping(ruleSymbol, fun(_ : AstType)
+            {
+              | Ast(sourceAstSymbol) when (sourceAstSymbol.IsSubtypeOf(targetAstSymbol)) =>
+                VSome(SyntaxMappingType.CreateList(ruleType, tupleAccess, targetAstSymbol, itemTupleAccess))
 
-                  | List(sourceAstSymbol)
-                  | OptionList(sourceAstSymbol) =>
-                    when (sourceAstSymbol.IsSubtypeOf(targetAstSymbol))
-                      candidates ::= SyntaxMappingType.ConcatLists(ruleType, tupleAccess, targetAstSymbol, itemTupleAccess)
+              | List(sourceAstSymbol)
+              | OptionList(sourceAstSymbol) when (sourceAstSymbol.IsSubtypeOf(targetAstSymbol)) =>
+                VSome(SyntaxMappingType.ConcatLists(ruleType, tupleAccess, targetAstSymbol, itemTupleAccess))
 
-                  | Option(sourceAstSymbol) =>
-                    when (sourceAstSymbol.IsSubtypeOf(targetAstSymbol))
-                      candidates ::= SyntaxMappingType.ConcatOptions(ruleType, tupleAccess, targetAstSymbol, itemTupleAccess)
-                }
-              }
-              match (candidates)
-              {
-                | []    => genericError()
-                | [one] => VSome(one)
-                | many  => genericError()
-              }
+              | Option(sourceAstSymbol) when (sourceAstSymbol.IsSubtypeOf(targetAstSymbol)) =>
+                VSome(SyntaxMappingType.ConcatOptions(ruleType, tupleAccess, targetAstSymbol, itemTupleAccess))
 
-            | _ => genericError()
-          }
+              | _ => VNone()
+            })
+          else
+            genericError()
 
-        | (Option(valueType), Option(targetAstSymbol)) => 
-          match (makeTupleAccess(valueType))
-          {
-            | (Ref(SyntaxRuleSymbol(SyntaxMappings = []) as ruleSymbol), _) => ruleHasNoMapping(ruleSymbol)
-            | (Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings)), valueTupleAccess) =>
-              mutable candidates : list[SyntaxMappingType] = [];
-              foreach (syntaxMapping in syntaxMappings)
-              {
-                match (syntaxMapping.ReturnType)
-                {
-                  | Ast(sourceAstSymbol) =>
-                    when (sourceAstSymbol.IsSubtypeOf(targetAstSymbol))
-                      candidates ::= SyntaxMappingType.CreateOption(ruleType, tupleAccess, targetAstSymbol, valueTupleAccess)
+        | (Option(valueType), Option(targetAstSymbol)) =>
+          if (makeTupleAccess(valueType) is (Ref(SyntaxRuleSymbol as ruleSymbol), valueTupleAccess))
+            selectMapping(ruleSymbol, fun(_ : AstType)
+            {
+              | Ast(sourceAstSymbol) when (sourceAstSymbol.IsSubtypeOf(targetAstSymbol)) =>
+                VSome(SyntaxMappingType.CreateOption(ruleType, tupleAccess, targetAstSymbol, valueTupleAccess))
 
-                  | _ => ()
-                }
-              }
-              match (candidates)
-              {
-                | []    => genericError()
-                | [one] => VSome(one)
-                | many  => genericError()
-              }
+              | _ => VNone()
+            })
+          else
+            genericError()
 
-            | _ => genericError()
-          }
-
-        | (Ref(SyntaxRuleSymbol(SyntaxMappings = []) as ruleSymbol), _) => ruleHasNoMapping(ruleSymbol)
-        | (Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings)), _) =>
-          mutable candidates : list[SyntaxMappingType] = [];
-          foreach (syntaxMapping in syntaxMappings)
-          {
-            def sourceAstType = syntaxMapping.ReturnType;
-            when (sourceAstType.IsSubtypeOf(targetAstType))
-              candidates ::= SyntaxMappingType.CallGetAst(ruleType, tupleAccess, sourceAstType);
-          }
-          match (candidates)
-          {
-            | []    => genericError()
-            | [one] => VSome(one)
-            | many  => genericError()
-          }
-
+        | (Ref(SyntaxRuleSymbol as ruleSymbol), _) =>
+          selectMapping(ruleSymbol, sourceAstType =>
+            if (sourceAstType.IsSubtypeOf(targetAstType))
+              VSome(SyntaxMappingType.CallGetAst(ruleType, tupleAccess, sourceAstType))
+            else
+              VNone())
 
         | _ => genericError()
       }
