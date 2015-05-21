@@ -179,6 +179,7 @@ namespace Nitra.Visualizer
         case "HasValue":
           return false;
         case "Id":
+        case "IsMissing":
         case "File":
         case "Span":
         case "IsAmbiguous":
