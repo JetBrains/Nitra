@@ -7,6 +7,7 @@ using Nemerle.Text;
 using Nemerle.Utility;
 
 using System;
+using SCG = System.Collections.Generic;
 
 namespace Nitra.Typing
 {
@@ -14,13 +15,66 @@ namespace Nitra.Typing
   {
     public ValidateSyntaxMapping(project : NitraProject) : void
     {
+      def cache = SCG.Dictionary();
+
+      def collectOverloads(ruleSymbol : SyntaxRuleSymbol) : SCG.Dictionary[list[AstType], SyntaxMappingSymbol]
+      {
+        mutable declaredOverloads;
+        unless (cache.TryGetValue(ruleSymbol, out declaredOverloads))
+        {
+          declaredOverloads = SCG.Dictionary();
+          foreach (syntaxMapping when syntaxMapping.HasValidSignature in ruleSymbol.SyntaxMappings)
+          {
+            def key = syntaxMapping.Parameters.Map(_.Type);
+            mutable existingOverload;
+            if (declaredOverloads.TryGetValue(key, out existingOverload))
+            {
+              using (root = project.RootError(syntaxMapping.FirstLocation, "Redefinition of AST mapping"))
+                root.Hint(existingOverload.FirstLocation, "previous definition");
+            }
+            else
+              declaredOverloads.Add(key, syntaxMapping)
+          }
+          cache.Add(ruleSymbol, declaredOverloads)
+        }
+        declaredOverloads
+      }
+
+      def makeParametersText(parameterTypes : list[AstType]) : string
+      {
+        | []   => "without parameters"
+        | many => $<#with parameters '..$(many; "*")'#>
+      }
+
       foreach (ruleSymbol when ruleSymbol.AssemblyId == AssemblyIds.CurrentAssembly in project.RootNamespace.Node.GetDescendants.[SyntaxRuleSymbol]())
       {
         match (ruleSymbol)
         {
-          | SimpleRuleSymbol     => ()
-          | ExtensibleRuleSymbol => ()
-          | ExtensionRuleSymbol  => ()
+          | SimpleRuleSymbol
+          | ExtensibleRuleSymbol => _ = collectOverloads(ruleSymbol)
+          | ExtensionRuleSymbol(BaseRule = SymbolRef.Some(baseRuleSymbol)) =>
+            def mappingsToOverride = SCG.Dictionary(collectOverloads(baseRuleSymbol));
+            def overloads          = collectOverloads(ruleSymbol);
+
+            foreach (pair in overloads)
+            {
+              def syntaxMapping = pair.Value;
+              mutable baseSyntaxMapping;
+              if (mappingsToOverride.TryGetValue(pair.Key, out baseSyntaxMapping))
+              {
+                unless (syntaxMapping.ReturnType.IsSubtypeOf(baseSyntaxMapping.ReturnType))
+                  project.Error(syntaxMapping.FirstLocation, $"AST mapping returning '$(baseSyntaxMapping.ReturnType)' is required.");
+                _ = mappingsToOverride.Remove(pair.Key);
+              }
+              else
+                project.Error(syntaxMapping.FirstLocation, $"AST mapping $(makeParametersText(pair.Key)) not found in base rule '$(baseRuleSymbol.FullName)'.");
+            }
+
+            when (mappingsToOverride.Count > 0)
+              foreach (pair in mappingsToOverride)
+                using (root = project.RootError(ruleSymbol.FirstLocation, "AST mapping $(makeParametersText(pair.Key)) returning '$(pair.Value.ReturnType)' is required"))
+                  root.Hint(pair.Value.FirstLocation, "base definition");
+
           | _ => ()
         }
       }
