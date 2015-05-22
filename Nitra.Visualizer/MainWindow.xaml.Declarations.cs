@@ -23,9 +23,6 @@ namespace Nitra.Visualizer
   {
     public TreeViewItem ObjectToItem(PropertyInfo prop, object obj)
     {
-      if (obj is IReference)
-      {
-      }
       string name = prop == null ? "" : prop.Name;
       var tvi = new TreeViewItem { Tag = obj, FontWeight = FontWeights.Normal };
       tvi.MouseDoubleClick += TviOnMouseDoubleClick;
@@ -56,7 +53,7 @@ namespace Nitra.Visualizer
       }
 
       var declaration = obj as IAst;
-      if (declaration != null && !(obj is IReference))
+      if (declaration != null /*&& !(obj is IReference)*/)
       {
         var xaml   = RenderXamlForDeclaration(name, declaration);
         tvi.Header = XamlReader.Parse(xaml);
@@ -85,7 +82,7 @@ namespace Nitra.Visualizer
         var xaml = RenderXamlForValue(prop, obj);
         tvi.Header = XamlReader.Parse(xaml);
 
-        if (obj == null || obj is IReference)
+        if (obj == null /*|| obj is IReference*/)
           return tvi;
 
         var t = obj.GetType();
@@ -117,7 +114,7 @@ namespace Nitra.Visualizer
         return;
 
       var declaration = obj as IAst;
-      if (declaration != null && !(obj is IReference))
+      if (declaration != null /*&& !(obj is IReference)*/)
       {
         var t = obj.GetType();
         var props = t.GetProperties();
@@ -150,7 +147,7 @@ namespace Nitra.Visualizer
       {
         var t = obj.GetType();
 
-        if (obj is string || t.IsPrimitive || obj is IReference)
+        if (obj is string || t.IsPrimitive /*|| obj is IReference*/)
           return;
 
         var props = t.GetProperties();

@@ -1,5 +1,4 @@
 ﻿using Nitra.Declarations;
-using Nitra.Typing;
 
 using Nemerle;
 using Nemerle.Collections;
@@ -39,14 +38,6 @@ namespace Nitra.Runtime.Binding
   }
   
   [Record]
-  public abstract class AliasSymbol : Symbol2
-  {
-    public Scope : Scope { get; }
-    public override FullName : string { get { Name.Text } }
-    public override Kind : string { get { "alias" } }
-  }
-  
-    [Record]
   public abstract class HierarchicalBaseSymbol : Symbol2
   {
     public Parent : HierarchicalSymbol { get; }
@@ -135,6 +126,26 @@ namespace Nitra.Runtime.Binding
         
         public this() { NameTable = Hashtable(); }
         
+        public DefineSymbol(symbol : Symbol2) : void
+        {
+          mutable old;
+          when (this.NameTable.TryGetValue(symbol.Name.Id, out old))
+          {
+            def cm = AstContext.CompilerMessages;
+            using(nested = cm.RootError(symbol.Name, $"The current scope already contains a definition for '$(symbol.Name)'."))
+              nested.Hint(old.Name, "previous definition.");
+
+            if (old is AmbiguousSymbol as amb)
+              amb.Ambiguous ::= symbol;
+            else
+              this.NameTable[symbol.Name.Id] = AmbiguousSymbol(old.Name, [old, symbol]);
+
+            return;
+          }
+    
+          this.NameTable.Add(symbol.Name.Id, symbol);
+        }
+
         public GetOrDefineSymbol(symbol : Symbol2) : Symbol2
         {
           mutable old;
@@ -164,54 +175,6 @@ namespace Nitra.Runtime.Binding
     | Filter { public Scope  : Scope       { get; } public Predicate : Symbol2 -> bool { get; } }
     | Nil
     
-    public Bind(references : IList[IReference]) : option[Symbol2]
-    {
-      when (references.Count == 0)
-        return None();
-        
-      def report(reference : IReference, sym : Symbol2, bindResult : Seq[Symbol2]) : option[Symbol2]
-      {
-        match (bindResult.Count())
-        {
-          | 1 => assert2(false); assert(false)
-          | 0 when sym == null => AstContext.CompilerMessages.Error(reference, $<#Cannot resolve symbol '$reference'.#>);
-          | 0 => AstContext.CompilerMessages.Error(reference, $<#The symbol '$reference' does not exist in the $(sym.Kind) '$(sym.FullName)'.#>);
-          | _ => AstContext.CompilerMessages.Error(reference, $<#Ambiguous reference '$reference': ..$(bindResult; ", "; _.FullName).#>);
-        }
-        None()
-      }
-      def bindMembers(references : IList[IReference], i : int, sym : Symbol2) : option[Symbol2]
-      {
-        def currentRef = references[i];
-        match (sym)
-        {
-          | AmbiguousHierarchicalSymbol as s => report(currentRef, sym, s.Ambiguous)
-          | HierarchicalSymbol          as h with scope = h.Scope
-          | AliasSymbol                 as a with scope = a.Scope =>
-            def bindResult = scope.Bind(currentRef);
-            when (bindResult.Count != 1)
-              return report(currentRef, sym, bindResult);
-
-            if (i + 1 < references.Count)
-              bindMembers(references, i + 1, bindResult[0])
-            else
-              Some(bindResult[0])
-              
-            | _ when i + 1 == references.Count => Some(sym)
-            | _ => AstContext.CompilerMessages.Error(currentRef, $<#Binded symbol '$(sym.FullName)' has unsupported symbol kind '$(sym.Kind)'.#>); None()
-        }
-      }
-      def first = references[0];
-      def firstResult = Bind(first);
-      def firstResultCount = firstResult.Count;
-      match (firstResultCount)
-      {
-        | 1 when references.Count > 1 => bindMembers(references, 1, firstResult[0])
-        | 1 => Some(firstResult[0])
-        | _ => report(first, null, firstResult)
-      }
-    }
-    
     /// Если не может связать возвращает AmbiguousSymbol или UnresolvedSymbol.
     public TryBind(reference : IReference) : Symbol2
     {
@@ -223,7 +186,6 @@ namespace Nitra.Runtime.Binding
         | _ => AmbiguousSymbol(reference, result.NToList())
       }
     }
-    
     
     public Bind(reference : IReference) : List[Symbol2]
     {
