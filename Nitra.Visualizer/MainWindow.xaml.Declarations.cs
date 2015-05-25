@@ -21,6 +21,8 @@ namespace Nitra.Visualizer
 {
   public partial class MainWindow
   {
+    private AstRoot<IAst> _astRoot;
+
     public TreeViewItem ObjectToItem(PropertyInfo prop, object obj)
     {
       string name = prop == null ? "" : prop.Name;
@@ -185,8 +187,10 @@ namespace Nitra.Visualizer
       return false;
     }
 
-    private void UpdateDeclarations(AstRoot<IAst> astRoot)
+    private void UpdateDeclarations(IMappedParseTree<IAst> root)
     {
+      // TODO: measure the code time 
+      var astRoot = AstRoot<IAst>.Create(root);
       _declarationsTreeView.Items.Clear();
       // TODO: display messages in GUI
       var compilerMessages = new DebugCompilerMessages();
@@ -196,9 +200,10 @@ namespace Nitra.Visualizer
         projectSupport.RefreshProject(new [] { astRoot.Content }, compilerMessages);
       else
         astRoot.EvalProperties(compilerMessages);
-      var root = ObjectToItem(null, astRoot.Content);
-      root.Header = "Root";
-      _declarationsTreeView.Items.Add(root);
+      var rootTreeViewItem = ObjectToItem(null, astRoot.Content);
+      rootTreeViewItem.Header = "Root";
+      _declarationsTreeView.Items.Add(rootTreeViewItem);
+      _astRoot = astRoot;
     }
 
     public static string Escape(string str)
