@@ -1542,8 +1542,9 @@ syntax module NitraSyntax
       }
     | Block = outline_begin_before nl "{" inl RuleBodyMember* d "}" outline_end_before nl
       {
-        override CollectGlobalSymbols  = foreach (member in this.RuleBodyMembers) member.CollectGlobalSymbols(owner);
-        override MakeContext           = FoldThrough(this.RuleBodyMembers, parent, _.MakeContext(_));
+        [Cached] private MakeOwner(owner : IRuleDeclarationSite) : IRuleDeclarationSite = owner;
+        override CollectGlobalSymbols  { _ = MakeOwner(owner); foreach (member in this.RuleBodyMembers) member.CollectGlobalSymbols(owner); }
+        override MakeContext           = FoldThrough(this.RuleBodyMembers, PrecedenceZeroContext(parent, Owner), _.MakeContext(_));//TODO вытащить из контекста приоритеты
         override GetLastLocation       = MakeLastLocation(this, OpenBrace);
         override CollectSyntaxMappings = foreach (x in this.RuleBodyMembers) x.CollectSyntaxMappings();
         override TypeSyntaxMappings    = foreach (x in this.RuleBodyMembers) x.TypeSyntaxMappings();
@@ -1587,13 +1588,8 @@ syntax module NitraSyntax
         override TypeSyntaxMappings   = ExtensibleRule.TypeSyntaxMappings();
         override Typing               = ExtensibleRule.Typing();
       }
-    | ExtensionRule = "|" sm RuleAttributes (Name "=")? RuleExpression Precedence? RuleBody?
+    | ExtensionRule = "|" sm RuleAttributes (Name "=")? RuleExpression RightAssociativeOpt=("right-associative")? RuleBody?
       {
-        syntax Precedence = "precedence" sm Number RightAssociative=("right-associative")?
-        {
-          Value() : int = if (RightAssociative.HasValue) -Number.Value() else Number.Value();
-        }
-
         [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : ParsedExtensionRuleSymbol = ParsedExtensionRuleSymbol(this, owner);
         override CollectGlobalSymbols
         {
@@ -1631,17 +1627,49 @@ syntax module NitraSyntax
             | owner                     => SymbolRef.None(owner.FirstLocation, false)
           }
         }
-        [Cached] private MakeTypedRule() : Rule.Sequence = TypeRuleExpression(this.Symbol.Options, RuleTypingContext, RuleExpression.Typing(BaseRuleRef, PrecedenceOpt.Map(_.Value()) ?? 0, None(), RuleTypingContext, this.Symbol.Options));
+        [Cached] private MakeTypedRule(precedenceContext : PrecedenceContext) : Rule.Sequence = TypeRuleExpression(this.Symbol.Options, RuleTypingContext, RuleExpression.Typing(BaseRuleRef, PrecedenceInfo(precedenceContext, RightAssociativeOpt.HasValue), None(), RuleTypingContext, this.Symbol.Options));
         override CollectSyntaxMappings = when (this.RuleBodyOpt.HasValue) this.RuleBodyOpt.Value.CollectSyntaxMappings();
         override TypeSyntaxMappings    = when (this.RuleBodyOpt.HasValue) this.RuleBodyOpt.Value.TypeSyntaxMappings();
         override Typing
         {
           def baseRule = MakeBaseRuleRef();
-          _ = MakeTypedRule();
+          _ = MakeTypedRule(RuleTypingContext.TryGetContext.[PrecedenceContext]());
           when (this.Symbol.Options.OperatorInfo == OperatorInfo.None && baseRule.IsSome)
             TryInferOperatorType(this.Symbol);
           when (this.RuleBodyOpt.HasValue)
             this.RuleBodyOpt.Value.Typing();
+        }
+      }
+    | Precedence = "precedence" sm PrecedenceName//(sm "order" sm Order)? ";"
+      {
+        syntax PrecedenceName
+        {
+          | Zero = "0"
+          | Name = Identifier
+        }
+
+        //syntax Order
+        //{
+        //  | Full = Name sm "<" sm Name sm "<" sm Name
+        //}
+
+        [Cached] private MakeOwner(owner : IRuleDeclarationSite) : IRuleDeclarationSite = owner;
+        [Cached] private MakeSymbol(owner : IRuleDeclarationSite) : PrecedenceSymbol
+        {
+          match (owner)
+          {
+            | owner is ExtensibleRuleSymbol => owner.GetPrecedenceSymbol(this)
+            | _                             => owner.Node.Project.Error(this, "Precedence declaration is not allowed here."); null
+          }
+        }
+        override CollectGlobalSymbols
+        {
+          _ = MakeSymbol(owner);
+          _ = MakeOwner(owner);
+        }
+        override MakeContext
+        {
+          PrecedenceContext.Make(parent, Owner, Symbol, this);
         }
       }
     | MapSyntax = "map" sm AstName=NitraType MapSyntaxBody
@@ -2057,32 +2085,31 @@ syntax module NitraSyntax
 
   syntax RuleExpression
   {
-    /// precedence < 0 if it is right-associative
-    Typing(_baseRule : option[ExtensibleRuleSymbol], _precedence : int, _fieldName : option[string], context : Context, _options : RuleDefinitionOptions) : Nitra.Model.Rule;
+    Typing(_baseRule : option[ExtensibleRuleSymbol], _precedenceInfo : PrecedenceInfo, _fieldName : option[string], context : Context, _options : RuleDefinitionOptions) : Nitra.Model.Rule;
     InferName() : string = "";
 
     | Sequence                        = LeftRule=RuleExpression ^ 10 RightRules=(sm RuleExpression ^ 10)+
       {
-        override Typing = TypeSequence(_baseRule, _precedence, _fieldName, context, _options, LeftRule, RightRules, this);
+        override Typing = TypeSequence(_baseRule, _precedenceInfo, _fieldName, context, _options, LeftRule, RightRules, this);
         override InferName = LeftRule.InferName();
       }
     | Not                             = "!" RuleExpression ^ 20
       {
         override Typing
         {
-          def rule = this.RuleExpression.Typing(None(), 0, None(), context, _options);
+          def rule = this.RuleExpression.Typing(None(), _precedenceInfo, None(), context, _options);
           Rule.Not(this.Location, RuleType.Void(), "", rule);
         }
       }
     | And                             = "&" RuleExpression ^ 20
       {
-        override Typing = Rule.And(this.Location, RuleType.Void(), "", RuleExpression.Typing(None(), 0, None(), context, _options));
+        override Typing = Rule.And(this.Location, RuleType.Void(), "", RuleExpression.Typing(None(), _precedenceInfo, None(), context, _options));
       }
     | Optional                        = RuleExpression "?" precedence 30
       {
         override Typing
         {
-          def rule  = RuleExpression.Typing(None(), 0, None(), context, _options);
+          def rule  = RuleExpression.Typing(None(), _precedenceInfo, None(), context, _options);
           def type  = EvaluateOptionRuleType(rule);
           Rule.Repeat(this.Location, type, _fieldName ?? (rule.FieldName + "Opt"), 0, Some(1), rule);
         }
@@ -2092,7 +2119,7 @@ syntax module NitraSyntax
       {
         override Typing
         {
-          def rule           = RuleExpression.Typing(None(), 0, None(), context, _options);
+          def rule           = RuleExpression.Typing(None(), _precedenceInfo, None(), context, _options);
           def type           = EvaluateListRuleType(rule);
           def (lower, upper) = RepeatQuantifier.Bounds();
           Rule.Repeat(this.Location, type, MakePlural(_fieldName, rule, context), lower, upper, rule);
@@ -2101,12 +2128,12 @@ syntax module NitraSyntax
       }
     | FieldName1                      = RuleExpression ^ 12 sm "as" sm Name
       {
-        override Typing = RuleExpression.Typing(_baseRule, _precedence, Some(Name.Value()), context, _options);
+        override Typing = RuleExpression.Typing(_baseRule, _precedenceInfo, Some(Name.Value()), context, _options);
         override InferName = Name.GetText();
       }
     | FieldName2                      = Name sm "=" sm RuleExpression ^ 11
       {
-        override Typing = RuleExpression.Typing(_baseRule, _precedence, Some(Name.Value()), context, _options);
+        override Typing = RuleExpression.Typing(_baseRule, _precedenceInfo, Some(Name.Value()), context, _options);
         override InferName = Name.GetText();
       }
     | Char                            = CharLiteral
@@ -2121,19 +2148,19 @@ syntax module NitraSyntax
       }
     | Rounds                          = "(" RuleExpression ")"
       {
-        override Typing = RuleExpression.Typing(_baseRule, _precedence, _fieldName, context, _options);
+        override Typing = RuleExpression.Typing(_baseRule, _precedenceInfo, _fieldName, context, _options);
         override InferName = RuleExpression.InferName();
       }
-    | Call                            = QualifiedName BindingPower=(sm "^" sm Number)?
+    | Call                            = QualifiedName BindingPower=(sm "^" sm Identifier)?
       {
-        override Typing = TypeCall(_baseRule, _precedence, _fieldName, context, _options, QualifiedName, BindingPower);
+        override Typing = TypeCall(_baseRule, _precedenceInfo, _fieldName, context, _options, QualifiedName, BindingPower);
         override InferName = QualifiedName.LastIdentifier().Value;
       }
     | RepeatWithSeparator         = "(" RuleExpression ";"sm Separator HangingOpt=(";"sm "?")? ")" RepeatQuantifier
       {
         override Typing
         {
-          def rule           = RuleExpression.Typing(None(), 0, None(), context, _options);
+          def rule           = RuleExpression.Typing(None(), _precedenceInfo, None(), context, _options);
           def sepRule        = Separator.Typing(None(), 0, None(), context, _options);
           def type           = EvaluateListWithSeparatorRuleType(rule, sepRule);
           def (lower, upper) = RepeatQuantifier.Bounds();
