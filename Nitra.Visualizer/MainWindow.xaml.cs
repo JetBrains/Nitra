@@ -66,8 +66,6 @@ namespace Nitra.Visualizer
     bool _needUpdateTextPrettyPrint;
     bool _needUpdatePerformance;
     ParseTree _parseTree;
-    TimeSpan _parseTimeSpan;
-    TimeSpan _parseTreeTimeSpan;
     TimeSpan _highlightingTimeSpan;
     readonly Settings _settings;
     private TestSuitVm _currentTestSuit;
@@ -466,10 +464,8 @@ namespace Nitra.Visualizer
     private void UpdatePerformance()
     {
       _needUpdatePerformance = false;
-      if (_calcParseTreeTime.IsChecked == true)
+      if (object.ReferenceEquals(_tabControl.SelectedItem, _performanceTabItem))
         UpdateParseTree();
-
-      _totalTime.Text = (_parseTimeSpan + _parseTreeTimeSpan + _foldingStrategy.TimeSpan + _highlightingTimeSpan).ToString();
     }
 
     private void UpdateParseTree()
@@ -481,9 +477,12 @@ namespace Nitra.Visualizer
 
       if (_parseTree == null)
       {
-        var timer = Stopwatch.StartNew();
+        var stat = ((StatisticsTask.Container [])_performanceTreeView.ItemsSource)[0];
+        var createParseTreeStat = new StatisticsTask.Single("ParseTree", "Create Parse Tree");
+        stat.AddSubtask(createParseTreeStat);
+        createParseTreeStat.Start();
         _parseTree = _parseResult.CreateParseTree();
-        _parseTreeTime.Text = (_parseTreeTimeSpan = timer.Elapsed).ToString();
+        createParseTreeStat.Stop();
       }
     }
 
@@ -606,18 +605,19 @@ namespace Nitra.Visualizer
         var timer = Stopwatch.StartNew();
 
         _parseResult = _currentTestSuit.Run(_text.Text, recoveryAlgorithm: GetRecoveryAlgorithm());
-
-        _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
+        if (_parseResult != null)
+          _performanceTreeView.ItemsSource = new[] { _parseResult.ParseSession.Statistics };
+        //_parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
 
 
         _foldingStrategy.ParseResult = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
 
-        _outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
+        //_outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
 
-        _recoveryTime.Text        = _currentTestSuit.TestTime.ToString();//recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
-        _findBestPathTime.Text    = "NA";//recovery.RecoveryPerformanceData.FindBestPathTime.ToString();
-        _flattenSequenceTime.Text = "NA";//recovery.RecoveryPerformanceData.FlattenSequenceTime.ToString();
+        //_recoveryTime.Text        = _currentTestSuit.TestTime.ToString();//recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
+        //_findBestPathTime.Text    = "NA";//recovery.RecoveryPerformanceData.FindBestPathTime.ToString();
+        //_flattenSequenceTime.Text = "NA";//recovery.RecoveryPerformanceData.FlattenSequenceTime.ToString();
 
         TryHighlightBraces(_text.CaretOffset);
         TryReportError();
@@ -655,7 +655,7 @@ namespace Nitra.Visualizer
       {
         var span = reference.Span;
 
-        if (!span.IntersectsWith(_span))
+        if (!span.IntersectsWith(_span) || !reference.IsSymbolEvaluated)
           return;
         
         var sym = reference.Symbol;
@@ -688,7 +688,6 @@ namespace Nitra.Visualizer
             spans.Add(spanInfo);
         }
         _highlightingTimeSpan = timer.Elapsed;
-        _highlightingTime.Text = _highlightingTimeSpan.ToString();
 
         foreach (var span in spans)
         {
@@ -745,106 +744,20 @@ namespace Nitra.Visualizer
       ShowNodeForCaret();
     }
 
-    public Tuple<string, string>[] GetRowsForColumn(int colIndex)
-    {
-      var result = new List<Tuple<string, string>>();
-
-      foreach (var g in _performanceGrid.Children.OfType<UIElement>().GroupBy(x => Grid.GetRow(x)).OrderBy(x => x.Key))
-      {
-        string label = null;
-        string value = null;
-
-        foreach (var uiElem in g)
-        {
-          int col = Grid.GetColumn(uiElem);
-
-          if (col == colIndex)
-          {
-            var labelElem = uiElem as Label;
-            if (labelElem != null)
-              label = labelElem.Content.ToString();
-
-            var checkBox = uiElem as CheckBox;
-            if (checkBox != null)
-              label = checkBox.Content.ToString();
-          }
-
-          if (col == colIndex + 1)
-          {
-            var text = uiElem as TextBlock;
-            if (text != null)
-              value = text.Text;
-          }
-
-        }
-
-        if (label == null && value == null)
-          continue;
-
-        Debug.Assert(label != null);
-        Debug.Assert(value != null);
-        result.Add(Tuple.Create(label, value));
-      }
-
-      return result.ToArray();
-    }
-
     private static string MakeStr(string str, int maxLen)
     {
       var padding = maxLen - str.Length + 1;
       return new string(' ', padding) + str;
     }
 
-    private string[][] MakePerfData()
-    {
-      var len = _performanceGrid.ColumnDefinitions.Count / 2;
-      var cols = new Tuple<string, string>[len][];
-      var maxLabelLen = new int[len];
-      var maxValueLen = new int[len];
-
-      for (int col = 0; col < len; col++)
-      {
-        var colData = GetRowsForColumn(col * 2);
-        cols[col] = colData.ToArray();
-        maxLabelLen[col] = colData.Max(x => x.Item1.Length);
-        maxValueLen[col] = colData.Max(x => x.Item2.Length);
-      }
-
-      string[][] strings = new string[len][];
-
-      for (int col = 0; col < len; col++)
-      {
-        strings[col] = new string[cols[col].Length];
-        for (int row = 0; row < strings[col].Length; row++)
-          strings[col][row] = MakeStr(cols[col][row].Item1, maxLabelLen[col]) + MakeStr(cols[col][row].Item2, maxValueLen[col]);
-      }
-
-      return strings;
-    }
-
     private void _copyButton_Click(object sender, RoutedEventArgs e)
     {
-      var rows = _performanceGrid.RowDefinitions.Count - 1;
-      var data = MakePerfData();
-      var cols = data.Length;
       var sb = new StringBuilder();
+      var stats = ((StatisticsTask.Container[])_performanceTreeView.ItemsSource);
 
-      for (int row = 0; row < rows; row++)
-      {
-        for (int col = 0; col < cols; col++)
-        {
-          var currRows = data[col];
-
-          if (row < currRows.Length)
-          {
-            sb.Append(currRows[row]);
-            if (col != cols - 1)
-              sb.Append(" │");
-          }
-        }
-        sb.AppendLine();
-      }
-
+      foreach (var stat in stats)
+        sb.AppendLine(stat.ToString());
+      
       var result = sb.ToString();
 
       Clipboard.SetData(DataFormats.Text, result);
@@ -1333,6 +1246,7 @@ namespace Nitra.Visualizer
           var text = _text.Text.Substring(0, start) + '\xFFFF';
           var prefix = _text.Document.GetText(start, end - start);
           _currentTestSuit.Run(text, null, start, prefix);
+          _performanceTreeView.ItemsSource = new[] { _currentTestSuit.Statistics };
           var ex = _currentTestSuit.Exception;
           var result = ex as LiteralCompletionException;
           //MessageBox.Show(string.Join(", ", result.Literals.OrderBy(x => x)));
