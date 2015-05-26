@@ -109,7 +109,7 @@ namespace Nitra.Visualizer
 
       _text.TextArea.Caret.PositionChanged += Caret_PositionChanged;
 
-      _highlightingStyles = new Dictionary<string, HighlightingColor>
+      _highlightingStyles = new Dictionary<string, HighlightingColor>(StringComparer.OrdinalIgnoreCase)
       {
         { "Keyword",              new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Blue) } },
         { "Comment",              new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
@@ -117,6 +117,8 @@ namespace Nitra.Visualizer
         { "MultilineComment",     new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
         { "Number",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Magenta) } },
         { "Operator",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
+        { "OpenBrace",            new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
+        { "CloseBrace",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
         { "String",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
         { "StringEx",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
         { "Char",                 new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkRed) } },
@@ -725,6 +727,8 @@ namespace Nitra.Visualizer
             };
             e.Sections.Add(section);
           }
+          else
+            Debug.WriteLine("Span class '" + span.SpanClass.Name + "' not found in styles");
         }
       }
       catch (Exception ex) { Debug.WriteLine(ex.GetType().Name + ":" + ex.Message); }
