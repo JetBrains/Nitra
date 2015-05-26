@@ -26,6 +26,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Nitra.Runtime.Binding;
 using Nitra.Runtime.Highlighting;
 using CheckBox = System.Windows.Controls.CheckBox;
 using Clipboard = System.Windows.Clipboard;
@@ -110,16 +111,20 @@ namespace Nitra.Visualizer
 
       _highlightingStyles = new Dictionary<string, HighlightingColor>
       {
-        { "Keyword",          new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Blue) } },
-        { "Comment",          new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "InlineComment",    new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "MultilineComment", new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "Number",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Magenta) } },
-        { "Operator",         new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
-        { "String",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
-        { "StringEx",         new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
-        { "Char",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Red) } },
-        { "Marker",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.LightBlue) } },
+        { "Keyword",              new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Blue) } },
+        { "Comment",              new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
+        { "InlineComment",        new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
+        { "MultilineComment",     new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
+        { "Number",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Magenta) } },
+        { "Operator",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
+        { "String",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
+        { "StringEx",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
+        { "Char",                 new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkRed) } },
+        { "Marker",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.LightBlue) } },
+        { "NitraCSharpType",      new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkCyan) } },
+        { "NitraCSharpNamespace", new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.CornflowerBlue) } },
+        { "NitraCSharpAlias",     new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkViolet) } },
+        { "Error",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Red) } },
       };
 
       _foldingManager    = FoldingManager.Install(_text.TextArea);
@@ -467,15 +472,15 @@ namespace Nitra.Visualizer
       _declarationsTreeView.Items.Clear();
 
       if (_parseTree == null)
+      {
+        _astRoot = null;
         _parseTree = _parseResult.CreateParseTree();
+      }
 
 // ReSharper disable once SuspiciousTypeConversion.Global
       var root = _parseTree as IMappedParseTree<IAst>;
       if (root != null)
-      {
-        var astRoot = AstRoot<IAst>.Create(root);
-        UpdateDeclarations(astRoot);
-      }
+        UpdateDeclarations(root);
     }
 
     private void UpdatePerformance()
@@ -653,6 +658,36 @@ namespace Nitra.Visualizer
       _textMarkerService.RemoveAll(marker => marker.Tag == (object)ErrorMarkerTag);
     }
 
+    private class CollectSymbolsAstVisitor : IAstVisitor
+    {
+      private readonly NSpan _span;
+      public List<SpanInfo> SpanInfos { get; private set; }
+
+      public CollectSymbolsAstVisitor(NSpan span) { _span = span; SpanInfos = new List<SpanInfo>(); }
+
+      public void Visit(IAst parseTree)
+      {
+        if (parseTree.Span.IntersectsWith(_span))
+          parseTree.Apply(this);
+      }
+
+      public void Visit(IReference reference)
+      {
+        var span = reference.Span;
+
+        if (!span.IntersectsWith(_span))
+          return;
+        
+        var sym = reference.Symbol;
+        var spanClass = sym.SpanClass;
+        
+        if (spanClass == "Default")
+          return;
+
+        SpanInfos.Add(new SpanInfo(span, new SpanClass(sym.SpanClass, null)));
+      }
+    }
+
     private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)
     {
       if (_parseResult == null)
@@ -660,10 +695,18 @@ namespace Nitra.Visualizer
 
       try
       {
+        var timer = Stopwatch.StartNew();
         var line = e.Line;
         var spans = new HashSet<SpanInfo>();
-        var timer = Stopwatch.StartNew();
         _parseResult.GetSpans(line.Offset, line.EndOffset, spans);
+        var astRoot = _astRoot;
+        if (astRoot != null)
+        {
+          var visitor = new CollectSymbolsAstVisitor(new NSpan(line.Offset, line.EndOffset));
+          astRoot.Apply(visitor);
+          foreach (var spanInfo in visitor.SpanInfos)
+            spans.Add(spanInfo);
+        }
         _highlightingTimeSpan = timer.Elapsed;
         _highlightingTime.Text = _highlightingTimeSpan.ToString();
 

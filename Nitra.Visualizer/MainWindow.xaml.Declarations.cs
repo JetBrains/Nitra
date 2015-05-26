@@ -21,11 +21,10 @@ namespace Nitra.Visualizer
 {
   public partial class MainWindow
   {
+    private AstRoot<IAst> _astRoot;
+
     public TreeViewItem ObjectToItem(PropertyInfo prop, object obj)
     {
-      if (obj is IReference)
-      {
-      }
       string name = prop == null ? "" : prop.Name;
       var tvi = new TreeViewItem { Tag = obj, FontWeight = FontWeights.Normal };
       tvi.MouseDoubleClick += TviOnMouseDoubleClick;
@@ -56,7 +55,7 @@ namespace Nitra.Visualizer
       }
 
       var declaration = obj as IAst;
-      if (declaration != null && !(obj is IReference))
+      if (declaration != null /*&& !(obj is IReference)*/)
       {
         var xaml   = RenderXamlForDeclaration(name, declaration);
         tvi.Header = XamlReader.Parse(xaml);
@@ -85,7 +84,7 @@ namespace Nitra.Visualizer
         var xaml = RenderXamlForValue(prop, obj);
         tvi.Header = XamlReader.Parse(xaml);
 
-        if (obj == null || obj is IReference)
+        if (obj == null /*|| obj is IReference*/)
           return tvi;
 
         var t = obj.GetType();
@@ -117,7 +116,7 @@ namespace Nitra.Visualizer
         return;
 
       var declaration = obj as IAst;
-      if (declaration != null && !(obj is IReference))
+      if (declaration != null /*&& !(obj is IReference)*/)
       {
         var t = obj.GetType();
         var props = t.GetProperties();
@@ -150,7 +149,7 @@ namespace Nitra.Visualizer
       {
         var t = obj.GetType();
 
-        if (obj is string || t.IsPrimitive || obj is IReference)
+        if (obj is string || t.IsPrimitive /*|| obj is IReference*/)
           return;
 
         var props = t.GetProperties();
@@ -179,6 +178,7 @@ namespace Nitra.Visualizer
         case "HasValue":
           return false;
         case "Id":
+        case "IsMissing":
         case "File":
         case "Span":
         case "IsAmbiguous":
@@ -187,19 +187,23 @@ namespace Nitra.Visualizer
       return false;
     }
 
-    private void UpdateDeclarations(AstRoot<IAst> astRoot)
+    private void UpdateDeclarations(IMappedParseTree<IAst> root)
     {
+      // TODO: measure the code time 
+      var astRoot = AstRoot<IAst>.Create(root);
       _declarationsTreeView.Items.Clear();
-      //dynamic ast = astRoot.Content;
-      //try
-      //{
-      //  ast.NamespaceIn = NamespaceSymbol.RootNamespace;
-      //}
-      //catch {  }
-      astRoot.EvalProperties(new DebugCompilerMessages()); // TODO: display messages in GUI
-      var root = ObjectToItem(null, astRoot.Content);
-      root.Header = "Root";
-      _declarationsTreeView.Items.Add(root);
+      // TODO: display messages in GUI
+      var compilerMessages = new DebugCompilerMessages();
+      // ReSharper disable once SuspiciousTypeConversion.Global
+      var projectSupport = astRoot.Content as IProjectSupport;
+      if (projectSupport != null)
+        projectSupport.RefreshProject(new [] { astRoot.Content }, compilerMessages);
+      else
+        astRoot.EvalProperties(compilerMessages);
+      var rootTreeViewItem = ObjectToItem(null, astRoot.Content);
+      rootTreeViewItem.Header = "Root";
+      _declarationsTreeView.Items.Add(rootTreeViewItem);
+      _astRoot = astRoot;
     }
 
     public static string Escape(string str)
@@ -253,7 +257,8 @@ namespace Nitra.Visualizer
       if (e.NewValue != null)
       {
         var obj = ((TreeViewItem) e.NewValue).Tag;
-        var id = obj.GetHashCode();
+        var symbol = obj as Symbol2;
+        var id = symbol != null ? symbol.Id : (obj == null ? 0 : obj.GetHashCode());
         _propertyGrid.SelectedObject = obj;
         _objectType.Text = obj == null ? "<null>" : obj.GetType().FullName + " [" + id + "]";
       }
