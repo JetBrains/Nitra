@@ -192,37 +192,49 @@ namespace Nitra.Visualizer
       if (_parseResult == null)
         return;
 
+      if (_astRoot != null)
+        return;
+
       _declarationsTreeView.Items.Clear();
 
       if (_parseTree == null)
       {
-        _astRoot = null;
+        Debug.Assert(_astRoot == null);
         _parseTree = _parseResult.CreateParseTree();
       }
 
       // ReSharper disable once SuspiciousTypeConversion.Global
       var root = _parseTree as IMappedParseTree<IAst>;
-      if (root != null)
-      {
-        // TODO: measure the code time 
-        var astRoot = AstRoot<IAst>.Create(root);
-        _astRoot = astRoot;
-        UpdateDeclarations(astRoot);
-      }
-    }
+      if (root == null)
+        return;
+      
+      var statistics = _parseResult.ParseSession.Statistics;
+      var dpStatistics = new StatisticsTask.Container("DependentProperty", "Dependent Property");
+      var astStatistics = new StatisticsTask.Single("AST", "AST Mapping");
 
+      astStatistics.Start();
+      var astRoot = AstRoot<IAst>.Create(root);
+      astStatistics.Stop();
+      statistics.AddSubtask(astStatistics);
+      _astRoot = astRoot;
 
-    private void UpdateDeclarations(AstRoot<IAst> astRoot)
-    {
       _declarationsTreeView.Items.Clear();
       // TODO: display messages in GUI
       var compilerMessages = new DebugCompilerMessages();
       // ReSharper disable once SuspiciousTypeConversion.Global
       var projectSupport = astRoot.Content as IProjectSupport;
       if (projectSupport != null)
-        projectSupport.RefreshProject(new [] { astRoot.Content }, compilerMessages);
+      {
+        projectSupport.RefreshProject(new[] {astRoot.Content}, compilerMessages, dpStatistics);
+        statistics.AddSubtask(dpStatistics);
+      }
       else
-        astRoot.EvalProperties(compilerMessages);
+      {
+        var dpCalcStatistics = new StatisticsTask.Single("DependentProperty", "Dependent Property calculation");
+        dpCalcStatistics.Start();
+        try { astRoot.EvalProperties(compilerMessages); }
+        finally { dpCalcStatistics.Stop(); statistics.AddSubtask(dpCalcStatistics); }
+      }
       var rootTreeViewItem = ObjectToItem(null, astRoot.Content);
       rootTreeViewItem.Header = "Root";
       _declarationsTreeView.Items.Add(rootTreeViewItem);

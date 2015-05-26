@@ -37,7 +37,6 @@ namespace Nitra.ViewModels
     public TestSuitVm(SolutionVm solution, string name, string config)
       : base(Path.Combine(solution.RootFolder, name))
     {
-      Statistics = new StatisticsTask.Container("Parsing", "Parsing");
       string testSuitPath = base.FullPath;
       var rootPath = solution.RootFolder;
       Solution = solution;
@@ -162,7 +161,7 @@ namespace Nitra.ViewModels
       var timer = System.Diagnostics.Stopwatch.StartNew();
       try
       {
-        Statistics = new StatisticsTask.Container("Parsing", "Parsing");
+        Statistics = new StatisticsTask.Container("Total", "Total");
         var parseSession = new ParseSession(StartRule,
           compositeGrammar:   _compositeGrammar,
           completionPrefix:   completionPrefix,
