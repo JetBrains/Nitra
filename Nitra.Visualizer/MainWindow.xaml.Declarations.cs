@@ -187,10 +187,33 @@ namespace Nitra.Visualizer
       return false;
     }
 
-    private void UpdateDeclarations(IMappedParseTree<IAst> root)
+    private void UpdateDeclarations()
     {
-      // TODO: measure the code time 
-      var astRoot = AstRoot<IAst>.Create(root);
+      if (_parseResult == null)
+        return;
+
+      _declarationsTreeView.Items.Clear();
+
+      if (_parseTree == null)
+      {
+        _astRoot = null;
+        _parseTree = _parseResult.CreateParseTree();
+      }
+
+      // ReSharper disable once SuspiciousTypeConversion.Global
+      var root = _parseTree as IMappedParseTree<IAst>;
+      if (root != null)
+      {
+        // TODO: measure the code time 
+        var astRoot = AstRoot<IAst>.Create(root);
+        _astRoot = astRoot;
+        UpdateDeclarations(astRoot);
+      }
+    }
+
+
+    private void UpdateDeclarations(AstRoot<IAst> astRoot)
+    {
       _declarationsTreeView.Items.Clear();
       // TODO: display messages in GUI
       var compilerMessages = new DebugCompilerMessages();
@@ -203,7 +226,6 @@ namespace Nitra.Visualizer
       var rootTreeViewItem = ObjectToItem(null, astRoot.Content);
       rootTreeViewItem.Header = "Root";
       _declarationsTreeView.Items.Add(rootTreeViewItem);
-      _astRoot = astRoot;
     }
 
     public static string Escape(string str)

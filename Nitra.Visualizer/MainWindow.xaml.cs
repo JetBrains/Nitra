@@ -65,7 +65,6 @@ namespace Nitra.Visualizer
     bool _needUpdateHtmlPrettyPrint;
     bool _needUpdateTextPrettyPrint;
     bool _needUpdatePerformance;
-    bool _needUpdateDeclarations;
     ParseTree _parseTree;
     TimeSpan _parseTimeSpan;
     TimeSpan _parseTreeTimeSpan;
@@ -438,7 +437,6 @@ namespace Nitra.Visualizer
       _needUpdateHtmlPrettyPrint = true;
       _needUpdateTextPrettyPrint = true;
       _needUpdatePerformance     = true;
-      _needUpdateDeclarations    = true;
       _parseTree                 = null;
 
       UpdateInfo();
@@ -456,33 +454,13 @@ namespace Nitra.Visualizer
           UpdateTextPrettyPrint();
         else if (_needUpdatePerformance     && object.ReferenceEquals(_tabControl.SelectedItem, _performanceTabItem))
           UpdatePerformance();
-        else if (_needUpdateDeclarations && object.ReferenceEquals(_tabControl.SelectedItem, _declarationsTabItem))
-          UpdateDeclarations();
+        
+        UpdateDeclarations();
       }
       catch(Exception e)
       {
         Debug.Write(e);
       }
-    }
-
-    private void UpdateDeclarations()
-    {
-      if (_parseResult == null)
-        return;
-
-      _needUpdateDeclarations = false;
-      _declarationsTreeView.Items.Clear();
-
-      if (_parseTree == null)
-      {
-        _astRoot = null;
-        _parseTree = _parseResult.CreateParseTree();
-      }
-
-// ReSharper disable once SuspiciousTypeConversion.Global
-      var root = _parseTree as IMappedParseTree<IAst>;
-      if (root != null)
-        UpdateDeclarations(root);
     }
 
     private void UpdatePerformance()
@@ -615,6 +593,8 @@ namespace Nitra.Visualizer
       if (_doTreeOperation)
         return;
 
+      _astRoot = null;
+
       if (_currentTestSuit == null)
         return;
 
@@ -629,7 +609,6 @@ namespace Nitra.Visualizer
 
         _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
 
-        _text.TextArea.TextView.Redraw(DispatcherPriority.Input);
 
         _foldingStrategy.ParseResult = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
@@ -637,15 +616,14 @@ namespace Nitra.Visualizer
         _outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
 
         _recoveryTime.Text        = _currentTestSuit.TestTime.ToString();//recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
-        _earleyParseTime.Text     = "NA";//recovery.RecoveryPerformanceData.EarleyParseTime.ToString();
-        _recoverAllWaysTime.Text  = "NA";//recovery.RecoveryPerformanceData.RecoverAllWaysTime.ToString();
         _findBestPathTime.Text    = "NA";//recovery.RecoveryPerformanceData.FindBestPathTime.ToString();
         _flattenSequenceTime.Text = "NA";//recovery.RecoveryPerformanceData.FlattenSequenceTime.ToString();
-        _parseErrorCount.Text     = "NA";//recovery.RecoveryPerformanceData.ParseErrorCount.ToString(CultureInfo.InvariantCulture);
 
         TryHighlightBraces(_text.CaretOffset);
         TryReportError();
         ShowInfo();
+
+        _text.TextArea.TextView.Redraw(DispatcherPriority.Input);
       }
       catch (Exception ex)
       {
