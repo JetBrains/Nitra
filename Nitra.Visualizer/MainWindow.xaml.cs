@@ -664,7 +664,7 @@ namespace Nitra.Visualizer
         if (spanClass == "Default")
           return;
 
-        SpanInfos.Add(new SpanInfo(span, new SpanClass(sym.SpanClass, null)));
+        SpanInfos.Add(new SpanInfo(span, new SpanClass(sym.SpanClass)));
       }
     }
 
