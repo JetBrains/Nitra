@@ -63,6 +63,8 @@ namespace Nitra
       Grammars = grammars;
       ParserHost = parserHost;
 
+      MakeBindingPowerMap();
+
       def rules = Grammars.SelectMany(gd => gd.Rules).NToArray();
 
       def extensionRuleDescriptors = rules
@@ -71,9 +73,9 @@ namespace Nitra
         .Map((baseRd, extetions) =>
         {
           def prefix = extetions.OfType.[PrefixRuleDescriptor]().NToArray();
-          def postfix = extetions.OfType.[PostfixRuleDescriptor]().NToArray();
-          Array.Sort.[PostfixRuleDescriptor](postfix, ((l, r) => l.BindingPower.CompareTo(r.BindingPower)));
-          (baseRd, (prefix, postfix))
+          def postfix = extetions.OfType.[PostfixRuleDescriptor]().MapToArray(rd => (rd, GetBindingPower(baseRd, rd.BindingPower)));
+          Array.Sort.[PostfixRuleDescriptor * int](postfix, (((_, lbp), (_, rbp)) => lbp.CompareTo(rbp)));
+          (baseRd, (prefix, postfix.MapToArray((rd, _bp) => rd)))
         });
 
       foreach (extensibleRule in rules.OfType.[ExtensibleRuleDescriptor]())
@@ -112,6 +114,65 @@ namespace Nitra
 
       CollectTokens();
       CollectFirstTokens(ruleIdBuilder);
+    }
+
+    private BindingPowerMap : Hashtable[ExtensibleRuleDescriptor, Hashtable[string, int]] = Hashtable();
+    public GetBindingPower(rd : ExtensibleRuleDescriptor, bpName : string) : int
+    {
+      def (bpName, strong) = if (bpName.StartsWith("+"))
+        (bpName.Substring(1), 1)
+      else
+        (bpName, 0);
+      mutable map;
+      def bp = if (BindingPowerMap.TryGetValue(rd, out map))
+      {
+        mutable bp;
+        if (map.TryGetValue(bpName, out bp))
+          bp
+        else
+          1
+      }
+      else
+        1;
+      bp * 2 + strong
+    }
+
+    private MakeBindingPowerMap() : void
+    {
+      def relations = Grammars.SelectMany(gd => gd.BindingPowerRelations).Grouping(r => r).Map((d, r) => (d, r.Flatten().Grouping((lo, hi) => (hi, lo))));
+      foreach ((descriptor, relations) in relations.KeyValuePairs)
+      {
+        def bpMap = Hashtable();
+        bpMap.Add("0", 0);
+        def rec(bpName)
+        {
+          mutable bp;
+          if (bpMap.TryGetValue(bpName, out bp))
+            bp;
+          else
+          {
+            mutable lowerBPs;
+            def newBP = if (relations.TryGetValue(bpName, out lowerBPs))
+            {
+              mutable maxBP = 1;
+              foreach (lowerBP in lowerBPs)
+                maxBP = Math.Max(maxBP, rec(lowerBP));
+              maxBP + 1
+            }
+            else
+              1;
+            bpMap[bpName] = newBP;
+            newBP;
+          }
+        }
+        foreach ((bp, lowerBPs) in relations.KeyValuePairs)
+        {
+          _ = rec(bp);
+          foreach (bp in lowerBPs)
+            _ = rec(bp);
+        }
+        BindingPowerMap.Add(descriptor, bpMap);
+      }
     }
 
     private InitMandatoryTokenCount() : void
@@ -721,15 +782,15 @@ a:visited, a:link, a:active
       }
       def renderPrefix(parser : ExtensionRuleParser, maxNameLen : int) : void
       {
-        def (bp, baseRuleDescriptor) = if (parser.Descriptor is PostfixRuleDescriptor as postfix) (postfix.BindingPower, postfix.BaseRule) else (-1, null);
+        def (bp, baseRuleDescriptor) = if (parser.Descriptor is PostfixRuleDescriptor as postfix) (postfix.BindingPower, postfix.BaseRule) else ("?", null);
         def info   = parser.Reflection(parser.RuleId) :> SequenceInfo.Root;
         def result = ruleHeader(XElement("span", "  | "), parser, parser.Descriptor.Name, maxNameLen);
         result.Add(" = ");
-        when (bp >= 0)
+        when (bp != "?")
         {
           def baseRule = this.ExtensibleRules[baseRuleDescriptor].GetParser(0);
           result.Add(XElement("span", " ", renderAHref(baseRule.Descriptor, baseRule.Descriptor.Name)));
-          when (bp > 0)
+          when (bp != "0")
             result.Add(" : " + bp + " ");
         }
         convertSubrules(result, info.Subrules);
