@@ -220,7 +220,7 @@ namespace Nitra.Visualizer
 
       _declarationsTreeView.Items.Clear();
       // TODO: display messages in GUI
-      var compilerMessages = new DebugCompilerMessages();
+      var compilerMessages = new VisualizerCompilerMessages(_errorsTreeView.Items, _textMarkerService, _text);
       // ReSharper disable once SuspiciousTypeConversion.Global
       var projectSupport = astRoot.Content as IProjectSupport;
       if (projectSupport != null)

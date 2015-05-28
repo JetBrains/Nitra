@@ -344,6 +344,56 @@ namespace Nitra.Visualizer
       return null;
     }
 
+    private class VisualizerCompilerMessages : ICompilerMessages, IRootCompilerMessages
+    {
+      private ItemCollection _errors;
+      private TextMarkerService _textMarkerService;
+      private NitraTextEditor _text;
+
+      public VisualizerCompilerMessages(ItemCollection errors, TextMarkerService textMarkerService, NitraTextEditor text)
+      {
+        _errors = errors;
+        _textMarkerService = textMarkerService;
+        _text = text;
+      }
+
+      public void ReportMessage(CompilerMessageType messageType, Location loc, string msg, int num)
+      {
+        var location = loc;
+        var marker = _textMarkerService.Create(location.StartPos, location.Length);
+        marker.Tag = ErrorMarkerTag;
+        marker.MarkerType = TextMarkerType.SquigglyUnderline;
+        marker.MarkerColor = Colors.Red;
+        marker.ToolTip = msg;
+
+        var errorNode = new TreeViewItem();
+        errorNode.Header = "(" + location.EndLineColumn + "): " + msg;
+        errorNode.MouseDoubleClick += (sender, e) =>
+        {
+          _text.CaretOffset = loc.StartPos;
+          _text.Select(loc.StartPos, loc.Length);
+          _text.ScrollToLine(loc.StartLineColumn.Line);
+        };
+
+        var subNode = new TreeViewItem();
+        subNode.FontSize = 12;
+        subNode.Header = msg;
+        errorNode.Items.Add(subNode);
+
+        _errors.Add(errorNode);
+      }
+
+      public IRootCompilerMessages ReportRootMessage(CompilerMessageType messageType, Location loc, string msg, int num)
+      {
+        Debug.Assert(_errors.Count > 0);
+        var node = (TreeViewItem)_errors[_errors.Count - 1];
+        var nested = new VisualizerCompilerMessages(node.Items, _textMarkerService, _text);
+        return nested;
+      }
+
+      public void Dispose() { }
+    }
+
     private void TryReportError()
     {
       ClearMarkers();
