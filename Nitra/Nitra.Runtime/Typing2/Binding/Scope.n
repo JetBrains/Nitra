@@ -1,0 +1,139 @@
+﻿using Nitra.Declarations;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+// TODO: rename Symbol2 to Symbol and remove follow line
+using Symbol = Nitra.Runtime.Binding.Symbol2;
+
+namespace Nitra.Runtime.Binding
+{
+  public variant Scope
+  {
+    | Table
+      {
+        public NameTable : Hashtable[int, Symbol] { get; }
+        
+        public this() { NameTable = Hashtable(); }
+        
+        public DefineSymbol(symbol : Symbol) : void
+        {
+          mutable old;
+          when (this.NameTable.TryGetValue(symbol.Name.Id, out old))
+          {
+            def cm = AstContext.CompilerMessages;
+            using(nested = cm.RootError(symbol.Name, $"The current scope already contains a definition for '$(symbol.Name)'."))
+              nested.Hint(old.Name, "previous definition.");
+
+            if (old is AmbiguousSymbol as amb)
+              amb.Ambiguous ::= symbol;
+            else
+              this.NameTable[symbol.Name.Id] = AmbiguousSymbol(old.Name, [old, symbol]);
+
+            return;
+          }
+    
+          this.NameTable.Add(symbol.Name.Id, symbol);
+        }
+
+        public GetOrDefineSymbol(symbol : Symbol) : Symbol
+        {
+          mutable old;
+          when (NameTable.TryGetValue(symbol.Name.Id, out old))
+            return old;
+          
+          NameTable.Add(symbol.Name.Id, symbol);
+          symbol
+        }
+        
+        public TryGetSymbol(name : IReference) : Symbol
+        {
+          mutable old;
+          when (NameTable.TryGetValue(name.Id, out old))
+            return old;
+          
+          null
+        }
+      }
+
+    | Union  { public Scopes : list[Scope] { get; } }
+    | Hide   { public Scope  : Scope       { get; } public Hidden : Scope { get; } }
+    | Filter { public Scope  : Scope       { get; } public Predicate : Symbol -> bool { get; } }
+    | Nil
+    
+    public Bind(reference : IReference) : Symbol
+    {
+      def sym = TryBind(reference);
+      Symbol.ReportError(reference, sym);
+      sym
+    }
+    
+    /// Если не может связать возвращает AmbiguousSymbol или UnresolvedSymbol.
+    public TryBind(reference : IReference) : Symbol
+    {
+      def result = BindMany(reference);
+      match (result.Count)
+      {
+        | 0 => UnresolvedSymbol(reference)
+        | 1 => result[0]
+        | _ => AmbiguousSymbol(reference, result.NToList())
+      }
+    }
+    
+    public BindMany(reference : IReference) : List[Symbol]
+    {
+      def results = List(2);
+      def bindManyImpl(thisScope : Scope, reference : IReference, results : List[Symbol]) : void
+      {
+        match (thisScope)
+        {
+          | Table as s =>
+            mutable result;
+            when (s.NameTable.TryGetValue(reference.Id, out result))
+              results.Add(result);
+          
+          | Union as s => 
+            foreach (scope in s.Scopes)
+              bindManyImpl(scope, reference, results);
+
+          | Hide as s => 
+            def binded = results.Count;
+            bindManyImpl(s.Scope, reference, results);
+            when (binded == results.Count)
+              bindManyImpl(s.Hidden, reference, results);
+        
+          | Filter as s =>
+            def notFilteredResults = List();
+            bindManyImpl(s.Scope, reference, notFilteredResults);
+            foreach (sym in notFilteredResults)
+              when (s.Predicate(sym))
+                results.Add(sym);
+          
+          | Nil => ()
+        }
+      }
+      
+      bindManyImpl(this, reference, results);
+      results
+    }
+    
+    public override ToString() : string
+    {
+      match (this)
+      {
+        | Table  as s => $<#[..$(s.NameTable.Keys; ", "; StringIndex.GetText)]#>
+        | Union  as s => $<# Union(..$(s.Scopes))#>
+        | Hide   as s => $<#$(s.Scope) hide $(s.Hidden)#>
+        | Filter      => "Filter"
+        | Nil => ""
+      }
+    }
+  }
+}

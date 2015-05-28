@@ -1,6 +1,8 @@
-﻿using System.Reflection;
+﻿using Nitra.Declarations;
+using Nitra.Runtime.Binding;
+
+using System.Reflection;
 using System.Windows.Input;
-using Nitra.Declarations;
 
 using System;
 using System.Collections;
@@ -19,6 +21,8 @@ namespace Nitra.Visualizer
 {
   public partial class MainWindow
   {
+    private AstRoot<IAst> _astRoot;
+
     public TreeViewItem ObjectToItem(PropertyInfo prop, object obj)
     {
       string name = prop == null ? "" : prop.Name;
@@ -51,7 +55,7 @@ namespace Nitra.Visualizer
       }
 
       var declaration = obj as IAst;
-      if (declaration != null)
+      if (declaration != null /*&& !(obj is IReference)*/)
       {
         var xaml   = RenderXamlForDeclaration(name, declaration);
         tvi.Header = XamlReader.Parse(xaml);
@@ -79,6 +83,15 @@ namespace Nitra.Visualizer
       {
         var xaml = RenderXamlForValue(prop, obj);
         tvi.Header = XamlReader.Parse(xaml);
+
+        if (obj == null /*|| obj is IReference*/)
+          return tvi;
+
+        var t = obj.GetType();
+        var props = t.GetProperties();
+        if (!(obj is string || t.IsPrimitive) && props.Any(p => !IsIgnoredProperty(p)))
+          tvi.Items.Add(obj);
+
         return tvi;
       }
     }
@@ -103,7 +116,7 @@ namespace Nitra.Visualizer
         return;
 
       var declaration = obj as IAst;
-      if (declaration != null)
+      if (declaration != null /*&& !(obj is IReference)*/)
       {
         var t = obj.GetType();
         var props = t.GetProperties();
@@ -132,6 +145,30 @@ namespace Nitra.Visualizer
           tvi.Items.Add(ObjectToItem(null, item));
         return;
       }
+
+      {
+        var t = obj.GetType();
+
+        if (obj is string || t.IsPrimitive /*|| obj is IReference*/)
+          return;
+
+        var props = t.GetProperties();
+
+        foreach (var prop in props) //.OrderBy(p => p.Name))
+        {
+          if (IsIgnoredProperty(prop))
+            continue;
+          try
+          {
+            var value = prop.GetValue(obj, null);
+            tvi.Items.Add(ObjectToItem(prop, value));
+          }
+          catch (Exception e)
+          {
+            tvi.Items.Add(ObjectToItem(prop, e.Message));
+          }
+        }
+      }
     }
 
     private static bool IsIgnoredProperty(PropertyInfo prop)
@@ -141,47 +178,94 @@ namespace Nitra.Visualizer
         case "HasValue":
           return false;
         case "Id":
+        case "IsMissing":
         case "File":
         case "Span":
         case "IsAmbiguous":
-        case "Parent":
           return true;
       }
       return false;
     }
 
-    private void UpdateDeclarations(AstRoot<IAst> astRoot)
+    private void UpdateDeclarations()
     {
-      astRoot.EvalProperties(new DebugCompilerMessages()); // TODO: display messages in GUI
-      var root = ObjectToItem(null, astRoot.Content);
-      root.Header = "Root";
-      //using (var d = Dispatcher.DisableProcessing())
-      //{
-        _declarationsTreeView.Items.Clear();
-        _declarationsTreeView.Items.Add(root);
-      //  _declarationsTreeView.UpdateLayout();
-      //}
+      if (_parseResult == null)
+        return;
+
+      if (_astRoot != null)
+        return;
+
+      _declarationsTreeView.Items.Clear();
+
+      if (_parseTree == null)
+      {
+        Debug.Assert(_astRoot == null);
+        _parseTree = _parseResult.CreateParseTree();
+      }
+
+      // ReSharper disable once SuspiciousTypeConversion.Global
+      var root = _parseTree as IMappedParseTree<IAst>;
+      if (root == null)
+        return;
+      
+      var statistics = _parseResult.ParseSession.Statistics;
+      var dpStatistics = new StatisticsTask.Container("DependentProperty", "Dependent Property");
+      var astStatistics = new StatisticsTask.Single("AST", "AST Mapping");
+
+      astStatistics.Start();
+      var astRoot = AstRoot<IAst>.Create(root);
+      astStatistics.Stop();
+      statistics.AddSubtask(astStatistics);
+      _astRoot = astRoot;
+
+      _declarationsTreeView.Items.Clear();
+      // TODO: display messages in GUI
+      var compilerMessages = new VisualizerCompilerMessages(_errorsTreeView.Items, _textMarkerService, _text);
+      // ReSharper disable once SuspiciousTypeConversion.Global
+      var projectSupport = astRoot.Content as IProjectSupport;
+      if (projectSupport != null)
+      {
+        projectSupport.RefreshProject(new[] {astRoot.Content}, compilerMessages, dpStatistics);
+        statistics.AddSubtask(dpStatistics);
+      }
+      else
+      {
+        var dpCalcStatistics = new StatisticsTask.Single("DependentProperty", "Dependent Property calculation");
+        dpCalcStatistics.Start();
+        try { astRoot.EvalProperties(compilerMessages); }
+        finally { dpCalcStatistics.Stop(); statistics.AddSubtask(dpCalcStatistics); }
+      }
+      var rootTreeViewItem = ObjectToItem(null, astRoot.Content);
+      rootTreeViewItem.Header = "Root";
+      _declarationsTreeView.Items.Add(rootTreeViewItem);
+    }
+
+    public static string Escape(string str)
+    {
+      return str.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
     }
 
     private static string RenderXamlForDeclaration(string name, IAst ast)
     {
       var declatation = ast as IDeclaration;
-      var suffix = declatation == null ? null : (": " + declatation.Name);
+      var suffix = declatation == null ? null : (": " + Escape(declatation.Name.Text));
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-" + (string.IsNullOrWhiteSpace(name) ? null : ("<Span Foreground = 'blue'>" + name + "</Span>: "))
+" + (string.IsNullOrWhiteSpace(name) ? null : ("<Span Foreground = 'blue'>" + Escape(name) + "</Span>: "))
              + ast.ToXaml() + suffix + @"
 </Span>";
     }
 
     private static string RenderXamlForValue(PropertyInfo prop, object obj)
     {
+      if (obj == null)
+        obj = "<null>";
       var isDependent = prop != null && prop.IsDefined(typeof(DependentPropertyAttribute), false);
       var color = isDependent ? "green" : "SlateBlue";
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-" + (prop == null ? null : ("<Bold><Span Foreground = '" + color + "'>" + prop.Name + "</Span></Bold>: "))
-             + obj + @"
+" + (prop == null ? null : ("<Bold><Span Foreground = '" + color + "'>" + Escape(prop.Name) + "</Span></Bold>: "))
+             + Escape(obj.ToString()) + @"
 </Span>";
     }
 
@@ -189,7 +273,7 @@ namespace Nitra.Visualizer
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-<Span Foreground = 'blue'>" + name + @"</Span>* <Span Foreground = 'gray'>Count: </Span> " + items.Count + @"
+<Span Foreground = 'blue'>" + Escape(name) + @"</Span>* <Span Foreground = 'gray'>Count: </Span> " + items.Count + @"
 </Span>";
     }
 
@@ -198,14 +282,20 @@ namespace Nitra.Visualizer
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-<Span Foreground = 'green'>" + name + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + count + @"
+<Span Foreground = 'green'>" + Escape(name) + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + count + @"
 </Span>";
     }
 
     private void _declarationsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
       if (e.NewValue != null)
-        _propertyGrid.SelectedObject = ((TreeViewItem)e.NewValue).Tag;
+      {
+        var obj = ((TreeViewItem) e.NewValue).Tag;
+        var symbol = obj as Symbol2;
+        var id = symbol != null ? symbol.Id : (obj == null ? 0 : obj.GetHashCode());
+        _propertyGrid.SelectedObject = obj;
+        _objectType.Text = obj == null ? "<null>" : obj.GetType().FullName + " [" + id + "]";
+      }
     }
 
     private void TviOnMouseDoubleClick(object sender, MouseButtonEventArgs e)

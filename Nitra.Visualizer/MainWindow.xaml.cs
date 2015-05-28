@@ -26,6 +26,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Nitra.Runtime.Binding;
 using Nitra.Runtime.Highlighting;
 using CheckBox = System.Windows.Controls.CheckBox;
 using Clipboard = System.Windows.Clipboard;
@@ -64,10 +65,7 @@ namespace Nitra.Visualizer
     bool _needUpdateHtmlPrettyPrint;
     bool _needUpdateTextPrettyPrint;
     bool _needUpdatePerformance;
-    bool _needUpdateDeclarations;
     ParseTree _parseTree;
-    TimeSpan _parseTimeSpan;
-    TimeSpan _parseTreeTimeSpan;
     TimeSpan _highlightingTimeSpan;
     readonly Settings _settings;
     private TestSuitVm _currentTestSuit;
@@ -108,18 +106,24 @@ namespace Nitra.Visualizer
 
       _text.TextArea.Caret.PositionChanged += Caret_PositionChanged;
 
-      _highlightingStyles = new Dictionary<string, HighlightingColor>
+      _highlightingStyles = new Dictionary<string, HighlightingColor>(StringComparer.OrdinalIgnoreCase)
       {
-        { "Keyword",          new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Blue) } },
-        { "Comment",          new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "InlineComment",    new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "MultilineComment", new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "Number",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Magenta) } },
-        { "Operator",         new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
-        { "String",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
-        { "StringEx",         new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
-        { "Char",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Red) } },
-        { "Marker",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.LightBlue) } },
+        { "Keyword",              new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Blue) } },
+        { "Comment",              new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
+        { "InlineComment",        new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
+        { "MultilineComment",     new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
+        { "Number",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Magenta) } },
+        { "Operator",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
+        { "OpenBrace",            new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
+        { "CloseBrace",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
+        { "String",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
+        { "StringEx",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
+        { "Char",                 new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkRed) } },
+        { "Marker",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.LightBlue) } },
+        { "NitraCSharpType",      new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkCyan) } },
+        { "NitraCSharpNamespace", new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Chocolate) } },
+        { "NitraCSharpAlias",     new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkViolet) } },
+        { "Error",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Red) } },
       };
 
       _foldingManager    = FoldingManager.Install(_text.TextArea);
@@ -340,6 +344,56 @@ namespace Nitra.Visualizer
       return null;
     }
 
+    private class VisualizerCompilerMessages : ICompilerMessages, IRootCompilerMessages
+    {
+      private ItemCollection _errors;
+      private TextMarkerService _textMarkerService;
+      private NitraTextEditor _text;
+
+      public VisualizerCompilerMessages(ItemCollection errors, TextMarkerService textMarkerService, NitraTextEditor text)
+      {
+        _errors = errors;
+        _textMarkerService = textMarkerService;
+        _text = text;
+      }
+
+      public void ReportMessage(CompilerMessageType messageType, Location loc, string msg, int num)
+      {
+        var location = loc;
+        var marker = _textMarkerService.Create(location.StartPos, location.Length);
+        marker.Tag = ErrorMarkerTag;
+        marker.MarkerType = TextMarkerType.SquigglyUnderline;
+        marker.MarkerColor = Colors.Red;
+        marker.ToolTip = msg;
+
+        var errorNode = new TreeViewItem();
+        errorNode.Header = "(" + location.EndLineColumn + "): " + msg;
+        errorNode.MouseDoubleClick += (sender, e) =>
+        {
+          _text.CaretOffset = loc.StartPos;
+          _text.Select(loc.StartPos, loc.Length);
+          _text.ScrollToLine(loc.StartLineColumn.Line);
+        };
+
+        var subNode = new TreeViewItem();
+        subNode.FontSize = 12;
+        subNode.Header = msg;
+        errorNode.Items.Add(subNode);
+
+        _errors.Add(errorNode);
+      }
+
+      public IRootCompilerMessages ReportRootMessage(CompilerMessageType messageType, Location loc, string msg, int num)
+      {
+        Debug.Assert(_errors.Count > 0);
+        var node = (TreeViewItem)_errors[_errors.Count - 1];
+        var nested = new VisualizerCompilerMessages(node.Items, _textMarkerService, _text);
+        return nested;
+      }
+
+      public void Dispose() { }
+    }
+
     private void TryReportError()
     {
       ClearMarkers();
@@ -382,6 +436,7 @@ namespace Nitra.Visualizer
         {
           var location = error.Location;
           var marker = _textMarkerService.Create(location.StartPos, location.Length);
+          marker.Tag = ErrorMarkerTag;
           marker.MarkerType = TextMarkerType.SquigglyUnderline;
           marker.MarkerColor = Colors.Red;
           string text;
@@ -430,7 +485,6 @@ namespace Nitra.Visualizer
       _needUpdateHtmlPrettyPrint = true;
       _needUpdateTextPrettyPrint = true;
       _needUpdatePerformance     = true;
-      _needUpdateDeclarations    = true;
       _parseTree                 = null;
 
       UpdateInfo();
@@ -448,8 +502,8 @@ namespace Nitra.Visualizer
           UpdateTextPrettyPrint();
         else if (_needUpdatePerformance     && object.ReferenceEquals(_tabControl.SelectedItem, _performanceTabItem))
           UpdatePerformance();
-        else if (_needUpdateDeclarations && object.ReferenceEquals(_tabControl.SelectedItem, _declarationsTabItem))
-          UpdateDeclarations();
+        
+        UpdateDeclarations();
       }
       catch(Exception e)
       {
@@ -457,32 +511,11 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void UpdateDeclarations()
-    {
-      if (_parseResult == null)
-        return;
-
-      _needUpdateDeclarations = false;
-
-      if (_parseTree == null)
-        _parseTree = _parseResult.CreateParseTree();
-
-// ReSharper disable once SuspiciousTypeConversion.Global
-      var root = _parseTree as IMappedParseTree<IAst>;
-      if (root != null)
-      {
-        var astRoot = AstRoot<IAst>.Create(root);
-        UpdateDeclarations(astRoot);
-      }
-    }
-
     private void UpdatePerformance()
     {
       _needUpdatePerformance = false;
-      if (_calcParseTreeTime.IsChecked == true)
+      if (object.ReferenceEquals(_tabControl.SelectedItem, _performanceTabItem))
         UpdateParseTree();
-
-      _totalTime.Text = (_parseTimeSpan + _parseTreeTimeSpan + _foldingStrategy.TimeSpan + _highlightingTimeSpan).ToString();
     }
 
     private void UpdateParseTree()
@@ -494,9 +527,12 @@ namespace Nitra.Visualizer
 
       if (_parseTree == null)
       {
-        var timer = Stopwatch.StartNew();
+        var stat = ((StatisticsTask.Container [])_performanceTreeView.ItemsSource)[0];
+        var createParseTreeStat = new StatisticsTask.Single("ParseTree", "Create Parse Tree");
+        stat.AddSubtask(createParseTreeStat);
+        createParseTreeStat.Start();
         _parseTree = _parseResult.CreateParseTree();
-        _parseTreeTime.Text = (_parseTreeTimeSpan = timer.Elapsed).ToString();
+        createParseTreeStat.Stop();
       }
     }
 
@@ -606,6 +642,8 @@ namespace Nitra.Visualizer
       if (_doTreeOperation)
         return;
 
+      _astRoot = null;
+
       if (_currentTestSuit == null)
         return;
 
@@ -617,26 +655,25 @@ namespace Nitra.Visualizer
         var timer = Stopwatch.StartNew();
 
         _parseResult = _currentTestSuit.Run(_text.Text, recoveryAlgorithm: GetRecoveryAlgorithm());
+        if (_parseResult != null)
+          _performanceTreeView.ItemsSource = new[] { _parseResult.ParseSession.Statistics };
+        //_parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
 
-        _parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
-
-        _text.TextArea.TextView.Redraw(DispatcherPriority.Input);
 
         _foldingStrategy.ParseResult = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
 
-        _outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
+        //_outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
 
-        _recoveryTime.Text        = _currentTestSuit.TestTime.ToString();//recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
-        _earleyParseTime.Text     = "NA";//recovery.RecoveryPerformanceData.EarleyParseTime.ToString();
-        _recoverAllWaysTime.Text  = "NA";//recovery.RecoveryPerformanceData.RecoverAllWaysTime.ToString();
-        _findBestPathTime.Text    = "NA";//recovery.RecoveryPerformanceData.FindBestPathTime.ToString();
-        _flattenSequenceTime.Text = "NA";//recovery.RecoveryPerformanceData.FlattenSequenceTime.ToString();
-        _parseErrorCount.Text     = "NA";//recovery.RecoveryPerformanceData.ParseErrorCount.ToString(CultureInfo.InvariantCulture);
+        //_recoveryTime.Text        = _currentTestSuit.TestTime.ToString();//recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
+        //_findBestPathTime.Text    = "NA";//recovery.RecoveryPerformanceData.FindBestPathTime.ToString();
+        //_flattenSequenceTime.Text = "NA";//recovery.RecoveryPerformanceData.FlattenSequenceTime.ToString();
 
         TryHighlightBraces(_text.CaretOffset);
         TryReportError();
         ShowInfo();
+
+        _text.TextArea.TextView.Redraw(DispatcherPriority.Input);
       }
       catch (Exception ex)
       {
@@ -651,6 +688,36 @@ namespace Nitra.Visualizer
       _textMarkerService.RemoveAll(marker => marker.Tag == (object)ErrorMarkerTag);
     }
 
+    private class CollectSymbolsAstVisitor : IAstVisitor
+    {
+      private readonly NSpan _span;
+      public List<SpanInfo> SpanInfos { get; private set; }
+
+      public CollectSymbolsAstVisitor(NSpan span) { _span = span; SpanInfos = new List<SpanInfo>(); }
+
+      public void Visit(IAst parseTree)
+      {
+        if (parseTree.Span.IntersectsWith(_span))
+          parseTree.Apply(this);
+      }
+
+      public void Visit(IReference reference)
+      {
+        var span = reference.Span;
+
+        if (!span.IntersectsWith(_span) || !reference.IsSymbolEvaluated)
+          return;
+        
+        var sym = reference.Symbol;
+        var spanClass = sym.SpanClass;
+        
+        if (spanClass == "Default")
+          return;
+
+        SpanInfos.Add(new SpanInfo(span, new SpanClass(sym.SpanClass)));
+      }
+    }
+
     private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)
     {
       if (_parseResult == null)
@@ -658,12 +725,19 @@ namespace Nitra.Visualizer
 
       try
       {
+        var timer = Stopwatch.StartNew();
         var line = e.Line;
         var spans = new HashSet<SpanInfo>();
-        var timer = Stopwatch.StartNew();
         _parseResult.GetSpans(line.Offset, line.EndOffset, spans);
+        var astRoot = _astRoot;
+        if (astRoot != null)
+        {
+          var visitor = new CollectSymbolsAstVisitor(new NSpan(line.Offset, line.EndOffset));
+          astRoot.Apply(visitor);
+          foreach (var spanInfo in visitor.SpanInfos)
+            spans.Add(spanInfo);
+        }
         _highlightingTimeSpan = timer.Elapsed;
-        _highlightingTime.Text = _highlightingTimeSpan.ToString();
 
         foreach (var span in spans)
         {
@@ -680,6 +754,8 @@ namespace Nitra.Visualizer
             };
             e.Sections.Add(section);
           }
+          else
+            Debug.WriteLine("Span class '" + span.SpanClass.Name + "' not found in styles");
         }
       }
       catch (Exception ex) { Debug.WriteLine(ex.GetType().Name + ":" + ex.Message); }
@@ -718,106 +794,20 @@ namespace Nitra.Visualizer
       ShowNodeForCaret();
     }
 
-    public Tuple<string, string>[] GetRowsForColumn(int colIndex)
-    {
-      var result = new List<Tuple<string, string>>();
-
-      foreach (var g in _performanceGrid.Children.OfType<UIElement>().GroupBy(x => Grid.GetRow(x)).OrderBy(x => x.Key))
-      {
-        string label = null;
-        string value = null;
-
-        foreach (var uiElem in g)
-        {
-          int col = Grid.GetColumn(uiElem);
-
-          if (col == colIndex)
-          {
-            var labelElem = uiElem as Label;
-            if (labelElem != null)
-              label = labelElem.Content.ToString();
-
-            var checkBox = uiElem as CheckBox;
-            if (checkBox != null)
-              label = checkBox.Content.ToString();
-          }
-
-          if (col == colIndex + 1)
-          {
-            var text = uiElem as TextBlock;
-            if (text != null)
-              value = text.Text;
-          }
-
-        }
-
-        if (label == null && value == null)
-          continue;
-
-        Debug.Assert(label != null);
-        Debug.Assert(value != null);
-        result.Add(Tuple.Create(label, value));
-      }
-
-      return result.ToArray();
-    }
-
     private static string MakeStr(string str, int maxLen)
     {
       var padding = maxLen - str.Length + 1;
       return new string(' ', padding) + str;
     }
 
-    private string[][] MakePerfData()
-    {
-      var len = _performanceGrid.ColumnDefinitions.Count / 2;
-      var cols = new Tuple<string, string>[len][];
-      var maxLabelLen = new int[len];
-      var maxValueLen = new int[len];
-
-      for (int col = 0; col < len; col++)
-      {
-        var colData = GetRowsForColumn(col * 2);
-        cols[col] = colData.ToArray();
-        maxLabelLen[col] = colData.Max(x => x.Item1.Length);
-        maxValueLen[col] = colData.Max(x => x.Item2.Length);
-      }
-
-      string[][] strings = new string[len][];
-
-      for (int col = 0; col < len; col++)
-      {
-        strings[col] = new string[cols[col].Length];
-        for (int row = 0; row < strings[col].Length; row++)
-          strings[col][row] = MakeStr(cols[col][row].Item1, maxLabelLen[col]) + MakeStr(cols[col][row].Item2, maxValueLen[col]);
-      }
-
-      return strings;
-    }
-
     private void _copyButton_Click(object sender, RoutedEventArgs e)
     {
-      var rows = _performanceGrid.RowDefinitions.Count - 1;
-      var data = MakePerfData();
-      var cols = data.Length;
       var sb = new StringBuilder();
+      var stats = ((StatisticsTask.Container[])_performanceTreeView.ItemsSource);
 
-      for (int row = 0; row < rows; row++)
-      {
-        for (int col = 0; col < cols; col++)
-        {
-          var currRows = data[col];
-
-          if (row < currRows.Length)
-          {
-            sb.Append(currRows[row]);
-            if (col != cols - 1)
-              sb.Append(" │");
-          }
-        }
-        sb.AppendLine();
-      }
-
+      foreach (var stat in stats)
+        sb.AppendLine(stat.ToString());
+      
       var result = sb.ToString();
 
       Clipboard.SetData(DataFormats.Text, result);
@@ -1306,6 +1296,7 @@ namespace Nitra.Visualizer
           var text = _text.Text.Substring(0, start) + '\xFFFF';
           var prefix = _text.Document.GetText(start, end - start);
           _currentTestSuit.Run(text, null, start, prefix);
+          _performanceTreeView.ItemsSource = new[] { _currentTestSuit.Statistics };
           var ex = _currentTestSuit.Exception;
           var result = ex as LiteralCompletionException;
           //MessageBox.Show(string.Join(", ", result.Literals.OrderBy(x => x)));

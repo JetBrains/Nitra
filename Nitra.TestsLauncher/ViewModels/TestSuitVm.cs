@@ -21,6 +21,7 @@ namespace Nitra.ViewModels
     public string                                   TestSuitPath     { get; set; }
     public Exception                                Exception        { get; private set; }
     public TimeSpan                                 TestTime         { get; private set; }
+    public StatisticsTask.Container                 Statistics       { get; private set; }
 
     public string _hint;
     public override string Hint { get { return _hint; } }
@@ -160,12 +161,14 @@ namespace Nitra.ViewModels
       var timer = System.Diagnostics.Stopwatch.StartNew();
       try
       {
+        Statistics = new StatisticsTask.Container("Total", "Total");
         var parseSession = new ParseSession(StartRule,
           compositeGrammar:   _compositeGrammar,
           completionPrefix:   completionPrefix,
           completionStartPos: completionStartPos,
           parseToEndOfString: true,
-          dynamicExtensions:  AllSynatxModules);
+          dynamicExtensions:  AllSynatxModules,
+          statistics:         Statistics);
         switch (recoveryAlgorithm)
         {
           case RecoveryAlgorithm.Smart: parseSession.OnRecovery = ParseSession.SmartRecovery; break;
