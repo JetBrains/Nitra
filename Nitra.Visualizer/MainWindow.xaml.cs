@@ -657,17 +657,10 @@ namespace Nitra.Visualizer
         _parseResult = _currentTestSuit.Run(_text.Text, recoveryAlgorithm: GetRecoveryAlgorithm());
         if (_parseResult != null)
           _performanceTreeView.ItemsSource = new[] { _parseResult.ParseSession.Statistics };
-        //_parseTime.Text = (_parseTimeSpan = timer.Elapsed).ToString();
 
 
         _foldingStrategy.ParseResult = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
-
-        //_outliningTime.Text = _foldingStrategy.TimeSpan.ToString();
-
-        //_recoveryTime.Text        = _currentTestSuit.TestTime.ToString();//recovery.RecoveryPerformanceData.Timer.Elapsed.ToString();
-        //_findBestPathTime.Text    = "NA";//recovery.RecoveryPerformanceData.FindBestPathTime.ToString();
-        //_flattenSequenceTime.Text = "NA";//recovery.RecoveryPerformanceData.FlattenSequenceTime.ToString();
 
         TryHighlightBraces(_text.CaretOffset);
         TryReportError();
@@ -919,6 +912,23 @@ namespace Nitra.Visualizer
 
         testSuit.TestStateChanged();
       }
+    }
+
+    private void RunTest(ITest test)
+    {
+      var testFile = test as TestVm;
+      if (testFile != null)
+        RunTest(testFile);
+
+      var testFolder = test as TestFolderVm;
+      if (testFolder != null)
+        RunTest(testFolder);
+    }
+
+    private void RunTest(TestFolderVm testFolder)
+    {
+      foreach (var testFile in testFolder.Tests)
+        RunTest(testFile);
     }
 
     private void RunTest(TestVm test)

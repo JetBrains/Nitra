@@ -121,32 +121,16 @@ namespace Nitra.TestsLauncher
           var dots = maxNameLen - test.Name.Length;
           Print(test.Name + " " + new string('.', dots) + " ");
           Console.Out.Flush();
-          test.Run(recoveryAlgorithm: RecoveryAlgorithm.Smart);
-
-          switch (test.TestState)
           {
-            case TestState.Skipped:
-              ContinuePrint("skipped.", ConsoleColor.Yellow);
-              break;
-            case TestState.Failure:
-              ContinuePrint("failed!", ConsoleColor.Red);
-              someTestsFailed = true;
-              Indent();
-              Diff(test);
-              Unindent();
-
-             break;
-            case TestState.Ignored:
-              ContinuePrint("ignored.", ConsoleColor.Yellow);
-              break;
-            case TestState.Inconclusive:
-              ContinuePrint("inconclusive.", ConsoleColor.Yellow);
-              break;
-            case TestState.Success:
-              ContinuePrint("passed.", ConsoleColor.Green);
-              break;
-            default:
-              break;
+            var testFile = test as TestVm;
+            if (testFile != null)
+              someTestsFailed |= RunTestFile(testFile);
+          }
+          {
+            var testFolder = test as TestFolderVm;
+            if (testFolder != null)
+              foreach (var testFile in testFolder.Tests)
+                someTestsFailed |= RunTestFile(testFile);
           }
         }
 
@@ -165,6 +149,37 @@ namespace Nitra.TestsLauncher
         //Console.ReadLine();
         Environment.Exit(-1);
       }
+    }
+
+    private static bool RunTestFile(TestVm testFile)
+    {
+      testFile.Run(RecoveryAlgorithm.Smart);
+
+      switch (testFile.TestState)
+      {
+        case TestState.Skipped:
+          ContinuePrint("skipped.", ConsoleColor.Yellow);
+          break;
+        case TestState.Failure:
+          ContinuePrint("failed!", ConsoleColor.Red);
+          Indent();
+          Diff(testFile);
+          Unindent();
+
+          return true;
+
+        case TestState.Ignored:
+          ContinuePrint("ignored.", ConsoleColor.Yellow);
+          break;
+        case TestState.Inconclusive:
+          ContinuePrint("inconclusive.", ConsoleColor.Yellow);
+          break;
+        case TestState.Success:
+          ContinuePrint("passed.", ConsoleColor.Green);
+          break;
+      }
+
+      return false;
     }
 
     private static void Diff(TestVm test)

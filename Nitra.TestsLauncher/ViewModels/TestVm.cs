@@ -1,16 +1,31 @@
-﻿using Nitra.Visualizer.Annotations;
+﻿using System;
+using Nitra.Visualizer.Annotations;
 
 using System.IO;
 
 namespace Nitra.ViewModels
 {
-  public class TestVm : FullPathVm
+  public class TestVm : FullPathVm, ITest
   {
     public string       TestPath          { get; private set; }
     public TestSuitVm   TestSuit          { get; private set; }
     public string       Name              { get { return Path.GetFileNameWithoutExtension(TestPath); } }
     public IParseResult Result            { get; private set; }
     public string       PrettyPrintResult { get; private set; }
+    public Exception    Exception         { get; private set; }
+    public TimeSpan     TestTime          { get; private set; }
+
+    private TestFolderVm _testFolder;
+
+    public TestVm(string testPath, TestSuitVm testSuit, TestFolderVm testFolder = null)
+      : base(testPath)
+    {
+      _testFolder = testFolder;
+      TestPath = testPath;
+      TestSuit = testSuit;
+      if (TestSuit.TestState == TestState.Ignored)
+        TestState = TestState.Ignored;
+    }
 
     public override string Hint { get { return Code; } }
 
@@ -36,13 +51,44 @@ namespace Nitra.ViewModels
       set { File.WriteAllText(Path.ChangeExtension(TestPath, ".gold"), value); }
     }
 
-    public TestVm(string testPath, TestSuitVm testSuit)
-      :base(testPath)
+    [CanBeNull]
+    public IParseResult Run([CanBeNull] string code = null, StatisticsTask.Container statistics = null, RecoveryAlgorithm recoveryAlgorithm = RecoveryAlgorithm.Smart, int completionStartPos = -1, string completionPrefix = null)
     {
-      TestPath = testPath;
-      TestSuit = testSuit;
-      if (TestSuit.TestState == TestState.Ignored)
-        TestState = TestState.Ignored;
+      if (code == null)
+        code = this.Code;
+
+      var timer = System.Diagnostics.Stopwatch.StartNew();
+      try
+      {
+        if (statistics == null)
+          statistics = new StatisticsTask.Container("Total", "Total");
+
+        var parseSession = new ParseSession(TestSuit.StartRule,
+          compositeGrammar: TestSuit.CompositeGrammar,
+          completionPrefix: completionPrefix,
+          completionStartPos: completionStartPos,
+          parseToEndOfString: true,
+          dynamicExtensions: TestSuit.AllSynatxModules,
+          statistics: statistics);
+        switch (recoveryAlgorithm)
+        {
+          case RecoveryAlgorithm.Smart: parseSession.OnRecovery = ParseSession.SmartRecovery; break;
+          case RecoveryAlgorithm.Panic: parseSession.OnRecovery = ParseSession.PanicRecovery; break;
+          case RecoveryAlgorithm.FirstError: parseSession.OnRecovery = ParseSession.FirsrErrorRecovery; break;
+        }
+
+        var source = new SourceSnapshot(code);
+        var parseResult = parseSession.Parse(source);
+        this.Exception = null;
+        this.TestTime = timer.Elapsed;
+        return parseResult;
+      }
+      catch (Exception ex)
+      {
+        this.Exception = ex;
+        this.TestTime = timer.Elapsed;
+        return null;
+      }
     }
 
     public IParseResult Run(RecoveryAlgorithm recoveryAlgorithm)

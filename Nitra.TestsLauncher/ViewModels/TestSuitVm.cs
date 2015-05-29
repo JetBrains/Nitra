@@ -17,7 +17,7 @@ namespace Nitra.ViewModels
     public string Name { get; private set; }
     public ObservableCollection<GrammarDescriptor>  SynatxModules    { get; private set; }
     public StartRuleDescriptor                      StartRule        { get; private set; }
-    public ObservableCollection<TestVm>             Tests            { get; private set; }
+    public ObservableCollection<ITest>              Tests            { get; private set; }
     public string                                   TestSuitPath     { get; set; }
     public Exception                                Exception        { get; private set; }
     public TimeSpan                                 TestTime         { get; private set; }
@@ -31,7 +31,13 @@ namespace Nitra.ViewModels
     readonly string _rootPath;
     private CompositeGrammar _compositeGrammar;
 
+    public CompositeGrammar CompositeGrammar
+    {
+      get { return _compositeGrammar = ParserHost.Instance.MakeCompositeGrammar(SynatxModules); }
+    }
+
     public XElement Xml { get { return Utils.MakeXml(_rootPath, SynatxModules, StartRule); } }
+
 
 
     public TestSuitVm(SolutionVm solution, string name, string config)
@@ -103,11 +109,17 @@ namespace Nitra.ViewModels
 
       Name = Path.GetFileName(testSuitPath);
 
-      var tests = new ObservableCollection<TestVm>();
+      var tests = new ObservableCollection<ITest>();
 
       if (Directory.Exists(testSuitPath))
-        foreach (var testPath in Directory.GetFiles(testSuitPath, "*.test").OrderBy(f => f))
-          tests.Add(new TestVm(testPath, this));
+      {
+        var paths = Directory.GetFiles(testSuitPath, "*.test").Concat(Directory.GetDirectories(testSuitPath));
+        foreach (var path in paths.OrderBy(f => f))
+          if (Directory.Exists(path))
+            tests.Add(new TestFolderVm(path, this));
+          else
+            tests.Add(new TestVm(path, this));
+      }
       else if (TestState != TestState.Ignored)
       {
         _hint = "The test suite folder '" + Path.GetDirectoryName(testSuitPath) + "' not exists.";
