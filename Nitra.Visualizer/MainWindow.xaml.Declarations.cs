@@ -101,6 +101,11 @@ namespace Nitra.Visualizer
       routedEventArgs.Handled = true;
 
       var tvi = (TreeViewItem)sender;
+      TviExpanded(tvi);
+    }
+
+    private void TviExpanded(TreeViewItem tvi)
+    {
       var obj = tvi.Tag;
       tvi.Items.Clear();
 
@@ -121,7 +126,7 @@ namespace Nitra.Visualizer
         var t = obj.GetType();
         var props = t.GetProperties();
 
-        foreach (var prop in props)//.OrderBy(p => p.Name))
+        foreach (var prop in props) //.OrderBy(p => p.Name))
         {
           if (IsIgnoredProperty(prop))
             continue;
@@ -141,7 +146,7 @@ namespace Nitra.Visualizer
       var items = obj as IEnumerable;
       if (items != null && !(items is string))
       {
-        foreach (var item in (IEnumerable)obj)
+        foreach (var item in (IEnumerable) obj)
           tvi.Items.Add(ObjectToItem(null, item));
         return;
       }
@@ -302,6 +307,7 @@ namespace Nitra.Visualizer
     {
       SelectCodeForDeclarationPart(sender);
       e.Handled = true;
+      //e.
     }
 
     private void SelectCodeForDeclarationPart(object sender)
@@ -312,12 +318,45 @@ namespace Nitra.Visualizer
 
       var ast = tvi.Tag as IAst;
       if (ast != null)
+        SelectText(ast);
+
+      TrySelectTextForSymbol(tvi.Tag as Symbol2, tvi);
+    }
+
+    private void TrySelectTextForSymbol(Symbol2 symbol, TreeViewItem tvi)
+    {
+      if (symbol != null && !symbol.Declarations.IsEmpty)
       {
-        _text.CaretOffset = ast.Span.StartPos;
-        _text.Select(ast.Span.StartPos, ast.Span.Length);
-        var loc = new Location(_parseResult.SourceSnapshot, ast.Span);
-        _text.ScrollToLine(loc.StartLineColumn.Line);
+        if (symbol.Declarations.Length == 1)
+          SelectText(symbol.Declarations.Head);
+        else
+        {
+          if (!tvi.IsExpanded)
+            tvi.IsExpanded = true;
+          foreach (TreeViewItem subItem in tvi.Items)
+          {
+            var decls = subItem.Tag as Nemerle.Core.list<Nitra.Declarations.IDeclaration>;
+            if (decls != null)
+            {
+              subItem.IsExpanded = true;
+              subItem.IsSelected = true;
+
+              foreach (TreeViewItem subSubItem in tvi.Items)
+                subSubItem.BringIntoView();
+
+              break;
+            }
+          }
+        }
       }
+    }
+
+    private void SelectText(IAst ast)
+    {
+      _text.CaretOffset = ast.Span.StartPos;
+      _text.Select(ast.Span.StartPos, ast.Span.Length);
+      var loc = new Location(_parseResult.SourceSnapshot, ast.Span);
+      _text.ScrollToLine(loc.StartLineColumn.Line);
     }
 
     private void TviOnKeyDown(object sender, KeyEventArgs e)
