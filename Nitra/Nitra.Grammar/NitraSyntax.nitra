@@ -882,40 +882,59 @@ syntax module NitraSyntax
     ReturnsType(ruleSymbol : SyntaxRuleSymbol, astType : AstType) : bool;
     Expression(ruleSymbol : SyntaxRuleSymbol, astType : AstType) : SyntaxMappingExpr;
 
-    | Conversion = QualifiedName ("(" (Argument=MapSyntaxExpression; "," sm)* ")")?
+    | Conversion = QualifiedName Arguments?
       {
+        syntax Arguments = "(" (ArgumentExpr=MapSyntaxExpression; "," sm)* ")"
+        {
+          MakeContext(parent : Context) : Context
+          {
+            foreach (item in ArgumentExprs.Item1)
+              _ = item.MakeContext(parent);
+            parent
+          }
+        }
+
         override MakeContext
         {
           when (ArgumentsOpt.HasValue)
-          _ = PassThrough(ArgumentsOpt.Value.Item2.Item1, parent, _.MakeContext(_));
+            _ = ArgumentsOpt.Value.MakeContext(parent);
           parent
         }
         override ReturnsType
         {
           def pathOpt = TypingUtils.BindRuleField(ruleSymbol, this.QualifiedName, this.Context);
-          if (pathOpt is VSome(path))
+          if (pathOpt is VSome(originalPath))
           {
-            def arguments = ArgumentsOpt.Value.Item2.Item1;
+            def path = Utils.FilterTuples(originalPath);
+            def arguments = if (ArgumentsOpt.HasValue) ArgumentsOpt.Value.ArgumentExprs.Item1.ToArray() else array[];
             match (path.Type)
             {
               | Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings)) => TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, astType).HasValue
-              | List(Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings))) =>
-                match(astType)
-                {
-                  | List(astSymbol) | OptionList(astSymbol) =>
-                       TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Ast(astType.Location, astSymbol)).HasValue
-                    || TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, astType).HasValue
-                    || TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Option(astType.Location, astSymbol)).HasValue
+              | List(item) =>
+                def itemPath = Utils.FilterTuples(ParseTreePath.Variable(path.Location.FromEnd(), Nitra.Model.Identifier(path.Location.FromEnd(), "node"), item));
+                if (itemPath.Type is Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings)))
+                  match(astType)
+                  {
+                    | List(astSymbol) | OptionList(astSymbol) =>
+                         TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Ast(astType.Location, astSymbol)).HasValue
+                      || TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, astType).HasValue
+                      || TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Option(astType.Location, astSymbol)).HasValue
 
-                  | _ => false
-                }
+                    | _ => false
+                  }
+                else
+                  false
 
-              | Option(Ref(SyntaxRuleSymbol as ruleSymbol)) =>
-                match(astType)
-                {
-                  | Option(astSymbol) => TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Ast(astType.Location, astSymbol)).HasValue
-                  | _ => false
-                }
+              | Option(value) =>
+                def valuePath = Utils.FilterTuples(ParseTreePath.Variable(path.Location.FromEnd(), Nitra.Model.Identifier(path.Location.FromEnd(), "node"), value));
+                if (valuePath.Type is Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings)))
+                  match(astType)
+                  {
+                    | Option(astSymbol) => TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Ast(astType.Location, astSymbol)).HasValue
+                    | _ => false
+                  }
+                else
+                  false
 
               | _ => false
             }
@@ -925,56 +944,81 @@ syntax module NitraSyntax
         }
         override Expression
         {
-          def pathOpt = TypingUtils.BindRuleField(ruleSymbol, this.QualifiedName, this.Context);
-          if (pathOpt is VSome(path))
+          def genericError()
           {
-            def arguments = ArgumentsOpt.Value.Item2.Item1;
+            this.Context.Error(this, "Cannot map rule to AST of type '$astType'.");
+            SyntaxMappingExpr.Error(this)
+          }
+          def pathOpt = TypingUtils.BindRuleField(ruleSymbol, this.QualifiedName, this.Context);
+          if (pathOpt is VSome(originalPath))
+          {
+            def path = Utils.FilterTuples(originalPath);
+            def makeArgumentExpr(p, a) { a.Expression(ruleSymbol, p.Type) }
+            def arguments = if (ArgumentsOpt.HasValue) ArgumentsOpt.Value.ArgumentExprs.Item1.ToArray() else array[];
             match (path.Type)
             {
               | Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings)) =>
                 if (TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, astType) is VSome(syntaxMapping))
                 {
+                  def argumentExprs = syntaxMapping.Parameters.Map2(arguments, makeArgumentExpr);
+                  SyntaxMappingExpr.Call(this.Location, path, argumentExprs, syntaxMapping.ReturnType);
                 }
                 else
-                {
-                }
+                  genericError()
 
-              | List(Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings))) =>
-                match(astType)
-                {
-                  | List(astSymbol) | OptionList(astSymbol) =>
-                    if (TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Ast(astType.Location, astSymbol)) is VSome(syntaxMapping))
-                    {
+              | List(item) =>
+                def itemPath = Utils.FilterTuples(ParseTreePath.Variable(path.Location.FromEnd(), Nitra.Model.Identifier(path.Location.FromEnd(), "node"), item));
+                if (itemPath.Type is Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings)))
+                  match(astType)
+                  {
+                    | List(astSymbol) | OptionList(astSymbol) =>
+                      if (TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Ast(astType.Location, astSymbol)) is VSome(syntaxMapping))
+                      {
+                        def argumentExprs = syntaxMapping.Parameters.Map2(arguments, makeArgumentExpr);
+                        SyntaxMappingExpr.ConvertList(this.Location, path, argumentExprs, astSymbol, itemPath);
+                      }
+                      else if (TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, astType) is VSome(syntaxMapping))
+                      {
+                        def argumentExprs = syntaxMapping.Parameters.Map2(arguments, makeArgumentExpr);
+                        SyntaxMappingExpr.ConcatLists(this.Location, path, argumentExprs, astSymbol, itemPath);
+                      }
+                      else if (TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Option(astType.Location, astSymbol)) is VSome(syntaxMapping))
+                      {
+                        def argumentExprs = syntaxMapping.Parameters.Map2(arguments, makeArgumentExpr);
+                        SyntaxMappingExpr.ConcatOptions(this.Location, path, argumentExprs, astSymbol, itemPath);
+                      }
+                      else
+                        genericError()
 
-                    }
-                    else if (TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, astType) is VSome(syntaxMapping))
-                    {
+                    | _ => genericError()
+                  }
+                else
+                  genericError()
 
-                    }
-                    else if (TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Option(astType.Location, astSymbol)) is VSome(syntaxMapping))
-                    {
+              | Option(value) =>
+                def valuePath = Utils.FilterTuples(ParseTreePath.Variable(path.Location.FromEnd(), Nitra.Model.Identifier(path.Location.FromEnd(), "node"), value));
+                if (valuePath.Type is Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings)))
+                  match(astType)
+                  {
+                    | Option(astSymbol) =>
+                      if (TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Ast(astType.Location, astSymbol)) is VSome(syntaxMapping))
+                      {
+                        def argumentExprs = syntaxMapping.Parameters.Map2(arguments, makeArgumentExpr);
+                        SyntaxMappingExpr.ConvertOption(this.Location, path, argumentExprs, astSymbol, valuePath);
+                      }
+                      else
+                        genericError()
 
-                    }
-                    else
-                    {
-                      
-                    }
+                    | _ => genericError()
+                  }
+                else
+                  genericError()
 
-                  | _ => false
-                }
-
-              | Option(Ref(SyntaxRuleSymbol as ruleSymbol)) =>
-                match(astType)
-                {
-                  | Option(astSymbol) => TypingUtils.SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Ast(astType.Location, astSymbol)).HasValue
-                  | _ => false
-                }
-
-              | _ => false
+              | _ => genericError()
             }
           }
           else
-            false
+            genericError()
         }
       }
     | Ast        = QualifiedName outline_begin_before nl OpenBrace="{" inl Members=MapSyntaxExpressionAstMember* d CloseBrace="}" outline_end_before nl
@@ -986,6 +1030,7 @@ syntax module NitraSyntax
         }
         override ReturnsType
         {
+          _ = ruleSymbol;
           if (astType is AstType.Ast(targetSymbol))
           {
             def astSymbolRef = TypingUtils.BindAstSymbolFromMappingExtension(this.QualifiedName.Location, targetSymbol, this.QualifiedName.CalcLocations(), this.Context);
@@ -1038,7 +1083,7 @@ syntax module NitraSyntax
               def itemType = AstType.Ast(astType.Location, astSymbol);
               mutable result = true;
               foreach (itemExpr in this.ItemExprs.Item1)
-                result &&= itemExpr.ReturnsType(ruleSymbol, itemType);
+                result &= itemExpr.ReturnsType(ruleSymbol, itemType);
               result
 
             | _ => false
@@ -1052,7 +1097,7 @@ syntax module NitraSyntax
               def itemType = AstType.Ast(astType.Location, astSymbol);
               def items = List();
               foreach (itemExpr in this.ItemExprs.Item1)
-                items.Add(itemExpr.Typing(ruleSymbol, itemType));
+                items.Add(itemExpr.Expression(ruleSymbol, itemType));
               SyntaxMappingExpr.ListCtor(this.Location, astSymbol, items.ToNList())
 
             | _ =>
@@ -1074,7 +1119,7 @@ syntax module NitraSyntax
           if (astType is AstType.Option(astSymbol))
           {
             def valueType = AstType.Ast(astType.Location, astSymbol);
-            ValueExpr.ReturnsType(valueType)
+            ValueExpr.ReturnsType(ruleSymbol, valueType)
           }
           else
             false
@@ -1106,7 +1151,7 @@ syntax module NitraSyntax
         {
           _ = ruleSymbol;
           if (astType is AstType.Option(astSymbol))
-            SyntaxMappingExpr.OptionCtor(this, astSymbol, None())
+            SyntaxMappingExpr.OptionCtor(this.Location, astSymbol, None())
           else
           {
             this.Context.Error(this, $"Expected ast type '$astType' got option.None");
@@ -1154,7 +1199,7 @@ syntax module NitraSyntax
         }
         else
         {
-          def expr = this.Expr.Typing(ruleSymbol, astType);
+          def expr = this.Expr.Expression(ruleSymbol, astType);
           return VSome(SyntaxMappingField(this.Location, astProperty, expr));
         }
       }
@@ -1246,7 +1291,7 @@ syntax module NitraSyntax
         {
           _ = sharedMappingFields;
           def patternExpr = pattern.SimpleTyping(syntaxMapping.DeclaringRule, this.Context);
-          def expr        = this.Expr.Typing(syntaxMapping.DeclaringRule, syntaxMapping.ReturnType);
+          def expr        = this.Expr.Expression(syntaxMapping.DeclaringRule, syntaxMapping.ReturnType);
           buffer.Add(SyntaxMappingCase(this.Location, patternExpr, expr))
         }
         override CollectExtensionBodies
@@ -1255,11 +1300,11 @@ syntax module NitraSyntax
           {
             | (SymbolRef.Some(ruleSymbol), true) =>
               def patternExpr = pattern.ExtensionTyping(ruleSymbol, this.Context);
-              def expr        = this.Expr.Typing(ruleSymbol, astType);
+              def expr        = this.Expr.Expression(ruleSymbol, astType);
               mappingCases.Add((ruleSymbol, SyntaxMappingCase(this.Location, patternExpr, expr)))
 
             | (SymbolRef.Some(ruleSymbol), false) =>
-              def expr = this.Expr.Typing(ruleSymbol, astType);
+              def expr = this.Expr.Expression(ruleSymbol, astType);
               mappingBodies.Add((ruleSymbol, expr))
 
             | _ => ()
@@ -1459,7 +1504,7 @@ syntax module NitraSyntax
             null
           }
           else
-            this.Expr.Typing(syntaxMapping.DeclaringRule, syntaxMapping.ReturnType)
+            this.Expr.Expression(syntaxMapping.DeclaringRule, syntaxMapping.ReturnType)
         }
       }
     | Inline = sm "=" sm Code=MapSyntaxCode
