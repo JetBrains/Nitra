@@ -22,7 +22,6 @@ namespace Nitra.ViewModels
     public Exception                                Exception        { get; private set; }
     public TimeSpan                                 TestTime         { get; private set; }
     public StatisticsTask.Container                 Statistics       { get; private set; }
-
     public string _hint;
     public override string Hint { get { return _hint; } }
     public string[] LibPaths { get; private set; }
@@ -31,18 +30,10 @@ namespace Nitra.ViewModels
     readonly string _rootPath;
     private CompositeGrammar _compositeGrammar;
 
-    public CompositeGrammar CompositeGrammar
+    public TestSuitVm(SolutionVm solution, string name, string config, ICompilerMessages compilerMessages)
+      : base(solution, Path.Combine(solution.RootFolder, name))
     {
-      get { return _compositeGrammar = ParserHost.Instance.MakeCompositeGrammar(SynatxModules); }
-    }
-
-    public XElement Xml { get { return Utils.MakeXml(_rootPath, SynatxModules, StartRule); } }
-
-
-
-    public TestSuitVm(SolutionVm solution, string name, string config)
-      : base(Path.Combine(solution.RootFolder, name))
-    {
+      Statistics = new StatisticsTask.Container("TestSuite", "Test Suite");
       string testSuitPath = base.FullPath;
       var rootPath = solution.RootFolder;
       Solution = solution;
@@ -116,9 +107,9 @@ namespace Nitra.ViewModels
         var paths = Directory.GetFiles(testSuitPath, "*.test").Concat(Directory.GetDirectories(testSuitPath));
         foreach (var path in paths.OrderBy(f => f))
           if (Directory.Exists(path))
-            tests.Add(new TestFolderVm(path, this));
+            tests.Add(new TestFolderVm(path, this, compilerMessages));
           else
-            tests.Add(new TestVm(path, this));
+            tests.Add(new TestVm(path, this, compilerMessages));
       }
       else if (TestState != TestState.Ignored)
       {
@@ -130,6 +121,11 @@ namespace Nitra.ViewModels
       solution.TestSuits.Add(this);
     }
 
+    public CompositeGrammar CompositeGrammar { get { return _compositeGrammar = ParserHost.Instance.MakeCompositeGrammar(SynatxModules); } }
+
+    public XElement Xml { get { return Utils.MakeXml(_rootPath, SynatxModules, StartRule); } }
+
+    public RecoveryAlgorithm RecoveryAlgorithm { get; set; }
 
     private static StartRuleDescriptor GetStartRule(XAttribute startRule, GrammarDescriptor m)
     {
@@ -173,7 +169,6 @@ namespace Nitra.ViewModels
       var timer = System.Diagnostics.Stopwatch.StartNew();
       try
       {
-        Statistics = new StatisticsTask.Container("Total", "Total");
         var parseSession = new ParseSession(StartRule,
           compositeGrammar:   _compositeGrammar,
           completionPrefix:   completionPrefix,

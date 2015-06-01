@@ -21,7 +21,7 @@ namespace Nitra.Visualizer
 {
   public partial class MainWindow
   {
-    private AstRoot<IAst> _astRoot;
+    private IAst _astRoot;
 
     public TreeViewItem ObjectToItem(PropertyInfo prop, object obj)
     {
@@ -194,53 +194,12 @@ namespace Nitra.Visualizer
 
     private void UpdateDeclarations()
     {
-      if (_parseResult == null)
-        return;
-
-      if (_astRoot != null)
+      if (_astRoot == null)
         return;
 
       _declarationsTreeView.Items.Clear();
 
-      if (_parseTree == null)
-      {
-        Debug.Assert(_astRoot == null);
-        _parseTree = _parseResult.CreateParseTree();
-      }
-
-      // ReSharper disable once SuspiciousTypeConversion.Global
-      var root = _parseTree as IMappedParseTree<IAst>;
-      if (root == null)
-        return;
-      
-      var statistics = _parseResult.ParseSession.Statistics;
-      var dpStatistics = new StatisticsTask.Container("DependentProperty", "Dependent Property");
-      var astStatistics = new StatisticsTask.Single("AST", "AST Mapping");
-
-      astStatistics.Start();
-      var astRoot = AstRoot<IAst>.Create(root);
-      astStatistics.Stop();
-      statistics.AddSubtask(astStatistics);
-      _astRoot = astRoot;
-
-      _declarationsTreeView.Items.Clear();
-      // TODO: display messages in GUI
-      var compilerMessages = new VisualizerCompilerMessages(_errorsTreeView.Items, _textMarkerService, _text);
-      // ReSharper disable once SuspiciousTypeConversion.Global
-      var projectSupport = astRoot.Content as IProjectSupport;
-      if (projectSupport != null)
-      {
-        projectSupport.RefreshProject(new[] {astRoot.Content}, compilerMessages, dpStatistics);
-        statistics.AddSubtask(dpStatistics);
-      }
-      else
-      {
-        var dpCalcStatistics = new StatisticsTask.Single("DependentProperty", "Dependent Property calculation");
-        dpCalcStatistics.Start();
-        try { astRoot.EvalProperties(compilerMessages); }
-        finally { dpCalcStatistics.Stop(); statistics.AddSubtask(dpCalcStatistics); }
-      }
-      var rootTreeViewItem = ObjectToItem(null, astRoot.Content);
+      var rootTreeViewItem = ObjectToItem(null, _astRoot);
       rootTreeViewItem.Header = "Root";
       _declarationsTreeView.Items.Add(rootTreeViewItem);
     }

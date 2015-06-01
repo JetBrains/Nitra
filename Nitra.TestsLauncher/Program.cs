@@ -5,11 +5,12 @@ using Nemerle.Diff;
 
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Threading;
+using Nitra.ProjectSystem;
+using File = System.IO.File;
 
 namespace Nitra.TestsLauncher
 {
@@ -96,7 +97,7 @@ namespace Nitra.TestsLauncher
 
     static void Start(string solutinFilePath, string config)
     {
-      var solution = new SolutionVm(solutinFilePath, null, config);
+      var solution = new SolutionVm(solutinFilePath, null, config, new ConsoleCompilerMessages());
       var testSuits = solution.TestSuits;
 
       var maxNameLen = CalcMaxNameLen(testSuits);

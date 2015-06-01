@@ -68,13 +68,16 @@ namespace Nitra.Visualizer
     ParseTree _parseTree;
     TimeSpan _highlightingTimeSpan;
     readonly Settings _settings;
-    private TestSuitVm _currentTestSuit;
     private SolutionVm _solution;
+    private TestSuitVm _currentTestSuit;
+    private TestFolderVm _currentTestFolder;
+    private TestVm _currentTest;
     private readonly PropertyGrid _propertyGrid;
     private readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
     private List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
     private List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
     private const string ErrorMarkerTag = "Error";
+    private readonly VisualizerCompilerMessages _cmpilerMessages;
 
     public MainWindow()
     {
@@ -138,6 +141,8 @@ namespace Nitra.Visualizer
       _propertyGrid = new PropertyGrid();
       _windowsFormsHost.Child = _propertyGrid;
 
+      _cmpilerMessages = new VisualizerCompilerMessages(_errorsTreeView.Items, _textMarkerService, _text);
+
       if (string.IsNullOrWhiteSpace(_settings.CurrentSolution))
         _solution = null;
       else
@@ -193,7 +198,7 @@ namespace Nitra.Visualizer
         return;
       }
 
-      _solution = new SolutionVm(_settings.CurrentSolution, selectedPath, _settings.Config);
+      _solution = new SolutionVm(_settings.CurrentSolution, selectedPath, _settings.Config, _cmpilerMessages);
       this.Title = _solution.Name + " - " + Constants.AppName;
       _testsTreeView.ItemsSource = _solution.TestSuits;
     }
@@ -346,6 +351,7 @@ namespace Nitra.Visualizer
 
     private class VisualizerCompilerMessages : ICompilerMessages, IRootCompilerMessages
     {
+      private Guid _kind;
       private ItemCollection _errors;
       private TextMarkerService _textMarkerService;
       private NitraTextEditor _text;
@@ -355,6 +361,12 @@ namespace Nitra.Visualizer
         _errors = errors;
         _textMarkerService = textMarkerService;
         _text = text;
+      }
+
+      public void Clear()
+      {
+        _errors.Clear();
+        _textMarkerService.RemoveAll(m => m.Tag.Equals(ErrorMarkerTag));
       }
 
       public void ReportMessage(CompilerMessageType messageType, Location loc, string msg, int num)
@@ -367,6 +379,7 @@ namespace Nitra.Visualizer
         marker.ToolTip = msg;
 
         var errorNode = new TreeViewItem();
+        errorNode.Tag = _kind;
         errorNode.Header = "(" + location.EndLineColumn + "): " + msg;
         errorNode.MouseDoubleClick += (sender, e) =>
         {
@@ -374,11 +387,6 @@ namespace Nitra.Visualizer
           _text.Select(loc.StartPos, loc.Length);
           _text.ScrollToLine(loc.StartLineColumn.Line);
         };
-
-        var subNode = new TreeViewItem();
-        subNode.FontSize = 12;
-        subNode.Header = msg;
-        errorNode.Items.Add(subNode);
 
         _errors.Add(errorNode);
       }
@@ -389,6 +397,24 @@ namespace Nitra.Visualizer
         var node = (TreeViewItem)_errors[_errors.Count - 1];
         var nested = new VisualizerCompilerMessages(node.Items, _textMarkerService, _text);
         return nested;
+      }
+
+      public void SetFutureMessagesKind(Guid kind)
+      {
+        _kind = kind;
+      }
+
+      public void Remove(Func<Guid, Location, bool> predicate)
+      {
+        for (int i = 0; i < _errors.Count;)
+        {
+          TreeViewItem errorNode = (TreeViewItem)_errors[i];
+          var guid = (Guid)errorNode.Tag;
+          if (guid == TestVm.TypingMsg)
+            _errors.RemoveAt(i);
+          else
+            i++;
+        }
       }
 
       public void Dispose() { }
@@ -643,22 +669,25 @@ namespace Nitra.Visualizer
         return;
 
       _astRoot = null;
+      _parseResult = null;
 
-      if (_currentTestSuit == null)
+      if (_currentTestSuit == null || _currentTest == null)
         return;
 
       try
       {
+        _cmpilerMessages.Clear();
         _recoveryTreeView.Items.Clear();
         _errorsTreeView.Items.Clear();
         _reflectionTreeView.ItemsSource = null;
         var timer = Stopwatch.StartNew();
 
-        _parseResult = _currentTestSuit.Run(_text.Text, recoveryAlgorithm: GetRecoveryAlgorithm());
-        if (_parseResult != null)
-          _performanceTreeView.ItemsSource = new[] { _parseResult.ParseSession.Statistics };
+        _currentTest.Code = _text.Text;
+        _currentTest.Run(GetRecoveryAlgorithm());
+        _performanceTreeView.ItemsSource = new[] { (_currentTest.Statistics ?? _currentTestFolder.Statistics) };
 
-
+        _astRoot = _currentTest.File.Ast;
+        _parseResult = _currentTest.File.ParseResult;
         _foldingStrategy.ParseResult = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
 
@@ -1058,7 +1087,7 @@ namespace Nitra.Visualizer
       {
         if (currentTestSuit != null)
           _solution.TestSuits.Remove(currentTestSuit);
-        var testSuit = new TestSuitVm(_solution, dialog.TestSuitName, _settings.Config);
+        var testSuit = new TestSuitVm(_solution, dialog.TestSuitName, _settings.Config, _cmpilerMessages);
         testSuit.IsSelected = true;
         _solution.Save();
       }
@@ -1401,7 +1430,7 @@ namespace Nitra.Visualizer
     private void OpenSolution(string solutionFilePath)
     {
       _settings.CurrentSolution = solutionFilePath;
-      _solution = new SolutionVm(solutionFilePath, null, _settings.Config);
+      _solution = new SolutionVm(solutionFilePath, null, _settings.Config, _cmpilerMessages);
       _testsTreeView.ItemsSource = _solution.TestSuits;
       RecentFileList.InsertFile(solutionFilePath);
     }
@@ -1452,7 +1481,7 @@ namespace Nitra.Visualizer
     {
       var rootDir = Path.GetDirectoryName(_solution.SolutinFilePath) ?? "";
       var name = (string)((MenuItem)e.Source).Header;
-      var testSuit = new TestSuitVm(_solution, name, _settings.Config);
+      var testSuit = new TestSuitVm(_solution, name, _settings.Config, _cmpilerMessages);
       testSuit.IsSelected = true;
       _solution.Save();
     }

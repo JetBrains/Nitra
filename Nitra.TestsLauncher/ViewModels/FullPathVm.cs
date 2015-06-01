@@ -2,22 +2,28 @@
 
 using System;
 using System.ComponentModel;
+using System.Diagnostics;
 
 namespace Nitra.ViewModels
 {
-  public abstract class FullPathVm : INotifyPropertyChanged
+  public abstract class FullPathVm : INotifyPropertyChanged, ITestTreeNode
   {
-    private bool      _isSelected;
-    private TestState _testState;
+    [NotNull] public  string    FullPath { get; private set; }
+    [NotNull] private bool      _isSelected;
+    [NotNull] private TestState _testState;
 
-    public FullPathVm(string fullPath)
+    protected FullPathVm([NotNull] ITestTreeNode parent, [NotNull] string fullPath)
     {
+      if (parent == null)
+        throw new ArgumentNullException("parent");
+      if (fullPath == null)
+        throw new ArgumentNullException("fullPath");
+      Parent = parent;
       FullPath = fullPath;
     }
 
     public abstract string Hint { get; }
 
-    public string FullPath { get; private set; }
 
     public bool IsSelected
     {
@@ -66,5 +72,7 @@ namespace Nitra.ViewModels
       PropertyChangedEventHandler handler = PropertyChanged;
       if (handler != null) handler(this, new PropertyChangedEventArgs(propertyName));
     }
+
+    public virtual ITestTreeNode Parent { get; private set; }
   }
 }

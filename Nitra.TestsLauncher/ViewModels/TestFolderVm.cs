@@ -5,6 +5,7 @@ using Nitra.Visualizer.Annotations;
 using System.IO;
 using System.Linq;
 using Nitra.Declarations;
+using Nitra.ProjectSystem;
 
 namespace Nitra.ViewModels
 {
@@ -16,9 +17,17 @@ namespace Nitra.ViewModels
     public ObservableCollection<TestVm> Tests             { get; private set; }
     //public ObservableCollection<IAst>   CompilationUnits  { get; private set; }
 
-    public TestFolderVm(string testPath, TestSuitVm testSuit)
-      :base(testPath)
+    public TestFolderVm(string testPath, TestSuitVm testSuit, ICompilerMessages compilerMessages)
+      : base(testSuit, testPath)
     {
+      var solution = new FsSolution<IAst>();
+      this.Project = new FsProject<IAst>(compilerMessages, solution);
+
+      Statistics            = new StatisticsTask.Container("Total");
+      ParsingStatistics     = Statistics.ReplaceContainerSubtask("Parsing");
+      AstStatistics         = Statistics.ReplaceContainerSubtask("Ast", "AST Creation");
+      DependPropsStatistics = Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties");
+
       TestPath = testPath;
       TestSuit = testSuit;
       if (TestSuit.TestState == TestState.Ignored)
@@ -29,20 +38,12 @@ namespace Nitra.ViewModels
 
       var paths = Directory.GetFiles(testSuitPath, "*.test");
       foreach (var path in paths.OrderBy(f => f))
-        tests.Add(new TestVm(path, TestSuit));
+        tests.Add(new TestVm(path, TestSuit, compilerMessages));
 
       Tests = tests;
     }
 
     public override string Hint { get { return "TestFolder"; } }
-
-    public IParseResult[] Run(RecoveryAlgorithm recoveryAlgorithm)
-    {
-      List<IParseResult> results = new List<IParseResult>();
-      foreach (var test in Tests)
-        results.Add(test.Run(recoveryAlgorithm));
-      return results.ToArray();
-    }
 
     public void Update([NotNull] string code, [NotNull] string gold)
     {
@@ -55,6 +56,20 @@ namespace Nitra.ViewModels
     public override string ToString()
     {
       return Name;
+    }
+
+    public StatisticsTask.Container Statistics            { get; private set; }
+    public StatisticsTask.Container ParsingStatistics     { get; private set; }
+    public StatisticsTask.Container AstStatistics         { get; private set; }
+    public StatisticsTask.Container DependPropsStatistics { get; private set; }
+
+    public FsProject<IAst> Project
+    {
+      get; private set; }
+
+    public void CalcDependProps(TestVm testVm)
+    {
+      
     }
   }
 }

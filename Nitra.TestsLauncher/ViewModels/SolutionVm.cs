@@ -8,14 +8,14 @@ using System.Text;
 
 namespace Nitra.ViewModels
 {
-  public class SolutionVm
+  public class SolutionVm : ITestTreeNode
   {
     public ObservableCollection<TestSuitVm> TestSuits { get; private set; }
     public bool IsDirty { get; private set; }
     public string SolutinFilePath { get; private set; }
     public string RootFolder { get; private set; }
 
-    public SolutionVm(string solutinFilePath, string selectePath, string config)
+    public SolutionVm(string solutinFilePath, string selectePath, string config, ICompilerMessages compilerMessages)
     {
       var isSolutinFileExists = solutinFilePath != null && File.Exists(solutinFilePath);
       if (!isSolutinFileExists)
@@ -40,8 +40,8 @@ namespace Nitra.ViewModels
         
         if (string.IsNullOrEmpty(suit))
           continue;
-        
-        var testSuit = new TestSuitVm(this, suit, config);
+
+        var testSuit = new TestSuitVm(this, suit, config, compilerMessages);
         
         if (selectePath != null)
         {
@@ -88,6 +88,11 @@ namespace Nitra.ViewModels
     {
       var dir = Path.GetDirectoryName(SolutinFilePath);
       return Directory.GetDirectories(dir ?? "").Select(Path.GetFileName).Except(TestSuits.Select(s => s.Name)).ToArray();
+    }
+
+    public ITestTreeNode Parent
+    {
+      get { return null; }
     }
   }
 }
