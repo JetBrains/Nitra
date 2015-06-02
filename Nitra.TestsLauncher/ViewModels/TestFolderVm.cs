@@ -25,6 +25,7 @@ namespace Nitra.ViewModels
 
       Statistics            = new StatisticsTask.Container("Total");
       ParsingStatistics     = Statistics.ReplaceContainerSubtask("Parsing");
+      ParseTreeStatistics   = Statistics.ReplaceContainerSubtask("ParseTree");
       AstStatistics         = Statistics.ReplaceContainerSubtask("Ast", "AST Creation");
       DependPropsStatistics = Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties");
 
@@ -38,7 +39,7 @@ namespace Nitra.ViewModels
 
       var paths = Directory.GetFiles(testSuitPath, "*.test");
       foreach (var path in paths.OrderBy(f => f))
-        tests.Add(new TestVm(path, TestSuit, compilerMessages));
+        tests.Add(new TestVm(path, this, compilerMessages));
 
       Tests = tests;
     }
@@ -60,6 +61,7 @@ namespace Nitra.ViewModels
 
     public StatisticsTask.Container Statistics            { get; private set; }
     public StatisticsTask.Container ParsingStatistics     { get; private set; }
+    public StatisticsTask.Container ParseTreeStatistics   { get; private set; }
     public StatisticsTask.Container AstStatistics         { get; private set; }
     public StatisticsTask.Container DependPropsStatistics { get; private set; }
 

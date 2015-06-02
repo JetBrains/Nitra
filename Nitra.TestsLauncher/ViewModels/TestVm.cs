@@ -27,8 +27,7 @@ namespace Nitra.ViewModels
     public Exception                Exception             { get; private set; }
     public TimeSpan                 TestTime              { get; private set; }
     public StatisticsTask.Container Statistics            { get; private set; }
-    public StatisticsTask.Single    ParsingStatistics     { get; private set; }
-    public StatisticsTask.Single    AstStatistics         { get; private set; }
+    public FileStatistics           FileStatistics        { get; private set; }
     public StatisticsTask.Container DependPropsStatistics { get; private set; }
 
     private TestFolderVm _testFolder;
@@ -39,8 +38,8 @@ namespace Nitra.ViewModels
       public int _completionStartPos = -1;
       public string _completionPrefix = null;
 
-      public TestFile([NotNull] TestVm test, FsProject<IAst> project)
-        : base(test.TestPath, test.TestSuit.StartRule, project, test.TestSuit.CompositeGrammar)
+      public TestFile([NotNull] TestVm test, FsProject<IAst> project, FileStatistics statistics)
+        : base(test.TestPath, test.TestSuit.StartRule, project, test.TestSuit.CompositeGrammar, statistics)
       {
         if (test == null) throw new ArgumentNullException("test");
         _test = test;
@@ -82,20 +81,24 @@ namespace Nitra.ViewModels
       if (_testFolder != null)
       {
         Statistics            = null;
-        ParsingStatistics     = _testFolder.ParsingStatistics.ReplaceSingleSubtask(Name);
-        AstStatistics         = _testFolder.AstStatistics.ReplaceSingleSubtask(Name);
-        DependPropsStatistics = _testFolder.DependPropsStatistics.ReplaceContainerSubtask(Name);
-        _file = new TestFile(this, _testFolder.Project);
+        FileStatistics = new FileStatistics(
+          _testFolder.ParsingStatistics.ReplaceSingleSubtask(Name),
+          _testFolder.ParseTreeStatistics.ReplaceSingleSubtask(Name),
+          _testFolder.AstStatistics.ReplaceSingleSubtask(Name));
+        DependPropsStatistics = _testFolder.DependPropsStatistics;
+        _file = new TestFile(this, _testFolder.Project, FileStatistics);
       }
       else
       {
         Statistics            = new StatisticsTask.Container("Total");
-        ParsingStatistics     = Statistics.ReplaceSingleSubtask("Parsing");
-        AstStatistics         = Statistics.ReplaceSingleSubtask("Ast", "AST Creation");
+        FileStatistics = new FileStatistics(
+          Statistics.ReplaceSingleSubtask("Parsing"),
+          Statistics.ReplaceSingleSubtask("ParseTree"),
+          Statistics.ReplaceSingleSubtask("Ast", "AST Creation"));
         DependPropsStatistics = Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties");
         var solution = new FsSolution<IAst>();
         var project = new FsProject<IAst>(compilerMessages, solution);
-        _file = new TestFile(this, project);
+        _file = new TestFile(this, project, FileStatistics);
       }
 
       if (TestSuit.TestState == TestState.Ignored)
@@ -136,6 +139,9 @@ namespace Nitra.ViewModels
       _file.ResetCache();
 
       var tests = _testFolder == null ? (IEnumerable<TestVm>)new[] {this} : _testFolder.Tests;
+      // TODO: Replace with DeepResetDependentProperties()
+      foreach (var test in tests)
+        test.File.ResetAst();
       var asts = tests.Select(t => t.File.Ast);
 
       var projectSupport = _file.Ast as IProjectSupport;
