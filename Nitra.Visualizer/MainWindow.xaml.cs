@@ -366,7 +366,7 @@ namespace Nitra.Visualizer
       public void Clear()
       {
         _errors.Clear();
-        _textMarkerService.RemoveAll(m => m.Tag.Equals(ErrorMarkerTag));
+        _textMarkerService.RemoveAll(m => m.Tag != null && m.Tag.Equals(ErrorMarkerTag));
       }
 
       public void ReportMessage(CompilerMessageType messageType, Location loc, string msg, int num)
@@ -526,39 +526,12 @@ namespace Nitra.Visualizer
           UpdateHtmlPrettyPrint();
         else if (_needUpdateTextPrettyPrint && object.ReferenceEquals(_tabControl.SelectedItem, _textPrettyPrintTabItem))
           UpdateTextPrettyPrint();
-        else if (_needUpdatePerformance     && object.ReferenceEquals(_tabControl.SelectedItem, _performanceTabItem))
-          UpdatePerformance();
         
         UpdateDeclarations();
       }
       catch(Exception e)
       {
         Debug.Write(e);
-      }
-    }
-
-    private void UpdatePerformance()
-    {
-      _needUpdatePerformance = false;
-      if (object.ReferenceEquals(_tabControl.SelectedItem, _performanceTabItem))
-        UpdateParseTree();
-    }
-
-    private void UpdateParseTree()
-    {
-      if (_parseResult == null)
-        return;
-      if (IsSplicable(_parseResult))
-        return;
-
-      if (_parseTree == null)
-      {
-        var stat = ((StatisticsTask.Container [])_performanceTreeView.ItemsSource)[0];
-        var createParseTreeStat = new StatisticsTask.Single("ParseTree", "Create Parse Tree");
-        stat.AddSubtask(createParseTreeStat);
-        createParseTreeStat.Start();
-        _parseTree = _parseResult.CreateParseTree();
-        createParseTreeStat.Stop();
       }
     }
 
@@ -649,7 +622,7 @@ namespace Nitra.Visualizer
 
     void _parseTimer_Elapsed(object sender, ElapsedEventArgs e)
     {
-      Dispatcher.Invoke(new Action(DoParse));
+      Reparse();
     }
 
     private RecoveryAlgorithm GetRecoveryAlgorithm()
@@ -1121,26 +1094,35 @@ namespace Nitra.Visualizer
 
     private void _testsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
-      var test = e.NewValue as TestVm;
-      if (test != null)
+      _loading = true;
+      try
       {
-        _text.Text = test.Code;
-        _currentTestSuit = test.TestSuit;
-        ShowDiff(test);
+        var test = e.NewValue as TestVm;
+        if (test != null)
+        {
+          _text.Text = test.Code;
+          _currentTestSuit = test.TestSuit;
+          _currentTest = test;
+          _currentTestFolder = test.Parent as TestFolderVm;
+          ShowDiff(test);
 
+        }
+
+        var testSuit = e.NewValue as TestSuitVm;
+        if (testSuit != null)
+        {
+          _text.Text = "";
+          _currentTestSuit = testSuit;
+          _para.Inlines.Clear();
+        }
       }
-
-      var testSuit = e.NewValue as TestSuitVm;
-      if (testSuit != null)
+      finally
       {
-        _text.Text = "";
-        _currentTestSuit = testSuit;
-        _para.Inlines.Clear();
+        _loading = false;
       }
-
       SaveSelectedTestAndTestSuit();
-
       _settings.Save();
+      Reparse();
     }
 
     private void OnRemoveTestSuit(object sender, ExecutedRoutedEventArgs e)
@@ -1241,6 +1223,11 @@ namespace Nitra.Visualizer
     }
 
     private void OnReparse(object sender, ExecutedRoutedEventArgs e)
+    {
+      Reparse();
+    }
+
+    private void Reparse()
     {
       Dispatcher.Invoke(new Action(DoParse));
     }
