@@ -312,9 +312,21 @@ namespace Nitra.Visualizer
 
     private void SelectText(IAst ast)
     {
+      var file = ast.File;
+      if (_currentTestFolder != null)
+      {
+        foreach (var test in _currentTestFolder.Tests)
+        {
+          if (test.File == file)
+          {
+            test.IsSelected = true;
+            break;
+          }
+        }
+      }
       _text.CaretOffset = ast.Span.StartPos;
       _text.Select(ast.Span.StartPos, ast.Span.Length);
-      var loc = new Location(_parseResult.SourceSnapshot, ast.Span);
+      var loc = new Location(file, ast.Span);
       _text.ScrollToLine(loc.StartLineColumn.Line);
     }
 
