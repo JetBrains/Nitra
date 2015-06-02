@@ -140,9 +140,12 @@ namespace Nitra.ViewModels
 
       var tests = _testFolder == null ? (IEnumerable<TestVm>)new[] {this} : _testFolder.Tests;
       // TODO: Replace with DeepResetDependentProperties()
-      foreach (var test in tests)
-        test.File.ResetAst();
-      var asts = tests.Select(t => t.File.Ast);
+      //foreach (var test in tests)
+      //  test.File.ResetAst();
+      var asts = tests.Select(t => t.File.Ast).ToArray();
+      foreach (var ast in asts)
+        ast.DeepResetProperties();
+
 
       var projectSupport = _file.Ast as IProjectSupport;
 

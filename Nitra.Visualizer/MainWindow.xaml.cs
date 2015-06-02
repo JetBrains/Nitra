@@ -508,7 +508,6 @@ namespace Nitra.Visualizer
       _needUpdateReflection      = true;
       _needUpdateHtmlPrettyPrint = true;
       _needUpdateTextPrettyPrint = true;
-      _needUpdatePerformance     = true;
       _parseTree                 = null;
 
       UpdateInfo();
