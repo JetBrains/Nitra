@@ -64,9 +64,7 @@ namespace Nitra.Visualizer
     bool _needUpdateReflection;
     bool _needUpdateHtmlPrettyPrint;
     bool _needUpdateTextPrettyPrint;
-    bool _needUpdatePerformance;
     ParseTree _parseTree;
-    TimeSpan _highlightingTimeSpan;
     readonly Settings _settings;
     private SolutionVm _solution;
     private TestSuitVm _currentTestSuit;
@@ -732,7 +730,6 @@ namespace Nitra.Visualizer
           foreach (var spanInfo in visitor.SpanInfos)
             spans.Add(spanInfo);
         }
-        _highlightingTimeSpan = timer.Elapsed;
 
         foreach (var span in spans)
         {
