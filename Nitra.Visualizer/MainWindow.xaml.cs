@@ -691,7 +691,7 @@ namespace Nitra.Visualizer
       public void Visit(IAst parseTree)
       {
         if (parseTree.Span.IntersectsWith(_span))
-          parseTree.Apply(this);
+          parseTree.Accept(this);
       }
 
       public void Visit(IReference reference)
@@ -726,7 +726,7 @@ namespace Nitra.Visualizer
         if (astRoot != null)
         {
           var visitor = new CollectSymbolsAstVisitor(new NSpan(line.Offset, line.EndOffset));
-          astRoot.Apply(visitor);
+          astRoot.Accept(visitor);
           foreach (var spanInfo in visitor.SpanInfos)
             spans.Add(spanInfo);
         }
