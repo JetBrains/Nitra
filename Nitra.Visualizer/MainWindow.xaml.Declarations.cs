@@ -312,7 +312,16 @@ namespace Nitra.Visualizer
 
     private void SelectText(IAst ast)
     {
-      var file = ast.File;
+      SelectText(ast.File, ast.Span);
+    }
+
+    private void SelectText(Location loc)
+    {
+      SelectText(loc.Source.File, loc.Span);
+    }
+
+    private void SelectText(File file, NSpan span)
+    {
       if (_currentTestFolder != null)
       {
         foreach (var test in _currentTestFolder.Tests)
@@ -324,10 +333,9 @@ namespace Nitra.Visualizer
           }
         }
       }
-      _text.CaretOffset = ast.Span.StartPos;
-      _text.Select(ast.Span.StartPos, ast.Span.Length);
-      var loc = new Location(file, ast.Span);
-      _text.ScrollToLine(loc.StartLineColumn.Line);
+      _text.CaretOffset = span.StartPos;
+      _text.Select(span.StartPos, span.Length);
+      _text.ScrollTo(_text.TextArea.Caret.Line, _text.TextArea.Caret.Column);
     }
 
     private void TviOnKeyDown(object sender, KeyEventArgs e)

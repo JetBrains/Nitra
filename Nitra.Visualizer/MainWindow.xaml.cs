@@ -374,61 +374,45 @@ namespace Nitra.Visualizer
       else
       {
         var errors = _parseResult.GetErrors();
-        var errorNodes = _errorsTreeView.Items;
-
-        if (errors.Length == 0)
-        {
-          _status.Text = "OK";
-          return;
-        }
-
-
         foreach (var error in errors)
+          _cmpilerMessages.Error(error.Location, "Error: " + error.Message);
+
+        var errorNodes = _errorsTreeView.Items;
+        var currFile = _currentTest.File;
+
+        foreach (var error in _cmpilerMessages.GetMessages().OrderBy(m => m.Location))
         {
+          var text = error.Text;
           var location = error.Location;
-          var marker = _textMarkerService.Create(location.StartPos, location.Length);
-          marker.Tag = ErrorMarkerTag;
-          marker.MarkerType = TextMarkerType.SquigglyUnderline;
-          marker.MarkerColor = Colors.Red;
-          string text;
-          try { text = error.DebugText; } catch { text = ""; }
-          marker.ToolTip = error.Message + "\r\n\r\n" + text;
+          var file = location.Source.File;
+          if (currFile == file)
+          {
+            var marker = _textMarkerService.Create(location.StartPos, location.Length);
+            marker.Tag = ErrorMarkerTag;
+            marker.MarkerType = TextMarkerType.SquigglyUnderline;
+            marker.MarkerColor = Colors.Red;
+            marker.ToolTip = text;
+          }
 
           var errorNode = new TreeViewItem();
-          errorNode.Header = "(" + error.Location.EndLineColumn + "): " + error.ToString();
+          errorNode.Header = "(" + error.Location.EndLineColumn + "): " + text;
           errorNode.Tag = error;
           errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
-
-          var subNode = new TreeViewItem();
-          subNode.FontSize = 12;
-          subNode.Header = error.DebugText;
-          errorNode.Items.Add(subNode);
-
           errorNodes.Add(errorNode);
         }
 
-        _status.Text = "Parsing completed with " + errors.Length + " error[s]";
+        _status.Text = errors.Length == 0 ? "OK" : errors.Length + " error[s]";
       }
     }
 
     void errorNode_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
       var node = (TreeViewItem)sender;
-      var error = node.Tag as ParseError;
-      if (error != null)
-      {
-        _text.CaretOffset = error.Location.StartPos;
-        _text.Select(error.Location.StartPos, error.Location.Length);
-        _text.ScrollToLine(error.Location.StartLineColumn.Line);
-      }
-      else
-      {
-        _text.CaretOffset = 0;
-      }
+      var error = (CompilerMessage)node.Tag;
+      SelectText(error.Location);
       e.Handled = true;
       _text.Focus();
     }
-
 
     void ShowInfo()
     {
@@ -574,7 +558,7 @@ namespace Nitra.Visualizer
       try
       {
         ClearMarkers();
-        _cmpilerMessages.Clear();
+        //_cmpilerMessages.Clear();
         _recoveryTreeView.Items.Clear();
         _errorsTreeView.Items.Clear();
         _reflectionTreeView.ItemsSource = null;
@@ -1298,7 +1282,7 @@ namespace Nitra.Visualizer
         return false;
 
       _text.CaretOffset = gotoPos;
-      _text.ScrollToLine(_text.TextArea.Caret.Line);
+      _text.ScrollTo(_text.TextArea.Caret.Line, _text.TextArea.Caret.Column);
       return true;
     }
 

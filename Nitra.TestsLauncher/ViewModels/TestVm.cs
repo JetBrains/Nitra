@@ -137,25 +137,34 @@ namespace Nitra.ViewModels
       _file._completionPrefix   = completionPrefix;
       _file.ResetCache();
 
-      var tests = _testFolder == null ? (IEnumerable<TestVm>)new[] {this} : _testFolder.Tests;
-      var asts = tests.Select(t => t.File.Ast).ToArray();
-      foreach (var ast in asts)
-        ast.DeepResetProperties();
-
-      var projectSupport = _file.Ast as IProjectSupport;
-
-      if (projectSupport != null)
-        projectSupport.RefreshProject(asts, compilerMessages, DependPropsStatistics);
-      else if (_testFolder != null)
-        throw new InvalidOperationException("The '" + _file.Ast.GetType().Name + "' type must implement IProjectSupport, to be used in a multi-file test.");
-      else
+      if (_file.Ast == null)
+        return false;
+      
+      compilerMessages.SetFutureMessagesKind(TypingMsg);
+      try
       {
-        var dp = DependPropsStatistics.ReplaceSingleSubtask("DependPropsCalc", "Dependent properties calculation");
-        dp.Restart();
-        var context = new DependentPropertyEvalContext();
-        AstUtils.EvalProperties(context, compilerMessages, asts, DependPropsStatistics);
-        dp.Stop();
+        var tests = _testFolder == null ? (IEnumerable<TestVm>)new[] {this} : _testFolder.Tests;
+        var asts = tests.Select(t => t.File.Ast).Where(ast => ast != null).ToArray();
+        foreach (var ast in asts)
+          ast.DeepResetProperties();
+
+        var projectSupport = _file.Ast as IProjectSupport;
+
+        if (projectSupport != null)
+          projectSupport.RefreshProject(asts, compilerMessages, DependPropsStatistics);
+        else if (_testFolder != null)
+          throw new InvalidOperationException("The '" + _file.Ast.GetType().Name + "' type must implement IProjectSupport, to be used in a multi-file test.");
+        else
+        {
+          var dp = DependPropsStatistics.ReplaceSingleSubtask("DependPropsCalc", "Dependent properties calculation");
+          dp.Restart();
+          var context = new DependentPropertyEvalContext();
+          AstUtils.EvalProperties(context, compilerMessages, asts, DependPropsStatistics);
+          dp.Stop();
+        }
       }
+      finally { compilerMessages.SetFutureMessagesKind(Guid.Empty); }
+
       return true;
     }
 
