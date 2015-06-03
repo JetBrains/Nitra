@@ -420,10 +420,6 @@ namespace Nitra.Visualizer
 
     private void TryReportError()
     {
-      ClearMarkers();
-
-      _errorsTreeView.Items.Clear();
-
       if (_parseResult == null)
         if (_currentTestSuit.Exception != null)
         {
@@ -646,6 +642,7 @@ namespace Nitra.Visualizer
 
       try
       {
+        ClearMarkers();
         _cmpilerMessages.Clear();
         _recoveryTreeView.Items.Clear();
         _errorsTreeView.Items.Clear();
