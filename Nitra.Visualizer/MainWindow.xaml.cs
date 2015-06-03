@@ -26,6 +26,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Nitra.ProjectSystem;
 using Nitra.Runtime.Binding;
 using Nitra.Runtime.Highlighting;
 using CheckBox = System.Windows.Controls.CheckBox;
@@ -33,6 +34,7 @@ using Clipboard = System.Windows.Clipboard;
 using ContextMenu = System.Windows.Controls.ContextMenu;
 using Control = System.Windows.Controls.Control;
 using DataFormats = System.Windows.DataFormats;
+using File = System.IO.File;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using Label = System.Windows.Controls.Label;
 using MenuItem = System.Windows.Controls.MenuItem;
@@ -75,7 +77,7 @@ namespace Nitra.Visualizer
     private List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
     private List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
     private const string ErrorMarkerTag = "Error";
-    private readonly VisualizerCompilerMessages _cmpilerMessages;
+    private readonly CompilerMessageList _cmpilerMessages = new CompilerMessageList();
 
     public MainWindow()
     {
@@ -139,8 +141,6 @@ namespace Nitra.Visualizer
       _propertyGrid = new PropertyGrid();
       _windowsFormsHost.Child = _propertyGrid;
 
-      _cmpilerMessages = new VisualizerCompilerMessages(_errorsTreeView.Items, _textMarkerService, _text);
-
       if (string.IsNullOrWhiteSpace(_settings.CurrentSolution))
         _solution = null;
       else
@@ -154,7 +154,7 @@ namespace Nitra.Visualizer
       if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) != 0)
         return;
       if (_solution != null)
-        SelectTest(_settings.SelectedTestSuit, _settings.SelectedTest);
+        SelectTest(_settings.SelectedTestSuit, _settings.SelectedTest, _settings.SelectedTestFolder);
     }
 
     private void Window_Closed(object sender, EventArgs e)
@@ -179,6 +179,8 @@ namespace Nitra.Visualizer
         _settings.SelectedTestSuit = _currentTestSuit.TestSuitPath;
         var test = _testsTreeView.SelectedItem as TestVm;
         _settings.SelectedTest = test == null ? null : test.Name;
+        var testFolder = test == null ? null : test.Parent as TestFolderVm;
+        _settings.SelectedTestFolder = testFolder == null ? null : testFolder.Name;
       }
 
       if (_solution != null && _solution.IsDirty)
@@ -345,77 +347,6 @@ namespace Nitra.Visualizer
       }
 
       return null;
-    }
-
-    private class VisualizerCompilerMessages : ICompilerMessages, IRootCompilerMessages
-    {
-      private Guid _kind;
-      private ItemCollection _errors;
-      private TextMarkerService _textMarkerService;
-      private NitraTextEditor _text;
-
-      public VisualizerCompilerMessages(ItemCollection errors, TextMarkerService textMarkerService, NitraTextEditor text)
-      {
-        _errors = errors;
-        _textMarkerService = textMarkerService;
-        _text = text;
-      }
-
-      public void Clear()
-      {
-        _errors.Clear();
-        _textMarkerService.RemoveAll(m => m.Tag != null && m.Tag.Equals(ErrorMarkerTag));
-      }
-
-      public void ReportMessage(CompilerMessageType messageType, Location loc, string msg, int num)
-      {
-        var location = loc;
-        var marker = _textMarkerService.Create(location.StartPos, location.Length);
-        marker.Tag = ErrorMarkerTag;
-        marker.MarkerType = TextMarkerType.SquigglyUnderline;
-        marker.MarkerColor = Colors.Red;
-        marker.ToolTip = msg;
-
-        var errorNode = new TreeViewItem();
-        errorNode.Tag = _kind;
-        errorNode.Header = "(" + location.EndLineColumn + "): " + msg;
-        errorNode.MouseDoubleClick += (sender, e) =>
-        {
-          _text.CaretOffset = loc.StartPos;
-          _text.Select(loc.StartPos, loc.Length);
-          _text.ScrollToLine(loc.StartLineColumn.Line);
-        };
-
-        _errors.Add(errorNode);
-      }
-
-      public IRootCompilerMessages ReportRootMessage(CompilerMessageType messageType, Location loc, string msg, int num)
-      {
-        Debug.Assert(_errors.Count > 0);
-        var node = (TreeViewItem)_errors[_errors.Count - 1];
-        var nested = new VisualizerCompilerMessages(node.Items, _textMarkerService, _text);
-        return nested;
-      }
-
-      public void SetFutureMessagesKind(Guid kind)
-      {
-        _kind = kind;
-      }
-
-      public void Remove(Func<Guid, Location, bool> predicate)
-      {
-        for (int i = 0; i < _errors.Count;)
-        {
-          TreeViewItem errorNode = (TreeViewItem)_errors[i];
-          var guid = (Guid)errorNode.Tag;
-          if (guid == TestVm.TypingMsg)
-            _errors.RemoveAt(i);
-          else
-            i++;
-        }
-      }
-
-      public void Dispose() { }
     }
 
     private void TryReportError()
@@ -848,16 +779,17 @@ namespace Nitra.Visualizer
       if (_needUpdateTextPrettyPrint)
         UpdateTextPrettyPrint();
       var testSuitPath = _currentTestSuit.TestSuitPath;
+      var selectedTestFolder = _currentTestFolder == null ? null : _currentTestFolder.Name;
       var dialog = new AddTest(TestFullPath(testSuitPath), _text.Text, _prettyPrintTextBox.Text) { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
         var testName = dialog.TestName;
         LoadTests();
-        SelectTest(testSuitPath, testName);
+        SelectTest(testSuitPath, testName, selectedTestFolder);
       }
     }
 
-    private void SelectTest(string testSuitPath, string testName)
+    private void SelectTest(string testSuitPath, string testName, string selectedTestFolder)
     {
       if (!CheckTestFolder())
       {
@@ -870,14 +802,24 @@ namespace Nitra.Visualizer
       if (testSuits == null)
         return;
 
-      var result = testSuits.FirstOrDefault(ts => ts.FullPath == testSuitPath);
+      var result = (ITestTreeContainerNode)testSuits.FirstOrDefault(ts => ts.FullPath == testSuitPath);
       if (result == null)
         return;
-      var test = result.Tests.FirstOrDefault(t => t.Name == testName);
+      if (selectedTestFolder != null)
+      {
+        var testFolder = result.Children.FirstOrDefault(t => t.Name == selectedTestFolder);
+        if (testFolder != null)
+          result = (ITestTreeContainerNode)testFolder;
+      }
+      var test = result.Children.FirstOrDefault(t => t.Name == testName);
       if (test != null)
+      {
         test.IsSelected = true;
+      }
       else
+      {
         result.IsSelected = true;
+      }
     }
 
     private static string TestFullPath(string path)

@@ -11,13 +11,14 @@ using System.Xml.Linq;
 
 namespace Nitra.ViewModels
 {
-  public class TestSuitVm : FullPathVm
+  public class TestSuitVm : FullPathVm, ITestTreeContainerNode
   {
     public SolutionVm Solution { get; private set; }
     public string Name { get; private set; }
     public ObservableCollection<GrammarDescriptor>  SynatxModules    { get; private set; }
     public StartRuleDescriptor                      StartRule        { get; private set; }
     public ObservableCollection<ITest>              Tests            { get; private set; }
+    public IEnumerable<ITest>                       Children         { get { return Tests; } }
     public string                                   TestSuitPath     { get; set; }
     public Exception                                Exception        { get; private set; }
     public TimeSpan                                 TestTime         { get; private set; }

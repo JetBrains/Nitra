@@ -9,12 +9,13 @@ using Nitra.ProjectSystem;
 
 namespace Nitra.ViewModels
 {
-  public class TestFolderVm : FullPathVm, ITest
+  public class TestFolderVm : FullPathVm, ITest, ITestTreeContainerNode
   {
     public string                       TestPath          { get; private set; }
     public TestSuitVm                   TestSuit          { get; private set; }
     public string                       Name              { get { return Path.GetFileNameWithoutExtension(TestPath); } }
     public ObservableCollection<TestVm> Tests             { get; private set; }
+    public IEnumerable<ITest>           Children          { get { return Tests; } }
     //public ObservableCollection<IAst>   CompilationUnits  { get; private set; }
 
     public TestFolderVm(string testPath, TestSuitVm testSuit, ICompilerMessages compilerMessages)
