@@ -563,12 +563,7 @@ namespace Nitra.Visualizer
 
       try
       {
-        ClearMarkers();
-        //_cmpilerMessages.Clear();
-        _recoveryTreeView.Items.Clear();
-        _errorsTreeView.Items.Clear();
-        _reflectionTreeView.ItemsSource = null;
-        var timer = Stopwatch.StartNew();
+        ClearAll();
 
         _currentTest.Code = _text.Text;
         _currentTest.Run(GetRecoveryAlgorithm());
@@ -591,6 +586,14 @@ namespace Nitra.Visualizer
         MessageBox.Show(this, ex.GetType().Name + ":" + ex.Message);
         Debug.WriteLine(ex.ToString());
       }
+    }
+
+    private void ClearAll()
+    {
+      ClearMarkers();
+      _recoveryTreeView.Items.Clear();
+      _errorsTreeView.Items.Clear();
+      _reflectionTreeView.ItemsSource = null;
     }
 
     private void ClearMarkers()
@@ -1021,15 +1024,6 @@ namespace Nitra.Visualizer
       _loading = true;
       try
       {
-        var testFolder = e.NewValue as TestFolderVm;
-        if (testFolder != null)
-        {
-          _currentTestFolder = testFolder;
-          _currentTestSuit = testFolder.TestSuit;
-          _currentTest = null;
-          _text.Text = "";
-        }
-
         var test = e.NewValue as TestVm;
         if (test != null)
         {
@@ -1040,9 +1034,20 @@ namespace Nitra.Visualizer
           ShowDiff(test);
         }
 
+        var testFolder = e.NewValue as TestFolderVm;
+        if (testFolder != null)
+        {
+          ClearAll();
+          _currentTestFolder = testFolder;
+          _currentTestSuit = testFolder.TestSuit;
+          _currentTest = null;
+          _text.Text = "";
+        }
+
         var testSuit = e.NewValue as TestSuitVm;
         if (testSuit != null)
         {
+          ClearAll();
           _currentTestFolder = null;
           _currentTest = null;
           _text.Text = "";
