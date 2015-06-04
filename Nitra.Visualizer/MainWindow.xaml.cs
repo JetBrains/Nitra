@@ -373,14 +373,20 @@ namespace Nitra.Visualizer
           _status.Text = "Not parsed!";
       else
       {
-        var errors = _parseResult.GetErrors();
-        foreach (var error in errors)
-          _cmpilerMessages.Error(error.Location, "Error: " + error.Message);
-
+        var cmpilerMessages = new List<CompilerMessage>();
         var errorNodes = _errorsTreeView.Items;
         var currFile = _currentTest.File;
 
-        foreach (var error in _cmpilerMessages.GetMessages().OrderBy(m => m.Location))
+        if (_currentTestFolder != null)
+          foreach (var test in _currentTestFolder.Tests)
+            cmpilerMessages.AddRange(test.File.GetCompilerMessages());
+        else
+          cmpilerMessages.AddRange(_currentTest.File.GetCompilerMessages());
+         
+        cmpilerMessages.Sort();
+
+
+        foreach (var error in cmpilerMessages)
         {
           var text = error.Text;
           var location = error.Location;
@@ -395,13 +401,13 @@ namespace Nitra.Visualizer
           }
 
           var errorNode = new TreeViewItem();
-          errorNode.Header = "(" + error.Location.EndLineColumn + "): " + text;
+          errorNode.Header = Path.GetFileNameWithoutExtension(file.FullName) + "(" + error.Location.EndLineColumn + "): " + text;
           errorNode.Tag = error;
           errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
           errorNodes.Add(errorNode);
         }
 
-        _status.Text = errors.Length == 0 ? "OK" : errors.Length + " error[s]";
+        _status.Text = cmpilerMessages.Count == 0 ? "OK" : cmpilerMessages.Count + " error[s]";
       }
     }
 
