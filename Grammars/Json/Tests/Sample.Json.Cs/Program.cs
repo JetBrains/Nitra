@@ -1,8 +1,8 @@
 ﻿using Nitra;
+using Nitra.ProjectSystem;
 using Nitra.Tests;
 
 using System;
-using System.IO;
 
 namespace Sample.Json.Cs
 {
@@ -11,23 +11,16 @@ namespace Sample.Json.Cs
     static void Main(string[] args)
     {
       if (args.Length > 0)
-        text = File.ReadAllText(args[0]);
+        text = System.IO.File.ReadAllText(args[0]);
 
-      var parseResult = JsonParser.Start.Parse(new SourceSnapshot(text));
+      var session = new ParseSession(JsonParser.Start, compilerMessages: new ConsoleCompilerMessages());
+      var result = session.Parse(text);
 
-      if (parseResult.IsSuccess)
+      if (result.IsSuccess)
       {
-        var ast = JsonParserParseTree.Start.CreateParseTree(parseResult);
-        Console.WriteLine("Pretty print: " + ast);
+        var parseTree = result.CreateParseTree();
+        Console.WriteLine("Pretty print: " + parseTree);
         Console.WriteLine();
-      }
-      else
-      {
-        foreach(var error in parseResult.GetErrors())
-        {
-          var pos = error.Location.StartLineColumn;
-          Console.WriteLine("{0}:{1}: {2}", pos.Line, pos.Column, error.Message);
-        }
       }
     }
 
