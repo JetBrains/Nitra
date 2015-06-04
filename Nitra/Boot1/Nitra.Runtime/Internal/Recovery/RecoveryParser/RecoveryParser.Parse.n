@@ -33,6 +33,11 @@ namespace Nitra.Internal.Recovery
       completeAll();
       while (RecordsToProcess.Count > 0)
       {
+        when (IsRecordsToProcessCorrupted)
+        {
+          RecordsToProcess.RebuildHeap();
+          IsRecordsToProcessCorrupted = false;
+        }
         def (record, tokenChanges) = RecordsToProcess.ExtractFirst();
         when (!BestSolution.IsFail && tokenChanges > BestSolution)
         {
@@ -85,7 +90,7 @@ namespace Nitra.Internal.Recovery
           if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 &&
             {
               def p = ParseResult.ParseSession.CompletionStartPos;
-              textPos > p || endPos < p
+              textPos >= p || endPos < p
             }})
           {
             SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
@@ -101,11 +106,43 @@ namespace Nitra.Internal.Recovery
             //skipRecord();
           }
 
+        | DynamicExtensibleItem as state =>
+          def parser = state.RuleParser;
+          ParseResult.ParseSession.CurrentGrammar = parser.Grammar;
+          endPos = parser.Parse(textPos, ParseResult.Text, ParseResult);
+          def grammarChanged = ParseResult.ParseSession.CurrentGrammar : object != parser.Grammar;
+          when (grammarChanged)
+          {
+            SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
+            def newParser = ParseResult.ParseSession.CurrentGrammar.GetExtensibleRuleParser(parser.Descriptor :> ExtensibleRuleDescriptor, 0);
+            def newState = newParser.DynamicExtensibleParsingSequence.States[0];
+            StartParseSubrule(ParseRecord(record.Sequence, newState.Id, endPos), tokenChanges);
+          }
+
+          if (optimize && { endPos >= 0 && 
+            { 
+              def p = ParseResult.ParseSession.CompletionStartPos;
+              textPos >= p || endPos < p
+            }})
+          {
+            SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
+            when (textPos == endPos)
+            {
+              _ = StartParseSequence(record, textPos, parser.ParsingSequence, tokenChanges);
+              //skipRecord();
+            }
+          }
+          else
+          {
+            _ = StartParseSequence(record, textPos, parser.ParsingSequence, tokenChanges);
+            //skipRecord();
+          }
+
         | Extensible       as state =>
           if (optimize && { endPos = state.RuleParser.Parse(textPos, ParseResult.Text, ParseResult); endPos >= 0 && 
             { 
               def p = ParseResult.ParseSession.CompletionStartPos;
-              textPos > p || endPos < p
+              textPos >= p || endPos < p
             }})
           {
             SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
@@ -131,19 +168,20 @@ namespace Nitra.Internal.Recovery
             _ = StartParseSequence(record, textPos, postfixRule.ParsingSequence, tokenChanges);
           //skipRecord();
 
-        | List(Subrule = SubruleInfo.List as subrule) when subrule.IsOptimized =>
+        | List(SubruleInfo = SubruleInfo.List as subrule) when subrule.IsOptimized =>
           endPos = subrule.Parse(textPos, ParseResult.Text, ParseResult);
           when (endPos >= textPos)
             SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
 
         | List              as state1 with seq = state1.Sequence
         | ListWithSeparator as state2 with seq = state2.Sequence
-        | Subsequence       as state3 with seq = state3.Sequence =>
+        | Subsequence       as state3 with seq = state3.Sequence
+        | DynamicExtensible as state4 with seq = state4.Sequence =>
           _ = StartParseSequence(record, textPos, seq, tokenChanges);
           //skipRecord();
 
         | Scan             as state =>
-          endPos = state.Subrule.Parse(textPos, ParseResult.Text, ParseResult);
+          endPos = state.SubruleInfo.Parse(textPos, ParseResult.Text, ParseResult);
           when (endPos >= 0)
             SubruleParsed(textPos, endPos, record, tokenChanges, TokenChanges.None);
           //else
@@ -165,6 +203,7 @@ namespace Nitra.Internal.Recovery
       {
         when (startTokenChanges < sequence.StartTokenChanges)
         {
+          IsRecordsToProcessCorrupted = true;
           sequence.StartTokenChanges = startTokenChanges;
           sequence.StartParse();
           sequence.UpdateSubrules(sequence.StartPos);

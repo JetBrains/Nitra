@@ -21,7 +21,7 @@ namespace Nitra.Internal.Recovery
   {
     private SequencesToRecover : SCG.Queue[ParsedSequence * int] = SCG.Queue();
 
-    private BuildRecoveredParseTree() : void
+    private SaveRecoveredRawTreePart() : void
     {
       MakeRecoveredSequence(StartSequence, this.ParseResult.Text.Length);
       while (SequencesToRecover.Count > 0)
@@ -33,9 +33,9 @@ namespace Nitra.Internal.Recovery
       when (this.ParseResult.RecoveredSequences.ContainsKey(key))
         return;
 
-
       def (_startPos, endPos, parsingSequence) = key;
-      def states = parsingSequence.States;
+      def isDynamicExtensible = parsingSequence is ParsingSequence.DynamicExtensible;
+      def host = ParseResult.ParserHost;
 
       when (parsingSequence.IsToken)
       {
@@ -50,11 +50,11 @@ namespace Nitra.Internal.Recovery
           return;
         mutable walkCalled = false;
         def (subrule, _) = subrules[index];
-        def state = states[subrule.State];
+        def state = host.ParsingStates[subrule.State];
         flattenSubrules.Add(subrule);
 
         foreach ((nextSubrule, _) in subrules with nextIndex)
-          when (subrule.End == nextSubrule.Begin && state.Next.Contains(nextSubrule.State))
+          when (subrule.End == nextSubrule.Begin && (isDynamicExtensible || state.Next.Contains(nextSubrule.State)))
           {
             walk(nextIndex);
             walkCalled = true;
@@ -98,9 +98,9 @@ namespace Nitra.Internal.Recovery
       this.ParseResult.RecoveredSequences.Add(key, recoveredSequence);
     }
 
-    private IsDeletedSubrule(seq : ParsedSequence, subrule : ParsedSubrule) : bool
+    private IsDeletedSubrule(subrule : ParsedSubrule) : bool
     {
-      seq.ParsingSequence.States[subrule.State].CanConsumeErrorTokens &&
+      ParseResult.ParserHost.ParsingStates[subrule.State].CanConsumeErrorTokens &&
       Deleted.Contains(subrule.Begin) &&
       Deleted[subrule.Begin].Contains(subrule.End)
     }
@@ -122,7 +122,7 @@ namespace Nitra.Internal.Recovery
               assert(sequences[0].Ends[subrule.End] == changes);
               SequencesToRecover.Enqueue(sequences[0], subrule.End);
             }
-            else when (IsDeletedSubrule(seq, subrule))
+            else when (IsDeletedSubrule(subrule))
             {
               def sequence = match (seq.ParsingSequence.States[0])
               {
@@ -142,6 +142,20 @@ namespace Nitra.Internal.Recovery
       {
         | Sequence =>
           makeSequence(seq, end);
+
+        | DynamicExtensible =>
+          def key = (seq.StartPos, end, seq.ParsingSequence);
+          when (this.ParseResult.RecoveredSequences.Contains(key))
+            return;
+          def subrules = GetSubrulesAndChanges(seq, end);
+          foreach ((subrule, _changes) in subrules)
+          {
+            def state = ParseResult.ParserHost.ParsingStates[subrule.State] :> ParsingState.DynamicExtensibleItem;
+            mutable parsedSequence;
+            when (Sequences.TryGetValue((subrule.Begin, state.RuleParser.ParsingSequence), out parsedSequence))
+              SequencesToRecover.Enqueue(parsedSequence, subrule.End);
+          }
+          AddRecoveredSequence(key, subrules, seq.Ends[end]);
 
         | Extensible =>
           def key = (seq.StartPos, end, seq.ParsingSequence);
@@ -185,32 +199,48 @@ namespace Nitra.Internal.Recovery
 
     private GetSubrulesAndChanges(seq : ParsedSequence, mutable end : int) : array[ParsedSubrule * TokenChanges]
     {
+      def dynamicExtensibleStates = if (seq.ParsingSequence is ParsingSequence.DynamicExtensible)
+      {
+        def states = SCG.HashSet();
+        foreach (subrule in seq.ParsedSubrules.Keys)
+          _ = states.Add(subrule.State);
+        states;
+      }
+      else
+        null;
       def subrules = SCG.List();
       mutable changes = seq.Ends[end];
       def stateEndChanges = Hashtable();
-      foreach (endState in seq.ParsingSequence.EndStates)
-        stateEndChanges[endState, end] = changes;
+      if (dynamicExtensibleStates == null)
+        foreach (endState in seq.ParsingSequence.EndStates)
+          stateEndChanges[endState, end] = changes;
+      else
+        foreach (state in dynamicExtensibleStates)
+          stateEndChanges[state, end] = changes;
 
       def allSubrules = seq.ParsedSubrules.KeyValuePairs.ToArray().SortInplace(SubrulesComparison);
-      def states = seq.ParsingSequence.States;
+      def host = ParseResult.ParserHost;
 
       for (mutable i = allSubrules.Length - 1; i >= 0; --i)
       {
         def (subrule, subruleChanges) = allSubrules[i];
         mutable endChanges;
         mutable startChanges;
+        def record = ParseRecord(seq, subrule.State, subrule.Begin);
         when (stateEndChanges.TryGetValue((subrule.State, subrule.End), out endChanges))
-        when (Records[subrule.Begin].TryGetValue(ParseRecord(seq, subrule.State, subrule.Begin), out startChanges))
+        when (Records[subrule.Begin].TryGetValue(record, out startChanges))
         {
-          startChanges = startChanges - seq.StartTokenChanges;
-          //def subruleChanges = GetSubruleTokenChanges(seq, subrule);
           when (startChanges + subruleChanges == endChanges)
           {
-            def state = states[subrule.State];
-            when (!subrule.IsEmpty || state.MandatoryTokenCount > 0)
+            def state = host.ParsingStates[subrule.State];
+            when (!subrule.IsEmpty || record.ParsingState.MandatoryTokenCount > 0)
               subrules.Add(subrule, subruleChanges);
-            foreach (prevState in state.Prev)
-              stateEndChanges[prevState, subrule.Begin] = startChanges;
+            if (dynamicExtensibleStates == null)
+              foreach (prevState in state.Prev)
+                stateEndChanges[prevState, subrule.Begin] = startChanges;
+            else
+              foreach (state in dynamicExtensibleStates)
+                stateEndChanges[state, subrule.Begin] = startChanges;
           }
         }
       }
