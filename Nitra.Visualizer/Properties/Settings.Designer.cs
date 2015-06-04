@@ -166,5 +166,17 @@ namespace Nitra.Visualizer.Properties {
                 this["Config"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string SelectedTestFolder {
+            get {
+                return ((string)(this["SelectedTestFolder"]));
+            }
+            set {
+                this["SelectedTestFolder"] = value;
+            }
+        }
     }
 }

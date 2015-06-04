@@ -97,7 +97,7 @@ namespace Nitra.Compiler
       ]>);
     }
 
-    protected DefineDependentProperty(tb : TypeBuilder, propertyRef : DependentAstPropertyRef.Compiling, modifiers : NemerleModifiers, defineIsEvaluatedProperty : bool = true) : void
+    protected DefineDependentProperty(tb : TypeBuilder, propertyRef : DependentAstPropertyRef.Compiling, modifiers : NemerleModifiers) : void
     {
       def propertyType     = Environment.TypeCompiler.CompileDependentPropertyType(propertyRef.Symbol);
       def backingFieldName = Util.tmpname(propertyRef.Symbol.Name);
@@ -135,13 +135,14 @@ namespace Nitra.Compiler
           }
         ]>);
 
-        when (defineIsEvaluatedProperty && propertyRef.Symbol.DeclaringAst is AbstractAstSymbol)
-        {
-          def name = GetIsEvaluatedPropertyName(propertyRef.Symbol);
-          tb.Define(<[ decl:
-            $(name : usesite) : bool implements $(Environment.GetAstType(propertyRef.Symbol.DeclaringAst) : typed).$(name : usesite) { get { $(propertyRef.Bit.Read()) } }
-          ]>);
-        }
+        def isEvaluatedName = GetIsEvaluatedPropertyName(propertyRef.Symbol);
+        def isEvaluatedMods = AttributesAndModifiers(modifiers, []);
+        tb.Define(<[ decl:
+          ..$isEvaluatedMods $(isEvaluatedName : usesite) : bool
+          {
+            get { $(propertyRef.Bit.Read()) }
+          }
+        ]>);
       });
     }
 
@@ -228,6 +229,126 @@ namespace Nitra.Compiler
             }
           ]>);
       }
+
+      def isEvaluatedName = GetIsEvaluatedPropertyName(propertyRef.Symbol);
+      def isEvaluatedMods = AttributesAndModifiers(modifiers, []);
+      tb.Define(<[ decl:
+        ..$isEvaluatedMods $(isEvaluatedName : usesite) : bool
+        {
+          get
+          {
+            if (this.IsAmbiguous)
+              this.Ambiguities[0].$(isEvaluatedName : usesite)
+            else
+              base.$(isEvaluatedName : usesite)
+          }
+        }
+      ]>);
+    }
+
+    protected static DefineResetPropertiesMethod(tb : TypeBuilder, ambiguousTb : TypeBuilder, inheritedBitsCount : int = 0) : void
+    {
+      assert(tb != null || ambiguousTb != null);
+
+      def makeBody(tb : TypeBuilder) : PExpr
+      {
+        def fields = tb.GetBitFieldManager().GetFields();
+        if (fields.Length > 0)
+        {
+          def body = SCG.List();
+          when (inheritedBitsCount > 0)
+            body.Add(<[ base.ResetProperties() ]>);
+
+          foreach (field in fields)
+            body.Add(<[ this.$(field : usesite) = 0 ]>);
+
+          <[ { ..$body } ]>
+        }
+        else null
+      }
+
+      def defineAmbiguousMethod(body)
+      {
+        ambiguousTb.Define(<[ decl:
+          public override ResetProperties() : void
+          {
+            if (this.IsAmbiguous)
+              Nitra.Internal.AstUtils.ResetAmbiguitiesProperties(this)
+            else
+              $body
+          }
+        ]>)
+      }
+
+      if (tb != null)
+      {
+        def body = makeBody(tb);
+        when (body != null)
+          tb.Define(<[ decl: public override ResetProperties() : void $body ]>);
+
+        when (ambiguousTb != null)
+          defineAmbiguousMethod(<[ base.ResetProperties() ]>);
+      }
+      else
+        defineAmbiguousMethod(makeBody(ambiguousTb) ?? <[ () ]>);
+    }
+
+    protected static DefineIsAllPropertiesEvaluatedProperty(tb : TypeBuilder, ambiguousTb : TypeBuilder, inheritedBitsCount : int = 0) : void
+    {
+      assert(tb != null || ambiguousTb != null);
+
+      def makeBody(tb : TypeBuilder) : PExpr
+      {
+        def fieldManager = tb.GetBitFieldManager();
+        def fields       = fieldManager.GetFields();
+        if (fields.Length > 0)
+        {
+          mutable acc =
+            if (inheritedBitsCount > 0)
+              <[ base.IsAllPropertiesEvaluated ]>
+            else
+              <[ true ]>;
+
+          def lastIndex = fields.Length - 1;
+          foreach (field in fields with index)
+            acc =
+              if (index == lastIndex)
+                <[ $acc && (this.$(field : usesite) == $(fieldManager.LastFieldMask)) ]>
+              else
+                <[ $acc && (this.$(field : usesite) == $(BitFieldManager.FullFieldMask)) ]>;
+
+          acc
+        }
+        else null
+      }
+
+      def defineAmbiguousMethod(body)
+      {
+        ambiguousTb.Define(<[ decl: 
+          public override IsAllPropertiesEvaluated : bool
+          {
+            get
+            {
+              if (this.IsAmbiguous)
+                Ambiguities[0].IsAllPropertiesEvaluated
+              else
+                $body
+            }
+          }
+        ]>)
+      }
+
+      if (tb != null)
+      {
+        def body = makeBody(tb);
+        when (body != null)
+          tb.Define(<[ decl: public override IsAllPropertiesEvaluated : bool { get { $body } } ]>);
+
+        when (ambiguousTb != null)
+          defineAmbiguousMethod(<[ base.IsAllPropertiesEvaluated ]>)
+      }
+      else
+        defineAmbiguousMethod(makeBody(ambiguousTb) ?? <[ true ]>)
     }
 
     protected static DefineIsPropertyEvaluatedMethod(tb : TypeBuilder, inheritedBitsCount : int) : void
@@ -270,7 +391,7 @@ namespace Nitra.Compiler
 
     private static MakeIsPropertyEvaluatedBody(tb : TypeBuilder) : PExpr
     {
-      def     fields = tb.GetBitFieldManager().GetFields().ToArray();
+      def     fields = tb.GetBitFieldManager().GetFields();
       mutable body   = <[ throw System.ArgumentOutOfRangeException("index") ]>;
       for (mutable i = fields.Length; i > 0; --i)
       {

@@ -21,7 +21,7 @@ namespace Nitra.Visualizer
 {
   public partial class MainWindow
   {
-    private AstRoot<IAst> _astRoot;
+    private IAst _astRoot;
 
     public TreeViewItem ObjectToItem(PropertyInfo prop, object obj)
     {
@@ -101,6 +101,11 @@ namespace Nitra.Visualizer
       routedEventArgs.Handled = true;
 
       var tvi = (TreeViewItem)sender;
+      TviExpanded(tvi);
+    }
+
+    private void TviExpanded(TreeViewItem tvi)
+    {
       var obj = tvi.Tag;
       tvi.Items.Clear();
 
@@ -121,7 +126,7 @@ namespace Nitra.Visualizer
         var t = obj.GetType();
         var props = t.GetProperties();
 
-        foreach (var prop in props)//.OrderBy(p => p.Name))
+        foreach (var prop in props) //.OrderBy(p => p.Name))
         {
           if (IsIgnoredProperty(prop))
             continue;
@@ -141,7 +146,7 @@ namespace Nitra.Visualizer
       var items = obj as IEnumerable;
       if (items != null && !(items is string))
       {
-        foreach (var item in (IEnumerable)obj)
+        foreach (var item in (IEnumerable) obj)
           tvi.Items.Add(ObjectToItem(null, item));
         return;
       }
@@ -189,53 +194,12 @@ namespace Nitra.Visualizer
 
     private void UpdateDeclarations()
     {
-      if (_parseResult == null)
-        return;
-
-      if (_astRoot != null)
+      if (_astRoot == null)
         return;
 
       _declarationsTreeView.Items.Clear();
 
-      if (_parseTree == null)
-      {
-        Debug.Assert(_astRoot == null);
-        _parseTree = _parseResult.CreateParseTree();
-      }
-
-      // ReSharper disable once SuspiciousTypeConversion.Global
-      var root = _parseTree as IMappedParseTree<IAst>;
-      if (root == null)
-        return;
-      
-      var statistics = _parseResult.ParseSession.Statistics;
-      var dpStatistics = new StatisticsTask.Container("DependentProperty", "Dependent Property");
-      var astStatistics = new StatisticsTask.Single("AST", "AST Mapping");
-
-      astStatistics.Start();
-      var astRoot = AstRoot<IAst>.Create(root);
-      astStatistics.Stop();
-      statistics.AddSubtask(astStatistics);
-      _astRoot = astRoot;
-
-      _declarationsTreeView.Items.Clear();
-      // TODO: display messages in GUI
-      var compilerMessages = new VisualizerCompilerMessages(_errorsTreeView.Items, _textMarkerService, _text);
-      // ReSharper disable once SuspiciousTypeConversion.Global
-      var projectSupport = astRoot.Content as IProjectSupport;
-      if (projectSupport != null)
-      {
-        projectSupport.RefreshProject(new[] {astRoot.Content}, compilerMessages, dpStatistics);
-        statistics.AddSubtask(dpStatistics);
-      }
-      else
-      {
-        var dpCalcStatistics = new StatisticsTask.Single("DependentProperty", "Dependent Property calculation");
-        dpCalcStatistics.Start();
-        try { astRoot.EvalProperties(compilerMessages); }
-        finally { dpCalcStatistics.Stop(); statistics.AddSubtask(dpCalcStatistics); }
-      }
-      var rootTreeViewItem = ObjectToItem(null, astRoot.Content);
+      var rootTreeViewItem = ObjectToItem(null, _astRoot);
       rootTreeViewItem.Header = "Root";
       _declarationsTreeView.Items.Add(rootTreeViewItem);
     }
@@ -302,6 +266,7 @@ namespace Nitra.Visualizer
     {
       SelectCodeForDeclarationPart(sender);
       e.Handled = true;
+      //e.
     }
 
     private void SelectCodeForDeclarationPart(object sender)
@@ -312,12 +277,65 @@ namespace Nitra.Visualizer
 
       var ast = tvi.Tag as IAst;
       if (ast != null)
+        SelectText(ast);
+
+      TrySelectTextForSymbol(tvi.Tag as Symbol2, tvi);
+    }
+
+    private void TrySelectTextForSymbol(Symbol2 symbol, TreeViewItem tvi)
+    {
+      if (symbol != null && !symbol.Declarations.IsEmpty)
       {
-        _text.CaretOffset = ast.Span.StartPos;
-        _text.Select(ast.Span.StartPos, ast.Span.Length);
-        var loc = new Location(_parseResult.SourceSnapshot, ast.Span);
-        _text.ScrollToLine(loc.StartLineColumn.Line);
+        if (symbol.Declarations.Length == 1)
+          SelectText(symbol.Declarations.Head);
+        else
+        {
+          if (!tvi.IsExpanded)
+            tvi.IsExpanded = true;
+          foreach (TreeViewItem subItem in tvi.Items)
+          {
+            var decls = subItem.Tag as Nemerle.Core.list<Nitra.Declarations.IDeclaration>;
+            if (decls != null)
+            {
+              subItem.IsExpanded = true;
+              subItem.IsSelected = true;
+
+              foreach (TreeViewItem subSubItem in tvi.Items)
+                subSubItem.BringIntoView();
+
+              break;
+            }
+          }
+        }
       }
+    }
+
+    private void SelectText(IAst ast)
+    {
+      SelectText(ast.File, ast.Span);
+    }
+
+    private void SelectText(Location loc)
+    {
+      SelectText(loc.Source.File, loc.Span);
+    }
+
+    private void SelectText(File file, NSpan span)
+    {
+      if (_currentTestFolder != null)
+      {
+        foreach (var test in _currentTestFolder.Tests)
+        {
+          if (test.File == file)
+          {
+            test.IsSelected = true;
+            break;
+          }
+        }
+      }
+      _text.CaretOffset = span.StartPos;
+      _text.Select(span.StartPos, span.Length);
+      _text.ScrollTo(_text.TextArea.Caret.Line, _text.TextArea.Caret.Column);
     }
 
     private void TviOnKeyDown(object sender, KeyEventArgs e)
