@@ -635,7 +635,6 @@ namespace Nitra.Visualizer
 
       try
       {
-        var timer = Stopwatch.StartNew();
         var line = e.Line;
         var spans = new HashSet<SpanInfo>();
         _parseResult.GetSpans(line.Offset, line.EndOffset, spans);
@@ -1022,6 +1021,15 @@ namespace Nitra.Visualizer
       _loading = true;
       try
       {
+        var testFolder = e.NewValue as TestFolderVm;
+        if (testFolder != null)
+        {
+          _currentTestFolder = testFolder;
+          _currentTestSuit = testFolder.TestSuit;
+          _currentTest = null;
+          _text.Text = "";
+        }
+
         var test = e.NewValue as TestVm;
         if (test != null)
         {
@@ -1030,12 +1038,13 @@ namespace Nitra.Visualizer
           _currentTest = test;
           _currentTestFolder = test.Parent as TestFolderVm;
           ShowDiff(test);
-
         }
 
         var testSuit = e.NewValue as TestSuitVm;
         if (testSuit != null)
         {
+          _currentTestFolder = null;
+          _currentTest = null;
           _text.Text = "";
           _currentTestSuit = testSuit;
           _para.Inlines.Clear();
