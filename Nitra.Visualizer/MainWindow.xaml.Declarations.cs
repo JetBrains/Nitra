@@ -23,7 +23,7 @@ namespace Nitra.Visualizer
   {
     private IAst _astRoot;
 
-    public TreeViewItem ObjectToItem(PropertyInfo prop, object obj)
+    private TreeViewItem ObjectToItem(PropertyInfo prop, object obj)
     {
       string name = prop == null ? "" : prop.Name;
       var tvi = new TreeViewItem { Tag = obj, FontWeight = FontWeights.Normal };
@@ -204,18 +204,13 @@ namespace Nitra.Visualizer
       _declarationsTreeView.Items.Add(rootTreeViewItem);
     }
 
-    public static string Escape(string str)
-    {
-      return str.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
-    }
-
     private static string RenderXamlForDeclaration(string name, IAst ast)
     {
       var declatation = ast as IDeclaration;
-      var suffix = declatation == null ? null : (": " + Escape(declatation.Name.Text));
+      var suffix = declatation == null ? null : (": " + Utils.Escape(declatation.Name.Text));
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-" + (string.IsNullOrWhiteSpace(name) ? null : ("<Span Foreground = 'blue'>" + Escape(name) + "</Span>: "))
+" + (string.IsNullOrWhiteSpace(name) ? null : ("<Span Foreground = 'blue'>" + Utils.Escape(name) + "</Span>: "))
              + ast.ToXaml() + suffix + @"
 </Span>";
     }
@@ -228,8 +223,8 @@ namespace Nitra.Visualizer
       var color = isDependent ? "green" : "SlateBlue";
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-" + (prop == null ? null : ("<Bold><Span Foreground = '" + color + "'>" + Escape(prop.Name) + "</Span></Bold>: "))
-             + Escape(obj.ToString()) + @"
+" + (prop == null ? null : ("<Bold><Span Foreground = '" + color + "'>" + Utils.Escape(prop.Name) + "</Span></Bold>: "))
+             + Utils.Escape(obj.ToString()) + @"
 </Span>";
     }
 
@@ -237,16 +232,15 @@ namespace Nitra.Visualizer
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-<Span Foreground = 'blue'>" + Escape(name) + @"</Span>* <Span Foreground = 'gray'>Count: </Span> " + items.Count + @"
+<Span Foreground = 'blue'>" + Utils.Escape(name) + @"</Span>* <Span Foreground = 'gray'>Count: </Span> " + items.Count + @"
 </Span>";
     }
-
 
     private static string RenderXamlForSeq(string name, int count)
     {
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-<Span Foreground = 'green'>" + Escape(name) + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + count + @"
+<Span Foreground = 'green'>" + Utils.Escape(name) + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + count + @"
 </Span>";
     }
 
@@ -266,7 +260,6 @@ namespace Nitra.Visualizer
     {
       SelectCodeForDeclarationPart(sender);
       e.Handled = true;
-      //e.
     }
 
     private void SelectCodeForDeclarationPart(object sender)
@@ -345,13 +338,6 @@ namespace Nitra.Visualizer
         SelectCodeForDeclarationPart(sender);
         e.Handled = true;
       }
-    }
-
-    private void CopyReflectionText(object sender, RoutedEventArgs e)
-    {
-      var reflectionStruct = _reflectionTreeView.SelectedItem as ReflectionStruct;
-      if (reflectionStruct != null)
-        CopyTreeNodeToClipboard(reflectionStruct.Description);
     }
   }
 }

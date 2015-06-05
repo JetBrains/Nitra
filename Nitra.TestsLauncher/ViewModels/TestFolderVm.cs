@@ -18,11 +18,11 @@ namespace Nitra.ViewModels
     public IEnumerable<ITest>           Children          { get { return Tests; } }
     //public ObservableCollection<IAst>   CompilationUnits  { get; private set; }
 
-    public TestFolderVm(string testPath, TestSuitVm testSuit, ICompilerMessages compilerMessages)
+    public TestFolderVm(string testPath, TestSuitVm testSuit)
       : base(testSuit, testPath)
     {
       var solution = new FsSolution<IAst>();
-      this.Project = new FsProject<IAst>(compilerMessages, solution);
+      this.Project = new FsProject<IAst>(solution);
 
       Statistics            = new StatisticsTask.Container("Total");
       ParsingStatistics     = Statistics.ReplaceContainerSubtask("Parsing");
@@ -40,7 +40,7 @@ namespace Nitra.ViewModels
 
       var paths = Directory.GetFiles(testSuitPath, "*.test");
       foreach (var path in paths.OrderBy(f => f))
-        tests.Add(new TestVm(path, this, compilerMessages));
+        tests.Add(new TestVm(path, this));
 
       Tests = tests;
     }

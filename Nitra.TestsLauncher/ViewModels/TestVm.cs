@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Windows;
 using Nitra.Internal;
 using NitraFile = Nitra.ProjectSystem.File;
 using IOFile = System.IO.File;
@@ -28,6 +29,7 @@ namespace Nitra.ViewModels
     public TimeSpan                 TestTime              { get; private set; }
     public StatisticsTask.Container Statistics            { get; private set; }
     public FileStatistics           FileStatistics        { get; private set; }
+    public bool                     IsSingleFileTest       { get { return Parent is TestSuitVm; } }
 
     private TestFolderVm _testFolder;
 
@@ -70,7 +72,7 @@ namespace Nitra.ViewModels
       }
     }
 
-    public TestVm(string testPath, ITestTreeNode parent, ICompilerMessages compilerMessages)
+    public TestVm(string testPath, ITestTreeNode parent)
       : base(parent, testPath)
     {
       _testFolder = parent as TestFolderVm;
@@ -96,7 +98,7 @@ namespace Nitra.ViewModels
           Statistics.ReplaceSingleSubtask("Ast", "AST Creation"),
           Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties"));
         var solution = new FsSolution<IAst>();
-        var project = new FsProject<IAst>(compilerMessages, solution);
+        var project = new FsProject<IAst>(solution);
         _file = new TestFile(this, project, FileStatistics);
       }
 
@@ -117,12 +119,17 @@ namespace Nitra.ViewModels
     {
       get
       {
-        var path = Path.ChangeExtension(TestPath, ".gold");
+        var path = GolgPath;
         if (IOFile.Exists(path))
           return IOFile.ReadAllText(path);
         return "";
       }
       set { IOFile.WriteAllText(Path.ChangeExtension(TestPath, ".gold"), value); }
+    }
+
+    public string GolgPath
+    {
+      get { return Path.ChangeExtension(TestPath, ".gold"); }
     }
 
 

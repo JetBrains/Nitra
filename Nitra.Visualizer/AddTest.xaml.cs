@@ -1,6 +1,8 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Windows;
 using Nitra.Visualizer.Properties;
 
@@ -32,24 +34,34 @@ namespace Nitra.Visualizer
       if (!Directory.Exists(path))
         Directory.CreateDirectory(path);
 
-      var found = Directory.EnumerateFiles(path, "*.test").FirstOrDefault(file => File.ReadAllText(file).Equals(_code, StringComparison.Ordinal));
+      return MakeTestName(path);
+    }
 
-      if (found == null)
+    private static string MakeTestName(string path)
+    {
+      var rx = new Regex(@"test-(\d+)");
+      var tests = new List<string>();
+      tests.AddRange(Directory.GetDirectories(path).Select(Path.GetFileNameWithoutExtension));
+      tests.AddRange(Directory.GetFiles(path, "*.test").Select(Path.GetFileNameWithoutExtension));
+      tests.Sort();
+      int num = 0;
+      for (int i = tests.Count - 1; i >= 0; i--)
       {
-        const string Ext = ".test";
-
-        var fileIndex = Directory.EnumerateFiles(path, "*" + Ext).Count();
-        string fileName;
-        do
+        var testName = tests[i];
+        var m = rx.Match(testName);
+        if (m.Success)
         {
-          fileIndex++;
-          fileName = "test-" + fileIndex.ToString("0000");
+          num = int.Parse(m.Groups[1].Value) + 1;
+          break;
         }
-        while (File.Exists(Path.Combine(path, fileName + Ext)));
-        return fileName;
       }
 
-      return Path.GetFileNameWithoutExtension(found);
+      for (;; num++)
+      {
+        var fileName = "test-" + num.ToString("0000");
+        if (!File.Exists(Path.Combine(path, fileName + ".test")))
+          return fileName;
+      }
     }
 
     public string TestName { get; private set; }
