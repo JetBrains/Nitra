@@ -1247,21 +1247,10 @@ namespace Nitra.Visualizer
         if (Keyboard.IsKeyDown(Key.Space))
         {
           int end = _text.CaretOffset;
-          int start = end;
-          var line = _text.Document.GetLineByOffset(end);
-          var lineText = _text.Document.GetText(line);
-          var offsetInLine = end - 1 - line.Offset;
-          for (int i = offsetInLine; i >= 0; i--)
-          {
-            var ch = lineText[i];
-            if (!char.IsLetter(ch))
-            {
-              break;
-            }
-            start--;
-          }
-          var text = _text.Text.Substring(0, start) + '\xFFFF';
+          var start = CalcCompletionStart(end);
+          TrySymbolCompletion(start, end);
           var prefix = _text.Document.GetText(start, end - start);
+          var text = _text.Text.Substring(0, start) + '\xFFFF';
           _currentTestSuit.Run(text, null, start, prefix);
           _performanceTreeView.ItemsSource = new[] { _currentTestSuit.Statistics };
           var ex = _currentTestSuit.Exception;
@@ -1284,6 +1273,90 @@ namespace Nitra.Visualizer
         else if (e.Key == Key.Oem6) // Oem6 - '}'
           TryMatchBraces();
       }
+    }
+
+    private class FindNodeAstVisitor : IAstVisitor
+    {
+      private readonly NSpan _span;
+      public readonly Stack<IAst> Stack = new Stack<IAst>();
+
+      public FindNodeAstVisitor(NSpan span) { _span = span; }
+
+      public void Visit(IAst parseTree)
+      {
+        if (parseTree.Span.IntersectsWith(_span))
+        {
+          Stack.Push(parseTree);
+          parseTree.Accept(this);
+        }
+      }
+
+      public void Visit(IReference reference)
+      {
+        if (reference.Span.IntersectsWith(_span))
+        {
+          Stack.Push(reference);
+          reference.Accept(this);
+        }
+      }
+    }
+
+    private void TrySymbolCompletion(int start, int end)
+    {
+      var result = new List<Symbol2>();
+      var prefix = _text.Document.GetText(start, end - start);
+
+      var visitor = new FindNodeAstVisitor(new NSpan(start, end));
+      _astRoot.Accept(visitor);
+      if (visitor.Stack.Count == 0)
+        return;
+
+      var ast = visitor.Stack.Peek();
+      var symbolProp = ast.GetType().GetProperty("Symbol");
+      if (symbolProp != null)
+      {
+        dynamic obj = ast;
+        if (obj.IsSymbolEvaluated)
+        {
+          var sym = obj.Symbol as HierarchicalSymbol;
+          if (sym != null)
+          {
+            result.AddRange(sym.MakeComletionList(prefix));
+          }
+        }
+      }
+
+      foreach (var curr in visitor.Stack)
+      {
+        var scopeProp = curr.GetType().GetProperty("Scope");
+        if (scopeProp != null)
+        {
+          dynamic obj = curr;
+          if (obj.IsScopeEvaluated)
+          {
+            result.AddRange(obj.Scope.MakeComletionList(prefix));
+            break;
+          }
+        }
+      }
+    }
+
+    private int CalcCompletionStart(int end)
+    {
+      int start = end;
+      var line = _text.Document.GetLineByOffset(end);
+      var lineText = _text.Document.GetText(line);
+      var offsetInLine = end - 1 - line.Offset;
+      for (int i = offsetInLine; i >= 0; i--)
+      {
+        var ch = lineText[i];
+        if (!char.IsLetter(ch))
+        {
+          break;
+        }
+        start--;
+      }
+      return start;
     }
 
     private void TryMatchBraces()
