@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Windows;
 using Nitra.Internal;
 using NitraFile = Nitra.ProjectSystem.File;
@@ -109,10 +110,16 @@ namespace Nitra.ViewModels
 
     public override string Hint { get { return Code; } }
 
+    private string _code;
     public string Code
     {
-      get { return IOFile.ReadAllText(TestPath); }
-      set { IOFile.WriteAllText(TestPath, value); this.File.ResetCache(); }
+      get { return _code ?? (_code = IOFile.ReadAllText(TestPath)); }
+      set
+      {
+        _code = value; this.File.ResetCache();
+        Action f = () => { lock (this) IOFile.WriteAllText(TestPath, value); };
+        f.BeginInvoke(null, null);
+      }
     }
 
     public string Gold
