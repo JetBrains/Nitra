@@ -1246,9 +1246,18 @@ namespace Nitra.Visualizer
 
         if (Keyboard.IsKeyDown(Key.Space))
         {
+          var completionList = new List<CompletionData>();
           int end = _text.CaretOffset;
           var start = CalcCompletionStart(end);
-          TrySymbolCompletion(start, end);
+          var symbols = TrySymbolCompletion(start, end);
+          var span = new NSpan(start, end);
+
+          foreach (var symbol in symbols)
+          {
+            var xaml = symbol.ToXaml();
+            completionList.Add(new CompletionData(span, symbol.Name.Text, xaml, xaml));
+          }
+
           var prefix = _text.Document.GetText(start, end - start);
           var text = _text.Text.Substring(0, start) + '\xFFFF';
           _currentTestSuit.Run(text, null, start, prefix);
@@ -1261,9 +1270,13 @@ namespace Nitra.Visualizer
 
           _completionWindow = new CompletionWindow(_text.TextArea);
           IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
-          var span = new NSpan(start, end);
           foreach (var literal in result.Literals)
-            data.Add(new LiteralCompletionData(span, literal));
+            completionList.Add(new CompletionData(span, literal, Utils.Escape(literal), Utils.Escape(literal)));
+
+          completionList.Sort();
+
+          foreach (var completionData in completionList)
+            data.Add(completionData);
 
           _completionWindow.Show();
           _completionWindow.Closed +=
@@ -1301,30 +1314,14 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void TrySymbolCompletion(int start, int end)
+    private IEnumerable<Symbol2> TrySymbolCompletion(int start, int end)
     {
-      var result = new List<Symbol2>();
       var prefix = _text.Document.GetText(start, end - start);
 
       var visitor = new FindNodeAstVisitor(new NSpan(start, end));
       _astRoot.Accept(visitor);
       if (visitor.Stack.Count == 0)
-        return;
-
-      var ast = visitor.Stack.Peek();
-      var symbolProp = ast.GetType().GetProperty("Symbol");
-      if (symbolProp != null)
-      {
-        dynamic obj = ast;
-        if (obj.IsSymbolEvaluated)
-        {
-          var sym = obj.Symbol as HierarchicalSymbol;
-          if (sym != null)
-          {
-            result.AddRange(sym.MakeComletionList(prefix));
-          }
-        }
-      }
+        return Enumerable.Empty<Symbol2>();
 
       foreach (var curr in visitor.Stack)
       {
@@ -1333,12 +1330,11 @@ namespace Nitra.Visualizer
         {
           dynamic obj = curr;
           if (obj.IsScopeEvaluated)
-          {
-            result.AddRange(obj.Scope.MakeComletionList(prefix));
-            break;
-          }
+            return obj.Scope.MakeComletionList(prefix);
         }
       }
+
+      return Enumerable.Empty<Symbol2>();
     }
 
     private int CalcCompletionStart(int end)
