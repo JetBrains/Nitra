@@ -1200,7 +1200,7 @@ namespace Nitra.Visualizer
       try
       {
         _text.TextArea.Caret.Offset = node.Span.StartPos;
-        _text.ScrollTo(_text.TextArea.Caret.Line, _text.TextArea.Caret.Line);
+        _text.ScrollTo(_text.TextArea.Caret.Line, _text.TextArea.Caret.Column);
         _text.TextArea.AllowCaretOutsideSelection();
         _text.Select(node.Span.StartPos, node.Span.Length);
       }
@@ -1246,16 +1246,38 @@ namespace Nitra.Visualizer
 
         if (Keyboard.IsKeyDown(Key.Space))
         {
+          if (_parseResult == null)
+            return;
           var completionList = new List<CompletionData>();
-          int end = _text.CaretOffset;
+          int pos = _text.CaretOffset;
+          var carretSpan = new NSpan(pos, pos);
+          var spasesWalker = new VoidRuleWalker(carretSpan);
+          var spans = new HashSet<SpanInfo>();
+          spasesWalker.Walk(_parseResult, spans);
+
+          foreach (var spanInfo in spans)
+            if (spanInfo.Span.Contains(carretSpan) && spanInfo.SpanClass != SpanClass.Default)
+              return; // completion in comment
+
+          int end = pos;
+          int spacesStart = pos;
+          int spacesEnd   = pos;
+
+          if (spans.Count != 0)
+          {
+            spacesStart = spans.Min(s => s.Span.StartPos);
+            spacesEnd   = spans.Max(s => s.Span.EndPos);
+          }
+
+
           var start = CalcCompletionStart(end);
-          var symbols = TrySymbolCompletion(start, end);
+          var symbols = TrySymbolCompletion(pos, spacesStart, spacesEnd);
           var span = new NSpan(start, end);
 
           foreach (var symbol in symbols)
           {
             var xaml = symbol.ToXaml();
-            completionList.Add(new CompletionData(span, symbol.Name.Text, xaml, xaml));
+            completionList.Add(new CompletionData(span, symbol.Name.Text, xaml, xaml, priority: 1.0));
           }
 
           var prefix = _text.Document.GetText(start, end - start);
@@ -1271,12 +1293,13 @@ namespace Nitra.Visualizer
           _completionWindow = new CompletionWindow(_text.TextArea);
           IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
           foreach (var literal in result.Literals)
-            completionList.Add(new CompletionData(span, literal, Utils.Escape(literal), Utils.Escape(literal)));
+            completionList.Add(new CompletionData(span, literal, Utils.Escape(literal), Utils.Escape(literal), priority: 2.0));
 
           completionList.Sort();
 
           foreach (var completionData in completionList)
-            data.Add(completionData);
+            if (!string.IsNullOrEmpty(completionData.Text) && char.IsLetter(completionData.Text[0]))
+              data.Add(completionData);
 
           _completionWindow.Show();
           _completionWindow.Closed +=
@@ -1314,14 +1337,13 @@ namespace Nitra.Visualizer
       }
     }
 
-    private IEnumerable<Symbol2> TrySymbolCompletion(int start, int end)
+    private IEnumerable<Symbol2> TrySymbolCompletion(int pos, int spacesStart, int spacesEnd)
     {
-      var prefix = _text.Document.GetText(start, end - start);
-
-      var visitor = new FindNodeAstVisitor(new NSpan(start, end));
+      var visitor = new FindNodeAstVisitor(new NSpan(spacesStart, spacesEnd));
       _astRoot.Accept(visitor);
       if (visitor.Stack.Count == 0)
         return Enumerable.Empty<Symbol2>();
+
 
       foreach (var curr in visitor.Stack)
       {
@@ -1330,7 +1352,10 @@ namespace Nitra.Visualizer
         {
           dynamic obj = curr;
           if (obj.IsScopeEvaluated)
+          {
+            var prefix = curr.Span.EndPos == pos ? _text.Document.GetText(curr.Span.StartPos, curr.Span.Length) : null;
             return obj.Scope.MakeComletionList(prefix);
+          }
         }
       }
 
