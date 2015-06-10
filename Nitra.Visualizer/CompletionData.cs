@@ -54,12 +54,7 @@ namespace Nitra.Visualizer
 
     private object ParseXaml(string xaml)
     {
-      var content = @"
-<Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-" + xaml + @"
-</Span>";
-
-      return XamlReader.Parse(content);
+      return XamlReader.Parse(Utils.WrapToXaml(xaml));
     }
   }
 }

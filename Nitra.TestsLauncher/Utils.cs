@@ -134,5 +134,15 @@ namespace Nitra.Visualizer
     {
       return str.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
     }
+
+    public static string WrapToXaml(string xaml)
+    {
+      var content = @"
+<Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
+" + xaml + @"
+</Span>";
+
+      return content;
+    }
   }
 }

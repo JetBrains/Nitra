@@ -1276,8 +1276,12 @@ namespace Nitra.Visualizer
 
           foreach (var symbol in symbols)
           {
-            var xaml = symbol.ToXaml();
-            completionList.Add(new CompletionData(span, symbol.Name.Text, xaml, xaml, priority: 1.0));
+            var content = symbol.ToXaml();
+            var description = content;
+            var amb = symbol as AmbiguousHierarchicalSymbol;
+            if (amb != null)
+              description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
+            completionList.Add(new CompletionData(span, symbol.Name.Text, content, description, priority: 1.0));
           }
 
           var prefix = _text.Document.GetText(start, end - start);
