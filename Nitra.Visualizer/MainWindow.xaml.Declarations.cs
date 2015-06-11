@@ -132,6 +132,8 @@ namespace Nitra.Visualizer
             continue;
           try
           {
+            if (declaration.IsMissing)
+              return;
             var value = prop.GetValue(declaration, null);
             tvi.Items.Add(ObjectToItem(prop, value));
           }
@@ -251,7 +253,13 @@ namespace Nitra.Visualizer
         var obj = ((TreeViewItem) e.NewValue).Tag;
         var symbol = obj as Symbol2;
         var id = symbol != null ? symbol.Id : (obj == null ? 0 : obj.GetHashCode());
-        _propertyGrid.SelectedObject = obj;
+        try
+        {
+          _propertyGrid.SelectedObject = obj;
+        }
+        catch
+        {
+        }
         _objectType.Text = obj == null ? "<null>" : obj.GetType().FullName + " [" + id + "]";
       }
     }

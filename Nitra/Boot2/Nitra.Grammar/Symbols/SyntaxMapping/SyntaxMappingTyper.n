@@ -2,6 +2,7 @@
 using Nitra.Model;
 
 using Nemerle;
+using Nemerle.Imperative;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -13,250 +14,368 @@ using G = NitraSyntaxParseTree;
 
 namespace Nitra.Typing
 {
-  internal abstract class SyntaxMappingTyper[TExpr]
+  internal module SyntaxMappingTyper
   {
-    protected abstract GetCompilerMessages(node : G.MapSyntaxExpression) : ICompilerMessages;
-    protected abstract TypeNode           (node : G.MapSyntaxExpression, ruleSymbol : SyntaxRuleSymbol, astType : AstType) : TExpr;
-    protected abstract CreateError        (node : G.MapSyntaxExpression) : TExpr;
-    protected abstract CreateTypeHint     (expr : G.MapSyntaxExpression, ruleSymbol : SyntaxRuleSymbol, astType : AstType) : TExpr;
-    protected abstract CreateCall         (node : G.MapSyntaxExpression,                        path : ParseTreePath, syntaxMapping : SyntaxMappingSymbol, arguments : SCG.IList[G.MapSyntaxExpression],                           ruleSymbol : SyntaxRuleSymbol) : TExpr;
-    protected abstract CreateConvertList  (node : G.MapSyntaxExpression, astSymbol : AstSymbol, path : ParseTreePath, syntaxMapping : SyntaxMappingSymbol, arguments : SCG.IList[G.MapSyntaxExpression], itemPath : ParseTreePath, ruleSymbol : SyntaxRuleSymbol) : TExpr;
-    protected abstract CreateConcatLists  (node : G.MapSyntaxExpression, astSymbol : AstSymbol, path : ParseTreePath, syntaxMapping : SyntaxMappingSymbol, arguments : SCG.IList[G.MapSyntaxExpression], itemPath : ParseTreePath, ruleSymbol : SyntaxRuleSymbol) : TExpr;
-    protected abstract CreateConcatOptions(node : G.MapSyntaxExpression, astSymbol : AstSymbol, path : ParseTreePath, syntaxMapping : SyntaxMappingSymbol, arguments : SCG.IList[G.MapSyntaxExpression], itemPath : ParseTreePath, ruleSymbol : SyntaxRuleSymbol) : TExpr;
-    protected abstract CreateConvertOption(node : G.MapSyntaxExpression, astSymbol : AstSymbol, path : ParseTreePath, syntaxMapping : SyntaxMappingSymbol, arguments : SCG.IList[G.MapSyntaxExpression], valuePath : ParseTreePath, ruleSymbol : SyntaxRuleSymbol) : TExpr;
-    protected abstract CreateAstCtor      (node : G.MapSyntaxExpression, astSymbol : AstSymbol, members : ListParseTree[G.MapSyntaxExpressionAstMember], closeBrace : NSpan, ruleSymbol : SyntaxRuleSymbol, compilerMessages : ICompilerMessages) : TExpr;
-    protected abstract CreateListCtor     (node : G.MapSyntaxExpression, astSymbol : AstSymbol, items : array[TExpr]) : TExpr;
-    protected abstract CreateOptionCtor   (node : G.MapSyntaxExpression, astSymbol : AstSymbol, value : ValueOption[TExpr]) : TExpr;
-
-    private static EmptyArguments : SCG.IList[G.MapSyntaxExpression] = array(0);
-
-    public TypeTypeHint(node : G.MapSyntaxExpression.TypeHint, ruleSymbol : SyntaxRuleSymbol, astType : AstType) : TExpr
+    public MakeExpression(type : SyntaxMappingType, astType : AstType, compilerMessages : ICompilerMessages) : SyntaxMappingExpr
     {
-      def compilerMessages = GetCompilerMessages(node);
-      def hint             = TypingUtils.NTypeToAstTypeWithMessage(node.NitraType, node.Context, compilerMessages);
-      if (hint.IsVoid)
-        CreateError(node)
-      else if (hint.IsSubtypeOf(astType))
-        CreateTypeHint(node.Expr, ruleSymbol, hint)
-      else
-        CreateError(node, compilerMessages, $"Expected ast type '$astType' got '$hint'.")
-    }
-
-    public TypeConversion(node : G.MapSyntaxExpression.Conversion, ruleSymbol : SyntaxRuleSymbol, astType : AstType) : TExpr
-    {
-      def compilerMessages = GetCompilerMessages(node);
-      def genericError()
+      match (type)
       {
-        CreateError(node, compilerMessages, $"Cannot map rule to AST of type '$astType'.")
-      }
-      def pathOpt = BindRuleField(ruleSymbol, node.QualifiedName, node.Context, compilerMessages);
-      if (pathOpt is VSome(originalPath))
-      {
-        def path      = FilterTuples(originalPath);
-        def arguments = if (node.ArgumentsOpt.HasValue) node.ArgumentsOpt.Value.ArgumentExprs.Item1 else EmptyArguments;
-        match (path.Type)
-        {
-          | Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings)) =>
-            if (SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, astType) is VSome(syntaxMapping))
-              CreateCall(node, path, syntaxMapping, arguments, ruleSymbol)
-            else
-              genericError()
-
-          | List(item) =>
-            def itemPath = FilterTuples(ParseTreePath.Variable(path.Location.FromEnd(), Nitra.Model.Identifier(path.Location.FromEnd(), "node"), item));
-            if (itemPath.Type is Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings)))
-              match(astType)
-              {
-                | List(astSymbol) | OptionList(astSymbol) =>
-                  if (SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Ast(astType.Location, astSymbol)) is VSome(syntaxMapping))
-                    CreateConvertList(node, astSymbol, path, syntaxMapping, arguments, itemPath, ruleSymbol)
-                  else if (SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, astType) is VSome(syntaxMapping))
-                    CreateConcatLists(node, astSymbol, path, syntaxMapping, arguments, itemPath, ruleSymbol)
-                  else if (SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Option(astType.Location, astSymbol)) is VSome(syntaxMapping))
-                    CreateConcatOptions(node, astSymbol, path, syntaxMapping, arguments, itemPath, ruleSymbol)
-                  else
-                    genericError()
-
-                | _ => genericError()
-              }
-            else
-              genericError()
-
-          | Option(value) =>
-            def valuePath = FilterTuples(ParseTreePath.Variable(path.Location.FromEnd(), Nitra.Model.Identifier(path.Location.FromEnd(), "node"), value));
-            if (valuePath.Type is Ref(SyntaxRuleSymbol(SyntaxMappings = syntaxMappings)))
-              match(astType)
-              {
-                | Option(astSymbol) =>
-                  if (SelectSyntaxMappingOverload(ruleSymbol, syntaxMappings, arguments, AstType.Ast(astType.Location, astSymbol)) is VSome(syntaxMapping))
-                    CreateConvertOption(node, astSymbol, path, syntaxMapping, arguments, valuePath, ruleSymbol)
-                  else
-                    genericError()
-
-                | _ => genericError()
-              }
-            else
-              genericError()
-
-          | _ => genericError()
-        }
-      }
-      else
-        genericError()
-    }
-
-    public TypeAst(node : G.MapSyntaxExpression.Ast, ruleSymbol : SyntaxRuleSymbol, astType : AstType) : TExpr
-    {
-      def compilerMessages = GetCompilerMessages(node);
-      if (astType is AstType.Ast(targetSymbol))
-      {
-        def astSymbolRef = TypingUtils.BindAstSymbolFromMappingExtension(node.QualifiedName, targetSymbol, node.Context, compilerMessages);
-        if (astSymbolRef is SymbolRef.Some(astSymbol))
-        {
-          if (astSymbol.IsSubtypeOf(targetSymbol))
-            CreateAstCtor(node, astSymbol, node.Members, node.CloseBrace, ruleSymbol, compilerMessages)
+        | Undefined           => SyntaxMappingExpr.Error(type)
+        | Ast(exprType, expr) =>
+          if (exprType.IsSubtypeOf(astType))
+            expr
           else
           {
-            def sourceName = astSymbol.FullName;
-            def targetName = targetSymbol.FullName;
-            CreateError(node, astSymbolRef, compilerMessages, $"Declaration '$sourceName' is not subtype of declaration '$targetName'")
+            compilerMessages.Error(type, $"Expected AST type '$astType' got '$exprType'.");
+            SyntaxMappingExpr.Error(type)
           }
-        }
-        else
-          CreateError(node)
+
+        | Option(valueType) =>
+          if (astType is AstType.Option(astSymbol))
+          {
+            def valueExpr =
+              if (valueType is Some(expr))
+                Some(MakeExpression(expr, AstType.Ast(astType, astSymbol), compilerMessages))
+              else
+                None();
+
+            SyntaxMappingExpr.OptionCtor(type, astSymbol, valueExpr)
+          }
+          else
+          {
+            compilerMessages.Error(type, $"Expected AST type '$astType' got option.");
+            SyntaxMappingExpr.Error(type)
+          }
+
+        | List(itemTypes) =>
+          match (astType)
+          {
+            | List(astSymbol) | OptionList(astSymbol) =>
+              def itemAstType = AstType.Ast(astType, astSymbol);
+              def itemExprs   = itemTypes.Map(MakeExpression(_, itemAstType, compilerMessages));
+              SyntaxMappingExpr.ListCtor(type, astSymbol, itemExprs)
+
+            | _ =>
+              compilerMessages.Error(type, $"Expected AST type '$astType' got list.");
+              SyntaxMappingExpr.Error(type)
+          }
+
+        | ParseTree(path) with arguments = []
+        | Call(path, arguments) =>
+          def callType = ResolveCall(type, path, arguments, VSome(astType), compilerMessages);
+          MakeExpression(callType, astType, compilerMessages)
       }
+    }
+
+    public TypeTypeHint(node : G.MapSyntaxExpression.TypeHint, ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType
+    {
+      def astType = TypingUtils.NTypeToAstTypeWithMessage(node.NitraType, node.Context);
+      if (astType.IsVoid)
+        SyntaxMappingType.Undefined(node)
       else
-        CreateError(node, compilerMessages, $"Expected ast type '$astType'")
-    }
-
-    public TypeList(node : G.MapSyntaxExpression.List, ruleSymbol : SyntaxRuleSymbol, astType : AstType) : TExpr
-    {
-      def compilerMessages = GetCompilerMessages(node);
-      match (astType)
       {
-        | AstType.List(astSymbol) | AstType.OptionList(astSymbol) =>
-          def itemType  = AstType.Ast(astType.Location, astSymbol);
-          def itemExprs = node.ItemExprs.Item1;
-          def items     = array(itemExprs.Count);
-          foreach (itemExpr in itemExprs with index)
-            items[index] = TypeNode(itemExpr, ruleSymbol, itemType);
-          CreateListCtor(node, astSymbol, items)
-
-        | _ => CreateError(node, compilerMessages, $"Expected ast type '$astType' got list")
+        def exprType = node.Expr.MakeType(ruleSymbol);
+        def expr     = MakeExpression(exprType, astType, node.Context);
+        SyntaxMappingType.Ast(node, astType, expr);
       }
     }
 
-    public TypeOptionSome(node : G.MapSyntaxExpression.OptionSome, ruleSymbol : SyntaxRuleSymbol, astType : AstType) : TExpr
+    public TypeIdentifier(node : G.MapSyntaxExpression.Identifier, ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType
     {
-      def compilerMessages = GetCompilerMessages(node);
-      if (astType is AstType.Option(astSymbol))
+      def name = node.Identifier.Identifier();
+      def result1 = node.Context.BindMany.[ParseTreePatternVariableSymbol](name.Location);
+      match (result1.Candidates)
       {
-        def valueType = AstType.Ast(astType.Location, astSymbol);
-        def value     = TypeNode(node.ValueExpr, ruleSymbol, valueType);
-        CreateOptionCtor(node, astSymbol, VSome(value))
-      }
-      else
-        CreateError(node, compilerMessages, $"Expected ast type '$astType' got option.Some")
-    }
+        | [variable] =>
+          def path = ParseTreePath.Variable(node, name, variable.Type);
+          SyntaxMappingType.ParseTree(node, path)
 
-    public TypeOptionNone(node : G.MapSyntaxExpression.OptionNone, _ruleSymbol : SyntaxRuleSymbol, astType : AstType) : TExpr
-    {
-      def compilerMessages = GetCompilerMessages(node);
-      if (astType is AstType.Option(astSymbol))
-        CreateOptionCtor(node, astSymbol, VNone())
-      else
-        CreateError(node, compilerMessages, $"Expected ast type '$astType' got option.None")
-    }
+        | _ :: _ =>
+          result1.Messages.TranslateTo(node.Context);
+          SyntaxMappingType.Undefined(node)
 
-    private CreateError(node : G.MapSyntaxExpression, compilerMessages : ICompilerMessages, message : string) : TExpr
-    {
-      CreateError(node, node, compilerMessages, message)
-    }
-
-    private CreateError(node : G.MapSyntaxExpression, errorLoc : Located, compilerMessages : ICompilerMessages, message : string) : TExpr
-    {
-      compilerMessages.Error(errorLoc, message);
-      CreateError(node)
-    }
-
-    private static BindRuleField(ruleSymbol : SyntaxRuleSymbol, qid : G.QualifiedIdentifier, context : Context, compilerMessages : ICompilerMessages) : ValueOption[ParseTreePath]
-    {
-      def eq(a : string, b : string)
-      {
-        String.Equals(a, b, StringComparison.InvariantCulture)
-      }
-
-      def bind(qualifier : ParseTreePath, name : Identifier, tail : list[Identifier]) : ValueOption[ParseTreePath]
-      {
-        def failure() : ValueOption[ParseTreePath]
-        {
-          compilerMessages.Error(name.Location, $"Unbound name '$(name.Value)'");
-          VNone()
-        }
-
-        def success(ruleType : RuleType) : ValueOption[ParseTreePath]
-        {
-          def path = ParseTreePath.Member(qualifier.Location + name.Location, qualifier, name, ruleType);
-          bindTail(path, tail)
-        }
-
-        match (qualifier.Type)
-        {
-          | Ref(symbol) =>
-            def loop(rules : list[Rule])
-            {
-              | [] => failure()
-              | rule :: _ when eq(name.Value, rule.FieldName) => success(rule.Type)
-              | _ :: otherRules => loop(otherRules)
-            }
-            loop(symbol.NonVoidSubRules)
-
-          | Tuple(members) =>
-            def loop(members, index)
-            {
-              match (members)
-              {
-                | [] => failure()
-                | member :: _ when eq(name.Value, "Item" + index.ToString()) => success(member)
-                | _ :: otherMembers => loop(otherMembers, index + 1)
-              }
-            }
-            loop(members, 1)
-
-          | _ => failure()
-        }
-      }
-      and bindTail(path : ParseTreePath, tail : list[Identifier]) : ValueOption[ParseTreePath]
-      {
-        match (tail)
-        {
-          | [] => VSome(path)
-          | nextName :: nextTail => bind(path, nextName, nextTail)
-        }
-      }
-
-      match (qid.Identifiers())
-      {
         | [] =>
-          compilerMessages.Error(qid, "No rule field name speciefied");
-          VNone()
-
-        | name :: tail =>
-          if (context.BindMany.[ParseTreePatternVariableSymbol](name.Location).Candidates is [variable])
+          def mappingContext = node.Context.GetContext.[MapSyntaxContext]();
+          if (mappingContext.BindParameter(name) is VSome(parameter))
           {
-            def path = ParseTreePath.Variable(name.Location, name, variable.Type);
-            bindTail(path, tail);
+            def expr = SyntaxMappingExpr.ParameterRef(name, parameter);
+            SyntaxMappingType.Ast(node, parameter.Type, expr)
+          }
+          else if (LookupRuleField(RuleType.Ref(ruleSymbol), name) is VSome(ruleType))
+          {
+            def path = ParseTreePath.Member(name, ParseTreePath.This(name.Location.FromStart(), ruleSymbol), name, ruleType);
+            SyntaxMappingType.ParseTree(node, path)
           }
           else
           {
-            def thisLoc = qid.Location.FromStart();
-            def path    = ParseTreePath.This(thisLoc, ruleSymbol);
-            bind(path, name, tail)
+            node.Context.Error(name, $"Unbound name $(name.Value).");
+            SyntaxMappingType.Undefined(node)
           }
       }
     }
 
-    private static FilterTuples(path : ParseTreePath) : ParseTreePath
+    public TypeMemberAccess(node : G.MapSyntaxExpression.MemberAccess, ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType
+    {
+      def error(errorLoc : Located, message : string)
+      {
+        node.Context.Error(errorLoc, message);
+        SyntaxMappingType.Undefined(node)
+      }
+      def unboundName(name : Identifier)
+      {
+        error(name, $"Unbound name '$name'.")
+      }
+
+      def makeAccess(exprType : SyntaxMappingType)
+      {
+        def loc = node.Location;
+        match (exprType)
+        {
+          | Ast(Void, _) | Undefined => SyntaxMappingType.Undefined(loc)
+          | Ast(Option, _) | Option => error(exprType, "Member access expression is not supported on option.")
+          | Ast(List, _) | Ast(OptionList, _) | List => error(exprType, "Member access expression is not supported on list.")
+          | Ast(Ast(symbol), expr) =>
+            def name = node.Identifier.Identifier();
+            match (symbol.LookupProperty(name.Value))
+            {
+              | VSome(SimpleAstPropertySymbol as property) =>
+                if (property.AstType.IsVoid)
+                  error(name, $"Property type '$(property.Type)' is not valid AST type.")
+                else
+                  SyntaxMappingType.Ast(loc, property.AstType, SyntaxMappingExpr.PropertyRef(loc, expr, property))
+
+              | VSome(property) => error(name, $"Property '$(property.FullName)' is not simple AST property.")
+              | VNone()         => unboundName(name)
+            }
+
+          | ParseTree(path) =>
+            def name = node.Identifier.Identifier();
+            if (LookupRuleField(path.Type, name) is VSome(ruleType))
+              SyntaxMappingType.ParseTree(loc, ParseTreePath.Member(loc, path, name, ruleType))
+            else
+              unboundName(name)
+
+          | Call(path, arguments) => makeAccess(ResolveCall(exprType, path, arguments, VNone(), node.Context))
+        }
+      }
+
+      makeAccess(node.Expr.MakeType(ruleSymbol))
+    }
+
+    public TypeCall(node : G.MapSyntaxExpression.Call, ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType
+    {
+      def exprType      = node.Expr.MakeType(ruleSymbol);
+      def argumentTypes = node.ArgumentExprs.Item1.MapToList(_.MakeType(ruleSymbol));
+      match (exprType)
+      {
+        | Undefined       => SyntaxMappingType.Undefined(node)
+        | ParseTree(path) => SyntaxMappingType.Call(node, path, argumentTypes)
+        | _               =>
+          node.Context.Error(node, "Syntax mapping invokation is not allowed here.");
+          SyntaxMappingType.Undefined(node)
+      }
+    }
+
+    public TypeAst(node : G.MapSyntaxExpression.Ast, ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType
+    {
+      def result = TypingUtils.BindAstSymbolFromMappingExtension(node.QualifiedName, node.Context);
+      if (result is SymbolRef.Some(astSymbol))
+      {
+        def mappingFields = SCG.List();
+        foreach (member in node.Members)
+          when (member.GetSyntaxMappingField(astSymbol, ruleSymbol) is VSome(mappingField))
+            mappingFields.Add(mappingField);
+
+        TypingUtils.CheckRequiredAstProperties(astSymbol, mappingFields, Location(node.Location.Source, node.CloseBrace), node.Context);
+        def type = AstType.Ast(node.QualifiedName, astSymbol);
+        def expr = SyntaxMappingExpr.AstCtor(node, astSymbol, mappingFields.ToNList());
+        SyntaxMappingType.Ast(node, type, expr)
+      }
+      else
+        SyntaxMappingType.Undefined(node)
+    }
+
+    private LookupRuleField(type : RuleType, name : Identifier) : ValueOption[RuleType]
+    {
+      match (type)
+      {
+        | Ref(symbol) =>
+          def loop(rules : list[Rule])
+          {
+            | [] => VNone()
+            | rule :: _ when StringComparer.Ordinal.Equals(name.Value, rule.FieldName) => VSome(rule.Type)
+            | _ :: otherRules => loop(otherRules)
+          }
+          loop(symbol.NonVoidSubRules)
+
+        | Tuple(members) =>
+          def loop(members, index)
+          {
+            match (members)
+            {
+              | [] => VNone()
+              | member :: _ when StringComparer.Ordinal.Equals(name.Value, $"Item$index") => VSome(member)
+              | _ :: otherMembers => loop(otherMembers, index + 1)
+            }
+          }
+          loop(members, 1)
+
+        | _ => VNone()
+      }
+    }
+
+    private ResolveCall(loc : Located, originalPath : ParseTreePath, arguments : list[SyntaxMappingType], returnTypeOpt : ValueOption[AstType], compilerMessages : ICompilerMessages) : SyntaxMappingType
+    {
+      def formatAstType(t : ValueOption[AstType]) : string
+      {
+        | VSome(astType) => $"AST of type '$astType'"
+        | VNone          => "AST"
+      }
+      def error(message : string) : SyntaxMappingType
+      {
+        compilerMessages.Error(loc, message);
+        SyntaxMappingType.Undefined(loc)
+      }
+      def selectOverload(targetRuleSymbol : SyntaxRuleSymbol, returnTypePred : AstType -> bool, resultBuilder : AstType * list[SyntaxMappingExpr] -> SyntaxMappingType) : SyntaxMappingType
+      {
+        def applyArguments(parms : list[SyntaxMappingParameter], args : list[SyntaxMappingType], subMessages : ICompilerMessages) : ValueOption[list[SyntaxMappingExpr]]
+        {
+          match (parms, args)
+          {
+            | ([], []) => VSome([])
+            | (p :: otherParms, a :: otherArgs) =>
+              def expr = MakeExpression(a, p.Type, subMessages);
+              if (expr is SyntaxMappingExpr.Error)
+                VNone()
+              else if (applyArguments(otherParms, otherArgs, subMessages) is VSome(otherExprs))
+                VSome(expr :: otherExprs)
+              else
+                VNone()
+
+            | _ => VNone()
+          }
+        }
+
+        def buffer = LightList();
+        foreach (syntaxMapping in targetRuleSymbol.SyntaxMappings)
+        {
+          when (returnTypePred(syntaxMapping.ReturnType))
+          when (syntaxMapping.Parameters.Length == arguments.Length)
+          {
+            def subMessages = CompilerMessageList();
+            when (applyArguments(syntaxMapping.Parameters, arguments, subMessages) is VSome(exprs))
+              buffer.Add(syntaxMapping, exprs, subMessages)
+          }
+        }
+
+        match (buffer.Count)
+        {
+          | 1 =>
+            def (syntaxMapping, args, subMessages) = buffer.FirstItem;
+            subMessages.GetMessages().TranslateTo(compilerMessages);
+            resultBuilder(syntaxMapping.ReturnType, args)
+
+          | 0 =>
+            if (targetRuleSymbol.SyntaxMappings.IsEmpty)
+              error($"Rule '$(targetRuleSymbol.FullName)' has no AST mapping.")
+            else
+              error($"Rule '$(targetRuleSymbol.FullName)' has no compatible AST mapping.")
+
+          | _ =>
+            using (root = compilerMessages.RootError(loc, $"Ambiguous '$(targetRuleSymbol.FullName)' AST mapping."))
+              foreach ((syntaxMapping, _, _) in buffer.ToArray())
+                root.Hint(syntaxMapping.FirstLocation, "AST mapping ambiguity.");
+            SyntaxMappingType.Undefined(loc)
+        }
+      }
+      def mapListBottomUpPred(_ : AstType) : bool
+      {
+        | Ast | List | OptionList | Option => true
+        | Void => false
+      }
+      def mapListTopDownPred(astSymbol : AstSymbol) : AstType -> bool
+      {
+        fun (returnType : AstType)
+        {
+          | Ast(returnSymbol) | List(returnSymbol) | OptionList(returnSymbol) | Option(returnSymbol) => returnSymbol.IsSubtypeOf(astSymbol)
+          | Void => false
+        }
+      }
+      def mapOptionBottomUpPred(_ : AstType) : bool
+      {
+        | Ast => true
+        | _   => false
+      }
+      def mapOptionTopDownPred(astSymbol : AstSymbol) : AstType -> bool
+      {
+        fun (returnType : AstType)
+        {
+          | Ast(returnSymbol) => returnSymbol.IsSubtypeOf(astSymbol)
+          | _                 => false
+        }
+      }
+      def createVariablePath(loc : Location, type : RuleType) : ParseTreePath
+      {
+        NavigateThroughTuples(ParseTreePath.Variable(loc, Nitra.Model.Identifier(loc, "node"), type))
+      }
+
+      def path = NavigateThroughTuples(originalPath);
+      match (path.Type)
+      {
+        | Ref(targetRuleSymbol) =>
+          selectOverload(targetRuleSymbol,
+            if (returnTypeOpt is VSome(astType)) fun (t) { t.IsSubtypeOf(astType) } else fun (_) { true },
+            (returnType, args) => SyntaxMappingType.Ast(loc, returnType, SyntaxMappingExpr.Call(loc, path, args, returnType)))
+
+        | List(item) =>
+          def itemPath = createVariablePath(path.Location.FromEnd(), item);
+          match (itemPath.Type, returnTypeOpt)
+          {
+            | (Ref(targetRuleSymbol), VNone)                             with (pred = mapListBottomUpPred, expectedSymbol = null)
+            | (Ref(targetRuleSymbol), VSome(List(expectedSymbol)))       with pred = mapListTopDownPred(expectedSymbol)
+            | (Ref(targetRuleSymbol), VSome(OptionList(expectedSymbol))) with pred = mapListTopDownPred(expectedSymbol) =>
+              selectOverload(targetRuleSymbol, pred, fun (returnType : AstType, args : list[SyntaxMappingExpr])
+              {
+                match (returnType)
+                {
+                  | Ast(returnSymbol)        with symbol = expectedSymbol ?? returnSymbol => SyntaxMappingType.Ast(loc, AstType.OptionList(Location.Default, symbol), SyntaxMappingExpr.ConvertList(loc, path, args, symbol, itemPath))
+                  | List(returnSymbol)       with symbol = expectedSymbol ?? returnSymbol
+                  | OptionList(returnSymbol) with symbol = expectedSymbol ?? returnSymbol => SyntaxMappingType.Ast(loc, AstType.OptionList(Location.Default, symbol), SyntaxMappingExpr.ConcatLists(loc, path, args, symbol, itemPath))
+                  | Option(returnSymbol)     with symbol = expectedSymbol ?? returnSymbol => SyntaxMappingType.Ast(loc, AstType.OptionList(Location.Default, symbol), SyntaxMappingExpr.ConcatOptions(loc, path, args, symbol, itemPath))
+                  | Void                                                                  => assert(false)
+                }
+              })
+
+            | (Ref,                   VSome(astType))               => error($"Expected AST type '$astType' got list.")
+            | (_,                     x)                            => error($"Cannot map list rule '$(originalPath.Type)' to $(formatAstType(x)): rule '$item' does not refer syntax rule symbol.")
+          }
+
+        | Option(value) =>
+          def valuePath = createVariablePath(path.Location.FromEnd(), value);
+          match (valuePath.Type, returnTypeOpt)
+          {
+            | (Ref(targetRuleSymbol), VNone)                         with (pred = mapOptionBottomUpPred, expectedSymbol = null)
+            | (Ref(targetRuleSymbol), VSome(Option(expectedSymbol))) with pred = mapOptionTopDownPred(expectedSymbol) =>
+              selectOverload(targetRuleSymbol, pred, fun (returnType : AstType, args : list[SyntaxMappingExpr])
+              {
+                if (returnType is Ast(returnSymbol))
+                {
+                  def symbol = expectedSymbol ?? returnSymbol;
+                  SyntaxMappingType.Ast(loc, AstType.Option(Location.Default, symbol), SyntaxMappingExpr.ConvertOption(loc, path, args, symbol, valuePath))
+                }
+                else
+                  assert(false)
+              })
+
+            | (Ref,                   VSome(astType))           => error($"Expected AST type '$astType' got option.")
+            | (_,                     x)                        => error($"Cannot map option rule '$(originalPath.Type)' to $(formatAstType(x)): rule '$value' does not refer syntax rule symbol.")
+          }
+
+        | _ => error($"Cannot map rule '$(originalPath.Type)' to $(formatAstType(returnTypeOpt)).")
+      }
+    }
+
+    private NavigateThroughTuples(path : ParseTreePath) : ParseTreePath
     {
       def filterNonKeywords(members : list[RuleType], index : int) : list[int * RuleType]
       {
@@ -270,36 +389,9 @@ namespace Nitra.Typing
 
       if (path.Type is Tuple(members))
         if (filterNonKeywords(members, 1) is [(index, nonKeyword)])
-          FilterTuples(ParseTreePath.Member(path.Location, path, Identifier(path.Location.FromEnd(), "Item" + index), nonKeyword))
+          NavigateThroughTuples(ParseTreePath.Member(path, path, Identifier(path.Location.FromEnd(), "Item" + index), nonKeyword))
         else path
       else path
-    }
-
-    private static SelectSyntaxMappingOverload(contextRuleSymbol : SyntaxRuleSymbol, syntaxMappings : list[SyntaxMappingSymbol], arguments : SCG.IList[G.MapSyntaxExpression], returnType : AstType) : ValueOption[SyntaxMappingSymbol]
-    {
-      def checkArgumentTypes(index, parms)
-      {
-        if (parms is current :: other)
-          arguments[index].ReturnsType(contextRuleSymbol, current.Type) && checkArgumentTypes(index + 1, other)
-        else
-          true
-      }
-
-      def candidates = LightList();
-      foreach (syntaxMapping in syntaxMappings)
-      {
-        when (syntaxMapping.ReturnType.IsSubtypeOf(returnType))
-        when (syntaxMapping.Parameters.Length == arguments.Count)
-        when (checkArgumentTypes(0, syntaxMapping.Parameters))
-          candidates.Add(syntaxMapping)
-      }
-
-      match (candidates.Count)
-      {
-        | 0 => VNone()
-        | 1 => VSome(candidates.FirstItem)
-        | _ => VNone()
-      }
     }
   }
 }

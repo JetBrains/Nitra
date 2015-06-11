@@ -1200,7 +1200,7 @@ namespace Nitra.Visualizer
       try
       {
         _text.TextArea.Caret.Offset = node.Span.StartPos;
-        _text.ScrollTo(_text.TextArea.Caret.Line, _text.TextArea.Caret.Line);
+        _text.ScrollTo(_text.TextArea.Caret.Line, _text.TextArea.Caret.Column);
         _text.TextArea.AllowCaretOutsideSelection();
         _text.Select(node.Span.StartPos, node.Span.Length);
       }
@@ -1246,44 +1246,168 @@ namespace Nitra.Visualizer
 
         if (Keyboard.IsKeyDown(Key.Space))
         {
-          int end = _text.CaretOffset;
-          int start = end;
-          var line = _text.Document.GetLineByOffset(end);
-          var lineText = _text.Document.GetText(line);
-          var offsetInLine = end - 1 - line.Offset;
-          for (int i = offsetInLine; i >= 0; i--)
-          {
-            var ch = lineText[i];
-            if (!char.IsLetter(ch))
-            {
-              break;
-            }
-            start--;
-          }
-          var text = _text.Text.Substring(0, start) + '\xFFFF';
-          var prefix = _text.Document.GetText(start, end - start);
-          _currentTestSuit.Run(text, null, start, prefix);
-          _performanceTreeView.ItemsSource = new[] { _currentTestSuit.Statistics };
-          var ex = _currentTestSuit.Exception;
-          var result = ex as LiteralCompletionException;
-          //MessageBox.Show(string.Join(", ", result.Literals.OrderBy(x => x)));
-          if (result == null)
+          if (_parseResult == null)
             return;
-
-          _completionWindow = new CompletionWindow(_text.TextArea);
-          IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
-          var span = new NSpan(start, end);
-          foreach (var literal in result.Literals)
-            data.Add(new LiteralCompletionData(span, literal));
-
-          _completionWindow.Show();
-          _completionWindow.Closed +=
-            delegate { _completionWindow = null; };
+          ShowCompletionWindow(_text.CaretOffset, _parseResult);
           e.Handled = true;
         }
         else if (e.Key == Key.Oem6) // Oem6 - '}'
           TryMatchBraces();
       }
+    }
+
+    private void ShowCompletionWindow(int pos, IParseResult parseResult)
+    {
+      var completionList = CompleteWord(pos, parseResult);
+
+      _completionWindow = new CompletionWindow(_text.TextArea);
+      IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
+
+      foreach (var completionData in completionList)
+        if (!string.IsNullOrEmpty(completionData.Text) && char.IsLetter(completionData.Text[0]))
+          data.Add(completionData);
+
+      _completionWindow.Show();
+      _completionWindow.Closed += delegate { _completionWindow = null; };
+    }
+
+    private List<CompletionData> CompleteWord(int pos, IParseResult parseResult)
+    {
+      var source = parseResult.SourceSnapshot;
+      var completionList = new List<CompletionData>();
+      var carretSpan = new NSpan(pos, pos);
+      var spasesWalker = new VoidRuleWalker(carretSpan);
+      var spans = new HashSet<SpanInfo>();
+      spasesWalker.Walk(parseResult, spans);
+
+      foreach (var spanInfo in spans)
+        if (spanInfo.Span.Contains(carretSpan) && spanInfo.SpanClass != SpanClass.Default)
+          return completionList;
+
+      int spacesStart = pos;
+      int spacesEnd = pos;
+
+      if (spans.Count != 0)
+      {
+        spacesStart = spans.Min(s => s.Span.StartPos);
+        spacesEnd = spans.Max(s => s.Span.EndPos);
+      }
+
+      IEnumerable<Symbol2> symbols = Enumerable.Empty<Symbol2>();
+      var visitor = new FindNodeAstVisitor(new NSpan(spacesStart, spacesEnd));
+      _astRoot.Accept(visitor);
+
+      var firstAstNode = visitor.Stack.Peek();
+      var span = firstAstNode.Span;
+      var start = span.StartPos;
+      var prefix = span.EndPos == pos ? source.Text.Substring(span.StartPos, span.Length) : null;
+      foreach (var curr in visitor.Stack)
+      {
+        var scopeProp = curr.GetType().GetProperty("Scope");
+        if (scopeProp != null)
+        {
+          dynamic obj = curr;
+          if (obj.IsScopeEvaluated)
+          {
+            symbols = obj.Scope.MakeComletionList(prefix);
+            break;
+          }
+        }
+      }
+
+      foreach (var symbol in symbols)
+      {
+        var content = symbol.ToXaml();
+        var description = content;
+        var amb = symbol as AmbiguousHierarchicalSymbol;
+        if (amb != null)
+          description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
+        completionList.Add(new CompletionData(span, symbol.Name.Text, content, description, priority: 1.0));
+      }
+
+      var text = source.Text.Substring(0, start) + '\xFFFF';
+      _currentTestSuit.Run(text, null, start, prefix);
+      var ex = _currentTestSuit.Exception;
+      var result = ex as LiteralCompletionException;
+      _performanceTreeView.ItemsSource = new[] {_currentTestSuit.Statistics};
+      //MessageBox.Show(string.Join(", ", result.Literals.OrderBy(x => x)));
+      if (result == null)
+        return completionList;
+
+      foreach (var literal in result.Literals)
+        completionList.Add(new CompletionData(span, literal, Utils.Escape(literal), Utils.Escape(literal), priority: 2.0));
+
+      completionList.Sort();
+      return completionList;
+    }
+
+    private class FindNodeAstVisitor : IAstVisitor
+    {
+      private readonly NSpan _span;
+      public readonly Stack<IAst> Stack = new Stack<IAst>();
+
+      public FindNodeAstVisitor(NSpan span) { _span = span; }
+
+      public void Visit(IAst parseTree)
+      {
+        if (parseTree.Span.IntersectsWith(_span))
+        {
+          Stack.Push(parseTree);
+          parseTree.Accept(this);
+        }
+      }
+
+      public void Visit(IReference reference)
+      {
+        if (reference.Span.IntersectsWith(_span))
+        {
+          Stack.Push(reference);
+          reference.Accept(this);
+        }
+      }
+    }
+
+    private IEnumerable<Symbol2> TrySymbolCompletion(int pos, int spacesStart, int spacesEnd)
+    {
+      var visitor = new FindNodeAstVisitor(new NSpan(spacesStart, spacesEnd));
+      _astRoot.Accept(visitor);
+      if (visitor.Stack.Count == 0)
+        return Enumerable.Empty<Symbol2>();
+
+
+      foreach (var curr in visitor.Stack)
+      {
+        var scopeProp = curr.GetType().GetProperty("Scope");
+        if (scopeProp != null)
+        {
+          dynamic obj = curr;
+          if (obj.IsScopeEvaluated)
+          {
+            var prefix = curr.Span.EndPos == pos ? _text.Document.GetText(curr.Span.StartPos, curr.Span.Length) : null;
+            return obj.Scope.MakeComletionList(prefix);
+          }
+        }
+      }
+
+      return Enumerable.Empty<Symbol2>();
+    }
+
+    private int CalcCompletionStart(int end)
+    {
+      int start = end;
+      var line = _text.Document.GetLineByOffset(end);
+      var lineText = _text.Document.GetText(line);
+      var offsetInLine = end - 1 - line.Offset;
+      for (int i = offsetInLine; i >= 0; i--)
+      {
+        var ch = lineText[i];
+        if (!char.IsLetter(ch))
+        {
+          break;
+        }
+        start--;
+      }
+      return start;
     }
 
     private void TryMatchBraces()
