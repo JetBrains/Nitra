@@ -129,5 +129,10 @@ namespace Nitra.Visualizer
       }
       return count;
     }
+
+    public static string Escape(string str)
+    {
+      return str.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+    }
   }
 }

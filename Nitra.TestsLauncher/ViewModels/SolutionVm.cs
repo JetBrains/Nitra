@@ -15,7 +15,7 @@ namespace Nitra.ViewModels
     public string SolutinFilePath { get; private set; }
     public string RootFolder { get; private set; }
 
-    public SolutionVm(string solutinFilePath, string selectePath, string config, ICompilerMessages compilerMessages)
+    public SolutionVm(string solutinFilePath, string selectePath, string config)
     {
       var isSolutinFileExists = solutinFilePath != null && File.Exists(solutinFilePath);
       if (!isSolutinFileExists)
@@ -41,7 +41,7 @@ namespace Nitra.ViewModels
         if (string.IsNullOrEmpty(suit))
           continue;
 
-        var testSuit = new TestSuitVm(this, suit, config, compilerMessages);
+        var testSuit = new TestSuitVm(this, suit, config);
         
         if (selectePath != null)
         {

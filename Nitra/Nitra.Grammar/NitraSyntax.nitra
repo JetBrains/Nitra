@@ -595,7 +595,7 @@ syntax module NitraSyntax
         override CollectGlobalSymbols { _ = ns; }
         override MakeContext
         {
-          def context = MapSyntaxContext(parent);
+          def context = MapSyntaxContext(parent, MakeParameters, MakeReturnType);
           _ = MapSyntaxBody.MakeContext(context);
           context
         }
@@ -886,49 +886,54 @@ syntax module NitraSyntax
   syntax MapSyntaxExpression
   {
     [Cached] MakeContext(parent : Context) : Context;
-    ReturnsType(ruleSymbol : SyntaxRuleSymbol, astType : AstType) : bool;
-    Expression(ruleSymbol : SyntaxRuleSymbol, astType : AstType) : SyntaxMappingExpr;
+    [Cached] MakeType(ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType;
+    Expression(ruleSymbol : SyntaxRuleSymbol, astType : AstType) : SyntaxMappingExpr = SyntaxMappingTyper.MakeExpression(MakeType(ruleSymbol), astType, this.Context);
 
+    | Braces = "(" Expr=MapSyntaxExpression ")"
+      {
+        override MakeContext { _ = Expr.MakeContext(parent); parent }
+        override MakeType   = this.Expr.MakeType(ruleSymbol);
+      }
     | TypeHint = Expr=MapSyntaxExpression sm ":" sm NitraType precedence 30
       {
         override MakeContext { _ = Expr.MakeContext(parent); parent }
-        override ReturnsType = SyntaxMappingTyper.Trial.TypeTypeHint(this, ruleSymbol, astType);
-        override Expression  = SyntaxMappingTyper.Actual.TypeTypeHint(this, ruleSymbol, astType);
+        override MakeType    = SyntaxMappingTyper.TypeTypeHint(this, ruleSymbol);
       }
-    | Conversion = !(ReservedWords !IdentifierPartCharacters) QualifiedName Arguments?
+    | Identifier = !(ReservedWords !IdentifierPartCharacters) Identifier
       {
         regex ReservedWords = "Some" | "None";
-        syntax Arguments = "(" (ArgumentExpr=MapSyntaxExpression; "," sm)* ")"
-        {
-          MakeContext(parent : Context) : Context { foreach (item in ArgumentExprs.Item1) _ = item.MakeContext(parent); parent }
-        }
-        override MakeContext { when (ArgumentsOpt.HasValue) _ = ArgumentsOpt.Value.MakeContext(parent); parent }
-        override ReturnsType = SyntaxMappingTyper.Trial.TypeConversion(this, ruleSymbol, astType);
-        override Expression  = SyntaxMappingTyper.Actual.TypeConversion(this, ruleSymbol, astType);
+        override MakeContext = parent;
+        override MakeType    = SyntaxMappingTyper.TypeIdentifier(this, ruleSymbol);
+      }
+    | MemberAccess = Expr=MapSyntaxExpression "." Identifier precedence 50
+      {
+        override MakeContext { _ = Expr.MakeContext(parent); parent }
+        override MakeType    = SyntaxMappingTyper.TypeMemberAccess(this, ruleSymbol);
+      }
+    | Call = Expr=MapSyntaxExpression "(" (ArgumentExpr=MapSyntaxExpression; "," sm)* ")" precedence 40
+      {
+        override MakeContext { _ = Expr.MakeContext(parent); foreach (item in ArgumentExprs.Item1) _ = item.MakeContext(parent); parent }
+        override MakeType    = SyntaxMappingTyper.TypeCall(this, ruleSymbol);
       }
     | Ast        = QualifiedName outline_begin_before nl OpenBrace="{" inl Members=MapSyntaxExpressionAstMember* d CloseBrace="}" outline_end_before nl
       {
         override MakeContext { foreach (member in this.Members) _ = member.MakeContext(parent); parent }
-        override ReturnsType = SyntaxMappingTyper.Trial.TypeAst(this, ruleSymbol, astType);
-        override Expression  = SyntaxMappingTyper.Actual.TypeAst(this, ruleSymbol, astType);
+        override MakeType    = SyntaxMappingTyper.TypeAst(this, ruleSymbol);
       }
     | List       = "[" (ItemExpr=MapSyntaxExpression; ",")* "]"
       {
         override MakeContext { foreach (member in this.ItemExprs.Item1) _ = member.MakeContext(parent); parent }
-        override ReturnsType = SyntaxMappingTyper.Trial.TypeList(this, ruleSymbol, astType);
-        override Expression  = SyntaxMappingTyper.Actual.TypeList(this, ruleSymbol, astType);
+        override MakeType   = SyntaxMappingType.List(this.Location, this.ItemExprs.Item1.MapToList(_.MakeType(ruleSymbol)));
       }
     | OptionSome = "Some" "(" ValueExpr=MapSyntaxExpression ")"
       {
         override MakeContext { _ = ValueExpr.MakeContext(parent); parent }
-        override ReturnsType = SyntaxMappingTyper.Trial.TypeOptionSome(this, ruleSymbol, astType);
-        override Expression  = SyntaxMappingTyper.Actual.TypeOptionSome(this, ruleSymbol, astType);
+        override MakeType    = SyntaxMappingType.Option(this.Location, Some(this.ValueExpr.MakeType(ruleSymbol)));
       }
     | OptionNone = "None" "(" ")"
       {
         override MakeContext = parent;
-        override ReturnsType = SyntaxMappingTyper.Trial.TypeOptionNone(this, ruleSymbol, astType);
-        override Expression  = SyntaxMappingTyper.Actual.TypeOptionNone(this, ruleSymbol, astType);
+        override MakeType    { IgnoreParams(); SyntaxMappingType.Option(this.Location, None()); }
       }
   }
 
@@ -1090,7 +1095,7 @@ syntax module NitraSyntax
             _ = member.MakeContext(parent);
           parent
         }
-        [Cached] private MakeAstSymbolRef(pattern : Pattern, astSymbol : AstSymbol) : SymbolRef[AstSymbol] = pattern.BindExtensionAst(astSymbol, this.Context);
+        [Cached] private MakeAstSymbolRef(pattern : Pattern) : SymbolRef[AstSymbol] = pattern.BindExtensionAst(this.Context);
         private CreateSyntaxMappingExpr(ruleSymbol : SyntaxRuleSymbol, astSymbol : AstSymbol, sharedMappingFields : List[SyntaxMappingField]) : SyntaxMappingExpr
         {
           def mappingFields = List();
@@ -1108,10 +1113,10 @@ syntax module NitraSyntax
         }
         override CollectSimpleMatchCases
         {
-          if (syntaxMapping.ReturnType is AstType.Ast(astSymbol))
+          if (syntaxMapping.ReturnType is AstType.Ast)
           {
             def patternExpr      = pattern.SimpleTyping(syntaxMapping.DeclaringRule, this.Context);
-            def caseAstSymbolRef = MakeAstSymbolRef(pattern, astSymbol);
+            def caseAstSymbolRef = MakeAstSymbolRef(pattern);
             when (caseAstSymbolRef is SymbolRef.Some(caseAstSymbol))
             {
               def expr = CreateSyntaxMappingExpr(syntaxMapping.DeclaringRule, caseAstSymbol, sharedMappingFields);
@@ -1126,12 +1131,12 @@ syntax module NitraSyntax
         }
         override CollectExtensionBodies
         {
-          if (astType is AstType.Ast(astSymbol))
+          if (astType is AstType.Ast)
           {
             def (ruleRef, hasPattern) = pattern.BindExtensionRule(baseRuleSymbol, this.Context);
             when (ruleRef is SymbolRef.Some(ruleSymbol))
             {
-              def extensionAstSymbolRef = MakeAstSymbolRef(pattern, astSymbol);
+              def extensionAstSymbolRef = MakeAstSymbolRef(pattern);
               when (extensionAstSymbolRef is SymbolRef.Some(extensionAstSymbol))
               {
                 if (hasPattern)
@@ -1186,9 +1191,8 @@ syntax module NitraSyntax
       context.Error(this, "Extension rule pattern expected");
       (SymbolRef.None(this.Location, true), false)
     }
-    BindExtensionAst(baseAstSymbol : AstSymbol, context : Context) : SymbolRef[AstSymbol]
+    BindExtensionAst(context : Context) : SymbolRef[AstSymbol]
     {
-      _ = baseAstSymbol;
       context.Error(this, "Extension rule pattern expected");
       SymbolRef.None(this.Location, true)
     }
@@ -1206,13 +1210,13 @@ syntax module NitraSyntax
     | Identifier
       {
         override BindExtensionRule        = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), false);
-        override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(this.Identifier.Location, baseAstSymbol, [this.Identifier.Location], context);
+        override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(this.Identifier.Location, [this.Identifier.Location], context);
         override Typing                   = PatternTyper.TypeIdentifier(this.Location, this.Identifier.Identifier(), ruleType, context);
       }
     | Ctor  = Identifier "(" (Pattern; "," sm)* ")"
       {
         override BindExtensionRule        = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), true);
-        override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(this.Identifier.Location, baseAstSymbol, [this.Identifier.Location], context);
+        override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(this.Identifier.Location, [this.Identifier.Location], context);
         override Typing                   = PatternTyper.TypeCtor(this.Location, this.Identifier.Identifier(), this.Patterns.Item1, ruleType, context);
         override ExtensionTyping          = PatternTyper.TypeParseTreePattern(this.Location, ruleSymbol, this.Patterns.Item1, context);
       }
@@ -1625,7 +1629,7 @@ syntax module NitraSyntax
         override CollectGlobalSymbols { _ = MakeOwner(owner) }
         override MakeContext
         {
-          def context = MapSyntaxContext(parent);
+          def context = MapSyntaxContext(parent, MakeParameters, MakeReturnType);
           _ = MapSyntaxBody.MakeContext(context);
           context
         }

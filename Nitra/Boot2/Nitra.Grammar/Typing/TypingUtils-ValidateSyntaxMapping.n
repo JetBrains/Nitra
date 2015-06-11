@@ -1,0 +1,104 @@
+﻿using Nitra.ProjectSystem;
+using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Typing
+{
+  public partial module TypingUtils
+  {
+    public ValidateSyntaxMapping(project : NitraProject) : void
+    {
+      def cache = SCG.Dictionary();
+
+      def checkParameters(syntaxMapping : SyntaxMappingSymbol) : void
+      {
+        def definedParameters = SCG.Dictionary();
+        foreach (p in syntaxMapping.Parameters)
+        {
+          mutable existingParameter;
+          if (definedParameters.TryGetValue(p.Name, out existingParameter))
+          {
+            using (root = project.RootError(p, $"Redefinition of AST mapping parameter '$(p.Name)'"))
+              root.Hint(existingParameter, "previous definition");
+          }
+          else
+            definedParameters.Add(p.Name, p)
+        }
+      }
+
+      def collectOverloads(ruleSymbol : SyntaxRuleSymbol) : SCG.Dictionary[list[AstType], SyntaxMappingSymbol]
+      {
+        mutable declaredOverloads;
+        unless (cache.TryGetValue(ruleSymbol, out declaredOverloads))
+        {
+          declaredOverloads = SCG.Dictionary();
+          foreach (syntaxMapping when syntaxMapping.HasValidSignature in ruleSymbol.SyntaxMappings)
+          {
+            checkParameters(syntaxMapping);
+
+            def key = syntaxMapping.Parameters.Map(_.Type);
+            mutable existingOverload;
+            if (declaredOverloads.TryGetValue(key, out existingOverload))
+            {
+              using (root = project.RootError(syntaxMapping.FirstLocation, "Redefinition of AST mapping"))
+                root.Hint(existingOverload.FirstLocation, "previous definition");
+            }
+            else
+              declaredOverloads.Add(key, syntaxMapping)
+          }
+          cache.Add(ruleSymbol, declaredOverloads)
+        }
+        declaredOverloads
+      }
+
+      def makeParametersText(parameters : list[SyntaxMappingParameter]) : string
+      {
+        | []   => "without parameters"
+        | many => $<#with parameters (..$(many; ", "))#>
+      }
+
+      foreach (ruleSymbol when ruleSymbol.AssemblyId == AssemblyIds.CurrentAssembly in project.RootNamespace.Node.GetDescendants.[SyntaxRuleSymbol]())
+      {
+        match (ruleSymbol)
+        {
+          | SimpleRuleSymbol
+          | ExtensibleRuleSymbol => _ = collectOverloads(ruleSymbol)
+          | ExtensionRuleSymbol(BaseRule = SymbolRef.Some(baseRuleSymbol)) =>
+            def mappingsToOverride = SCG.Dictionary(collectOverloads(baseRuleSymbol));
+            def overloads          = collectOverloads(ruleSymbol);
+
+            foreach (pair in overloads)
+            {
+              def syntaxMapping = pair.Value;
+              mutable baseSyntaxMapping;
+              if (mappingsToOverride.TryGetValue(pair.Key, out baseSyntaxMapping))
+              {
+                unless (syntaxMapping.ReturnType.IsSubtypeOf(baseSyntaxMapping.ReturnType))
+                  project.Error(syntaxMapping.FirstLocation, $"AST mapping returning '$(baseSyntaxMapping.ReturnType)' is required.");
+                _ = mappingsToOverride.Remove(pair.Key);
+              }
+              else
+                project.Error(syntaxMapping.FirstLocation, $"AST mapping $(makeParametersText(syntaxMapping.Parameters)) not found in base rule '$(baseRuleSymbol.FullName)'.");
+            }
+
+            when (mappingsToOverride.Count > 0)
+              foreach (pair in mappingsToOverride)
+              {
+                def syntaxMapping = pair.Value;
+                using (root = project.RootError(ruleSymbol.FirstLocation, $"AST mapping $(makeParametersText(syntaxMapping.Parameters)) returning '$(syntaxMapping.ReturnType)' is required"))
+                  root.Hint(syntaxMapping.FirstLocation, "base definition");
+              }
+
+          | _ => ()
+        }
+      }
+    }
+  }
+}

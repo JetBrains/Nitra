@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Windows;
 using Nitra.Internal;
 using NitraFile = Nitra.ProjectSystem.File;
 using IOFile = System.IO.File;
@@ -28,7 +29,7 @@ namespace Nitra.ViewModels
     public TimeSpan                 TestTime              { get; private set; }
     public StatisticsTask.Container Statistics            { get; private set; }
     public FileStatistics           FileStatistics        { get; private set; }
-    public StatisticsTask.Container DependPropsStatistics { get; private set; }
+    public bool                     IsSingleFileTest       { get { return Parent is TestSuitVm; } }
 
     private TestFolderVm _testFolder;
 
@@ -71,7 +72,7 @@ namespace Nitra.ViewModels
       }
     }
 
-    public TestVm(string testPath, ITestTreeNode parent, ICompilerMessages compilerMessages)
+    public TestVm(string testPath, ITestTreeNode parent)
       : base(parent, testPath)
     {
       _testFolder = parent as TestFolderVm;
@@ -84,8 +85,8 @@ namespace Nitra.ViewModels
         FileStatistics = new FileStatistics(
           _testFolder.ParsingStatistics.ReplaceSingleSubtask(Name),
           _testFolder.ParseTreeStatistics.ReplaceSingleSubtask(Name),
-          _testFolder.AstStatistics.ReplaceSingleSubtask(Name));
-        DependPropsStatistics = _testFolder.DependPropsStatistics;
+          _testFolder.AstStatistics.ReplaceSingleSubtask(Name),
+          _testFolder.DependPropsStatistics);
         _file = new TestFile(this, _testFolder.Project, FileStatistics);
       }
       else
@@ -94,10 +95,10 @@ namespace Nitra.ViewModels
         FileStatistics = new FileStatistics(
           Statistics.ReplaceSingleSubtask("Parsing"),
           Statistics.ReplaceSingleSubtask("ParseTree"),
-          Statistics.ReplaceSingleSubtask("Ast", "AST Creation"));
-        DependPropsStatistics = Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties");
+          Statistics.ReplaceSingleSubtask("Ast", "AST Creation"),
+          Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties"));
         var solution = new FsSolution<IAst>();
-        var project = new FsProject<IAst>(compilerMessages, solution);
+        var project = new FsProject<IAst>(solution);
         _file = new TestFile(this, project, FileStatistics);
       }
 
@@ -118,7 +119,7 @@ namespace Nitra.ViewModels
     {
       get
       {
-        var path = Path.ChangeExtension(TestPath, ".gold");
+        var path = GolgPath;
         if (IOFile.Exists(path))
           return IOFile.ReadAllText(path);
         return "";
@@ -126,13 +127,15 @@ namespace Nitra.ViewModels
       set { IOFile.WriteAllText(Path.ChangeExtension(TestPath, ".gold"), value); }
     }
 
+    public string GolgPath
+    {
+      get { return Path.ChangeExtension(TestPath, ".gold"); }
+    }
+
 
     [CanBeNull]
     public bool Run(RecoveryAlgorithm recoveryAlgorithm = RecoveryAlgorithm.Smart, int completionStartPos = -1, string completionPrefix = null)
     {
-      var compilerMessages = this.File.Project.CompilerMessages;
-      compilerMessages.Remove((kind, loc) => kind == TypingMsg || loc.Source.File == this.File);
-
       _file._completionStartPos = completionStartPos;
       _file._completionPrefix   = completionPrefix;
       _file.ResetCache();
@@ -140,30 +143,22 @@ namespace Nitra.ViewModels
       if (_file.Ast == null)
         return false;
       
-      compilerMessages.SetFutureMessagesKind(TypingMsg);
-      try
+      var tests = _testFolder == null ? (IEnumerable<TestVm>)new[] {this} : _testFolder.Tests;
+      var files = tests.Select(t => t.File).ToArray();
+      foreach (var file in files)
+        file.DeepResetProperties();
+
+      var projectSupport = _file.Ast as IProjectSupport;
+
+      if (projectSupport != null)
+        projectSupport.RefreshProject(files);
+      else if (_testFolder != null)
+        throw new InvalidOperationException("The '" + _file.Ast.GetType().Name + "' type must implement IProjectSupport, to be used in a multi-file test.");
+      else
       {
-        var tests = _testFolder == null ? (IEnumerable<TestVm>)new[] {this} : _testFolder.Tests;
-        var asts = tests.Select(t => t.File.Ast).Where(ast => ast != null).ToArray();
-        foreach (var ast in asts)
-          ast.DeepResetProperties();
-
-        var projectSupport = _file.Ast as IProjectSupport;
-
-        if (projectSupport != null)
-          projectSupport.RefreshProject(asts, compilerMessages, DependPropsStatistics);
-        else if (_testFolder != null)
-          throw new InvalidOperationException("The '" + _file.Ast.GetType().Name + "' type must implement IProjectSupport, to be used in a multi-file test.");
-        else
-        {
-          var dp = DependPropsStatistics.ReplaceSingleSubtask("DependPropsCalc", "Dependent properties calculation");
-          dp.Restart();
-          var context = new DependentPropertyEvalContext();
-          AstUtils.EvalProperties(context, compilerMessages, asts, DependPropsStatistics);
-          dp.Stop();
-        }
+        var context = new DependentPropertyEvalContext();
+        AstUtils.EvalProperties(context, files);
       }
-      finally { compilerMessages.SetFutureMessagesKind(Guid.Empty); }
 
       return true;
     }
@@ -175,7 +170,7 @@ namespace Nitra.ViewModels
 
       
       var gold = Gold;
-      var parseTree = (ParseTree)_file.ParseTree;
+      var parseTree = (ParseTree)_file.GetParseTree();
       var prettyPrintResult = parseTree.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
       PrettyPrintResult = prettyPrintResult;
       TestState = gold == prettyPrintResult ? TestState.Success : TestState.Failure;

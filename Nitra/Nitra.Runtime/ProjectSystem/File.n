@@ -13,46 +13,51 @@ using System.Linq;
 
 namespace Nitra.ProjectSystem
 {
-  public class FileStatistics
-  {
-    public this([NotNull] parse : StatisticsTask.Single, [NotNull] parseTree : StatisticsTask.Single, [NotNull] ast : StatisticsTask.Single)
-    {
-      Parse     = parse;
-      ParseTree = parseTree;
-      Ast       = ast;
-    }
-
-    public Parse     : StatisticsTask.Single { get; }
-    public ParseTree : StatisticsTask.Single { get; }
-    public Ast       : StatisticsTask.Single { get; }
-  }
-
   [Record]
   public abstract class File : ISourceSnapshotProvider
   {
     public abstract Project     : Project { get; }
     public abstract Length      : int     { get; }
     public abstract FullName    : string  { get; }
+    public virtual  Name        : string  { get { IO.Path.GetFileNameWithoutExtension(FullName) } }
+    public abstract Ast         : IAst    { get; }
     public Statistics           : FileStatistics { get; }
 
-    public abstract GetSource() : SourceSnapshot;
+    [RecordIgnore] protected mutable _parseMessages : CompilerMessageList = CompilerMessageList();
+    public ParseMessages        : Seq[CompilerMessage] { get { _parseMessages } }
 
-    public virtual EvalProperties(context : DependentPropertyEvalContext, compilerMessages : ICompilerMessages) : void
+    [RecordIgnore] protected mutable _astMessages : CompilerMessageList = CompilerMessageList();
+    public AstMessages          : CompilerMessageList { get { _astMessages } }
+
+    [RecordIgnore] protected mutable _typingMessages : CompilerMessageList = CompilerMessageList();
+    public TypingMessages       : CompilerMessageList{ get { _typingMessages } }
+
+    public abstract GetParseTree() : ParseTree;
+    public abstract DeepResetProperties() : void;
+
+    public GetCompilerMessages() : array[CompilerMessage]
     {
-      IgnoreParams();
+      def len1 = _parseMessages.Count;
+      def len2 = len1 + _astMessages.Count;
+      def result = array(len2 + _typingMessages.Count);
+      _parseMessages.CopyTo (result, 0);
+      _astMessages.CopyTo   (result, len1);
+      _typingMessages.CopyTo(result, len2);
+      result
     }
+
+    public abstract GetSource() : SourceSnapshot;
 
     public override ToString() : string { FullName }
   }
 
-  public abstract class ConcreteFile[TAst] : File
-    where TAst: IAst
+  public abstract class ConcreteFile : File
   {
             _ruleDescriptor   : StartRuleDescriptor;
             _compositeGrammar : CompositeGrammar;
     mutable _parseResult      : IParseResult;
-    mutable _astRoot          : AstRoot[TAst];
-    mutable _parseTree        : IMappedParseTree[TAst];
+    mutable _ast              : IAst;
+    mutable _parseTree        : ParseTree;
     
     public ParseResult : IParseResult { get { _parseResult }}
 
@@ -63,54 +68,55 @@ namespace Nitra.ProjectSystem
       _compositeGrammar = compositeGrammar;
     }
 
-    public virtual Ast        : TAst
+    public override Ast        : IAst
     {
       get
       {
-        when (_astRoot == null)
+        when (_ast == null)
           UpdateAst();
-        _astRoot.Content
+        _ast
       }
     }
 
-    public virtual ParseTree : IMappedParseTree[TAst]
+    public override GetParseTree() : ParseTree
     {
-      get
-      {
-        when (_parseTree == null)
-          UpdateParseTree();
-        _parseTree
-      }
+      when (_parseTree == null)
+        UpdateParseTree();
+      _parseTree
     }
 
     public virtual ResetCache() : void
     {
-      _astRoot     = null;
-      _parseTree   = null;
+      _parseMessages.Clear();
       _parseResult = null;
+      ResetParseTree();
+    }
+
+    public virtual ResetParseTree() : void
+    {
+      ResetAst();
+
+      _parseTree   = null;
     }
 
     public virtual ResetAst() : void
     {
-      _astRoot     = null;
+      _astMessages.Clear();
+      _typingMessages.Clear();
+
+      _ast     = null;
     }
-    
-    public virtual ResetParseTree() : void
+
+    public override DeepResetProperties() : void
     {
-      _astRoot     = null;
-      _parseTree   = null;
-    }
-    
-    public override EvalProperties(context : DependentPropertyEvalContext, compilerMessages : ICompilerMessages) : void
-    {
-      when (_astRoot == null)
-        UpdateAst();
-      _astRoot.EvalProperties(context, compilerMessages);
+      _typingMessages.Clear();
+      when (_ast != null)
+        IAstExtensions.DeepResetProperties(_ast);
     }
 
     protected virtual GetParseSession() : ParseSession
     {
-      ParseSession(_ruleDescriptor, _compositeGrammar);
+      ParseSession(_ruleDescriptor, _compositeGrammar, compilerMessages=_parseMessages);
     }
 
     public virtual ReParse() : void
@@ -119,15 +125,14 @@ namespace Nitra.ProjectSystem
 
       def stat = Statistics;
       stat?.Parse.Restart();
-      
+
       def parseSession = GetParseSession();
-      def parseResult  = parseSession.Parse(GetSource());
-      _parseResult     = parseResult;
-      
-      def project      = Project;
-      foreach(error in parseResult.GetErrors())
-        project.Error(error.Location, error.Message);
-      
+      _parseMessages.Clear();
+      _astMessages.Clear();
+      _typingMessages.Clear();
+
+      _parseResult     = parseSession.Parse(GetSource());
+
       stat?.Parse.Stop();
     }
 
@@ -135,20 +140,20 @@ namespace Nitra.ProjectSystem
     {
       when (_parseResult == null)
         ReParse();
-        
+
       def stat = Statistics;
       // TODO: The parse tree does not materialize here. So the measurements are incorrect.
       stat?.ParseTree.Restart();
 
-      _parseTree = _parseResult.CreateParseTree() :> IMappedParseTree[TAst];
-      
+      _parseTree = _parseResult.CreateParseTree();
+
       stat?.ParseTree.Stop();
     }
 
     public virtual UpdateAst() : void
     {
       assert3(Project != null);
-      
+
       when (_parseResult == null)
         ReParse();
 
@@ -157,9 +162,18 @@ namespace Nitra.ProjectSystem
 
       def stat = Statistics;
       stat?.Ast.Restart();
-      
-      _astRoot = AstRoot[TAst].Create(_parseTree, Project);
-      
+
+      _astMessages.Clear();
+      _typingMessages.Clear();
+
+      mutable oldState;
+      try
+      {
+        oldState = AstContext.Set(_astMessages);
+        _ast = (_parseTree : IMappedParseTree).GetAst();
+      }
+      finally AstContext.Restore(oldState);
+
       stat?.Ast.Stop();
     }
   }

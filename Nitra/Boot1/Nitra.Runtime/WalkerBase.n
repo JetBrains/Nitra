@@ -141,8 +141,8 @@ namespace Nitra.Runtime
         while (curTextPos < endPos)
           surroundwith(not_recovery)
           {
-            def rawTreePtr = parseResult.GetRawTree(curTextPos, ruleInfo.Rule.Id);
-            def endPos = curTextPos + parseResult.GetRawTreeSize(rawTreePtr, ruleInfo.Rule);
+            def rawTreePtr = parseResult.GetRawTree(curTextPos, ruleInfo.Item.Id);
+            def endPos = curTextPos + parseResult.GetRawTreeSize(rawTreePtr, ruleInfo.Item);
             OnListItem(rawTreePtr, ruleInfo.ListItemRule, curTextPos, endPos, parseResult, context);
             curTextPos = endPos;
           }
@@ -155,13 +155,14 @@ namespace Nitra.Runtime
       mutable curTextPos = startPos;
 
       when (_isRecovered)
-        assert2(false, "Recovery of DyntamicSyntaxExtensionPoint not implemented");
+        when (Walk(parseResult, (ruleInfo.Item.Subrules[0] :> SubruleInfo.ExtensibleCall).RuleParser.DynamicExtensibleParsingSequence, startPos, endPos, context))
+          return;
 
       assert2(endPos >= 0);
 
       when (startPos != endPos)
       {
-        def descriptor = (ruleInfo.Rule.Subrules[0] :> SubruleInfo.ExtensibleCall).RuleParser.Descriptor :> ExtensibleRuleDescriptor;
+        def descriptor = (ruleInfo.Item.Subrules[0] :> SubruleInfo.ExtensibleCall).RuleParser.Descriptor :> ExtensibleRuleDescriptor;
         def parseResult = parseResult :> ParseResult;
         while (curTextPos < endPos)
           surroundwith(not_recovery)
@@ -172,16 +173,16 @@ namespace Nitra.Runtime
             mutable prefixRawTreePtr = parseResult.GetRawTree(curTextPos, ruleParser.PrefixId);
             def bestRawTree          = ruleParser.BestPrefix(parseResult.TryGetPrefix(ref curTextPos, ref prefixRawTreePtr), parseResult);
             def endPos               = curTextPos + ruleParser.GetPrefixSize(bestRawTree, parseResult);
-            OnDyntamicSyntaxExtensionPoint(ruleParser, curTextPos, endPos, parseResult, context);
+            OnDynamicExtensibleItem(bestRawTree, curTextPos, endPos, ruleParser.PrefixRuleParser(bestRawTree, parseResult), parseResult, context);
             curTextPos = endPos;
           }
         assert3(curTextPos == endPos);
       }
     }
 
-    public virtual OnDyntamicSyntaxExtensionPoint(ruleParser : ExtensibleRuleParser, startPos : int, endPos : int, parseResult : IParseResult, context : TContext) : void
+    public virtual OnDynamicExtensibleItem(rawTreePtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : IParseResult, context : TContext) : void
     {
-      WalkExtensible(startPos, endPos, ruleParser, parseResult, context)
+      WalkPrefix(rawTreePtr, startPos, endPos, ruleParser, parseResult, context);
     }
 
     public virtual OnListWithSeparator(ruleInfo : SubruleInfo.ListWithSeparator, startPos : int, endPos : int, parseResult : IParseResult, context : TContext) : void
@@ -203,8 +204,8 @@ namespace Nitra.Runtime
         while (true)
         {
           when (curTextPos >= endPos) break;
-          def rawTreePtr = parseResult.GetRawTree(curTextPos, ruleInfo.Rule.Id);
-          def itemEndPos = curTextPos + parseResult.GetRawTreeSize(rawTreePtr, ruleInfo.Rule);
+          def rawTreePtr = parseResult.GetRawTree(curTextPos, ruleInfo.Item.Id);
+          def itemEndPos = curTextPos + parseResult.GetRawTreeSize(rawTreePtr, ruleInfo.Item);
           OnListItem(rawTreePtr, ruleInfo.ListItemRule, curTextPos, itemEndPos, parseResult, context);
           curTextPos = itemEndPos;
 
@@ -244,17 +245,18 @@ namespace Nitra.Runtime
       firstPrefix
     }
 
-    public Walk(parseResult : IParseResult, states : array[ParsingState], subrules : array[SubruleStart], sequenceInfo : SequenceInfo, context : TContext) : void
+    public Walk(parseResult : IParseResult, subrules : array[SubruleStart], sequenceInfo : SequenceInfo, context : TContext) : void
     {
       StartWalkSequence(sequenceInfo);
+      def host = parseResult.ParserHost;
 
       mutable prevIndexWithMarkers = -1;
       for (mutable i = 0; i < subrules.Length - 1; ++i)
       {
         def begin    = subrules[i].Pos;
         def end      = subrules[i + 1].Pos;
-        def state    = states[subrules[i].State];
-        def ruleInfo = state.Subrule;
+        def state    = host.ParsingStates[subrules[i].State];
+        def ruleInfo = state.SubruleInfo;
 
         when (sequenceInfo != null)
         {
@@ -268,6 +270,28 @@ namespace Nitra.Runtime
 
         match (state)
         {
+          | DynamicExtensibleItem as state =>
+            if (begin == end)
+              OnPrefixMissed(state.RuleParser, begin, parseResult, context);
+            else
+            {
+              mutable ambiguousPrefixs;
+              def firstPrefix = GetExtensions(parseResult, -1, state.RuleParser.PrefixRules, begin, end, out ambiguousPrefixs);
+
+              if (ambiguousPrefixs != null)
+                OnAmbiguousPrefix(parseResult, state.RuleParser, ambiguousPrefixs, begin, end, context);
+              else if (firstPrefix != null)
+                OnDynamicExtensibleItem(-1, begin, end, firstPrefix, parseResult, context);
+              else
+              {
+                def parseResult = parseResult :> ParseResult;
+                mutable pos = begin;
+                mutable prefixRawTreePtr = state.RuleParser.FindFirstPrefix(ref pos, parseResult);
+                assert2(prefixRawTreePtr > 0);
+                OnDynamicExtensibleItem(prefixRawTreePtr, begin, end, state.RuleParser.PrefixRuleParser(prefixRawTreePtr, parseResult), parseResult, context);
+              }
+            }
+
           | ExtensionPrefix  as state =>
             if (begin == end)
               OnPrefixMissed(state.RuleParser, begin, parseResult, context);
@@ -326,12 +350,12 @@ namespace Nitra.Runtime
       FinishWalkSequence(sequenceInfo);
     }
 
-    public virtual OnAmbiguous(parseResult : IParseResult, states : array[ParsingState], parseWays : array[array[SubruleStart]], sequenceInfo : SequenceInfo, startPos : int, endPos : int, context : TContext) : void
+    public virtual OnAmbiguous(parseResult : IParseResult, parseWays : array[array[SubruleStart]], sequenceInfo : SequenceInfo, startPos : int, endPos : int, context : TContext) : void
     {
       _ = startPos; _ = endPos;
 
       foreach (parseWay in parseWays)
-        Walk(parseResult, states, parseWay, sequenceInfo, context)
+        Walk(parseResult, parseWay, sequenceInfo, context)
     }
 
     public virtual OnAmbiguousPrefix(parseResult : IParseResult, extensibleRuleParser : ExtensibleRuleParser, ambiguousPrefixs : List[ExtensionAmbiguity], startPos : int, endPos : int, context : TContext) : void
@@ -361,7 +385,7 @@ namespace Nitra.Runtime
           if (recoveredSequence.IsDeleted)
             OnDeleted(parseResult, startPos, endPos, parsingSequence.SequenceInfo, context);
           else
-            Walk(parseResult, parsingSequence.States, parseResult.RecoveredSubrules[recoveredSequence.Subrules].Subrules, parsingSequence.SequenceInfo, context);
+            Walk(parseResult, parseResult.RecoveredSubrules[recoveredSequence.Subrules].Subrules, parsingSequence.SequenceInfo, context);
           true
 
         | Ambiguous   as recoveredSequence =>
@@ -370,7 +394,7 @@ namespace Nitra.Runtime
           foreach (subruleStart in recoveredSequence.Subrules with i)
             parseWays[i] = parseResult.RecoveredSubrules[subruleStart].Subrules;
 
-          OnAmbiguous(parseResult, parsingSequence.States, parseWays, parsingSequence.SequenceInfo, startPos, endPos, context);
+          OnAmbiguous(parseResult, parseWays, parsingSequence.SequenceInfo, startPos, endPos, context);
           true
       }
     }

@@ -31,7 +31,7 @@ namespace Nitra.ViewModels
     readonly string _rootPath;
     private CompositeGrammar _compositeGrammar;
 
-    public TestSuitVm(SolutionVm solution, string name, string config, ICompilerMessages compilerMessages)
+    public TestSuitVm(SolutionVm solution, string name, string config)
       : base(solution, Path.Combine(solution.RootFolder, name))
     {
       Statistics = new StatisticsTask.Container("TestSuite", "Test Suite");
@@ -108,9 +108,9 @@ namespace Nitra.ViewModels
         var paths = Directory.GetFiles(testSuitPath, "*.test").Concat(Directory.GetDirectories(testSuitPath));
         foreach (var path in paths.OrderBy(f => f))
           if (Directory.Exists(path))
-            tests.Add(new TestFolderVm(path, this, compilerMessages));
+            tests.Add(new TestFolderVm(path, this));
           else
-            tests.Add(new TestVm(path, this, compilerMessages));
+            tests.Add(new TestVm(path, this));
       }
       else if (TestState != TestState.Ignored)
       {

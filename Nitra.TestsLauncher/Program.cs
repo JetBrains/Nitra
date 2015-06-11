@@ -97,7 +97,7 @@ namespace Nitra.TestsLauncher
 
     static void Start(string solutinFilePath, string config)
     {
-      var solution = new SolutionVm(solutinFilePath, null, config, new ConsoleCompilerMessages());
+      var solution = new SolutionVm(solutinFilePath, null, config);
       var testSuits = solution.TestSuits;
 
       var maxNameLen = CalcMaxNameLen(testSuits);

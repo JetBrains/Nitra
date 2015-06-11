@@ -49,7 +49,7 @@ namespace Nitra.Runtime.Reflection
     public override OnDeleted(parseResult : IParseResult, startPos : int, endPos : int, sequenceInfo : SequenceInfo, context : List[ReflectionStruct]) : void
     {
       _ = parseResult; _ = sequenceInfo;
-      def name = "<Deleted>: " + parseResult.OriginalSource.Text.Substring(startPos, endPos - startPos);
+      def name = "<Deleted>: " + parseResult.SourceSnapshot.Text.Substring(startPos, endPos - startPos);
       def node = CreateNode(ReflectionKind.Deleted, sequenceInfo, name, startPos, endPos, null);
       context.Add(node);
     }
@@ -88,6 +88,27 @@ namespace Nitra.Runtime.Reflection
         base.OnListItem(rawTreePtr, ruleInfo, startPos, endPos, parseResult, context);
     }
 
+    public override OnDyntamicSyntaxExtensionPoint(ruleInfo : SubruleInfo.List, startPos : int, endPos : int, parseResult : IParseResult, context : List[ReflectionStruct]) : void
+    {
+      def name = "DyntamicSyntaxExtensionPoint: " + ruleInfo.Description;
+      def children = List();
+      base.OnDyntamicSyntaxExtensionPoint(ruleInfo, startPos, endPos, parseResult, children);
+      def node = CreateNode(ruleInfo, name, startPos, endPos, children);
+      context.Add(node);
+    }
+
+    public override OnDynamicExtensibleItem(rawTreePtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : IParseResult, context : List[ReflectionStruct]) : void
+    {
+      if (startPos == endPos)
+      {
+        def name = "Missed: " + ruleParser.FullName;
+        def node = CreateNode(ruleParser, name, startPos, endPos, null);
+        context.Add(node);
+      }
+      else
+        base.OnDynamicExtensibleItem(rawTreePtr, startPos, endPos, ruleParser, parseResult, context);
+    }
+
     public override OnOption(ruleInfo : SubruleInfo.Option, startPos : int, endPos : int, parseResult : IParseResult, context : List[ReflectionStruct]) : void
     {
       def name = "Option: " + ruleInfo.Description;
@@ -117,9 +138,20 @@ namespace Nitra.Runtime.Reflection
 
     public override WalkPrefix(rawTreePtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : IParseResult, context : List[ReflectionStruct]) : void
     {
-      def name = ruleParser.ParsingSequence.SequenceInfo.ShortName;
+      def name = ruleParser.ParsingSequence.SequenceInfo.ShortName + " (" + ruleParser.ParserData.Descriptor.Name + " prefix)";
       def children = List();
       base.WalkPrefix(rawTreePtr, startPos, endPos, ruleParser, parseResult, children);
+      def node = CreateNode(ruleParser, name, startPos, endPos, children);
+      context.Add(node);
+    }
+
+    public override WalkPostfix(rawTreePtr : int, startPos : int, endPos : int, ruleParser : ExtensionRuleParser, parseResult : IParseResult, context : List[ReflectionStruct]) : void
+    {
+      def bp = (ruleParser.Descriptor :> PostfixRuleDescriptor).BindingPower;
+      def bpText = if (bp == 0) "" else " ^ " + bp;
+      def name = ruleParser.ParsingSequence.SequenceInfo.ShortName + " (" + ruleParser.ParserData.Descriptor.Name + " postfix"  + bpText + ")";
+      def children = List();
+      base.WalkPostfix(rawTreePtr, startPos, endPos, ruleParser, parseResult, children);
       def node = CreateNode(ruleParser, name, startPos, endPos, children);
       context.Add(node);
     }
@@ -168,13 +200,13 @@ namespace Nitra.Runtime.Reflection
       public CanParseEmptyString : bool   { get { false } }
     }
 
-    public override OnAmbiguous(parseResult : IParseResult, states : array[ParsingState], parseWays : array[array[SubruleStart]], sequenceInfo : SequenceInfo, startPos : int, endPos : int, context : List[ReflectionStruct]) : void
+    public override OnAmbiguous(parseResult : IParseResult, parseWays : array[array[SubruleStart]], sequenceInfo : SequenceInfo, startPos : int, endPos : int, context : List[ReflectionStruct]) : void
     {
       def root = List.[ReflectionStruct]();
       foreach (parseWay in parseWays)
       {
         def children = List();
-        Walk(parseResult, states, parseWay, sequenceInfo, children);
+        Walk(parseResult, parseWay, sequenceInfo, children);
         def info = sequenceInfo : INitraReflection ?? NullNitraReflection.Instance;
         def node = CreateNode(ReflectionKind.Ambiguous, info, info.ShortName, startPos, endPos, children);
         root.Add(node);
@@ -186,22 +218,25 @@ namespace Nitra.Runtime.Reflection
 
     public override OnAmbiguousPrefix(parseResult : IParseResult, extensibleRuleParser : ExtensibleRuleParser, ambiguous : List[ExtensionAmbiguity], startPos : int, endPos : int, context : List[ReflectionStruct]) : void
     {
-      OnAmbiguous("prefixes", parseResult, extensibleRuleParser, ambiguous, startPos, endPos, context);
+      OnAmbiguousImpl("prefixes", parseResult, extensibleRuleParser, ambiguous, startPos, endPos, context, true);
     }
 
     public override OnAmbiguousPostfix(parseResult : IParseResult, extensibleRuleParser : ExtensibleRuleParser, ambiguous : List[ExtensionAmbiguity], startPos : int, endPos : int, context : List[ReflectionStruct]) : void
     {
-      OnAmbiguous("suffixes", parseResult, extensibleRuleParser, ambiguous, startPos, endPos, context);
+      OnAmbiguousImpl("suffixes", parseResult, extensibleRuleParser, ambiguous, startPos, endPos, context, false);
     }
 
-    public OnAmbiguous(name : string, parseResult : IParseResult, extensibleRuleParser : ExtensibleRuleParser, ambiguous : List[ExtensionAmbiguity], startPos : int, endPos : int, context : List[ReflectionStruct]) : void
+    private OnAmbiguousImpl(name : string, parseResult : IParseResult, extensibleRuleParser : ExtensibleRuleParser, ambiguous : List[ExtensionAmbiguity], startPos : int, endPos : int, context : List[ReflectionStruct], isPrefix : bool) : void
     {
       def root = List.[ReflectionStruct]();
 
       foreach (parser in ambiguous)
       {
         def children = List();
-        _ = WalkPostfix(parser.RawTreePtr, startPos, endPos, parser.ExtensionRuleParser, parseResult, children);
+        if (isPrefix)
+          _ = WalkPrefix(parser.RawTreePtr, startPos, endPos, parser.ExtensionRuleParser, parseResult, children);
+        else
+          _ = WalkPostfix(parser.RawTreePtr, startPos, endPos, parser.ExtensionRuleParser, parseResult, children);
         def info = parser.ExtensionRuleParser : INitraReflection;
         def node = CreateNode(ReflectionKind.Ambiguous, info, info.ShortName, startPos, endPos, children);
         root.Add(node);

@@ -26,6 +26,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Microsoft.VisualBasic.FileIO;
 using Nitra.ProjectSystem;
 using Nitra.Runtime.Binding;
 using Nitra.Runtime.Highlighting;
@@ -74,7 +75,7 @@ namespace Nitra.Visualizer
     private TestVm _currentTest;
     private readonly PropertyGrid _propertyGrid;
     private readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
-    private List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
+    private readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
     private List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
     private const string ErrorMarkerTag = "Error";
     private readonly CompilerMessageList _cmpilerMessages = new CompilerMessageList();
@@ -198,7 +199,7 @@ namespace Nitra.Visualizer
         return;
       }
 
-      _solution = new SolutionVm(_settings.CurrentSolution, selectedPath, _settings.Config, _cmpilerMessages);
+      _solution = new SolutionVm(_settings.CurrentSolution, selectedPath, _settings.Config);
       this.Title = _solution.Name + " - " + Constants.AppName;
       _testsTreeView.ItemsSource = _solution.TestSuits;
     }
@@ -373,14 +374,20 @@ namespace Nitra.Visualizer
           _status.Text = "Not parsed!";
       else
       {
-        var errors = _parseResult.GetErrors();
-        foreach (var error in errors)
-          _cmpilerMessages.Error(error.Location, "Error: " + error.Message);
-
+        var cmpilerMessages = new List<CompilerMessage>();
         var errorNodes = _errorsTreeView.Items;
         var currFile = _currentTest.File;
 
-        foreach (var error in _cmpilerMessages.GetMessages().OrderBy(m => m.Location))
+        if (_currentTestFolder != null)
+          foreach (var test in _currentTestFolder.Tests)
+            cmpilerMessages.AddRange(test.File.GetCompilerMessages());
+        else
+          cmpilerMessages.AddRange(_currentTest.File.GetCompilerMessages());
+         
+        cmpilerMessages.Sort();
+
+
+        foreach (var error in cmpilerMessages)
         {
           var text = error.Text;
           var location = error.Location;
@@ -395,13 +402,13 @@ namespace Nitra.Visualizer
           }
 
           var errorNode = new TreeViewItem();
-          errorNode.Header = "(" + error.Location.EndLineColumn + "): " + text;
+          errorNode.Header = Path.GetFileNameWithoutExtension(file.FullName) + "(" + error.Location.EndLineColumn + "): " + text;
           errorNode.Tag = error;
           errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
           errorNodes.Add(errorNode);
         }
 
-        _status.Text = errors.Length == 0 ? "OK" : errors.Length + " error[s]";
+        _status.Text = cmpilerMessages.Count == 0 ? "OK" : cmpilerMessages.Count + " error[s]";
       }
     }
 
@@ -557,12 +564,7 @@ namespace Nitra.Visualizer
 
       try
       {
-        ClearMarkers();
-        //_cmpilerMessages.Clear();
-        _recoveryTreeView.Items.Clear();
-        _errorsTreeView.Items.Clear();
-        _reflectionTreeView.ItemsSource = null;
-        var timer = Stopwatch.StartNew();
+        ClearAll();
 
         _currentTest.Code = _text.Text;
         _currentTest.Run(GetRecoveryAlgorithm());
@@ -585,6 +587,17 @@ namespace Nitra.Visualizer
         MessageBox.Show(this, ex.GetType().Name + ":" + ex.Message);
         Debug.WriteLine(ex.ToString());
       }
+    }
+
+    private void ClearAll()
+    {
+      ClearMarkers();
+      _parseResult = null;
+      _declarationsTreeView.Items.Clear();
+      _matchedBracketsMarkers.Clear();
+      _recoveryTreeView.Items.Clear();
+      _errorsTreeView.Items.Clear();
+      _reflectionTreeView.ItemsSource = null;
     }
 
     private void ClearMarkers()
@@ -629,7 +642,6 @@ namespace Nitra.Visualizer
 
       try
       {
-        var timer = Stopwatch.StartNew();
         var line = e.Line;
         var spans = new HashSet<SpanInfo>();
         _parseResult.GetSpans(line.Offset, line.EndOffset, spans);
@@ -979,7 +991,7 @@ namespace Nitra.Visualizer
       {
         if (currentTestSuit != null)
           _solution.TestSuits.Remove(currentTestSuit);
-        var testSuit = new TestSuitVm(_solution, dialog.TestSuitName, _settings.Config, _cmpilerMessages);
+        var testSuit = new TestSuitVm(_solution, dialog.TestSuitName, _settings.Config);
         testSuit.IsSelected = true;
         _solution.Save();
       }
@@ -988,26 +1000,21 @@ namespace Nitra.Visualizer
 
     private void OnRemoveTest(object sender, ExecutedRoutedEventArgs e)
     {
-      var test = _testsTreeView.SelectedItem as TestVm;
+      var test = _testsTreeView.SelectedItem as ITest;
       if (test == null)
         return;
       if (MessageBox.Show(this, "Do you want to delete the '" + test.Name + "' test?", "Visualizer!", MessageBoxButton.YesNo,
         MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
         return;
 
-      var fullPath = TestFullPath(test.TestPath);
-      File.Delete(fullPath);
-      var goldFullPath = Path.ChangeExtension(fullPath, ".gold");
-      if (File.Exists(goldFullPath))
-        File.Delete(goldFullPath);
-      LoadTests();
+      Delete();
     }
 
     private void CommandBinding_CanRemoveTest(object sender, CanExecuteRoutedEventArgs e)
     {
       if (_testsTreeView == null)
         return;
-      e.CanExecute = _testsTreeView.SelectedItem is TestVm;
+      e.CanExecute = _testsTreeView.SelectedItem is TestVm || _testsTreeView.SelectedItem is TestFolderVm;
       e.Handled = true;
     }
 
@@ -1024,12 +1031,24 @@ namespace Nitra.Visualizer
           _currentTest = test;
           _currentTestFolder = test.Parent as TestFolderVm;
           ShowDiff(test);
+        }
 
+        var testFolder = e.NewValue as TestFolderVm;
+        if (testFolder != null)
+        {
+          ClearAll();
+          _currentTestFolder = testFolder;
+          _currentTestSuit = testFolder.TestSuit;
+          _currentTest = null;
+          _text.Text = "";
         }
 
         var testSuit = e.NewValue as TestSuitVm;
         if (testSuit != null)
         {
+          ClearAll();
+          _currentTestFolder = null;
+          _currentTest = null;
           _text.Text = "";
           _currentTestSuit = testSuit;
           _para.Inlines.Clear();
@@ -1148,7 +1167,10 @@ namespace Nitra.Visualizer
 
     private void Reparse()
     {
-      Dispatcher.Invoke(new Action(DoParse));
+      if (Dispatcher.CheckAccess())
+        DoParse();
+      else
+        Dispatcher.Invoke(new Action(DoParse));
     }
 
     private void OnTreeViewItemSelected(object sender, RoutedEventArgs e)
@@ -1336,7 +1358,7 @@ namespace Nitra.Visualizer
     private void OpenSolution(string solutionFilePath)
     {
       _settings.CurrentSolution = solutionFilePath;
-      _solution = new SolutionVm(solutionFilePath, null, _settings.Config, _cmpilerMessages);
+      _solution = new SolutionVm(solutionFilePath, null, _settings.Config);
       _testsTreeView.ItemsSource = _solution.TestSuits;
       RecentFileList.InsertFile(solutionFilePath);
     }
@@ -1387,7 +1409,7 @@ namespace Nitra.Visualizer
     {
       var rootDir = Path.GetDirectoryName(_solution.SolutinFilePath) ?? "";
       var name = (string)((MenuItem)e.Source).Header;
-      var testSuit = new TestSuitVm(_solution, name, _settings.Config, _cmpilerMessages);
+      var testSuit = new TestSuitVm(_solution, name, _settings.Config);
       testSuit.IsSelected = true;
       _solution.Save();
     }
@@ -1435,6 +1457,144 @@ namespace Nitra.Visualizer
     private void OnUsePanicRecovery(object sender, ExecutedRoutedEventArgs e)
     {
       OnReparse(null, null);
+    }
+
+    private void EventSetter_OnHandler(object sender, MouseButtonEventArgs e)
+    {
+      var tvi = sender as TreeViewItem;
+
+      if (tvi != null && e.ChangedButton == MouseButton.Right && e.ButtonState == MouseButtonState.Pressed)
+        tvi.IsSelected = true;
+    }
+
+    private static string MakeTestFileName(TestFolderVm testFolder)
+    {
+      var names = new bool['Z' - 'A'];
+      foreach (var t in testFolder.Tests)
+      {
+        var name = t.Name;
+        if (name.Length == 1)
+        {
+          var ch = name[0];
+          if (ch >= 'A' && ch <= 'Z')
+            names[ch - 'A'] = true;
+        }
+      }
+
+      for (int i = 0; i < names.Length; i++)
+        if (!names[i])
+          return ((char)('A' + i)).ToString();
+
+      return Path.GetFileNameWithoutExtension(Path.GetTempFileName());
+    }
+
+    private void AddFile_MenuItem_OnClick(object sender, RoutedEventArgs e)
+    {
+      TestFolderVm testFolder;
+      var test = _testsTreeView.SelectedItem as TestVm;
+      if (test != null)
+      {
+        var dirPath = Path.ChangeExtension(test.TestPath, null);
+        if (!Directory.Exists(dirPath))
+          Directory.CreateDirectory(dirPath);
+
+        testFolder = new TestFolderVm(dirPath, test.TestSuit);
+        var suite = (TestSuitVm)test.Parent;
+        var index = suite.Tests.IndexOf(test);
+        suite.Tests[index] = testFolder;
+
+        var firstFilePath = Path.Combine(dirPath, MakeTestFileName(testFolder) + ".test");
+        if (File.Exists(test.TestPath))
+          File.Move(test.TestPath, firstFilePath);
+        else
+          File.WriteAllText(firstFilePath, Environment.NewLine, Encoding.UTF8);
+
+        if (File.Exists(test.GolgPath))
+          File.Move(test.GolgPath, Path.ChangeExtension(firstFilePath, ".gold"));
+
+        testFolder.Tests.Add(new TestVm(firstFilePath, testFolder));
+
+        AddNewFileToMultitest(testFolder).IsSelected = true;
+        return;
+      }
+
+      testFolder = _testsTreeView.SelectedItem as TestFolderVm;
+      if (testFolder != null)
+      {
+        AddNewFileToMultitest(testFolder).IsSelected = true;
+        return;
+      }
+    }
+
+    private static TestVm AddNewFileToMultitest(TestFolderVm testFolder)
+    {
+      var name = MakeTestFileName(testFolder);
+      var path = Path.Combine(testFolder.TestPath, name + ".test");
+      File.WriteAllText(path, Environment.NewLine, Encoding.UTF8);
+      var newTest = new TestVm(path, testFolder);
+      testFolder.Tests.Add(newTest);
+      return newTest;
+    }
+
+    private void CopyReflectionText(object sender, RoutedEventArgs e)
+    {
+      var reflectionStruct = _reflectionTreeView.SelectedItem as ReflectionStruct;
+      if (reflectionStruct != null)
+        CopyTreeNodeToClipboard(reflectionStruct.Description);
+    }
+
+    private void DeleteFile_MenuItem_OnClick(object sender, RoutedEventArgs e)
+    {
+      Delete();
+    }
+
+    private void Delete()
+    {
+      TestFolderVm testFolder;
+      var test = _testsTreeView.SelectedItem as TestVm;
+      if (test != null)
+      {
+        if (File.Exists(test.TestPath))
+          File.Delete(test.TestPath);
+        var goldPath = Path.ChangeExtension(test.TestPath, ".gold");
+        if (File.Exists(goldPath))
+          File.Delete(goldPath);
+        testFolder = test.Parent as TestFolderVm;
+        if (testFolder != null)
+        {
+          var index = testFolder.Tests.IndexOf(test);
+          testFolder.Tests.Remove(test);
+          if (index < testFolder.Tests.Count)
+            testFolder.Tests[index].IsSelected = true;
+          else if (index > 0)
+            testFolder.Tests[index - 1].IsSelected = true;
+        }
+        else
+        {
+          var suite = test.TestSuit;
+          var index = suite.Tests.IndexOf(test);
+          test.TestSuit.Tests.Remove(test);
+          if (index < suite.Tests.Count)
+            suite.Tests[index].IsSelected = true;
+          else if (index > 0)
+            suite.Tests[index - 1].IsSelected = true;
+        }
+
+        return;
+      }
+      testFolder = _testsTreeView.SelectedItem as TestFolderVm;
+      if (testFolder != null)
+      {
+        if (Directory.Exists(testFolder.TestPath))
+          FileSystem.DeleteDirectory(testFolder.TestPath, UIOption.OnlyErrorDialogs, RecycleOption.DeletePermanently);
+        var suite = testFolder.TestSuit;
+        var index = suite.Tests.IndexOf(testFolder);
+        suite.Tests.Remove(testFolder);
+        if (index < suite.Tests.Count)
+          suite.Tests[index].IsSelected = true;
+        else if (index > 0)
+          suite.Tests[index - 1].IsSelected = true;
+      }
     }
   }
 }

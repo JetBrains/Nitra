@@ -17,24 +17,23 @@ namespace Nitra.Internal.Recovery
   [Record, StructuralEquality]
   public partial class ParsedSequence
   {
-    [EqualsIgnore]               public         RecoveryParser    : RecoveryParser;
-                                 public         StartPos          : int;
-                                 public         ParsingSequence   : ParsingSequence;
-    [EqualsIgnore]               public         StartTokenChanges : TokenChanges { get; internal set; }
+    [EqualsIgnore]               public           RecoveryParser    : RecoveryParser;
+                                 public           StartPos          : int;
+                                 public           ParsingSequence   : ParsingSequence;
+    [EqualsIgnore]               public           StartTokenChanges : TokenChanges { get; internal set; }
 
-    [RecordIgnore, EqualsIgnore] public         Callers           : SCG.HashSet[ParseRecord]               = SCG.HashSet();
-    [RecordIgnore, EqualsIgnore] public         ParsedSubrules    : Hashtable[ParsedSubrule, TokenChanges] = Hashtable();
-    [RecordIgnore, EqualsIgnore] public         Ends              : Hashtable[int, TokenChanges]           = Hashtable();
-    [RecordIgnore, EqualsIgnore] public mutable Iteration         : int = -1;
+    [RecordIgnore, EqualsIgnore] public           Callers           : SCG.HashSet[ParseRecord]                     = SCG.HashSet();
+    [RecordIgnore, EqualsIgnore] public           ParsedSubrules    : Hashtable[ParsedSubrule, TokenChanges]       = Hashtable();
+    [RecordIgnore, EqualsIgnore] public           Ends              : Hashtable[int, TokenChanges]                 = Hashtable();
 
-    public IsToken : bool { get { this.ParsingSequence.IsToken }}
-
-    public RuleName : string { get { this.ParsingSequence.RuleName } }
+    public IsToken             : bool       { get { ParsingSequence.IsToken }}
+    public RuleName            : string     { get { ParsingSequence.RuleName } }
+    public ParserHost          : ParserHost { get { ParsingSequence.ParserHost } }
 
     public StartParse() : void
     {
       foreach (startState in ParsingSequence.StartStates)
-        RecoveryParser.StartParseSubrule(ParseRecord(this, startState, StartPos), StartTokenChanges);
+        RecoveryParser.StartParseSubrule(ParseRecord(this, startState, StartPos), TokenChanges.None);
     }
 
     public UpdateSubrules(end : int) : void
@@ -61,41 +60,57 @@ namespace Nitra.Internal.Recovery
         ParsedSubrules[subrule] = subruleTokenChanges;
     }
 
-    public IsSubruleVoid(subrule : ParsedSubrule) : bool
-    {
-      match (ParsingSequence.States[subrule.State])
-      {
-        | Simple            as state => state.RuleParser.IsVoid
-        | Extensible        as state => state.RuleParser.IsVoid
-        | ExtensionPrefix   as state => state.RuleParser.IsVoid
-        | ExtensionPostfix  as state => state.RuleParser.IsVoid
-        | Subsequence       as state => state.SequenceInfo.IsVoid
-        | List                       => false
-        | ListWithSeparator          => false
-        | Scan                       => false
-        | Predicate                  => true
-      }
-    }
-
-    public SubruleMandatoryTokenCount(state : int) : int
-    {
-      match (ParsingSequence.States[state])
-      {
-        | Simple            as state => state.RuleParser.SequenceInfo.MandatoryTokenCount
-        | Extensible        as state => state.RuleParser.MandatoryTokenCount
-        | ExtensionPrefix   as state => state.RuleParser.MandatoryTokenCount
-        | ExtensionPostfix           => 0
-        | Subsequence       as state => state.SequenceInfo.MandatoryTokenCount
-        | List              as state => state.Subrule.MandatoryTokenCount
-        | ListWithSeparator as state => state.Subrule.MandatoryTokenCount
-        | Scan              as state => state.Subrule.MandatoryTokenCount
-        | Predicate                  => 0
-      }
-    }
-
     public GetSequencesForSubrule(parsedSubrule : ParsedSubrule) : Seq[ParsedSequence]
     {
-      this.ParsingSequence.GetSequencesForSubrule(parsedSubrule, this.RecoveryParser);
+      //this.ParsingSequence.GetSequencesForSubrule(parsedSubrule, this.RecoveryParser);
+      when (parsedSubrule.IsEmpty)
+        return;
+
+      def begin = parsedSubrule.Begin;
+      def end   = parsedSubrule.End;
+      mutable sequence;
+
+      match (this.RecoveryParser.ParseResult.ParserHost.ParsingStates[parsedSubrule.State])
+      {
+        | Simple           as state =>
+          when (RecoveryParser.Sequences.TryGetValue((begin, state.RuleParser.ParsingSequence), out sequence))
+            when (sequence.Ends.Contains(end))
+              yield sequence;
+
+        | Extensible       as state =>
+          when (RecoveryParser.Sequences.TryGetValue((begin, state.RuleParser.ParsingSequence), out sequence))
+            when (sequence.Ends.Contains(end))
+              yield sequence;
+
+        | DynamicExtensibleItem as state =>
+          foreach (prefixRule in state.RuleParser.PrefixRules)
+            when (RecoveryParser.Sequences.TryGetValue((begin, prefixRule.ParsingSequence), out sequence))
+              when (sequence.Ends.Contains(end))
+                yield sequence;
+
+        | ExtensionPrefix  as state =>
+          foreach (prefixRule in state.RuleParser.PrefixRules)
+            when (RecoveryParser.Sequences.TryGetValue((begin, prefixRule.ParsingSequence), out sequence))
+              when (sequence.Ends.Contains(end))
+                yield sequence;
+
+        | ExtensionPostfix as state =>
+          foreach (postfixRule when state.RuleParser.FirstPostfixRuleId <= postfixRule.RuleId in state.RuleParser.PostfixRules)
+            when (RecoveryParser.Sequences.TryGetValue((begin, postfixRule.ParsingSequence), out sequence))
+              when (sequence.Ends.Contains(end))
+                yield sequence;
+
+        | List              as state1 with seq = state1.Sequence
+        | ListWithSeparator as state2 with seq = state2.Sequence
+        | Subsequence       as state3 with seq = state3.Sequence
+        | DynamicExtensible as state4 with seq = state4.Sequence =>
+          when (RecoveryParser.Sequences.TryGetValue((begin, seq), out sequence))
+            when (sequence.Ends.Contains(end))
+              yield sequence;
+
+        | Scan => ()
+        | Predicate => ()
+      }
     }
 
     public AddCaller(caller : ParseRecord) : void
@@ -105,9 +120,8 @@ namespace Nitra.Internal.Recovery
           RecoveryParser.Completion(end, caller, this);
     }
 
-    public AddEnd(end : int, endTokenChanges : TokenChanges) : void
+    public AddEnd(end : int, newTokenChanges : TokenChanges) : void
     {
-      def newTokenChanges = endTokenChanges - StartTokenChanges;
       mutable oldTokenChanges;
       if (Ends.TryGetValue(end, out oldTokenChanges))
       {
