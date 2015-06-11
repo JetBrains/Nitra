@@ -1248,71 +1248,97 @@ namespace Nitra.Visualizer
         {
           if (_parseResult == null)
             return;
-          var completionList = new List<CompletionData>();
-          int pos = _text.CaretOffset;
-          var carretSpan = new NSpan(pos, pos);
-          var spasesWalker = new VoidRuleWalker(carretSpan);
-          var spans = new HashSet<SpanInfo>();
-          spasesWalker.Walk(_parseResult, spans);
-
-          foreach (var spanInfo in spans)
-            if (spanInfo.Span.Contains(carretSpan) && spanInfo.SpanClass != SpanClass.Default)
-              return; // completion in comment
-
-          int end = pos;
-          int spacesStart = pos;
-          int spacesEnd   = pos;
-
-          if (spans.Count != 0)
-          {
-            spacesStart = spans.Min(s => s.Span.StartPos);
-            spacesEnd   = spans.Max(s => s.Span.EndPos);
-          }
-
-
-          var start = CalcCompletionStart(end);
-          var symbols = TrySymbolCompletion(pos, spacesStart, spacesEnd);
-          var span = new NSpan(start, end);
-
-          foreach (var symbol in symbols)
-          {
-            var content = symbol.ToXaml();
-            var description = content;
-            var amb = symbol as AmbiguousHierarchicalSymbol;
-            if (amb != null)
-              description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
-            completionList.Add(new CompletionData(span, symbol.Name.Text, content, description, priority: 1.0));
-          }
-
-          var prefix = _text.Document.GetText(start, end - start);
-          var text = _text.Text.Substring(0, start) + '\xFFFF';
-          _currentTestSuit.Run(text, null, start, prefix);
-          _performanceTreeView.ItemsSource = new[] { _currentTestSuit.Statistics };
-          var ex = _currentTestSuit.Exception;
-          var result = ex as LiteralCompletionException;
-          //MessageBox.Show(string.Join(", ", result.Literals.OrderBy(x => x)));
-          if (result == null)
-            return;
-
-          _completionWindow = new CompletionWindow(_text.TextArea);
-          IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
-          foreach (var literal in result.Literals)
-            completionList.Add(new CompletionData(span, literal, Utils.Escape(literal), Utils.Escape(literal), priority: 2.0));
-
-          completionList.Sort();
-
-          foreach (var completionData in completionList)
-            if (!string.IsNullOrEmpty(completionData.Text) && char.IsLetter(completionData.Text[0]))
-              data.Add(completionData);
-
-          _completionWindow.Show();
-          _completionWindow.Closed +=
-            delegate { _completionWindow = null; };
+          ShowCompletionWindow(_text.CaretOffset, _parseResult);
           e.Handled = true;
         }
         else if (e.Key == Key.Oem6) // Oem6 - '}'
           TryMatchBraces();
       }
+    }
+
+    private void ShowCompletionWindow(int pos, IParseResult parseResult)
+    {
+      var completionList = CompleteWord(pos, parseResult);
+
+      _completionWindow = new CompletionWindow(_text.TextArea);
+      IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
+
+      foreach (var completionData in completionList)
+        if (!string.IsNullOrEmpty(completionData.Text) && char.IsLetter(completionData.Text[0]))
+          data.Add(completionData);
+
+      _completionWindow.Show();
+      _completionWindow.Closed += delegate { _completionWindow = null; };
+    }
+
+    private List<CompletionData> CompleteWord(int pos, IParseResult parseResult)
+    {
+      var source = parseResult.SourceSnapshot;
+      var completionList = new List<CompletionData>();
+      var carretSpan = new NSpan(pos, pos);
+      var spasesWalker = new VoidRuleWalker(carretSpan);
+      var spans = new HashSet<SpanInfo>();
+      spasesWalker.Walk(parseResult, spans);
+
+      foreach (var spanInfo in spans)
+        if (spanInfo.Span.Contains(carretSpan) && spanInfo.SpanClass != SpanClass.Default)
+          return completionList;
+
+      int spacesStart = pos;
+      int spacesEnd = pos;
+
+      if (spans.Count != 0)
+      {
+        spacesStart = spans.Min(s => s.Span.StartPos);
+        spacesEnd = spans.Max(s => s.Span.EndPos);
+      }
+
+      IEnumerable<Symbol2> symbols = Enumerable.Empty<Symbol2>();
+      var visitor = new FindNodeAstVisitor(new NSpan(spacesStart, spacesEnd));
+      _astRoot.Accept(visitor);
+
+      var firstAstNode = visitor.Stack.Peek();
+      var span = firstAstNode.Span;
+      var start = span.StartPos;
+      var prefix = span.EndPos == pos ? source.Text.Substring(span.StartPos, span.Length) : null;
+      foreach (var curr in visitor.Stack)
+      {
+        var scopeProp = curr.GetType().GetProperty("Scope");
+        if (scopeProp != null)
+        {
+          dynamic obj = curr;
+          if (obj.IsScopeEvaluated)
+          {
+            symbols = obj.Scope.MakeComletionList(prefix);
+            break;
+          }
+        }
+      }
+
+      foreach (var symbol in symbols)
+      {
+        var content = symbol.ToXaml();
+        var description = content;
+        var amb = symbol as AmbiguousHierarchicalSymbol;
+        if (amb != null)
+          description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
+        completionList.Add(new CompletionData(span, symbol.Name.Text, content, description, priority: 1.0));
+      }
+
+      var text = source.Text.Substring(0, start) + '\xFFFF';
+      _currentTestSuit.Run(text, null, start, prefix);
+      var ex = _currentTestSuit.Exception;
+      var result = ex as LiteralCompletionException;
+      _performanceTreeView.ItemsSource = new[] {_currentTestSuit.Statistics};
+      //MessageBox.Show(string.Join(", ", result.Literals.OrderBy(x => x)));
+      if (result == null)
+        return completionList;
+
+      foreach (var literal in result.Literals)
+        completionList.Add(new CompletionData(span, literal, Utils.Escape(literal), Utils.Escape(literal), priority: 2.0));
+
+      completionList.Sort();
+      return completionList;
     }
 
     private class FindNodeAstVisitor : IAstVisitor
