@@ -55,7 +55,7 @@ namespace Nitra.Visualizer
       }
 
       var declaration = obj as IAst;
-      if (declaration != null /*&& !(obj is IReference)*/)
+      if (declaration != null)
       {
         var xaml   = RenderXamlForDeclaration(name, declaration);
         tvi.Header = XamlReader.Parse(xaml);
@@ -84,7 +84,7 @@ namespace Nitra.Visualizer
         var xaml = RenderXamlForValue(prop, obj);
         tvi.Header = XamlReader.Parse(xaml);
 
-        if (obj == null /*|| obj is IReference*/)
+        if (obj == null)
           return tvi;
 
         var t = obj.GetType();
@@ -121,7 +121,7 @@ namespace Nitra.Visualizer
         return;
 
       var declaration = obj as IAst;
-      if (declaration != null /*&& !(obj is IReference)*/)
+      if (declaration != null)
       {
         var t = obj.GetType();
         var props = t.GetProperties();
@@ -156,7 +156,7 @@ namespace Nitra.Visualizer
       {
         var t = obj.GetType();
 
-        if (obj is string || t.IsPrimitive /*|| obj is IReference*/)
+        if (obj is string || t.IsPrimitive)
           return;
 
         var props = t.GetProperties();
