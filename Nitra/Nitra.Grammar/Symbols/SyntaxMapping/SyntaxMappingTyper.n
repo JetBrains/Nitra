@@ -60,10 +60,10 @@ namespace Nitra.Typing
               SyntaxMappingExpr.Error(type)
           }
 
-        | ParseTree(path) with arguments = []
-        | Call(path, arguments) =>
-          def callType = ResolveCall(type, path, arguments, VSome(astType), compilerMessages);
-          MakeExpression(callType, astType, compilerMessages)
+        | ParseTree(path)       with typeToCheck = ResolveCall(type, path, [],        VSome(astType), compilerMessages)
+        | Call(path, arguments) with typeToCheck = ResolveCall(type, path, arguments, VSome(astType), compilerMessages)
+        | Match(path, cases)    with typeToCheck = ResolveMatch(type, path, cases, astType, compilerMessages) =>
+          MakeExpression(typeToCheck, astType, compilerMessages)
       }
     }
 
@@ -108,7 +108,7 @@ namespace Nitra.Typing
           }
           else
           {
-            node.Context.Error(name, $"Unbound name $(name.Value).");
+            node.Context.Error(name, $"Unbound name '$(name.Value)'.");
             SyntaxMappingType.Undefined(node)
           }
       }
@@ -134,6 +134,7 @@ namespace Nitra.Typing
           | Ast(Void, _) | Undefined => SyntaxMappingType.Undefined(loc)
           | Ast(Option, _) | Option => error(exprType, "Member access expression is not supported on option.")
           | Ast(List, _) | Ast(OptionList, _) | List => error(exprType, "Member access expression is not supported on list.")
+          | Match => error(exprType, "Member access expression is not supported on parse tree match.")
           | Ast(Ast(symbol), expr) =>
             def name = node.Identifier.Identifier();
             match (symbol.LookupProperty(name.Value))
@@ -172,6 +173,22 @@ namespace Nitra.Typing
         | ParseTree(path) => SyntaxMappingType.Call(node, path, argumentTypes)
         | _               =>
           node.Context.Error(node, "Syntax mapping invokation is not allowed here.");
+          SyntaxMappingType.Undefined(node)
+      }
+    }
+
+    public TypeMatch(node : G.MapSyntaxExpression.Match, ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType
+    {
+      def exprType = node.Expr.MakeType(ruleSymbol);
+      match (exprType)
+      {
+        | Undefined       => SyntaxMappingType.Undefined(node)
+        | ParseTree(path) =>
+          def cases = node.MatchCases.Item1.MapToList(_.MakeType(path.Type, ruleSymbol));
+          SyntaxMappingType.Match(node, path, cases)
+
+        | _ =>
+          node.Context.Error(node, "Parse tree matching is not allowed here.");
           SyntaxMappingType.Undefined(node)
       }
     }
@@ -373,6 +390,17 @@ namespace Nitra.Typing
 
         | _ => error($"Cannot map rule '$(originalPath.Type)' to $(formatAstType(returnTypeOpt)).")
       }
+    }
+
+    private ResolveMatch(loc : Located, path : ParseTreePath, cases : list[Location * ParseTreePattern * SyntaxMappingType], returnType : AstType, compilerMessages : ICompilerMessages) : SyntaxMappingType
+    {
+      def caseExprs = SCG.List();
+      foreach ((caseLoc, pattern, caseType) in cases)
+      {
+        def expr = MakeExpression(caseType, returnType, compilerMessages);
+        caseExprs.Add(SyntaxMappingCase(caseLoc, pattern, expr));
+      }
+      SyntaxMappingType.Ast(loc, returnType, SyntaxMappingExpr.Match(loc, path, caseExprs.ToNList()))
     }
 
     private NavigateThroughTuples(path : ParseTreePath) : ParseTreePath
