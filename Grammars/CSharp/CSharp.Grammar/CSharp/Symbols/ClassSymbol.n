@@ -4,6 +4,7 @@ using Nitra.Declarations;
 
 using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -14,24 +15,71 @@ using System.Linq;
 namespace CSharp.Symbols
 {
   [Record]
-  public abstract class ClassSymbol : TypeSymbol
+  public abstract class ClassSymbol : GenericTypeSymbol
   {
     public static Create(declaration : Type.Class) : ClassSymbol
     {
       def name = declaration.Name;
       def parent = declaration.Parent;
+      
+      assert2(!declaration.TypeParameters.IsMissing);
+      
+      mutable symbol = parent.NestedScope.TryGetSymbol(name);
 
-      // TODO: Add support of partial classes
-      def symbol =
-          if (declaration.Parent is NamespaceSymbol as p)
-            TopClassSymbol(name, p)
-          else
-            NestedClassSymbol(name, declaration.Parent);
+      when (symbol is AmbiguousHierarchicalSymbol as ambiguous)
+      {
+        symbol = null;
+        foreach (type is ClassSymbol in ambiguous.Ambiguous)
+        {
+          symbol = type;
+          break;
+        }
+      }
+      def err(loc, str) { AstContext.CompilerMessages.Error(loc, str); }
+      mutable classSymbol;
+      when (symbol is ClassSymbol as firstDefenition) // is partial class?
+      {
+        when (firstDefenition.TypeParameters.Length == declaration.TypeParameters.Count)
+        {
+          mutable i = 0;
+          firstDefenition.TypeParameters.Iter2(declaration.TypeParameters, 
+            fun (sym, par)
+            {
+              when (sym.Name.Id != par.Name.Id)
+              {
+                err(par.Name, $<#Type parameter name '$(par.Name)' differs from '$(sym.Name)' declared in oter parts.#>);
+                when (sym.Declarations is [_])
+                  err(par.Name, $<#Type parameter name '$(sym.Name)' differs from '$(par.Name)' declared in oter parts.#>);
+              }
+              
+              when (sym.Variance.ValueOrDefault != par.Variance.ValueOrDefault)
+              {
+                err(par.Name, <#Type parameter variance differs from declared in oter parts.#>);
+                when (sym.Declarations is [_])
+                  err(sym.Name, <#Type parameter variance differs from declared in oter parts.#>);
+              }
+              
+              i++;
+            });
+          classSymbol = firstDefenition;
+        }
+      }
 
-      name.Symbol = symbol;
-      parent.DefineNestedSymbol(symbol);
-      symbol.Declarations ::= declaration;
-      symbol
+      when (classSymbol == null)
+      {
+        //def typeParameters = declaration.TypeParameters.
+        classSymbol =
+            if (declaration.Parent is NamespaceSymbol as p)
+              TopClassSymbol(name, p, null)
+            else
+              NestedClassSymbol(name, declaration.Parent, null);
+
+        parent.DefineNestedSymbol(classSymbol);
+      }
+      
+      name.Symbol = classSymbol;
+      classSymbol.Declarations ::= declaration;
+      classSymbol
     }
   }
   
