@@ -26,6 +26,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Nitra.Visualizer.Controls;
 using Microsoft.VisualBasic.FileIO;
 using Nitra.ProjectSystem;
 using Nitra.Runtime.Binding;
@@ -73,7 +74,7 @@ namespace Nitra.Visualizer
     private TestSuitVm _currentTestSuit;
     private TestFolderVm _currentTestFolder;
     private TestVm _currentTest;
-    private readonly PropertyGrid _propertyGrid;
+    private readonly PependentPropertyGrid _propertyGrid;
     private readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
     private readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
     private List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
@@ -139,7 +140,7 @@ namespace Nitra.Visualizer
       _text.Options.EnableRectangularSelection = true;
       _text.Options.IndentationSize = 2;
       _testsTreeView.SelectedValuePath = "FullPath";
-      _propertyGrid = new PropertyGrid();
+      _propertyGrid = new PependentPropertyGrid();
       _windowsFormsHost.Child = _propertyGrid;
 
       if (string.IsNullOrWhiteSpace(_settings.CurrentSolution))

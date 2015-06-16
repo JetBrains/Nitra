@@ -134,8 +134,15 @@ namespace Nitra.Visualizer
           {
             if (declaration.IsMissing)
               return;
-            var value = prop.GetValue(declaration, null);
-            tvi.Items.Add(ObjectToItem(prop, value));
+            var isEvalPropName = "Is" + prop.Name + "Evaluated";
+            var isEvalProp = t.GetProperty(isEvalPropName);
+            if (isEvalProp == null || (bool) isEvalProp.GetValue(declaration, null))
+            {
+              var value = prop.GetValue(declaration, null);
+              tvi.Items.Add(ObjectToItem(prop, value));
+            }
+            else
+              tvi.Items.Add(ObjectToItem(prop, "<not evaluated>"));
           }
           catch (Exception e)
           {
