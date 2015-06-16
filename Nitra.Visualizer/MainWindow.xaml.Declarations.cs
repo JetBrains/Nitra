@@ -136,7 +136,7 @@ namespace Nitra.Visualizer
               return;
             var isEvalPropName = "Is" + prop.Name + "Evaluated";
             var isEvalProp = t.GetProperty(isEvalPropName);
-            if (isEvalProp == null || (bool) isEvalProp.GetValue(declaration, null))
+            if (isEvalProp == null || (bool)isEvalProp.GetValue(declaration, null))
             {
               var value = prop.GetValue(declaration, null);
               tvi.Items.Add(ObjectToItem(prop, value));

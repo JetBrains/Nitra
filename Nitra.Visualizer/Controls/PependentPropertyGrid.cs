@@ -71,9 +71,21 @@ namespace Nitra.Visualizer.Controls
         var isEvalProp     = type.GetProperty(isEvalPropName);
 
         if (isEvalProp == null || (bool)isEvalProp.GetValue(obj, null))
+        {
+          if (propertyDescriptor.Name == "Value")
+          {
+            var hasValueProp = type.GetProperty("HasValue");
+
+            if (hasValueProp == null || (bool)hasValueProp.GetValue(obj, null))
+              _propertyDescriptors.Add(propertyDescriptor);
+            else
+              _propertyDescriptors.Add(new EmulatedPropertyDescriptor(propertyDescriptor, "<no value>"));
+          }
+
           _propertyDescriptors.Add(propertyDescriptor);
+        }
         else
-          _propertyDescriptors.Add(new EmulatedPropertyDescriptor(propertyDescriptor));
+          _propertyDescriptors.Add(new EmulatedPropertyDescriptor(propertyDescriptor, "<not evaluated>"));
       }
     }
 

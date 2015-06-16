@@ -10,10 +10,13 @@ namespace Nitra.Visualizer.Controls
   public class EmulatedPropertyDescriptor : PropertyDescriptor
   {
     private readonly PropertyDescriptor _basePropertyDescriptor;
+    private readonly string _value;
 
-    public EmulatedPropertyDescriptor(PropertyDescriptor basePropertyDescriptor) : base(basePropertyDescriptor)
+    public EmulatedPropertyDescriptor(PropertyDescriptor basePropertyDescriptor, string value)
+      : base(basePropertyDescriptor)
     {
       _basePropertyDescriptor = basePropertyDescriptor;
+      _value = value;
     }
 
     public override object GetEditor(Type editorBaseType)
@@ -28,7 +31,7 @@ namespace Nitra.Visualizer.Controls
 
     public override object GetValue(object component)
     {
-      return "<not evaluated>";
+      return _value;
     }
 
     public override void ResetValue(object component)
