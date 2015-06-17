@@ -140,42 +140,139 @@ namespace Nitra
       bp
     }
 
+    private class PrecedenceGroup
+    {
+      public Precedences : SCG.List[Precedence] = SCG.List();
+      public mutable BindingPower : int = -1;
+    }
+
+    private class Precedence
+    {
+      public         Name    : string;
+      public         Lower   : SCG.HashSet[Precedence] = SCG.HashSet();
+      //public         Higher  : SCG.HashSet[Precedence] = SCG.HashSet();
+      public mutable Index   : int = -1;
+      public mutable Lowlink : int = -1;
+      public mutable Group   : PrecedenceGroup = null;
+      
+      public mutable OnStack : bool = false;
+
+      public this (name : string)
+      {
+        Name = name;
+      }
+
+      public override GetHashCode() : int
+      {
+        Name.GetHashCode()
+      }
+
+      public override Equals(that : object) : bool
+      {
+        | Precedence as that when that.Name == Name => true
+        | _                                         => false
+      }
+    }
+
     private MakeBindingPowerMap() : void
     {
-      def relations = Grammars.SelectMany(gd => gd.BindingPowerRelations).Grouping(r => r).Map((d, r) => (d, r.Flatten().Grouping((lo, hi) => (hi, lo))));
-      foreach ((descriptor, relations) in relations.KeyValuePairs)
+      def allPrecedences = Hashtable();
+      def getPrecedence(descriptor, name)
       {
-        def bpMap = Hashtable();
-        bpMap.Add("0", 0);
-        bpMap.Add("+0", 1);
-        def rec(bpName)
+        mutable precedences;
+        unless (allPrecedences.TryGetValue(descriptor, out precedences))
         {
-          mutable bp;
-          if (bpMap.TryGetValue(bpName, out bp))
-            bp;
-          else
+          precedences = Hashtable();
+          allPrecedences.Add(descriptor, precedences);
+        }
+        mutable precedence;
+        unless (precedences.TryGetValue(name, out precedence))
+        {
+          precedence = Precedence(name);
+          precedences.Add(name, precedence);
+        }
+        precedence
+      }
+      foreach (grammar in Grammars)//TODO: получить все приоритеты, а не только те для которых заданы отношения
+        foreach ((rd, relations) in grammar.BindingPowerRelations)
+          foreach ((loName, hiName) in relations)
           {
-            mutable lowerBPs;
-            def newBP = if (relations.TryGetValue(bpName, out lowerBPs))
+            def lo = getPrecedence(rd, loName);
+            def hi = getPrecedence(rd, hiName);
+            //_ = lo.Higher.Add(hi);
+            _ = hi.Lower.Add(lo);
+          }
+      def allGroups = Hashtable();
+      foreach ((descriptor, precedences) in allPrecedences.KeyValuePairs)
+      {
+        //https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm
+        def stack = SCG.Stack();
+        mutable index = 0;
+        def groups = SCG.List();
+        def strongConnect(precedence)
+        {
+          precedence.Index = index;
+          precedence.Lowlink = index;
+          precedence.OnStack = true;
+          stack.Push(precedence);
+          index += 1;
+          foreach (lowerPrecedence in precedence.Lower)
+          {
+            if (lowerPrecedence.Index == -1) 
             {
-              mutable maxBP = 2;
-              foreach (lowerBP in lowerBPs)
-                maxBP = Math.Max(maxBP, rec(lowerBP));
-              maxBP + 2
+              strongConnect(lowerPrecedence);
+              precedence.Lowlink = Math.Min(precedence.Lowlink, lowerPrecedence.Lowlink)
             }
-            else
-              2;
-            bpMap[bpName]       = newBP;
-            bpMap["+" + bpName] = newBP + 1;
-            newBP;
+            else when (lowerPrecedence.OnStack)
+              precedence.Lowlink = Math.Min(precedence.Lowlink, lowerPrecedence.Lowlink)
+          }
+          when (precedence.Lowlink == precedence.Index)
+          {
+            def curGroup = PrecedenceGroup();
+            groups.Add(curGroup);
+            mutable curPrecedence;
+            do
+            {
+              curPrecedence = stack.Pop();
+              curPrecedence.OnStack = false;
+              curPrecedence.Group = curGroup;
+              curGroup.Precedences.Add(curPrecedence);
+            }
+            while (precedence : object != curPrecedence);
           }
         }
-        foreach ((bp, lowerBPs) in relations.KeyValuePairs)
+        foreach (precedence when precedence.Index == -1 in precedences.Values)
+          strongConnect(precedence);
+        allGroups.Add(descriptor, groups);
+      }
+      foreach ((descriptor, groups) in allGroups.KeyValuePairs)
+      {
+        def rec(group : PrecedenceGroup)
         {
-          _ = rec(bp);
-          foreach (bp in lowerBPs)
-            _ = rec(bp);
+          if (group.BindingPower != -1)
+            group.BindingPower;
+          else
+          {
+            mutable maxBP = 1;
+            group.BindingPower = 0;
+            foreach (precedence in group.Precedences)
+              foreach (lowerPrecedence in precedence.Lower)
+                maxBP = Math.Max(maxBP, rec(lowerPrecedence.Group) + 1);
+            group.BindingPower = maxBP;
+            maxBP;
+          }
         }
+        foreach (group in groups)
+          _ = rec(group);
+        def bpMap = Hashtable();
+        bpMap["0"]  = 0;
+        bpMap["+0"] = 1;
+        foreach (group in groups)
+          foreach (precedence in group.Precedences)
+          {
+            bpMap[precedence.Name]       = group.BindingPower * 2;
+            bpMap["+" + precedence.Name] = group.BindingPower * 2 + 1;
+          }
         BindingPowerMap.Add(descriptor, bpMap);
       }
     }
