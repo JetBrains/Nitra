@@ -13,6 +13,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Markup;
+using System.Windows.Media;
 using Nitra.Internal;
 using Nitra.ProjectSystem;
 using Nitra.Runtime.Reflection;
@@ -136,13 +137,18 @@ namespace Nitra.Visualizer
               return;
             var isEvalPropName = "Is" + prop.Name + "Evaluated";
             var isEvalProp = t.GetProperty(isEvalPropName);
-            if (isEvalProp == null || (bool)isEvalProp.GetValue(declaration, null))
+            if (isEvalProp == null || (bool) isEvalProp.GetValue(declaration, null))
             {
               var value = prop.GetValue(declaration, null);
               tvi.Items.Add(ObjectToItem(prop, value));
             }
             else
-              tvi.Items.Add(ObjectToItem(prop, "<not evaluated>"));
+            {
+              var tviNotEval = ObjectToItem(prop, "<not evaluated>");
+              tviNotEval.Foreground = Brushes.Red;
+              tviNotEval.FontWeight = FontWeights.Bold;
+              tvi.Items.Add(tviNotEval);
+            }
           }
           catch (Exception e)
           {

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
 using System.Data;
+using System.Reflection;
 using System.Text;
 using System.Windows.Forms;
 
@@ -67,26 +68,25 @@ namespace Nitra.Visualizer.Controls
       PropertyDescriptorCollection originalPropertyDescriptors = TypeDescriptor.GetProperties(obj);
       foreach (PropertyDescriptor propertyDescriptor in originalPropertyDescriptors)
       {
-        var isEvalPropName = "Is" + propertyDescriptor.Name + "Evaluated";
-        var isEvalProp     = type.GetProperty(isEvalPropName);
+        var valid = GetValidationProperty(propertyDescriptor, type);
 
-        if (isEvalProp == null || (bool)isEvalProp.GetValue(obj, null))
-        {
-          if (propertyDescriptor.Name == "Value")
-          {
-            var hasValueProp = type.GetProperty("HasValue");
-
-            if (hasValueProp == null || (bool)hasValueProp.GetValue(obj, null))
-              _propertyDescriptors.Add(propertyDescriptor);
-            else
-              _propertyDescriptors.Add(new EmulatedPropertyDescriptor(propertyDescriptor, "<no value>"));
-          }
-
+        if (valid == null || (bool)valid.GetValue(obj, null))
           _propertyDescriptors.Add(propertyDescriptor);
-        }
         else
-          _propertyDescriptors.Add(new EmulatedPropertyDescriptor(propertyDescriptor, "<not evaluated>"));
+          _propertyDescriptors.Add(new EmulatedPropertyDescriptor(propertyDescriptor, valid.Name == "HasValue" ? "<no value>" : "<not evaluated>"));
       }
+    }
+
+    private static PropertyInfo GetValidationProperty(PropertyDescriptor propertyDescriptor, Type type)
+    {
+      var isEvalPropName = "Is" + propertyDescriptor.Name + "Evaluated";
+      var isEvalProp = type.GetProperty(isEvalPropName);
+      if (isEvalProp != null)
+        return isEvalProp;
+      if (propertyDescriptor.Name == "Value")
+        return type.GetProperty("HasValue");
+
+      return null;
     }
 
     //********************** Designer

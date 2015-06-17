@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Drawing;
+using System.Drawing.Design;
 using System.Linq;
 using System.Text;
 using JetBrains.Annotations;
@@ -19,9 +21,23 @@ namespace Nitra.Visualizer.Controls
       _value = value;
     }
 
+    class NotEvalUITypeEditor : UITypeEditor 
+    {
+      public override bool GetPaintValueSupported(ITypeDescriptorContext context)
+      {
+        return true; //Set to true to implement the PaintValue method
+      }
+
+      public override void PaintValue(PaintValueEventArgs e)
+      {
+        using (var brush = new SolidBrush(Color.Red))
+          e.Graphics.FillRectangle(brush, e.Bounds);
+      }
+    }
+
     public override object GetEditor(Type editorBaseType)
     {
-      return null;
+      return new NotEvalUITypeEditor();
     }
 
     public override bool CanResetValue(object component)
