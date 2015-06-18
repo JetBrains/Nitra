@@ -643,6 +643,9 @@ namespace Nitra.Visualizer
           return;
         
         var sym = reference.Symbol;
+        var ambiguous = sym as IAmbiguousSymbol;
+        if (ambiguous != null && sym.IsResolved)
+          sym = ambiguous.ResolutionResult;
         var spanClass = sym.SpanClass;
         
         if (spanClass == "Default")
