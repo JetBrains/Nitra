@@ -36,17 +36,8 @@ namespace Nitra.Visualizer.Controls
       set
       {
         // Set the new object to the wrapper and create one if necessary.
-        if (_wrapper == null)
-        {
-          _wrapper = new ObjectWrapper(value);
-          RefreshProperties();
-        }
-        else if (_wrapper.SelectedObject != value)
-        {
-          bool needrefresh = value.GetType() != _wrapper.SelectedObject.GetType();
-          _wrapper.SelectedObject = value;
-          if (needrefresh) RefreshProperties();
-        }
+        _wrapper = new ObjectWrapper(value);
+        RefreshProperties();
         // Set the list of properties to the wrapper.
         _wrapper.PropertyDescriptors = _propertyDescriptors;
         // Link the wrapper to the parent PropertyGrid.
