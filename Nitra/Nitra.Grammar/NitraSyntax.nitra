@@ -67,8 +67,8 @@ syntax module NitraSyntax
   ///////////////////////////////////////////////////////////////////////////
   //
 
-  [StartRule, ExplicitSpaces]
-  syntax Start                = s NamespaceBody !Any
+  [StartRule]
+  syntax Start = NamespaceBody
   {
     CollectGlobalSymbols(rootNs : NamespaceSymbol) : void = NamespaceBody.CollectGlobalSymbols(rootNs);
     [Cached] MakeContext(parent : Context) : Context = NamespaceBody.MakeContext(parent);
@@ -841,10 +841,7 @@ syntax module NitraSyntax
           _ = MatchTokens.Map(t => t.Item2.MakeContext(context));
           context
         }
-        override Typing
-        {
-          _ = RegularRule();
-        }
+        override Typing { _ = RegularRule(); }
       }
     | KeywordRegex        = "keyword" sm "regex"  sm MatchTokens=RegexExpression sm "rule" sm QualifiedName ";"nl
       {
@@ -865,14 +862,12 @@ syntax module NitraSyntax
       project.AddSymbolDef(symbol, Name.Location);
       symbol
     }
-    MakeContext(parent : Context) : Context
-    {
-      RuleAliasContext(parent, MakeSymbol(parent.Project));
-    }
+    MakeContext(parent : Context) : Context = RuleAliasContext(parent, MakeSymbol(parent.Project));
   }
 
   syntax MapSyntaxCode
   {
+    MakeExpr(context : Context) : SyntaxMappingExpr = SyntaxMappingExpr.Code(this, NemerleParser.Parse(this, context));
     | Block
     | Expression = Expression ";"
   }
@@ -971,11 +966,7 @@ syntax module NitraSyntax
 
   syntax ParseTreeFieldExpressionMapping = Expr=MapSyntaxExpression sm "->" sm AstPropertyName=Name ";"
   {
-    [Cached] MakeContext(parent : Context) : Context
-    {
-      _ = Expr.MakeContext(parent);
-      parent
-    }
+    [Cached] MakeContext(parent : Context) : Context { _ = Expr.MakeContext(parent); parent }
     GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol) : ValueOption[SyntaxMappingField]
     {
       def astPropertyRef = TypingUtils.BindAstProperty(astSymbol, this.AstPropertyName, this.Context);
@@ -1006,12 +997,9 @@ syntax module NitraSyntax
       _ = ruleSymbol;
       def astPropertyRef = TypingUtils.BindAstProperty(astSymbol, this.FieldName, this.Context);
       if (astPropertyRef is SymbolRef.Some(astProperty))
-      {
-        def code = NemerleParser.Parse(this.Code, this.Context);
-        def expr = SyntaxMappingExpr.Code(this.Code.Location, code);
-        VSome(SyntaxMappingField(this.Location, astProperty, expr))
-      }
-      else VNone()
+        VSome(SyntaxMappingField(this.Location, astProperty, this.Code.MakeExpr(this.Context)))
+      else
+        VNone()
     }
   }
 
@@ -1073,11 +1061,7 @@ syntax module NitraSyntax
 
     | Expression = sm "->" sm Expr=MapSyntaxExpression
       {
-        override MakeContext
-        {
-          _ = Expr.MakeContext(parent);
-          parent
-        }
+        override MakeContext { _ = Expr.MakeContext(parent); parent }
         override CollectSimpleMatchCases
         {
           _ = sharedMappingFields;
@@ -1104,12 +1088,7 @@ syntax module NitraSyntax
       }
     | PerField = outline_begin_before nl OpenBrace="{" inl Members=MapSyntaxExpressionAstMember* d CloseBrace="}" outline_end_before nl
       {
-        override MakeContext
-        {
-          foreach (member in Members)
-            _ = member.MakeContext(parent);
-          parent
-        }
+        override MakeContext { foreach (member in Members) _ = member.MakeContext(parent); parent }
         [Cached] private MakeAstSymbolRef(pattern : Pattern) : SymbolRef[AstSymbol] = pattern.BindExtensionAst(this.Context);
         private CreateSyntaxMappingExpr(ruleSymbol : SyntaxRuleSymbol, astSymbol : AstSymbol, sharedMappingFields : List[SyntaxMappingField]) : SyntaxMappingExpr
         {
@@ -1121,10 +1100,7 @@ syntax module NitraSyntax
             when (member.GetSyntaxMappingField(astSymbol, ruleSymbol) is VSome(mappingField))
               mappingFields.Add(mappingField);
 
-          def errorLoc = Location(this.Location.Source, this.CloseBrace);
-          TypingUtils.CheckRequiredAstProperties(astSymbol, mappingFields, errorLoc, this.Context);
-
-          SyntaxMappingExpr.AstCtor(this.Location, astSymbol, mappingFields.ToNList());
+          TypingUtils.CreateAstCtor(this, astSymbol, mappingFields, Location(this.Location.Source, this.CloseBrace), this.Context)
         }
         override CollectSimpleMatchCases
         {
@@ -1179,19 +1155,16 @@ syntax module NitraSyntax
         {
           _ = sharedMappingFields;
           def patternExpr = pattern.SimpleTyping(syntaxMapping.DeclaringRule, this.Context);
-          def code        = NemerleParser.Parse(this.Code, this.Context);
-          def expr        = SyntaxMappingExpr.Code(this.Code.Location, code);
+          def expr        = this.Code.MakeExpr(this.Context);
           buffer.Add(SyntaxMappingCase(this.Location, patternExpr, expr))
         }
         override CollectExtensionBodies
         {
           _ = astType;
-          def code = NemerleParser.Parse(this.Code, this.Context);
-          def expr = SyntaxMappingExpr.Code(this.Code.Location, code);
           match (pattern.BindExtensionRule(baseRuleSymbol, this.Context))
           {
-            | (SymbolRef.Some(ruleSymbol), true)  => mappingCases.Add((ruleSymbol, SyntaxMappingCase(this.Location, pattern.ExtensionTyping(ruleSymbol, this.Context), expr)))
-            | (SymbolRef.Some(ruleSymbol), false) => mappingBodies.Add((ruleSymbol, expr))
+            | (SymbolRef.Some(ruleSymbol), true)  => mappingCases.Add((ruleSymbol, SyntaxMappingCase(this.Location, pattern.ExtensionTyping(ruleSymbol, this.Context), this.Code.MakeExpr(this.Context))))
+            | (SymbolRef.Some(ruleSymbol), false) => mappingBodies.Add((ruleSymbol, this.Code.MakeExpr(this.Context)))
             | _ => ()
           }
         }
@@ -1268,10 +1241,7 @@ syntax module NitraSyntax
             null
           else match (syntaxMapping.ReturnType)
           {
-            | Ast(astSymbol) =>
-              TypingUtils.CheckRequiredAstProperties(astSymbol, [], this.Location, this.Context);
-              SyntaxMappingExpr.AstCtor(this.Location, astSymbol, [])
-
+            | Ast(astSymbol)        => TypingUtils.CreateAstCtor(this, astSymbol, [], this.Location, this.Context)
             | List(astSymbol)
             | OptionList(astSymbol) => SyntaxMappingExpr.ListCtor(this.Location, astSymbol, [])
             | Option(astSymbol)     => SyntaxMappingExpr.OptionCtor(this.Location, astSymbol, None())
@@ -1281,11 +1251,7 @@ syntax module NitraSyntax
       }
     | Expression = outline_begin_before nl "{" Expr=MapSyntaxExpression "}" outline_end_before nl
       {
-        override MakeContext
-        {
-          _ = this.Expr.MakeContext(parent);
-          parent
-        }
+        override MakeContext { _ = this.Expr.MakeContext(parent); parent }
         override TypeSyntaxMappings
         {
           if (syntaxMapping.DeclaringRule is ExtensibleRuleSymbol)
@@ -1299,12 +1265,7 @@ syntax module NitraSyntax
       }
     | Inline = sm "=" sm Code=MapSyntaxCode
       {
-        override TypeSyntaxMappings
-        {
-          _ = syntaxMapping;
-          def code = NemerleParser.Parse(this.Code, this.Context);
-          SyntaxMappingExpr.Code(this.Location, code)
-        }
+        override TypeSyntaxMappings { _ = syntaxMapping; this.Code.MakeExpr(this.Context); }
       }
     | PerMember = outline_begin_before nl OpenBrace="{" inl Members=MapSyntaxBodyMember* d CloseBrace="}" outline_end_before nl
       {
@@ -1358,11 +1319,7 @@ syntax module NitraSyntax
             }
             else match (syntaxMapping.ReturnType)
             {
-              | Ast(astSymbol) =>
-                def errorLoc = Location(this.Location.Source, this.CloseBrace);
-                TypingUtils.CheckRequiredAstProperties(astSymbol, mappingFields, errorLoc, this.Context);
-                SyntaxMappingExpr.AstCtor(this.Location, astSymbol, mappingFields.ToNList())
-
+              | Ast(astSymbol) => TypingUtils.CreateAstCtor(this, astSymbol, mappingFields, Location(this.Location.Source, this.CloseBrace), this.Context)
               | List(astSymbol)
               | OptionList(astSymbol) => SyntaxMappingExpr.ListCtor(this.Location, astSymbol, [])
               | Option(astSymbol)     => SyntaxMappingExpr.OptionCtor(this.Location, astSymbol, None())
@@ -1700,7 +1657,7 @@ syntax module NitraSyntax
           def (type, _)  = this.Type.Typing(context);
           RuleMethod.RuleMethodSignature(this.Location, parameters, type);
         }
-        [Cached] private MakeBody()     : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
+        [Cached] private MakeBody()     : RuleMethod.RuleMethodBody = this.RuleMethodBody.MakeBody(this.Context);
         [Cached] private MakeIsCached() : bool                      = RuleMethodAttributes.IsCached();
         [Cached] private MakeAstType()  : AstType                   = TypingUtils.NTypeToAstType(this.Signature.Type, this.Context);
         override Typing
@@ -1763,7 +1720,7 @@ syntax module NitraSyntax
               SymbolRef.None(Name.Location, false)
           }
         }
-        [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
+        [Cached] private MakeBody() : RuleMethod.RuleMethodBody = this.RuleMethodBody.MakeBody(this.Context);
         override Typing
         {
           when (this.Symbol != null)
@@ -1815,7 +1772,7 @@ syntax module NitraSyntax
               SymbolRef.None(Name.Location, false)
           }
         }
-        [Cached] private MakeBody() : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.RuleMethodBody.BodyLocation(), NemerleParser.Parse(this.RuleMethodBody, Context));
+        [Cached] private MakeBody() : RuleMethod.RuleMethodBody = this.RuleMethodBody.MakeBody(this.Context);
         override Typing
         {
           when (this.Symbol != null)
@@ -1864,6 +1821,7 @@ syntax module NitraSyntax
   {
     BodyLocation() : Nitra.Location;
     IsEmpty() : bool;
+    MakeBody(context : Context) : RuleMethod.RuleMethodBody = RuleMethod.RuleMethodBody(this.BodyLocation(), NemerleParser.Parse(this, context));
 
     | Block
       {
