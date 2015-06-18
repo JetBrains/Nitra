@@ -16,76 +16,69 @@ namespace CSharp.Symbols
 {
   public abstract class ClassSymbol : GenericTypeSymbol
   {
-    public static Create(declaration : Type.Class, typeParameters : list[TypeParameterSymbol]) : ClassSymbol
+    public static Create(declaration : Type.Class, typeParameters : list[TypeParameterSymbol], isPartial : bool) : ClassSymbol
     {
+      def err(loc : IAst, str : string) : void { AstContext.CompilerMessages.Error(loc, str); }
       def name = declaration.Name;
       def parent = declaration.Parent;
+      def typeParametersCount = typeParameters.Length;
       
       assert2(!declaration.TypeParameters.IsMissing);
       
+      def ambiguous = List();
+      
       mutable symbol = parent.NestedScope.TryGetSymbol(name);
-
-      when (symbol is AmbiguousHierarchicalSymbol as ambiguous)
+      match (symbol)
       {
-        symbol = null;
-        foreach (type is ClassSymbol in ambiguous.Ambiguous)
-        {
-          symbol = type;
-          break;
-        }
-      }
-      def err(loc, str) { AstContext.CompilerMessages.Error(loc, str); }
-      mutable classSymbol;
-      when (symbol is ClassSymbol as firstDefenition) // is partial class?
-      {
-        when (firstDefenition.TypeParameters.Count == declaration.TypeParameters.Count)
-        {
-          mutable i = 0;
-          firstDefenition.TypeParameters.Iter2(declaration.TypeParameters, 
-            fun (sym, par)
-            {
-              when (sym.Name.Id != par.Name.Id)
-              {
-                err(par.Name, $<#Type parameter name '$(par.Name)' differs from '$(sym.Name)' declared in oter parts.#>);
-                when (sym.Declarations is [_])
-                  err(par.Name, $<#Type parameter name '$(sym.Name)' differs from '$(par.Name)' declared in oter parts.#>);
-              }
-              
-              when (sym.Variance.ValueOrDefault != par.Variance.ValueOrDefault)
-              {
-                err(par.Name, <#Type parameter variance differs from declared in oter parts.#>);
-                when (sym.Declarations is [_])
-                  err(sym.Name, <#Type parameter variance differs from declared in oter parts.#>);
-              }
-              
-              i++;
-            });
-          classSymbol = firstDefenition;
-        }
-      }
+        | null => ()
+        | overloads is OverloadSymbol => 
+          foreach (overload in overloads.Overloads)
+            ambiguous.Add(overload);
 
-      when (classSymbol == null)
+        | ambig is IAmbiguousSymbol => 
+          foreach (ambiguousSymbol in ambig.Ambiguous)
+            ambiguous.Add(ambiguousSymbol);
+          
+        | _ => ambiguous.Add(symbol);
+      }
+      
+      def candidates = List();
+      
+      // TODO: заменить ClassSymbol на параметр типа
+      foreach (candidate in ambiguous)
+        when (candidate is ClassSymbol as genericType) // is class?
+          when (genericType.TypeParameters.Count == typeParametersCount)
+            candidates.Add(genericType);
+            
+      def define()
       {
         def typeParametersArray = typeParameters.ToArray();
         Array.Reverse(typeParametersArray);
         
-        classSymbol =
+        def classSymbol =
             if (declaration.Parent is NamespaceSymbol as p)
-              TopClassSymbol(name, p, typeParametersArray)
+              TopClassSymbol(name, p, typeParametersArray, isPartial)
             else
-              NestedClassSymbol(name, declaration.Parent, typeParametersArray);
+              NestedClassSymbol(name, declaration.Parent, typeParametersArray, isPartial);
 
         parent.DefineNestedSymbol(classSymbol);
+        classSymbol
       }
-      
+            
+      def classSymbol =
+      if (candidates.Count() == 1 && candidates[0].IsPartial && declaration.IsPartial)
+        candidates[0] // merge
+      else
+        define();
+
       name.Symbol = classSymbol;
       classSymbol.Declarations ::= declaration;
       classSymbol
     }
     
-    protected this(name : IName, parent : HierarchicalSymbol, typeParameters : array[TypeParameterSymbol])
+    protected this(name : IName, parent : HierarchicalSymbol, typeParameters : array[TypeParameterSymbol], isPartial : bool)
     {
-      base(name, parent, typeParameters);
+      base(name, parent, typeParameters, isPartial);
     }    
   }
   
