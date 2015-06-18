@@ -1,6 +1,7 @@
 ﻿using Nitra.Internal;
 using Nitra.Internal.Recovery;
 using Nitra.Runtime;
+using Nitra.Runtime.GraphUtils;
 using Nitra.Runtime.Reflection;
 
 using Nemerle;
@@ -140,38 +141,10 @@ namespace Nitra
       bp
     }
 
-    private class PrecedenceGroup
+    [Record]
+    private class Precedence : GraphNodeWithConnections[Precedence]
     {
-      public Precedences : SCG.List[Precedence] = SCG.List();
-      public mutable BindingPower : int = -1;
-    }
-
-    private class Precedence
-    {
-      public         Name    : string;
-      public         Lower   : SCG.HashSet[Precedence] = SCG.HashSet();
-      //public         Higher  : SCG.HashSet[Precedence] = SCG.HashSet();
-      public mutable Index   : int = -1;
-      public mutable Lowlink : int = -1;
-      public mutable Group   : PrecedenceGroup = null;
-      
-      public mutable OnStack : bool = false;
-
-      public this (name : string)
-      {
-        Name = name;
-      }
-
-      public override GetHashCode() : int
-      {
-        Name.GetHashCode()
-      }
-
-      public override Equals(that : object) : bool
-      {
-        | Precedence as that when that.Name == Name => true
-        | _                                         => false
-      }
+      public Name : string;
     }
 
     private MakeBindingPowerMap() : void
@@ -199,79 +172,19 @@ namespace Nitra
           {
             def lo = getPrecedence(rd, loName);
             def hi = getPrecedence(rd, hiName);
-            //_ = lo.Higher.Add(hi);
-            _ = hi.Lower.Add(lo);
+            _ = hi.AddConnection(lo);
           }
-      def allGroups = Hashtable();
       foreach ((descriptor, precedences) in allPrecedences.KeyValuePairs)
       {
-        //https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm
-        def stack = SCG.Stack();
-        mutable index = 0;
-        def groups = SCG.List();
-        def strongConnect(precedence)
-        {
-          precedence.Index = index;
-          precedence.Lowlink = index;
-          precedence.OnStack = true;
-          stack.Push(precedence);
-          index += 1;
-          foreach (lowerPrecedence in precedence.Lower)
-          {
-            if (lowerPrecedence.Index == -1) 
-            {
-              strongConnect(lowerPrecedence);
-              precedence.Lowlink = Math.Min(precedence.Lowlink, lowerPrecedence.Lowlink)
-            }
-            else when (lowerPrecedence.OnStack)
-              precedence.Lowlink = Math.Min(precedence.Lowlink, lowerPrecedence.Lowlink)
-          }
-          when (precedence.Lowlink == precedence.Index)
-          {
-            def curGroup = PrecedenceGroup();
-            groups.Add(curGroup);
-            mutable curPrecedence;
-            do
-            {
-              curPrecedence = stack.Pop();
-              curPrecedence.OnStack = false;
-              curPrecedence.Group = curGroup;
-              curGroup.Precedences.Add(curPrecedence);
-            }
-            while (precedence : object != curPrecedence);
-          }
-        }
-        foreach (precedence when precedence.Index == -1 in precedences.Values)
-          strongConnect(precedence);
-        allGroups.Add(descriptor, groups);
-      }
-      foreach ((descriptor, groups) in allGroups.KeyValuePairs)
-      {
-        def rec(group : PrecedenceGroup)
-        {
-          if (group.BindingPower != -1)
-            group.BindingPower;
-          else
-          {
-            mutable maxBP = 1;
-            foreach (precedence in group.Precedences)
-              foreach (lowerPrecedence in precedence.Lower)
-                when (lowerPrecedence.Group : object != group)
-                  maxBP = Math.Max(maxBP, rec(lowerPrecedence.Group) + 1);
-            group.BindingPower = maxBP;
-            maxBP;
-          }
-        }
-        foreach (group in groups)
-          _ = rec(group);
         def bpMap = Hashtable();
         bpMap["0"]  = 0;
         bpMap["+0"] = 1;
-        foreach (group in groups)
-          foreach (precedence in group.Precedences)
+        def groups = GraphAlgorithms.FindStronglyConnectedComponents(precedences.Values);
+        foreach ((group, bindingPower) in GraphAlgorithms.FindMaximalDistanceToLeafInDAG(groups))
+          foreach (precedence in group.Nodes)
           {
-            bpMap[precedence.Name]       = group.BindingPower * 2;
-            bpMap["+" + precedence.Name] = group.BindingPower * 2 + 1;
+            bpMap[precedence.Name]       = (bindingPower + 1) * 2;
+            bpMap["+" + precedence.Name] = (bindingPower + 1) * 2 + 1;
           }
         BindingPowerMap.Add(descriptor, bpMap);
       }
