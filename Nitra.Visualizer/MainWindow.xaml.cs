@@ -641,11 +641,8 @@ namespace Nitra.Visualizer
 
         if (!span.IntersectsWith(_span) || !reference.IsSymbolEvaluated)
           return;
-        
-        var sym = reference.Symbol;
-        var ambiguous = sym as IAmbiguousSymbol;
-        if (ambiguous != null && sym.IsResolved)
-          sym = ambiguous.ResolutionResult;
+
+        var sym = reference.Symbol.ResolutionResult;
         var spanClass = sym.SpanClass;
         
         if (spanClass == "Default")
