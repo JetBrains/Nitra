@@ -388,10 +388,10 @@ namespace Nitra.Visualizer
         cmpilerMessages.Sort();
 
 
-        foreach (var error in cmpilerMessages)
+        foreach (var message in cmpilerMessages)
         {
-          var text = error.Text;
-          var location = error.Location;
+          var text = message.Text;
+          var location = message.Location;
           var file = location.Source.File;
           if (currFile == file)
           {
@@ -403,9 +403,19 @@ namespace Nitra.Visualizer
           }
 
           var errorNode = new TreeViewItem();
-          errorNode.Header = Path.GetFileNameWithoutExtension(file.FullName) + "(" + error.Location.EndLineColumn + "): " + text;
-          errorNode.Tag = error;
+          errorNode.Header = Path.GetFileNameWithoutExtension(file.FullName) + "(" + message.Location.StartLineColumn + "): " + text;
+          errorNode.Tag = message;
           errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
+
+          foreach (var nestedMessage in message.NestedMessages)
+          {
+            var nestadErrorNode = new TreeViewItem();
+            nestadErrorNode.Header = Path.GetFileNameWithoutExtension(file.FullName) + "(" + nestedMessage.Location.StartLineColumn + "): " + nestedMessage.Text;
+            nestadErrorNode.Tag = nestedMessage;
+            nestadErrorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
+            errorNode.Items.Add(nestadErrorNode);
+          }
+
           errorNodes.Add(errorNode);
         }
 
@@ -416,6 +426,8 @@ namespace Nitra.Visualizer
     void errorNode_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
       var node = (TreeViewItem)sender;
+      if (!node.IsSelected)
+        return;
       var error = (CompilerMessage)node.Tag;
       SelectText(error.Location);
       e.Handled = true;
@@ -642,7 +654,7 @@ namespace Nitra.Visualizer
         if (!span.IntersectsWith(_span) || !reference.IsSymbolEvaluated)
           return;
 
-        var sym = reference.Symbol.ResolutionResult;
+        var sym = reference.Symbol.IsResolved ? reference.Symbol.ResolutionResult : reference.Symbol;
         var spanClass = sym.SpanClass;
         
         if (spanClass == "Default")
