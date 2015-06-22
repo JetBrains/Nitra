@@ -49,7 +49,7 @@ namespace Nitra.Visualizer
           tvi = ObjectToItem(prop, option.Value);
         else
         {
-          var xaml = RenderXamlForValue(prop, "&lt;None&gt;");
+          var xaml = RenderXamlForValue(prop, "<None>");
           tvi.Header = XamlReader.Parse(xaml);
         }
         return tvi;
