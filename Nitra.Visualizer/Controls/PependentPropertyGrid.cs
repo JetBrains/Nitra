@@ -55,6 +55,9 @@ namespace Nitra.Visualizer.Controls
 
       // Fill the collection with all the properties.
       var obj = _wrapper.SelectedObject;
+      if (obj == null)
+        return;
+
       var type = obj.GetType();
       PropertyDescriptorCollection originalPropertyDescriptors = TypeDescriptor.GetProperties(obj);
       foreach (PropertyDescriptor propertyDescriptor in originalPropertyDescriptors)
