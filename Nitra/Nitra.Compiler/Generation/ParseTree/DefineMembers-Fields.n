@@ -20,7 +20,7 @@ namespace Nitra.Compiler
 {
   internal abstract partial class RuleParseTreeEmitter
   {
-    protected DefineParseTreeCtorAndFields(fields : SCG.List[FieldInfo], _nodeTb : TypeBuilder, needDefaultBody : bool) : void
+    protected DefineParseTreeCtorAndFields(fields : SCG.List[FieldInfo], _nodeTb : TypeBuilder) : void
     {
       def traverse(ruleType : RuleType, obj : PExpr) : ChemicalRuleType * PExpr
       {
@@ -90,14 +90,9 @@ namespace Nitra.Compiler
 
       foreach (field in fields)
       {
-        if (needDefaultBody)
-          _nodeTb.DefineConditional(<[ decl:
-            public new virtual $(field.Name : usesite) : $(field.Type : typed) { get { Nitra.Runtime.Internal.ParseTreeUtils.ThrowOnFieldAccess(this, $(field.Name : string)) } }
-          ]>);
-        else
-          _nodeTb.DefineConditional(<[ decl:
-            public new abstract $(field.Name : usesite) : $(field.Type : typed) { get; }
-          ]>);
+        _nodeTb.DefineConditional(<[ decl:
+          public new abstract $(field.Name : usesite) : $(field.Type : typed) { get; }
+        ]>);
 
         match (field.Rule.Type)
         {
@@ -114,6 +109,52 @@ namespace Nitra.Compiler
               ]>);
         }
       }
+    }
+
+    protected DefineAmbiguousOrMissingCtorAndFields(fields : SCG.List[FieldInfo], _nodeTb : TypeBuilder) : void
+    {
+      def makeMissingValue(ruleType : RuleType) : PExpr
+      {
+        | Void           => assert(false)
+        | Chars          => <[ Nitra.NSpan(pos) ]>
+        | List           => <[ Nitra.EmptyListParseTree(Nitra.Location(sourceProvider, pos)) ]>
+        | Option         => <[ Nitra.OptionParseTree.None(Nitra.Location(sourceProvider, pos)) ]>
+        | Tuple(members) => <[ Nitra.ConcreteSequenceParseTree(Nitra.Location(sourceProvider, pos), ..$(members.Map(makeMissingValue))) ]>
+        | Ref(symbol)    => <[ $(Environment.GetParseTreeType(symbol) : typed).AmbiguousOrMissingNode(sourceProvider, pos) ]>
+      }
+
+      def ctorBody = SCG.List();
+      ctorBody.Add(<[ assert(sourceProvider != null); ]>);
+      ctorBody.Add(<[ this.sourceProvider = sourceProvider; ]>);
+      ctorBody.Add(<[ this.pos            = pos; ]>);
+
+      foreach (field in fields)
+      {
+        def backingFieldName = Util.tmpname(field.Name);
+        _nodeTb.Define(<[ decl:
+          private $(backingFieldName : usesite) : $(field.Type : typed)
+        ]>);
+        _nodeTb.Define(<[ decl:
+          public override $(field.Name : usesite) : $(field.Type : typed)
+          {
+            get
+            {
+              if (IsAmbiguous)
+                this.ambiguities[0].$(field.Name : usesite)
+              else
+                this.$(backingFieldName : usesite)
+            }
+          }
+        ]>);
+        ctorBody.Add(<[ this.$(backingFieldName : usesite) = $(makeMissingValue(field.Rule.Type)) ]>);
+      }
+
+      _nodeTb.Define(<[ decl:
+        public this(sourceProvider : Nitra.Runtime.ISourceSnapshotProvider, pos : int)
+        {
+          ..$ctorBody
+        }
+      ]>);
     }
   }
 }
