@@ -127,11 +127,19 @@ namespace Nitra.Compiler
         <[ $(name : usesite) = $value ]>
       }
 
-      def nodeLoc() : PExpr { <[ node ]> }
-
-      def callGetAst(args : list[SyntaxMappingExpr], loc : void -> PExpr) : PExpr -> PExpr
+      def callItemGetAst(args : list[SyntaxMappingExpr], path : ParseTreePath, astType : AstType) : SCG.List[PExpr] * PExpr
       {
-        fun (obj) { <[ $obj.GetAst(..$(args.Map(CompileSyntaxMapping(_, loc)))) ]> }
+        def parseTreeLoc() { <[ parseTree ]> }
+        def argExprs = SCG.List();
+        def argRefs  = SCG.List();
+        foreach (arg in args)
+        {
+          def varName = Util.tmpname("arg");
+          argExprs.Add(<[ def $(varName : usesite) = $(CompileSyntaxMapping(arg, parseTreeLoc)) ]>);
+          argRefs.Add(<[ $(varName : usesite) ]>)
+        }
+        def expr = CompileParseTreeMemberAccess(path, astType, false, obj => <[ $obj.GetAst(..$argRefs) ]>);
+        (argExprs, expr)
       }
 
       def compileMatch(path : ParseTreePath, cases : list[SyntaxMappingCase]) : PExpr
@@ -217,40 +225,45 @@ namespace Nitra.Compiler
           | OptionCtor(astSymbol, Some(value)) => <[ $(Environment.GetAstType(astSymbol) : typed).AstOption($(loc()), $(CompileSyntaxMapping(value, loc))) ]>
           | OptionCtor(astSymbol, None())      => <[ $(Environment.GetAstType(astSymbol) : typed).AstOption($(loc())) ]>
           | Match(path, cases)                 => compileMatch(path, cases)
-          | Call(path, args, returnType)       => CompileParseTreeMemberAccess(path, returnType, false, callGetAst(args, loc))
+          | Call(path, args, returnType)       => CompileParseTreeMemberAccess(path, returnType, false, obj => <[ $obj.GetAst(..$(args.Map(CompileSyntaxMapping(_, loc)))) ]>)
           | ConvertList(path, args, astSymbol, itemPath) =>
-            def astType     = Environment.GetAstType(astSymbol);
-            def itemExpr    = CompileParseTreeMemberAccess(itemPath, AstType.Ast(expr.Location, astSymbol), false, callGetAst(args, nodeLoc));
             CompileParseTreeMemberAccess(path, AstType.List(expr.Location, astSymbol), true, fun(obj)
             {
+              def (argExprs, itemExpr) = callItemGetAst(args, itemPath, AstType.Ast(expr.Location, astSymbol));
               // NB: sometimes compiler does not inline loop function with 'foreach' statement inside
               <[
                 def parseTree = $obj;
-                def items     = array(parseTree.Count);
                 def e         = parseTree.GetEnumerator();
-                def loop(index : int) : void
-                {
-                  when (e.MoveNext())
+                def items     =
+                  if (e.MoveNext())
                   {
-                    def node = e.Current;
-                    items[index] = $itemExpr;
-                    loop(index + 1);
+                    ..$argExprs;
+                    def buffer = array(parseTree.Count);
+                    def loop(index : int) : void
+                    {
+                      def node = e.Current;
+                      buffer[index] = $itemExpr;
+                      when (e.MoveNext())
+                        loop(index + 1);
+                    }
+                    loop(0);
+                    buffer
                   }
-                }
-                loop(0);
-                $(astType : typed).AstList(parseTree : Nitra.Located, items)
+                  else null;
+                $(Environment.GetAstType(astSymbol) : typed).AstList(parseTree : Nitra.Located, items)
               ]>
             })
 
           | ConvertOption(path, args, astSymbol, valuePath) =>
-            def astType     = Environment.GetAstType(astSymbol);
-            def valueExpr   = CompileParseTreeMemberAccess(valuePath, AstType.Ast(expr.Location, astSymbol), false, callGetAst(args, nodeLoc));
             CompileParseTreeMemberAccess(path, AstType.Option(expr.Location, astSymbol), true, fun (obj)
             {
+              def astType               = Environment.GetAstType(astSymbol);
+              def (argExprs, valueExpr) = callItemGetAst(args, valuePath, AstType.Ast(expr.Location, astSymbol));
               <[
                 def parseTree  = $obj;
                 if (parseTree.HasValue)
                 {
+                  ..$argExprs;
                   def node = parseTree.Value;
                   $(astType : typed).AstOption(parseTree, $valueExpr)
                 }
@@ -260,42 +273,58 @@ namespace Nitra.Compiler
             })
 
           | ConcatLists(path, args, astSymbol, itemPath) =>
-            def astType     = Environment.GetAstType(astSymbol);
-            def itemExpr    = CompileParseTreeMemberAccess(itemPath, AstType.List(expr.Location, astSymbol), false, callGetAst(args, nodeLoc));
             CompileParseTreeMemberAccess(path, AstType.List(expr.Location, astSymbol), true, fun (obj)
             {
+              def (argExprs, itemExpr) = callItemGetAst(args, itemPath, AstType.List(expr.Location, astSymbol));
               // NB: sometimes compiler does not inline loop function with 'foreach' statement inside
               <[
                 def parseTree = $obj;
-                def items     = System.Collections.Generic.List();
                 def e         = parseTree.GetEnumerator();
-                while (e.MoveNext())
-                {
-                  def node = e.Current;
-                  items.AddRange($itemExpr);
-                }
-                $(astType : typed).AstList(parseTree : Nitra.Located, items.ToArray())
+                def items     =
+                  if (e.MoveNext())
+                  {
+                    ..$argExprs;
+                    def buffer = System.Collections.Generic.List(parseTree.Count * 2);
+                    do
+                    {
+                      def node = e.Current;
+                      // TODO: what if AstList is ambiguous?
+                      buffer.AddRange($itemExpr);
+                    }
+                    while (e.MoveNext());
+                    buffer.ToArray()
+                  }
+                  else null;
+                $(Environment.GetAstType(astSymbol) : typed).AstList(parseTree : Nitra.Located, items)
               ]>
             })
 
           | ConcatOptions(path, args, astSymbol, itemPath) =>
-            def astType     = Environment.GetAstType(astSymbol);
-            def itemExpr    = CompileParseTreeMemberAccess(itemPath, AstType.Option(expr.Location, astSymbol), false, callGetAst(args, nodeLoc));
             CompileParseTreeMemberAccess(path, AstType.List(expr.Location, astSymbol), true, fun (obj)
             {
+              def (argExprs, itemExpr) = callItemGetAst(args, itemPath, AstType.Option(expr.Location, astSymbol));
               // NB: sometimes compiler does not inline loop function with 'foreach' statement inside
               <[
                 def parseTree = $obj;
-                def items     = System.Collections.Generic.List();
                 def e         = parseTree.GetEnumerator();
-                while (e.MoveNext())
-                {
-                  def node = e.Current;
-                  def ast = $itemExpr;
-                  when (ast.HasValue)
-                    items.Add(ast.Value);
-                }
-                $(astType : typed).AstList(parseTree : Nitra.Located, items.ToArray())
+                def items     =
+                  if (e.MoveNext())
+                  {
+                    ..$argExprs;
+                    def buffer = System.Collections.Generic.List(parseTree.Count);
+                    do
+                    {
+                      def node = e.Current;
+                      // TODO: what if AstOption is ambiguous?
+                      def ast = $itemExpr;
+                      when (ast.HasValue)
+                        buffer.Add(ast.Value);
+                    }
+                    while (e.MoveNext());
+                    buffer.ToArray()
+                  }
+                  else null;
+                $(Environment.GetAstType(astSymbol) : typed).AstList(parseTree : Nitra.Located, items)
               ]>
             })
         }
