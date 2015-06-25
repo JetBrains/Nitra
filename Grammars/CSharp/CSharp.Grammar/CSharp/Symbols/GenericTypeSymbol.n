@@ -1,15 +1,95 @@
-﻿using Nitra.Declarations;
+﻿using Nitra;
+using Nitra.Declarations;
 using Nitra.Runtime.Binding;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
+
 namespace CSharp.Symbols
 {
   public abstract class GenericTypeSymbol : TypeSymbol
   {
-    public this(name : IName, parent : HierarchicalSymbol, typeParameters : array[TypeParameterSymbol], isPartial : bool)
+    public static Create(
+      ctorTop        : GenericType * array[TypeParameterSymbol] -> GenericTypeSymbol,
+      ctorNested     : GenericType * array[TypeParameterSymbol] -> GenericTypeSymbol,
+      declaration    : GenericType,
+      typeParameters : array[TypeParameterSymbol],
+      parent         : NamespaceOrTypeSymbol
+    ) : GenericTypeSymbol
     {
-      base(name, parent);
+      //def err(loc : IAst, str : string) : void { AstContext.CompilerMessages.Error(loc, str); }
+      def name = declaration.Name;
+      def typeParametersCount = typeParameters.Length;
+      def isPartial = declaration.IsPartial.ValueOrDefault;
+      
+      assert2(!declaration.TypeParameters.IsMissing);
+      
+      def ambiguous = List();
+      
+      mutable symbol = parent.NestedScope.TryGetSymbol(name);
+      match (symbol)
+      {
+        | null => ()
+        | ambig is IAmbiguousSymbol => 
+          foreach (ambiguousSymbol in ambig.Ambiguous)
+            ambiguous.Add(ambiguousSymbol);
+          
+        | _ => ambiguous.Add(symbol);
+      }
+      
+      def candidates = List();
+      
+      // TODO: заменить ClassSymbol на параметр типа
+      foreach (candidate in ambiguous)
+        when (candidate is ClassSymbol as genericType) // is class?
+          when (genericType.TypeParameters.Count == typeParametersCount)
+            candidates.Add(genericType);
+            
+      def define()
+      {
+        def classSymbol = 
+          if (declaration.Parent is NamespaceSymbol)
+            ctorTop(declaration, typeParameters)
+            else
+              ctorNested(declaration, typeParameters);
+
+        def realAmbiguous = ambiguous.OfType.[GenericTypeSymbol]().Where(s => s.TypeParameters.Count == typeParametersCount).ToList();
+        when (realAmbiguous.Count > 0)
+        {
+          def cm = AstContext.CompilerMessages;
+          using (nested = cm.RootError(name, $"The $(parent.Kind) '$(parent.FullName)' already contains a declaration for '$name'"))
+            foreach (a in realAmbiguous)
+              foreach (d in a.Declarations)
+                nested.Hint(d.Name, "previous definition.");
+        }     
+        parent.DefineNestedSymbol(classSymbol, reportErrors=false);
+        classSymbol
+      }
+            
+      def classSymbol =
+        if (candidates.Count() == 1 && candidates[0].IsPartial && isPartial)
+          candidates[0] // merge
+        else
+          define();
+
+      name.Symbol = classSymbol;
+      classSymbol.Declarations ::= declaration;
+      classSymbol
+    }
+    
+    public this(declaration : GenericType, typeParameters : array[TypeParameterSymbol])
+    {
+      base(declaration.Name, declaration.Parent);
       TypeParameters = ReadOnlyCollection(typeParameters);
-      IsPartial      = isPartial;
+      IsPartial      = declaration.IsPartial.ValueOrDefault;
     }
     
     public IsPartial : bool { get; }
@@ -31,6 +111,53 @@ namespace CSharp.Symbols
       def tp = if (TypeParameters.Count == 0) "" else $<#<..$(TypeParameters; ", "; x => x.Name.Text)>#>;
       def name = this.Name?.Text;
       $"$name$tp ($Kind)"
+    }
+
+    public override AfterStage(stage : int) : void
+    {
+      /*
+      when (stage != 1)
+        return;
+
+      when (Declarations.IsEmpty)
+        return;
+        
+      def err(ast : IAst,  msg : string) : void { AstContext.CompilerMessages.Error(ast, msg); }
+      //def typeParameters = this.TypeParameters;
+      
+      mutable hasCtorConstraint   = false;
+      mutable hasClassConstraint  = false;
+      mutable hasStructConstraint = false;
+      def bases = HashSet();
+      
+      def first = Declarations.Head :> Type.Class;
+      
+      foreach (constraintClause in first.TypeParameterConstraints with i)
+      {
+        def ptSymbol = constraintClause.Symbol;
+        foreach (constraint in constraintClause.Constraints)
+        {
+          | Ctor   => hasCtorConstraint   = true;
+          | Class  => hasClassConstraint  = true;
+          | Struct => hasStructConstraint = false;
+          | Base as currBase with baseSymbol = currBase.Symbol => 
+            unless (bases.Add(baseSymbol))
+              err(currBase, $"Duplicate constraint '$currBase' for type parameter '$(ptSymbol.Name)'");
+
+          if (baseSymbol is ClassSymbol && i != 0)
+            err(currBase, $"The class type constraint '$currBase' must come before any other constraints.");
+          else when (!(baseSymbol is InterfaceSymbol || baseSymbol is TypeParameterSymbol || baseSymbol is ClassSymbol))
+            err(currBase, $"'$currBase' is not a valid constraint. A type used as a constraint must be an interface, a non-sealed class or a type parameter.");
+            
+        }
+      }
+        
+      foreach (decl is Type.Class in Declarations.Tail)
+      {
+        foreach (constraint in decl.TypeParameterConstraints)
+        {}
+      }
+      /// */
     }
   }
 }
