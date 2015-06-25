@@ -1055,10 +1055,11 @@ namespace Nitra.Visualizer
         var test = e.NewValue as TestVm;
         if (test != null)
         {
-          _text.Text = test.Code;
+          _parseResult = null;
           _currentTestSuit = test.TestSuit;
           _currentTest = test;
           _currentTestFolder = test.Parent as TestFolderVm;
+          _text.Text = test.Code;
           ShowDiff(test);
         }
 
