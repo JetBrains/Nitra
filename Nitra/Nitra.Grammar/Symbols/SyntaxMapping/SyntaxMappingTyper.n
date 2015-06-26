@@ -67,20 +67,44 @@ namespace Nitra.Typing
       }
     }
 
-    public TypeTypeHint(node : G.MapSyntaxExpression.TypeHint, ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType
+    public TypeTypeHint(node : G.MapSyntaxExpression.TypeHint, ruleSymbol : SyntaxRuleSymbol, _typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
     {
       def astType = TypingUtils.NTypeToAstTypeWithMessage(node.NitraType, node.Context);
       if (astType.IsVoid)
         SyntaxMappingType.Undefined(node)
       else
       {
-        def exprType = node.Expr.MakeType(ruleSymbol);
+        def exprType = node.Expr.MakeType(ruleSymbol, VSome(astType));
         def expr     = MakeExpression(exprType, astType, node.Context);
         SyntaxMappingType.Ast(node, astType, expr);
       }
     }
 
-    public TypeIdentifier(node : G.MapSyntaxExpression.Identifier, ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType
+    public TypeList(node : G.MapSyntaxExpression.List, ruleSymbol : SyntaxRuleSymbol, typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+    {
+      def itemTypeHintOpt =
+        if (typeHintOpt is VSome(AstType.List(itemType) as t))
+          VSome(AstType.Ast(t.Location, itemType))
+        else
+          VNone();
+
+      def items = node.ItemExprs.Item1.MapToList(_.MakeType(ruleSymbol, itemTypeHintOpt));
+      SyntaxMappingType.List(node.Location, items)
+    }
+
+    public TypeOptionSome(node : G.MapSyntaxExpression.OptionSome, ruleSymbol : SyntaxRuleSymbol, typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+    {
+      def valueTypeHintOpt =
+        if (typeHintOpt is VSome(AstType.Option(valueType) as t))
+          VSome(AstType.Ast(t.Location, valueType))
+        else
+          VNone();
+
+      def valueOpt = Some(node.ValueExpr.MakeType(ruleSymbol, valueTypeHintOpt));
+      SyntaxMappingType.Option(node.Location, valueOpt)
+    }
+
+    public TypeIdentifier(node : G.MapSyntaxExpression.Identifier, ruleSymbol : SyntaxRuleSymbol, _typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
     {
       def name = node.Identifier.Identifier();
       def result1 = node.Context.BindMany.[LocalVariableSymbol](name.Location);
@@ -93,6 +117,10 @@ namespace Nitra.Typing
         | [parameter is SyntaxMappingParameterSymbol] =>
           def expr = SyntaxMappingExpr.ParameterRef(name, parameter);
           SyntaxMappingType.Ast(node, parameter.Type, expr)
+
+        | [variable is AstVariableSymbol] =>
+          def expr = SyntaxMappingExpr.VariableRef(name, variable);
+          SyntaxMappingType.Ast(node, variable.Type, expr)
 
         | _ :: _ =>
           result1.Messages.TranslateTo(node.Context);
@@ -112,7 +140,7 @@ namespace Nitra.Typing
       }
     }
 
-    public TypeMemberAccess(node : G.MapSyntaxExpression.MemberAccess, ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType
+    public TypeMemberAccess(node : G.MapSyntaxExpression.MemberAccess, ruleSymbol : SyntaxRuleSymbol, _typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
     {
       def error(errorLoc : Located, message : string)
       {
@@ -158,13 +186,13 @@ namespace Nitra.Typing
         }
       }
 
-      makeAccess(node.Expr.MakeType(ruleSymbol))
+      makeAccess(node.Expr.MakeType(ruleSymbol, VNone()))
     }
 
-    public TypeCall(node : G.MapSyntaxExpression.Call, ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType
+    public TypeCall(node : G.MapSyntaxExpression.Call, ruleSymbol : SyntaxRuleSymbol, _typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
     {
-      def exprType      = node.Expr.MakeType(ruleSymbol);
-      def argumentTypes = node.ArgumentExprs.Item1.MapToList(_.MakeType(ruleSymbol));
+      def exprType      = node.Expr.MakeType(ruleSymbol, VNone());
+      def argumentTypes = node.ArgumentExprs.Item1.MapToList(_.MakeType(ruleSymbol, VNone()));
       match (exprType)
       {
         | Undefined       => SyntaxMappingType.Undefined(node)
@@ -175,14 +203,14 @@ namespace Nitra.Typing
       }
     }
 
-    public TypeMatch(node : G.MapSyntaxExpression.Match, ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType
+    public TypeMatch(node : G.MapSyntaxExpression.Match, ruleSymbol : SyntaxRuleSymbol, typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
     {
-      def exprType = node.Expr.MakeType(ruleSymbol);
+      def exprType = node.Expr.MakeType(ruleSymbol, VNone());
       match (exprType)
       {
         | Undefined       => SyntaxMappingType.Undefined(node)
         | ParseTree(path) =>
-          def cases = node.MatchCases.Item1.MapToList(_.MakeType(path.Type, ruleSymbol));
+          def cases = node.MatchCases.Item1.MapToList(_.MakeType(path.Type, ruleSymbol, typeHintOpt));
           SyntaxMappingType.Match(node, path, cases)
 
         | _ =>
@@ -191,7 +219,51 @@ namespace Nitra.Typing
       }
     }
 
-    public TypeAst(node : G.MapSyntaxExpression.Ast, ruleSymbol : SyntaxRuleSymbol) : SyntaxMappingType
+    public TypeFold(node : G.MapSyntaxExpression.Fold, ruleSymbol : SyntaxRuleSymbol, typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
+    {
+      if (typeHintOpt is VSome(astType))
+      {
+        _ = node.MakeReturnType(astType);
+
+        def itemExpr = node.ItemExpr.MakeType(ruleSymbol, VNone());
+        match (itemExpr)
+        {
+          | Undefined       => SyntaxMappingType.Undefined(node)
+          | ParseTree(path) =>
+            if (path.Type is RuleType.List(itemType))
+            {
+              def itemSymbol = ParseTreePatternVariableSymbol(node.ItemName.Identifier(), itemType);
+              node.EachExpr.Context.GetContext.[ParseTreePatternVariableContext]().AddVariable(itemSymbol);
+
+              def accumulatorReference = node.AccumulatorName2.Identifier();
+              unless (node.AccumulatorSymbol.Name == accumulatorReference.Value)
+                node.Context.Error(accumulatorReference, $"Unbound name '$(accumulatorReference.Value)'.");
+
+              def initExpr = MakeExpression(node.InitExpr.MakeType(ruleSymbol, VSome(astType)), astType, node.Context);
+              def eachExpr = MakeExpression(node.EachExpr.MakeType(ruleSymbol, VSome(astType)), astType, node.Context);
+              def expr     = SyntaxMappingExpr.Fold(node, itemSymbol, path, node.AccumulatorSymbol, initExpr, eachExpr, astType);
+              SyntaxMappingType.Ast(node, astType, expr)
+            }
+            else
+            {
+              node.Context.Error(path, $"Expected list rule type got '$(path.Type)'.");
+              SyntaxMappingType.Undefined(node)
+            }
+
+            | _ =>
+              node.Context.Error(node, "Parse tree list folding is not allowed here.");
+              SyntaxMappingType.Undefined(node)
+        }
+      } 
+      else
+      {
+        _ = node.MakeReturnType(AstType.Void(node));
+        node.Context.Error(node, "Type inference is not supported, please specify type with ':' operator.");
+        SyntaxMappingType.Undefined(node)
+      }
+    }
+
+    public TypeAst(node : G.MapSyntaxExpression.Ast, ruleSymbol : SyntaxRuleSymbol, _typeHintOpt : ValueOption[AstType]) : SyntaxMappingType
     {
       def result = TypingUtils.BindAstSymbolFromMappingExtension(node.QualifiedName, node.Context);
       if (result is SymbolRef.Some(astSymbol))
