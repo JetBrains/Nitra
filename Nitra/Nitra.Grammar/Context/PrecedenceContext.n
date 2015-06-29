@@ -32,60 +32,20 @@ namespace Nitra.Typing
     }
 
     public abstract GetPrecedence() : option[SymbolRef[PrecedenceSymbol]];
+    public virtual Typing() : void {}
 
     public static Make(parent : Context, owner : IPrecedenceSymbolOwner, symbol : PrecedenceSymbol, node : G.RuleBodyMember.Precedence) : Context
     {
       match (node.PrecedenceName)
       {
         | Zero =>
-          when (node.OrderOpt.HasValue)
-            symbol.Node.Project.Error(node.OrderOpt, "Order not allowed for zero precedence.");
+          when (node.Order.HasValue)
+            symbol.Node.Project.Error(node.Order, "Order not allowed for zero precedence.");
           PrecedenceZeroContext(parent);
         | Name =>
           //TODO добавить проверку порядка контекстов
           if (symbol != null)
-          {
-            def context = PrecedenceNamedContext(parent, symbol);
-            when (node.OrderOpt.HasValue)
-            {
-              def bind(location : Location)
-              {
-                match (owner.Node.BindMany.[PrecedenceSymbol](location))
-                {
-                  | [symbol]    => symbol
-                  | []          => symbol.Node.Project.Error(location, "Undeclared precedence."); null
-                  | symbol :: _ => symbol.Node.Project.Error(location, "Ambiguous precedence."); symbol
-                }
-              }
-              match (node.OrderOpt.Value.Item2)
-              {
-                | order is G.RuleBodyMember.Precedence.Nested.Order.Full =>
-                  def symbolLow = bind(order.Name1.Location);
-                  def symbolMid = bind(order.Name2.Location);
-                  def symbolHi  = bind(order.Name3.Location);
-                  when (symbolLow != null && symbolMid != null && symbolHi != null)
-                    if (symbolMid == symbol)
-                    {
-                      context.AddRelation(PrecedenceRelation(owner, symbolLow.Name.ToString(), symbolMid.Name.ToString()));
-                      context.AddRelation(PrecedenceRelation(owner, symbolMid.Name.ToString(), symbolHi.Name.ToString()));
-                    }
-                    else
-                      symbol.Node.Project.Error(order.Name2.Location, "Middle precedence must be same as current precedence.");
-
-                | order is G.RuleBodyMember.Precedence.Nested.Order.Partial =>
-                  def symbol1 = bind(order.Name1.Location);
-                  def symbol2 = bind(order.Name2.Location);
-                  when (symbol1 != null && symbol2 != null)
-                    if (symbol1 == symbol || symbol2 == symbol)
-                      context.AddRelation(PrecedenceRelation(owner, symbol1.Name.ToString(), symbol2.Name.ToString()));
-                    else
-                      symbol.Node.Project.Error(order.Location, "On of precedencies must be same as current precedence.");
-
-                | _ => assert2(false);
-              }
-            }
-            context
-          }
+            PrecedenceNamedContext(parent, owner, symbol, node);
           else
             parent;
         | _    => assert3(false);
@@ -165,17 +125,62 @@ namespace Nitra.Typing
 
   public sealed class PrecedenceNamedContext : PrecedenceContext
   {
-    public Symbol : PrecedenceSymbol;
-    public Relations : List[PrecedenceRelation] = List();
-    public this(parent : Context, symbol : PrecedenceSymbol)
+    public  Symbol : PrecedenceSymbol;
+    private Owner : IPrecedenceSymbolOwner;
+    private Node : G.RuleBodyMember.Precedence;
+    public  Relations : List[PrecedenceRelation] = List();
+
+    public this(parent : Context, owner : IPrecedenceSymbolOwner, symbol : PrecedenceSymbol, node : G.RuleBodyMember.Precedence)
     {
       base(parent);
       Symbol = symbol;
+      Owner  = owner;
+      Node   = node;
     }
 
     public AddRelation(relation : PrecedenceRelation) : void
     {
       Relations.Add(relation);
+    }
+
+    public override Typing() : void
+    {
+      when (Node.Order.HasValue)
+      {
+        def bind(identifier : G.Identifier)
+        {
+          def location = identifier.Location;
+          def symbols = Owner.Node.BindMany.[PrecedenceSymbol](location);
+          def symbols = match (symbols)
+          {
+            | []      => 
+              if (Owner is ExtendSyntaxSymbol as owner)
+                if (owner.Extend.HasValue)
+                  owner.Extend.GetValue(Symbol.Node.Project).Node.BindMany.[PrecedenceSymbol](location);
+                else
+                  [];
+              else
+                [];
+            | symbols => symbols
+          }
+          match (symbols)
+          {
+            | [symbol]    => symbol
+            | []          => Symbol.Node.Project.Error(location, "Undeclared precedence."); null
+            | symbol :: _ => symbol.Node.Project.Error(location, "Ambiguous precedence."); symbol
+          }
+        }
+        def symbols = Node.Order.Value.Item2.Item1.Map(bind);
+        unless (symbols.Count(s => s : object == Symbol) == 1)
+          Symbol.Node.Project.Error(Node.Order.Location, "On of precedencies must be same as current precedence.");
+        mutable prevSymbol = null;
+        foreach (symbol in symbols)
+        {
+          when (prevSymbol != null && symbol != null)
+            AddRelation(PrecedenceRelation(Owner, prevSymbol.Name.ToString(), symbol.Name.ToString()));
+          prevSymbol = symbol;
+        }
+      }
     }
 
     public override GetPrecedence() : option[SymbolRef[PrecedenceSymbol]]
