@@ -13,6 +13,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Markup;
+using System.Windows.Media;
 using Nitra.Internal;
 using Nitra.ProjectSystem;
 using Nitra.Runtime.Reflection;
@@ -48,14 +49,14 @@ namespace Nitra.Visualizer
           tvi = ObjectToItem(prop, option.Value);
         else
         {
-          var xaml = RenderXamlForValue(prop, "&lt;None&gt;");
+          var xaml = RenderXamlForValue(prop, "<None>");
           tvi.Header = XamlReader.Parse(xaml);
         }
         return tvi;
       }
 
       var declaration = obj as IAst;
-      if (declaration != null /*&& !(obj is IReference)*/)
+      if (declaration != null)
       {
         var xaml   = RenderXamlForDeclaration(name, declaration);
         tvi.Header = XamlReader.Parse(xaml);
@@ -84,7 +85,7 @@ namespace Nitra.Visualizer
         var xaml = RenderXamlForValue(prop, obj);
         tvi.Header = XamlReader.Parse(xaml);
 
-        if (obj == null /*|| obj is IReference*/)
+        if (obj == null)
           return tvi;
 
         var t = obj.GetType();
@@ -121,7 +122,7 @@ namespace Nitra.Visualizer
         return;
 
       var declaration = obj as IAst;
-      if (declaration != null /*&& !(obj is IReference)*/)
+      if (declaration != null)
       {
         var t = obj.GetType();
         var props = t.GetProperties();
@@ -134,8 +135,20 @@ namespace Nitra.Visualizer
           {
             if (declaration.IsMissing)
               return;
-            var value = prop.GetValue(declaration, null);
-            tvi.Items.Add(ObjectToItem(prop, value));
+            var isEvalPropName = "Is" + prop.Name + "Evaluated";
+            var isEvalProp = t.GetProperty(isEvalPropName);
+            if (isEvalProp == null || (bool) isEvalProp.GetValue(declaration, null))
+            {
+              var value = prop.GetValue(declaration, null);
+              tvi.Items.Add(ObjectToItem(prop, value));
+            }
+            else
+            {
+              var tviNotEval = ObjectToItem(prop, "<not evaluated>");
+              tviNotEval.Foreground = Brushes.Red;
+              tviNotEval.FontWeight = FontWeights.Bold;
+              tvi.Items.Add(tviNotEval);
+            }
           }
           catch (Exception e)
           {
@@ -156,7 +169,7 @@ namespace Nitra.Visualizer
       {
         var t = obj.GetType();
 
-        if (obj is string || t.IsPrimitive /*|| obj is IReference*/)
+        if (obj is string || t.IsPrimitive)
           return;
 
         var props = t.GetProperties();

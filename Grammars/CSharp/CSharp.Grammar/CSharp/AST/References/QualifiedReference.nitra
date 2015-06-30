@@ -1,18 +1,21 @@
-﻿using Nitra.Runtime.Binding;
-
+﻿using CSharp.Symbols;
+using Nitra;
+using Nitra.Runtime.Binding;
 using System.Linq;
 
 namespace CSharp
 {
   asts QualifiedReference
   {
-    in Scope : Scope;
+  stage 1:
+    in Arity : int = 0;
+    in Scope   : Scope;
     out Symbol : Symbol2;
 
     | Simple
       {
         Name.Scope = Scope;
-        Symbol      = Name.Symbol;
+        Symbol     = Utils.TryResolveTypeOverload(Name.Symbol, Arity);
 
         Name : Reference;
       }
@@ -20,7 +23,7 @@ namespace CSharp
     | Aliased 
       {
         Name.Scope = Scope;
-        Symbol     = Name.Symbol;
+        Symbol     = Utils.TryResolveTypeOverload(Name.Symbol, Arity);
 
         Alias : Reference;
         Name  : Reference;
@@ -28,9 +31,10 @@ namespace CSharp
 
     | Qualified
       {
+        Qualifier.Arity = 0;
         Qualifier.Scope = Scope;
         Name.Scope      = Qualifier.Symbol.Scope;
-        Symbol          = Name.Symbol;
+        Symbol          = Utils.TryResolveTypeOverload(Name.Symbol, Arity);
 
         Qualifier : QualifiedReference;
         Name      : Reference;
@@ -38,27 +42,102 @@ namespace CSharp
 
     | Generic
       {
+        Arguments.Arity     = 0;
+        QualifiedName.Arity = Arguments.Count;
         QualifiedName.Scope = Scope;
         Arguments.Scope     = Scope;
         Symbol              = QualifiedName.Symbol;
 
         QualifiedName : QualifiedReference;
-        Arguments     : QualifiedReference+;
+        Arguments     : QualifiedReference*; // TODO: change to  QualifiedReference+
       }
   }
 
   map syntax CsIdentifiers.QualifiedIdentifier -> QualifiedReference
   {
-    | (None,    (first :: other, _)) = other.Aggregate(first.CreateSimple(),            (acc, item) => item.CreateQualified(acc));
-    | (Some(a), (first :: other, _)) = other.Aggregate(first.CreateAliased(a.GetAst()), (acc, item) => item.CreateQualified(acc));
+    | (None,    (first :: other, _)) -> fold (item in other; acc = first();    acc = item(acc))
+    | (Some(a), (first :: other, _)) -> fold (item in other; acc = first(a()); acc = item(acc))
     | (_,       ([],             _)) = IntrinsicUtils.CreateMissingQualifiedReference(QualifiedIdentifierParts.File, QualifiedIdentifierParts.Span);
+  }
+
+  map syntax CsIdentifiers.QualifiedIdentifierPartTypeArguments -> QualifiedReference*
+  {
+    | TypeArgumentList -> AnyTypes.Item1
+    | OpenTypeArguments =
+      {
+        def args = array(RankSeparators.Count + 1);
+        args[0] = IntrinsicUtils.CreateOpenTypeArgument(this.File, NSpan(OpenBrace.EndPos));
+        foreach (rs in RankSeparators with index)
+          args[index + 1] = IntrinsicUtils.CreateOpenTypeArgument(this.File, NSpan(rs.EndPos));
+        QualifiedReference.AstList(this, args)
+      }
+  }
+
+  map syntax CsIdentifiers.QualifiedIdentifierPart -> QualifiedReference
+  {
+    | (r, None)           -> Simple { r -> Name; }
+    | (r, Some(typeArgs)) -> Generic
+      {
+        Simple { r -> Name; } -> QualifiedName;
+        typeArgs -> Arguments;
+      }
+  }
+
+  map syntax CsIdentifiers.QualifiedIdentifierPart(aliasAst : Nitra.Runtime.Binding.Reference) -> QualifiedReference
+  {
+    | (r, None)           -> Aliased { aliasAst -> Alias; r -> Name; }
+    | (r, Some(typeArgs)) -> Generic
+      {
+        Aliased { aliasAst -> Alias; r -> Name; } -> QualifiedName;
+        typeArgs -> Arguments;
+      }
+  }
+
+  map syntax CsIdentifiers.QualifiedIdentifierPart(qualifier : QualifiedReference) -> QualifiedReference
+  {
+    | (r, None)           -> Qualified { qualifier -> Qualifier; r -> Name; }
+    | (r, Some(typeArgs)) -> Generic
+      {
+        Qualified { qualifier -> Qualifier; r -> Name; } -> QualifiedName;
+        typeArgs -> Arguments;
+      }
   }
 
   map syntax CsIdentifiers.InterfaceType -> QualifiedReference
   {
-    | (None,    (first, _) :: other) = other.Aggregate(first.CreateSimple(),            (acc, item) => item.Item1.CreateQualified(acc));
-    | (Some(a), (first, _) :: other) = other.Aggregate(first.CreateAliased(a.GetAst()), (acc, item) => item.Item1.CreateQualified(acc));
+    | (None,    (first, _) :: other) -> fold (item in other; acc = first();    acc = item(acc))
+    | (Some(a), (first, _) :: other) -> fold (item in other; acc = first(a()); acc = item(acc))
     | (_,       []                 ) = IntrinsicUtils.CreateMissingQualifiedReference(InterfaceTypeParts.File, InterfaceTypeParts.Span);
+  }
+
+  map syntax CsIdentifiers.InterfaceTypePart -> QualifiedReference
+  {
+    | (r, None)           -> Simple { r -> Name; }
+    | (r, Some(typeArgs)) -> Generic
+      {
+        Simple { r -> Name; } -> QualifiedName;
+        typeArgs -> Arguments;
+      }
+  }
+
+  map syntax CsIdentifiers.InterfaceTypePart(aliasAst : Nitra.Runtime.Binding.Reference) -> QualifiedReference
+  {
+    | (r, None)           -> Aliased { aliasAst -> Alias; r -> Name; }
+    | (r, Some(typeArgs)) -> Generic
+      {
+        Aliased { aliasAst -> Alias; r -> Name; } -> QualifiedName;
+        typeArgs -> Arguments;
+      }
+  }
+
+  map syntax CsIdentifiers.InterfaceTypePart(qualifier : QualifiedReference) -> QualifiedReference
+  {
+    | (r, None)           -> Qualified { qualifier -> Qualifier; r -> Name; }
+    | (r, Some(typeArgs)) -> Generic
+      {
+        Qualified { qualifier -> Qualifier; r -> Name; } -> QualifiedName;
+        typeArgs -> Arguments;
+      }
   }
 
   map syntax Types.TypeName -> QualifiedReference
@@ -72,34 +151,31 @@ namespace CSharp
     | (typeName, None) -> typeName
     | (typeName, Some) -> Generic
       {
-        QualifiedName = IntrinsicUtils.CreateQualifiedReference(this.File, this.Span, "System", "Nullable");
+        Qualified
+        {
+          Simple { Name = Reference(this.File, this.Span, "System"); } -> Qualifier;
+          Name = Reference(this.File, this.Span, "Nullable");
+        } -> QualifiedName;
         [ typeName ] -> Arguments;
       }
   }
 
-  map syntax Types.TypeSpecifier -> QualifiedReference
+  map syntax Types.TypeSpecifier(qualifiedName : QualifiedReference) -> QualifiedReference
   {
-    | PointerSpecifier = IntrinsicUtils.CreateQualifiedReference(this.File, this.Span, "#Pointer");
-    | RankSpecifier =
+    | PointerSpecifier -> Generic
       {
-        def rank = RankSpecifier.RankSeparators.Count + 1;
-        IntrinsicUtils.CreateQualifiedReference(this.File, this.Span, "#Array" + rank.ToString())
-      };
+        Simple { Name = Reference(this.File, this.Span, "#Pointer"); } -> QualifiedName;
+        [qualifiedName] -> Arguments;
+      }
+    | RankSpecifier -> Generic
+      {
+        Simple { Name = Reference(this.File, this.Span, "#Array" + (RankSpecifier.RankSeparators.Count + 1).ToString()); } -> QualifiedName;
+        [qualifiedName] -> Arguments;
+      }
   }
 
-  map syntax Types.AnyType -> QualifiedReference =
+  map syntax Types.AnyType -> QualifiedReference
   {
-    mutable acc = AnyNonArrayType.GetAst();
-
-    foreach (ts in TypeSpecifiers)
-    {
-      acc = QualifiedReference.Generic(
-        File          = acc.File,
-        Span          = acc.Span + ts.Span,
-        QualifiedName = ts.GetAst(),
-        Arguments     = QualifiedReference.AstList(this.File, acc.Span, acc))
-    }
-
-    acc
-  };
+    fold (ts in TypeSpecifiers; acc = AnyNonArrayType; acc = ts(acc))
+  }
 }

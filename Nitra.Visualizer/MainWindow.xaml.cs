@@ -26,6 +26,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Nitra.Visualizer.Controls;
 using Microsoft.VisualBasic.FileIO;
 using Nitra.ProjectSystem;
 using Nitra.Runtime.Binding;
@@ -73,7 +74,7 @@ namespace Nitra.Visualizer
     private TestSuitVm _currentTestSuit;
     private TestFolderVm _currentTestFolder;
     private TestVm _currentTest;
-    private readonly PropertyGrid _propertyGrid;
+    private readonly PependentPropertyGrid _propertyGrid;
     private readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
     private readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
     private List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
@@ -139,7 +140,7 @@ namespace Nitra.Visualizer
       _text.Options.EnableRectangularSelection = true;
       _text.Options.IndentationSize = 2;
       _testsTreeView.SelectedValuePath = "FullPath";
-      _propertyGrid = new PropertyGrid();
+      _propertyGrid = new PependentPropertyGrid();
       _windowsFormsHost.Child = _propertyGrid;
 
       if (string.IsNullOrWhiteSpace(_settings.CurrentSolution))
@@ -387,10 +388,10 @@ namespace Nitra.Visualizer
         cmpilerMessages.Sort();
 
 
-        foreach (var error in cmpilerMessages)
+        foreach (var message in cmpilerMessages)
         {
-          var text = error.Text;
-          var location = error.Location;
+          var text = message.Text;
+          var location = message.Location;
           var file = location.Source.File;
           if (currFile == file)
           {
@@ -402,9 +403,19 @@ namespace Nitra.Visualizer
           }
 
           var errorNode = new TreeViewItem();
-          errorNode.Header = Path.GetFileNameWithoutExtension(file.FullName) + "(" + error.Location.EndLineColumn + "): " + text;
-          errorNode.Tag = error;
+          errorNode.Header = Path.GetFileNameWithoutExtension(file.FullName) + "(" + message.Location.StartLineColumn + "): " + text;
+          errorNode.Tag = message;
           errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
+
+          foreach (var nestedMessage in message.NestedMessages)
+          {
+            var nestadErrorNode = new TreeViewItem();
+            nestadErrorNode.Header = Path.GetFileNameWithoutExtension(file.FullName) + "(" + nestedMessage.Location.StartLineColumn + "): " + nestedMessage.Text;
+            nestadErrorNode.Tag = nestedMessage;
+            nestadErrorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
+            errorNode.Items.Add(nestadErrorNode);
+          }
+
           errorNodes.Add(errorNode);
         }
 
@@ -415,6 +426,8 @@ namespace Nitra.Visualizer
     void errorNode_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
       var node = (TreeViewItem)sender;
+      if (!node.IsSelected)
+        return;
       var error = (CompilerMessage)node.Tag;
       SelectText(error.Location);
       e.Handled = true;
@@ -618,14 +631,30 @@ namespace Nitra.Visualizer
           parseTree.Accept(this);
       }
 
+      public void Visit(IName name)
+      {
+        var span = name.Span;
+
+        if (!span.IntersectsWith(_span) || !name.IsSymbolEvaluated)
+          return;
+
+        var sym = name.Symbol;
+        var spanClass = sym.SpanClass;
+
+        if (spanClass == "Default")
+          return;
+
+        SpanInfos.Add(new SpanInfo(span, new SpanClass(sym.SpanClass)));
+      }
+
       public void Visit(IReference reference)
       {
         var span = reference.Span;
 
         if (!span.IntersectsWith(_span) || !reference.IsSymbolEvaluated)
           return;
-        
-        var sym = reference.Symbol;
+
+        var sym = reference.Symbol.IsResolved ? reference.Symbol.ResolutionResult : reference.Symbol;
         var spanClass = sym.SpanClass;
         
         if (spanClass == "Default")
@@ -1026,10 +1055,11 @@ namespace Nitra.Visualizer
         var test = e.NewValue as TestVm;
         if (test != null)
         {
-          _text.Text = test.Code;
+          _parseResult = null;
           _currentTestSuit = test.TestSuit;
           _currentTest = test;
           _currentTestFolder = test.Parent as TestFolderVm;
+          _text.Text = test.Code;
           ShowDiff(test);
         }
 
@@ -1246,9 +1276,7 @@ namespace Nitra.Visualizer
 
         if (Keyboard.IsKeyDown(Key.Space))
         {
-          if (_parseResult == null)
-            return;
-          ShowCompletionWindow(_text.CaretOffset, _parseResult);
+          ShowCompletionWindow(_text.CaretOffset);
           e.Handled = true;
         }
         else if (e.Key == Key.Oem6) // Oem6 - '}'
@@ -1256,9 +1284,12 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void ShowCompletionWindow(int pos, IParseResult parseResult)
+    private void ShowCompletionWindow(int pos)
     {
-      var completionList = CompleteWord(pos, parseResult);
+      if(_parseResult == null || _astRoot == null)
+        return;
+
+      var completionList = CompleteWord(pos, _parseResult, _astRoot);
 
       _completionWindow = new CompletionWindow(_text.TextArea);
       IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
@@ -1271,143 +1302,31 @@ namespace Nitra.Visualizer
       _completionWindow.Closed += delegate { _completionWindow = null; };
     }
 
-    private List<CompletionData> CompleteWord(int pos, IParseResult parseResult)
+    private List<CompletionData> CompleteWord(int pos, IParseResult parseResult, IAst astRoot)
     {
-      var source = parseResult.SourceSnapshot;
+      NSpan replacementSpan;
+      var result = NitraUtils.CompleteWord(pos, parseResult, astRoot, out replacementSpan);
       var completionList = new List<CompletionData>();
-      var carretSpan = new NSpan(pos, pos);
-      var spasesWalker = new VoidRuleWalker(carretSpan);
-      var spans = new HashSet<SpanInfo>();
-      spasesWalker.Walk(parseResult, spans);
 
-      foreach (var spanInfo in spans)
-        if (spanInfo.Span.Contains(carretSpan) && spanInfo.SpanClass != SpanClass.Default)
-          return completionList;
-
-      int spacesStart = pos;
-      int spacesEnd = pos;
-
-      if (spans.Count != 0)
+      foreach (var elem in result)
       {
-        spacesStart = spans.Min(s => s.Span.StartPos);
-        spacesEnd = spans.Max(s => s.Span.EndPos);
-      }
-
-      IEnumerable<Symbol2> symbols = Enumerable.Empty<Symbol2>();
-      var visitor = new FindNodeAstVisitor(new NSpan(spacesStart, spacesEnd));
-      _astRoot.Accept(visitor);
-
-      var firstAstNode = visitor.Stack.Peek();
-      var span = firstAstNode.Span;
-      var start = span.StartPos;
-      var prefix = span.EndPos == pos ? source.Text.Substring(span.StartPos, span.Length) : null;
-      foreach (var curr in visitor.Stack)
-      {
-        var scopeProp = curr.GetType().GetProperty("Scope");
-        if (scopeProp != null)
+        var symbol = elem as Symbol2;
+        if (symbol != null)
         {
-          dynamic obj = curr;
-          if (obj.IsScopeEvaluated)
-          {
-            symbols = obj.Scope.MakeComletionList(prefix);
-            break;
-          }
+          var content = symbol.ToXaml();
+          var description = content;
+          var amb = symbol as AmbiguousHierarchicalSymbol;
+          if (amb != null)
+            description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
+          completionList.Add(new CompletionData(replacementSpan, symbol.Name.Text, content, description, priority: 1.0));
         }
+
+        var literal = elem as string;
+        if (literal != null)
+          completionList.Add(new CompletionData(replacementSpan, literal, Utils.Escape(literal), Utils.Escape(literal), priority: 2.0));
       }
 
-      foreach (var symbol in symbols)
-      {
-        var content = symbol.ToXaml();
-        var description = content;
-        var amb = symbol as AmbiguousHierarchicalSymbol;
-        if (amb != null)
-          description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
-        completionList.Add(new CompletionData(span, symbol.Name.Text, content, description, priority: 1.0));
-      }
-
-      var text = source.Text.Substring(0, start) + '\xFFFF';
-      _currentTestSuit.Run(text, null, start, prefix);
-      var ex = _currentTestSuit.Exception;
-      var result = ex as LiteralCompletionException;
-      _performanceTreeView.ItemsSource = new[] {_currentTestSuit.Statistics};
-      //MessageBox.Show(string.Join(", ", result.Literals.OrderBy(x => x)));
-      if (result == null)
-        return completionList;
-
-      foreach (var literal in result.Literals)
-        completionList.Add(new CompletionData(span, literal, Utils.Escape(literal), Utils.Escape(literal), priority: 2.0));
-
-      completionList.Sort();
       return completionList;
-    }
-
-    private class FindNodeAstVisitor : IAstVisitor
-    {
-      private readonly NSpan _span;
-      public readonly Stack<IAst> Stack = new Stack<IAst>();
-
-      public FindNodeAstVisitor(NSpan span) { _span = span; }
-
-      public void Visit(IAst parseTree)
-      {
-        if (parseTree.Span.IntersectsWith(_span))
-        {
-          Stack.Push(parseTree);
-          parseTree.Accept(this);
-        }
-      }
-
-      public void Visit(IReference reference)
-      {
-        if (reference.Span.IntersectsWith(_span))
-        {
-          Stack.Push(reference);
-          reference.Accept(this);
-        }
-      }
-    }
-
-    private IEnumerable<Symbol2> TrySymbolCompletion(int pos, int spacesStart, int spacesEnd)
-    {
-      var visitor = new FindNodeAstVisitor(new NSpan(spacesStart, spacesEnd));
-      _astRoot.Accept(visitor);
-      if (visitor.Stack.Count == 0)
-        return Enumerable.Empty<Symbol2>();
-
-
-      foreach (var curr in visitor.Stack)
-      {
-        var scopeProp = curr.GetType().GetProperty("Scope");
-        if (scopeProp != null)
-        {
-          dynamic obj = curr;
-          if (obj.IsScopeEvaluated)
-          {
-            var prefix = curr.Span.EndPos == pos ? _text.Document.GetText(curr.Span.StartPos, curr.Span.Length) : null;
-            return obj.Scope.MakeComletionList(prefix);
-          }
-        }
-      }
-
-      return Enumerable.Empty<Symbol2>();
-    }
-
-    private int CalcCompletionStart(int end)
-    {
-      int start = end;
-      var line = _text.Document.GetLineByOffset(end);
-      var lineText = _text.Document.GetText(line);
-      var offsetInLine = end - 1 - line.Offset;
-      for (int i = offsetInLine; i >= 0; i--)
-      {
-        var ch = lineText[i];
-        if (!char.IsLetter(ch))
-        {
-          break;
-        }
-        start--;
-      }
-      return start;
     }
 
     private void TryMatchBraces()

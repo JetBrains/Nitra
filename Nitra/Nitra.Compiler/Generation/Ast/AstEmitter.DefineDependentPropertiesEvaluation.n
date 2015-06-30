@@ -54,12 +54,7 @@ namespace Nitra.Compiler
             body.Add(Util.locate(assignment.Location.NLocation(), <[ $(PExprUtils.FromQualifiedIdentifier(assignment.Path)) = $(assignment.Expression) ]>));
         }
 
-        tb.Define(<[ decl:
-          public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
-          {
-            ..$body
-          }
-        ]>);
+        DefineEvalPropertiesMethod(tb, <[ { ..$body } ]>);
 
         def compileGraph(methodBuilder : MethodBuilder, graphNodes : Seq[Node]) : void
         {
@@ -82,6 +77,7 @@ namespace Nitra.Compiler
                 assert(false, $"IProperty for symbol $s not found");
             }
             def graphNodes2 = AddDependencyOnAstProperties(graphNodes, props);
+            CheckStageDependencies(graphNodes2);
             //CheckOutputPropertiesAssignment(symbol, newGraphNodes);
             def code          = GenerateCode(tb, graphNodes2);
             if (symbol is ExtensionAstSymbol)
@@ -123,7 +119,6 @@ namespace Nitra.Compiler
 
     private static ErrorUnexpectedExpr(expr : TExpr) : void
     {
-      assert2(false);
       Message.FatalError(expr.Location, $"Unexpected expression '$expr' $(expr.GetType().Name)")
     }
 
@@ -250,11 +245,6 @@ namespace Nitra.Compiler
             def propertyRef = Environment.LookupAstPropertySymbol(e.prop);
             if (propertyRef != null)
             {
-              when (propertyRef.Symbol.Direction == DependentPropertyDirection.In && e.obj is TExpr.This)
-              {
-                Message.FatalError(e.Location, "Assignment of input dependent property within its declaration is not allowed.");
-              }
-
               def nodesMap = nodesMap;
               def key = toKey(e);
               def node = nodesMap[key] :> Node.AssignProp;
@@ -346,6 +336,32 @@ namespace Nitra.Compiler
       newDependencyGraph
     }
 
+    private CheckStageDependencies(dependencyGraph : Seq[Node]) : void
+    {
+      foreach (a in dependencyGraph)
+      {
+        | AssignProp as a =>
+          def target = a.PropertyRef.Symbol;
+          when (target.Direction == DependentPropertyDirection.Out)
+          {
+            foreach (d in a.DependendOn)
+            {
+              def source = d.PropertyRef.Symbol;
+              when (target.Stage < source.Stage)
+              {
+                Message.Error(a.Location, $"Reversing stage dependency detected: property '$(target.FullName)' from stage '$(target.Stage)' value depends on property '$(source.FullName)' from stage '$(source.Stage)'.");
+                when (target.AssemblyId == AssemblyIds.CurrentAssembly)
+                  Message.Hint(target.FirstLocation.NLocation(), $"Assigned property from stage '$(target.Stage)'.");
+                when (source.AssemblyId == AssemblyIds.CurrentAssembly)
+                  Message.Hint(source.FirstLocation.NLocation(), $"Dependend property from stage '$(source.Stage)'.");
+              }
+            }
+          }
+
+        | _ => ()
+      }
+    }
+
     private GenerateCode(tb : TypeBuilder, dependencyGraph : Seq[Node]) : PExpr
     {
       def orderedNodes = dependencyGraph.ToArray();
@@ -385,6 +401,13 @@ namespace Nitra.Compiler
               ]>
             };
 
+          def propertyStage = a.PropertyRef.Symbol.Stage;
+          def code =
+            if (propertyStage > 0)
+              <[ when (context.Stage >= $propertyStage) $code ]>
+            else
+              code;
+
           result.Add(code);
 
         | UseProp         => ()
@@ -396,21 +419,6 @@ namespace Nitra.Compiler
 
       def code = <[ { ..$result } ]>;
       code
-    }
-
-    private static GenerateHasValueCheck(obj : TExpr, propertyRef : DependentAstPropertyRef) : PExpr
-    {
-      GenerateHasValueCheck(<[ $(obj : typed) ]>, propertyRef)
-    }
-
-    private static GenerateHasValueCheck(obj : PExpr, propertyRef : DependentAstPropertyRef) : PExpr
-    {
-      match (propertyRef)
-      {
-        | Compiling(bit) when obj is <[ this ]>      => bit.Read()
-        | _              when propertyRef.Index >= 0 => <[ $obj.IsPropertyEvaluated($(propertyRef.Index : int)) ]>
-        | _                                          => <[ $obj.$(GetIsEvaluatedPropertyName(propertyRef.Symbol) : usesite) ]>
-      }
     }
   }
 }

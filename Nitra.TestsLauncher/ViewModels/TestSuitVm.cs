@@ -167,7 +167,6 @@ namespace Nitra.ViewModels
       if (StartRule == null)
         return null;
 
-      var timer = System.Diagnostics.Stopwatch.StartNew();
       try
       {
         var parseSession = new ParseSession(StartRule,
@@ -185,13 +184,11 @@ namespace Nitra.ViewModels
         }
         var parseResult = parseSession.Parse(source);
         this.Exception = null;
-        this.TestTime = timer.Elapsed;
         return parseResult;
       }
       catch (Exception ex)
       {
         this.Exception = ex;
-        this.TestTime = timer.Elapsed;
         return null;
       }
     }
