@@ -35,17 +35,6 @@ namespace Nitra.Compiler
       }
     }
 
-    private static MakeParseTreeMemberAccess(path : ParseTreePath) : PExpr
-    {
-      Util.locate(path.Location.NLocation(),
-        match(path)
-        {
-          | This                       => <[ this ]>
-          | Variable(name, _)          => <[ $(name.Value : usesite) ]>
-          | Member(qualifier, name, _) => <[ $(MakeParseTreeMemberAccess(qualifier)).$(name.Value : usesite) ]>
-        })
-    }
-
     private CompileParseTreeMemberAccess(path : ParseTreePath, astType : AstType, needsParseTreeCheck : bool, compile : PExpr -> PExpr) : PExpr
     {
       def missingLocName = Util.tmpname("missingLoc");
@@ -118,100 +107,187 @@ namespace Nitra.Compiler
         code
     }
 
-    private CompileSyntaxMapping(expr : SyntaxMappingExpr, loc : void -> PExpr) : PExpr
+    private variant AstLocationContext
     {
-      assert(expr != null);
+      | Root
+      | Variable { name : string }
 
-      def compileField(field : SyntaxMappingField) : PExpr
+      private GetLocationSource() : PExpr
+      {
+        match (this)
+        {
+          | Root        => <[ this ]>
+          | Variable(n) => <[ $(n : usesite) ]>
+        }
+      }
+
+      public File    : PExpr { get { <[ $(GetLocationSource()).File ]> } }
+      public Span    : PExpr { get { <[ $(GetLocationSource()).Span ]> } }
+      public Located : PExpr { get { GetLocationSource()               } }
+    }
+
+    private CompileAstCtor(astSymbol : AstSymbol, fields : list[SyntaxMappingField], loc : AstLocationContext) : PExpr
+    {
+      def args = SCG.List();
+      args.Add(loc.File);
+      args.Add(loc.Span);
+      foreach (field in fields)
       {
         def name  = field.Property.Name;
         def value = CompileSyntaxMapping(field.Expr, loc);
-        <[ $(name : usesite) = $value ]>
+        args.Add(<[ $(name : usesite) = $value ]>);
       }
+      <[ $(Environment.GetAstType(astSymbol) : typed)(..$args) ]>
+    }
 
-      def callItemGetAst(args : list[SyntaxMappingExpr], path : ParseTreePath, astType : AstType) : SCG.List[PExpr] * PExpr
-      {
-        def parseTreeLoc() { <[ parseTree ]> }
-        def argExprs = SCG.List();
-        def argRefs  = SCG.List();
-        foreach (arg in args)
-        {
-          def varName = Util.tmpname("arg");
-          argExprs.Add(<[ def $(varName : usesite) = $(CompileSyntaxMapping(arg, parseTreeLoc)) ]>);
-          argRefs.Add(<[ $(varName : usesite) ]>)
-        }
-        def expr = CompileParseTreeMemberAccess(path, astType, false, obj => <[ $obj.GetAst(..$argRefs) ]>);
-        (argExprs, expr)
-      }
+    private CompileAstListCtor(astSymbol : AstSymbol, items : list[SyntaxMappingExpr], loc : AstLocationContext) : PExpr
+    {
+      def args = SCG.List();
+      args.Add(loc.Located);
+      foreach (item in items)
+        args.Add(CompileSyntaxMapping(item, loc));
+      <[ $(Environment.GetAstType(astSymbol) : typed).AstList(..$args) ]>
+    }
 
-      def compileMatch(path : ParseTreePath, cases : list[SyntaxMappingCase]) : PExpr
+    private CompileAstOptionCtor(astSymbol : AstSymbol, valueOpt : option[SyntaxMappingExpr], loc : AstLocationContext) : PExpr
+    {
+      def args = SCG.List();
+      args.Add(loc.Located);
+      when (valueOpt is Some(value))
+        args.Add(CompileSyntaxMapping(value, loc));
+      <[ $(Environment.GetAstType(astSymbol) : typed).AstOption(..$args) ]>
+    }
+
+    private CompileMatch(errorLoc : Located, path : ParseTreePath, cases : list[SyntaxMappingCase], returnType : AstType) : PExpr
+    {
+      def rootObj = Util.tmpname("obj");
+      def loc     = if (path is ParseTreePath.This) AstLocationContext.Root() else AstLocationContext.Variable(rootObj);
+
+      def compileAccessNonCached(a : Access, body : SCG.List[PExpr], cache : SCG.Dictionary[Access, string]) : PExpr
       {
-        def compileAccess(_ : Access) : PExpr
+        match (a)
         {
-          | Obj                            => MakeParseTreeMemberAccess(path) // TODO: rewrite with CompileParseTreeMemberAccess approach
-          | Sel(ListCons,   0,     access) => <[ $(compileAccess(access)).Head ]>
-          | Sel(ListCons,   1,     access) => <[ $(compileAccess(access)).Tail ]>
-          | Sel(OptionSome, 0,     access) => <[ $(compileAccess(access)).Value ]>
-          | Sel(Tuple,      index, access) => <[ $(compileAccess(access)).$("Item" + (index + 1) : usesite) ]>
-          | Sel(ParseTree,  index, access) => <[ $(compileAccess(access)).$(RuleSymbol.NonVoidSubRules.Nth(index).FieldName : usesite) ]>
+          | Obj                            => <[ $(rootObj : usesite) ]>
+          | Sel(ListCons,   0,     access) => <[ $(compileAccess(access, body, cache)).Head ]>
+          | Sel(ListCons,   1,     access) => <[ $(compileAccess(access, body, cache)).Tail ]>
+          | Sel(OptionSome, 0,     access) => <[ $(compileAccess(access, body, cache)).Value ]>
+          | Sel(Tuple,      index, access) => <[ $(compileAccess(access, body, cache)).$("Item" + (index + 1) : usesite) ]>
+          | Sel(ParseTree,  index, access) => <[ $(compileAccess(access, body, cache)).$(RuleSymbol.NonVoidSubRules.Nth(index).FieldName : usesite) ]>
           | _ => assert(false, "Invalid access path")
         }
+      }
 
-        def compileTest(n : string, ctor : ParseTreeCtor) : PExpr
+      and compileAccess(a : Access, body : SCG.List[PExpr], cache : SCG.Dictionary[Access, string]) : PExpr
+      {
+        mutable variableName;
+        unless (cache.TryGetValue(a, out variableName))
         {
-          match (ctor)
-          {
-            | ListCons   => <[ $(n : usesite).Count > 0 ]>
-            | ListNil    => <[ $(n : usesite).Count == 0 ]>
-            | OptionSome => <[ $(n : usesite).HasValue ]>
-            | OptionNone => <[ ! $(n : usesite).HasValue ]>
-            | Tuple
-            | ParseTree  => assert(false, "Check is redundant")
-          }
+          variableName = Util.tmpname("parseTree");
+          cache.Add(a, variableName);
+          def code = compileAccessNonCached(a, body, cache);
+          body.Add(<[ def $(variableName : usesite) = $code ]>);
         }
+        <[ $(variableName : usesite) ]>
+      }
 
-        def     redundantCases : SCG.HashSet[_] = SCG.HashSet(cases);
-        mutable canFail        : bool;
-        def compileDecision(d : Decision[SyntaxMappingCase], loc : void -> PExpr) : PExpr
+      def compileTest(expr : PExpr, ctor : ParseTreeCtor) : PExpr
+      {
+        match (ctor)
         {
-          match (d)
-          {
-            | Failure =>
-              canFail = true;
-              <[ assert(false, "Match failed") ]>
-
-            | Success(case)                     =>
-              _ = redundantCases.Remove(case);
-              CompileSyntaxMapping(case.Expr, loc)
-
-            | Variable(name, access, continuation) =>
-              <[
-                def $(name.Value : global) = $(compileAccess(access));
-                $(compileDecision(continuation, loc))
-              ]>.FlattenPExpr()
-
-            | IfEq(access, ctor, t, f) =>
-              def n = Util.tmpname("parseTree");
-              def loc () { <[ $(n : usesite) ]> }
-              <[
-                def $(n : usesite) = $(compileAccess(access));
-                if ($(compileTest(n, ctor)))
-                  $(compileDecision(t, loc))
-                else
-                  $(compileDecision(f, loc))
-              ]>
-          }
+          | ListCons   => <[ $expr.Count > 0 ]>
+          | ListNil    => <[ $expr.Count == 0 ]>
+          | OptionSome => <[ $expr.HasValue ]>
+          | OptionNone => <[ ! $expr.HasValue ]>
+          | Tuple
+          | ParseTree  => assert(false, "Check is redundant")
         }
+      }
 
+      def     redundantCases : SCG.HashSet[_] = SCG.HashSet(cases);
+      mutable canFail        : bool;
+      def compileDecision(d : Decision[SyntaxMappingCase], body : SCG.List[PExpr], cache : SCG.Dictionary[Access, string]) : void
+      {
+        match (d)
+        {
+          | Failure =>
+            canFail = true;
+            body.Add(<[ assert(false, "Match failed") ]>)
+
+          | Success(case) =>
+            _ = redundantCases.Remove(case);
+            body.Add(CompileSyntaxMapping(case.Expr, loc))
+
+          | Variable(name, access, continuation) =>
+            def obj = compileAccessNonCached(access, body, cache);
+            body.Add(<[ def $(name.Value : global) = $obj; ]>);
+            compileDecision(continuation, body, cache);
+
+          | IfEq(access, ctor, t, f) =>
+            def obj    = compileAccess(access, body, cache);
+            def tBody  = SCG.List();
+            compileDecision(t, tBody, SCG.Dictionary(cache)); // TODO: clone cache on demand
+            def fBody  = SCG.List();
+            compileDecision(f, fBody, cache);
+            body.Add(<[ if ($(compileTest(obj, ctor))) { ..$tBody } else { ..$fBody} ]>)
+        }
+      }
+
+      CompileParseTreeMemberAccess(path, returnType, true, fun (obj)
+      {
         def rules      = cases.Map(c => (c.Pattern, c));
         def decision   = MatchCompiler.Compile(rules);
-        def code       = compileDecision(decision, loc);
+
+        def accessCache = SCG.Dictionary();
+        accessCache.Add(Access.Obj(), rootObj);
+
+        def body       = SCG.List();
+        body.Add(<[ def $(rootObj : usesite) = $obj ]>);
+        compileDecision(decision, body, accessCache);
+
         when (canFail)
-          Environment.Project.Warning(expr, "Matching is not exhaustive.");
+          Environment.Project.Warning(errorLoc, "Matching is not exhaustive.");
+
         foreach (case in redundantCases)
           Environment.Project.Warning(case, "Match case is redundant.");
-        code
-      }
+
+        <[ {..$body } ]>
+      })
+    }
+
+    private CompileSyntaxMappingInvokation(path : ParseTreePath, returnType : AstType, arguments : list[PExpr]) : PExpr
+    {
+      CompileParseTreeMemberAccess(path, returnType, false, obj => <[ $obj.GetAst(..$arguments) ]>)
+    }
+
+    private CompileListConversion(path : ParseTreePath, arguments : list[SyntaxMappingExpr], astSymbol : AstSymbol, itemPath : ParseTreePath, itemType : AstType, getBody : PExpr -> PExpr) : PExpr
+    {
+      CompileParseTreeMemberAccess(path, AstType.List(path.Location, astSymbol), true, fun(obj)
+      {
+        def loc      = AstLocationContext.Variable("parseTree");
+        def body     = SCG.List();
+        def argRefs  = SCG.List();
+        foreach (arg in arguments)
+        {
+          | ParameterRef | VariableRef => argRefs.Add(CompileSyntaxMapping(arg, loc));
+          | _ =>
+            def varName = Util.tmpname("arg");
+            body.Add(<[ def $(varName : usesite) = $(CompileSyntaxMapping(arg, loc)) ]>);
+            argRefs.Add(<[ $(varName : usesite) ]>)
+        }
+        def itemExpr = CompileSyntaxMappingInvokation(itemPath, itemType, argRefs.ToNList());
+        body.Add(getBody(itemExpr));
+
+        <[
+          def parseTree = $obj;
+          def e         = parseTree.GetEnumerator();
+          $(Environment.GetAstType(astSymbol) : typed).AstList(parseTree : Nitra.Located, (if (e.MoveNext()) { ..$body } else null) : array[_])
+        ]>
+      })
+    }
+
+    private CompileSyntaxMapping(expr : SyntaxMappingExpr, loc : AstLocationContext) : PExpr
+    {
+      assert(expr != null);
 
       Util.locate(expr.Location.NLocation(),
       {
@@ -222,53 +298,40 @@ namespace Nitra.Compiler
           | ParameterRef(par)                  => <[ $(par.Name : usesite) ]>
           | VariableRef(var)                   => <[ $(var.Name : usesite) ]>
           | PropertyRef(targetExpr, symbol)    => <[ $(CompileSyntaxMapping(targetExpr, loc)).$(symbol.Name : usesite) ]> // TODO: may hide AST ambiguitys
-          | AstCtor(astSymbol, args)           => <[ $(Environment.GetAstType(astSymbol) : typed)(File = $(loc()).File, Span = $(loc()).Span, ..$(args.Map(compileField))) ]>
-          | ListCtor(astSymbol, [])            => <[ $(Environment.GetAstType(astSymbol) : typed).AstList($(loc())) ]>
-          | ListCtor(astSymbol, items)         => <[ $(Environment.GetAstType(astSymbol) : typed).AstList($(loc()), ..$(items.Map(CompileSyntaxMapping(_, loc)))) ]>
-          | OptionCtor(astSymbol, Some(value)) => <[ $(Environment.GetAstType(astSymbol) : typed).AstOption($(loc()), $(CompileSyntaxMapping(value, loc))) ]>
-          | OptionCtor(astSymbol, None())      => <[ $(Environment.GetAstType(astSymbol) : typed).AstOption($(loc())) ]>
-          | Match(path, cases)                 => compileMatch(path, cases)
-          | Call(path, args, returnType)       => CompileParseTreeMemberAccess(path, returnType, false, obj => <[ $obj.GetAst(..$(args.Map(CompileSyntaxMapping(_, loc)))) ]>)
+          | AstCtor(astSymbol, args)           => CompileAstCtor(astSymbol, args, loc)
+          | ListCtor(astSymbol, items)         => CompileAstListCtor(astSymbol, items, loc)
+          | OptionCtor(astSymbol, valueOpt)    => CompileAstOptionCtor(astSymbol, valueOpt, loc)
+          | Match(path, cases, returnType)     => CompileMatch(expr, path, cases, returnType)
+          | Call(path, args, returnType)       => CompileSyntaxMappingInvokation(path, returnType, args.Map(CompileSyntaxMapping(_, loc)))
           | ConvertList(path, args, astSymbol, itemPath) =>
-            CompileParseTreeMemberAccess(path, AstType.List(expr.Location, astSymbol), true, fun(obj)
+            CompileListConversion(path, args, astSymbol, itemPath, AstType.Ast(itemPath, astSymbol), fun (itemExpr)
             {
-              def (argExprs, itemExpr) = callItemGetAst(args, itemPath, AstType.Ast(expr.Location, astSymbol));
-              // NB: sometimes compiler does not inline loop function with 'foreach' statement inside
               <[
-                def parseTree = $obj;
-                def e         = parseTree.GetEnumerator();
-                def items     =
-                  if (e.MoveNext())
-                  {
-                    ..$argExprs;
-                    def buffer = array(parseTree.Count);
-                    def loop(index : int) : void
-                    {
-                      def node = e.Current;
-                      buffer[index] = $itemExpr;
-                      when (e.MoveNext())
-                        loop(index + 1);
-                    }
-                    loop(0);
-                    buffer
-                  }
-                  else null;
-                $(Environment.GetAstType(astSymbol) : typed).AstList(parseTree : Nitra.Located, items)
+                def buffer = array(parseTree.Count);
+                def loop(index : int) : void
+                {
+                  def node = e.Current;
+                  buffer[index] = $itemExpr;
+                  when (e.MoveNext())
+                    loop(index + 1);
+                }
+                loop(0);
+                buffer
               ]>
             })
 
           | ConvertOption(path, args, astSymbol, valuePath) =>
+            def astType     = Environment.GetAstType(astSymbol);
+            def argumentLoc = AstLocationContext.Variable("parseTree");
+            def valueExpr   = CompileSyntaxMappingInvokation(valuePath, AstType.Ast(valuePath, astSymbol), args.Map(CompileSyntaxMapping(_, argumentLoc)));
             CompileParseTreeMemberAccess(path, AstType.Option(expr.Location, astSymbol), true, fun (obj)
             {
-              def astType               = Environment.GetAstType(astSymbol);
-              def (argExprs, valueExpr) = callItemGetAst(args, valuePath, AstType.Ast(expr.Location, astSymbol));
               <[
                 def parseTree  = $obj;
                 if (parseTree.HasValue)
                 {
-                  ..$argExprs;
                   def node = parseTree.Value;
-                  $(astType : typed).AstOption(parseTree, $valueExpr)
+                  $(astType : typed).AstOption(parseTree, $(valueExpr))
                 }
                 else
                   $(astType : typed).AstOption(parseTree)
@@ -276,58 +339,36 @@ namespace Nitra.Compiler
             })
 
           | ConcatLists(path, args, astSymbol, itemPath) =>
-            CompileParseTreeMemberAccess(path, AstType.List(expr.Location, astSymbol), true, fun (obj)
+            CompileListConversion(path, args, astSymbol, itemPath, AstType.List(itemPath, astSymbol), fun (itemExpr)
             {
-              def (argExprs, itemExpr) = callItemGetAst(args, itemPath, AstType.List(expr.Location, astSymbol));
-              // NB: sometimes compiler does not inline loop function with 'foreach' statement inside
               <[
-                def parseTree = $obj;
-                def e         = parseTree.GetEnumerator();
-                def items     =
-                  if (e.MoveNext())
-                  {
-                    ..$argExprs;
-                    def buffer = System.Collections.Generic.List(parseTree.Count * 2);
-                    do
-                    {
-                      def node = e.Current;
-                      // TODO: what if AstList is ambiguous?
-                      buffer.AddRange($itemExpr);
-                    }
-                    while (e.MoveNext());
-                    buffer.ToArray()
-                  }
-                  else null;
-                $(Environment.GetAstType(astSymbol) : typed).AstList(parseTree : Nitra.Located, items)
+                def buffer = System.Collections.Generic.List(parseTree.Count * 2);
+                do
+                {
+                  def node = e.Current;
+                  // TODO: what if AstList is ambiguous?
+                  buffer.AddRange($itemExpr);
+                }
+                while (e.MoveNext());
+                buffer.ToArray()
               ]>
             })
 
           | ConcatOptions(path, args, astSymbol, itemPath) =>
-            CompileParseTreeMemberAccess(path, AstType.List(expr.Location, astSymbol), true, fun (obj)
+            CompileListConversion(path, args, astSymbol, itemPath, AstType.Option(itemPath, astSymbol), fun (itemExpr)
             {
-              def (argExprs, itemExpr) = callItemGetAst(args, itemPath, AstType.Option(expr.Location, astSymbol));
-              // NB: sometimes compiler does not inline loop function with 'foreach' statement inside
               <[
-                def parseTree = $obj;
-                def e         = parseTree.GetEnumerator();
-                def items     =
-                  if (e.MoveNext())
-                  {
-                    ..$argExprs;
-                    def buffer = System.Collections.Generic.List(parseTree.Count);
-                    do
-                    {
-                      def node = e.Current;
-                      // TODO: what if AstOption is ambiguous?
-                      def ast = $itemExpr;
-                      when (ast.HasValue)
-                        buffer.Add(ast.Value);
-                    }
-                    while (e.MoveNext());
-                    buffer.ToArray()
-                  }
-                  else null;
-                $(Environment.GetAstType(astSymbol) : typed).AstList(parseTree : Nitra.Located, items)
+                def buffer = System.Collections.Generic.List(parseTree.Count);
+                do
+                {
+                  def node = e.Current;
+                  // TODO: what if AstOption is ambiguous?
+                  def ast = $itemExpr;
+                  when (ast.HasValue)
+                    buffer.Add(ast.Value);
+                }
+                while (e.MoveNext());
+                buffer.ToArray()
               ]>
             })
 
@@ -383,9 +424,10 @@ namespace Nitra.Compiler
     {
       assert(_nodeTb != null);
 
+      def loc = AstLocationContext.Root();
       foreach (syntaxMapping in this.RuleSymbol.SyntaxMappings)
       {
-        def code = CompileSyntaxMapping(syntaxMapping.Expression, () => <[ this ]>);
+        def code = CompileSyntaxMapping(syntaxMapping.Expression, loc);
         DefineGetAstMethod(_nodeTb, syntaxMapping, NemerleModifiers.Public %| NemerleModifiers.Virtual, code)
       }
     }
@@ -394,9 +436,10 @@ namespace Nitra.Compiler
     {
       assert(_nodeTb != null);
 
+      def loc = AstLocationContext.Root();
       foreach (syntaxMapping in this.RuleSymbol.SyntaxMappings)
       {
-        def code = CompileSyntaxMapping(syntaxMapping.Expression, () => <[ this ]>);
+        def code = CompileSyntaxMapping(syntaxMapping.Expression, loc);
         DefineGetAstMethod(_nodeTb, syntaxMapping, NemerleModifiers.Public %| NemerleModifiers.Override, code)
       }
     }
