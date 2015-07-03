@@ -1,5 +1,6 @@
 ﻿using Nitra.ProjectSystem;
 using Nitra.Runtime;
+using Nitra.Model;
 
 using Nemerle;
 using Nemerle.Collections;
@@ -9,8 +10,6 @@ using Nemerle.Utility;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-
-using G = NitraSyntaxParseTree;
 
 namespace Nitra.Typing
 {
@@ -29,6 +28,7 @@ namespace Nitra.Typing
     public Name   : string;
   }
 
+  public type PrecedenceOrderList = option[Location * list[Identifier]];
   public type PrecedenceRelations = list[PrecedenceRelation];
 
   public abstract class PrecedenceContext : Context
@@ -40,24 +40,6 @@ namespace Nitra.Typing
 
     public abstract GetPrecedence() : option[SymbolRef[PrecedenceSymbol]];
     public virtual Typing() : void {}
-
-    public static Make(parent : Context, owner : IPrecedenceSymbolOwner, symbol : PrecedenceSymbol, node : G.RuleBodyMember.Precedence) : Context
-    {
-      match (node.PrecedenceName)
-      {
-        | Zero =>
-          when (node.Order.HasValue)
-            symbol.Node.Project.Error(node.Order, "Order not allowed for zero precedence.");
-          PrecedenceZeroContext(parent);
-        | Name =>
-          //TODO добавить проверку порядка контекстов
-          if (symbol != null)
-            PrecedenceNamedContext(parent, owner, symbol, node);
-          else
-            parent;
-        | _    => assert3(false);
-      }
-    }
 
     public static MakePrecedenceRelations(context : Context) : PrecedenceRelations * list[Precedence]
     {
@@ -86,7 +68,7 @@ namespace Nitra.Typing
               when (context.Relations.Count == 0)
                 relations.Add(PrecedenceRelation(symbol, prevContext.Symbol.Name, context.Symbol.Name));
             else when (context.Relations.Count == 0)
-              context.Project.Error(context.Node.PrecedenceName.Location, "Implicit precedence can't follow explicit precedence.");
+              context.Error(context.Name, "Implicit precedence can't follow explicit precedence.");
           }
           prevContext = context;
           relations.AddRange(context.Relations);
@@ -139,17 +121,19 @@ namespace Nitra.Typing
 
   public sealed class PrecedenceNamedContext : PrecedenceContext
   {
-    public Symbol    : PrecedenceSymbol;
-    public Owner     : IPrecedenceSymbolOwner;
-    public Node      : G.RuleBodyMember.Precedence;
-    public Relations : List[PrecedenceRelation] = List();
+    public  Symbol    : PrecedenceSymbol;
+    public  Owner     : IPrecedenceSymbolOwner;
+    public  Relations : List[PrecedenceRelation] = List();
+    public  Name      : Identifier;
+    private _order    : PrecedenceOrderList;
 
-    public this(parent : Context, owner : IPrecedenceSymbolOwner, symbol : PrecedenceSymbol, node : G.RuleBodyMember.Precedence)
+    public this(parent : Context, owner : IPrecedenceSymbolOwner, symbol : PrecedenceSymbol, name : Identifier, order : PrecedenceOrderList)
     {
       base(parent);
       Symbol = symbol;
       Owner  = owner;
-      Node   = node;
+      Name   = name;
+      _order = order;
     }
 
     public AddRelation(relation : PrecedenceRelation) : void
@@ -159,20 +143,16 @@ namespace Nitra.Typing
 
     public override Typing() : void
     {
-      when (Node.Order.HasValue)
+      when (_order is Some((errorLoc, names)))
       {
-        def bind(identifier : G.Identifier)
+        def bind(identifier : Identifier)
         {
-          def location = identifier.Location;
-          def symbols = Owner.Node.BindMany.[PrecedenceSymbol](location);
+          def symbols = Owner.Node.BindMany.[PrecedenceSymbol](identifier.Value);
           def symbols = match (symbols)
           {
             | []      => 
-              if (Owner is ExtendSyntaxSymbol as owner)
-                if (owner.Extend.HasValue)
-                  owner.Extend.GetValue(Symbol.Node.Project).Node.BindMany.[PrecedenceSymbol](location);
-                else
-                  [];
+              if (Owner is ExtendSyntaxSymbol(Extend = SymbolRef.Some(extendRule)))
+                extendRule.Node.BindMany.[PrecedenceSymbol](identifier.Value);
               else
                 [];
             | symbols => symbols
@@ -180,13 +160,13 @@ namespace Nitra.Typing
           match (symbols)
           {
             | [symbol]    => symbol
-            | []          => Symbol.Node.Project.Error(location, "Undeclared precedence."); null
-            | symbol :: _ => symbol.Node.Project.Error(location, "Ambiguous precedence."); symbol
+            | []          => this.Error(identifier, "Undeclared precedence."); null
+            | symbol :: _ => this.Error(identifier, "Ambiguous precedence."); symbol
           }
         }
-        def symbols = Node.Order.Value.Item2.Item1.Map(bind);
+        def symbols = names.Map(bind);
         unless (symbols.Count(s => s : object == Symbol) == 1)
-          Symbol.Node.Project.Error(Node.Order.Location, "On of precedencies must be same as current precedence.");
+          this.Error(errorLoc, "On of precedencies must be same as current precedence.");
         mutable prevSymbol = null;
         foreach (symbol in symbols)
         {
