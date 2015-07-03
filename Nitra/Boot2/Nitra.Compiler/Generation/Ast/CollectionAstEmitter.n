@@ -1,0 +1,160 @@
+﻿using Nitra.Typing;
+using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Compiler
+{
+  internal abstract class CollectionAstEmitter : BaseAstEmitter
+  {
+    public override Environment : EmitterEnvironment { get }
+    public          Symbol      : AstSymbol          { get }
+
+    public this(environment : EmitterEnvironment, symbol : AstSymbol)
+    {
+      Environment = environment;
+      Symbol      = symbol;
+    }
+
+    protected FileType : FixedType { get { Environment.FileTypeVar;  } }
+    protected SpanType : FixedType { get { Environment.NSpanTypeVar; } }
+
+    mutable _baseTb        : TypeBuilder;
+    mutable _concreteTb    : TypeBuilder;
+    mutable _ambiguousTb   : TypeBuilder;
+
+    protected abstract CreateBaseTb(ownerTb : TypeBuilder, itemType : FixedType) : TypeBuilder;
+    protected abstract CreateConcreteTb(ownerTb : TypeBuilder, itemType : FixedType,  baseType : FixedType) : TypeBuilder;
+    protected abstract CreateAmbiguousTb(ownerTb : TypeBuilder, itemType : FixedType, baseType : FixedType) : TypeBuilder;
+    protected abstract MakeEvalPropertiesBody(
+      astProperties        : SCG.Dictionary[DependentAstPropertySymbol, DependentAstPropertyRef],
+      collectionProperties : SCG.Dictionary[DependentAstPropertySymbol, DependentAstPropertyRef.Compiling],
+      dependentProperties  : array[DependentAstPropertySymbol]) : PExpr;
+
+    public DefineTypes(ownerTb : TypeBuilder) : void
+    {
+      Util.locate(Symbol.FirstLocation.NLocation(),
+      {
+        def itemType = Environment.GetAstType(Symbol);
+
+        assert(_baseTb == null);
+        _baseTb = CreateBaseTb(ownerTb, itemType);
+        def baseType = _baseTb.GetMemType();
+
+        assert(_concreteTb == null);
+        _concreteTb = CreateConcreteTb(ownerTb, itemType, baseType);
+
+        assert(_ambiguousTb == null);
+        _ambiguousTb = CreateAmbiguousTb(ownerTb, itemType, baseType);
+      })
+    }
+
+    public DefineMembers(astProperties : SCG.Dictionary[DependentAstPropertySymbol, DependentAstPropertyRef]) : void
+    {
+      assert(_baseTb != null);
+
+      def define()
+      {
+        def dependentProperties = Symbol.AllProperties.OfType.[DependentAstPropertySymbol]().ToArray();
+        when (dependentProperties.Length == 0)
+          return;
+
+        def bits                 = _concreteTb.GetBitFieldManager();
+        def collectionProperties = SCG.Dictionary();
+        foreach (propertySymbol in dependentProperties)
+        {
+          DefineInterfaceDependentProperty(propertySymbol, _baseTb);
+          def bit          = bits.Allocate();
+          def propertyRef = DependentAstPropertyRef.Compiling(propertySymbol, bit.Index, bit);
+          DefineDependentProperty(_concreteTb, propertyRef, NemerleModifiers.Public);
+          DefineAmbiguousDependentProperty(_ambiguousTb, propertyRef, NemerleModifiers.Public);
+
+          collectionProperties.Add(propertySymbol, propertyRef);
+        }
+
+        DefineIsPropertyEvaluatedMethod(_concreteTb, NemerleModifiers.Override);
+        DefineResetPropertiesMethod(_concreteTb, null);
+        DefineIsAllPropertiesEvaluatedProperty(_concreteTb, null);
+        DefineEvalPropertiesMethod(_concreteTb, MakeEvalPropertiesBody(astProperties, collectionProperties, dependentProperties));
+      }
+
+      Util.locate(Symbol.FirstLocation.NLocation(), Environment.Manager.MacroColors.InGlobalColor(define))
+    }
+
+    protected static LinkProperties(body : SCG.List[PExpr], sourceObj : PExpr, source : DependentAstPropertyRef, targetObj : PExpr, target : DependentAstPropertyRef) : void
+    {
+      body.Add(<[
+        when ($(GenerateHasValueCheck(sourceObj, source)) && ! $(GenerateHasValueCheck(targetObj, target)))
+        {
+          $targetObj.$(target.Symbol.Name : usesite) = $sourceObj.$(source.Symbol.Name : usesite)
+        }
+      ]>);
+    }
+
+    protected static SetPropertyValue(body : SCG.List[PExpr], target : DependentAstPropertyRef, value : PExpr) : void
+    {
+      def targetObj = <[ this ]>;
+      body.Add(<[
+        unless($(GenerateHasValueCheck(targetObj, target)))
+        {
+          $targetObj.$(target.Symbol.Name : usesite) = $value
+        }
+      ]>);
+    }
+
+    private DefineAmbiguousDependentProperty(tb : TypeBuilder, propertyRef : DependentAstPropertyRef, modifiers : NemerleModifiers) : void
+    {
+      def propertyType = TypeCompiler.CompileDependentPropertyType(propertyRef.Symbol);
+      def name         = propertyRef.Symbol.Name;
+      def mods         = AttributesAndModifiers(modifiers, [MakeDependentPropertyAttribute(propertyRef.Symbol, propertyRef.Index)]);
+      match (propertyRef.Symbol.Direction)
+      {
+        | In  =>
+          tb.Define(<[ decl:
+            ..$mods $(name : usesite) : $(propertyType : typed)
+            {
+              get { this.Ambiguities[0].$(name : usesite) }
+              set { foreach (ambiguity in this.Ambiguities) ambiguity.$(name : usesite) = value; }
+            }
+          ]>);
+
+        | Out =>
+          tb.Define(<[ decl:
+            ..$mods $(name : usesite) : $(propertyType : typed)
+            {
+              get { this.Ambiguities[0].$(name : usesite) }
+            }
+          ]>);
+      }
+
+      def isEvaluatedName = GetIsEvaluatedPropertyName(propertyRef.Symbol);
+      def isEvaluatedMods = AttributesAndModifiers(modifiers, []);
+      tb.Define(<[ decl:
+        ..$isEvaluatedMods $(isEvaluatedName : usesite) : bool
+        {
+          get { this.Ambiguities[0].$(isEvaluatedName : usesite) }
+        }
+      ]>);
+    }
+
+    public Emit() : void
+    {
+      assert(_baseTb != null);
+
+      _baseTb.Compile();
+      _concreteTb.Compile();
+      _ambiguousTb.Compile();
+    }
+  }
+}

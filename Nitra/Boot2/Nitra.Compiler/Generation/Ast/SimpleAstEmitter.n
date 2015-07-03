@@ -19,13 +19,15 @@ namespace Nitra.Compiler
     private         _symbol            : SimpleAstSymbol;
     private mutable _tb                : TypeBuilder;
     private mutable _ambiguousTb       : TypeBuilder;
-    private         _collectionEmitter : CollectionEmitter;
+    private         _listEmitter       : ListAstEmitter;
+    private         _optionEmitter     : OptionAstEmitter;
 
     public this(environment : EmitterEnvironment, symbol : SimpleAstSymbol)
     {
       base(environment, environment.NamespaceOfSymbol(symbol));
-      this._symbol = symbol;
-      this._collectionEmitter = CollectionEmitter(this, symbol);
+      this._symbol        = symbol;
+      this._listEmitter   = ListAstEmitter(environment, symbol);
+      this._optionEmitter = OptionAstEmitter(environment, symbol);
     }
 
     public override DefineTypes() : void
@@ -51,7 +53,8 @@ namespace Nitra.Compiler
         assert(_ambiguousTb == null);
         _ambiguousTb = DefineAmbiguousAst(_tb);
 
-        _collectionEmitter.DefineTypes(_tb);
+        _listEmitter.DefineTypes(_tb);
+        _optionEmitter.DefineTypes(_tb);
       });
     }
 
@@ -69,7 +72,8 @@ namespace Nitra.Compiler
 
       def initStatements = SCG.List();
       initStatements.Add(<[ this.File = File ]>);
-      initStatements.Add(<[ this.Span = Span ]>);
+      initStatements.Add(<[ mutable isSpanSet ]>);
+      initStatements.Add(<[ unless (TryEvalSpan) { this.Span = Span; isSpanSet = true } ]>);
 
       def missingBody = SCG.List();
       missingBody.Add(<[ this.File = file ]>);
@@ -80,7 +84,7 @@ namespace Nitra.Compiler
       def defineSimpleProperty(propertySymbol : SimpleAstPropertySymbol) : void
       {
         def name             = propertySymbol.Name;
-        def propertyType     = Environment.TypeCompiler.CompileSimplePropertyType(propertySymbol);
+        def propertyType     = TypeCompiler.CompileSimplePropertyType(propertySymbol);
 
         initParameters.Add(<[ parameter : $(name : usesite) : $(propertyType.Type : typed) ]>);
         initStatements.Add(<[ this.$(name : usesite) = $(name : usesite) ]>);
@@ -90,6 +94,7 @@ namespace Nitra.Compiler
         match (propertyType)
         {
           | Ast         =>
+            initStatements.Add(<[ when ($(name : usesite).File : object == File) UpdateSpan(ref isSpanSet, $(name : usesite).Span) ]>);
             acceptBody.Add(<[ visitor.Visit(this.$(name : usesite)); ]>);
 
             if (propertyType.Type.Equals(thisType))
@@ -97,8 +102,13 @@ namespace Nitra.Compiler
             else unless (propertySymbol.AstType.IsVoid)
               missingBody.Add(<[ this.$(name : usesite) = $(GetMissingAstCtor(Environment, propertySymbol.AstType))(file, span) ]>);
 
-          | ParsedValue => missingBody.Add(<[ this.$(name : usesite) = Nitra.ParsedValue(span.StartPos) ]>);
-          | Span        => missingBody.Add(<[ this.$(name : usesite) = span ]>);
+          | ParsedValue =>
+            initStatements.Add(<[ UpdateSpan(ref isSpanSet, $(name : usesite).Span) ]>);
+            missingBody.Add(<[ this.$(name : usesite) = Nitra.ParsedValue(span.StartPos) ]>);
+
+          | Span        =>
+            initStatements.Add(<[ UpdateSpan(ref isSpanSet, $(name : usesite)) ]>);
+            missingBody.Add(<[ this.$(name : usesite) = span ]>);
         }
       }
 
@@ -120,7 +130,7 @@ namespace Nitra.Compiler
       def defineProjectedProperty(propertySymbol : ProjectedAstPropertySymbol) : void
       {
         def name         = propertySymbol.Name;
-        def propertyType = Environment.TypeCompiler.CompileProjectedPropertyType(propertySymbol);
+        def propertyType = TypeCompiler.CompileProjectedPropertyType(propertySymbol);
         DefineSimpleProperty(name, propertyType, _tb, _ambiguousTb);
         projectedProps.Add(propertySymbol);
 
@@ -138,6 +148,9 @@ namespace Nitra.Compiler
         | _ => ()
       }
 
+      initParameters.Add(<[ parameter: TryEvalSpan : bool = false ]>);
+      initStatements.Add(<[ unless (isSpanSet) this.Span = Span ]>);
+
       CompileProjection(projectedProps, initStatements);
 
       _tb.Define(<[ decl:
@@ -153,7 +166,8 @@ namespace Nitra.Compiler
       DefineIsAllPropertiesEvaluatedProperty(_tb, _ambiguousTb);
       DefineDependentPropertiesEvaluation(_tb, _symbol);
 
-      _collectionEmitter.DefineMembers(dependentProps);
+      _listEmitter.DefineMembers(dependentProps);
+      _optionEmitter.DefineMembers(dependentProps);
 
       when (acceptBody.Count > 0)
         _tb.Define(<[ decl: public override Accept(visitor : Nitra.Declarations.IAstVisitor) : void { ..$acceptBody } ]>);
@@ -167,7 +181,8 @@ namespace Nitra.Compiler
       assert(_ambiguousTb != null);
       _ambiguousTb.Compile();
 
-      _collectionEmitter.Emit();
+      _listEmitter.Emit();
+      _optionEmitter.Emit();
     }
   }
 }
