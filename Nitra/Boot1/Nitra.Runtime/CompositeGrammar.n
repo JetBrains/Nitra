@@ -1,6 +1,7 @@
 ﻿using Nitra.Internal;
 using Nitra.Internal.Recovery;
 using Nitra.Runtime;
+using Nitra.Runtime.GraphUtils;
 using Nitra.Runtime.Reflection;
 
 using Nemerle;
@@ -63,6 +64,8 @@ namespace Nitra
       Grammars = grammars;
       ParserHost = parserHost;
 
+      MakeBindingPowerMap();
+
       def rules = Grammars.SelectMany(gd => gd.Rules).NToArray();
 
       def extensionRuleDescriptors = rules
@@ -71,9 +74,9 @@ namespace Nitra
         .Map((baseRd, extetions) =>
         {
           def prefix = extetions.OfType.[PrefixRuleDescriptor]().NToArray();
-          def postfix = extetions.OfType.[PostfixRuleDescriptor]().NToArray();
-          Array.Sort.[PostfixRuleDescriptor](postfix, ((l, r) => l.BindingPower.CompareTo(r.BindingPower)));
-          (baseRd, (prefix, postfix))
+          def postfix = extetions.OfType.[PostfixRuleDescriptor]().MapToArray(rd => (rd, GetBindingPower(baseRd, rd.BindingPower)));
+          Array.Sort.[PostfixRuleDescriptor * int](postfix, (((_, lbp), (_, rbp)) => lbp.CompareTo(rbp)));
+          (baseRd, (prefix, postfix.MapToArray((rd, _bp) => rd)))
         });
 
       foreach (extensibleRule in rules.OfType.[ExtensibleRuleDescriptor]())
@@ -93,7 +96,7 @@ namespace Nitra
         kv.Value.Init(ruleIdBuilder);
 
       foreach (extensibleRule in ExtensibleRules)
-        _ = GetExtensibleRuleParser(extensibleRule.Key, 0);
+        _ = GetExtensibleRuleParser(extensibleRule.Key, "0");
 
       InitTokens();
 
@@ -112,6 +115,84 @@ namespace Nitra
 
       CollectTokens();
       CollectFirstTokens(ruleIdBuilder);
+    }
+
+    private BindingPowerMap : Hashtable[ExtensibleRuleDescriptor, Hashtable[string, int]] = Hashtable();
+    public GetBindingPower(rd : ExtensibleRuleDescriptor, bpName : string) : int
+    {
+      mutable map;
+      def defaultBP(bpName)
+      {
+        if (bpName.StartsWith("+"))
+          3
+        else
+          2
+      }
+      def bp = if (BindingPowerMap.TryGetValue(rd, out map))
+      {
+        mutable bp;
+        if (map.TryGetValue(bpName, out bp))
+          bp
+        else
+          defaultBP(bpName)
+      }
+      else
+        defaultBP(bpName);
+      bp
+    }
+
+    [Record]
+    private class Precedence : GraphNodeWithConnections[Precedence]
+    {
+      public Name : string;
+    }
+
+    private MakeBindingPowerMap() : void
+    {
+      def allPrecedences = Hashtable();
+      def getPrecedence(descriptor, name)
+      {
+        mutable precedences;
+        unless (allPrecedences.TryGetValue(descriptor, out precedences))
+        {
+          precedences = Hashtable();
+          allPrecedences.Add(descriptor, precedences);
+        }
+        mutable precedence;
+        unless (precedences.TryGetValue(name, out precedence))
+        {
+          precedence = Precedence(name);
+          precedences.Add(name, precedence);
+        }
+        precedence
+      }
+      foreach (grammar in Grammars)
+      {
+        foreach ((rd, allPrecedences) in grammar.AllPrecedences)
+          foreach (name in allPrecedences)
+            _ = getPrecedence(rd, name);
+        foreach ((rd, relations) in grammar.BindingPowerRelations)
+          foreach ((loName, hiName) in relations)
+          {
+            def lo = getPrecedence(rd, loName);
+            def hi = getPrecedence(rd, hiName);
+            _ = hi.AddConnection(lo);
+          }
+      }
+      foreach ((descriptor, precedences) in allPrecedences.KeyValuePairs)//TODO: генерация сообщений об ошибках в случае циклов и не полной упорядоченности приоритетов.
+      {
+        def bpMap = Hashtable();
+        bpMap["0"]  = 0;
+        bpMap["+0"] = 1;
+        def groups = GraphAlgorithms.FindStronglyConnectedComponents(precedences.Values);
+        foreach ((group, bindingPower) in GraphAlgorithms.FindMaximalDistanceToLeafInDAG(groups))
+          foreach (precedence in group.Nodes)
+          {
+            bpMap[precedence.Name]       = (bindingPower + 1) * 2;
+            bpMap["+" + precedence.Name] = (bindingPower + 1) * 2 + 1;
+          }
+        BindingPowerMap.Add(descriptor, bpMap);
+      }
     }
 
     private InitMandatoryTokenCount() : void
@@ -414,7 +495,7 @@ namespace Nitra
         visitSimple(parser);
 
       foreach ((descriptor, parserData) when descriptor.IsStartRule in ExtensibleRules.KeyValuePairs)
-        visitExtensible(parserData.Parsers[0]);
+        visitExtensible(parserData.GetParser("0"));
     }
 
     public GetTokenParser(subrule : SubruleInfo) : TokenParser
@@ -447,7 +528,7 @@ namespace Nitra
       }
     }
     
-    public GetExtensibleRuleParser(rd : ExtensibleRuleDescriptor, bindingPower : int) : ExtensibleRuleParser
+    public GetExtensibleRuleParser(rd : ExtensibleRuleDescriptor, bindingPower : string) : ExtensibleRuleParser
     {
       ExtensibleRules[rd].GetParser(bindingPower)
     }
@@ -462,7 +543,7 @@ namespace Nitra
       match (descriptor)
       {
         | desc is SimpleRuleDescriptor     => GetSimpleRuleParser(desc)
-        | desc is ExtensibleRuleDescriptor => GetExtensibleRuleParser(desc, 0)
+        | desc is ExtensibleRuleDescriptor => GetExtensibleRuleParser(desc, "0")
         | _ => assert3(false, "GetStartRuleParser support only SimpleRuleDescriptor or ExtensibleRuleDescriptor")
       }
     }
@@ -721,15 +802,15 @@ a:visited, a:link, a:active
       }
       def renderPrefix(parser : ExtensionRuleParser, maxNameLen : int) : void
       {
-        def (bp, baseRuleDescriptor) = if (parser.Descriptor is PostfixRuleDescriptor as postfix) (postfix.BindingPower, postfix.BaseRule) else (-1, null);
+        def (bp, baseRuleDescriptor) = if (parser.Descriptor is PostfixRuleDescriptor as postfix) (postfix.BindingPower, postfix.BaseRule) else ("?", null);
         def info   = parser.Reflection(parser.RuleId) :> SequenceInfo.Root;
         def result = ruleHeader(XElement("span", "  | "), parser, parser.Descriptor.Name, maxNameLen);
         result.Add(" = ");
-        when (bp >= 0)
+        when (bp != "?")
         {
-          def baseRule = this.ExtensibleRules[baseRuleDescriptor].GetParser(0);
+          def baseRule = this.ExtensibleRules[baseRuleDescriptor].GetParser("0");
           result.Add(XElement("span", " ", renderAHref(baseRule.Descriptor, baseRule.Descriptor.Name)));
-          when (bp > 0)
+          when (bp != "0")
             result.Add(" : " + bp + " ");
         }
         convertSubrules(result, info.Subrules);

@@ -1,0 +1,194 @@
+﻿using Nitra.ProjectSystem;
+using Nitra.Runtime;
+using Nitra.Model;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Typing
+{
+  [Record]
+  public class PrecedenceRelation
+  {
+    public Symbol : IPrecedenceSymbolOwner;
+    public Low : string;
+    public Hi  : string;
+  }
+
+  [Record]
+  public class Precedence
+  {
+    public Symbol : IPrecedenceSymbolOwner;
+    public Name   : string;
+  }
+
+  public type PrecedenceOrderList = option[Location * list[Identifier]];
+  public type PrecedenceRelations = list[PrecedenceRelation];
+
+  public abstract class PrecedenceContext : Context
+  {
+    public this(parent : Context)
+    {
+      base(parent);
+    }
+
+    public abstract GetPrecedence() : PrecedenceReference;
+    public virtual Typing() : void {}
+
+    public static MakePrecedenceRelations(context : Context) : PrecedenceRelations * list[Precedence]
+    {
+      def allPrecedences = HashSet();
+      def contexts = List();
+      def collectContexts(_)
+      {
+        | context is PrecedenceStartContext => contexts.Add(context); 
+        | context is PrecedenceContext      => contexts.Add(context); collectContexts(context.Parent);
+        | context                           =>                        collectContexts(context.Parent);
+      }
+      collectContexts(context);
+      contexts.Reverse();
+      def relations = List();
+      mutable prevContext = null;
+      mutable symbol      = null;
+      foreach (context in contexts)
+      {
+        | context is PrecedenceStartContext => symbol = context.Owner;
+        | _       is PrecedenceZeroContext  => prevContext = null;
+        | context is PrecedenceNamedContext =>
+          _ = allPrecedences.Add(context.Symbol.Name);
+          when (prevContext != null)
+          {
+            if (prevContext.Relations.Count == 0)
+              when (context.Relations.Count == 0)
+                relations.Add(PrecedenceRelation(symbol, prevContext.Symbol.Name, context.Symbol.Name));
+            else when (context.Relations.Count == 0)
+              context.Error(context.Name, "Implicit precedence can't follow explicit precedence.");
+          }
+          prevContext = context;
+          relations.AddRange(context.Relations);
+        | _ => assert3(false);
+      }
+      (relations.NToList(), allPrecedences.Map(name => Precedence(symbol, name)));
+    }
+  }
+
+  public sealed class PrecedenceStartContext : PrecedenceContext
+  {
+    public Owner : IPrecedenceSymbolOwner;
+    public this(parent : Context, owner : IPrecedenceSymbolOwner)
+    {
+      base(parent);
+      Owner = owner;
+    }
+
+    public override GetPrecedence() : PrecedenceReference
+    {
+      PrecedenceReference.Zero();
+    }
+  }
+
+  public sealed class PrecedenceZeroContext : PrecedenceContext
+  {
+    public this(parent : Context)
+    {
+      base(parent);
+    }
+
+    public override GetPrecedence() : PrecedenceReference
+    {
+      PrecedenceReference.Zero();
+    }
+  }
+
+  public sealed class PrecedenceNoneContext : PrecedenceContext
+  {
+    public this()
+    {
+      base(null);
+    }
+
+    public override GetPrecedence() : PrecedenceReference
+    {
+      PrecedenceReference.Zero();
+    }
+  }
+
+  public sealed class PrecedenceNamedContext : PrecedenceContext
+  {
+    public  Symbol    : PrecedenceSymbol;
+    public  Owner     : IPrecedenceSymbolOwner;
+    public  Relations : List[PrecedenceRelation] = List();
+    public  Name      : Identifier;
+    private _order    : PrecedenceOrderList;
+
+    public this(parent : Context, owner : IPrecedenceSymbolOwner, symbol : PrecedenceSymbol, name : Identifier, order : PrecedenceOrderList)
+    {
+      base(parent);
+      Symbol = symbol;
+      Owner  = owner;
+      Name   = name;
+      _order = order;
+    }
+
+    public AddRelation(relation : PrecedenceRelation) : void
+    {
+      Relations.Add(relation);
+    }
+
+    public override Typing() : void
+    {
+      when (_order is Some((errorLoc, names)))
+      {
+        def bind(identifier : Identifier)
+        {
+          def symbols = Owner.Node.BindMany.[PrecedenceSymbol](identifier.Value);
+          def symbols = match (symbols)
+          {
+            | []      => 
+              if (Owner is ExtendSyntaxSymbol(Extend = SymbolRef.Some(extendRule)))
+                extendRule.Node.BindMany.[PrecedenceSymbol](identifier.Value);
+              else
+                [];
+            | symbols => symbols
+          }
+          match (symbols)
+          {
+            | [symbol]    => symbol
+            | []          => this.Error(identifier, "Undeclared precedence."); null
+            | symbol :: _ => this.Error(identifier, "Ambiguous precedence."); symbol
+          }
+        }
+        def symbols = names.Map(bind);
+        unless (symbols.Count(s => s : object == Symbol) == 1)
+          this.Error(errorLoc, "On of precedencies must be same as current precedence.");
+        mutable prevSymbol = null;
+        foreach (symbol in symbols)
+        {
+          when (prevSymbol != null && symbol != null)
+            AddRelation(PrecedenceRelation(Owner, prevSymbol.Name.ToString(), symbol.Name.ToString()));
+          prevSymbol = symbol;
+        }
+      }
+    }
+
+    public override GetPrecedence() : PrecedenceReference
+    {
+      PrecedenceReference.Name(SymbolRef.Some(Location.Default, true, Symbol));//TODO proper location
+    }
+  }
+
+  [Record]
+  public class PrecedenceInfo
+  {
+    public Context : PrecedenceContext { get; }
+    public IsRightAssociative : bool { get; }
+    public IsStrong : bool { get; }
+    public static None : PrecedenceInfo { get; default PrecedenceInfo(PrecedenceNoneContext(), false, false) }
+  }
+}

@@ -17,8 +17,9 @@ namespace Nitra.Compiler
   public sealed class SplicableSyntaxModuleConverter
   {
     _rewriteOperations  : SCG.List[SyntaxRuleSymbol * SyntaxRuleSymbol]      = SCG.List();
-    _ruleMapTable       : SCG.Dictionary[SyntaxRuleSymbol, SyntaxRuleSymbol] = SCG.Dictionary();
-    _baseRulesToResolve : SCG.List[Symbol * ExtensibleRuleSymbol] = SCG.List();
+    _ruleMapTable       : SCG.Dictionary[Symbol, Symbol]                     = SCG.Dictionary();
+    _baseRulesToResolve : SCG.List[Symbol * ExtensibleRuleSymbol]            = SCG.List();
+    _syntaxModules      : SCG.List[SyntaxModuleSymbol * ChemicalSyntaxModuleSymbol] = SCG.List();
     _project            : NitraProject;
 
     public this(project : NitraProject)
@@ -35,6 +36,8 @@ namespace Nitra.Compiler
         .SetExternalImports([])
         .SetTokenLiterals([])
         .SetSpliceSource(SymbolRef.Some(Location.Default, true, syntaxModule));
+
+      _syntaxModules.Add(syntaxModule, splicableSyntaxModule);
 
       _ = syntaxModule.Node.Parent.AddAndReport(splicableSyntaxModule, splicableSyntaxModule.FirstLocation);
 
@@ -84,6 +87,7 @@ namespace Nitra.Compiler
                 .SetSyntaxMappings([])
                 .SetSpliceSource(SymbolRef.Some(Location.Default, true, ruleSymbol));
 
+              _ruleMapTable.Add(ruleSymbol, rewrittenRuleSymbol);
               _baseRulesToResolve.Add(rewrittenRuleSymbol, extendingRuleSymbol);
 
               _ = targetNode.AddAndReport(rewrittenRuleSymbol, rewrittenRuleSymbol.FirstLocation);
@@ -95,6 +99,7 @@ namespace Nitra.Compiler
                 .SetDeclarationSite(declarationSite)
                 .SetIsToken(extendSymbol.IsToken);
 
+              _ruleMapTable.Add(extendSymbol, rewrittenExtendSymbol);
               _baseRulesToResolve.Add(rewrittenExtendSymbol, extendingRuleSymbol);
 
               _ = targetNode.AddAndReport(rewrittenExtendSymbol, rewrittenExtendSymbol.FirstLocation);
@@ -104,7 +109,25 @@ namespace Nitra.Compiler
           }
         }
       }
-      enumerateRules(syntaxModule.Node, splicableSyntaxModule.Node, splicableSyntaxModule)
+      enumerateRules(syntaxModule.Node, splicableSyntaxModule.Node, splicableSyntaxModule);
+
+      def newPrecedences = SCG.List();
+      foreach (p in syntaxModule.AllPrecedences)
+      {
+        mutable newOwner;
+        when (_ruleMapTable.TryGetValue(p.Symbol :> Symbol, out newOwner))
+          newPrecedences.Add(Precedence(newOwner :> IPrecedenceSymbolOwner, p.Name));
+      }
+      _ = splicableSyntaxModule.SetAllPrecedences(newPrecedences.ToNList());
+
+      def newRelations = SCG.List();
+      foreach (r in syntaxModule.PrecedenceRelations)
+      {
+        mutable newOwner;
+        when (_ruleMapTable.TryGetValue(r.Symbol :> Symbol, out newOwner))
+          newRelations.Add(PrecedenceRelation(newOwner :> IPrecedenceSymbolOwner, r.Hi, r.Low));
+      }
+      _ = splicableSyntaxModule.SetPrecedenceRelations(newRelations.ToNList());
     }
 
     public ResolveBaseRules() : void
@@ -125,7 +148,7 @@ namespace Nitra.Compiler
     {
       foreach ((sourceRuleSymbol, rewrittenRuleSymbol) in _rewriteOperations)
       {
-        def newSeq = Rewrite(rewrittenRuleSymbol.DeclaringModule, sourceRuleSymbol);
+        def newSeq = Rewrite(rewrittenRuleSymbol.DeclaringModule, sourceRuleSymbol, rewrittenRuleSymbol);
         match (rewrittenRuleSymbol)
         {
           | ChemicalBaseSimpleRuleSymbol    as s => _ = s.SetRule(newSeq);
@@ -135,14 +158,25 @@ namespace Nitra.Compiler
       }
     }
 
-    private Rewrite(targetSyntaxModule : SyntaxModuleSymbol, sourceRuleSybmol : SyntaxRuleSymbol) : Rule.Sequence
+    private Rewrite(targetSyntaxModule : SyntaxModuleSymbol, sourceRuleSybmol : SyntaxRuleSymbol, targetRuleSymbol : SyntaxRuleSymbol) : Rule.Sequence
     {
+      def rewriteBp(bp : BindingPowerInfo) : BindingPowerInfo
+      {
+        if (bp.Symbol is PrecedenceReference.Name(SymbolRef.Some(precedence)))
+        {
+          def precedenceOwner = targetRuleSymbol.DeclarationSite :> IPrecedenceSymbolOwner;
+          def newPrecedence   = PrecedenceSymbol.GetPrecedenceSymbol(precedenceOwner, Identifier(targetRuleSymbol.FirstLocation, precedence.Name));
+          BindingPowerInfo(PrecedenceReference.Name(SymbolRef.Some(targetRuleSymbol.FirstLocation, true, newPrecedence)), bp.IsStrong)
+        }
+        else bp
+      }
+
       def rewrite(rule : Rule, prefix : string) : Rule
       {
         def makeSplicable(spliceSyntaxModule : SyntaxModuleSymbol, newRule : Rule, splicableType : ExtensibleRuleSymbol.SplicableRuleType) : Rule
         {
           def splicableSymbol = MakeSplicableRuleSymbol(targetSyntaxModule, spliceSyntaxModule, prefix, newRule, splicableType);
-          def call = Rule.Call(Location.Default, splicableSymbol.Type, newRule.FieldName, SymbolRef.Some(Location.Default, true, splicableSymbol), 0);
+          def call = Rule.Call(Location.Default, splicableSymbol.Type, newRule.FieldName, SymbolRef.Some(Location.Default, true, splicableSymbol), BindingPowerInfo.Zero);
           match (splicableType)
           {
             | None         => assert(false)
@@ -222,12 +256,12 @@ namespace Nitra.Compiler
 
           | Call(SymbolRef.Some(SimpleRuleSymbol as ruleSymbol), bp) when !(ruleSymbol.Type is RuleType.Void) =>
             def target  = if (ruleSymbol.IsToken) ruleSymbol else LookupRewrittenRuleSymbol(ruleSymbol);
-            def newRule = Rule.Call(Location.Default, target.Type, rule.FieldName, SymbolRef.Some(Location.Default, true, target), bp);
+            def newRule = Rule.Call(Location.Default, target.Type, rule.FieldName, SymbolRef.Some(Location.Default, true, target), rewriteBp(bp));
             makeSplicable(ruleSymbol.DeclaringModule, newRule, ExtensibleRuleSymbol.SplicableRuleType.Splice(target.Type))
 
           | Call(SymbolRef.Some(ExtensibleRuleSymbol as ruleSymbol), bp) =>
             def target  = if (ruleSymbol.IsToken) ruleSymbol else LookupRewrittenRuleSymbol(ruleSymbol);
-            def newRule = Rule.Call(Location.Default, target.Type, rule.FieldName, SymbolRef.Some(Location.Default, true, target), bp);
+            def newRule = Rule.Call(Location.Default, target.Type, rule.FieldName, SymbolRef.Some(Location.Default, true, target), rewriteBp(bp));
             if (sourceRuleSybmol is ExtensionRuleSymbol(BaseRule = SymbolRef.Some(baseRuleSymbol)) when baseRuleSymbol == ruleSymbol)
               newRule
             else
@@ -299,11 +333,11 @@ namespace Nitra.Compiler
 
       def seq = [
         Rule.String(Location.Default, "", "$" + prefix, true, null),
-        Rule.Call(Location.Default, identifierEndRule.Type, "", SymbolRef.Some(Location.Default, true, identifierEndRule), 0),
+        Rule.Call(Location.Default, identifierEndRule.Type, "", SymbolRef.Some(Location.Default, true, identifierEndRule), BindingPowerInfo.Zero),
         Rule.String(Location.Default, "", "("),
-        Rule.Call(Location.Default, spliceTextRule.Type, "", SymbolRef.Some(Location.Default, true, spliceTextRule), 0),
+        Rule.Call(Location.Default, spliceTextRule.Type, "", SymbolRef.Some(Location.Default, true, spliceTextRule), BindingPowerInfo.Zero),
         Rule.String(Location.Default, "", ")"),
-        Rule.Call(Location.Default, spaceRule.Type, "", SymbolRef.Some(Location.Default, true, spaceRule), 0),
+        Rule.Call(Location.Default, spaceRule.Type, "", SymbolRef.Some(Location.Default, true, spaceRule), BindingPowerInfo.Zero),
       ];
 
       def symbol = ChemicalBaseExtensionRuleSymbol(Location.Default, "$")

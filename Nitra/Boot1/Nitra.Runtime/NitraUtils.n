@@ -1,0 +1,99 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Late;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.Declarations;
+using Nitra.Runtime.Binding;
+using Nitra.Runtime.Reflection;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+using SCG = System.Collections.Generic;
+
+namespace Nitra
+{
+  public module NitraUtils
+  {
+    public CompleteWord(pos : int, parseResult : IParseResult, astRoot : IAst, replacementSpan : out NSpan) : Seq[object]
+    {
+      def source         = parseResult.SourceSnapshot;
+      def completionList = List.[object]();
+
+      // Получаем информацию о пробельных ветках дерева разбора в области курсора
+      def curretSpan     = NSpan(pos, pos);
+      def spans          = HashSet();
+      def spasesWalker   = VoidRuleWalker(curretSpan);
+      
+      spasesWalker.Walk(parseResult, spans);
+
+      foreach (spanInfo when spanInfo.Span.Contains(curretSpan) && spanInfo.SpanClass != SpanClass.Default in spans)
+        return []; // выходим, если комплит идет в комментарии или грязи
+
+      // вычисляем начало и конец пробельных правил
+
+      mutable spacesStart = pos;
+      mutable spacesEnd   = pos;
+
+      when (spans.Count != 0)
+      {
+        spacesStart = spans.Min(s => s.Span.StartPos);
+        spacesEnd   = spans.Max(s => s.Span.EndPos);
+      }
+
+      // находим цепочку ветвей AST ведущую к позиции комплита
+
+      def visitor = FindNodeAstVisitor(NSpan(spacesStart, spacesEnd));
+      astRoot.Accept(visitor);
+
+      // Вычисляем префикс комплита (если есть). Он будет использоваться для фильтрации списка и будет заменен выбранным словом
+      def span         = if (visitor.Stack.Count > 0) visitor.Stack.Peek().Span else NSpan(pos, pos);
+      def start        = span.StartPos;
+      def prefix       = if (span.EndPos == pos) source.Text.Substring(span.StartPos, span.Length) else "";
+      
+      replacementSpan = if (span.EndPos == pos) span else NSpan(pos, pos);
+      
+      // Находим первую ветку AST в которой есть зависимое свойство Scope и вычисляем по этому Scope список автодополнения
+      // TODO: заменить рефлексию на интерфейсы
+
+      foreach (curr in visitor.Stack)
+      {
+        def scopeProp = curr.GetType().GetProperty("Scope");
+        when (scopeProp != null && late (curr.IsScopeEvaluated) :> bool)
+        {
+          completionList.AddRange(late (curr.Scope.MakeComletionList(prefix)) :> Seq[Symbol2]);
+          break;
+        }
+      }
+
+      // Комплишен по литералам (в соответствии с грамматикой).
+
+      def text         = source.Text.Substring(0, start) + '\xFFFF';
+      def parseSession = parseResult.ParseSession;
+
+      try
+      {
+        // при задании этих свойств, парсер вернет список литералов в исключении LiteralCompletionException
+        parseSession.CompletionStartPos = start;
+        parseSession.CompletionPrefix = prefix;
+        parseSession.OnRecovery = ParseSession.SmartRecovery;
+        _ = parseSession.Parse(text);
+      }
+      catch
+      { 
+        | ex is LiteralCompletionException => completionList.AddRange(ex.Literals);
+        | _ => ()
+      }
+      finally
+      {
+        parseSession.CompletionStartPos = -1;
+        parseSession.CompletionPrefix = null;
+      }
+
+      completionList
+    }
+  }
+}
