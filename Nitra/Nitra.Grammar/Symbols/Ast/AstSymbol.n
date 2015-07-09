@@ -21,24 +21,49 @@ namespace Nitra.Typing
     public abstract IsDeclaration            : bool                             { get; }
     public abstract Cardinality              : AstCardinality                   { get; }
 
+    public SymbolClassName : string
+    {
+      get
+      {
+        assert(IsDeclaration);
+        Name + "Symbol"
+      }
+    }
+
+    public SymbolClassFullName : list[string]
+    {
+      get
+      {
+        def nsParts =
+          if (this is ExtensionAstSymbol)
+            Node.Parent.Parent.FullNameParts
+          else
+            Node.Parent.FullNameParts;
+
+        nsParts + [SymbolClassName]
+      }
+    }
+
     public Properties : Seq[AstPropertySymbol]
     {
       get { this.Node.GetChildren.[AstPropertySymbol]() }
     }
 
-    public AllBaseAsts : HashSet[AstSymbol]
+    public AllBaseAsts : Seq[AstSymbol]
     {
       get { TypeInheritance(); _allBaseAsts }
     }
 
-    public AllProperties : Dictionary[string, AstPropertySymbol]
+    public AllProperties : Seq[AstPropertySymbol]
     {
-      get { TypeInheritance(); _allProperties }
+      get { TypeInheritance(); _allProperties.Values }
     }
 
     public IsSubtypeOf(other : AstSymbol) : bool
     {
-      this == other || this.AllBaseAsts.Contains(other)
+      TypeInheritance();
+
+      this == other || _allBaseAsts.Contains(other)
     }
 
     [RecordIgnore] private mutable _allBaseAsts         : HashSet[AstSymbol];
@@ -74,7 +99,7 @@ namespace Nitra.Typing
           {
             foreach (ast1 in _allBaseAsts)
             {
-              foreach (p1 in ast1.Properties)
+              foreach (p1 when p1.OverrideProperty.IsNone in ast1.Properties)
               {
                 mutable p2;
                 if (_allProperties.TryGetValue(p1.Name, out p2))
@@ -90,18 +115,32 @@ namespace Nitra.Typing
                   _allProperties.Add(p1.Name, p1)
               }
             }
+
+            when (IsDeclaration)
+              TryOverrideSymbolProperty();
           }
 
           foreach (p in Properties)
           {
-            mutable existingProperty;
-            if (_allProperties.TryGetValue(p.Name, out existingProperty))
+            if (p.OverrideProperty is SymbolRef.Some(originalProperty))
             {
-              using (root = Node.Project.RootError(p.FirstLocation, $"Redefinition of property '$(p.Name)', property inherited from declaration '$(existingProperty.DeclaringAst.FullName)'."))
-                root.Hint(existingProperty.FirstLocation, "Property declaration.");
+              mutable existingProperty;
+              if (_allProperties.TryGetValue(p.Name, out existingProperty) && originalProperty : object == existingProperty)
+                _allProperties[p.Name] = p;
+              else
+                Node.Project.Error(p.FirstLocation, $"Invalid  property '$(p.Name)'override.");
             }
             else
-              _allProperties.Add(p.Name, p);
+            {
+              mutable existingProperty;
+              if (_allProperties.TryGetValue(p.Name, out existingProperty))
+              {
+                using (root = Node.Project.RootError(p.FirstLocation, $"Redefinition of property '$(p.Name)', property inherited from declaration '$(existingProperty.DeclaringAst.FullName)'."))
+                  root.Hint(existingProperty.FirstLocation, "Property declaration.");
+              }
+              else
+                _allProperties.Add(p.Name, p);
+            }
           }
         }
         finally _isTypingInheritance = false;
@@ -110,6 +149,8 @@ namespace Nitra.Typing
 
     public LookupProperty(name : string) : ValueOption[AstPropertySymbol]
     {
+      assert(_allProperties != null);
+
       mutable symbol;
       if (_allProperties.TryGetValue(name, out symbol))
         VSome(symbol)
@@ -126,6 +167,22 @@ namespace Nitra.Typing
         {
           initializedOutProperties ::= propertySymbol;
         }
+      }
+    }
+
+    private TryOverrideSymbolProperty() : void
+    {
+      when (LookupProperty("Symbol") is VSome(OutAstPropertySymbol as symbolProperty))
+      {
+        def newSymbolProperty = ChemicalOutAstPropertySymbol(FirstLocation, "Symbol")
+          .SetAssemblyId(AssemblyIds.CurrentAssembly)
+          .SetAstType(symbolProperty.AstType)
+          .SetLinkedProperty(SymbolRef.None(Location.Default, true))
+          .SetOverrideProperty(SymbolRef.Some(Location.Default, true, symbolProperty))
+          .SetStage(symbolProperty.Stage)
+          .SetType(Utils.MakeNTypeQualified(FirstLocation, SymbolClassFullName));
+
+        _ = Node.AddAndReport(newSymbolProperty, FirstLocation)
       }
     }
   }
