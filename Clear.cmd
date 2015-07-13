@@ -2,8 +2,6 @@ set RemoveCmd=rmdir /S /Q
 %RemoveCmd% bin\
 %RemoveCmd% Grammars\Bin\
 %RemoveCmd% Grammars\CSharp\CSharp.Grammar\obj\
-%RemoveCmd% Grammars\CSharp\CSharp.Grammar.Splicable\obj\
-%RemoveCmd% Grammars\CSharp\CSharp.Processor\obj\
 %RemoveCmd% Grammars\Json\Json.Grammar\obj\
 %RemoveCmd% Grammars\Json\Tests\Sample.Json.Cs\bin\
 %RemoveCmd% Grammars\Json\Tests\Sample.Json.Cs\obj\
@@ -20,7 +18,6 @@ set RemoveCmd=rmdir /S /Q
 %RemoveCmd% Nitra\Nitra.Core\obj\
 %RemoveCmd% Nitra\Nitra.Grammar\bin\
 %RemoveCmd% Nitra\Nitra.Grammar\obj\
-%RemoveCmd% Nitra\Nitra.Quote\obj\
 %RemoveCmd% Nitra\Nitra.Runtime\bin\
 %RemoveCmd% Nitra\Nitra.Runtime\obj\
 %RemoveCmd% Nitra\Nitra.Runtime.Macros\bin\

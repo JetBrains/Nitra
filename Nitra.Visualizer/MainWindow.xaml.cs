@@ -480,8 +480,6 @@ namespace Nitra.Visualizer
 
       if (_parseResult == null)
         return;
-      if (IsSplicable(_parseResult))
-        return;
 
       if (_parseTree == null)
         _parseTree = _parseResult.CreateParseTree();
@@ -497,8 +495,6 @@ namespace Nitra.Visualizer
       _needUpdateTextPrettyPrint = false;
 
       if (_parseResult == null)
-        return;
-      if (IsSplicable(_parseResult))
         return;
 
       if (_parseTree == null)
@@ -1252,11 +1248,6 @@ namespace Nitra.Visualizer
     {
       e.CanExecute = _currentTestSuit != null;
       e.Handled = true;
-    }
-
-    private static bool IsSplicable(IParseResult parseResult)
-    {
-      return parseResult.ParseSession.StartRuleDescriptor.Grammar.IsSplicable;
     }
 
     private CompletionWindow _completionWindow;
