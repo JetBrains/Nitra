@@ -21,13 +21,13 @@ namespace Nitra.Runtime.Binding
     | Table
       {
         [RecordIgnore] private _nameTable : Hashtable[int, ISymbol];
-        
+
         public this() { _nameTable = Hashtable(); }
-        
+
         public Symbols : Hashtable[int, ISymbol].ValueCollection { get { _nameTable.Values } }
 
         public Define[TSymbol](declaration : IDeclaration) : TSymbol
-          where TSymbol : Symbol2
+          where TSymbol : ISymbol2
         {
           def     name             = declaration.Name;
           def     candidateSymbols = LightList();
@@ -37,41 +37,40 @@ namespace Nitra.Runtime.Binding
           match (this.TryGetSymbol(name))
           {
             | null => () // это первое объявление символа с таким именем в этом scope-е
-            | ambiguousSymbol is IAmbiguousSymbol => 
+            | ambiguousSymbol is IAmbiguousSymbol =>
+              ambiguousSymbols = HashSet(ambiguousSymbol.Ambiguous);
               foreach (symbol is TSymbol in ambiguousSymbol.Ambiguous)
               {
-                when (ambiguousSymbols : object == null) ambiguousSymbols = HashSet();
-                _ = ambiguousSymbols.Add(symbol);
-
-                when (symbol.IsKeyEquals(declaration) && symbol.MergeCondition(declaration))
+                when (symbol.IsMergeKeyEquals(declaration) && symbol.MergeCondition(declaration))
                   candidateSymbols.Add(symbol);
               }
 
             | symbol is TSymbol =>
-              when (ambiguousSymbols : object == null) ambiguousSymbols = HashSet();
+              ambiguousSymbols = HashSet();
               _ = ambiguousSymbols.Add(symbol);
-              candidateSymbols.Add(symbol);
+
+              when (symbol.IsMergeKeyEquals(declaration) && symbol.MergeCondition(declaration))
+                candidateSymbols.Add(symbol);
 
             | symbol =>
-              when (ambiguousSymbols : object == null) ambiguousSymbols = HashSet();
+              ambiguousSymbols = HashSet();
               _ = ambiguousSymbols.Add(symbol);
           }
 
           def concreteSymbol =
-            if (candidateSymbols.Count == 1)
-              candidateSymbols[0] // merge
-            else
-              declaration.CreateSymbol(name) :> TSymbol;
+            match (candidateSymbols.Count)
+            {
+              | 0 => declaration.CreateSymbol(name) :> TSymbol;
+              | 1 => candidateSymbols[0] // merge
+              | _ => assert(false)
+            };
 
           if (ambiguousSymbols : object == null)
-          {
-            this.DefineSymbol(concreteSymbol, false);
-            concreteSymbol
-          }
+            _nameTable.Add(name.Id, concreteSymbol);
           else when (ambiguousSymbols.Add(concreteSymbol))
           {
             // фильтруем без учета конкретного типа
-            def realAmbiguousSymbols = ambiguousSymbols.FilterToArray(s => !concreteSymbol.Equals(s) && s.IsKeyEquals(declaration));
+            def realAmbiguousSymbols = ambiguousSymbols.FilterToArray(s => !concreteSymbol.Equals(s) && s.IsMergeKeyEquals(declaration));
             when (realAmbiguousSymbols.Length > 0)
             {
               def cm = AstContext.CompilerMessages;
@@ -80,81 +79,27 @@ namespace Nitra.Runtime.Binding
                   foreach (d in ambiguous.Declarations)
                     nested.Hint(d.Name, "previous definition.");
             }
-            this.DefineSymbol(AmbiguousSymbol(name, ambiguousSymbols.NToList()), false);
+            _nameTable[name.Id] = AmbiguousSymbol(name, ambiguousSymbols.NToList());
           }
+
+          concreteSymbol
         }
 
-        public DefineSymbol(symbol : ISymbol, reportErrors : bool) : void
-        {
-          mutable old;
-          when (_nameTable.TryGetValue(symbol.Name.Id, out old))
-          {
-            when (reportErrors)
-            {
-              def cm = AstContext.CompilerMessages;
-              using(nested = cm.RootError(symbol.Name, $"The current scope already contains a definition for '$(symbol.Name)'."))
-                nested.Hint(old.Name, "previous definition.");
-            }
-
-            if (old is AmbiguousSymbol as amb)
-              amb.Ambiguous ::= symbol;
-            else
-              _nameTable[symbol.Name.Id] = AmbiguousSymbol(old.Name, [old, symbol]);
-
-            return;
-          }
-    
-          _nameTable.Add(symbol.Name.Id, symbol);
-        }
-
-        public DefineNestedSymbol(parentSymbol : IContainer, symbol : IMemberSymbol, reportErrors : bool) : void
-        {
-          mutable old;
-          when (_nameTable.TryGetValue(symbol.Name.Id, out old))
-          {
-            when (reportErrors)
-              AstContext.CompilerMessages.Error(symbol.Name, 
-                $"The $(parentSymbol.Kind) '$(parentSymbol.FullName)' already contains a definition for '$(symbol.Name)'");
-
-            if (old is AmbiguousHierarchicalSymbol as amb)
-              amb.Ambiguous ::= symbol;
-            else
-              _nameTable[old.Name.Id] = AmbiguousHierarchicalSymbol(old.Name, symbol.Parent, [old :> IMemberSymbol, symbol]);
-
-            return;
-          }
-          
-          this._nameTable.Add(symbol.Name.Id, symbol);
-        }
-
-        // TODO: Make internal
-        public GetOrDefineSymbol(symbol : ISymbol) : ISymbol
-        {
-          mutable old;
-          when (_nameTable.TryGetValue(symbol.Name.Id, out old))
-            return old;
-          
-          _nameTable.Add(symbol.Name.Id, symbol);
-          symbol
-        }
-        
-        // TODO: Make internal
-        public TryGetSymbol(name : IName) : ISymbol
+        internal TryGetSymbol(name : IName) : ISymbol
         {
           mutable old;
           when (_nameTable.TryGetValue(name.Id, out old))
             return old;
-          
+
           null
         }
 
-        // TODO: Make internal
-        public TryGetSymbol(name : IReference) : ISymbol
+        internal TryGetSymbol(name : IReference) : ISymbol
         {
           mutable old;
           when (_nameTable.TryGetValue(name.Id, out old))
             return old;
-          
+
           null
         }
 
@@ -190,14 +135,14 @@ namespace Nitra.Runtime.Binding
           result
       }
     }
-    
+
     public Bind(reference : IReference) : ISymbol
     {
       def sym = TryBind(reference);
       SymbolUtils.ReportError(reference, sym);
       sym
     }
-    
+
     /// Если не может связать возвращает AmbiguousSymbol или UnresolvedSymbol.
     public TryBind(reference : IReference) : ISymbol
     {
@@ -209,7 +154,7 @@ namespace Nitra.Runtime.Binding
         | _ => AmbiguousSymbol(reference.ToName(), result.NToList())
       }
     }
-    
+
     public BindMany(reference : IReference) : List[ISymbol]
     {
       def results = List(2);
