@@ -627,7 +627,7 @@ namespace Nitra.Visualizer
           parseTree.Accept(this);
       }
 
-      public void Visit(IName name)
+      public void Visit(Name name)
       {
         var span = name.Span;
 
@@ -643,7 +643,7 @@ namespace Nitra.Visualizer
         SpanInfos.Add(new SpanInfo(span, new SpanClass(sym.SpanClass)));
       }
 
-      public void Visit(IReference reference)
+      public void Visit(Reference reference)
       {
         var span = reference.Span;
 
