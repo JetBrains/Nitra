@@ -1302,14 +1302,14 @@ namespace Nitra.Visualizer
       foreach (var elem in result)
       {
         var symbol = elem as Symbol2;
-        if (symbol != null)
+        if (symbol != null && symbol.IsNameValid)
         {
           var content = symbol.ToXaml();
           var description = content;
-          var amb = symbol as AmbiguousHierarchicalSymbol;
+          var amb = symbol as IAmbiguousSymbol;
           if (amb != null)
             description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
-          completionList.Add(new CompletionData(replacementSpan, symbol.Name.Text, content, description, priority: 1.0));
+          completionList.Add(new CompletionData(replacementSpan, symbol.Name, content, description, priority: 1.0));
         }
 
         var literal = elem as string;

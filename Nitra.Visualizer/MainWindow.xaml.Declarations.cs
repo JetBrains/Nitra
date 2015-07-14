@@ -221,7 +221,7 @@ namespace Nitra.Visualizer
 
     private static string RenderXamlForDeclaration(string name, IAst ast)
     {
-      var declatation = ast as IDeclaration;
+      var declatation = ast as Declaration;
       var suffix = declatation == null ? null : (": " + Utils.Escape(declatation.Name.Text));
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
@@ -308,7 +308,7 @@ namespace Nitra.Visualizer
             tvi.IsExpanded = true;
           foreach (TreeViewItem subItem in tvi.Items)
           {
-            var decls = subItem.Tag as Nemerle.Core.list<Nitra.Declarations.IDeclaration>;
+            var decls = subItem.Tag as Nemerle.Core.list<Declaration>;
             if (decls != null)
             {
               subItem.IsExpanded = true;
