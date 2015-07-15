@@ -12,7 +12,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 // TODO: rename Symbol2 to Symbol and remove follow line
-using Symbol = Nitra.Runtime.Binding.Symbol2;
+using Symbol  = Nitra.Runtime.Binding.Symbol2;
+using ISymbol = Nitra.Runtime.Binding.ISymbol2;
 
 namespace CSharp
 {
@@ -23,61 +24,28 @@ namespace CSharp
       def makeCurrentScope(scope : Scope) : Scope
       {
         def withAliases =
-          if (aliases == [])
+          if (aliases.Symbols.Count == 0)
             scope
           else
-            Scope.Union([scope, aliases]);
+            UnionScope([scope, aliases]);
 
         def withUsings =
           match (opening)
           {
             | []    => withAliases
-            | [one] => Scope.Hide(withAliases, one)
-            | _     => Scope.Hide(withAliases, Scope.Union(opening))
+            | [one] => HidingScope(withAliases, one)
+            | _     => HidingScope(withAliases, UnionScope(opening))
           };
-            
+
         withUsings
       }
 
-      match (currentScope)
-      {
-        | Hide as h with (scope = h.Scope, parent = h.Hidden) => Scope.Hide(makeCurrentScope(scope), parent)
-        | scope => makeCurrentScope(scope)
-      }
+      if (currentScope is HidingScope as h)
+        HidingScope(makeCurrentScope(h.Scope), h.Hidden)
+      else
+        makeCurrentScope(currentScope)
     }
-    
-    public EnterNamespace(mutable ns : NamespaceSymbol, path : Name.IAstList, namespaceDeclaration : Namespace) : NamespaceSymbol
-    {
-      def lastIndex = path.Count - 1;
-      foreach (name in path with i)
-      {
-        mutable symbol = ns.MembersScope.TryGetSymbol(name);
-        when (symbol is AmbiguousHierarchicalSymbol as ambiguous)
-        {
-          symbol = null;
-          foreach (ns is NamespaceSymbol in ambiguous.Ambiguous)
-          {
-            symbol = ns;
-            break;
-          }
-        }
-        when (symbol == null)
-        {
-          def namespaceSymbol = NamespaceSymbol(name, ns);
-          ns.DefineNestedSymbol(namespaceSymbol, reportErrors=true);
-          symbol = namespaceSymbol;
-        }
-        when (i == lastIndex)
-          symbol.Declarations ::= namespaceDeclaration;
-          
-        ns = (symbol :> NamespaceSymbol);
-        name.Symbol = ns;
-      }
-      otherwise ns = NamespaceSymbol(namespaceDeclaration.Name, ns);
-      
-      ns
-    }
-    
+
     public MakeEnteredScope(parentScope : Scope, parentNs : NamespaceSymbol, enteredNs : NamespaceSymbol) : Scope
     {
       def buildEnterNsScope(ns : NamespaceSymbol) : Scope
@@ -85,52 +53,37 @@ namespace CSharp
         def parent = ns.Parent;
         def scope  = ns.Scope;
         
-        if (parent == parentNs)
-          Scope.Hide(scope, parentScope)
+        if (parent : object == parentNs)
+          HidingScope(scope, parentScope)
         else
-          Scope.Hide(scope, buildEnterNsScope(parent))
+          HidingScope(scope, buildEnterNsScope(parent))
       }
       
       buildEnterNsScope(enteredNs)
     }
-    
-    public TryResolveTypeOverload(symbol : Symbol, argumentsCount : int) : Symbol
+
+    [Memoize]
+    public TypeOverloadResolution(argumentsCount : int) : Func[IAmbiguousSymbol, Seq[ISymbol]]
     {
-      symbol.TryResolve(x => x.Ambiguous.OfType.[GenericTypeSymbol]().Where(s => s.TypeParameters.Count == argumentsCount));
-    }
-    
-    public TryGetPrevTypeParameters(declaration : GenericType) : array[TypeParameterSymbol]
-    {
-      def isPartial = declaration.IsPartial.ValueOrDefault;
-      when (!isPartial)
-        return null;
-        
-      def typeParametersCount = declaration.TypeParameters.Count;
-      def symbol = declaration.Parent.MembersScope.TryGetSymbol(declaration.Name);
-      def ambiguous = List();
-      match (symbol)
+      fun (x)
       {
-        | null => ()
-        | ambig is IAmbiguousSymbol => 
-          foreach (ambiguousSymbol in ambig.Ambiguous)
-            ambiguous.Add(ambiguousSymbol);
-          
-        | _ => ambiguous.Add(symbol);
+        x.Ambiguous.OfType.[GenericTypeSymbol]().Where(s => s.TypeParametersCount == argumentsCount)
       }
-      
-      def candidates = List();
-      
-      // TODO: заменить ClassSymbol на параметр типа
-      foreach (candidate in ambiguous)
-        when (candidate is ClassSymbol as genericType) // is class?
-          when (genericType.TypeParameters.Count == typeParametersCount)
-            candidates.Add(genericType);
-      
-      
-      if (candidates.Count() == 1 && candidates[0].IsPartial && isPartial)
-        candidates[0].TypeParameters.ToArray() // merge
+    }
+
+    private _noTypeParameters : array[TypeParameterSymbol] = array(0);
+
+    public CreateTypeParameters(count : int) : array[TypeParameterSymbol]
+    {
+      if (count == 0)
+        _noTypeParameters
       else
-        null
+      {
+        def result = array(count);
+        for (mutable i = 0; i < result.Length; ++i)
+          result[i] = TypeParameterSymbol();
+        result
+      }
     }
   }
 }
