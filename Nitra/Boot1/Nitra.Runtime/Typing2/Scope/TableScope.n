@@ -1,0 +1,135 @@
+﻿using Nitra.Declarations;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+// TODO: rename Symbol2 to Symbol and remove follow line
+using Symbol = Nitra.Runtime.Binding.Symbol2;
+using ISymbol = Nitra.Runtime.Binding.ISymbol2;
+
+namespace Nitra.Runtime.Binding
+{
+  public class TableScope : Scope
+  {
+    public this()
+    {
+      _nameTable = Hashtable();
+    }
+
+    private _nameTable : Hashtable[int, ISymbol];
+
+    public Symbols : Hashtable[int, ISymbol].ValueCollection { get { _nameTable.Values } }
+
+    public Define[TSymbol](declaration : Declaration) : TSymbol
+      where TSymbol : ISymbol
+    {
+      def     name             = declaration.Name;
+      def     candidateSymbols = LightList();
+      mutable ambiguousSymbols : HashSet[ISymbol2];
+
+      // пробуем смерджить
+      match (this.TryGetSymbol(name))
+      {
+        | null => () // это первое объявление символа с таким именем в этом scope-е
+        | ambiguousSymbol is IAmbiguousSymbol =>
+          ambiguousSymbols = HashSet(ambiguousSymbol.Ambiguous);
+          foreach (symbol is TSymbol in ambiguousSymbol.Ambiguous)
+          {
+            when (symbol.IsMergeKeyEquals(declaration) && symbol.MergeCondition(declaration))
+              candidateSymbols.Add(symbol);
+          }
+
+        | symbol is TSymbol =>
+          ambiguousSymbols = HashSet();
+          _ = ambiguousSymbols.Add(symbol);
+
+          when (symbol.IsMergeKeyEquals(declaration) && symbol.MergeCondition(declaration))
+            candidateSymbols.Add(symbol);
+
+        | symbol =>
+          ambiguousSymbols = HashSet();
+          _ = ambiguousSymbols.Add(symbol);
+      }
+
+      def concreteSymbol =
+        match (candidateSymbols.Count)
+        {
+          | 0 => declaration.CreateSymbol() :> TSymbol;
+          | 1 => candidateSymbols[0] // merge
+          | _ => assert(false)
+        };
+
+      if (ambiguousSymbols : object == null)
+        _nameTable.Add(name.Id, concreteSymbol);
+      else when (ambiguousSymbols.Add(concreteSymbol))
+      {
+        // фильтруем без учета конкретного типа
+        def realAmbiguousSymbols = ambiguousSymbols.FilterToArray(s => !concreteSymbol.Equals(s) && s.IsMergeKeyEquals(declaration));
+        when (realAmbiguousSymbols.Length > 0)
+        {
+          def cm = AstContext.CompilerMessages;
+          using (nested = cm.RootError(name, $"Redefinition of '$name'"))
+            foreach (ambiguous in realAmbiguousSymbols)
+              foreach (d in ambiguous.Declarations)
+                nested.Hint(d.Name, "previous definition.");
+        }
+        _nameTable[name.Id] = AmbiguousSymbol(ambiguousSymbols.NToList());
+      }
+
+      (concreteSymbol :> DeclaredSymbol).AddDeclaration(declaration);
+
+      assert(!name.IsSymbolEvaluated);
+      name.Symbol = concreteSymbol;
+
+      concreteSymbol
+    }
+
+    internal TryGetSymbol(name : Name) : ISymbol
+    {
+      mutable old;
+      when (_nameTable.TryGetValue(name.Id, out old))
+        return old;
+
+      null
+    }
+
+    internal TryGetSymbol(name : Reference) : ISymbol
+    {
+      mutable old;
+      when (_nameTable.TryGetValue(name.Id, out old))
+        return old;
+
+      null
+    }
+
+    public override BindMany(reference : Reference, results : ref LightList[ISymbol]) : void
+    {
+      match (TryGetSymbol(reference))
+      {
+        | null                  => ()
+        | a is IAmbiguousSymbol => results.AddRange(a.Ambiguous);
+        | result                => results.Add(result);
+      }
+    }
+
+    public override MakeComletionList(prefix : string) : Seq[ISymbol]
+    {
+      if (string.IsNullOrEmpty(prefix))
+        Symbols
+      else
+        Symbols.Where(s => s.Name.StartsWith(prefix, StringComparison.InvariantCultureIgnoreCase))
+    }
+
+    public override ToString() : string
+    {
+      $<#[..$(_nameTable.Keys; ", "; StringIndex.GetText)]#>
+    }
+  }
+}
