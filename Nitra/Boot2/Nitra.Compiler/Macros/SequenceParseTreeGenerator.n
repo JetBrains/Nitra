@@ -1,0 +1,142 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Internal
+{
+  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Assembly)]
+  public macro SequenceParseTreeGenerator()
+  {
+    def env = ManagerClass.Instance.CoreEnv.EnterIntoNamespace(["Nitra"]);
+    for (mutable memberCount = 2; memberCount <= 10; ++memberCount)
+      SequenceParseTreeGeneratorImpl.GenerateType(env, "SequenceParseTree", memberCount)
+  }
+
+  internal module SequenceParseTreeGeneratorImpl
+  {
+    public GenerateType(env : GlobalEnv, name : string, memberCount : int) : void
+    {
+      def baseTypeVariables      = SCG.List();
+      def concreteTypeVariables  = SCG.List();
+      def ambiguousTypeVariables = SCG.List();
+
+      def baseConstraints      = SCG.List();
+      def concreteConstraints  = SCG.List();
+      def ambiguousConstraints = SCG.List();
+
+      def concreteBaseTypeParameters = SCG.List();
+      def ambiguousBaseTypeParameters = SCG.List();
+
+      for (mutable i = 1; i <= memberCount; ++i)
+      {
+        def typeVariable = Splicable.Name(<[ $("T" + i.ToString() : usesite) ]>);
+        baseTypeVariables.Add(typeVariable);
+        baseConstraints.Add(Constraint(typeVariable, <[ Nitra.IParseTree ]>, false));
+
+        def typeVariable = Splicable.Name(<[ $("T" + i.ToString() : usesite) ]>);
+        concreteTypeVariables.Add(typeVariable);
+        concreteConstraints.Add(Constraint(typeVariable, <[ Nitra.IParseTree ]>, false));
+        concreteBaseTypeParameters.Add(<[ $("T" + i.ToString() : usesite) ]>);
+
+        def typeVariable = Splicable.Name(<[ $("T" + i.ToString() : usesite) ]>);
+        ambiguousTypeVariables.Add(typeVariable);
+        ambiguousConstraints.Add(Constraint(typeVariable, <[ Nitra.IParseTree ]>, false));
+        ambiguousBaseTypeParameters.Add(<[ $("T" + i.ToString() : usesite) ]>);
+      }
+
+      def applyItemExprs = SCG.List();
+      for (mutable i = memberCount; i >= 1; --i)
+      {
+        applyItemExprs.Add(<[ when (CanApplyVisitor.[$("T" + i.ToString() : usesite)]()) applyItem += 1; ]>);
+        when (i > 1)
+          applyItemExprs.Add(<[ applyItem <<= 1 ]>);
+      }
+
+      def baseTb = env.Define(<[ decl:
+        [Record]
+        public abstract class $(name : usesite)[..$(baseTypeVariables.ToNList())] : Nitra.ParseTree where ..$(baseConstraints.ToNList())
+        {
+        }
+      ]>);
+
+      def concreteTb = env.Define(<[ decl:
+        [Record]
+        public sealed class $("Concrete" + name : usesite)[..$(concreteTypeVariables.ToNList())] : $(name : usesite)[..$(concreteBaseTypeParameters.ToNList())] where ..$(concreteConstraints.ToNList())
+        {
+          private static applyItem : int;
+          static this() { unchecked { ..$applyItemExprs } }
+          public override Location : Nitra.Location { get }
+        }
+      ]>);
+
+      def ambiguousTb = env.Define(<[ decl:
+        [Record]
+        public sealed class $("Ambiguous" + name : usesite)[..$(ambiguousTypeVariables.ToNList())] : $(name : usesite)[..$(ambiguousBaseTypeParameters.ToNList())], Nitra.IAmbiguousParseTree where ..$(ambiguousConstraints.ToNList())
+        {
+          public override IsAmbiguous   : bool                                                                 { get true }
+          public          Ambiguities   : array[$(name : usesite)[..$(ambiguousBaseTypeParameters.ToNList())]] { get; }
+          public          AmbiguityType : Nitra.ParseTreeAmbiguityType                                         { get Nitra.ParseTreeAmbiguityType.Recovery }
+          public override Location      : Nitra.Location                                                       { get Ambiguities[0].Location }
+        }
+      ]>);
+
+      def variableRefs = SCG.List();
+      def statements = SCG.List();
+
+      for (mutable i = 1; i <= memberCount; ++i)
+      {
+        def itemName = "Item" + i.ToString();
+        def itemType = "T" + i.ToString();
+        baseTb.Define(<[ decl:
+          public abstract $(itemName : usesite) : $(itemType : usesite) { get }
+        ]>);
+
+        concreteTb.Define(<[ decl:
+          public override $(itemName : usesite) : $(itemType : usesite) { get }
+        ]>);
+
+        ambiguousTb.Define(<[ decl:
+          public override $(itemName : usesite) : $(itemType : usesite) { get throw System.NotSupportedException("Sequence is ambiguous") }
+        ]>);
+
+        def mask = 1 << (i - 1);
+
+        def tempVarName = "newItem" + i.ToString();
+        statements.Add(<[ mutable $(tempVarName : usesite) = this.$(itemName : usesite); ]>);
+        statements.Add(<[
+          when (applyItem %& $(mask : int) != 0)
+          {
+            $(tempVarName : usesite) = visitor.Visit(this.$(itemName : usesite) :> Nitra.ParseTree) :> $(itemType : usesite);
+            isUntouched &= ReferenceEquals($(tempVarName : usesite), this.$(itemName : usesite));
+          }
+        ]>);
+        variableRefs.Add(<[ $(tempVarName : usesite) ]>);
+      }
+
+      concreteTb.Define(<[ decl:
+        public override Apply(visitor : Nitra.ParseTreeVisitor) : Nitra.ParseTree
+        {
+          unchecked
+          {
+            visitor.Enter(this);
+            mutable isUntouched = true;
+            ..$statements;
+            def result = if (isUntouched) this else $("Concrete" + name : usesite)(this.Location, ..$variableRefs);
+            visitor.Leave(this, result);
+            result
+          }
+        }
+      ]>);
+
+      baseTb.Compile();
+      concreteTb.Compile();
+      ambiguousTb.Compile();
+    }
+  }
+}

@@ -56,7 +56,7 @@ namespace Nitra.Compiler
 
           def statementsStandardMode = SCG.List();
           foreach (subrule in prevSubrules)
-            statementsStandardMode.Add(ParseTreeUtils.Skip(subrule, parentRawTreePtr));
+            statementsStandardMode.Add(Skip(subrule, parentRawTreePtr));
           when (needRuleParserStandardMode)
             statementsStandardMode.Add(MakeRuleParserDefinition());
           statementsStandardMode.Add(valueExpr);
@@ -261,7 +261,7 @@ namespace Nitra.Compiler
             statementsEmptyRecoveryMode.Add(<[ def $(varName : usesite) = $(CompileEmptySubruleValueRecoveryMode(subrule, false)) ]>);
           }
           else
-            statementsStandardMode.Add(ParseTreeUtils.Skip(subrule, rawTreePointer));
+            statementsStandardMode.Add(Skip(subrule, rawTreePointer));
         }
 
         match (subruleValues.Count)
@@ -291,20 +291,14 @@ namespace Nitra.Compiler
         def isNonVoid        = subruleValues.Count > 0;
         def isSpan           = subruleValues.Count == 1 && subruleValues[0][1].SrcRule.Type is RuleType.Chars;
 
-        def codeStandardMode =
-        {
-          def codeWithoutRuleParser = ParseTreeUtils.DeclareRawTreePointer(rawTreePointer, <[ { ..$statementsStandardMode } ]>);
-          if (rawTreePointer.IsAccessed || needRuleParserStandardMode)
-            <[
-              $(MakeRuleParserDefinition());
-              $codeWithoutRuleParser;
-            ]>.FlattenPExpr()
-          else
-            codeWithoutRuleParser;
-        };
+        when (rawTreePointer.IsAccessed)
+          statementsStandardMode.Insert(0, <[ def $(rawTreePointer.Name : global) = parseResult.GetRawTree(pos, ruleParser.$(rawTreePointer.Sequence.RuleIdFieldName : global)); ]>);
 
+        when (rawTreePointer.IsAccessed || needRuleParserStandardMode)
+          statementsStandardMode.Insert(0, MakeRuleParserDefinition());
+
+        def codeStandardMode      = <[ { ..$statementsStandardMode } ]>;
         def codeRecoveryMode      = <[ { ..$statementsRecoveryMode } ]>;
-
         def emptyCodeRecoveryMode = <[ { ..$statementsEmptyRecoveryMode } ]>;
 
         def ambiguousSequenceCode = match (sequence.SrcRule.Type)
@@ -348,10 +342,10 @@ namespace Nitra.Compiler
     {
       match (subrule)
       {
-        | Empty      as subrule => ParseTreeUtils.Skip(subrule, parentRawTreePointer)
+        | Empty      as subrule => Skip(subrule, parentRawTreePointer)
         | SimpleCall as subrule =>
           if (subrule.Symbol.Type is RuleType.Void)
-            ParseTreeUtils.Skip(subrule, parentRawTreePointer)
+            Skip(subrule, parentRawTreePointer)
           else
           {
             needRuleParser = true;
@@ -360,7 +354,7 @@ namespace Nitra.Compiler
 
         | ExtensibleCall as subrule =>
           if (subrule.Symbol.Type is RuleType.Void)
-            ParseTreeUtils.Skip(subrule, parentRawTreePointer)
+            Skip(subrule, parentRawTreePointer)
           else
           {
             needRuleParser = true;
@@ -371,17 +365,22 @@ namespace Nitra.Compiler
                 parseResult,
                 $(subrule.BindingPower.Name : string),
                 $(subrule.Symbol.GetRuleDescriptorRef()),
-                ruleParser.Grammar,
-                Nitra.Internal.DefaultExtensibleRuleParseTreeFactory.Instance);
+                ruleParser.Grammar);
             ]>
           }
 
         | RegularCall
         | List(IsSkipAnyPattern = true)
-        | TokenString => ParseTreeUtils.GetTokenValue(subrule, parentRawTreePointer, <[ $(Environment.NSpanTypeVar : typed)(tokenPos, pos) ]>)
+        | TokenString =>
+          <[
+            def tokenPos = pos;
+            pos += $(parentRawTreePointer.GetSize(subrule));
+            $(Environment.NSpanTypeVar : typed)(tokenPos, pos)
+          ]>
+
         | Option(itemSequence) =>
           if (subrule.SrcRule.Type is RuleType.Void)
-            ParseTreeUtils.Skip(subrule, parentRawTreePointer)
+            Skip(subrule, parentRawTreePointer)
           else
           {
             def (loaderType, itemType, id, converter) = GetArgumentsForCreateParseTree(CompileSequence(itemSequence));
@@ -390,7 +389,7 @@ namespace Nitra.Compiler
 
         | List(IsDynamicSyntaxExtentionPoint = true, Item = itemSequence) =>
           if (subrule.SrcRule.Type is RuleType.Void)
-            ParseTreeUtils.Skip(subrule, parentRawTreePointer)
+            Skip(subrule, parentRawTreePointer)
           else
           {
             def callInfo    = itemSequence.NonMarkerSubrules[0] :> SubruleCompileInfo.ExtensibleCall;
@@ -402,14 +401,13 @@ namespace Nitra.Compiler
                 $(subrule.Offset),
                 ref pos,
                 $(callInfo.Symbol.GetRuleDescriptorRef()),
-                $(callInfo.BindingPower.Name : string),
-                Nitra.Internal.DefaultExtensibleRuleParseTreeFactory.Instance)
+                $(callInfo.BindingPower.Name : string))
             ]>
           }
 
         | List(Item = itemSequence) =>
           if (subrule.SrcRule.Type is RuleType.Void)
-            ParseTreeUtils.Skip(subrule, parentRawTreePointer)
+            Skip(subrule, parentRawTreePointer)
           else
           {
             def (loaderType, itemType, id, converter) = GetArgumentsForCreateParseTree(CompileSequence(itemSequence));
@@ -419,7 +417,7 @@ namespace Nitra.Compiler
         | ListWithSeparator(Item = itemSequence, Separator = separatorSequence)=>
           match (itemSequence.SrcRule.Type, separatorSequence.SrcRule.Type)
           {
-            | (Void, Void) => ParseTreeUtils.Skip(subrule, parentRawTreePointer)
+            | (Void, Void) => Skip(subrule, parentRawTreePointer)
             | (_, Void) =>
               def (itemLoaderType, itemType, itemSequenceId, itemConverter) = GetArgumentsForCreateParseTree(CompileSequence(itemSequence));
               def (separatorLoaderType, _, separatorSequenceId, _)          = GetArgumentsForCreateParseTree(CompileSequence(separatorSequence));
@@ -462,8 +460,7 @@ namespace Nitra.Compiler
                 parseResult,
                 $(subrule.BindingPower.Name : string),
                 $(subrule.Symbol.GetRuleDescriptorRef()),
-                parsingSequence.Grammar,
-                Nitra.Internal.DefaultExtensibleRuleParseTreeFactory.Instance);
+                parsingSequence.Grammar);
             ]>
 
         | RegularCall
@@ -489,8 +486,7 @@ namespace Nitra.Compiler
               Nitra.Internal.ParseTreeFactory.CreateDynamicExtensionPointList.[$(itemType : typed)](
                 this.parseResult, state, _subruleStartPos, _subruleEndPos,
                 $(callInfo.Symbol.GetRuleDescriptorRef()),
-                $(callInfo.BindingPower.Name : string),
-                Nitra.Internal.DefaultExtensibleRuleParseTreeFactory.Instance)
+                $(callInfo.BindingPower.Name : string))
             ]>
           }
 
@@ -605,6 +601,11 @@ namespace Nitra.Compiler
       | Empty
       | Marker => false
       | _ => !(subrule.SrcRule.Type is RuleType.Void)
+    }
+
+    private static Skip(subrule : SubruleCompileInfo, parentRawTreePointer : RawTreePointer) : PExpr
+    {
+      <[ pos += $(parentRawTreePointer.GetSize(subrule)); ]>
     }
   }
 }

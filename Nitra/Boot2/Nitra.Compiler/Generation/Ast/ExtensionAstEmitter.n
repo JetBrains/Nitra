@@ -21,6 +21,7 @@ namespace Nitra.Compiler
     private mutable _ambiguousTb       : TypeBuilder;
     private         _listEmitter       : ListAstEmitter;
     private         _optionEmitter     : OptionAstEmitter;
+    private mutable _symbolTb          : TypeBuilder;
 
     public this(parent : AstEmitter, symbol : ExtensionAstSymbol)
     {
@@ -33,23 +34,36 @@ namespace Nitra.Compiler
 
     public override DefineTypes() : void
     {
-      assert(_tb == null);
+      Util.locate(_symbol.FirstLocation.NLocation(),
+      {
+        assert(_tb == null);
 
-      def baseTypes = SCG.List();
-      baseTypes.Add(<[ $(Environment.GetAstType(_symbol.BaseAst.GetValue(Environment.Project)) : typed) ]>);
+        def baseTypes = SCG.List();
+        foreach (baseAst in _symbol.BaseAsts)
+          baseTypes.Add(<[ $(Environment.GetAstType(baseAst) : typed) ]>);
 
-      _tb = _parent.DefineNestedType(<[ decl:
-        public partial class $(_symbol.Name : usesite) : ..$baseTypes
+        _tb = _parent.DefineNestedType(<[ decl:
+          public partial class $(_symbol.Name : usesite) : ..$baseTypes
+          {
+            private this() {}
+          }
+        ]>);
+
+        assert(_ambiguousTb == null);
+        _ambiguousTb = DefineAmbiguousAst(_tb);
+
+        _listEmitter.DefineTypes(_tb);
+        _optionEmitter.DefineTypes(_tb);
+
+        when (_symbol.IsDeclaration)
         {
-          private this() {}
+          _symbolTb = _parent.NemerleEnv.Define(<[ decl:
+            public partial class $(_symbol.SymbolClassName : usesite) : ..$(MakeSymbolClassBaseTypes(_symbol))
+            {
+            }
+          ]>);
         }
-      ]>);
-
-      assert(_ambiguousTb == null);
-      _ambiguousTb = DefineAmbiguousAst(_tb);
-
-      _listEmitter.DefineTypes(_tb);
-      _optionEmitter.DefineTypes(_tb);
+      })
     }
 
     public override DefineMembers() : void
@@ -117,12 +131,25 @@ namespace Nitra.Compiler
 
         if (propertySymbol.DeclaringAst == _symbol)
         {
-          def bit         = _tb.GetBitFieldManager().Allocate();
-          def propertyRef = DependentAstPropertyRef.Compiling(propertySymbol, index, bit);
-          DefineDependentProperty(_tb, propertyRef, NemerleModifiers.Public | NemerleModifiers.Virtual);
-          DefineAmbiguousDependentProperty(_ambiguousTb, propertyRef, NemerleModifiers.Public | NemerleModifiers.Override);
+          if (propertySymbol.OverrideProperty.HasValue)
+          {
+            inheritedFieldsCount += 1;
 
-          dependentProps.Add(propertySymbol, propertyRef);
+            def propertyRef = DependentAstPropertyRef.Reflected(propertySymbol, index);
+            dependentProps.Add(propertySymbol, propertyRef);
+
+            DefineDependentPropertyOverride(propertyRef);
+            DefineAmbiguousDependentProperty(_ambiguousTb, propertyRef, NemerleModifiers.Public | NemerleModifiers.Override);
+          }
+          else
+          {
+            def bit         = _tb.GetBitFieldManager().Allocate();
+            def propertyRef = DependentAstPropertyRef.Compiling(propertySymbol, index, bit);
+            DefineDependentProperty(_tb, propertyRef, NemerleModifiers.Public | NemerleModifiers.Virtual);
+            DefineAmbiguousDependentProperty(_ambiguousTb, propertyRef, NemerleModifiers.Public | NemerleModifiers.Override);
+
+            dependentProps.Add(propertySymbol, propertyRef);
+          }
         }
         else
         {
@@ -176,13 +203,21 @@ namespace Nitra.Compiler
       DefineIsPropertyEvaluatedMethod(_tb, inheritedFieldsCount);
       DefineResetPropertiesMethod(_tb, _ambiguousTb, inheritedFieldsCount);
       DefineIsAllPropertiesEvaluatedProperty(_tb, _ambiguousTb, inheritedFieldsCount);
-      DefineDependentPropertiesEvaluation(_tb, _symbol);
+      DefineDependentPropertiesEvaluation(_tb, _symbol, _symbol.IsDeclaration);
 
       _listEmitter.DefineMembers(dependentProps);
       _optionEmitter.DefineMembers(dependentProps);
 
       when (acceptBody.Count > 1)
         _tb.Define(<[ decl: public override Accept(visitor : Nitra.Declarations.IAstVisitor) : void { ..$acceptBody } ]>);
+
+      when (_symbol.IsDeclaration)
+        _tb.Define(<[ decl:
+          public override CreateSymbol() : Nitra.Runtime.Binding.ISymbol2
+          {
+            $(GetSymbolClassRef(_symbol))()
+          }
+        ]>);
     }
 
     public override Emit() : void
@@ -195,6 +230,38 @@ namespace Nitra.Compiler
 
       _listEmitter.Emit();
       _optionEmitter.Emit();
+
+      when (_symbolTb != null)
+        _symbolTb.Compile();
+    }
+
+    private DefineDependentPropertyOverride(propertyRef : DependentAstPropertyRef) : void
+    {
+      def propertyType     = TypeCompiler.CompileDependentPropertyType(propertyRef.Symbol);
+      Util.locate(propertyRef.Symbol.FirstLocation.NLocation(),
+      {
+        def setterMods    =
+          match (propertyRef.Symbol.Direction)
+          {
+            | In  => AttributesAndModifiers(NemerleModifiers.None,      [])
+            | Out => AttributesAndModifiers(NemerleModifiers.Protected, [])
+          };
+        _tb.Define(<[ decl:
+          [$(MakeDependentPropertyAttribute(propertyRef.Symbol, propertyRef.Index))]
+          public new virtual $(propertyRef.Symbol.Name : usesite) : $(propertyType : typed)
+          {
+            get
+            {
+              base.$(propertyRef.Symbol.Name : usesite) :> $(propertyType : typed)
+            }
+            ..$setterMods
+            set
+            {
+              base.$(propertyRef.Symbol.Name : usesite) = value
+            }
+          }
+        ]>);
+      });
     }
   }
 }
