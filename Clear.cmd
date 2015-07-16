@@ -15,7 +15,6 @@ set RemoveCmd=rmdir /S /Q
 %RemoveCmd% Nitra\Nitra\bin\
 %RemoveCmd% Nitra\Nitra\obj\
 %RemoveCmd% Nitra\Nitra.Compiler\obj\
-%RemoveCmd% Nitra\Nitra.Core\obj\
 %RemoveCmd% Nitra\Nitra.Grammar\bin\
 %RemoveCmd% Nitra\Nitra.Grammar\obj\
 %RemoveCmd% Nitra\Nitra.Runtime\bin\
