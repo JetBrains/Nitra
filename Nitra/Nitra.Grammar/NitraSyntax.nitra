@@ -204,24 +204,37 @@ syntax module NitraSyntax
     Typing(context : Context, isDeclaration : bool) : list[AstSymbol] = TypingUtils.BindAstInheritanceList(this.BaseAsts.Item1, context, isDeclaration);
   }
 
-  syntax AstBody = outline_begin_before nl "{" inl Symbol? Members=AstMember* d "}" outline_end_before nl
+  syntax SymbolDefinition = "sealed"? "symbol" outline_begin_before nl "{" inl Members=AstMember* d "}" outline_end_before nl
   {
-    syntax Symbol = "symbol" outline_begin_before nl "{" inl Members=AstMember* d "}" outline_end_before nl
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    TypeSymbol(astSymbol : AstSymbol, symbolSymbolRef : SymbolRef[SymbolSymbol]) : void
     {
-      CollectGlobalSymbols(astSymbol : AstSymbol) : void //site : IMemberSite
-      {
-        //def site = symbol :> IMemberSite;
-        //foreach (member in Members)
-        //  member.CollectGlobalSymbols(site);
-      }
-      //[Cached] MakeContext(parent : Context) : Context = PassThrough(Members, parent, _.MakeContext(_));
-      //Typing() : void = foreach (member in Members) member.Typing();
-      //TypeProperties() : void = foreach (member in Members) member.TypeProperties();
+      if (astSymbol.IsDeclaration)
+        when (symbolSymbolRef is SymbolRef.Some(symbolSymbol))
+        {
+          if (symbolSymbol.Declaration : object == astSymbol)
+            ()
+          else
+            this.Context.Error(this.Location.FromStart(), $"Symbol definition is not allowed in declaration with inherited sealed symbol '$(symbolSymbol.FullName)'.");
+        }
+      else
+        this.Context.Error(this.Location.FromStart(), "Symbol definition is not allowed in AST.");
     }
+  }
+
+  syntax AstBody = outline_begin_before nl "{" inl SymbolDefinition? Members=AstMember* d "}" outline_end_before nl
+  {
+    IsSymbolSealed() : bool = SymbolDefinitionOpt.HasValue && SymbolDefinitionOpt.Value.KwSealedOpt.HasValue;
     CollectGlobalSymbols(site : IMemberSite) : void = foreach (member in Members) member.CollectGlobalSymbols(site);
-    [Cached] MakeContext(parent : Context) : Context = PassThrough(Members, parent, _.MakeContext(_));
+    [Cached] MakeContext(parent : Context) : Context
+    {
+      when (SymbolDefinitionOpt.HasValue)
+        _ = SymbolDefinitionOpt.Value.MakeContext(parent);
+      PassThrough(Members, parent, _.MakeContext(_));
+    }
     Typing() : void = foreach (member in Members) member.Typing();
     TypeProperties() : void = foreach (member in Members) member.TypeProperties();
+    TypeSymbol(astSymbol : AstSymbol, symbolSymbolRef : SymbolRef[SymbolSymbol]) : void = when (SymbolDefinitionOpt.HasValue) SymbolDefinitionOpt.Value.TypeSymbol(astSymbol, symbolSymbolRef);
   }
 
   syntax AstMember
@@ -513,8 +526,10 @@ syntax module NitraSyntax
           | Declaration = "declarations" { override IsDeclaration = true; }
         }
 
-        syntax Body = outline_begin_before nl "{" inl Members=AstMember* Extensions=ExtensionAst* d "}" outline_end_before nl
+        syntax Body = outline_begin_before nl "{" SymbolDefinition? inl Members=AstMember* Extensions=ExtensionAst* d "}" outline_end_before nl
         {
+          IsSymbolSealed() : bool = SymbolDefinitionOpt.HasValue && SymbolDefinitionOpt.Value.KwSealedOpt.HasValue;
+
           CollectGlobalSymbols(site : IMemberSite, isDeclaration : bool) : void
           {
             foreach (member in Members) member.CollectGlobalSymbols(site);
@@ -522,6 +537,8 @@ syntax module NitraSyntax
           }
           [Cached] MakeContext(parent : Context) : Context
           {
+            when (SymbolDefinitionOpt.HasValue)
+              _ = SymbolDefinitionOpt.Value.MakeContext(parent);
             def context1 = PassThrough(Members, parent, _.MakeContext(_));
             def context2 = PassThrough(Extensions, context1, _.MakeContext(_));
             context2
@@ -536,6 +553,7 @@ syntax module NitraSyntax
             foreach (member in Members) member.TypeProperties();
             foreach (extension in Extensions) extension.TypeProperties();
           }
+          TypeSymbol(astSymbol : AstSymbol, symbolSymbolRef : SymbolRef[SymbolSymbol]) : void = when (SymbolDefinitionOpt.HasValue) SymbolDefinitionOpt.Value.TypeSymbol(astSymbol, symbolSymbolRef);
         }
 
         [Cached] private MakeAstSymbol() : ParsedExtensibleAstSymbol = ParsedExtensibleAstSymbol(this, this.Header.IsDeclaration());
