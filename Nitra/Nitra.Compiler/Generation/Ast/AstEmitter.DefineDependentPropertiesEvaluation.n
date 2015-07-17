@@ -101,6 +101,7 @@ namespace Nitra.Compiler
           def func = args.Typer.CurrentFunction;
           when (func.Name == "EvalProperties")
           {
+            //assert2(args.Typer.CurrentTypeBuilder?.FullName != "CSharp.CompilationUnit");
             try
             {
               match (func.Body)
@@ -185,7 +186,38 @@ namespace Nitra.Compiler
           | _ =>  ErrorUnexpectedExpr(expr); null
         }
       }
-
+      def nodeForPropertySymbol(propAccess : TExpr.PropertyMember, propertyRef : DependentAstPropertyRef) : Node
+      {
+        def nodesMap = nodesMap;
+        def key = toKey(propAccess);
+        mutable to;
+        unless (nodesMap.TryGetValue(key, out to))
+        {
+          to = Node.UseProp(propAccess, propertyRef);
+          nodesMap[key] = to;
+        }
+        to
+      }
+      def addUseDependence(expr : TExpr, node : Node) : void
+      {
+        match (expr)
+        {
+          | TExpr.PropertyMember as propAccess =>
+            def propertyRef = Environment.LookupAstPropertySymbol(propAccess.prop);
+            if (propertyRef != null)
+            {
+              def to = nodeForPropertySymbol(propAccess, propertyRef);
+              when (node.DependendOn.Add(to))
+                addUseDependence(propAccess.obj, to);
+            }
+            else
+              addUseDependence(propAccess.obj, node);
+          
+          | TExpr.Base
+          | TExpr.This => () // OK
+          | _ => ErrorUnexpectedExpr(expr); // not a property in member acess
+        }
+      }
       def addNodesDependentOnAssignedProperty(expr : TExpr, node : Node) : void
       {
         def walker = ExprWalker();
@@ -193,20 +225,9 @@ namespace Nitra.Compiler
         {
             def loop(expr)
             {
-              | TExpr.PropertyMember as e =>
-                def propertyRef = Environment.LookupAstPropertySymbol(e.prop);
-                when (propertyRef != null)
-                {
-                  def nodesMap = nodesMap;
-                  def key = toKey(e);
-                  mutable to;
-                  unless (nodesMap.TryGetValue(key, out to))
-                  {
-                    to = Node.UseProp(e, propertyRef);
-                    nodesMap[key] = to;
-                  }
-                  node.DependendOn.Add(to);
-                }
+              | TExpr.PropertyMember as propAccess =>
+                addUseDependence(propAccess, node);
+                info.Skip();
 
               | TExpr.Delayed as e when e.susp.IsResolved => loop(e.susp.ResolutionResult)
               | TExpr.Delayed as e => Message.FatalError(e.Location, "Delayed typing detected: " + e)
@@ -257,6 +278,7 @@ namespace Nitra.Compiler
               def key = toKey(e);
               def node = nodesMap[key] :> Node.AssignProp;
               addNodesDependentOnAssignedProperty(assign.source, node);
+              addNodesDependentOnAssignedProperty(e.obj, node);
             }
             else
               Message.FatalError(e.Location, "You can assign only a dependent property.");
@@ -313,7 +335,7 @@ namespace Nitra.Compiler
         def prop = getRootProp(synthesizedProp.Expr);
         foreach (astProp in declaredPropNodes)
           when (prop : object == astProp.Prop)
-            synthesizedProp.DependendOn.Add(astProp);
+            _ = synthesizedProp.DependendOn.Add(astProp);
       }
 
       //visualize(": После добавления зависимостей с синтизируемых свойств");
@@ -324,7 +346,7 @@ namespace Nitra.Compiler
         def prop = getRootProp(inheritedProp.Expr.target);
         foreach (astProp in declaredPropNodes)
           when (prop : object == astProp.Prop)
-            astProp.DependendOn.Add(inheritedProp);
+            _ = astProp.DependendOn.Add(inheritedProp);
       }
 
       //Node.Visualize(nodesMap.Values, "После добавления зависимостей на наследуемые свойства");
@@ -333,7 +355,7 @@ namespace Nitra.Compiler
       when (cycled2)
       {
         foreach (astProp when astProp.State == NodeState.Cycling in declaredPropNodes)
-          _ = astProp.DependendOn.RemoveAll(inheritedProp => inheritedProp.State == NodeState.Cycling);
+          _ = astProp.DependendOn.RemoveWhere(inheritedProp => inheritedProp.State == NodeState.Cycling)
       }
       def cycled3 = Node.Sort(newDependencyGraph);
 
@@ -386,13 +408,34 @@ namespace Nitra.Compiler
           def code =
             if (a.DependendOn.Count > 0)
             {
-              def conditions = a.DependendOn.Fold(<[ true ]>, (p, acc) =>  <[ $acc && $(GenerateHasValueCheck(p.Obj, p.PropertyRef)) ]>);
+              def makeCondition(node : Node) : PExpr
+              {
+                def makeDependentCheck(node : Node, predicates : SCG.List[PExpr], visited : SCG.HashSet[Node]) : void
+                {
+                  unless (visited.Add(node))
+                    return;
+                
+                  foreach (p in node.DependendOn)
+                  {
+                    makeDependentCheck(p, predicates, visited);
+                    unless (p is Node.DeclaredProp)
+                      predicates.Add(<[ $(GenerateHasValueCheck(p.Obj, p.PropertyRef)) ]>);
+                  }
+                }
+                
+                def predicates = SCG.List();
+                makeDependentCheck(node, predicates, SCG.HashSet());
+                predicates.Fold(<[ true ]>, (p, acc) => <[ $acc && $p ]>)
+              }
+              def conditions = makeCondition(a);
               <[
-                unless ($(GenerateHasValueCheck(a.Obj, a.PropertyRef)))
                   if ($conditions)
                   {
-                    $(a.Debug ?? a.Expr : typed);
-                    context.CalculatedCountInc();
+                    unless ($(GenerateHasValueCheck(a.Obj, a.PropertyRef)))
+                    {
+                      $(a.Debug ?? a.Expr : typed);
+                      context.CalculatedCountInc();
+                    }
                   }
                   else
                     context.DeferredCountInc();
