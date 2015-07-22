@@ -204,7 +204,74 @@ syntax module NitraSyntax
     Typing(context : Context, isDeclaration : bool) : list[AstSymbol] = TypingUtils.BindAstInheritanceList(this.BaseAsts.Item1, context, isDeclaration);
   }
 
-  syntax SymbolDefinition = "sealed"? "symbol" outline_begin_before nl "{" inl Members=AstMember* d "}" outline_end_before nl
+  syntax DependentProperty = Modifier Name sm ":" sm NitraType PropertyValue
+  {
+    token Modifier
+    {
+      Type() : DependentPropertyDirection * bool;
+      | "in"    { override Type = (DependentPropertyDirection.In,  false); }
+      | "out"   { override Type = (DependentPropertyDirection.Out, false); }
+      | "inout" { override Type = (DependentPropertyDirection.In,  true ); }
+    }
+
+    syntax PropertyValue
+    {
+      ValueLocation() : Nitra.Location;
+      HasValue() : bool;
+
+      | Expression = sm "=" sm Expression ";" nl
+        {
+          override ValueLocation = Expression.Location;
+          override HasValue = true;
+        }
+      | Empty = ";" nl
+        {
+          override ValueLocation = this.Location.FromStart();
+          override HasValue = false;
+        }
+    }
+
+    [Cached] Stage() : int = this.Context.TryGetContext.[AstDependentPropertyStageContext]()?.Stage;
+    [Cached] MakeSymbol1(propertyContainer : PropertyContainerSymbol, direction : DependentPropertyDirection, isInOut : bool) : ParsedDependentPropertySymbol = ParsedDependentPropertySymbol(this, propertyContainer, direction, isInOut);
+    [Cached] MakeSymbol2(propertyContainer : PropertyContainerSymbol) : ParsedDependentPropertySymbol = ParsedDependentPropertySymbol(this, propertyContainer, DependentPropertyDirection.Out, true);
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    CollectGlobalSymbols(propertyContainer : PropertyContainerSymbol) : void
+    {
+      def (direction, isInOut) = this.Modifier.Type();
+      _ = propertyContainer.Node.AddAndReport.[PropertySymbol](MakeSymbol1(propertyContainer, direction, isInOut), Name.Location);
+      when (isInOut)
+        _ = propertyContainer.Node.AddAndReport.[PropertySymbol](MakeSymbol2(propertyContainer), Name.Location);
+    }
+    [Cached] MakeType() : NType = this.NitraType.Typing(this.Context)[0];
+    Typing() : void
+    {
+      _ = MakeType();
+    }
+    TypeProperties() : void
+    {
+      when (this.PropertyValue.HasValue())
+      {
+        def assignment = DependentPropertyAssignment(this.Location, [Nitra.Model.Identifier(Name.Location, Symbol1.Name)], NemerleParser.Parse(this.PropertyValue, this.Context));
+        TypingUtils.RegisterDependentPropertyAssignment(this.Symbol1.PropertyContainer, assignment, this.Context)
+      }
+    }
+  }
+
+  syntax PropertyAssignment = QualifiedName sm "=" sm Expression ";"
+  {
+    Typing(propertyContainer : PropertyContainerSymbol, context : Context) : void
+    {
+      def assignment = DependentPropertyAssignment(this.Location, this.QualifiedName.Identifiers(), NemerleParser.Parse(this.Expression, context));
+      TypingUtils.RegisterDependentPropertyAssignment(propertyContainer, assignment, context)
+    }
+  }
+
+  syntax StageScope = "stage" sm Number ":"
+  {
+    MakeContext(parent : Context) : Context = AstDependentPropertyStageContext(parent, Number.Value());
+  }
+
+  syntax SymbolDefinition = "sealed"? "symbol" outline_begin_before nl "{" inl Members=SymbolMember* d "}" outline_end_before nl
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
     TypeSymbol(astSymbol : AstSymbol, symbolSymbolRef : SymbolRef[SymbolSymbol]) : void
@@ -220,6 +287,36 @@ syntax module NitraSyntax
       else
         this.Context.Error(this.Location.FromStart(), "Symbol definition is not allowed in AST.");
     }
+  }
+
+  syntax SymbolMember
+  {
+    CollectGlobalSymbols(propertyContainer : PropertyContainerSymbol) : void;
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    Typing() : void;
+    TypeProperties() : void;
+
+    | DependentProperty
+      {
+        override CollectGlobalSymbols = DependentProperty.CollectGlobalSymbols(propertyContainer);
+        override MakeContext = DependentProperty.MakeContext(parent);
+        override Typing = DependentProperty.Typing();
+        override TypeProperties = DependentProperty.TypeProperties();
+      }
+    | PropertyAssignment
+      {
+        [Cached] private MakePropertyContainer(propertyContainer : PropertyContainerSymbol) : PropertyContainerSymbol = propertyContainer;
+        override CollectGlobalSymbols { _ = MakePropertyContainer(propertyContainer) }
+        override Typing {}
+        override TypeProperties = PropertyAssignment.Typing(this.PropertyContainer, this.Context);
+      }
+    | StageScope
+      {
+        override CollectGlobalSymbols { _ = propertyContainer; }
+        override MakeContext = StageScope.MakeContext(parent);
+        override Typing {}
+        override TypeProperties {}
+      }
   }
 
   syntax AstBody = outline_begin_before nl "{" inl SymbolDefinition? Members=AstMember* d "}" outline_end_before nl
@@ -261,49 +358,19 @@ syntax module NitraSyntax
         }
         override TypeProperties {}
       }
-    | DependentProperty = Modifier Name sm ":" sm NitraType DependentPropertyValue
+    | DependentProperty
       {
-        token Modifier
-        {
-          Type() : DependentPropertyDirection * bool;
-          | "in"    { override Type = (DependentPropertyDirection.In,  false); }
-          | "out"   { override Type = (DependentPropertyDirection.Out, false); }
-          | "inout" { override Type = (DependentPropertyDirection.In,  true ); }
-        }
-
-        [Cached] private MakeSymbol1(propertyContainer : PropertyContainerSymbol, direction : DependentPropertyDirection, isInOut : bool) : ParsedDependentPropertySymbol = ParsedDependentPropertySymbol(this, propertyContainer, direction, isInOut);
-        [Cached] private MakeSymbol2(propertyContainer : PropertyContainerSymbol) : ParsedDependentPropertySymbol = ParsedDependentPropertySymbol(this, propertyContainer, DependentPropertyDirection.Out, true);
-        override CollectGlobalSymbols
-        {
-          def (direction, isInOut) = this.Modifier.Type();
-          _ = propertyContainer.Node.AddAndReport.[PropertySymbol](MakeSymbol1(propertyContainer, direction, isInOut), Name.Location);
-          when (isInOut)
-            _ = propertyContainer.Node.AddAndReport.[PropertySymbol](MakeSymbol2(propertyContainer), Name.Location);
-        }
-        [Cached] private MakeType() : NType = this.NitraType.Typing(this.Context)[0];
-        override Typing
-        {
-          _ = MakeType();
-        }
-        override TypeProperties
-        {
-          when (this.DependentPropertyValue.HasValue())
-          {
-            def assignment = DependentPropertyAssignment(this.Location, [Nitra.Model.Identifier(Name.Location, Symbol1.Name)], NemerleParser.Parse(this.DependentPropertyValue, this.Context));
-            TypingUtils.RegisterDependentPropertyAssignment(this.Symbol1.PropertyContainer, assignment, this.Context)
-          }
-        }
+        override CollectGlobalSymbols = DependentProperty.CollectGlobalSymbols(propertyContainer);
+        override MakeContext = DependentProperty.MakeContext(parent);
+        override Typing = DependentProperty.Typing();
+        override TypeProperties = DependentProperty.TypeProperties();
       }
-    | PropertyAssignment = QualifiedName sm "=" sm Expression ";"
+    | PropertyAssignment
       {
         [Cached] private MakePropertyContainer(propertyContainer : PropertyContainerSymbol) : PropertyContainerSymbol = propertyContainer;
         override CollectGlobalSymbols { _ = MakePropertyContainer(propertyContainer) }
         override Typing {}
-        override TypeProperties
-        {
-          def assignment = DependentPropertyAssignment(this.Location, this.QualifiedName.Identifiers(), NemerleParser.Parse(this.Expression, this.Context));
-          TypingUtils.RegisterDependentPropertyAssignment(this.PropertyContainer, assignment, this.Context)
-        }
+        override TypeProperties = PropertyAssignment.Typing(this.PropertyContainer, this.Context);
       }
     | Decompose = "decompose" Name outline_begin_before nl "{" inl Properties=ProjectedProperty* d "}" outline_end_before nl
       {
@@ -343,29 +410,12 @@ syntax module NitraSyntax
           foreach (property in Properties) property.TypeProjection(projectionSource, baseType)
         }
       }
-    | StageScope = "stage" sm Number ":"
+    | StageScope
       {
         override CollectGlobalSymbols { _ = propertyContainer; }
-        override MakeContext = AstDependentPropertyStageContext(parent, Number.Value());
+        override MakeContext = StageScope.MakeContext(parent);
         override Typing {}
         override TypeProperties {}
-      }
-  }
-
-  syntax DependentPropertyValue
-  {
-    ValueLocation() : Nitra.Location;
-    HasValue() : bool;
-
-    | Expression = sm "=" sm Expression ";" nl
-      {
-        override ValueLocation = Expression.Location;
-        override HasValue = true;
-      }
-    | Empty = ";" nl
-      {
-        override ValueLocation = this.Location.FromStart();
-        override HasValue = false;
       }
   }
 
