@@ -16,14 +16,13 @@ using SCG = System.Collections.Generic;
 
 namespace Nitra.Compiler
 {
-  internal abstract partial class AstEmitter
+  internal abstract partial class BaseAstEmitter
   {
-    protected DefineDependentPropertiesEvaluation(tb : TypeBuilder, symbol : AstSymbol, evalSymbolProperty : bool) : void
+    protected DefineDependentPropertiesEvaluation(tb : TypeBuilder, symbol : AstSymbol, evalSymbolProperty : bool, makeBody : PExpr -> PExpr = null) : void
     {
       Util.locate(symbol.FirstLocation.NLocation(),
       tb.Manager.MacroColors.InGlobalColor(fun()
       {
-        def body = SCG.List();
         when ((symbol : object) is IDependentPropertyAssignmentContainer as container)
         {
           def initializedOutProperties = SCG.HashSet(symbol.InitializedOutProperties);
@@ -47,7 +46,10 @@ namespace Nitra.Compiler
                 {
                   _ = initializedOutProperties.Add(p);
                   if (symbol.Symbol is SymbolRef.Some(s))
-                    body.Add(Util.locate(symbol.FirstLocation.NLocation(), <[ this.Symbol = this.ContainingScope.Define.[$(Environment.GetSymbolClass(s) : typed)](this) ]>));
+                  {
+                    def loc = if (outPropertySymbol.PropertyContainer == symbol) outPropertySymbol.FirstLocation else symbol.FirstLocation;
+                    container.AddAssignment(DependentPropertyAssignment(loc, [Identifier(symbol.FirstLocation, outPropertySymbol.Name)], <[ this.ContainingScope.Define.[$(Environment.GetSymbolClass(s) : typed)](this) ]>))
+                  }
                   else
                     assert(false, "Symbol property is not set!");
                 }
@@ -61,73 +63,102 @@ namespace Nitra.Compiler
             | _ => ()
           }
 
-          foreach (assignment in container.GetAssignments())
-            body.Add(Util.locate(assignment.Location.NLocation(), <[ $(PExprUtils.FromQualifiedIdentifier(assignment.Path)) = $(assignment.Expression) ]>));
+          TypeDependentPropertiesEvaluation(tb, symbol, container.GetAssignments(), makeBody)
         }
-
-        DefineEvalPropertiesMethod(tb, <[ { ..$body } ]>);
-
-        def compileGraph(methodBuilder : MethodBuilder, graphNodes : Seq[Node]) : void
-        {
-          def cycled = Node.Sort(graphNodes);
-          if (cycled)
-          {
-            def cycledNodes = Node.FindCycling(graphNodes);
-            foreach (cycledNode in cycledNodes)
-              Message.Error(cycledNode.Location, "Is cycled.");
-            otherwise assert(false, "Cycled nodes not found");
-          }
-          else
-          {
-            def props = SCG.List();
-            foreach (s is StructuralPropertySymbol in symbol.AllProperties)
-            {
-              if (tb.LookupMember(s.Name).Find(m => m is IProperty) is Some(m))
-                props.Add(m :> IProperty);
-              else
-                assert(false, $"IProperty for symbol $s not found");
-            }
-            def graphNodes2 = AddDependencyOnAstProperties(graphNodes, props);
-            CheckStageDependencies(graphNodes2);
-            //CheckOutputPropertiesAssignment(symbol, newGraphNodes);
-            def code          = GenerateCode(tb, graphNodes2);
-            if (symbol is ExtensionAstSymbol)
-              methodBuilder.Body = <[ $code; base.EvalProperties($("context" : usesite)); ]>
-            else
-              methodBuilder.Body = code;
-            throw RestartRunBodyTyperException()
-          }
-        }
-
-        def typingHandler(_ : object, args : StageEventArgs) : void
-        {
-          def func = args.Typer.CurrentFunction;
-          when (func.Name == "EvalProperties")
-          {
-            //assert2(args.Typer.CurrentTypeBuilder?.FullName != "CSharp.CompilationUnit");
-            try
-            {
-              match (func.Body)
-              {
-                | FunBody.Typed(TExpr.Block(_, TExpr.Literal(Literal.Void))) =>
-                  compileGraph(args.Typer.CurrentMethodBuilder, [])
-
-                | FunBody.Typed(TExpr.Block(_, bodyExpr)) =>
-                  def expr       = ValidateEvalFieldsCode(bodyExpr);
-                  def nodesMap   = MakeDependencyGraph(expr);
-                  def graphNodes = nodesMap.Values.ToArray();
-                  compileGraph(args.Typer.CurrentMethodBuilder, graphNodes)
-
-                | _ => Message.Error(args.Typer.CurrentFunction.Location, "Unsupported dependent properties syntax.")
-              }
-            }
-            finally
-              tb.MethodBeforeStage2 -= typingHandler
-          }
-        }
-        tb.MethodBeforeStage2 += typingHandler
       }));
     }
+
+    protected DefineDependentPropertiesEvaluation(tb : TypeBuilder, symbol : SymbolSymbol, makeBody : PExpr -> PExpr = null) : void
+    {
+      Util.locate(symbol.FirstLocation.NLocation(),
+      tb.Manager.MacroColors.InGlobalColor(fun()
+      {
+        when ((symbol : object) is IDependentPropertyAssignmentContainer as container)
+        {
+          def initializedOutProperties = SCG.HashSet(symbol.InitializedOutProperties);
+          foreach (p in symbol.AllProperties)
+          {
+            | DependentPropertySymbol(Direction = Out) as outPropertySymbol =>
+              unless (initializedOutProperties.Contains(outPropertySymbol))
+              {
+                def loc = if (outPropertySymbol.PropertyContainer == symbol) outPropertySymbol.FirstLocation else symbol.FirstLocation;
+                Message.Error(loc.NLocation(), $"Output dependent property '$(outPropertySymbol.Name)' is never assigned to");
+              }
+
+            | _ => ()
+          }
+
+          TypeDependentPropertiesEvaluation(tb, symbol, container.GetAssignments(), makeBody)
+        }
+      }));
+    }
+
+    private TypeDependentPropertiesEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol, assignments : Seq[DependentPropertyAssignment], makeBody : PExpr -> PExpr) : void
+    {
+      def body = SCG.List();
+      foreach (assignment in assignments)
+        body.Add(Util.locate(assignment.Location.NLocation(), <[ $(PExprUtils.FromQualifiedIdentifier(assignment.Path)) = $(assignment.Expression) ]>));
+      DefineEvalPropertiesMethod(tb, <[ { ..$body } ]>);
+
+      def compileGraph(methodBuilder : MethodBuilder, graphNodes : Seq[Node]) : void
+      {
+        def cycled = Node.Sort(graphNodes);
+        if (cycled)
+        {
+          def cycledNodes = Node.FindCycling(graphNodes);
+          foreach (cycledNode in cycledNodes)
+            Message.Error(cycledNode.Location, "Is cycled.");
+          otherwise assert(false, "Cycled nodes not found");
+        }
+        else
+        {
+          def props = SCG.List();
+          foreach (s is StructuralPropertySymbol in symbol.AllProperties)
+          {
+            if (tb.LookupMember(s.Name).Find(m => m is IProperty) is Some(m))
+              props.Add(m :> IProperty);
+            else
+              assert(false, $"IProperty for symbol $s not found");
+          }
+          def graphNodes2 = AddDependencyOnAstProperties(graphNodes, props);
+          CheckStageDependencies(graphNodes2);
+          //CheckOutputPropertiesAssignment(symbol, newGraphNodes);
+          def code = GenerateCode(tb, graphNodes2);
+          methodBuilder.Body = if (makeBody != null) makeBody(code) else code;
+          throw RestartRunBodyTyperException()
+        }
+      }
+
+      def typingHandler(_ : object, args : StageEventArgs) : void
+      {
+        def func = args.Typer.CurrentFunction;
+        when (func.Name == "EvalProperties")
+        {
+          //assert2(args.Typer.CurrentTypeBuilder?.FullName != "CSharp.CompilationUnit");
+          try
+          {
+            match (func.Body)
+            {
+              | FunBody.Typed(TExpr.Block(_, TExpr.Literal(Literal.Void))) =>
+                compileGraph(args.Typer.CurrentMethodBuilder, [])
+
+              | FunBody.Typed(TExpr.Block(_, bodyExpr)) =>
+                def expr       = ValidateEvalFieldsCode(bodyExpr);
+                def nodesMap   = MakeDependencyGraph(expr);
+                def graphNodes = nodesMap.Values.ToArray();
+                compileGraph(args.Typer.CurrentMethodBuilder, graphNodes)
+
+              | _ => Message.Error(args.Typer.CurrentFunction.Location, "Unsupported dependent properties syntax.")
+            }
+          }
+          finally
+            tb.MethodBeforeStage2 -= typingHandler
+        }
+      }
+      tb.MethodBeforeStage2 += typingHandler
+    }
+
+    protected static CallBaseEvalProperties : PExpr -> PExpr = fun(code) { <[ $code; base.EvalProperties($("context" : usesite)); ]> };
 
     private static ErrorUnexpectedExpr(expr : TExpr) : void
     {
