@@ -75,6 +75,7 @@ syntax module NitraSyntax
     TypeSyntaxMappings() : void = NamespaceBody.TypeSyntaxMappings();
     TypeAst() : void = NamespaceBody.TypeAst();
     Typing() : void = NamespaceBody.Typing();
+    TypeSymbolMembers() : void = NamespaceBody.TypeSymbolMembers();
   }
 
   syntax Usings = outline_hiden outline_begin Using* outline_end_before
@@ -94,6 +95,7 @@ syntax module NitraSyntax
     TypeSyntaxMappings() : void = foreach (topDecl in NamespaceMembers) topDecl.TypeSyntaxMappings();
     TypeAst() : void = foreach (topDecl in NamespaceMembers) topDecl.TypeAst();
     Typing() : void = foreach (topDecl in NamespaceMembers) topDecl.Typing();
+    TypeSymbolMembers() : void = foreach (topDecl in NamespaceMembers) topDecl.TypeSymbolMembers();
   }
 
   syntax Using
@@ -274,28 +276,39 @@ syntax module NitraSyntax
   syntax SymbolDefinition = "sealed"? "symbol" outline_begin_before nl "{" inl Members=SymbolMember* d "}" outline_end_before nl
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
-    TypeSymbol(astSymbol : AstSymbol, symbolSymbolRef : SymbolRef[SymbolSymbol]) : void
+    [Cached] CalcIsTypingAllowed(value : bool) : bool = value;
+    CollectSymbolMembers(astSymbol : AstSymbol, symbolSymbolRef : SymbolRef[SymbolSymbol]) : void
     {
+      mutable isTypingAllowed;
+
       if (astSymbol.IsDeclaration)
         when (symbolSymbolRef is SymbolRef.Some(symbolSymbol))
         {
           if (symbolSymbol.Declaration : object == astSymbol)
           {
+            isTypingAllowed = true;
+
             foreach (member in Members)
               member.CollectGlobalSymbols(symbolSymbol);
             mutable memberContext = this.Context;
             foreach (member in Members)
               memberContext = member.MakeContext(memberContext);
-            foreach (member in Members)
-              member.Typing();
-            foreach (member in Members)
-              member.TypeProperties();
           }
           else
             this.Context.Error(this.Location.FromStart(), $"Symbol definition is not allowed in declaration with inherited sealed symbol '$(symbolSymbol.FullName)'.");
         }
       else
         this.Context.Error(this.Location.FromStart(), "Symbol definition is not allowed in AST.");
+
+      _ = CalcIsTypingAllowed(isTypingAllowed);
+    }
+    TypeSymbolMembers() : void
+    {
+      when (IsTypingAllowed)
+      {
+        foreach (member in Members) member.Typing();
+        foreach (member in Members) member.TypeProperties()
+      }
     }
   }
 
@@ -341,7 +354,8 @@ syntax module NitraSyntax
     }
     Typing() : void = foreach (member in Members) member.Typing();
     TypeProperties() : void = foreach (member in Members) member.TypeProperties();
-    TypeSymbol(astSymbol : AstSymbol, symbolSymbolRef : SymbolRef[SymbolSymbol]) : void = when (SymbolDefinitionOpt.HasValue) SymbolDefinitionOpt.Value.TypeSymbol(astSymbol, symbolSymbolRef);
+    CollectSymbolMembers(astSymbol : AstSymbol, symbolSymbolRef : SymbolRef[SymbolSymbol]) : void = when (SymbolDefinitionOpt.HasValue) SymbolDefinitionOpt.Value.CollectSymbolMembers(astSymbol, symbolSymbolRef);
+    TypeSymbolMembers() : void = when (SymbolDefinitionOpt.HasValue) SymbolDefinitionOpt.Value.TypeSymbolMembers();
   }
 
   syntax AstMember
@@ -474,6 +488,7 @@ syntax module NitraSyntax
       else
         inherited
     }
+    TypeSymbolMembers() : void = when (Body.HasValue) Body.Value.TypeSymbolMembers();
   }
 
   token AstModifier
@@ -493,6 +508,7 @@ syntax module NitraSyntax
     TypeSyntaxMappings() : void {}
     TypeAst() : void {}
     Typing() : void;
+    TypeSymbolMembers() : void;
 
     | SimpleAst = Header sm Name AstInheritance? Body=AstBody
       {
@@ -539,6 +555,7 @@ syntax module NitraSyntax
           when (this.AstSymbol.Symbol is SymbolRef.Some(s))
             s.TypeInheritance();
         }
+        override TypeSymbolMembers = Body.TypeSymbolMembers();
       }
 
     | ExtensibleAst = Header sm Name AstInheritance? Body
@@ -577,7 +594,8 @@ syntax module NitraSyntax
             foreach (member in Members) member.TypeProperties();
             foreach (extension in Extensions) extension.TypeProperties();
           }
-          TypeSymbol(astSymbol : AstSymbol, symbolSymbolRef : SymbolRef[SymbolSymbol]) : void = when (SymbolDefinitionOpt.HasValue) SymbolDefinitionOpt.Value.TypeSymbol(astSymbol, symbolSymbolRef);
+          CollectSymbolMembers(astSymbol : AstSymbol, symbolSymbolRef : SymbolRef[SymbolSymbol]) : void = when (SymbolDefinitionOpt.HasValue) SymbolDefinitionOpt.Value.CollectSymbolMembers(astSymbol, symbolSymbolRef);
+          TypeSymbolMembers() : void = when (SymbolDefinitionOpt.HasValue) SymbolDefinitionOpt.Value.TypeSymbolMembers();
         }
 
         [Cached] private MakeAstSymbol() : ParsedExtensibleAstSymbol = ParsedExtensibleAstSymbol(this, this.Header.IsDeclaration());
@@ -606,6 +624,7 @@ syntax module NitraSyntax
           when (this.AstSymbol.Symbol is SymbolRef.Some(s))
             s.TypeInheritance();
         }
+        override TypeSymbolMembers = Body.TypeSymbolMembers();
       }
 
     | ExtendAst = Header sm (Name sm "=" sm)? BaseName=QualifiedName Body
@@ -631,6 +650,7 @@ syntax module NitraSyntax
               extension.Typing(baseAstRef);
           }
           TypeAst() : void = foreach (extension in Extensions) extension.TypeProperties();
+          TypeSymbolMembers() : void = foreach (extension in Extensions) extension.TypeSymbolMembers();
         }
 
         override CollectGlobalSymbols
@@ -654,6 +674,7 @@ syntax module NitraSyntax
         }
         override TypeAst = Body.TypeAst();
         [Cached] private MakeBaseAstRef() : SymbolRef[ExtensibleAstSymbol] = this.Context.Bind.[ExtensibleAstSymbol](BaseName);
+        override TypeSymbolMembers = Body.TypeSymbolMembers();
       }
 
     | MapSyntax = "map" sm "syntax" sm RuleName=QualifiedName ParametersOpt=MapSyntaxParameters? sm "->" sm AstName=NitraType MapSyntaxBody
@@ -693,6 +714,7 @@ syntax module NitraSyntax
         {
           _ = MakeExpr();
         }
+        override TypeSymbolMembers {}
       }
 
     | Namespace   = "namespace"   sm QualifiedName outline_begin_before nl "{" inl NamespaceBody      d "}" outline_end_before nl
@@ -708,6 +730,7 @@ syntax module NitraSyntax
         override TypeSyntaxMappings = NamespaceBody.TypeSyntaxMappings();
         override Typing = NamespaceBody.Typing();
         override TypeAst = NamespaceBody.TypeAst();
+        override TypeSymbolMembers = NamespaceBody.TypeSymbolMembers();
       }
 
     | SyntaxModule = SyntaxModuleAttributes "syntax" sm "module"sm Name outline_begin_before nl "{" inl Usings SyntaxModuleMember* d "}" outline_end_before nl
@@ -738,6 +761,7 @@ syntax module NitraSyntax
           foreach (decl in SyntaxModuleMembers)
             decl.Typing();
         }
+        override TypeSymbolMembers {}
       }
   }
 
