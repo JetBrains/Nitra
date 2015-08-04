@@ -5,10 +5,12 @@ At present Nitra allows you to create dynamically expanding parsers. In the futu
 
 Licence - [BSD 3-Clause License](http://opensource.org/licenses/BSD-3-Clause)
 
-[Install](http://confluence.jetbrains.com/display/Nitra/Install) – instructions to setup environment.
+[Install](http://confluence.jetbrains.com/display/Nitra/Install) вЂ“ instructions to setup environment.
 
 [Build](http://confluence.jetbrains.com/display/Nitra/Build) - building Nitra project from sources.
 
 [Example](http://confluence.jetbrains.com/display/Nitra/Calculator+sample) - string calculator example
+
+[Roadmap](http://confluence.jetbrains.com/display/Nitra/Roadmap)
 
 [More information](http://confluence.jetbrains.com/display/Nitra)
