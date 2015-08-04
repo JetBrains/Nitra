@@ -26,16 +26,12 @@ namespace Nitra.Compiler
       def propertyType = TypeCompiler.CompileDependentPropertyType(propertySymbol);
       def attribute    = MakeDependentPropertyAttribute(propertySymbol, -1);
       def mods         = AttributesAndModifiers(if (isOverride) NemerleModifiers.New else NemerleModifiers.None, [attribute]);
-      match (propertySymbol.Direction)
-      {
-        | In  => tb.Define(<[ decl: ..$mods $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; set; } ]>)
-        | Out => tb.Define(<[ decl: ..$mods $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; }      ]>)
-      }
+      tb.Define(<[ decl: ..$mods $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; set; } ]>);
       unless (isOverride)
         tb.Define(<[ decl: $(GetIsEvaluatedPropertyName(propertySymbol) : usesite) : bool { get; } ]>);
     }
 
-    protected DefineDependentProperty(tb : TypeBuilder, propertyRef : DependentPropertyRef.Compiling, modifiers : NemerleModifiers) : void
+    protected DefineDependentProperty(tb : TypeBuilder, propertyRef : DependentPropertyRef.Compiling, modifiers : NemerleModifiers, overrideSetter : bool = true) : void
     {
       def propertyType     = TypeCompiler.CompileDependentPropertyType(propertyRef.Symbol);
       def backingFieldName = Util.tmpname(propertyRef.Symbol.Name);
@@ -46,12 +42,6 @@ namespace Nitra.Compiler
         ]>);
 
         def mods          = AttributesAndModifiers(modifiers, [MakeDependentPropertyAttribute(propertyRef.Symbol, propertyRef.Index)]);
-        def setterMods    =
-          match (propertyRef.Symbol.Direction)
-          {
-            | In  => AttributesAndModifiers(NemerleModifiers.None,      [])
-            | Out => AttributesAndModifiers(NemerleModifiers.Protected, [])
-          };
         tb.Define(<[ decl:
           ..$mods $(propertyRef.Symbol.Name : usesite) : $(propertyType : typed)
           {
@@ -61,7 +51,6 @@ namespace Nitra.Compiler
                 $(MakeAccessAssertion(propertyRef));
               this.$(backingFieldName : usesite)
             }
-            ..$setterMods
             set
             {
               unless ($(propertyRef.Bit.Read()))
@@ -81,7 +70,38 @@ namespace Nitra.Compiler
             get { $(propertyRef.Bit.Read()) }
           }
         ]>);
+
+        when (overrideSetter)
+          DefineDependenPropertyOverrideSetter(tb, propertyRef.Symbol);
       });
+    }
+
+    protected DefineDependenPropertyOverrideSetter(tb : TypeBuilder, property : DependentPropertySymbol) : void
+    {
+      when (property.OverrideProperty is SymbolRef.Some(originalProperty))
+      {
+        def originalType   = TypeCompiler.CompileDependentPropertyType(originalProperty :> DependentPropertySymbol);
+        def overriddenType = TypeCompiler.CompileDependentPropertyType(property);
+
+        def setterName = "set_" + property.Name;
+        def decl = <[ decl:
+          $(Util.tmpname(setterName) : usesite)(value : $(originalType : typed)) : void
+          {
+            this.$(property.Name : usesite) = value :> $(overriddenType : typed)
+          }
+        ]>;
+
+        decl.implemented = [<[ $(Environment.Project.GetNemerleType(originalProperty.PropertyContainer) : typed).$(setterName : usesite) ]>];
+
+        foreach (container in property.PropertyContainer.GetAncestors())
+        {
+          when (container.LookupProperty(property.Name) is VSome(candidateProperty)             when candidateProperty.PropertyContainer : object == container)
+          when (candidateProperty.OverrideProperty is SymbolRef.Some(candidateOriginalProperty) when originalProperty : object == candidateOriginalProperty)
+            decl.implemented ::= <[ $(Environment.Project.GetNemerleType(container) : typed).$(setterName : usesite) ]>;
+        }
+
+        tb.Define(decl)
+      }
     }
 
     protected static GetIsEvaluatedPropertyName(propertySymbol : DependentPropertySymbol) : string
