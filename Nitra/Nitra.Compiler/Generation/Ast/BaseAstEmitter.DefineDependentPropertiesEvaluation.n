@@ -18,22 +18,45 @@ namespace Nitra.Compiler
 {
   internal abstract partial class BaseAstEmitter
   {
-    protected DefineDependentPropertiesEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol, defineEvalPropertiesMethod : TypeBuilder * IDependentPropertyAssignmentContainer -> void) : void
+    protected DefineDependentPropertiesInheritableEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol) : void
     {
-      DefineDependentPropertiesEvaluation(tb, symbol, defineEvalPropertiesMethod, IdentityExpr)
-    }
-
-    protected DefineDependentPropertiesEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol, defineEvalPropertiesMethod : TypeBuilder * IDependentPropertyAssignmentContainer -> void, makeBody : PExpr -> PExpr) : void
-    {
-      Util.locate(symbol.FirstLocation.NLocation(),
-      tb.Manager.MacroColors.InGlobalColor(fun()
+      Util.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
       {
-        defineEvalPropertiesMethod(tb, symbol :> IDependentPropertyAssignmentContainer);
-        DefineDependentPropertiesEvaluationImpl(tb, symbol, makeBody);
+        def body = SCG.List();
+        foreach (assignment in (symbol :> IDependentPropertyAssignmentContainer).GetAssignments())
+          body.Add(Util.locate(assignment.Location.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ self ]>, assignment.Path)) = $(PrepareExprForInheritableEvaluation(symbol, assignment.Expression)) ]>));
+
+        tb.DefineConditional(<[ decl:
+          public static EvalProperties($("self" : global) : this, $("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
+          {
+            ..$body
+          }
+        ]>, conditionName="DEBUG_EVAL_DEPENDENT_PROPERTIES");
+
+        DefineDependentPropertiesEvaluationImpl(tb, symbol, null, <[ self ]>);
       }));
     }
 
-    private DefineDependentPropertiesEvaluationImpl(tb : TypeBuilder, symbol : PropertyContainerSymbol, makeBody : PExpr -> PExpr) : void
+    protected DefineDependentPropertiesSealedEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef] = null) : void
+    {
+      Util.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
+      {
+        def body = SCG.List();
+        foreach (assignment in (symbol :> IDependentPropertyAssignmentContainer).GetAssignments())
+          body.Add(Util.locate(assignment.Location.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ this ]>, assignment.Path)) = $(assignment.Expression) ]>));
+
+        tb.DefineConditional(<[ decl:
+          public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
+          {
+            ..$body
+          }
+        ]>, conditionName="DEBUG_EVAL_DEPENDENT_PROPERTIES");
+
+        DefineDependentPropertiesEvaluationImpl(tb, symbol, dependentProperties, <[ this ]>);
+      }));
+    }
+
+    private DefineDependentPropertiesEvaluationImpl(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef], self : PExpr) : void
     {
       def compileGraph(methodBuilder : MethodBuilder, graphNodes : Seq[Node]) : void
       {
@@ -58,7 +81,7 @@ namespace Nitra.Compiler
           def graphNodes2 = AddDependencyOnAstProperties(graphNodes, props);
           CheckStageDependencies(graphNodes2);
           //CheckOutputPropertiesAssignment(symbol, newGraphNodes);
-          methodBuilder.Body = makeBody(GenerateCode(tb, graphNodes2));
+          methodBuilder.Body = GenerateCode(tb, symbol, graphNodes2, dependentProperties, self);
           throw RestartRunBodyTyperException()
         }
       }
@@ -91,58 +114,6 @@ namespace Nitra.Compiler
       }
       tb.MethodBeforeStage2 += typingHandler
     }
-
-    protected static IdentityExpr : PExpr -> PExpr = fun (x) { x };
-
-    protected static CallBaseEvalProperties : PExpr -> PExpr = fun (code) { <[ $code; base.EvalProperties($("context" : usesite)); ]> };
-
-    protected static CallSymbolEvalProperties(symbol : AstSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef]) : PExpr -> PExpr
-    {
-      if (symbol.IsDeclaration)
-      {
-        if (symbol.LookupProperty("Symbol") is VSome(symbolProperty is DependentPropertySymbol))
-        {
-          fun (code)
-          {
-            <[
-              when ($(GenerateHasValueCheck(<[ this ]>, dependentProperties[symbolProperty])))
-                this.$(symbolProperty.Name : usesite).EvalProperties(context);
-              $code
-            ]>
-          }
-        }
-        else IdentityExpr
-      }
-      else IdentityExpr
-    }
-
-    protected static DefineEvalPropertiesMethod1 : TypeBuilder * IDependentPropertyAssignmentContainer -> void = fun (tb, container)
-    {
-      def body = SCG.List();
-      foreach (assignment in container.GetAssignments())
-        body.Add(Util.locate(assignment.Location.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ this ]>, assignment.Path)) = $(assignment.Expression) ]>));
-
-      tb.DefineConditional(<[ decl:
-        public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
-        {
-          ..$body
-        }
-      ]>, conditionName="DEBUG_EVAL_DEPENDENT_PROPERTIES");
-    };
-
-    protected static DefineEvalPropertiesMethod2 : TypeBuilder * IDependentPropertyAssignmentContainer -> void = fun (tb, container)
-    {
-      def body = SCG.List();
-      foreach (assignment in container.GetAssignments())
-        body.Add(Util.locate(assignment.Location.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ self ]>, assignment.Path)) = $(assignment.Expression) ]>));
-
-      tb.DefineConditional(<[ decl:
-        public static EvalProperties($("self" : global) : this, $("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
-        {
-          ..$body
-        }
-      ]>, conditionName="DEBUG_EVAL_DEPENDENT_PROPERTIES");
-    };
 
     private static ErrorUnexpectedExpr(expr : TExpr) : void
     {
@@ -415,7 +386,7 @@ namespace Nitra.Compiler
       }
     }
 
-    private GenerateCode(tb : TypeBuilder, dependencyGraph : Seq[Node]) : PExpr
+    private GenerateCode(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependencyGraph : Seq[Node], dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef], self : PExpr) : PExpr
     {
       def orderedNodes = dependencyGraph.ToArray();
       Array.Sort(orderedNodes, (l, r) => l.Order - r.Order);
@@ -425,6 +396,28 @@ namespace Nitra.Compiler
       // Rendering code
       def result = SCG.List();
       result.Add(<[ _ = context ]>);
+
+      unless (symbol.IsAbstract || symbol.IsExtensible)
+      {
+        foreach (ancestor in symbol.GetAncestors())
+        {
+          if (ancestor.IsExtensible)
+            result.Add(<[ base.EvalProperties(context); ]>);
+          else when (ancestor.IsAbstract && ancestor.InitializedOutProperties is _ :: _)
+            result.Add(<[ $(Environment.Project.GetNemerleType(ancestor) : typed).EvalProperties(this, context) ]>);
+        }
+      }
+
+      when (dependentProperties != null)
+      when (symbol is AstSymbol(IsDeclaration = true))
+      when (symbol.LookupProperty("Symbol") is VSome(symbolProperty is DependentPropertySymbol))
+      {
+        result.Add(<[
+          when ($(GenerateHasValueCheck(<[ this ]>, dependentProperties[symbolProperty])))
+            this.$(symbolProperty.Name : usesite).EvalProperties(context);
+        ]>);
+      }
+
       foreach (node in orderedNodes)
       {
         | AssignProp    as a => 
@@ -437,7 +430,7 @@ namespace Nitra.Compiler
                 {
                   unless (visited.Add(node))
                     return;
-                
+
                   foreach (p in node.DependendOn)
                   {
                     makeDependentCheck(p, predicates, visited);
@@ -445,23 +438,22 @@ namespace Nitra.Compiler
                       predicates.Add(<[ $(GenerateHasValueCheck(p.Obj, p.PropertyRef)) ]>);
                   }
                 }
-                
+
                 def predicates = SCG.List();
                 makeDependentCheck(node, predicates, SCG.HashSet());
                 predicates.Fold(<[ true ]>, (p, acc) => <[ $acc && $p ]>)
               }
-              def conditions = makeCondition(a);
               <[
-                  if ($conditions)
+                if ($(makeCondition(a)))
+                {
+                  unless ($(GenerateHasValueCheck(a.Obj, a.PropertyRef)))
                   {
-                    unless ($(GenerateHasValueCheck(a.Obj, a.PropertyRef)))
-                    {
-                      $(a.Debug ?? a.Expr : typed);
-                      context.CalculatedCountInc();
-                    }
+                    $(a.Debug ?? a.Expr : typed);
+                    context.CalculatedCountInc();
                   }
-                  else
-                    context.DeferredCountInc();
+                }
+                else
+                  context.DeferredCountInc();
               ]>
             }
             else
@@ -488,11 +480,18 @@ namespace Nitra.Compiler
         | DeclaredProp(p) =>
           def propertyType = tb.GetMemType().TypeOfMember(p);
           when (propertyType.TryRequire(Environment.AstTypeVar))
-            result.Add(<[ this.$(p.Name : global).EvalProperties(context) ]>);
+            result.Add(<[ $(self).$(p.Name : global).EvalProperties(context) ]>);
       }
 
       def code = <[ { ..$result } ]>;
       code
+    }
+
+    private static PrepareExprForInheritableEvaluation(symbol : PropertyContainerSymbol, expr : PExpr) : PExpr
+    {
+      // TODO: replace 'this' with 'self', add 'self' where possible
+      _ = symbol;
+      expr
     }
   }
 }
