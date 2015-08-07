@@ -18,7 +18,7 @@ namespace Nitra.Compiler
 {
   internal abstract partial class BaseAstEmitter
   {
-    protected DefineDependentPropertiesInheritableEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol) : void
+    protected DefineDependentPropertiesInheritableEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef]) : void
     {
       Util.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
       {
@@ -33,11 +33,11 @@ namespace Nitra.Compiler
           }
         ]>, conditionName="DEBUG_EVAL_DEPENDENT_PROPERTIES");
 
-        DefineDependentPropertiesEvaluationImpl(tb, symbol, null, <[ self ]>);
+        DefineDependentPropertiesEvaluationImpl(tb, symbol, dependentProperties, <[ self ]>);
       }));
     }
 
-    protected DefineDependentPropertiesSealedEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef] = null) : void
+    protected DefineDependentPropertiesSealedEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef]) : void
     {
       Util.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
       {
@@ -101,7 +101,7 @@ namespace Nitra.Compiler
 
               | FunBody.Typed(TExpr.Block(_, bodyExpr)) =>
                 def expr       = ValidateEvalFieldsCode(bodyExpr);
-                def nodesMap   = MakeDependencyGraph(expr);
+                def nodesMap   = MakeDependencyGraph(expr, dependentProperties);
                 def graphNodes = nodesMap.Values.ToArray();
                 compileGraph(args.Typer.CurrentMethodBuilder, graphNodes)
 
@@ -162,8 +162,17 @@ namespace Nitra.Compiler
       expr.Walk(removeDelayed)
     }
 
-    private MakeDependencyGraph(expr : TExpr) : Hashtable[list[IProperty], Node]
+    private MakeDependencyGraph(expr : TExpr, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef]) : Hashtable[list[IProperty], Node]
     {
+      def makePropertyRef(obj : TExpr, propertySymbol : DependentPropertySymbol, propertyIndex : int) : DependentPropertyRef
+      {
+        mutable propertyRef;
+        if (IsThis(obj) && dependentProperties.TryGetValue(propertySymbol, out propertyRef))
+          propertyRef
+        else
+          DependentPropertyRef.Reflected(propertySymbol, propertyIndex)
+      }
+
       def nodesMap = Hashtable();
       def toKey(expr : TExpr, acc : list[IProperty] = []) : list[IProperty]
       {
@@ -192,16 +201,15 @@ namespace Nitra.Compiler
       {
         match (expr)
         {
-          | TExpr.PropertyMember as propAccess =>
-            def propertyRef = Environment.LookupPropertySymbol(propAccess.prop);
-            if (propertyRef != null)
+          | TExpr.PropertyMember as e =>
+            if (Environment.LookupDependentPropertySymbol(e.prop) is VSome((propertySymbol, propertyIndex)))
             {
-              def to = nodeForPropertySymbol(propAccess, propertyRef);
+              def to = nodeForPropertySymbol(e, makePropertyRef(e.obj, propertySymbol, propertyIndex));
               when (node.DependendOn.Add(to))
-                addUseDependence(propAccess.obj, to);
+                addUseDependence(e.obj, to);
             }
             else
-              addUseDependence(propAccess.obj, node);
+              addUseDependence(e.obj, node);
 
           | TExpr.Base
           | TExpr.This
@@ -214,18 +222,18 @@ namespace Nitra.Compiler
         def walker = ExprWalker();
         def walk(info : ExprWalkInfo) : void
         {
-            def loop(expr)
-            {
-              | TExpr.PropertyMember as propAccess =>
-                addUseDependence(propAccess, node);
-                info.Skip();
+          def loop(expr)
+          {
+            | TExpr.PropertyMember as propAccess =>
+              addUseDependence(propAccess, node);
+              info.Skip();
 
-              | TExpr.Delayed as e when e.susp.IsResolved => loop(e.susp.ResolutionResult)
-              | TExpr.Delayed as e => Message.FatalError(e.Location, "Delayed typing detected: " + e)
-              | _ => ()
-            }
-            
-            loop(info.Node)
+            | TExpr.Delayed as e when e.susp.IsResolved => loop(e.susp.ResolutionResult)
+            | TExpr.Delayed as e => Message.FatalError(e.Location, "Delayed typing detected: " + e)
+            | _ => ()
+          }
+
+          loop(info.Node)
         }
         walker.Walk(expr, walk);
       }
@@ -234,8 +242,7 @@ namespace Nitra.Compiler
         match (assign.target)
         {
           | TExpr.PropertyMember as e =>
-            def propertyRef = Environment.LookupPropertySymbol(e.prop);
-            if (propertyRef != null)
+            if (Environment.LookupDependentPropertySymbol(e.prop) is VSome((propertySymbol, propertyIndex)))
             {
               def key = toKey(e);
               mutable existingNode;
@@ -246,7 +253,7 @@ namespace Nitra.Compiler
               }
               else
               {
-                def node = Node.AssignProp(assign, debug, e, propertyRef);
+                def node = Node.AssignProp(assign, debug, e, makePropertyRef(e.obj, propertySymbol, propertyIndex));
                 nodesMap[key] = node;
               }
             }
@@ -262,8 +269,7 @@ namespace Nitra.Compiler
         match (assign.target)
         {
           | TExpr.PropertyMember as e =>
-            def propertyRef = Environment.LookupPropertySymbol(e.prop);
-            if (propertyRef != null)
+            if (Environment.LookupDependentPropertySymbol(e.prop).IsSome)
             {
               def nodesMap = nodesMap;
               def key = toKey(e);
@@ -404,16 +410,15 @@ namespace Nitra.Compiler
           when (ancestor.IsAbstract && ancestor.InitializedOutProperties is _ :: _)
             result.Add(<[ $(Environment.Project.GetNemerleType(ancestor) : typed).EvalProperties(this, context) ]>);
         }
-      }
 
-      when (dependentProperties != null)
-      when (symbol is AstSymbol(IsDeclaration = true))
-      when (symbol.LookupProperty("Symbol") is VSome(symbolProperty is DependentPropertySymbol))
-      {
-        result.Add(<[
-          when ($(GenerateHasValueCheck(<[ this ]>, dependentProperties[symbolProperty])))
-            this.$(symbolProperty.Name : usesite).EvalProperties(context);
-        ]>);
+        when (symbol is AstSymbol(IsDeclaration = true))
+        when (symbol.LookupProperty("Symbol") is VSome(symbolProperty is DependentPropertySymbol))
+        {
+          result.Add(<[
+            when ($(GenerateHasValueCheck(<[ this ]>, dependentProperties[symbolProperty])))
+              this.$(symbolProperty.Name : usesite).EvalProperties(context);
+          ]>);
+        }
       }
 
       foreach (node in orderedNodes)
@@ -424,22 +429,22 @@ namespace Nitra.Compiler
             {
               def makeCondition(node : Node) : PExpr
               {
-                def makeDependentCheck(node : Node, predicates : SCG.List[PExpr], visited : SCG.HashSet[Node]) : void
+                def makeDependentCheck(node : Node, properties : SCG.List[TExpr * DependentPropertyRef], visited : SCG.HashSet[Node]) : void
                 {
                   unless (visited.Add(node))
                     return;
 
                   foreach (p in node.DependendOn)
                   {
-                    makeDependentCheck(p, predicates, visited);
+                    makeDependentCheck(p, properties, visited);
                     unless (p is Node.DeclaredProp)
-                      predicates.Add(<[ $(GenerateHasValueCheck(p.Obj, p.PropertyRef)) ]>);
+                      properties.Add(p.Obj, p.PropertyRef);
                   }
                 }
 
-                def predicates = SCG.List();
-                makeDependentCheck(node, predicates, SCG.HashSet());
-                predicates.Fold(<[ true ]>, (p, acc) => <[ $acc && $p ]>)
+                def properties = SCG.List();
+                makeDependentCheck(node, properties, SCG.HashSet());
+                GenerateHasValueCheck(properties)
               }
               <[
                 if ($(makeCondition(a)))
