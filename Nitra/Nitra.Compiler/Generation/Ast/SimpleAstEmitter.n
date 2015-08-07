@@ -194,5 +194,176 @@ namespace Nitra.Compiler
       _listEmitter.Emit();
       _optionEmitter.Emit();
     }
+
+    private static DefineStructuralProperty(name : string, type : FixedType, baseTb : TypeBuilder, ambiguousTb : TypeBuilder) : void
+    {
+      baseTb.Define(<[ decl: public virtual $(name : usesite) : $(type : typed) { get; protected set; } ]>);
+      ambiguousTb.Define(<[ decl:
+        public override $(name : usesite) : $(type : typed)
+        {
+          get
+          {
+            if (this.IsAmbiguous)
+              this.Ambiguities[0].$(name : usesite)
+            else
+              base.$(name : usesite)
+          }
+          protected set
+          {
+            if (this.IsAmbiguous)
+              throw System.InvalidOperationException()
+            else
+              base.$(name : usesite) = value
+          }
+        }
+      ]>);
+    }
+
+    private DefineAmbiguousDependentProperty(tb : TypeBuilder, propertyRef : DependentPropertyRef, modifiers : NemerleModifiers) : void
+    {
+      def propertyType = TypeCompiler.CompileDependentPropertyType(propertyRef.Symbol);
+      def name         = propertyRef.Symbol.Name;
+      def mods         = AttributesAndModifiers(modifiers, [MakeDependentPropertyAttribute(propertyRef.Symbol, propertyRef.Index)]);
+      tb.Define(<[ decl:
+        ..$mods $(name : usesite) : $(propertyType : typed)
+        {
+          get
+          {
+            if (this.IsAmbiguous)
+              this.Ambiguities[0].$(name : usesite)
+            else
+              base.$(name : usesite)
+          }
+          set
+          {
+            if (this.IsAmbiguous)
+              foreach (ambiguity in this.Ambiguities)
+                ambiguity.$(name : usesite) = value;
+            else
+              base.$(name : usesite) = value;
+          }
+        }
+      ]>);
+
+      def isEvaluatedName = GetIsEvaluatedPropertyName(propertyRef.Symbol);
+      def isEvaluatedMods = AttributesAndModifiers(modifiers, []);
+      tb.Define(<[ decl:
+        ..$isEvaluatedMods $(isEvaluatedName : usesite) : bool
+        {
+          get
+          {
+            if (this.IsAmbiguous)
+              this.Ambiguities[0].$(isEvaluatedName : usesite)
+            else
+              base.$(isEvaluatedName : usesite)
+          }
+        }
+      ]>);
+    }
+
+    private CompileProjection(properties : SCG.List[ProjectedPropertySymbol], result : SCG.List[PExpr]) : void
+    {
+      def locFromExpr(astExpr : PExpr) : PExpr
+      {
+        <[
+          def ast = $astExpr;
+          Nitra.Location(ast.File, ast.Span)
+        ]>
+      }
+      def locFromName(name : string) : PExpr { locFromExpr(<[ $(name : usesite) ]>) }
+
+      foreach (g in properties.Where(p => p.ProjectionType.IsSome).GroupBy(p => p.ProjectionType.Value.ProjectionSource))
+      {
+        def projectionSource = g.Key;
+        def init = SCG.List();
+        def body = SCG.List();
+        def end  = SCG.List();
+        foreach (property in g)
+        {
+          match (property.ProjectionType.Value)
+          {
+            | OptionList as projectionType with canBeEmpty = true
+            | List       as projectionType with canBeEmpty = false =>
+              def targetName   = projectionType.TargetAst.FullName;
+              def concreteType = Environment.GetAstType(projectionType.TargetAst);
+              def bufferName = Util.tmpname("list");
+              init.Add(<[ def $(bufferName : usesite) = System.Collections.Generic.List.[$(concreteType : typed)]() ]>);
+              body.Add(<[
+                match (item)
+                {
+                  | concreteItem is $(concreteType : typed) => $(bufferName : usesite).Add(concreteItem)
+                  | _ => ()
+                }
+              ]>);
+              end.Add(<[ this.$(property.Name : usesite) = $(concreteType : typed).AstList(this.$(projectionSource.Name : usesite).File, this.$(projectionSource.Name : usesite).Span, $(bufferName : usesite).ToArray()); ]>);
+              unless (canBeEmpty)
+              {
+                end.Add(<[
+                  when ($(bufferName : usesite).Count == 0)
+                    Nitra.Declarations.AstContext.CompilerMessages.Error($(locFromExpr(<[ this.$(projectionSource.Name : usesite) ]>)), $$"Missing definition of '$targetName'.")
+                ]>);
+              }
+
+            | Option as projectionType =>
+              def targetName   = projectionType.TargetAst.FullName;
+              def concreteType = Environment.GetAstType(projectionType.TargetAst);
+              def bufferName   = Util.tmpname("option");
+              init.Add(<[ mutable $(bufferName : usesite) : $(concreteType : typed) ]>);
+              body.Add(<[
+                match (item)
+                {
+                  | concreteItem is $(concreteType : typed) =>
+                    if ($(bufferName : usesite) : object == null)
+                      $(bufferName : usesite) = concreteItem
+                    else
+                      using (root = Nitra.Declarations.AstContext.CompilerMessages.RootError($(locFromName("concreteItem")), $$"Duplicate definition of '$targetName'."))
+                      {
+                        root.Hint($(locFromName(bufferName)), "Previous definition.")
+                      }
+
+                  | _ => ()
+                }
+              ]>);
+              end.Add(<[
+                this.$(property.Name : usesite) =
+                  if ($(bufferName : usesite) : object != null)
+                    $(concreteType : typed).AstOption(this.$(projectionSource.Name : usesite).File, this.$(projectionSource.Name : usesite).Span, $(bufferName : usesite))
+                  else
+                    $(concreteType : typed).AstOption(this.$(projectionSource.Name : usesite).File, this.$(projectionSource.Name : usesite).Span)
+              ]>);
+
+            | Single as projectionType =>
+              def targetName   = projectionType.TargetAst.FullName;
+              def concreteType = Environment.GetAstType(projectionType.TargetAst);
+              def bufferName   = Util.tmpname("single");
+              init.Add(<[ mutable $(bufferName : usesite) : $(concreteType : typed) ]>);
+              body.Add(<[
+                match (item)
+                {
+                  | concreteItem is $(concreteType : typed) =>
+                    if ($(bufferName : usesite) : object == null)
+                      $(bufferName : usesite) = concreteItem
+                    else
+                      using (root = Nitra.Declarations.AstContext.CompilerMessages.RootError($(locFromName("concreteItem")), $$"Duplicate definition of '$targetName'."))
+                      {
+                        root.Hint($(locFromName(bufferName)), "Previous definition.")
+                      }
+
+                  | _ => ()
+                }
+              ]>);
+              end.Add(<[
+                if ($(bufferName : usesite) : object != null)
+                  this.$(property.Name : usesite) = $(bufferName : usesite)
+                else
+                  Nitra.Declarations.AstContext.CompilerMessages.Error($(locFromExpr(<[ this.$(projectionSource.Name : usesite) ]>)), $$"Missing definition of '$targetName'.")
+              ]>);
+          }
+        }
+        result.AddRange(init);
+        result.Add(<[ foreach (item in this.$(projectionSource.Name : usesite)) { ..$body } ]>);
+        result.AddRange(end);
+      }
+    }
   }
 }
