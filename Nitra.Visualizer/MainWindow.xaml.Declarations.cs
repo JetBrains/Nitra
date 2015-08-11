@@ -234,13 +234,25 @@ namespace Nitra.Visualizer
     {
       if (obj == null)
         obj = "<null>";
-      var isDependent = prop != null && prop.IsDefined(typeof(DependentPropertyAttribute), false);
-      var color = isDependent ? "green" : "SlateBlue";
-      return @"
-<Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-" + (prop == null ? null : ("<Bold><Span Foreground = '" + color + "'>" + Utils.Escape(prop.Name) + "</Span></Bold>: "))
-             + Utils.Escape(obj.ToString()) + @"
-</Span>";
+      var header = "";
+      var tooltip = "";
+      if (prop != null)
+      {
+        var color = "SlateBlue";
+        var prefix = "";
+        
+        var attr = (DependentPropertyAttribute)prop.GetCustomAttributes(typeof(DependentPropertyAttribute), false).FirstOrDefault();
+        if (attr != null)
+        {
+          color = "green";
+          prefix = attr.IsOut
+            ? "<Span Foreground='blue'>out</Span> "
+            : "<Span Foreground='blue'>in</Span> ";
+          tooltip = "ToolTip='" + Utils.Escape(attr.FullName) + "'";
+        }
+        header = prefix + "<Bold><Span Foreground='" + color + "'>" + Utils.Escape(prop.Name) + "</Span></Bold>: ";
+      }
+      return "<Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' " + tooltip + ">" + header + Utils.Escape(obj.ToString()) + "</Span>";
     }
 
     private static string RenderXamlForlist(string name, IAstList<IAst> items)
