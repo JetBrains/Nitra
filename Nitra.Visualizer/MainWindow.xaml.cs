@@ -49,6 +49,8 @@ using ToolTip = System.Windows.Controls.ToolTip;
 namespace Nitra.Visualizer
 {
   using System.Windows.Documents;
+  using Nitra.Visualizer.Interop;
+  using System.Windows.Interop;
 
   /// <summary>
   /// Interaction logic for MainWindow.xaml
@@ -91,11 +93,6 @@ namespace Nitra.Visualizer
 
       InitializeComponent();
 
-      this.Top         = _settings.WindowTop;
-      this.Left        = _settings.WindowLeft;
-      this.Height      = _settings.WindowHeight;
-      this.Width       = _settings.WindowLWidth;
-      this.WindowState = (WindowState)_settings.WindowState;
       _mainRow.Height  = new GridLength(_settings.TabControlHeight);
 
 
@@ -159,19 +156,36 @@ namespace Nitra.Visualizer
         SelectTest(_settings.SelectedTestSuit, _settings.SelectedTest, _settings.SelectedTestFolder);
     }
 
-    private void Window_Closed(object sender, EventArgs e)
+    protected override void OnSourceInitialized(EventArgs e)
     {
-      _settings.Config           = (string)_configComboBox.SelectedValue;
+      base.OnSourceInitialized(e);
+      this.SetPlacement(_settings.MainWindowPlacement);
+    }
+
+    private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
+    {
+      _settings.MainWindowPlacement = this.GetPlacement();
+      _settings.Config = (string)_configComboBox.SelectedValue;
       _settings.TabControlHeight = _mainRow.Height.Value;
-      _settings.LastTextInput    = _text.Text;
-      _settings.WindowState      = (int)this.WindowState;
-      _settings.WindowTop        = this.Top;
-      _settings.WindowLeft       = this.Left;
-      _settings.WindowHeight     = this.Height;
-      _settings.WindowLWidth     = this.Width;
-      _settings.ActiveTabIndex   = _tabControl.SelectedIndex;
+      _settings.LastTextInput = _text.Text;
+      _settings.ActiveTabIndex = _tabControl.SelectedIndex;
 
       SaveSelectedTestAndTestSuit();
+      _settings.Save();
+    }
+
+    void SetPlacement(string placementXml)
+    {
+      var helper = new WindowInteropHelper(this);
+      var handle = helper.Handle;
+      WindowPlacement.SetPlacement(handle, placementXml);
+    }
+
+    string GetPlacement()
+    {
+      var helper = new WindowInteropHelper(this);
+      var handle = helper.Handle;
+      return WindowPlacement.GetPlacement(handle);
     }
 
     private void SaveSelectedTestAndTestSuit()
