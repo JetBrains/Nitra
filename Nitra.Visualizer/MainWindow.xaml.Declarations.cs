@@ -315,17 +315,18 @@ namespace Nitra.Visualizer
 
     private void TrySelectTextForSymbol(Symbol2 symbol, TreeViewItem tvi)
     {
-      if (symbol != null && !symbol.Declarations.IsEmpty)
+      if (symbol != null)
       {
-        if (symbol.Declarations.Length == 1)
-          SelectText(symbol.Declarations.Head);
-        else
+        var declarations = symbol.GetDeclarationsUntyped().ToList();
+        if (declarations.Count == 1)
+          SelectText(declarations[0]);
+        else if (declarations.Count > 1)
         {
           if (!tvi.IsExpanded)
             tvi.IsExpanded = true;
           foreach (TreeViewItem subItem in tvi.Items)
           {
-            var decls = subItem.Tag as Nemerle.Core.list<Declaration>;
+            var decls = subItem.Tag as IEnumerable<Declaration>;
             if (decls != null)
             {
               subItem.IsExpanded = true;
