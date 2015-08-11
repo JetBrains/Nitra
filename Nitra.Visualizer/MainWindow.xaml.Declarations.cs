@@ -198,6 +198,7 @@ namespace Nitra.Visualizer
 
     private static bool IsIgnoredProperty(PropertyInfo prop)
     {
+      var name = prop.Name;
       switch (prop.Name)
       {
         case "HasValue":
@@ -208,8 +209,12 @@ namespace Nitra.Visualizer
         case "Span":
         case "IsAmbiguous":
           return true;
+        default:
+          if (name.StartsWith("Is", StringComparison.Ordinal) && name.EndsWith("Evaluated", StringComparison.Ordinal) && !name.Equals("IsAllPropertiesEvaluated", StringComparison.Ordinal))
+            return true;
+
+          return false;
       }
-      return false;
     }
 
     private void UpdateDeclarations()
