@@ -135,20 +135,8 @@ namespace Nitra.Visualizer
           {
             if (declaration.IsMissing)
               return;
-            var isEvalPropName = "Is" + prop.Name + "Evaluated";
-            var isEvalProp = t.GetProperty(isEvalPropName);
-            if (isEvalProp == null || (bool) isEvalProp.GetValue(declaration, null))
-            {
-              var value = prop.GetValue(declaration, null);
-              tvi.Items.Add(ObjectToItem(prop, value));
-            }
-            else
-            {
-              var tviNotEval = ObjectToItem(prop, "<not evaluated>");
-              tviNotEval.Foreground = Brushes.Red;
-              tviNotEval.FontWeight = FontWeights.Bold;
-              tvi.Items.Add(tviNotEval);
-            }
+
+            ReadValue(tvi, declaration, t, prop);
           }
           catch (Exception e)
           {
@@ -180,14 +168,31 @@ namespace Nitra.Visualizer
             continue;
           try
           {
-            var value = prop.GetValue(obj, null);
-            tvi.Items.Add(ObjectToItem(prop, value));
+            ReadValue(tvi, obj, t, prop);
           }
           catch (Exception e)
           {
             tvi.Items.Add(ObjectToItem(prop, e.Message));
           }
         }
+      }
+    }
+
+    private void ReadValue(TreeViewItem tvi, object obj, Type t, PropertyInfo prop)
+    {
+      var isEvalPropName = "Is" + prop.Name + "Evaluated";
+      var isEvalProp = t.GetProperty(isEvalPropName);
+      if (isEvalProp == null || (bool)isEvalProp.GetValue(obj, null))
+      {
+        var value = prop.GetValue(obj, null);
+        tvi.Items.Add(ObjectToItem(prop, value));
+      }
+      else
+      {
+        var tviNotEval = ObjectToItem(prop, "<not evaluated>");
+        tviNotEval.Foreground = Brushes.Red;
+        tviNotEval.FontWeight = FontWeights.Bold;
+        tvi.Items.Add(tviNotEval);
       }
     }
 
