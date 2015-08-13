@@ -4,6 +4,33 @@ using Nemerle.Collections;
 
 namespace CSharp
 {
+  map syntax Main.CompilationUnit -> CompilationUnit
+  {
+    ExternAliasDirectives       -> ExternAlias;
+    UsingDirectives             -> UsingDirectives;
+    GlobalAttributes            -> Attributes;
+    NamespaceMemberDeclarations -> Members;
+  }
+
+  map syntax TopDeclarations.ExternAliasDirective -> ExternAliasDirective
+  {
+    Name -> Name;
+  }
+
+  map syntax TopDeclarations.UsingDirective -> UsingDirective
+  {
+    | Alias -> UsingAliasDirective
+      {
+        Name          -> Name;
+        QualifiedName -> NamespaceOrTypeName;
+      }
+
+    | Open -> UsingOpenDirective
+      {
+        QualifiedName -> NamespaceOrTypeName;
+      }
+  }
+
   map syntax Types.TypeParameter -> TypeParameter
   {
     Name -> Name;
@@ -283,5 +310,317 @@ namespace CSharp
   map syntax TopDeclarations.EnumMemberDeclarations -> EnumMember*
   {
     EnumMemberDeclarations.Item1
+  }
+
+  map syntax TopDeclarations.NamespaceMemberDeclaration -> NamespaceMember
+  {
+    | Namespace ->
+      ExplicitNamespace
+      {
+        NamespaceName.Name          -> Name;
+        NamespaceName.Path(ImplicitNamespaceTag{}) -> Path;
+        ExternAliasDirectives       -> ExternAlias;
+        UsingDirectives             -> UsingDirectives;
+        NamespaceMemberDeclarations -> Members;
+      }
+
+    | Type -> TypeDeclaration
+  }
+
+  ast ImplicitNamespaceTag { }
+
+  map syntax CsIdentifiers.Name(_tag : ImplicitNamespaceTag) -> ImplicitNamespace
+  {
+    ImplicitNamespace
+    {
+      Name = this.GetAst();
+    }
+  }
+
+  map syntax TopDeclarations.ConstructorInitializer -> ConstructorInitializer
+  {
+    | This {}
+    | Base {}
+  }
+
+  map syntax TopDeclarations.FormalParameter -> FormalParameter
+  {
+    Name       -> Name;
+    AnyType    -> Type;
+    Attributes -> Attributes;
+    Modifier =
+      if (this.ParameterModifierOpt.HasValue)
+      {
+        def result =
+          match (this.GetText(this.ParameterModifierOpt.Value))
+          {
+            | "ref"    => ParameterModifier.Ref
+            | "out"    => ParameterModifier.Out
+            | "this"   => ParameterModifier.This
+            | "params" => ParameterModifier.Params
+            | _        => assert2(false, "Unknown parameter modifier value"); ParameterModifier.None
+          };
+        ParsedValue(this.ParameterModifierOpt.Value, result)
+      }
+      else
+        ParsedValue(this.ParameterModifierOpt.Span, ParameterModifier.None);
+  }
+
+  map syntax TopDeclarations.FormalParameters -> FormalParameter*
+  {
+    FormalParameters.Item1
+  }
+
+  map syntax Statements.ConstantDeclarator(header : ConstantHeader) -> Member.Constant
+  {
+    Name -> Name;
+    header -> Header;
+  }
+
+  map syntax TopDeclarations.FixedSizeBufferDeclarator(header : FixedSizeBufferHeader) -> Member.FixedSizeBuffer
+  {
+    Name   -> Name;
+    header -> Header;
+  }
+
+  map syntax TopDeclarations.GetAccessorDeclaration -> PropertyAccessor.Get
+  {
+    Name = Name(this.File, this.KwGet, "#Get");
+    Attributes -> Attributes;
+    Modifiers  -> Modifiers;
+  }
+
+  map syntax TopDeclarations.SetAccessorDeclaration -> PropertyAccessor.Set
+  {
+    Name = Name(this.File, this.KwSet, "#Set");
+    Attributes -> Attributes;
+    Modifiers  -> Modifiers;
+  }
+
+  map syntax TopDeclarations.AccessorDeclarations -> PropertyAccessor*
+  {
+    | GetSet(g, Some(s)) -> [g, s]
+    | GetSet(g, None)    -> [g]
+    | SetGet(s, Some(g)) -> [s, g]
+    | SetGet(s, None)    -> [s]
+    | None               -> []
+  }
+
+  map syntax TopDeclarations.AddAccessorDeclaration -> EventAccessor.Add
+  {
+    Name = Name(this.File, this.KwAdd, "#Add");
+    Attributes -> Attributes;
+  }
+
+  map syntax TopDeclarations.RemoveAccessorDeclaration -> EventAccessor.Remove
+  {
+    Name = Name(this.File, this.KwRemove, "#Remove");
+    Attributes -> Attributes;
+  }
+
+  map syntax TopDeclarations.EventAccessorDeclarations -> EventAccessor*
+  {
+    | AddRemove(a, r) -> [a, r]
+    | RemoveAdd(r, a) -> [r, a]
+  }
+
+  map syntax TopDeclarations.Modifiers -> Modifier*
+  {
+    Modifiers
+  }
+
+  map syntax TopDeclarations.Modifier -> Modifier
+  {
+    | New       {}
+    | Public    {}
+    | Protected {}
+    | Internal  {}
+    | Private   {}
+    | Virtual   {}
+    | Volatile  {}
+    | Static    {}
+    | Readonly  {}
+    | Sealed    {}
+    | Override  {}
+    | Abstract  {}
+    | Extern    {}
+    | Unsafe    {}
+    | AsyncMod -> Async {}
+  }
+
+  map syntax CsIdentifiers.QualifiedIdentifier -> QualifiedReference
+  {
+    | (None,    (first :: other, _)) -> fold (item in other; acc = first();    acc = item(acc))
+    | (Some(a), (first :: other, _)) -> fold (item in other; acc = first(a()); acc = item(acc))
+    | (_,       ([],             _)) = IntrinsicUtils.CreateMissingQualifiedReference(QualifiedIdentifierParts.File, QualifiedIdentifierParts.Span);
+  }
+
+  map syntax CsIdentifiers.QualifiedIdentifierPartTypeArguments -> QualifiedReference*
+  {
+    | TypeArgumentList -> AnyTypes.Item1
+    | OpenTypeArguments =
+      {
+        def args = array(RankSeparators.Count + 1);
+        args[0] = IntrinsicUtils.CreateOpenTypeArgument(this.File, NSpan(OpenBrace.EndPos));
+        foreach (rs in RankSeparators with index)
+          args[index + 1] = IntrinsicUtils.CreateOpenTypeArgument(this.File, NSpan(rs.EndPos));
+        QualifiedReference.AstList(this, args)
+      }
+  }
+
+  map syntax CsIdentifiers.QualifiedIdentifierPart -> QualifiedReference
+  {
+    let qid : QualifiedReference = Simple { Reference -> Name; } in
+    match (QualifiedIdentifierPartTypeArgumentsOpt)
+    {
+      | None -> qid
+      | Some(typeArgs) -> Generic { qid -> QualifiedName; typeArgs -> Arguments; }
+    }
+  }
+
+  map syntax CsIdentifiers.QualifiedIdentifierPart(aliasAst : Nitra.Runtime.Binding.Reference) -> QualifiedReference
+  {
+    let qid : QualifiedReference = Aliased { Reference -> Name; aliasAst -> Alias; } in
+    match (QualifiedIdentifierPartTypeArgumentsOpt)
+    {
+      | None -> qid
+      | Some(typeArgs) -> Generic { qid -> QualifiedName; typeArgs -> Arguments; }
+    }
+  }
+
+  map syntax CsIdentifiers.QualifiedIdentifierPart(qualifier : QualifiedReference) -> QualifiedReference
+  {
+    let qid : QualifiedReference = Qualified { Reference -> Name; qualifier -> Qualifier; } in
+    match (QualifiedIdentifierPartTypeArgumentsOpt)
+    {
+      | None -> qid
+      | Some(typeArgs) -> Generic { qid -> QualifiedName; typeArgs -> Arguments; }
+    }
+  }
+
+  map syntax CsIdentifiers.InterfaceType -> QualifiedReference
+  {
+    | (None,    (first, _) :: other) -> fold (item in other; acc = first();    acc = item(acc))
+    | (Some(a), (first, _) :: other) -> fold (item in other; acc = first(a()); acc = item(acc))
+    | (_,       []                 ) = IntrinsicUtils.CreateMissingQualifiedReference(InterfaceTypeParts.File, InterfaceTypeParts.Span);
+  }
+
+  map syntax CsIdentifiers.InterfaceTypePart -> QualifiedReference
+  {
+    let qid : QualifiedReference = Simple { Reference -> Name; } in
+    match (QualifiedIdentifierPartTypeArgumentsOpt)
+    {
+      | None -> qid
+      | Some(typeArgs) -> Generic { qid -> QualifiedName; typeArgs -> Arguments; }
+    }
+  }
+
+  map syntax CsIdentifiers.InterfaceTypePart(aliasAst : Nitra.Runtime.Binding.Reference) -> QualifiedReference
+  {
+    let qid : QualifiedReference = Aliased { Reference -> Name; aliasAst -> Alias; } in
+    match (QualifiedIdentifierPartTypeArgumentsOpt)
+    {
+      | None -> qid
+      | Some(typeArgs) -> Generic { qid -> QualifiedName; typeArgs -> Arguments; }
+    }
+  }
+
+  map syntax CsIdentifiers.InterfaceTypePart(qualifier : QualifiedReference) -> QualifiedReference
+  {
+    let qid : QualifiedReference = Qualified { Reference -> Name; qualifier -> Qualifier; } in
+    match (QualifiedIdentifierPartTypeArgumentsOpt)
+    {
+      | None -> qid
+      | Some(typeArgs) -> Generic { qid -> QualifiedName; typeArgs -> Arguments; }
+    }
+  }
+
+  map syntax Types.TypeName -> QualifiedReference
+  {
+    | QualifiedName  -> QualifiedIdentifier
+    | PredefinedType = IntrinsicUtils.CreatePredefinedTypeReference(this.File, this.PredefinedType, GetText(PredefinedType));
+  }
+
+  map syntax Types.AnyNonArrayType -> QualifiedReference
+  {
+    | (typeName, None) -> typeName
+    | (typeName, Some) -> Generic
+      {
+        Qualified
+        {
+          Simple { Name = Reference(this.File, this.Span, "System"); } -> Qualifier;
+          Name = Reference(this.File, this.Span, "Nullable");
+        } -> QualifiedName;
+        [ typeName ] -> Arguments;
+      }
+  }
+
+  map syntax Types.TypeSpecifier(qualifiedName : QualifiedReference) -> QualifiedReference
+  {
+    | PointerSpecifier -> Generic
+      {
+        Simple { Name = Reference(this.File, this.Span, "#Pointer"); } -> QualifiedName;
+        [qualifiedName] -> Arguments;
+      }
+    | RankSpecifier -> Generic
+      {
+        Simple { Name = Reference(this.File, this.Span, "#Array" + (RankSpecifier.RankSeparators.Count + 1).ToString()); } -> QualifiedName;
+        [qualifiedName] -> Arguments;
+      }
+  }
+
+  map syntax Types.AnyType -> QualifiedReference
+  {
+    fold (ts in TypeSpecifiers; acc = AnyNonArrayType; acc = ts(acc))
+  }
+
+  // Reference is a predefined declaration
+  map syntax CsIdentifiers.QualifiedAlias -> Reference { Alias }
+
+  map syntax Attributes.Attribute(targetOpt : AttributeTarget?) -> Attribute
+  {
+    targetOpt     -> Target;
+    QualifiedName -> Name;
+  }
+
+  map syntax Attributes.AttributeList(targetOpt : AttributeTarget?) -> Attribute*
+  {
+    Attributes.Item1(targetOpt)
+  }
+
+  map syntax Attributes.AttributeSection -> Attribute*
+  {
+    AttributeList(AttributeTargetSpecifierOpt)
+  }
+
+  map syntax Attributes.GlobalAttributeSection -> Attribute*
+  {
+    AttributeList(Some(GlobalAttributeTargetSpecifier))
+  }
+
+  map syntax Attributes.AttributeTargetSpecifier -> AttributeTarget =
+  {
+    match (this.GetText(this.AttributeTarget))
+    {
+      | "field"    => AttributeTarget.Field(this.File, this.AttributeTarget)
+      | "event"    => AttributeTarget.Event(this.File, this.AttributeTarget)
+      | "method"   => AttributeTarget.Method(this.File, this.AttributeTarget)
+      | "param"    => AttributeTarget.Param(this.File, this.AttributeTarget)
+      | "property" => AttributeTarget.Property(this.File, this.AttributeTarget)
+      | "return"   => AttributeTarget.Return(this.File, this.AttributeTarget)
+      | "type"     => AttributeTarget.Type(this.File, this.AttributeTarget)
+      | "typevar"  => AttributeTarget.Typevar(this.File, this.AttributeTarget)
+      | _          => AttributeTarget.AmbiguousOrMissing(this.File, this.AttributeTarget)
+    }
+  }
+
+  map syntax Attributes.GlobalAttributeTargetSpecifier -> AttributeTarget =
+  {
+    match (this.GetText(this.GlobalAttributeTarget))
+    {
+      | "assembly" => AttributeTarget.Assembly(this.File, this.GlobalAttributeTarget)
+      | "module"   => AttributeTarget.Module(this.File, this.GlobalAttributeTarget)
+      | _          => AttributeTarget.AmbiguousOrMissing(this.File, this.GlobalAttributeTarget)
+    }
   }
 }
