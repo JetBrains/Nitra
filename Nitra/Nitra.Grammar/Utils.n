@@ -414,18 +414,38 @@ namespace Nitra
       MakeSymbolRef(bindingResult)
     }
 
-    public ConvertRegularRuleToFsm(this regularRule : RegularRule, compilerMessages : ICompilerMessages) : FSM
+    public TryMap[From, To](this from : list[From], fn : From -> option[To]) : option[list[To]]
+    {
+      mutable res = array(from.Length);
+      foreach (item in from with i)
+        match (fn(item))
+        {
+          | Some(item) => res[i] = item
+          | None       => return None()
+        }
+      Some(res.NToList())
+    }
+
+    public ConvertRegularRuleToFsm(this regularRule : RegularRule, compilerMessages : ICompilerMessages) : option[FSM]
     {
       def visitedRules = HashSet();
-      def convert(_ : RegularRule) : FSM
+      def convert2(fsm1 : option[FSM], fsm2 : option[FSM], fn) : option[FSM]
       {
-        | Choice(rules)                            => FSMBuilder.Choice(rules.Map(convert))
-        | Sequence(rules)                          => FSMBuilder.Seq(rules.Map(convert))
-        | Chars(chars)                             => FSMBuilder.Seq(chars)
-        | Repeat(min, max, rule)                   => FSMBuilder.Repeat(min, max, convert(rule))
-        | RepeatWithSeparator(min, max, rule, sep) => FSMBuilder.RepeatWithSeparator(min, max, convert(rule), convert(sep))
-        | Invert(rule)                             => FSMTransform.Invert(convert(rule))
-        | Subtract(rule1, rule2)                   => FSMTransform.Sub(convert(rule1), convert(rule2))
+        match (fsm1, fsm2)
+        {
+          | (Some(fsm1), Some(fsm2)) => Some(fn(fsm1, fsm2))
+          | _                        => None()
+        }
+      }
+      and convert(_ : RegularRule) : option[FSM]
+      {
+        | Choice(rules)                            => rules.TryMap(convert).Map(FSMBuilder.Choice)
+        | Sequence(rules)                          => rules.TryMap(convert).Map(FSMBuilder.Seq)
+        | Chars(chars)                             => Some(FSMBuilder.Seq(chars))
+        | Repeat(min, max, rule)                   => convert(rule).Map(FSMBuilder.Repeat(min, max, _))
+        | RepeatWithSeparator(min, max, rule, sep) => convert2(convert(rule), convert(sep), FSMBuilder.RepeatWithSeparator(min, max, _, _))
+        | Invert(rule)                             => convert(rule).Map(FSMTransform.Invert)
+        | Subtract(rule1, rule2)                   => convert2(convert(rule1), convert(rule2), FSMTransform.Sub)
         | Call(RuleRef.Some(symbol is RegularRuleSymbol) as ruleRef) =>
           if (visitedRules.Add(symbol))
           {
@@ -436,16 +456,15 @@ namespace Nitra
           else
           {
             compilerMessages.Error(ruleRef, "Cyclic rule call found.");
-            FSM()
+            None()
           }
 
-        | Call(RuleRef.Some as ruleRef) =>
-          compilerMessages.Error(ruleRef, "ICE: Invalid symbol type.");
-          FSM()
+        | Call(RuleRef.Some) =>
+          None()
 
         | Call(RuleRef.None) =>
           // binding error already reported
-          FSM()
+          None()
       }
       convert(regularRule)
     }
@@ -457,7 +476,7 @@ namespace Nitra
 
     public MakeMatcher(this regularRule : RegularRule, compilerMessages : ICompilerMessages) : RegularExpressionMatcher
     {
-      FSMMatch.MakeMatcher(ConvertRegularRuleToFsm(regularRule, compilerMessages))
+      FSMMatch.MakeMatcher(ConvertRegularRuleToFsm(regularRule, compilerMessages).Value)
     }
 
     IsNewLine(ch : char) : bool
@@ -659,7 +678,7 @@ namespace Nitra
       {
         | Rule.Not :: tail
         | Rule.And :: tail => isSkipAnyPattern(tail)
-        | Rule.Call(RuleRef.Some(anyRule is RegularRuleSymbol), _, _) as call :: [] when RegularRuleExtensions.IsAnyDfa(anyRule.Fsm) && call.BindingPower.IsZero =>
+        | Rule.Call(RuleRef.Some(anyRule is RegularRuleSymbol), _, _) as call :: [] when anyRule.Fsm.HasValue && RegularRuleExtensions.IsAnyDfa(anyRule.Fsm.Value) && call.BindingPower.IsZero =>
           true
 
         | Rule.Sequence(rules) :: []   => isSkipAnyPattern(rules)
