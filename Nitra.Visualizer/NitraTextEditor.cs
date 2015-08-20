@@ -147,5 +147,7 @@ namespace Nitra.Visualizer
     {
       return this.brush.ToString();
     }
+
+    public SolidColorBrush Brush { get { return brush; } }
   }
 }

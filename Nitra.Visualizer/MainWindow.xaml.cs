@@ -500,7 +500,17 @@ namespace Nitra.Visualizer
 
       var htmlWriter = new HtmlPrettyPrintWriter(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes, "missing", "debug", "garbage");
       _parseTree.PrettyPrint(htmlWriter, 0, null);
-      var html = Properties.Resources.PrettyPrintDoughnut.Replace("{prettyprint}", htmlWriter.ToString());
+
+      var spanStyles = new StringBuilder();
+      foreach (var style in _highlightingStyles)
+      {
+        if (style.Value.Foreground is SimpleHighlightingBrush)
+        {
+          var color = ((SimpleHighlightingBrush) style.Value.Foreground).Brush.Color;
+          spanStyles.Append('.').Append(style.Key).Append("{color:rgb(").Append(color.R).Append(',').Append(color.G).Append(',').Append(color.B).AppendLine(");}");
+        }
+      }
+      var html = Properties.Resources.PrettyPrintDoughnut.Replace("{spanclasses}", spanStyles.ToString()).Replace("{prettyprint}", htmlWriter.ToString());
       prettyPrintViewer.NavigateToString(html);
     }
 

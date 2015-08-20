@@ -11,9 +11,9 @@ namespace Nitra.Visualizer
   {
     private readonly StringBuilder _buffer;
     private readonly StringWriter _writer; // for HtmlEncode
-    private readonly string _missingNodeClass;
-    private readonly string _debugClass;
-    private readonly string _garbageClass;
+    private readonly SpanClass _missingNodeClass;
+    private readonly SpanClass _debugClass;
+    private readonly SpanClass _garbageClass;
     private int _currentIndent;
     private int _lastStartLine;
     private int _lastIndentEnd;
@@ -24,9 +24,9 @@ namespace Nitra.Visualizer
     {
       _buffer = new StringBuilder();
       _writer = new StringWriter(_buffer);
-      _missingNodeClass = missingNodeClass;
-      _debugClass = debugClass;
-      _garbageClass = garbageClass;
+      _missingNodeClass = new SpanClass(missingNodeClass);
+      _debugClass = new SpanClass(debugClass);
+      _garbageClass = new SpanClass(garbageClass);
     }
 
     protected override void Garbage(IPrettyPrintSource source, NSpan skip)
@@ -46,7 +46,7 @@ namespace Nitra.Visualizer
       else
       {
         var text = source.Text.Substring(token.StartPos, token.Length);
-        WebUtility.HtmlEncode(text, _writer);
+        WriteSpan(spanClass, text);
       }
     }
 
@@ -58,7 +58,7 @@ namespace Nitra.Visualizer
           WriteSpan(_missingNodeClass, text);
       }
       else
-        WebUtility.HtmlEncode(text, _writer);
+        WriteSpan(spanClass, text);
     }
 
     public override void MissingNode(RuleDescriptor ruleDescriptor)
@@ -161,13 +161,19 @@ namespace Nitra.Visualizer
       _lastIndentEnd = _buffer.Length;
     }
 
-    private void WriteSpan(string cssClass, string text)
+    private void WriteSpan(SpanClass spanClass, string text)
     {
-      _writer.Write("<span class=\"");
-      WebUtility.HtmlEncode(cssClass, _writer);
-      _writer.Write("\">");
+      if (spanClass != null)
+      {
+        _writer.Write("<span class=\"");
+        WebUtility.HtmlEncode(spanClass.Name, _writer);
+        _writer.Write("\">");
+      }
       WebUtility.HtmlEncode(text, _writer);
-      _writer.Write("</span>");
+      if (spanClass != null)
+      {
+        _writer.Write("</span>");
+      }
     }
 
     public void WriteTo(TextWriter writer)
