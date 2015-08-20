@@ -127,7 +127,7 @@ namespace Nitra.Visualizer
         var t = obj.GetType();
         var props = t.GetProperties();
 
-        foreach (var prop in props) //.OrderBy(p => p.Name))
+        foreach (var prop in props.OrderBy(p => p.Name))
         {
           if (IsIgnoredProperty(prop))
             continue;
@@ -162,7 +162,7 @@ namespace Nitra.Visualizer
 
         var props = t.GetProperties();
 
-        foreach (var prop in props) //.OrderBy(p => p.Name))
+        foreach (var prop in props.OrderBy(p => p.Name))
         {
           if (IsIgnoredProperty(prop))
             continue;
