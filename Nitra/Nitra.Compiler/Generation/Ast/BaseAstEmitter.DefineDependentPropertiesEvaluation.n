@@ -107,6 +107,15 @@ namespace Nitra.Compiler
                 def expr       = ValidateEvalFieldsCode(bodyExpr);
                 def nodesMap   = MakeDependencyGraph(expr, dependentProperties);
                 def graphNodes = nodesMap.Values.ToArray();
+                
+                assert2(graphNodes.Length < 5);
+                
+                def nodesMap2   = MakeDependencyGraph2(expr, dependentProperties);
+                def graphNodes2 = nodesMap2.Values.ToArray();
+                
+                when (graphNodes.Length >= 5)
+                  Nitra.Compiler.BaseAstEmitter.Node2.Visualize(graphNodes2, tb.Name);
+                
                 compileGraph(args.Typer.CurrentMethodBuilder, graphNodes)
 
               | _ => Message.Error(args.Typer.CurrentFunction.Location, "Unsupported dependent properties syntax.")
@@ -166,6 +175,160 @@ namespace Nitra.Compiler
       expr.Walk(removeDelayed)
     }
 
+    private MakeDependencyGraph2(expr : TExpr, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef]) : Hashtable[list[string], Node2]
+    {
+      def makePropertyRef(obj : TExpr, propertySymbol : DependentPropertySymbol, propertyIndex : int) : DependentPropertyRef
+      {
+        mutable propertyRef;
+        if (IsThis(obj) && dependentProperties.TryGetValue(propertySymbol, out propertyRef))
+          propertyRef
+        else
+          DependentPropertyRef.Reflected(propertySymbol, propertyIndex)
+      }
+
+      def nodesMap = Hashtable();
+      def toKey(expr : TExpr, acc : list[string] = []) : list[string]
+      {
+        match (expr)
+        {
+          | TExpr.PropertyMember as e => toKey(e.obj, e.prop.Name :: acc)
+          | TExpr.Base => acc
+          | TExpr.This => acc
+          | TExpr.LocalRef(LocalValue(Name = "self", ValKind = LocalValue.Kind.FunParm)) => acc
+          | _ =>  ErrorUnexpectedExpr(expr); null
+        }
+      }
+      def nodeForPropertySymbol(propAccess : TExpr.PropertyMember, propertyRef : DependentPropertyRef) : Node2
+      {
+        def nodesMap = nodesMap;
+        def key = toKey(propAccess);
+        mutable to;
+        unless (nodesMap.TryGetValue(key, out to))
+        {
+          to = Node2.UseProp(propAccess.Location, key, propertyRef != null);
+          nodesMap[key] = to;
+        }
+        to
+      }
+      def addUseDependence(expr : TExpr, node : Node2) : void
+      {
+        match (expr)
+        {
+          | TExpr.PropertyMember as e =>
+            def propertyRef =
+              if (Environment.LookupDependentPropertySymbol(e.prop) is VSome((propertySymbol, propertyIndex)))
+                makePropertyRef(e.obj, propertySymbol, propertyIndex)
+              else
+                null;
+            def to = nodeForPropertySymbol(e, propertyRef);
+            // Зависимость присвоения зависимого свойства от структурного не имеет смысла. Зато имеет смысл вычислить внутренности
+            // структорного свойства после установки "на нем" зависимго свойства. Для этого, разворачиваем зависимости:
+            if (node is Node2.AssignProp && to is Node2.UseProp(IsDependent=false))
+              when (to.DependendOn.Add(node))
+                addUseDependence(e.obj, to);
+            else when (node.DependendOn.Add(to))
+              addUseDependence(e.obj, to);
+
+          | TExpr.Base
+          | TExpr.This
+          | TExpr.LocalRef(LocalValue(Name = "self", ValKind = LocalValue.Kind.FunParm)) => () // OK
+          | _ => ErrorUnexpectedExpr(expr); // not a property in member acess
+        }
+      }
+      def addNodesDependentOnAssignedProperty(expr : TExpr, node : Node2) : void
+      {
+        def walker = ExprWalker();
+        def walk(info : ExprWalkInfo) : void
+        {
+          def loop(expr)
+          {
+            | TExpr.PropertyMember as propAccess =>
+              addUseDependence(propAccess, node);
+              info.Skip();
+
+            | TExpr.Delayed as e when e.susp.IsResolved => loop(e.susp.ResolutionResult)
+            | TExpr.Delayed as e => Message.FatalError(e.Location, "Delayed typing detected: " + e)
+            | _ => ()
+          }
+
+          loop(info.Node)
+        }
+        walker.Walk(expr, walk);
+      }
+      def addKey(assign : TExpr.Assign) : void
+      {
+        match (assign.target)
+        {
+          | TExpr.PropertyMember as e =>
+            if (Environment.LookupDependentPropertySymbol(e.prop).IsSome) //  is VSome((propertySymbol, propertyIndex))
+            {
+              def key = toKey(e);
+              mutable existingNode;
+              if (nodesMap.TryGetValue(key, out existingNode))
+              {
+                Message.Warning(existingNode.Location, "Related message: First assingment of dependent property.");
+                Message.FatalError(e.Location, "Multiple assign of dependent property.");
+              }
+              else
+              {
+                // makePropertyRef(e.obj, propertySymbol, propertyIndex)
+                def node = Node2.AssignProp(e.Location, key, assign);
+                nodesMap[key] = node;
+              }
+            }
+            else
+              Message.FatalError(e.Location, "You can assign only a dependent property.");
+
+          | TExpr.Delayed => assert(false);
+          | _ => Message.FatalError(assign.target.Location, "You can assign only a dependent property.");
+        }
+      }
+      def processAssignProp(assign : TExpr.Assign) : void
+      {
+        match (assign.target)
+        {
+          | TExpr.PropertyMember as e =>
+            if (Environment.LookupDependentPropertySymbol(e.prop).IsSome)
+            {
+              def nodesMap = nodesMap;
+              def key = toKey(e);
+              def node = nodesMap[key] :> Node2.AssignProp;
+              addNodesDependentOnAssignedProperty(assign.source, node);
+              addNodesDependentOnAssignedProperty(e.obj, node);
+            }
+            else
+              Message.FatalError(e.Location, "You can assign only a dependent property.");
+
+          | TExpr.Delayed => assert(false);
+          | _ => Message.FatalError(assign.target.Location, "You can assign only a dependent property.");
+        }
+      }
+      def addAssigns(expr : TExpr) : void
+      {
+        match (expr)
+        {
+          | TExpr.Delayed => assert(false);
+          | TExpr.DebugInfo as e => addAssigns(e.expr)
+          | TExpr.Sequence as e => addAssigns(e.e1); addAssigns(e.e2);
+          | TExpr.Assign as e => addKey(e);
+          | e => ErrorUnexpectedExpr(e)
+        }
+      }
+      def calcDependents(expr : TExpr) : void
+      {
+        | TExpr.Delayed => assert(false);
+        | TExpr.DebugInfo as e => calcDependents(e.expr)
+        | TExpr.Sequence as e => calcDependents(e.e1); calcDependents(e.e2);
+        | TExpr.Assign as e => processAssignProp(e);
+        | e => ErrorUnexpectedExpr(e)
+      }
+
+      addAssigns(expr);
+      calcDependents(expr);
+      //assert2(nodesMap.Count < 5);
+      nodesMap
+    }
+    
     private MakeDependencyGraph(expr : TExpr, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef]) : Hashtable[list[IProperty], Node]
     {
       def makePropertyRef(obj : TExpr, propertySymbol : DependentPropertySymbol, propertyIndex : int) : DependentPropertyRef
@@ -310,6 +473,7 @@ namespace Nitra.Compiler
 
       addAssigns(expr);
       calcDependents(expr);
+      //assert2(nodesMap.Count < 5);
       nodesMap
     }
 
