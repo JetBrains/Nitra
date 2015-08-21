@@ -1,0 +1,187 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.Typing;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Compiler
+{
+  [Record]
+  internal variant PropertyDependencyNode
+  {
+    public Symbol   : PropertySymbol;
+    public Location : Nemerle.Compiler.Location;
+      
+    | AssignProp    { Path : list[string]; Expr : TExpr.Assign; }
+    | UseProp       { Path : list[string];  }
+
+    public IsDependent : bool { get { Symbol is DependentPropertySymbol } }
+    public State       : PropertyDependencyNodeState { get { _state } }
+    public Order       : int       { get { _order } }
+
+    [RecordIgnore] mutable _state : PropertyDependencyNodeState;
+    [RecordIgnore] mutable _order : int = -1;
+    [RecordIgnore] public DependendOn : HashSet[PropertyDependencyNode] = HashSet();
+      
+    public static Serialize(graphNodes : Seq[PropertyDependencyNode]) : list[PropertyDependencyNodeData]
+    {
+      def map = Dictionary();
+      foreach (node in graphNodes with i)
+        map.Add(node, i);
+      mutable result = List();
+      def getIndices(node : PropertyDependencyNode) : list[int]
+      {
+        node.DependendOn.Select(map.get_Item).NToList()
+      }
+      foreach (node in graphNodes)
+      {
+        | AssignProp as n => result.Add(PropertyDependencyNodeData.Assign(n.Path, getIndices(n), null));
+        | UseProp    as n => result.Add(PropertyDependencyNodeData.Use   (n.Path, getIndices(n), null));
+      }
+        
+      throw NotImplementedException()
+    }
+
+    public static Deserialize(graphNodes : Seq[PropertyDependencyNodeData]) : list[PropertyDependencyNode]
+    {
+      throw NotImplementedException()
+    }
+    
+#pragma warning disable 10003
+
+    public static Visualize(nodes : Seq[PropertyDependencyNode], typeName : string) : void
+    {
+      _ = Sort(nodes);
+      
+      def name(node : PropertyDependencyNode) { node._order }
+      def label(node : PropertyDependencyNode) { X.DotEscape(node.ToString()) }
+      
+      def edges = List();
+      
+      foreach (node in nodes.OrderBy(n => n.Order))
+        foreach (to in node.DependendOn.OrderBy(n => n.Order))
+          edges.Add($<#$(name(node)) -> $(name(to))#>);
+        
+      def color(node : PropertyDependencyNode)
+      {
+        | AssignProp   => "blue"
+        | UseProp as u => if (u.IsDependent) "black" else "red"
+      }
+      def content = $<#
+        digraph RecoveryParser
+        {
+          rankdir=LR;
+          compound=true;
+          label="The properties dependency graph for $typeName";
+
+          ..$(nodes; "\r\n            "; n => $<#$(name(n)) [label="$(label(n))" color=$(color(n)) shape=box]#>)
+
+          ..$(edges; "\r\n            ")
+        }
+      #>;
+
+      X.ExecuteDot(content);
+    }
+
+#pragma warning restore 10003
+
+    public static Sort(graphNodes : Seq[PropertyDependencyNode]) : bool
+    {
+      foreach (node in graphNodes)
+        node._state = PropertyDependencyNodeState.None;
+      otherwise
+        return false; // graph is empty
+
+      mutable index = 0;
+      mutable cycling = false;
+
+      foreach (node in GetRoots(graphNodes))
+        cycling |= node.Sort(ref index);
+      otherwise
+      {
+        foreach (node in graphNodes)
+          node._state = PropertyDependencyNodeState.Cycling;
+        return true;
+      }
+
+      cycling
+    }
+
+    /// Return: true - cycling; false - OK
+    public Sort(index : ref int) : bool
+    {
+      mutable cycling = false;
+      this._state = PropertyDependencyNodeState.Cycling;
+
+      foreach (to in DependendOn)
+      {
+        if (to._state == PropertyDependencyNodeState.None)
+          when (to.Sort(ref index))
+            cycling |= true;
+        else when (to._state == PropertyDependencyNodeState.Cycling)
+          cycling |= true;
+      }
+
+      if (cycling)
+      {
+        this._order = -1;
+        true
+      }
+      else
+      {
+        this._state = PropertyDependencyNodeState.Visited;
+        this._order = index;
+        index++;
+        false
+      }
+    }
+
+    public static GetRoots(graphNodes : Seq[PropertyDependencyNode]) : Seq[PropertyDependencyNode]
+    {
+      def hasEdgeTo = HashSet();
+
+      foreach (node in graphNodes)
+        hasEdgeTo.UnionWith(node.DependendOn);
+
+      foreach (node in graphNodes)
+        unless (hasEdgeTo.Contains(node))
+          yield node;
+    }
+
+    public static FindCycling(graphNodes : Seq[PropertyDependencyNode]) : Seq[PropertyDependencyNode]
+    {
+      foreach (node in graphNodes)
+        when (node._state == PropertyDependencyNodeState.Cycling)
+          yield node;
+    }
+
+    public override ToString() : string
+    {
+      _order + ": " +
+      match (this)
+      {
+        | AssignProp    as x => 
+          def loc = x.Expr.source.Location;
+          def expr =
+            if (loc.Line == loc.EndLine && File.Exists(loc.File))
+            {
+              def lines = File.ReadAllLines(loc.File);
+              def line = lines[loc.Line - 1];
+              line.Substring(loc.Column - 1, loc.EndColumn - loc.Column)
+            }
+            else
+              x.Expr.source.ToString();
+                  
+          $<#..$(x.Path; ".") = $expr#>
+              
+        | UseProp       as x => x.Path.ToString(".")
+      }
+    }
+  }
+}
