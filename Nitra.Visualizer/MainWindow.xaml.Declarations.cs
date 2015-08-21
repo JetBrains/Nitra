@@ -251,8 +251,8 @@ namespace Nitra.Visualizer
         var color = "SlateBlue";
         var prefix = "";
         
-        var attr = (DependentPropertyAttribute)prop.GetCustomAttributes(typeof(DependentPropertyAttribute), false).FirstOrDefault();
-        if (attr != null)
+        var attr = (PropertyAttribute)prop.GetCustomAttributes(typeof(PropertyAttribute), false).FirstOrDefault();
+        if (attr != null && attr.IsDependent)
         {
           color = "green";
           prefix = attr.IsOut
