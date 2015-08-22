@@ -1,12 +1,15 @@
 ﻿using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Collections;
+using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
+using Nitra.ProjectSystem;
 using Nitra.Typing;
+
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -21,18 +24,18 @@ namespace Nitra.Compiler
     public Symbol   : PropertySymbol;
     public Index    : int;
     public Location : Nemerle.Compiler.Location;
-    
+
     public this(path : list[PropertySymbol], index : int, location : Nemerle.Compiler.Location)
-      requires path != null && !path.IsEmpty
+      requires path is _ :: _
     {
       Path     = path;
       Location = location;
       Index    = index;
       Symbol   = path.Last();
     }
-      
-    | AssignProp { public EvalMethodName : string { get { <#Eval-..$(Path; "-"; p => p.Name)#> } } }
-    | UseProp
+
+    | Assign { Expr : PExpr; }
+    | Use
 
     public IsDependent : bool                        { get { Symbol is DependentPropertySymbol } }
     public State       : PropertyDependencyNodeState { get { _state } }
@@ -54,22 +57,28 @@ namespace Nitra.Compiler
       }
       foreach (node in graphNodes)
       {
-        | AssignProp as n => result.Add(PropertyDependencyNodeData.Assign(n.Path, getIndices(n), node.Index));
-        | UseProp    as n => result.Add(PropertyDependencyNodeData.Use   (n.Path, getIndices(n), node.Index));
+        | Assign => result.Add(PropertyDependencyNodeData.Assign(node.Path, node.Index, getIndices(node)));
+        | Use    => result.Add(PropertyDependencyNodeData.Use   (node.Path, node.Index, getIndices(node)));
       }
         
       result.ToNList()
     }
 
-    public static Deserialize(graphNodes : list[PropertyDependencyNodeData]) : array[PropertyDependencyNode]
+    public static Deserialize(project : NitraProject, propertySymbol : PropertyContainerSymbol, graphNodes : list[PropertyDependencyNodeData]) : array[PropertyDependencyNode]
     {
       def dataNodes = graphNodes.ToArray();
       def nodes = array(dataNodes.Length);
 
       foreach (n in dataNodes with i)
       {
-        | Use    => nodes[i] = PropertyDependencyNode.UseProp   (n.Path, n.Index, n.Location);
-        | Assign => nodes[i] = PropertyDependencyNode.AssignProp(n.Path, n.Index, n.Location);
+        | Use    => nodes[i] = PropertyDependencyNode.Use   (n.Path, n.Index, n.Location);
+        | Assign =>
+          def type       = project.GetNemerleType(propertySymbol);
+          def methodName = BaseAstEmitter.GetEvalMethodName(n.Path);
+          mutable target = <[ this ]>;
+          foreach (p in n.Path)
+            target = <[ $target.$(p.Name : usesite) ]>;
+          nodes[i] = PropertyDependencyNode.Assign(n.Path, n.Index, n.Location, <[ $target = $(type : typed).$(methodName : usesite)(this, context) ]>);
       }
 
       foreach (n in nodes with i)
@@ -95,11 +104,11 @@ namespace Nitra.Compiler
         
       def color(node : PropertyDependencyNode)
       {
-        | AssignProp   => "blue"
-        | UseProp as u => if (u.IsDependent) "black" else "red"
+        | Assign   => "blue"
+        | Use as u => if (u.IsDependent) "black" else "red"
       }
       def content = $<#
-        digraph RecoveryParser
+        digraph DependencyGraph
         {
           rankdir=LR;
           compound=true;
@@ -191,8 +200,8 @@ namespace Nitra.Compiler
       _order + ": " +
       match (this)
       {
-        | AssignProp    as x => 
-          def loc = x.Expr.source.Location;
+        | Assign    as x => 
+          def loc = x.Expr.Location;
           def expr =
             if (loc.Line == loc.EndLine && File.Exists(loc.File))
             {
@@ -201,11 +210,11 @@ namespace Nitra.Compiler
               line.Substring(loc.Column - 1, loc.EndColumn - loc.Column)
             }
             else
-              x.Expr.source.ToString();
-                  
+              x.Expr.ToString();
+
           $<#..$(x.Path; ".") = $expr#>
               
-        | UseProp       as x => x.Path.ToString(".")
+        | Use       as x => x.Path.ToString(".")
       }
     }
   }
