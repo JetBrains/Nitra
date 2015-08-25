@@ -20,24 +20,24 @@ namespace Nitra.Compiler
   /// Node of a property dependency graph.
   internal variant PropertyDependencyNode
   {
-    public Path     : list[PropertySymbol];
-    public Symbol   : PropertySymbol;
-    public Index    : int;
-    public Location : Nemerle.Compiler.Location;
+    public DeclaredIn : PropertyContainerSymbol;
+    public Path       : DependencyPath;
+    public Index      : int;
+    public Location   : Nemerle.Compiler.Location;
 
-    public this(path : list[PropertySymbol], index : int, location : Nemerle.Compiler.Location)
-      requires path is _ :: _
+    public this(declaredIn : PropertyContainerSymbol, path : DependencyPath, index : int, location : Nemerle.Compiler.Location)
+      requires !(path is DependencyPath.This)
     {
-      Path     = path;
-      Location = location;
-      Index    = index;
-      Symbol   = path.Last();
+      DeclaredIn = declaredIn;
+      Path       = path;
+      Location   = location;
+      Index      = index;
     }
 
     | Assign { Expr : PExpr; }
     | Use
 
-    public IsDependent : bool                        { get { Symbol is DependentPropertySymbol } }
+    public IsDependent : bool                        { get { Path is DeclaredProperty(_, DependentPropertySymbol) } }
     public State       : PropertyDependencyNodeState { get { _state } }
     public Order       : int                         { get { _order } }
 
@@ -65,8 +65,8 @@ namespace Nitra.Compiler
         def dataNode =
           match (node)
           {
-            | Assign => PropertyDependencyNodeData.Assign(loc, node.Path, node.Index, dependenedOn)
-            | Use    => PropertyDependencyNodeData.Use   (loc, node.Path, node.Index, dependenedOn)
+            | Assign => PropertyDependencyNodeData.Assign(loc, node.DeclaredIn, node.Path, node.Index, dependenedOn)
+            | Use    => PropertyDependencyNodeData.Use   (loc, node.DeclaredIn, node.Path, node.Index, dependenedOn)
           };
 
         result.Add(dataNode);
@@ -75,23 +75,27 @@ namespace Nitra.Compiler
       propertyContainerSymbol.SetPropertyDependency(result.ToNList())
     }
 
-    public static Load(propertySymbol : PropertyContainerSymbol) : array[PropertyDependencyNode]
+    public static Load(propertyContainerSymbol : PropertyContainerSymbol) : array[PropertyDependencyNode]
     {
-      assert(propertySymbol.IsAbstract);
+      assert(propertyContainerSymbol.IsAbstract);
 
-      def dataNodes = propertySymbol.PropertyDependency.ToArray();
+      def dataNodes = propertyContainerSymbol.PropertyDependency.ToArray();
       def nodes = array(dataNodes.Length);
-      def project = propertySymbol.Node.Project :> NitraProject;
+      def project = propertyContainerSymbol.Node.Project :> NitraProject;
       foreach (n in dataNodes with i)
       {
-        | Use    => nodes[i] = PropertyDependencyNode.Use(n.Path, n.Index, n.NLocation());
+        | Use    => nodes[i] = PropertyDependencyNode.Use(n.DeclaredIn, n.Path, n.Index, n.NLocation());
         | Assign =>
-          def type       = project.GetNemerleType(propertySymbol);
+          def type       = project.GetNemerleType(propertyContainerSymbol);
           def methodName = BaseAstEmitter.GetEvalMethodName(n.Path);
-          mutable target = <[ this ]>;
-          foreach (p in n.Path)
-            target = <[ $target.$(p.Name : usesite) ]>;
-          nodes[i] = PropertyDependencyNode.Assign(n.Path, n.Index, n.NLocation(), <[ $target = $(type : typed).$(methodName : usesite)(this, context) ]>);
+
+          def compile(path : DependencyPath) : PExpr
+          {
+            | This => <[ this ]>
+            | DeclaredProperty(path, symbol) with name = symbol.Name
+            | CustomProperty(path, name) => <[ $(compile(path)).$(name : usesite) ]>
+          }
+          nodes[i] = PropertyDependencyNode.Assign(n.DeclaredIn, n.Path, n.Index, n.NLocation(), <[ $(compile(n.Path)) = $(type : typed).$(methodName : usesite)(this, context) ]>);
       }
 
       foreach (n in nodes with i)
@@ -225,9 +229,9 @@ namespace Nitra.Compiler
             else
               x.Expr.ToString();
 
-          $<#..$(x.Path; "."; _.Name) = $expr#>
+          $<#$(x.Path) = $expr#>
               
-        | Use       as x => $<#..$(x.Path; "."; _.Name)#>
+        | Use       as x => x.Path.ToString()
       }
     }
   }

@@ -9,10 +9,13 @@ using Nemerle.Compiler.Typedtree;
 using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
+using Nemerle.Surround;
 
 using System;
 using System.Linq;
 using SCG = System.Collections.Generic;
+
+[assembly: DefineSurround("related_messages", true, Environment.Manager.BeginRelatedMessageSequence(), Environment.Manager.EndRelatedMessageSequence())]
 
 namespace Nitra.Compiler
 {
@@ -30,14 +33,14 @@ namespace Nitra.Compiler
           body.Add(Util.locate(assignment.Location.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ self ]>, assignment.Path)) = $expr ]>));
         }
 
-        tb.DefineConditional(<[ decl:
-          public static EvalProperties($("self" : global) : this, $("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
+        def evalMethod = tb.DefineAndReturn(<[ decl:
+          public static $(" fake " : usesite)($("self" : global) : this, $("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
           {
             ..$body
           }
-        ]>, conditionName="DEBUG_EVAL_DEPENDENT_PROPERTIES");
+        ]>) :> MethodBuilder;
 
-        DefineDependentPropertiesEvaluationImpl(tb, symbol, dependentProperties, <[ self ]>);
+        DefineDependentPropertiesEvaluationImpl(evalMethod, tb, symbol, dependentProperties, <[ self ]>);
       }));
     }
 
@@ -49,20 +52,20 @@ namespace Nitra.Compiler
         foreach (assignment in (symbol :> IDependentPropertyAssignmentContainer).GetAssignments())
           body.Add(Util.locate(assignment.Location.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ this ]>, assignment.Path)) = $(assignment.Expression) ]>));
 
-        tb.DefineConditional(<[ decl:
+        def evalMethod = tb.DefineAndReturn(<[ decl:
           public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
           {
             ..$body
           }
-        ]>, conditionName="DEBUG_EVAL_DEPENDENT_PROPERTIES");
+        ]>) :> MethodBuilder;
 
-        DefineDependentPropertiesEvaluationImpl(tb, symbol, dependentProperties, <[ this ]>);
+        DefineDependentPropertiesEvaluationImpl(evalMethod, tb, symbol, dependentProperties, <[ this ]>);
       }));
     }
 
-    private DefineDependentPropertiesEvaluationImpl(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef], self : PExpr) : void
+    private DefineDependentPropertiesEvaluationImpl(evalMethod : MethodBuilder, tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef], self : PExpr) : void
     {
-      def compileGraph(methodBuilder : MethodBuilder, graphNodes : Seq[Node]) : void
+      def compileGraph(graphNodes : Seq[Node]) : void
       {
         def cycled = Node.Sort(graphNodes);
         if (cycled)
@@ -85,49 +88,42 @@ namespace Nitra.Compiler
           def graphNodes2 = AddDependencyOnAstProperties(graphNodes, props);
           CheckStageDependencies(graphNodes2);
           //CheckOutputPropertiesAssignment(symbol, newGraphNodes);
-          methodBuilder.Body = GenerateCode(tb, symbol, graphNodes2, dependentProperties, self);
-          throw RestartRunBodyTyperException()
+          evalMethod.Body = GenerateCode(tb, symbol, graphNodes2, dependentProperties, self);
         }
       }
 
-      def typingHandler(_ : object, args : StageEventArgs) : void
+      def errorCount = Message.ErrorCount;
+      def typer = Typer(evalMethod);
+      typer.StopAfterPhase = 1;
+      typer.RunFullTyping();
+      when (errorCount != Message.ErrorCount)
+        throw Recovery();
+
+      match (evalMethod.GetHeader().Body)
       {
-        def func = args.Typer.CurrentFunction;
-        when (func.Name == "EvalProperties")
-        {
-          //assert2(args.Typer.CurrentTypeBuilder?.FullName != "CSharp.CompilationUnit");
-          try
-          {
-            match (func.Body)
-            {
-              | FunBody.Typed(TExpr.Block(_, TExpr.Literal(Literal.Void))) =>
-                compileGraph(args.Typer.CurrentMethodBuilder, [])
+        | FunBody.Typed(TExpr.Block(_, TExpr.Literal(Literal.Void))) =>
+          compileGraph([])
 
-              | FunBody.Typed(TExpr.Block(_, bodyExpr)) =>
-                def expr       = ValidateEvalFieldsCode(bodyExpr);
-                def nodesMap   = MakeDependencyGraph(expr, dependentProperties);
-                def graphNodes = nodesMap.Values.ToArray();
+        | FunBody.Typed(TExpr.Block(_, bodyExpr)) =>
+          def expr       = ValidateEvalFieldsCode(bodyExpr);
+          def nodesMap   = MakeDependencyGraph(expr, dependentProperties);
+          def graphNodes = nodesMap.Values.ToArray();
 
-                assert2(graphNodes.Length < 5);
+          assert2(graphNodes.Length < 5);
 
-                def nodesMap2 = MakeDependencyGraph2(tb, symbol, expr, dependentProperties);
-                def graphNodes2 = nodesMap2.Values.ToArray();
-                when (symbol.IsAbstract)
-                  PropertyDependencyNode.Save(graphNodes2, symbol);
+          def localMap  = MakeLocalDependencyGraph(tb, symbol, expr);
+          def fullGraph = MakeFullDepencyGraph(symbol, localMap);
 
-                when (graphNodes.Length >= 5)
-                  Nitra.Compiler.PropertyDependencyNode.Visualize(graphNodes2, tb.Name);
+          when (symbol.IsAbstract)
+            PropertyDependencyNode.Save(fullGraph, symbol);
 
-                compileGraph(args.Typer.CurrentMethodBuilder, graphNodes)
+          when (graphNodes.Length >= 5)
+            PropertyDependencyNode.Visualize(fullGraph, tb.Name);
 
-              | _ => Message.Error(args.Typer.CurrentFunction.Location, "Unsupported dependent properties syntax.")
-            }
-          }
-          finally
-            tb.MethodBeforeStage2 -= typingHandler
-        }
+          compileGraph(graphNodes)
+
+        | _ => assert2(false, $"Failed typing of dependent evaluations in method '$(evalMethod.Name)'");
       }
-      tb.MethodBeforeStage2 += typingHandler
     }
 
     private static ErrorUnexpectedExpr(expr : TExpr) : void
@@ -177,43 +173,124 @@ namespace Nitra.Compiler
       expr.Walk(removeDelayed)
     }
 
-    private AddParentGraphs(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef]) : Hashtable[list[PropertySymbol], PropertyDependencyNode]
+    private MakeFullDepencyGraph(symbol : PropertyContainerSymbol, map : Hashtable[DependencyPath, PropertyDependencyNode]) : array[PropertyDependencyNode]
     {
-      null
-    }
+      def replacementList = SCG.List();
 
-    private MakeDependencyGraph2(tb : TypeBuilder, symbol : PropertyContainerSymbol, expr : TExpr, dependentProperties : SCG.Dictionary[DependentPropertySymbol, DependentPropertyRef]) : Hashtable[list[PropertySymbol], PropertyDependencyNode]
-    {
-      def makePropertyRef(obj : TExpr, propertySymbol : DependentPropertySymbol, propertyIndex : int) : DependentPropertyRef
+      foreach (parent in symbol.GetParents())
       {
-        mutable propertyRef;
-        if (IsThis(obj) && dependentProperties.TryGetValue(propertySymbol, out propertyRef))
-          propertyRef
-        else
-          DependentPropertyRef.Reflected(propertySymbol, propertyIndex)
+        def parentGraph = PropertyDependencyNode.Load(parent);
+        foreach (node in parentGraph)
+        {
+          mutable existingNode;
+          if (map.TryGetValue(node.Path, out existingNode))
+          {
+            when (existingNode.DeclaredIn : object == node.DeclaredIn)
+              continue;
+
+            match (node, existingNode)
+            {
+              | (Use    as use,    Assign as assign)
+              | (Assign as assign, Use    as use) => replacementList.Add(use, assign);
+              | (Use, Use) =>
+                existingNode.DependendOn.UnionWith(node.DependendOn);
+                replacementList.Add(node, existingNode);
+
+              | (Assign, Assign) =>
+                if (existingNode.DeclaredIn : object == symbol)
+                  replacementList.Add(node, existingNode);
+                else
+                {
+                  def pathText = node.Path.ToString();
+                  def name1    = existingNode.DeclaredIn.FullName;
+                  def name2    = node.DeclaredIn.FullName;
+                  surroundwith (related_messages)
+                  {
+                    Message.Error(symbol.FirstLocation.NLocation(), $"Multiple assignment of property '$pathText' in parents: '$name1' and '$name2'.");
+                    Message.Hint(existingNode.Location, $"First assignment of '$pathText' from '$name1'.");
+                    Message.Hint(node.Location,         $"Second assignment of '$pathText' from '$name2'.");
+                  }
+                }
+            }
+          }
+          else
+            map.Add(node.Path, node);
+        }
+
+        foreach ((oldNode, newNode) in replacementList)
+        {
+          foreach (pair in map)
+          {
+            def dependendOn = pair.Value.DependendOn;
+            when (dependendOn.Remove(oldNode))
+              _ = dependendOn.Add(newNode);
+          }
+        }
+        replacementList.Clear();
       }
 
+      def result = map.Values.ToArray();
+      SortGraphAndReport(result);
+      result
+    }
+
+    private AddParentGraphs(inheritorSymbol : PropertyContainerSymbol, graph : Hashtable[DependencyPath, PropertyDependencyNode], visited : SCG.HashSet[PropertyContainerSymbol]) : void
+    {
+      unless (visited.Add(inheritorSymbol))
+        return;
+
+      def nodes = PropertyDependencyNode.Load(inheritorSymbol);
+
+      foreach (node in nodes)
+        unless (graph.ContainsKey(node.Path))
+          graph.Add(node.Path, node);
+
+      def parentsNodes = Hashtable();
+
+      foreach (node in nodes)
+      {
+        when (graph.ContainsKey(node.Path))
+          continue;
+
+        mutable existingNode;
+        if (parentsNodes.TryGetValue(node.Path, out existingNode))
+        {
+          def pathText = node.Path.ToString();
+          def name1    = existingNode.DeclaredIn.FullName;
+          def name2    = node.DeclaredIn.FullName;
+          surroundwith (related_messages)
+          {
+            Message.Error(inheritorSymbol.FirstLocation.NLocation(), $"Multiple assignment of property '$pathText' in parents: '$name1' and '$name2'.");
+            Message.Hint(existingNode.Location, $"First assignment of '$pathText' from '$name1'.");
+            Message.Hint(node.Location,         $"Second assignment of '$pathText' from '$name2'.");
+          }
+        }
+        else
+          parentsNodes.Add(node.Path, node);
+      }
+      
+      foreach (parents in inheritorSymbol.GetParents())
+        AddParentGraphs(parents, graph, visited);
+    }
+
+    private MakeLocalDependencyGraph(tb : TypeBuilder, symbol : PropertyContainerSymbol, expr : TExpr) : Hashtable[DependencyPath, PropertyDependencyNode]
+    {
       def nodesMap = Hashtable();
-      def getPathAndIndex(expr : TExpr, acc : list[PropertySymbol] * int = ([], -1)) : list[PropertySymbol] * int
+      def getPathAndIndex(expr : TExpr) : DependencyPath * int
       {
         match (expr)
         {
           | TExpr.PropertyMember as e =>
+            def (path, _) = getPathAndIndex(e.obj);
             match (Environment.LookupPropertySymbol(e.prop))
             {
-              | VSome((propertySymbol, propertyIndex)) => 
-                match (acc)
-                {
-                  | ([], _) => getPathAndIndex(e.obj, ([propertySymbol], propertyIndex))
-                  | (tail, index) => getPathAndIndex(e.obj, (propertySymbol :: tail, index))
-                }
-
-              | VNone => assert3(false); Message.FatalError(e.prop.Location, $"Usage of property '$(e.prop)' is not valid in dependent evaluation.")
+              | VSome((propertySymbol, propertyIndex)) => (DependencyPath.DeclaredProperty(path, propertySymbol), propertyIndex)
+              | VNone                                  => (DependencyPath.CustomProperty(path, e.prop.Name), -1)
             }
 
-          | TExpr.Base => acc
-          | TExpr.This => acc
-          | TExpr.LocalRef(LocalValue(Name = "self", ValKind = LocalValue.Kind.FunParm)) => acc
+          | TExpr.Base
+          | TExpr.This
+          | TExpr.LocalRef(LocalValue(Name = "self", ValKind = LocalValue.Kind.FunParm)) => (DependencyPath.This(), -1)
           | _ =>  ErrorUnexpectedExpr(expr);  (null, -1)
         }
       }
@@ -224,7 +301,7 @@ namespace Nitra.Compiler
         mutable to;
         unless (nodesMap.TryGetValue(path, out to))
         {
-          to = PropertyDependencyNode.Use(path, index, propAccess.Location);
+          to = PropertyDependencyNode.Use(symbol, path, index, propAccess.Location);
           nodesMap[path] = to;
         }
         to
@@ -292,10 +369,10 @@ namespace Nitra.Compiler
                     $(assign.source : typed)
                   }
                 ]>);
-                nodesMap[path] = PropertyDependencyNode.Assign(path, index, e.Location, <[ $(assign.target : typed) = $(methodName : usesite)(this, context) ]>);
+                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, index, e.Location, <[ $(assign.target : typed) = $(methodName : usesite)(this, context) ]>);
               }
               else
-                nodesMap[path] = PropertyDependencyNode.Assign(path, index, e.Location, <[ $(assign : typed) ]>);
+                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, index, e.Location, <[ $(assign : typed) ]>);
             }
             else
               Message.FatalError(e.Location, "You can assign only a dependent property.");
@@ -676,6 +753,18 @@ namespace Nitra.Compiler
       }
 
       <[ { ..$result } ]>
+    }
+
+    private static SortGraphAndReport(graphNodes : Seq[PropertyDependencyNode]) : void
+    {
+      def cycled = PropertyDependencyNode.Sort(graphNodes);
+      when (cycled)
+      {
+        def cycledNodes = PropertyDependencyNode.FindCycling(graphNodes);
+        foreach (cycledNode in cycledNodes)
+          Message.Error(cycledNode.Location, "Is cycled.");
+        otherwise assert(false, "Cycled nodes not found");
+      }
     }
   }
 }
