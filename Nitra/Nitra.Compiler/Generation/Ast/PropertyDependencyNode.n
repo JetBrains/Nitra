@@ -22,22 +22,20 @@ namespace Nitra.Compiler
   {
     public DeclaredIn : PropertyContainerSymbol;
     public Path       : DependencyPath;
-    public Index      : int;
     public Location   : Nemerle.Compiler.Location;
 
-    public this(declaredIn : PropertyContainerSymbol, path : DependencyPath, index : int, location : Nemerle.Compiler.Location)
+    public this(declaredIn : PropertyContainerSymbol, path : DependencyPath, location : Nemerle.Compiler.Location)
       requires !(path is DependencyPath.This)
     {
       DeclaredIn = declaredIn;
       Path       = path;
       Location   = location;
-      Index      = index;
     }
 
     | Assign { Expr : PExpr; }
     | Use
 
-    public IsDependent : bool                        { get { Path is DeclaredProperty(_, DependentPropertySymbol) } }
+    public IsDependent : bool                        { get { Path is DeclaredProperty(_, DependentPropertySymbol, _) } }
     public State       : PropertyDependencyNodeState { get { _state } }
     public Order       : int                         { get { _order } }
 
@@ -49,29 +47,32 @@ namespace Nitra.Compiler
     {
       assert(propertyContainerSymbol.IsAbstract);
 
-      def map = Dictionary();
-      foreach (node in graphNodes with i)
-        map.Add(node, i);
-
-      def result  = List();
-      def project = propertyContainerSymbol.Node.Project :> NitraProject;
-      foreach (node in graphNodes)
+      def result = List();
+      when (graphNodes.Length > 0)
       {
-        def loc = project.MakeNitraLocation(node.Location);
-        mutable dependenedOn = [];
-        foreach (dependency in node.DependendOn)
-          dependenedOn ::= map[dependency];
+        def map = Dictionary();
+        foreach (node in graphNodes with i)
+          map.Add(node, i);
 
-        def dataNode =
-          match (node)
-          {
-            | Assign => PropertyDependencyNodeData.Assign(loc, node.DeclaredIn, node.Path, node.Index, dependenedOn)
-            | Use    => PropertyDependencyNodeData.Use   (loc, node.DeclaredIn, node.Path, node.Index, dependenedOn)
-          };
+      
+        def project = propertyContainerSymbol.Node.Project :> NitraProject;
+        foreach (node in graphNodes)
+        {
+          def loc = project.MakeNitraLocation(node.Location);
+          mutable dependenedOn = [];
+          foreach (dependency in node.DependendOn)
+            dependenedOn ::= map[dependency];
 
-        result.Add(dataNode);
+          def dataNode =
+            match (node)
+            {
+              | Assign => PropertyDependencyNodeData.Assign(loc, node.DeclaredIn, node.Path, dependenedOn)
+              | Use    => PropertyDependencyNodeData.Use   (loc, node.DeclaredIn, node.Path, dependenedOn)
+            };
+
+          result.Add(dataNode);
+        }
       }
-
       propertyContainerSymbol.SetPropertyDependency(result.ToNList())
     }
 
@@ -84,24 +85,22 @@ namespace Nitra.Compiler
       def project = propertyContainerSymbol.Node.Project :> NitraProject;
       foreach (n in dataNodes with i)
       {
-        | Use    => nodes[i] = PropertyDependencyNode.Use(n.DeclaredIn, n.Path, n.Index, n.NLocation());
+        | Use    => nodes[i] = PropertyDependencyNode.Use(n.DeclaredIn, n.Path, n.NLocation());
         | Assign =>
           def type       = project.GetNemerleType(propertyContainerSymbol);
           def methodName = BaseAstEmitter.GetEvalMethodName(n.Path);
-
-          def compile(path : DependencyPath) : PExpr
-          {
-            | This => <[ this ]>
-            | DeclaredProperty(path, symbol) with name = symbol.Name
-            | CustomProperty(path, name) => <[ $(compile(path)).$(name : usesite) ]>
-          }
-          nodes[i] = PropertyDependencyNode.Assign(n.DeclaredIn, n.Path, n.Index, n.NLocation(), <[ $(compile(n.Path)) = $(type : typed).$(methodName : usesite)(this, context) ]>);
+          nodes[i] = PropertyDependencyNode.Assign(n.DeclaredIn, n.Path, n.NLocation(), <[ $(BaseAstEmitter.CompilePath(n.Path)) = $(type : typed).$(methodName : usesite)(this, context) ]>);
       }
 
       foreach (n in nodes with i)
         n.DependendOn.UnionWith(dataNodes[i].DependendOn.Select(to => nodes[to]));
 
       nodes
+    }
+
+    public static Compare(l : PropertyDependencyNode, r : PropertyDependencyNode) : int
+    {
+      l.Order - r.Order
     }
 
 #pragma warning disable 10003
