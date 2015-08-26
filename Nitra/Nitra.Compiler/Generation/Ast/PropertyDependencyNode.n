@@ -1,6 +1,7 @@
 ﻿using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Collections;
+using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
 using Nemerle.Compiler.Typedtree;
 using Nemerle.Imperative;
@@ -20,9 +21,10 @@ namespace Nitra.Compiler
   /// Node of a property dependency graph.
   internal variant PropertyDependencyNode
   {
-    public DeclaredIn : PropertyContainerSymbol;
-    public Path       : DependencyPath;
-    public Location   : Nemerle.Compiler.Location;
+    public DeclaredIn    : PropertyContainerSymbol;
+    public Path          : DependencyPath;
+    public Location      : Nemerle.Compiler.Location;
+    public NitraLocation : Location { get { (DeclaredIn.Node.Project :> NitraProject).MakeNitraLocation(Location) } }
 
     public this(declaredIn : PropertyContainerSymbol, path : DependencyPath, location : Nemerle.Compiler.Location)
       requires !(path is DependencyPath.This)
@@ -54,11 +56,8 @@ namespace Nitra.Compiler
         foreach (node in graphNodes with i)
           map.Add(node, i);
 
-      
-        def project = propertyContainerSymbol.Node.Project :> NitraProject;
         foreach (node in graphNodes)
         {
-          def loc = project.MakeNitraLocation(node.Location);
           mutable dependenedOn = [];
           foreach (dependency in node.DependendOn)
             dependenedOn ::= map[dependency];
@@ -66,8 +65,8 @@ namespace Nitra.Compiler
           def dataNode =
             match (node)
             {
-              | Assign => PropertyDependencyNodeData.Assign(loc, node.DeclaredIn, node.Path, dependenedOn)
-              | Use    => PropertyDependencyNodeData.Use   (loc, node.DeclaredIn, node.Path, dependenedOn)
+              | Assign => PropertyDependencyNodeData.Assign(node.NitraLocation, node.DeclaredIn, node.Path, dependenedOn)
+              | Use    => PropertyDependencyNodeData.Use   (node.NitraLocation, node.DeclaredIn, node.Path, dependenedOn)
             };
 
           result.Add(dataNode);
@@ -89,7 +88,9 @@ namespace Nitra.Compiler
         | Assign =>
           def type       = project.GetNemerleType(propertyContainerSymbol);
           def methodName = BaseAstEmitter.GetEvalMethodName(n.Path);
-          nodes[i] = PropertyDependencyNode.Assign(n.DeclaredIn, n.Path, n.NLocation(), <[ $(BaseAstEmitter.CompilePath(n.Path)) = $(type : typed).$(methodName : usesite)(this, context) ]>);
+          def loc        = n.NLocation();
+          def expr       = Util.locate(loc, <[ $(BaseAstEmitter.CompilePath(n.Path)) = $(type : typed).$(methodName : usesite)(this, context) ]>);
+          nodes[i] = PropertyDependencyNode.Assign(n.DeclaredIn, n.Path, loc, expr);
       }
 
       foreach (n in nodes with i)
@@ -105,26 +106,30 @@ namespace Nitra.Compiler
 
 #pragma warning disable 10003
 
-    public static Visualize(nodes : Seq[PropertyDependencyNode], typeName : string) : void
+    public static Visualize(symbol : PropertyContainerSymbol, nodes : Seq[PropertyDependencyNode], typeName : string) : void
     {
       _ = Sort(nodes);
-      
-      def name(node : PropertyDependencyNode) { node._order }
+
+      def nodeId = Dictionary();
+      foreach (node in nodes with index)
+        nodeId[node] = index;
+
+      def name(node : PropertyDependencyNode) { nodeId[node]; }
       def label(node : PropertyDependencyNode) { X.DotEscape(node.ToString()) }
-      
+
       def edges = List();
-      
+
       foreach (node in nodes.OrderBy(n => n.Order))
         foreach (to in node.DependendOn.OrderBy(n => n.Order))
           edges.Add($<#$(name(node)) -> $(name(to))#>);
-        
+
       def color(node : PropertyDependencyNode)
       {
-        | Assign   => "blue"
+        | Assign   => if (symbol : object == node.DeclaredIn) "blue" else "darkgreen"
         | Use as u => if (u.IsDependent) "black" else "red"
       }
       def content = $<#
-        digraph DependencyGraph
+        digraph $(typeName)_
         {
           rankdir=LR;
           compound=true;
@@ -216,22 +221,17 @@ namespace Nitra.Compiler
       _order + ": " +
       match (this)
       {
-        | Assign    as x => 
-          def loc = x.Expr.Location;
-          def expr =
-            if (loc.Line == loc.EndLine && File.Exists(loc.File))
-            {
-              def lines = File.ReadAllLines(loc.File);
-              def line = lines[loc.Line - 1];
-              line.Substring(loc.Column - 1, loc.EndColumn - loc.Column)
-            }
-            else
-              x.Expr.ToString();
+        | Assign    as x =>
+          def loc = NitraLocation;
+          if (loc.IsEmpty)
+            x.Expr.ToString()
+          else
+            loc.GetText()
 
-          $<#$(x.Path) = $expr#>
-              
         | Use       as x => x.Path.ToString()
       }
     }
+
+    private static _trimChars : array[char] = array['\n', '\r', ' ', '\t'];
   }
 }

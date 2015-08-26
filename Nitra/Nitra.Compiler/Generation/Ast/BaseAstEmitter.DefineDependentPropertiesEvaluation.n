@@ -35,7 +35,7 @@ namespace Nitra.Compiler
               {
                 mutable unused;
                 def expr = PrepareExprForInheritableEvaluation(symbol, assignment.Expression, false, ref unused);
-                body.Add(Util.locate(assignment.Location.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ self ]>, assignment.Path)) = $expr ]>));
+                body.Add(Util.locate(assignment.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ self ]>, assignment.Path)) = $expr ]>));
               }
 
               def evalMethod = tb.DefineAndReturn(<[ decl:
@@ -62,7 +62,7 @@ namespace Nitra.Compiler
       {
         def body = SCG.List();
         foreach (assignment in (symbol :> IDependentPropertyAssignmentContainer).GetAssignments())
-          body.Add(Util.locate(assignment.Location.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ this ]>, assignment.Path)) = $(assignment.Expression) ]>));
+          body.Add(Util.locate(assignment.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ this ]>, assignment.Path)) = $(assignment.Expression) ]>));
 
         def evalMethod = tb.DefineAndReturn(<[ decl:
           public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
@@ -78,6 +78,8 @@ namespace Nitra.Compiler
 
     private TypeDependentEvaluation(evalMethod : MethodBuilder, symbol : PropertyContainerSymbol) : array[PropertyDependencyNode]
     {
+      assert2(evalMethod.DeclaringType.Name != "Simple");
+
       def errorCount = Message.ErrorCount;
       def typer = Typer(evalMethod);
       typer.StopAfterPhase = 1;
@@ -94,7 +96,7 @@ namespace Nitra.Compiler
           def fullGraph = MakeFullDepencyGraph(symbol, localMap);
           CheckStageDependencies(fullGraph);
           when (fullGraph.Length >= 5)
-            PropertyDependencyNode.Visualize(fullGraph, symbol.Name);
+            PropertyDependencyNode.Visualize(symbol, fullGraph, symbol.Name);
           fullGraph
 
         | _ =>
@@ -167,8 +169,11 @@ namespace Nitra.Compiler
 
             match (node, existingNode)
             {
-              | (Use    as use,    Assign as assign)
-              | (Assign as assign, Use    as use) => replacementList.Add(use, assign);
+              | (Use    as use,    Assign as assign) => replacementList.Add(use, assign);
+              | (Assign as assign, Use    as use) =>
+                map[assign.Path] = assign;
+                replacementList.Add(use, assign);
+
               | (Use, Use) =>
                 existingNode.DependendOn.UnionWith(node.DependendOn);
                 replacementList.Add(node, existingNode);
@@ -252,7 +257,7 @@ namespace Nitra.Compiler
             def to = nodeForPropertySymbol(e);
             // Зависимость присвоения зависимого свойства от структурного не имеет смысла. Зато имеет смысл вычислить внутренности
             // структорного свойства после установки "на нем" зависимго свойства. Для этого, разворачиваем зависимости:
-            if (node is PropertyDependencyNode.Assign && to is PropertyDependencyNode.Use(IsDependent=false))
+            if (node is PropertyDependencyNode.Assign && to is PropertyDependencyNode.Use(IsDependent = false) && to.Path.IsSinglePropertyPath)
               when (to.DependendOn.Add(node))
                 addUseDependence(e.obj, to);
             else when (node.DependendOn.Add(to))
@@ -307,10 +312,14 @@ namespace Nitra.Compiler
                     $(assign.source : typed)
                   }
                 ]>);
-                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assign.Location, <[ $(assign.target : typed) = $(methodName : usesite)(this, context) ]>);
+                def expr = Util.locate(assign.Location, <[ $(assign.target : typed) = $(methodName : usesite)(this, context) ]>);
+                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assign.Location, expr);
               }
               else
-                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assign.Location, <[ $(assign : typed) ]>);
+              {
+                def expr = Util.locate(assign.Location, <[ $(assign : typed) ]>);
+                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assign.Location, expr);
+              }
             }
             else
               Message.FatalError(e.Location, "You can assign only a dependent property.");
