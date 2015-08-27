@@ -1,4 +1,5 @@
-﻿using Nitra.Typing;
+﻿using Nitra.Runtime.GraphUtils;
+using Nitra.Typing;
 using Nitra.Model;
 
 using Nemerle;
@@ -78,7 +79,7 @@ namespace Nitra.Compiler
 
     private TypeDependentEvaluation(evalMethod : MethodBuilder, symbol : PropertyContainerSymbol) : array[PropertyDependencyNode]
     {
-      //def needDebugging = evalMethod.DeclaringType.Name == "Simple";
+      //def needDebugging = evalMethod.DeclaringType.Name == "TypeParameterConstraintsClause";
       //assert2(!needDebugging);
 
       def errorCount = Message.ErrorCount;
@@ -94,8 +95,10 @@ namespace Nitra.Compiler
         | FunBody.Typed(TExpr.Block(_, bodyExpr)) =>
           def expr      = ValidateEvalFieldsCode(bodyExpr);
           def localMap  = MakeLocalDependencyGraph(evalMethod.DeclaringType, symbol, expr);
+          PropertyDependencyNode.TryBreakCyclesInStructuralProperties(localMap.Values);
           def fullGraph = MakeFullDepencyGraph(symbol, localMap);
           CheckStageDependencies(fullGraph);
+          //when (needDebugging)
           when (fullGraph.Length >= 5)
             PropertyDependencyNode.Visualize(symbol, fullGraph, symbol.Name);
           fullGraph
@@ -213,11 +216,7 @@ namespace Nitra.Compiler
       }
 
       def result = map.Values.ToArray();
-      def cycled = PropertyDependencyNode.Sort(result);
-      when (cycled)
-        foreach (structural is PropertyDependencyNode.Use when !structural.IsDependent && structural.State == PropertyDependencyNodeState.Cycling && structural.Path.IsSinglePropertyPath in result)
-          _ = structural.DependendOn.RemoveWhere(dependOn => dependOn.State == PropertyDependencyNodeState.Cycling);
-          
+      PropertyDependencyNode.TryBreakCyclesInStructuralProperties(result);
       SortGraphAndReport(result);
       result
     }
@@ -478,17 +477,21 @@ namespace Nitra.Compiler
       <[ { ..$result } ]>
     }
 
-    private static SortGraphAndReport(dependencyGraph : array[PropertyDependencyNode]) : void
+    private SortGraphAndReport(dependencyGraph : array[PropertyDependencyNode]) : void
     {
-      def cycled = PropertyDependencyNode.Sort(dependencyGraph);
-      if (cycled)
+      def components = GraphAlgorithms.FindStronglyConnectedComponents(dependencyGraph).ToArray();
+      foreach (component when component.Nodes.Count > 1 in components)
       {
-        def cycledNodes = PropertyDependencyNode.FindCycling(dependencyGraph);
-        foreach (cycledNode in cycledNodes)
-          Message.Error(cycledNode.Location, "Is cycled.");
-        otherwise assert(false, "Cycled nodes not found");
+        surroundwith (related_messages)
+        {
+          foreach (node in component.Nodes with i)
+            if (i == 0)
+              Message.Error(node.Location, $"Cycled $(node.Path) property dependency found.");
+            else
+              Message.Hint(node.Location, $"Another cycled $(node.Path) property.");
+        }
       }
-      else
+      otherwise
         Array.Sort(dependencyGraph, PropertyDependencyNode.Compare);
     }
   }
