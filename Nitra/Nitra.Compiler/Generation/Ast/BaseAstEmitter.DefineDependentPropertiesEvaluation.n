@@ -59,7 +59,7 @@ namespace Nitra.Compiler
       });
     }
 
-    protected DefineDependentPropertiesSealedEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField]) : void
+    protected DefineDependentPropertiesSealedEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField], structuralProperties : SCG.Dictionary[StructuralPropertySymbol, FixedType]) : void
     {
       Util.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
       {
@@ -79,7 +79,7 @@ namespace Nitra.Compiler
         ]>) :> MethodBuilder;
 
         def graph = TypeDependentEvaluation(evalMethod, symbol, assignments);
-        evalMethod.Body = GenerateCode(symbol, graph, dependentProperties);
+        evalMethod.Body = GenerateCode(symbol, graph, dependentProperties, structuralProperties);
       }));
     }
 
@@ -105,8 +105,8 @@ namespace Nitra.Compiler
           def fullGraph = MakeFullDepencyGraph(symbol, localMap);
           CheckStageDependencies(fullGraph);
           //when (needDebugging)
-          when (fullGraph.Length >= 5)
-            PropertyDependencyNode.Visualize(symbol, fullGraph, symbol.Name);
+          //when (fullGraph.Length >= 5)
+          //  PropertyDependencyNode.Visualize(symbol, fullGraph, symbol.Name);
           fullGraph
 
         | _ =>
@@ -410,11 +410,12 @@ namespace Nitra.Compiler
       }
     }
 
-    private GenerateCode(symbol : PropertyContainerSymbol, dependencyGraph : array[PropertyDependencyNode], dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField]) : PExpr
+    private GenerateCode(symbol : PropertyContainerSymbol, dependencyGraph : array[PropertyDependencyNode], dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField], structuralProperties : SCG.Dictionary[StructuralPropertySymbol, FixedType]) : PExpr
     {
       def result = SCG.List();
       result.Add(<[ _ = context ]>);
 
+      def evaluatedStructuralProperties = SCG.HashSet();
       foreach (node in dependencyGraph)
       {
         | Assign    as a =>
@@ -463,16 +464,26 @@ namespace Nitra.Compiler
               ]>
             };
 
-          def code =
-            if (a.Path is DependencyPath.DeclaredProperty(_, DependentPropertySymbol(Stage = propertyStage), _) when propertyStage > 0)
-              <[ when (context.Stage >= $propertyStage) $code ]>
-            else
-              code;
+          if (a.Path is DeclaredProperty(_, DependentPropertySymbol(Stage = propertyStage), _) when propertyStage > 0)
+            result.Add(<[ when (context.Stage >= $(propertyStage : int)) $code ]>);
+          else
+            result.Add(code);
 
-          result.Add(code);
-
-        | Use => ()
+        | Use =>
+          when (node.Path is DeclaredProperty(This, StructuralPropertySymbol as propertySymbol, _))
+          {
+            def propertyType = structuralProperties[propertySymbol];
+            when (propertyType.TryRequire(Environment.AstTypeVar))
+            {
+              result.Add(<[ this.$(propertySymbol.Name : global).EvalProperties(context) ]>);
+              _ = evaluatedStructuralProperties.Add(propertySymbol);
+            }
+          }
       }
+
+      foreach (pair in structuralProperties)
+        when (!evaluatedStructuralProperties.Contains(pair.Key) && pair.Value.TryRequire(Environment.AstTypeVar))
+          result.Add(<[ this.$(pair.Key.Name : global).EvalProperties(context) ]>);
 
       when (symbol is AstSymbol(IsDeclaration = true))
       when (symbol.LookupProperty("Symbol") is VSome(symbolProperty is DependentPropertySymbol))
