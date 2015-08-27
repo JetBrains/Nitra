@@ -31,12 +31,14 @@ namespace Nitra.Compiler
           {
             tb.Manager.MacroColors.InGlobalColor(fun()
             {
-              def body = SCG.List();
+              def assignments = SCG.List();
+              def body        = SCG.List();
               foreach (assignment in (symbol :> IDependentPropertyAssignmentContainer).GetAssignments())
               {
                 mutable unused;
                 def expr = PrepareExprForInheritableEvaluation(symbol, assignment.Expression, false, ref unused);
                 body.Add(Util.locate(assignment.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ self ]>, assignment.Path)) = $expr ]>));
+                assignments.Add(assignment.Path, expr);
               }
 
               def evalMethod = tb.DefineAndReturn(<[ decl:
@@ -46,8 +48,8 @@ namespace Nitra.Compiler
                 }
               ]>) :> MethodBuilder;
 
-              def graph = TypeDependentEvaluation(evalMethod, symbol);
-              evalMethod.Body = <[ () ]>;
+              def graph = TypeDependentEvaluation(evalMethod, symbol, assignments);
+              evalMethod.Body = <[ IgnoreParams() ]>;
               graph
             });
           }
@@ -61,9 +63,13 @@ namespace Nitra.Compiler
     {
       Util.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
       {
-        def body = SCG.List();
+        def assignments = SCG.List();
+        def body        = SCG.List();
         foreach (assignment in (symbol :> IDependentPropertyAssignmentContainer).GetAssignments())
+        {
           body.Add(Util.locate(assignment.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ this ]>, assignment.Path)) = $(assignment.Expression) ]>));
+          assignments.Add(assignment.Path, assignment.Expression);
+        }
 
         def evalMethod = tb.DefineAndReturn(<[ decl:
           public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
@@ -72,12 +78,12 @@ namespace Nitra.Compiler
           }
         ]>) :> MethodBuilder;
 
-        def graph = TypeDependentEvaluation(evalMethod, symbol);
+        def graph = TypeDependentEvaluation(evalMethod, symbol, assignments);
         evalMethod.Body = GenerateCode(symbol, graph, dependentProperties);
       }));
     }
 
-    private TypeDependentEvaluation(evalMethod : MethodBuilder, symbol : PropertyContainerSymbol) : array[PropertyDependencyNode]
+    private TypeDependentEvaluation(evalMethod : MethodBuilder, symbol : PropertyContainerSymbol, assignments : SCG.List[list[Identifier] * PExpr]) : array[PropertyDependencyNode]
     {
       //def needDebugging = evalMethod.DeclaringType.Name == "TypeParameterConstraintsClause";
       //assert2(!needDebugging);
@@ -94,7 +100,7 @@ namespace Nitra.Compiler
         | FunBody.Typed(TExpr.Block(_, TExpr.Literal(Literal.Void))) => array(0)
         | FunBody.Typed(TExpr.Block(_, bodyExpr)) =>
           def expr      = ValidateEvalFieldsCode(bodyExpr);
-          def localMap  = MakeLocalDependencyGraph(evalMethod.DeclaringType, symbol, expr);
+          def localMap  = MakeLocalDependencyGraph(evalMethod.DeclaringType, symbol, expr, assignments);
           PropertyDependencyNode.TryBreakCyclesInStructuralProperties(localMap.Values);
           def fullGraph = MakeFullDepencyGraph(symbol, localMap);
           CheckStageDependencies(fullGraph);
@@ -221,7 +227,7 @@ namespace Nitra.Compiler
       result
     }
 
-    private MakeLocalDependencyGraph(tb : TypeBuilder, symbol : PropertyContainerSymbol, expr : TExpr) : Hashtable[DependencyPath, PropertyDependencyNode]
+    private MakeLocalDependencyGraph(tb : TypeBuilder, symbol : PropertyContainerSymbol, expr : TExpr, assignments : SCG.List[list[Identifier] * PExpr]) : Hashtable[DependencyPath, PropertyDependencyNode]
     {
       def nodesMap = Hashtable();
       def makePath(expr : TExpr) : DependencyPath
@@ -311,18 +317,21 @@ namespace Nitra.Compiler
               else if (symbol.IsAbstract)
               {
                 def methodName = GetEvalMethodName(path);
+                def source     = FindAssignmentExpr(path, assignments);
                 tb.Define(<[ decl: 
-                  public static $(methodName : global)(self : this, context : Nitra.Declarations.DependentPropertyEvalContext) : $(assign.source.Type : typed)
+                  public static $(methodName : global)(self : this) : $(assign.source.Type : typed)
                   {
-                    $(assign.source : typed)
+                    _ = self;
+                    $source
                   }
                 ]>);
-                def expr = Util.locate(assign.Location, <[ $(assign.target : typed) = $(methodName : usesite)(this, context) ]>);
+                def expr = Util.locate(assign.Location, <[ $(CompilePath(path)) = $(methodName : usesite)(this) ]>);
                 nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assign.Location, expr);
               }
               else
               {
-                def expr = Util.locate(assign.Location, <[ $(assign : typed) ]>);
+                def source = FindAssignmentExpr(path, assignments);
+                def expr   = Util.locate(assign.Location, <[ $(CompilePath(path)) = $source ]>);
                 nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assign.Location, expr);
               }
             }
@@ -493,6 +502,39 @@ namespace Nitra.Compiler
       }
       otherwise
         Array.Sort(dependencyGraph, PropertyDependencyNode.Compare);
+    }
+
+    private static FindAssignmentExpr(path : DependencyPath, assignments : SCG.List[list[Identifier] * PExpr]) : PExpr
+    {
+      def cmp(path : DependencyPath, id : Identifier) : bool * DependencyPath
+      {
+        match (path)
+        {
+          | DeclaredProperty(otherPath, PropertySymbol(Name = name), _)
+          | CustomProperty(otherPath,                         name) => (StringComparer.Ordinal.Equals(name, id.Value), otherPath)
+          | _ => (false, path)
+        }
+      }
+      def isMatch(path : DependencyPath, qid : list[Identifier]) : bool * DependencyPath
+      {
+        match (qid)
+        {
+          | []   => (false, path)
+          | [id] => cmp(path, id)
+          | id :: other =>
+            match (isMatch(path, other))
+            {
+              | (true, path) => cmp(path, id)
+              | fail => fail
+            }
+        }
+      }
+
+      foreach ((qid, expr) in assignments)
+        when (isMatch(path, qid) is (true, This))
+          return expr;
+
+      assert(false, $"Assignment of '$path' is not found.");
     }
   }
 }
