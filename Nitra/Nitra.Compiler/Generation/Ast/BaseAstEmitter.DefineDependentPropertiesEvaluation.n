@@ -48,9 +48,9 @@ namespace Nitra.Compiler
               graph
             });
           }
-          else array(0);
+          else PropertyDependencyGraph(symbol);
 
-        PropertyDependencyNode.Save(graph, symbol);
+        graph.Save();
       });
     }
 
@@ -68,7 +68,7 @@ namespace Nitra.Compiler
         ]>) :> MethodBuilder;
 
         def graph = TypeDependentEvaluation(evalMethod, symbol, assignments);
-        evalMethod.Body = GenerateCode(symbol, graph, dependentProperties, structuralProperties);
+        evalMethod.Body = GenerateCode(tb, symbol, graph, dependentProperties, structuralProperties);
       }));
     }
 
@@ -103,7 +103,7 @@ namespace Nitra.Compiler
 
             | Call(name, rawArgs) =>
               def args = rawArgs.Map(prepareExpr);
-              body.Add(<[ $path.$(name.Value : usesite)(..$args) ]>);
+              body.Add(<[ Nitra.PExprAnchor($path.$(name.Value : usesite)(..$args)) ]>);
           }
         })
       }
@@ -111,7 +111,7 @@ namespace Nitra.Compiler
       (body, assignments)
     }
 
-    private TypeDependentEvaluation(evalMethod : MethodBuilder, symbol : PropertyContainerSymbol, assignments : SCG.List[list[Identifier] * PExpr]) : array[PropertyDependencyNode]
+    private TypeDependentEvaluation(evalMethod : MethodBuilder, symbol : PropertyContainerSymbol, assignments : SCG.List[list[Identifier] * PExpr]) : PropertyDependencyGraph
     {
       //def needDebugging = evalMethod.DeclaringType.Name == "TypeParameterConstraintsClause";
       //assert2(!needDebugging);
@@ -123,26 +123,26 @@ namespace Nitra.Compiler
       when (errorCount != Message.ErrorCount)
         throw Recovery();
 
-      def localGraph =
+      def graph =
         match (evalMethod.GetHeader().Body)
         {
-          | FunBody.Typed(TExpr.Block(_, TExpr.Literal(Literal.Void))) => Hashtable()
+          | FunBody.Typed(TExpr.Block(_, TExpr.Literal(Literal.Void))) => PropertyDependencyGraph(symbol)
           | FunBody.Typed(TExpr.Block(_, bodyExpr)) =>
             def expr = ValidateEvalFieldsCode(bodyExpr);
             MakeLocalDependencyGraph(evalMethod.DeclaringType, symbol, expr, assignments)
 
           | _ =>
             assert2(false, $"Failed typing of dependent evaluations in method '$(evalMethod.Name)'");
-            Hashtable()
+            PropertyDependencyGraph(symbol)
         };
 
-      PropertyDependencyNode.TryBreakCyclesInStructuralProperties(localGraph.Values);
-      def fullGraph = MakeFullDepencyGraph(symbol, localGraph);
-      CheckStageDependencies(fullGraph);
+      PropertyDependencyNode.TryBreakCyclesInStructuralProperties(graph.Nodes.Values);
+      MakeFullDepencyGraph(symbol, graph);
+      CheckStageDependencies(graph);
       //when (needDebugging)
-      //when (fullGraph.Length >= 5)
+      //when (graph.Nodes.Count >= 5)
       //  PropertyDependencyNode.Visualize(symbol, fullGraph, symbol.Name);
-      fullGraph
+      graph
     }
 
     private static ErrorUnexpectedExpr(expr : TExpr) : void
@@ -192,17 +192,27 @@ namespace Nitra.Compiler
       expr.Walk(removeDelayed)
     }
 
-    private MakeFullDepencyGraph(symbol : PropertyContainerSymbol, map : Hashtable[DependencyPath, PropertyDependencyNode]) : array[PropertyDependencyNode]
+    private MakeFullDepencyGraph(symbol : PropertyContainerSymbol, graph : PropertyDependencyGraph) : void
     {
       def replacementList = SCG.List();
 
+      def replace(nodesToProcess : Seq[IPropertyDependencyNode], oldNode : PropertyDependencyNode, newNode : PropertyDependencyNode)
+      {
+        foreach (node in nodesToProcess)
+        {
+          def dependendOn = node.DependendOn;
+          when (dependendOn.Remove(oldNode))
+            _ = dependendOn.Add(newNode);
+        }
+      }
+
       foreach (parent in symbol.GetParents())
       {
-        def parentGraph = PropertyDependencyNode.Load(parent);
-        foreach (node in parentGraph)
+        def (parentNodes, parentCalls) = PropertyDependencyGraph.Load(parent);
+        foreach (node in parentNodes)
         {
           mutable existingNode;
-          if (map.TryGetValue(node.Path, out existingNode))
+          if (graph.Nodes.TryGetValue(node.Path, out existingNode))
           {
             when (existingNode.DeclaredIn : object == node.DeclaredIn)
               continue;
@@ -211,7 +221,7 @@ namespace Nitra.Compiler
             {
               | (Use    as use,    Assign as assign) => replacementList.Add(use, assign);
               | (Assign as assign, Use    as use) =>
-                map[assign.Path] = assign;
+                graph.Nodes[assign.Path] = assign;
                 replacementList.Add(use, assign);
 
               | (Use, Use) =>
@@ -236,30 +246,27 @@ namespace Nitra.Compiler
             }
           }
           else
-            map.Add(node.Path, node);
+            graph.Nodes.Add(node.Path, node);
         }
+
+        graph.Calls.AddRange(parentCalls);
 
         foreach ((oldNode, newNode) in replacementList)
         {
-          foreach (pair in map)
-          {
-            def dependendOn = pair.Value.DependendOn;
-            when (dependendOn.Remove(oldNode))
-              _ = dependendOn.Add(newNode);
-          }
+          replace(graph.Nodes.Values, oldNode, newNode);
+          replace(graph.Calls,        oldNode, newNode);
         }
         replacementList.Clear();
       }
 
-      def result = map.Values.ToArray();
-      PropertyDependencyNode.TryBreakCyclesInStructuralProperties(result);
-      SortGraphAndReport(result);
-      result
+      PropertyDependencyNode.TryBreakCyclesInStructuralProperties(graph.Nodes.Values);
+      CheckLoopsAndReport(graph);
     }
 
-    private MakeLocalDependencyGraph(tb : TypeBuilder, symbol : PropertyContainerSymbol, expr : TExpr, assignments : SCG.List[list[Identifier] * PExpr]) : Hashtable[DependencyPath, PropertyDependencyNode]
+    private MakeLocalDependencyGraph(tb : TypeBuilder, symbol : PropertyContainerSymbol, expr : TExpr, assignments : SCG.List[list[Identifier] * PExpr]) : PropertyDependencyGraph
     {
       def nodesMap = Hashtable();
+      def calls    = SCG.List();
       def makePath(expr : TExpr) : DependencyPath
       {
         match (expr)
@@ -290,7 +297,7 @@ namespace Nitra.Compiler
         }
         to
       }
-      def addUseDependence(expr : TExpr, node : PropertyDependencyNode) : void
+      def addUseDependence(expr : TExpr, from : IPropertyDependencyNode) : void
       {
         match (expr)
         {
@@ -298,11 +305,16 @@ namespace Nitra.Compiler
             def to = nodeForPropertySymbol(e);
             // Зависимость присвоения зависимого свойства от структурного не имеет смысла. Зато имеет смысл вычислить внутренности
             // структорного свойства после установки "на нем" зависимго свойства. Для этого, разворачиваем зависимости:
-            if (node is PropertyDependencyNode.Assign && to is PropertyDependencyNode.Use(IsDependent=false) && to.Path.IsSinglePropertyPath)
-              when (to.DependendOn.Add(node))
-                addUseDependence(e.obj, to);
-            else when (node.DependendOn.Add(to))
-              addUseDependence(e.obj, to);
+            match (from, to)
+            {
+              | (PropertyDependencyNode.Assign as assign, PropertyDependencyNode.Use(IsDependent=false, Path=DependencyPath(IsSinglePropertyPath=true))) =>
+                when (to.DependendOn.Add(assign))
+                  addUseDependence(e.obj, to);
+
+              | _ =>
+                when (from.DependendOn.Add(to))
+                  addUseDependence(e.obj, to);
+            }
 
           | TExpr.Base
           | TExpr.This
@@ -310,7 +322,7 @@ namespace Nitra.Compiler
           | _ => ErrorUnexpectedExpr(expr); // not a property in member acess
         }
       }
-      def addNodesDependentOnAssignedProperty(expr : TExpr, node : PropertyDependencyNode) : void
+      def addNodesDependentOnAssignedProperty(expr : TExpr, node : IPropertyDependencyNode) : void
       {
         def walker = ExprWalker();
         def walk(info : ExprWalkInfo) : void
@@ -346,7 +358,7 @@ namespace Nitra.Compiler
               }
               else if (symbol.IsAbstract)
               {
-                def methodName = GetEvalMethodName(path);
+                def methodName = $"Eval-$path";
                 def source     = FindAssignmentExpr(path, assignments);
                 tb.Define(<[ decl: 
                   public static $(methodName : global)(self : this) : $(assign.source.Type : typed)
@@ -355,14 +367,14 @@ namespace Nitra.Compiler
                     $source
                   }
                 ]>);
-                def expr = Util.locate(assign.Location, <[ $(CompilePath(path)) = $(methodName : usesite)(this) ]>);
-                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assign.Location, expr);
+                def code = PropertyDependencyCode.Compiled(assign.Location, methodName);
+                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assign.Location, code);
               }
               else
               {
                 def source = FindAssignmentExpr(path, assignments);
-                def expr   = Util.locate(assign.Location, <[ $(CompilePath(path)) = $source ]>);
-                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assign.Location, expr);
+                def code   = PropertyDependencyCode.Source(assign.Location, source);
+                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assign.Location, code);
               }
             }
             else
@@ -405,22 +417,46 @@ namespace Nitra.Compiler
       }
       def calcDependents(expr : TExpr) : void
       {
-        | TExpr.Delayed => assert(false);
-        | TExpr.DebugInfo as e => calcDependents(e.expr)
-        | TExpr.Sequence as e => calcDependents(e.e1); calcDependents(e.e2);
-        | TExpr.Assign as e => processAssign(e);
-        | e => ErrorUnexpectedExpr(e)
+        match (expr)
+        {
+          | TExpr.Delayed => assert(false);
+          | TExpr.DebugInfo as e => calcDependents(e.expr)
+          | TExpr.Sequence as e => calcDependents(e.e1); calcDependents(e.e2);
+          | TExpr.Assign as e => processAssign(e);
+          | TExpr.MacroEnvelope(_, m, TExpr.Call as e, rawExpr) when (m.GetName() == "PExprAnchor" && m.GetNamespace() == "Nitra") =>
+            def code =
+              if (symbol.IsAbstract)
+              {
+                def methodName = Util.tmpname("Call-");
+                tb.Define(<[ decl:
+                  public static $(methodName : global)(self : this) : void
+                  {
+                    _ = self;
+                    $rawExpr
+                  }
+                ]>);
+                PropertyDependencyCode.Compiled(rawExpr.Location, methodName);
+              }
+              else
+                PropertyDependencyCode.Source(rawExpr.Location, rawExpr);
+
+            def node = PropertyDependencyCall(symbol, rawExpr.Location, code);
+            addNodesDependentOnAssignedProperty(e, node);
+            calls.Add(node);
+
+          | e => ErrorUnexpectedExpr(e)
+        }
       }
 
       addAssigns(expr);
       calcDependents(expr);
       //assert2(nodesMap.Count < 5);
-      nodesMap
+      PropertyDependencyGraph(symbol, nodesMap, calls)
     }
 
-    private CheckStageDependencies(dependencyGraph : array[PropertyDependencyNode]) : void
+    private CheckStageDependencies(dependencyGraph : PropertyDependencyGraph) : void
     {
-      foreach (a in dependencyGraph)
+      foreach (a in dependencyGraph.Nodes.Values)
       {
         | Assign(Path = DependencyPath.DeclaredProperty(_, DependentPropertySymbol(Direction = DependentPropertyDirection.Out) as target, _)) as a =>
           foreach (d in a.DependendOn)
@@ -440,64 +476,62 @@ namespace Nitra.Compiler
       }
     }
 
-    private GenerateCode(symbol : PropertyContainerSymbol, dependencyGraph : array[PropertyDependencyNode], dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField], structuralProperties : SCG.Dictionary[StructuralPropertySymbol, FixedType]) : PExpr
+    private GenerateCode(tb : TypeBuilder, symbol : PropertyContainerSymbol, dependencyGraph : PropertyDependencyGraph, dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField], structuralProperties : SCG.Dictionary[StructuralPropertySymbol, FixedType]) : PExpr
     {
+      def compileCode(symbol : PropertyContainerSymbol, code : PropertyDependencyCode) : PExpr
+      {
+        match(code)
+        {
+          | Compiled(methodName) => Util.locate(code.Location, <[ $(Environment.Project.GetNemerleType(symbol) : typed).$(methodName : usesite)(this) ]>)
+          | Source(expr)         => expr
+        }
+      }
+
+      def makeCondition(node : IPropertyDependencyNode) : PExpr
+      {
+        def makeDependentCheck(node : IPropertyDependencyNode, properties : SCG.List[DependencyPath], visited : SCG.HashSet[IPropertyDependencyNode]) : void
+        {
+          unless (visited.Add(node))
+            return;
+
+          foreach (p in node.DependendOn)
+          {
+            makeDependentCheck(p, properties, visited);
+            properties.Add(p.Path);
+          }
+        }
+
+        def properties = SCG.List();
+        makeDependentCheck(node, properties, SCG.HashSet());
+        GenerateHasValueCheck(properties, dependentProperties)
+      }
+
       def result = SCG.List();
       result.Add(<[ _ = context ]>);
 
       def evaluatedStructuralProperties = SCG.HashSet();
-      foreach (node in dependencyGraph)
+      foreach (node in dependencyGraph.GetOrderedNodes())
       {
-        | Assign    as a =>
-          def code =
-            if (a.DependendOn.Count > 0)
+        | Assign(code) =>
+          def expr1 = Util.locate(code.Location, <[ $(CompilePath(node.Path)) = $(compileCode(node.DeclaredIn, code)) ]>);
+          def expr2 =
+          <[
+            unless ($(GenerateHasValueCheck(node.Path, dependentProperties)))
             {
-              def makeCondition(node : PropertyDependencyNode) : PExpr
-              {
-                def makeDependentCheck(node : PropertyDependencyNode, properties : SCG.List[DependencyPath], visited : SCG.HashSet[PropertyDependencyNode]) : void
-                {
-                  unless (visited.Add(node))
-                    return;
-
-                  foreach (p in node.DependendOn)
-                  {
-                    makeDependentCheck(p, properties, visited);
-                    properties.Add(p.Path);
-                  }
-                }
-
-                def properties = SCG.List();
-                makeDependentCheck(node, properties, SCG.HashSet());
-                GenerateHasValueCheck(properties, dependentProperties)
-              }
-              <[
-                if ($(makeCondition(a)))
-                {
-                  unless ($(GenerateHasValueCheck(a.Path, dependentProperties)))
-                  {
-                    $(a.Expr);
-                    context.CalculatedCountInc();
-                  }
-                }
-                else
-                  context.DeferredCountInc();
-              ]>
+              $expr1;
+              context.CalculatedCountInc();
             }
+          ]>;
+          def expr3 =
+            if (node.DependendOn.Count > 0)
+              <[ if ($(makeCondition(node))) $expr2 else context.DeferredCountInc(); ]>
             else
-            {
-              <[
-                unless ($(GenerateHasValueCheck(a.Path, dependentProperties)))
-                {
-                  $(a.Expr);
-                  context.CalculatedCountInc();
-                }
-              ]>
-            };
+              expr2;
 
-          if (a.Path is DeclaredProperty(_, DependentPropertySymbol(Stage = propertyStage), _) when propertyStage > 0)
-            result.Add(<[ when (context.Stage >= $(propertyStage : int)) $code ]>);
+          if (node.Path is DeclaredProperty(_, DependentPropertySymbol(Stage = propertyStage), _) when propertyStage > 0)
+            result.Add(<[ when (context.Stage >= $(propertyStage : int)) $expr3 ]>);
           else
-            result.Add(code);
+            result.Add(expr3);
 
         | Use =>
           when (node.Path is DeclaredProperty(This, StructuralPropertySymbol as propertySymbol, _))
@@ -509,6 +543,25 @@ namespace Nitra.Compiler
               _ = evaluatedStructuralProperties.Add(propertySymbol);
             }
           }
+      }
+
+      foreach (call in dependencyGraph.Calls)
+      {
+        def bit = tb.GetBitFieldManager().Allocate();
+        def expr1 =
+        <[
+          unless ($(bit.Read()))
+          {
+            $(compileCode(call.DeclaredIn, call.Code));
+            $(bit.Set());
+          }
+        ]>;
+        def expr2 =
+          if (call.DependendOn.Count > 0)
+            <[ when ($(makeCondition(call))) $expr1 ]>
+          else
+            expr1;
+        result.Add(expr2);
       }
 
       foreach (pair in structuralProperties)
@@ -527,9 +580,9 @@ namespace Nitra.Compiler
       <[ { ..$result } ]>
     }
 
-    private SortGraphAndReport(dependencyGraph : array[PropertyDependencyNode]) : void
+    private CheckLoopsAndReport(dependencyGraph : PropertyDependencyGraph) : void
     {
-      def components = GraphAlgorithms.FindStronglyConnectedComponents(dependencyGraph).ToArray();
+      def components = GraphAlgorithms.FindStronglyConnectedComponents(dependencyGraph.Nodes.Values).ToArray();
       foreach (component when component.Nodes.Count > 1 in components)
       {
         surroundwith (related_messages)
@@ -541,8 +594,6 @@ namespace Nitra.Compiler
               Message.Hint(node.Location, $"Another cycled $(node.Path) property.");
         }
       }
-      otherwise
-        Array.Sort(dependencyGraph, PropertyDependencyNode.Compare);
     }
 
     private static FindAssignmentExpr(path : DependencyPath, assignments : SCG.List[list[Identifier] * PExpr]) : PExpr
