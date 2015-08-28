@@ -31,18 +31,7 @@ namespace Nitra.Compiler
           {
             tb.Manager.MacroColors.InGlobalColor(fun()
             {
-              def assignments = SCG.List();
-              def body        = SCG.List();
-              foreach (statement in (symbol :> IDependentStatementContainer).GetStatements())
-              {
-                | Assignment(rawExpr) =>
-                  mutable unused;
-                  def expr = PrepareExprForInheritableEvaluation(symbol, rawExpr, false, ref unused);
-                  body.Add(Util.locate(statement.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ self ]>, statement.Path)) = $expr ]>));
-                  assignments.Add(statement.Path, expr);
-
-                | Call => ()
-              }
+              def (body, assignments) = CompileStatements(symbol);
 
               def evalMethod = tb.DefineAndReturn(<[ decl:
                 public static $(" fake " : usesite)($("self" : global) : this, $("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
@@ -69,16 +58,7 @@ namespace Nitra.Compiler
     {
       Util.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
       {
-        def assignments = SCG.List();
-        def body        = SCG.List();
-        foreach (statement in (symbol :> IDependentStatementContainer).GetStatements())
-        {
-          | Assignment(expr) =>
-            body.Add(Util.locate(statement.NLocation(), <[ $(PExprUtils.FromQualifiedMember(<[ this ]>, statement.Path)) = $(expr) ]>));
-            assignments.Add(statement.Path, expr);
-
-          | Call => ()
-        }
+        def (body, assignments) = CompileStatements(symbol);
 
         def evalMethod = tb.DefineAndReturn(<[ decl:
           public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
@@ -90,6 +70,45 @@ namespace Nitra.Compiler
         def graph = TypeDependentEvaluation(evalMethod, symbol, assignments);
         evalMethod.Body = GenerateCode(symbol, graph, dependentProperties, structuralProperties);
       }));
+    }
+
+    private CompileStatements(symbol : PropertyContainerSymbol) : SCG.List[PExpr] * SCG.List[list[Identifier] * PExpr]
+    {
+      def prepareExpr(rawExpr : PExpr) : PExpr
+      {
+        if (symbol.IsAbstract)
+        {
+          mutable unused;
+          PrepareExprForInheritableEvaluation(symbol, rawExpr, false, ref unused);
+        }
+        else
+          rawExpr
+      }
+
+      def assignments = SCG.List();
+      def body        = SCG.List();
+
+      foreach (statement in (symbol :> IDependentStatementContainer).GetStatements())
+      {
+        Util.locate(statement.NLocation(),
+        {
+          def self = if (symbol.IsAbstract) <[ self ]> else <[ this ]>;
+          def path = PExprUtils.FromQualifiedMember(self, statement.Path);
+          match (statement)
+          {
+            | Assignment(rawExpr) =>
+              def expr = prepareExpr(rawExpr);
+              body.Add(<[ $path = $expr ]>);
+              assignments.Add(statement.Path, expr);
+
+            | Call(name, rawArgs) =>
+              def args = rawArgs.Map(prepareExpr);
+              body.Add(<[ $path.$(name.Value : usesite)(..$args) ]>);
+          }
+        })
+      }
+
+      (body, assignments)
     }
 
     private TypeDependentEvaluation(evalMethod : MethodBuilder, symbol : PropertyContainerSymbol, assignments : SCG.List[list[Identifier] * PExpr]) : array[PropertyDependencyNode]
