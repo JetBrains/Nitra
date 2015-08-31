@@ -24,7 +24,7 @@ namespace Nitra.Compiler
     protected DefineInterfaceDependentProperty(propertySymbol : DependentPropertySymbol, tb : TypeBuilder, isOverride : bool) : void
     {
       def propertyType = TypeCompiler.CompileDependentPropertyType(propertySymbol);
-      def attribute    = MakePropertyAttribute(propertySymbol, -1);
+      def attribute    = MakePropertyAttribute(propertySymbol);
       def mods         = AttributesAndModifiers(if (isOverride) NemerleModifiers.New else NemerleModifiers.None, [attribute]);
       tb.Define(<[ decl: ..$mods $(propertySymbol.Name : usesite) : $(propertyType : typed) { get; set; } ]>);
       unless (isOverride)
@@ -41,7 +41,7 @@ namespace Nitra.Compiler
           [RecordIgnore] private mutable $(backingFieldName : usesite) : $(propertyType : typed)
         ]>);
 
-        def mods          = AttributesAndModifiers(modifiers, [MakePropertyAttribute(propertyRef.Symbol, propertyRef.Index)]);
+        def mods          = AttributesAndModifiers(modifiers, [MakePropertyAttribute(propertyRef.Symbol, propertyRef.Mask)]);
         tb.Define(<[ decl:
           ..$mods $(propertyRef.Symbol.Name : usesite) : $(propertyType : typed)
           {
@@ -115,7 +115,7 @@ namespace Nitra.Compiler
       <[ assert(false, $(assertMessage : string)); ]>
     }
 
-    protected static MakePropertyAttribute(propertySymbol : PropertySymbol, index : int = -1) : PExpr
+    protected static MakePropertyAttribute(propertySymbol : PropertySymbol, mask : int = 0) : PExpr
     {
       def (isIn, isOut) =
         if (propertySymbol is DependentPropertySymbol(Direction = direction))
@@ -123,7 +123,7 @@ namespace Nitra.Compiler
         else
           (<[ false ]>, <[ false ]>);
 
-      <[ Nitra.Internal.PropertyAttribute($(propertySymbol.FullName : string), $(index : int), $isIn, $isOut) ]>
+      <[ Nitra.Internal.PropertyAttribute($(propertySymbol.FullName : string), $(mask : int), $isIn, $isOut) ]>
     }
 
     protected static DefineResetPropertiesMethod(tb : TypeBuilder, ambiguousTb : TypeBuilder) : void
@@ -278,36 +278,39 @@ namespace Nitra.Compiler
       mutable bitField;
       match (path)
       {
-        | DeclaredProperty(This, DependentPropertySymbol as symbol, _) when dependentProperties.TryGetValue(symbol, out bitField) => bitField.Read();
-        | DeclaredProperty(obj, DependentPropertySymbol as symbol, index) => CallIsPropertyEvaluated(CompilePath(obj), symbol)
+        | DeclaredProperty(This, DependentPropertySymbol as symbol, _) when dependentProperties.TryGetValue(symbol, out bitField) => dependentProperties[symbol].Read()
+        | DeclaredProperty(obj, DependentPropertySymbol as symbol, _) => CallIsPropertyEvaluated(CompilePath(obj), symbol)
         | _ => <[ true ]>
       }
     }
 
     protected static GenerateHasValueCheck(properties : SCG.List[DependencyPath], dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField]) : PExpr
     {
-      mutable other;
-      def bitsToCheck = LightList();
-      mutable bitField;
-      foreach (path in properties)
+      def makeKey(obj : DependencyPath.DeclaredProperty) : DependencyPath * bool
       {
-        | DeclaredProperty(This, DependentPropertySymbol as symbol, _) when dependentProperties.TryGetValue(symbol, out bitField) => bitsToCheck.Add(bitField)
-        | DeclaredProperty(obj, DependentPropertySymbol as symbol, index) => PExprUtils.CombineAnd(ref other, CallIsPropertyEvaluated(CompilePath(obj), symbol))
-        | _ => ()
+        def hasMask = if (obj.Path is DependencyPath.This) dependentProperties.ContainsKey(obj.Symbol :> DependentPropertySymbol) else obj.Mask != 0;
+        (obj.Path, hasMask)
       }
 
-      mutable result;
-      match (bitsToCheck.Count)
+      mutable acc;
+      foreach (g in properties.OfType.[DependencyPath.DeclaredProperty]().Where(p => p.Symbol is DependentPropertySymbol).GroupBy(makeKey))
       {
-        | 0 => ()
-        | 1 => result = bitsToCheck.FirstItem.Read()
-        | _ => result = BitField.CheckAll(bitsToCheck.ToList())
+        match (g.Key)
+        {
+          | (DependencyPath.This, true) => PExprUtils.CombineAnd(ref acc, BitField.CheckAll(g.Select(item => dependentProperties[item.Symbol :> DependentPropertySymbol])));
+          | (path, true) when g.Count() > 1 =>
+            mutable mask;
+            foreach (item in g)
+              mask |= item.Mask;
+            PExprUtils.CombineAnd(ref acc, <[ unchecked($(CompilePath(path)).PropertiesEvalState & $(mask : int) == $(mask : int) ) ]>);
+
+          | (path, _) =>
+            foreach (item in g)
+              PExprUtils.CombineAnd(ref acc, CallIsPropertyEvaluated(CompilePath(path), item.Symbol :> DependentPropertySymbol));
+        }
       }
 
-      when (other : object != null)
-        PExprUtils.CombineAnd(ref result, other);
-
-      result ?? <[ true ]>
+      acc ?? <[ true ]>
     }
 
     private static CallIsPropertyEvaluated(obj : PExpr, symbol : DependentPropertySymbol) : PExpr
