@@ -34,7 +34,7 @@ namespace Nitra.Compiler
               def evalMethod = tb.DefineAndReturn(<[ decl:
                 public static $(" fake " : usesite)($("self" : global) : this, $("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
                 {
-                  ..$(CompileStatements(symbol))
+                  ..$(CompileStatements(tb, symbol))
                 }
               ]>) :> MethodBuilder;
 
@@ -59,7 +59,7 @@ namespace Nitra.Compiler
         def evalMethod = tb.DefineAndReturn(<[ decl:
           public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
           {
-            ..$(CompileStatements(symbol))
+            ..$(CompileStatements(tb, symbol))
           }
         ]>) :> MethodBuilder;
 
@@ -68,7 +68,7 @@ namespace Nitra.Compiler
       }));
     }
 
-    private CompileStatements(symbol : PropertyContainerSymbol) : SCG.List[PExpr]
+    private CompileStatements(tb : TypeBuilder, symbol : PropertyContainerSymbol) : SCG.List[PExpr]
     {
       def prepareExpr(rawExpr : PExpr) : PExpr
       {
@@ -81,23 +81,28 @@ namespace Nitra.Compiler
           rawExpr
       }
 
+      def compilePath(statement : DependentStatement) : PExpr
+      {
+        def self = if (symbol.IsAbstract) <[ self ]> else <[ this ]>;
+        PExprUtils.FromQualifiedMember(self, statement.Path);
+      }
+
       def body = SCG.List();
 
       foreach (statement in (symbol :> IDependentStatementContainer).GetStatements())
       {
         Util.locate(statement.NLocation(),
         {
-          def self = if (symbol.IsAbstract) <[ self ]> else <[ this ]>;
-          def path = PExprUtils.FromQualifiedMember(self, statement.Path);
           match (statement)
           {
-            | Assignment(rawExpr) =>
-              def expr = prepareExpr(rawExpr);
-              body.Add(<[ $path = Nitra.PExprAnchor($expr) ]>);
-
-            | Call(name, rawArgs) =>
-              def args = rawArgs.Map(prepareExpr);
-              body.Add(<[ Nitra.PExprAnchor($path.$(name.Value : usesite)(..$args)) ]>);
+            | Assign(rawExpr)     => body.Add(<[ $(compilePath(statement)) = Nitra.PExprAnchor($(prepareExpr(rawExpr))) ]>);
+            | Call(name, rawArgs) => body.Add(<[ Nitra.PExprAnchor($(compilePath(statement)).$(name.Value : usesite)(..$(rawArgs.Map(prepareExpr)))) ]>);
+            | Add(rawExpr) =>
+              def typer     = Typer(tb.GlobalEnv, tb);
+              def typedPath = typer.TryTyping(fun() { typer.TypeName(PExprUtils.FromQualifiedIdentifier(statement.Path)) });
+              def pathType  = typedPath.Type.Fix();
+              body.Add(<[ $(compilePath(statement)) = Nitra.PExprAnchor($(pathType : typed)(context.Stage)) ]>);
+              body.Add(<[ Nitra.PExprAnchor($(compilePath(statement)).Add($(prepareExpr(rawExpr)))) ]>);
           }
         })
       }
@@ -403,10 +408,12 @@ namespace Nitra.Compiler
           | TExpr.DebugInfo as e => calcDependents(e.expr)
           | TExpr.Sequence as e => calcDependents(e.e1); calcDependents(e.e2);
           | TExpr.Assign(target, TExpr.MacroEnvelope(_, m, source, _)) when IsPExprAnchor(m) => processAssign(target, source);
-          | TExpr.MacroEnvelope(_, m, TExpr.Call as e, rawExpr) when IsPExprAnchor(m) =>
-            def code = PropertyDependencyCode.Source(rawExpr.Location, tb, expr.Type, rawExpr);
-            def node = PropertyDependencyCall(symbol, rawExpr.Location, code);
-            addNodesDependentOnAssignedProperty(e, node);
+          | TExpr.MacroEnvelope(_, m, TExpr.Call(TExpr.MethodRef(obj, meth, _, _), _, _), rawExpr) when IsPExprAnchor(m) =>
+            def code            = PropertyDependencyCode.Source(rawExpr.Location, tb, expr.Type, rawExpr);
+            def usedOnInitStage = meth.IsCustomAttributeDefined("Nitra.Staging.UsedOnInitStageAttribute");
+            def path            = makePath(obj);
+            def node            = PropertyDependencyCall(symbol, rawExpr.Location, code, path, usedOnInitStage);
+            addNodesDependentOnAssignedProperty(obj, node);
             calls.Add(node);
 
           | e => ErrorUnexpectedExpr(e)
@@ -517,21 +524,12 @@ namespace Nitra.Compiler
 
       foreach (call in dependencyGraph.Calls)
       {
-        def bit = tb.GetBitFieldManager().Allocate();
-        def expr1 =
-        <[
-          unless ($(bit.Read()))
-          {
-            $(compileCode(call.DeclaredIn, call.Code));
-            $(bit.Set());
-          }
-        ]>;
-        def expr2 =
-          if (call.DependendOn.Count > 0)
-            <[ when ($(makeCondition(call))) $expr1 ]>
-          else
-            expr1;
-        result.Add(expr2);
+        def bit   = tb.GetBitFieldManager().Allocate();
+        def expr1 =                                 <[ $(compileCode(call.DeclaredIn, call.Code)); $(bit.Set()); ]>;
+        def expr2 = if (call.UsedOnInitStage)       <[ when (context.Stage == $(CompilePath(call.Path)).CreationStage) $expr1 ]> else expr1;
+        def expr3 = if (call.DependendOn.Count > 0) <[ when ($(makeCondition(call))) $expr2 ]>                                   else expr2;
+        def expr4 =                                 <[ unless ($(bit.Read())) $expr3 ]>;
+        result.Add(expr4);
       }
 
       foreach (pair in structuralProperties)
