@@ -223,33 +223,46 @@ namespace Nitra.Compiler
         defineAmbiguousMethod(makeBody(ambiguousTb) ?? <[ true ]>)
     }
 
-    protected static DefineIsPropertyEvaluatedMethod(tb : TypeBuilder, modifiers : NemerleModifiers) : void
+    protected static DefinePropertiesEvalState(tb : TypeBuilder, ambiguousTb : TypeBuilder) : void
     {
-      def body = MakeIsPropertyEvaluatedBody(tb);
-      def mods = AttributesAndModifiers(NemerleModifiers.Public %| modifiers, []);
-      tb.Define(<[ decl:
-        ..$mods IsPropertyEvaluated(index : int) : bool
-        {
-          _ = index;
-          unchecked ($body)
-        }
-      ]>);
-    }
+      assert(tb != null || ambiguousTb != null);
 
-    private static MakeIsPropertyEvaluatedBody(tb : TypeBuilder) : PExpr
-    {
-      def     fields = tb.GetBitFieldManager().GetFields();
-      mutable body   = <[ throw System.ArgumentOutOfRangeException("index") ]>;
-      for (mutable i = fields.Length; i > 0; --i)
+      def makeBody(tb : TypeBuilder) : PExpr
       {
-        body = <[
-          if (index < $(i * BitFieldManager.BitFieldSize))
-            this.$(fields[i - 1] : usesite) %&& (1 << (index % $(BitFieldManager.BitFieldSize)))
-          else
-            $body
-        ]>
+        def fields = tb.GetBitFieldManager().GetFields();
+        if (fields.Length > 0)
+          <[ this.$(fields[0] : usesite) ]>
+        else
+          null
       }
-      body
+
+      def defineAmbiguousMethod(body)
+      {
+        ambiguousTb.Define(<[ decl: 
+          public override PropertiesEvalState : int
+          {
+            get
+            {
+              if (this.IsAmbiguous)
+                Ambiguities[0].PropertiesEvalState
+              else
+                $body
+            }
+          }
+        ]>)
+      }
+
+      if (tb != null)
+      {
+        def body = makeBody(tb);
+        when (body != null)
+          tb.Define(<[ decl: public override PropertiesEvalState : int { get { $body } } ]>);
+
+        when (ambiguousTb != null)
+          defineAmbiguousMethod(<[ base.PropertiesEvalState ]>)
+      }
+      else
+        defineAmbiguousMethod(makeBody(ambiguousTb) ?? <[ 0 ]>)
     }
 
     protected static GenerateHasValueCheck(obj : PExpr, propertyRef : DependentPropertyRef) : PExpr
@@ -257,7 +270,7 @@ namespace Nitra.Compiler
       if (propertyRef is Compiling(bit) when IsThis(obj))
         bit.Read()
       else
-        CallIsPropertyEvaluated(obj, propertyRef.Symbol, propertyRef.Index)
+        CallIsPropertyEvaluated(obj, propertyRef.Symbol)
     }
 
     protected static GenerateHasValueCheck(path : DependencyPath, dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField]) : PExpr
@@ -266,7 +279,7 @@ namespace Nitra.Compiler
       match (path)
       {
         | DeclaredProperty(This, DependentPropertySymbol as symbol, _) when dependentProperties.TryGetValue(symbol, out bitField) => bitField.Read();
-        | DeclaredProperty(obj, DependentPropertySymbol as symbol, index) => CallIsPropertyEvaluated(CompilePath(obj), symbol, index)
+        | DeclaredProperty(obj, DependentPropertySymbol as symbol, index) => CallIsPropertyEvaluated(CompilePath(obj), symbol)
         | _ => <[ true ]>
       }
     }
@@ -279,7 +292,7 @@ namespace Nitra.Compiler
       foreach (path in properties)
       {
         | DeclaredProperty(This, DependentPropertySymbol as symbol, _) when dependentProperties.TryGetValue(symbol, out bitField) => bitsToCheck.Add(bitField)
-        | DeclaredProperty(obj, DependentPropertySymbol as symbol, index) => PExprUtils.CombineAnd(ref other, CallIsPropertyEvaluated(CompilePath(obj), symbol, index))
+        | DeclaredProperty(obj, DependentPropertySymbol as symbol, index) => PExprUtils.CombineAnd(ref other, CallIsPropertyEvaluated(CompilePath(obj), symbol))
         | _ => ()
       }
 
@@ -297,12 +310,9 @@ namespace Nitra.Compiler
       result ?? <[ true ]>
     }
 
-    private static CallIsPropertyEvaluated(obj : PExpr, symbol : DependentPropertySymbol, index : int) : PExpr
+    private static CallIsPropertyEvaluated(obj : PExpr, symbol : DependentPropertySymbol) : PExpr
     {
-      if (index >= 0)
-        <[ $obj.IsPropertyEvaluated($(index : int)) ]>
-      else
-        <[ $obj.$(GetIsEvaluatedPropertyName(symbol) : usesite) ]>
+      <[ $obj.$(GetIsEvaluatedPropertyName(symbol) : usesite) ]>
     }
 
     private static IsThis(e : PExpr) : bool
