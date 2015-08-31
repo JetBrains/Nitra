@@ -14,6 +14,7 @@ using System.Diagnostics;
 ﻿using Microsoft.VisualStudio.Shell.Interop;
 ﻿using Microsoft.VisualStudio.TextManager.Interop;
 ﻿using Nitra;
+using Nitra.ProjectSystem;
 ﻿using Nitra.VisualStudio;
 ﻿using Nitra.VisualStudio.Parsing;
 
@@ -108,20 +109,20 @@ namespace XXNamespaceXX
       mgr.NavigateToLineAndColumn(buffer, ref logicalView, line, column, line, column);
     }
 
-    private TaskErrorCategory TranslateErrorCategory(Error error)
+    private static TaskErrorCategory TranslateErrorCategory(CompilerMessage error)
     {
+      switch (error.Type)
+      {
+        case CompilerMessageType.FatalError:
+        case CompilerMessageType.Error:
+          return TaskErrorCategory.Error;
+        case CompilerMessageType.Warning:
+          return TaskErrorCategory.Warning;
+        case CompilerMessageType.Hint:
+          return TaskErrorCategory.Message;
+      }
+
       return TaskErrorCategory.Error;
-      //switch (error)
-      //{
-      //  case ValidationErrorSeverity.Error:
-      //    return TaskErrorCategory.Error;
-      //  case ValidationErrorSeverity.Message:
-      //    return TaskErrorCategory.Message;
-      //  case ValidationErrorSeverity.Warning:
-      //    return TaskErrorCategory.Warning;
-      //}
-      //
-      //return TaskErrorCategory.Error;
     }
 
     public void ReportParseErrors(IParseResult parseResult, ITextSnapshot snapshot)
@@ -132,7 +133,9 @@ namespace XXNamespaceXX
         // remove any previously created errors to get a clean start
         ClearErrors();
 
-        foreach (var error in parseResult.GetErrors())
+        var messages = (CompilerMessageList)parseResult.CompilerMessages;
+
+        foreach (var error in messages.GetMessages())
         {
           // creates the instance that will be added to the Error List
           var nSpan = error.Location.Span;
@@ -142,7 +145,7 @@ namespace XXNamespaceXX
           task.Priority = TaskPriority.Normal;
           task.Document = _textBuffer.Properties.GetProperty<ITextDocument>(typeof(ITextDocument)).FilePath;
           task.ErrorCategory = TranslateErrorCategory(error);
-          task.Text = error.Message;
+          task.Text = error.Text;
           task.Line = _textBuffer.CurrentSnapshot.GetLineNumberFromPosition(span.Start);
           task.Column = span.Start - _textBuffer.CurrentSnapshot.GetLineFromLineNumber(task.Line).Start;
           task.Navigate += OnTaskNavigate;
