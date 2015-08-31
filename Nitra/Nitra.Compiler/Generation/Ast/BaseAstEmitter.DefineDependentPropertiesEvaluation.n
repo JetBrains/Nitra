@@ -22,6 +22,9 @@ namespace Nitra.Compiler
 {
   internal abstract partial class BaseAstEmitter
   {
+    private static StagedAttribute     = "Nitra.Staging.StagedAttribute";
+    private static StagedInitAttribute = "Nitra.Staging.StagedInitAttribute";
+
     protected DefineDependentPropertiesInheritableEvaluation(tb : TypeBuilder, symbol : PropertyContainerSymbol) : void
     {
       Util.locate(symbol.FirstLocation.NLocation(),
@@ -100,9 +103,23 @@ namespace Nitra.Compiler
             | Add(rawExpr) =>
               def typer     = Typer(tb.GlobalEnv, tb);
               def typedPath = typer.TryTyping(fun() { typer.TypeName(PExprUtils.FromQualifiedIdentifier(statement.Path)) });
-              def pathType  = typedPath.Type.Fix();
-              body.Add(<[ $(compilePath(statement)) = Nitra.PExprAnchor($(pathType : typed)(context.Stage)) ]>);
-              body.Add(<[ Nitra.PExprAnchor($(compilePath(statement)).Add($(prepareExpr(rawExpr)))) ]>);
+              match (typedPath.Type.Fix())
+              {
+                | FixedType.Class(ti, _) as pathType =>
+                  unless (ti.IsCustomAttributeDefined(StagedAttribute))
+                    Message.Error(statement.NLocation(), $"Type '$pathType' is not marked with '$StagedAttribute' attribute.");
+
+                  match (ti.GetMembers().Find(m => m is IMethod && m.IsCustomAttributeDefined(StagedInitAttribute)))
+                  {
+                    | Some(m) =>
+                      body.Add(<[ $(compilePath(statement)) = Nitra.PExprAnchor($(pathType : typed)(context.Stage)) ]>);
+                      body.Add(<[ Nitra.PExprAnchor($(compilePath(statement)).$(m.Name : usesite)($(prepareExpr(rawExpr)))) ]>);
+
+                    | None => Message.Error(statement.NLocation(), $"Type '$pathType' does not contain any method marked with '$StagedInitAttribute' attribute.")
+                  }
+
+                | t => Message.Error(statement.NLocation(), $"Type '$t' is not valid in staged initialization statement.");
+              }
           }
         })
       }
@@ -409,12 +426,19 @@ namespace Nitra.Compiler
           | TExpr.Sequence as e => calcDependents(e.e1); calcDependents(e.e2);
           | TExpr.Assign(target, TExpr.MacroEnvelope(_, m, source, _)) when IsPExprAnchor(m) => processAssign(target, source);
           | TExpr.MacroEnvelope(_, m, TExpr.Call(TExpr.MethodRef(obj, meth, _, _), _, _), rawExpr) when IsPExprAnchor(m) =>
-            def code            = PropertyDependencyCode.Source(rawExpr.Location, tb, expr.Type, rawExpr);
-            def usedOnInitStage = meth.IsCustomAttributeDefined("Nitra.Staging.UsedOnInitStageAttribute");
-            def path            = makePath(obj);
-            def node            = PropertyDependencyCall(symbol, rawExpr.Location, code, path, usedOnInitStage);
-            addNodesDependentOnAssignedProperty(obj, node);
-            calls.Add(node);
+            def code     = PropertyDependencyCode.Source(rawExpr.Location, tb, expr.Type, rawExpr);
+            def isStaged = if (obj.Type is FixedType.Class(ti, _)) ti.IsCustomAttributeDefined(StagedAttribute) else false;
+            def call     =
+              if (isStaged)
+                if (meth.IsCustomAttributeDefined(StagedInitAttribute))
+                  PropertyDependencyCall.StagedInit(symbol, rawExpr.Location, code, makePath(obj))
+                else
+                  PropertyDependencyCall.StagedUse(symbol, rawExpr.Location, code, makePath(obj))
+              else
+                PropertyDependencyCall.Normal(symbol, rawExpr.Location, code);
+
+            addNodesDependentOnAssignedProperty(obj, call);
+            calls.Add(call);
 
           | e => ErrorUnexpectedExpr(e)
         }
@@ -525,10 +549,16 @@ namespace Nitra.Compiler
       foreach (call in dependencyGraph.Calls)
       {
         def bit   = tb.GetBitFieldManager().Allocate();
-        def expr1 =                                 <[ $(compileCode(call.DeclaredIn, call.Code)); $(bit.Set()); ]>;
-        def expr2 = if (call.UsedOnInitStage)       <[ when (context.Stage == $(CompilePath(call.Path)).CreationStage) $expr1 ]> else expr1;
-        def expr3 = if (call.DependendOn.Count > 0) <[ when ($(makeCondition(call))) $expr2 ]>                                   else expr2;
-        def expr4 =                                 <[ unless ($(bit.Read())) $expr3 ]>;
+        def expr1 = <[ $(compileCode(call.DeclaredIn, call.Code)); $(bit.Set()); ]>;
+        def expr2 = 
+          match (call)
+          {
+            | Normal           => expr1
+            | StagedInit(path) => <[ when (context.Stage == $(CompilePath(path)).CreationStage) $expr1 ]>
+            | StagedUse (path) => <[ when (context.Stage > $(CompilePath(path)).CreationStage)  $expr1 ]>
+          };
+        def expr3 = if (call.DependendOn.Count > 0) <[ when ($(makeCondition(call))) $expr2 ]> else expr2;
+        def expr4 = <[ unless ($(bit.Read())) $expr3 ]>;
         result.Add(expr4);
       }
 
