@@ -31,19 +31,17 @@ namespace Nitra.Compiler
           {
             tb.Manager.MacroColors.InGlobalColor(fun()
             {
-              def (body, assignments) = CompileStatements(symbol);
-
               def evalMethod = tb.DefineAndReturn(<[ decl:
                 public static $(" fake " : usesite)($("self" : global) : this, $("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
                 {
-                  ..$body
+                  ..$(CompileStatements(symbol))
                 }
               ]>) :> MethodBuilder;
 
               unless (Environment.IsIdeMode)
                 evalMethod.SkipEmiting = true;
 
-              def graph = TypeDependentEvaluation(evalMethod, symbol, assignments);
+              def graph = TypeDependentEvaluation(evalMethod, symbol);
               evalMethod.Body = <[ IgnoreParams() ]>;
               graph
             });
@@ -58,21 +56,19 @@ namespace Nitra.Compiler
     {
       Util.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
       {
-        def (body, assignments) = CompileStatements(symbol);
-
         def evalMethod = tb.DefineAndReturn(<[ decl:
           public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
           {
-            ..$body
+            ..$(CompileStatements(symbol))
           }
         ]>) :> MethodBuilder;
 
-        def graph = TypeDependentEvaluation(evalMethod, symbol, assignments);
+        def graph = TypeDependentEvaluation(evalMethod, symbol);
         evalMethod.Body = GenerateCode(tb, symbol, graph, dependentProperties, structuralProperties);
       }));
     }
 
-    private CompileStatements(symbol : PropertyContainerSymbol) : SCG.List[PExpr] * SCG.List[list[Identifier] * PExpr]
+    private CompileStatements(symbol : PropertyContainerSymbol) : SCG.List[PExpr]
     {
       def prepareExpr(rawExpr : PExpr) : PExpr
       {
@@ -85,8 +81,7 @@ namespace Nitra.Compiler
           rawExpr
       }
 
-      def assignments = SCG.List();
-      def body        = SCG.List();
+      def body = SCG.List();
 
       foreach (statement in (symbol :> IDependentStatementContainer).GetStatements())
       {
@@ -98,8 +93,7 @@ namespace Nitra.Compiler
           {
             | Assignment(rawExpr) =>
               def expr = prepareExpr(rawExpr);
-              body.Add(<[ $path = $expr ]>);
-              assignments.Add(statement.Path, expr);
+              body.Add(<[ $path = Nitra.PExprAnchor($expr) ]>);
 
             | Call(name, rawArgs) =>
               def args = rawArgs.Map(prepareExpr);
@@ -108,10 +102,10 @@ namespace Nitra.Compiler
         })
       }
 
-      (body, assignments)
+      body
     }
 
-    private TypeDependentEvaluation(evalMethod : MethodBuilder, symbol : PropertyContainerSymbol, assignments : SCG.List[list[Identifier] * PExpr]) : PropertyDependencyGraph
+    private TypeDependentEvaluation(evalMethod : MethodBuilder, symbol : PropertyContainerSymbol) : PropertyDependencyGraph
     {
       //def needDebugging = evalMethod.DeclaringType.Name == "TypeParameterConstraintsClause";
       //assert2(!needDebugging);
@@ -129,7 +123,7 @@ namespace Nitra.Compiler
           | FunBody.Typed(TExpr.Block(_, TExpr.Literal(Literal.Void))) => PropertyDependencyGraph(symbol)
           | FunBody.Typed(TExpr.Block(_, bodyExpr)) =>
             def expr = ValidateEvalFieldsCode(bodyExpr);
-            MakeLocalDependencyGraph(evalMethod.DeclaringType, symbol, expr, assignments)
+            MakeLocalDependencyGraph(evalMethod.DeclaringType, symbol, expr)
 
           | _ =>
             assert2(false, $"Failed typing of dependent evaluations in method '$(evalMethod.Name)'");
@@ -263,7 +257,7 @@ namespace Nitra.Compiler
       CheckLoopsAndReport(graph);
     }
 
-    private MakeLocalDependencyGraph(tb : TypeBuilder, symbol : PropertyContainerSymbol, expr : TExpr, assignments : SCG.List[list[Identifier] * PExpr]) : PropertyDependencyGraph
+    private MakeLocalDependencyGraph(tb : TypeBuilder, symbol : PropertyContainerSymbol, expr : TExpr) : PropertyDependencyGraph
     {
       def nodesMap = Hashtable();
       def calls    = SCG.List();
@@ -342,9 +336,9 @@ namespace Nitra.Compiler
         }
         walker.Walk(expr, walk);
       }
-      def addKey(assign : TExpr.Assign) : void
+      def addKey(assignLoc : Nemerle.Compiler.Location, target : TExpr, source : TExpr, rawSourceExpr : PExpr) : void
       {
-        match (assign.target)
+        match (target)
         {
           | TExpr.PropertyMember as e =>
             if (Environment.LookupPropertySymbol(e.prop).IsSome) //  is VSome((propertySymbol, propertyIndex))
@@ -358,21 +352,20 @@ namespace Nitra.Compiler
               }
               else
               {
-                def source = FindAssignmentExpr(path, assignments);
-                def code   = PropertyDependencyCode.Source(assign.Location, tb, assign.source.Type, source);
-                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assign.Location, code);
+                def code   = PropertyDependencyCode.Source(assignLoc, tb, source.Type, rawSourceExpr);
+                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assignLoc, code);
               }
             }
             else
               Message.FatalError(e.Location, "You can assign only a dependent property.");
 
           | TExpr.Delayed => assert(false);
-          | _ => Message.FatalError(assign.target.Location, "You can assign only a dependent property.");
+          | _ => Message.FatalError(assignLoc, "You can assign only a dependent property.");
         }
       }
-      def processAssign(assign : TExpr.Assign) : void
+      def processAssign(target : TExpr, source : TExpr) : void
       {
-        match (assign.target)
+        match (target)
         {
           | TExpr.PropertyMember as e =>
             if (Environment.LookupPropertySymbol(e.prop).IsSome)
@@ -380,14 +373,14 @@ namespace Nitra.Compiler
               def nodesMap = nodesMap;
               def path = makePath(e);
               def node = nodesMap[path] :> PropertyDependencyNode.Assign;
-              addNodesDependentOnAssignedProperty(assign.source, node);
+              addNodesDependentOnAssignedProperty(source, node);
               addNodesDependentOnAssignedProperty(e.obj, node);
             }
             else
               Message.FatalError(e.Location, "You can assign only a dependent property.");
 
           | TExpr.Delayed => assert(false);
-          | _ => Message.FatalError(assign.target.Location, "You can assign only a dependent property.");
+          | _ => Message.FatalError(target.Location, "You can assign only a dependent property.");
         }
       }
       def addAssigns(expr : TExpr) : void
@@ -397,7 +390,7 @@ namespace Nitra.Compiler
           | TExpr.Delayed => assert(false);
           | TExpr.DebugInfo as e => addAssigns(e.expr)
           | TExpr.Sequence as e => addAssigns(e.e1); addAssigns(e.e2);
-          | TExpr.Assign as e => addKey(e);
+          | TExpr.Assign(target, TExpr.MacroEnvelope(_, m, source, rawSourceExpr)) as e when IsPExprAnchor(m) => addKey(e.Location, target, source, rawSourceExpr);
           | TExpr.MacroEnvelope(_, m, TExpr.Call, _) when IsPExprAnchor(m) => ()
           | e => ErrorUnexpectedExpr(e)
         }
@@ -409,7 +402,7 @@ namespace Nitra.Compiler
           | TExpr.Delayed => assert(false);
           | TExpr.DebugInfo as e => calcDependents(e.expr)
           | TExpr.Sequence as e => calcDependents(e.e1); calcDependents(e.e2);
-          | TExpr.Assign as e => processAssign(e);
+          | TExpr.Assign(target, TExpr.MacroEnvelope(_, m, source, _)) when IsPExprAnchor(m) => processAssign(target, source);
           | TExpr.MacroEnvelope(_, m, TExpr.Call as e, rawExpr) when IsPExprAnchor(m) =>
             def code = PropertyDependencyCode.Source(rawExpr.Location, tb, expr.Type, rawExpr);
             def node = PropertyDependencyCall(symbol, rawExpr.Location, code);
@@ -571,39 +564,6 @@ namespace Nitra.Compiler
               Message.Hint(node.Location, $"Another cycled $(node.Path) property.");
         }
       }
-    }
-
-    private static FindAssignmentExpr(path : DependencyPath, assignments : SCG.List[list[Identifier] * PExpr]) : PExpr
-    {
-      def cmp(path : DependencyPath, id : Identifier) : bool * DependencyPath
-      {
-        match (path)
-        {
-          | DeclaredProperty(otherPath, PropertySymbol(Name = name), _)
-          | CustomProperty(otherPath,                         name) => (StringComparer.Ordinal.Equals(name, id.Value), otherPath)
-          | _ => (false, path)
-        }
-      }
-      def isMatch(path : DependencyPath, qid : list[Identifier]) : bool * DependencyPath
-      {
-        match (qid)
-        {
-          | []   => (false, path)
-          | [id] => cmp(path, id)
-          | id :: other =>
-            match (isMatch(path, other))
-            {
-              | (true, path) => cmp(path, id)
-              | fail => fail
-            }
-        }
-      }
-
-      foreach ((qid, expr) in assignments)
-        when (isMatch(path, qid) is (true, This))
-          return expr;
-
-      assert(false, $"Assignment of '$path' is not found.");
     }
   }
 }
