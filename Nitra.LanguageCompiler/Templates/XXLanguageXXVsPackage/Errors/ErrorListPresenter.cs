@@ -127,7 +127,7 @@ namespace XXNamespaceXX
 
     public void ReportParseErrors(IParseResult parseResult, ITextSnapshot snapshot)
     {
-      _errorListProvider.SuspendRefresh();
+      _errorListProvider.SuspendRefresh(); 
       try
       {
         // remove any previously created errors to get a clean start
@@ -153,8 +153,8 @@ namespace XXNamespaceXX
           _previousErrors.Add(task);
 
           var trackingSpan = _textBuffer.CurrentSnapshot.CreateTrackingSpan(span, SpanTrackingMode.EdgeNegative);
-          _squiggleTagger.CreateTagSpan(trackingSpan, new ErrorTag("syntax error", error.Message));
-          _previousSquiggles.Add(new TrackingTagSpan<IErrorTag>(trackingSpan, new ErrorTag("syntax error", error.Message)));
+          _squiggleTagger.CreateTagSpan(trackingSpan, new ErrorTag("syntax error", error.Text));
+          _previousSquiggles.Add(new TrackingTagSpan<IErrorTag>(trackingSpan, new ErrorTag("syntax error", error.Text)));
         }
       }
       finally { _errorListProvider.ResumeRefresh(); }
