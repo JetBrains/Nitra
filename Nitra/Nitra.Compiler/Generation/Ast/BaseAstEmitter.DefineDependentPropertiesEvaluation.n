@@ -37,12 +37,13 @@ namespace Nitra.Compiler
               def evalMethod = tb.DefineAndReturn(<[ decl:
                 public static $(" fake " : usesite)($("self" : global) : this, $("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
                 {
-                  ..$(CompileStatements(tb, symbol))
                 }
               ]>) :> MethodBuilder;
 
               unless (Environment.IsIdeMode)
                 evalMethod.SkipEmiting = true;
+
+              CompileStatements(evalMethod, symbol);
 
               def graph = TypeDependentEvaluation(evalMethod, symbol);
               evalMethod.Body = <[ IgnoreParams() ]>;
@@ -62,16 +63,17 @@ namespace Nitra.Compiler
         def evalMethod = tb.DefineAndReturn(<[ decl:
           public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void
           {
-            ..$(CompileStatements(tb, symbol))
           }
         ]>) :> MethodBuilder;
+
+        CompileStatements(evalMethod, symbol);
 
         def graph = TypeDependentEvaluation(evalMethod, symbol);
         evalMethod.Body = GenerateCode(tb, symbol, graph, dependentProperties, structuralProperties);
       }));
     }
 
-    private CompileStatements(tb : TypeBuilder, symbol : PropertyContainerSymbol) : SCG.List[PExpr]
+    private CompileStatements(mb : MethodBuilder, symbol : PropertyContainerSymbol) : void
     {
       def prepareExpr(rawExpr : PExpr) : PExpr
       {
@@ -101,8 +103,8 @@ namespace Nitra.Compiler
             | Assign(rawExpr)     => body.Add(<[ $(compilePath(statement)) = Nitra.PExprAnchor($(prepareExpr(rawExpr))) ]>);
             | Call(name, rawArgs) => body.Add(<[ Nitra.PExprAnchor($(compilePath(statement)).$(name.Value : usesite)(..$(rawArgs.Map(prepareExpr)))) ]>);
             | Add(rawExpr) =>
-              def typer     = Typer(tb.GlobalEnv, tb);
-              def typedPath = typer.TryTyping(fun() { typer.TypeName(PExprUtils.FromQualifiedIdentifier(statement.Path)) });
+              def typer     = Typer(mb);
+              def typedPath = typer.TryTyping(fun() { typer.TypeExpr(compilePath(statement)) });
               match (typedPath.Type.Fix())
               {
                 | FixedType.Class(ti, _) as pathType =>
@@ -124,7 +126,7 @@ namespace Nitra.Compiler
         })
       }
 
-      body
+      mb.Body = <[ { ..$body } ]>
     }
 
     private TypeDependentEvaluation(evalMethod : MethodBuilder, symbol : PropertyContainerSymbol) : PropertyDependencyGraph
@@ -297,7 +299,8 @@ namespace Nitra.Compiler
 
           | TExpr.Base
           | TExpr.This
-          | TExpr.LocalRef(LocalValue(Name = "self", ValKind = LocalValue.Kind.FunParm)) => DependencyPath.This()
+          | TExpr.LocalRef(LocalValue(Name = "self",    ValKind = LocalValue.Kind.FunParm)) => DependencyPath.This()
+          | TExpr.LocalRef(LocalValue(Name = "context", ValKind = LocalValue.Kind.FunParm)) => DependencyPath.Context()
           | _ =>  ErrorUnexpectedExpr(expr); null
         }
       }
@@ -334,7 +337,8 @@ namespace Nitra.Compiler
 
           | TExpr.Base
           | TExpr.This
-          | TExpr.LocalRef(LocalValue(Name = "self", ValKind = LocalValue.Kind.FunParm)) => () // OK
+          | TExpr.LocalRef(LocalValue(Name = "self",    ValKind = LocalValue.Kind.FunParm))
+          | TExpr.LocalRef(LocalValue(Name = "context", ValKind = LocalValue.Kind.FunParm)) => () // OK
           | _ => ErrorUnexpectedExpr(expr); // not a property in member acess
         }
       }
@@ -483,7 +487,7 @@ namespace Nitra.Compiler
       {
         match(code)
         {
-          | Compiled(methodName) => Util.locate(code.Location, <[ $(Environment.Project.GetNemerleType(symbol) : typed).$(methodName : usesite)(this) ]>)
+          | Compiled(methodName) => Util.locate(code.Location, <[ $(Environment.Project.GetNemerleType(symbol) : typed).$(methodName : usesite)(this, context) ]>)
           | Source(_, _, expr)   => expr
         }
       }
