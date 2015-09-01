@@ -157,6 +157,7 @@ namespace Nitra.Compiler
       PropertyDependencyNode.TryBreakCyclesInStructuralProperties(graph.Nodes.Values);
       MakeFullDepencyGraph(symbol, graph);
       CheckStageDependencies(graph);
+      _ = PropertyDependencyNode.Sort(graph.Nodes.Values);
       //when (needDebugging)
       //when (graph.Nodes.Count >= 5)
       //  PropertyDependencyNode.Visualize(symbol, fullGraph, symbol.Name);
@@ -492,13 +493,12 @@ namespace Nitra.Compiler
         }
       }
 
-      def makeCondition(node : IPropertyDependencyNode) : PExpr
+      def makeCondition(node : IPropertyDependencyNode, trueExpr : PExpr, falseExpr : PExpr = null) : PExpr
       {
         def makeDependentCheck(node : IPropertyDependencyNode, properties : SCG.List[DependencyPath], visited : SCG.HashSet[IPropertyDependencyNode]) : void
         {
           unless (visited.Add(node))
             return;
-
           foreach (p in node.DependendOn)
           {
             makeDependentCheck(p, properties, visited);
@@ -506,9 +506,22 @@ namespace Nitra.Compiler
           }
         }
 
-        def properties = SCG.List();
-        makeDependentCheck(node, properties, SCG.HashSet());
-        GenerateHasValueCheck(properties, dependentProperties)
+        if (node.DependendOn.Count > 0)
+        {
+          def properties = SCG.List();
+          makeDependentCheck(node, properties, SCG.HashSet());
+          match (GenerateHasValueCheck(properties, dependentProperties))
+          {
+            | <[ true ]> => trueExpr
+            | pred =>
+              if (falseExpr : object != null)
+                <[ if ($pred) $trueExpr else $falseExpr ]>
+              else
+                <[ when ($pred) $trueExpr ]>
+          }
+        }
+        else
+          trueExpr
       }
 
       def result = SCG.List();
@@ -527,12 +540,7 @@ namespace Nitra.Compiler
               context.CalculatedCountInc();
             }
           ]>;
-          def expr3 =
-            if (node.DependendOn.Count > 0)
-              <[ if ($(makeCondition(node))) $expr2 else context.DeferredCountInc(); ]>
-            else
-              expr2;
-
+          def expr3 = makeCondition(node, expr2, <[ context.DeferredCountInc() ]>);
           if (node.Path is DeclaredProperty(_, DependentPropertySymbol(Stage = propertyStage), _) when propertyStage > 0)
             result.Add(<[ when (context.Stage >= $(propertyStage : int)) $expr3 ]>);
           else
@@ -561,7 +569,7 @@ namespace Nitra.Compiler
             | StagedInit(path) => <[ when (context.Stage == $(CompilePath(path)).CreationStage) $expr1 ]>
             | StagedUse (path) => <[ when (context.Stage > $(CompilePath(path)).CreationStage)  $expr1 ]>
           };
-        def expr3 = if (call.DependendOn.Count > 0) <[ when ($(makeCondition(call))) $expr2 ]> else expr2;
+        def expr3 = makeCondition(call, expr2);
         def expr4 = <[ unless ($(bit.Read())) $expr3 ]>;
         result.Add(expr4);
       }
