@@ -321,7 +321,8 @@ namespace Nitra.Compiler
         mutable to;
         unless (nodesMap.TryGetValue(path, out to))
         {
-          to = PropertyDependencyNode.Use(symbol, path, propAccess.Location);
+          def isStaged = propAccess.Type.TryRequire(Environment.StagedTypeVar);
+          to = PropertyDependencyNode.Use(symbol, path, propAccess.Location, isStaged);
           nodesMap[path] = to;
         }
         to
@@ -388,8 +389,9 @@ namespace Nitra.Compiler
               }
               else
               {
-                def code   = PropertyDependencyCode.Source(assignLoc, tb, source.Type, rawSourceExpr);
-                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assignLoc, code);
+                def isStaged   = e.Type.TryRequire(Environment.StagedTypeVar);
+                def code       = PropertyDependencyCode.Source(assignLoc, tb, source.Type, rawSourceExpr);
+                nodesMap[path] = PropertyDependencyNode.Assign(symbol, path, assignLoc, isStaged, code);
               }
             }
             else
@@ -440,16 +442,17 @@ namespace Nitra.Compiler
           | TExpr.Sequence as e => calcDependents(e.e1); calcDependents(e.e2);
           | TExpr.Assign(target, TExpr.MacroEnvelope(_, m, source, _)) when IsPExprAnchor(m) => processAssign(target, source);
           | TExpr.MacroEnvelope(_, m, TExpr.Call(TExpr.MethodRef(obj, meth, _, _), _, _) as callExpr, rawExpr) when IsPExprAnchor(m) =>
+            def path     = makePath(obj);
             def code     = PropertyDependencyCode.Source(rawExpr.Location, tb, expr.Type, rawExpr);
             def isStaged = obj.Type.TryRequire(Environment.StagedTypeVar);
             def node     =
               if (isStaged)
                 if (meth.IsCustomAttributeDefined(StagedInitAttribute))
-                  PropertyDependencyCall.StagedInit(symbol, rawExpr.Location, code, makePath(obj))
+                  PropertyDependencyCall.StagedInit(symbol, rawExpr.Location, path, code)
                 else
-                  PropertyDependencyCall.StagedUse(symbol, rawExpr.Location, code, makePath(obj))
+                  PropertyDependencyCall.StagedUse(symbol, rawExpr.Location, path, code)
               else
-                PropertyDependencyCall.Normal(symbol, rawExpr.Location, code);
+                PropertyDependencyCall.Normal(symbol, rawExpr.Location, path, code);
 
             addNodesDependentOnAssignedProperty(callExpr, node);
             calls.Add(node);
@@ -504,22 +507,31 @@ namespace Nitra.Compiler
 
       def makeCondition(node : IPropertyDependencyNode, trueExpr : PExpr, falseExpr : PExpr = null) : PExpr
       {
-        def makeDependentCheck(node : IPropertyDependencyNode, properties : SCG.List[DependencyPath], visited : SCG.HashSet[IPropertyDependencyNode]) : void
+        def collectDependendOn(node : IPropertyDependencyNode, properties : SCG.List[DependencyPath], stagedProperties : SCG.List[DependencyPath], visited : SCG.HashSet[IPropertyDependencyNode]) : void
         {
           unless (visited.Add(node))
             return;
           foreach (p in node.DependendOn)
           {
-            makeDependentCheck(p, properties, visited);
+            collectDependendOn(p, properties, stagedProperties, visited);
             properties.Add(p.Path);
+            when (p.IsStaged)
+              stagedProperties.Add(p.Path);
           }
         }
 
         if (node.DependendOn.Count > 0)
         {
-          def properties = SCG.List();
-          makeDependentCheck(node, properties, SCG.HashSet());
-          match (GenerateHasValueCheck(properties, dependentProperties))
+          def properties       = SCG.List();
+          def stagedProperties = SCG.List();
+          collectDependendOn(node, properties, stagedProperties, SCG.HashSet());
+          mutable pred = GenerateHasValueCheck(properties, dependentProperties);
+          foreach (path in stagedProperties)
+          {
+            unless (node.Path.Equals(path))
+              PExprUtils.CombineAnd(ref pred, <[ context.Stage > $(CompilePath(path)).CreationStage ]>);
+          }
+          match (pred)
           {
             | <[ true ]> => trueExpr
             | pred =>
@@ -574,9 +586,9 @@ namespace Nitra.Compiler
         def expr2 = 
           match (call)
           {
-            | Normal           => expr1
-            | StagedInit(path) => <[ when (context.Stage == $(CompilePath(path)).CreationStage) $expr1 ]>
-            | StagedUse (path) => <[ when (context.Stage > $(CompilePath(path)).CreationStage)  $expr1 ]>
+            | Normal     => expr1
+            | StagedInit => <[ when (context.Stage == $(CompilePath(call.Path)).CreationStage) $expr1 ]>
+            | StagedUse  => <[ when (context.Stage > $(CompilePath(call.Path)).CreationStage)  $expr1 ]>
           };
         def expr3 = makeCondition(call, expr2);
         def expr4 = <[ unless ($(bit.Read())) $expr3 ]>;
