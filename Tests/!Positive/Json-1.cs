@@ -1,6 +1,7 @@
 ﻿// REFERENCE: Json.Grammar.dll
 
 using Nitra;
+using Nitra.ProjectSystem;
 using Nitra.Tests;
 
 using System;
@@ -189,21 +190,11 @@ namespace Sample.Json.Cs
 
     static void Test(string text)
     {
-      var source = new SourceSnapshot(text);
-      var parseResult = JsonParser.Start.Parse(source);
-      if (parseResult.IsSuccess)
-      {
-        var pt = parseResult.CreateParseTree();
-        Console.WriteLine("Pretty print: " + pt);
-      }
-      else
-      {
-        foreach (var error in parseResult.GetErrors())
-        {
-          var pos = error.Location.StartLineColumn;
-          Console.WriteLine("{0}:{1}: {2}", pos.Line, pos.Column, error.Message);
-        }
-      }
+      var session     = new ParseSession(JsonParser.Start, compilerMessages: new ConsoleCompilerMessages());
+      var source      = new SourceSnapshot(text);
+      var parseResult = session.Parse(source);
+      var parseTree   = parseResult.CreateParseTree();
+      Console.WriteLine("Pretty print: " + parseTree);
     }
   }
 }
