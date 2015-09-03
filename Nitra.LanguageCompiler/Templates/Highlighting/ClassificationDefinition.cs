@@ -9,7 +9,7 @@ using JetBrains.TextControl.DocumentMarkup;
 
 [assembly: RegisterHighlighter(
   id: XXNamespaceXX.XXSpanClassNameXXClassificationDefinition.Name,
-  EffectColor = "Red",
+  EffectColor = "RedColor",
   EffectType = EffectType.TEXT,
   Layer = HighlighterLayer.SYNTAX,
   VSPriority = VSPriority.IDENTIFIERS)]
