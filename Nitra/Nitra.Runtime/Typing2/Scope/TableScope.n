@@ -25,9 +25,9 @@ namespace Nitra.Runtime.Binding
     }
 
     private _owner : string;
-    private _nameTable : Hashtable[int, ISymbol];
+    private _nameTable : Hashtable[int, Ref[ISymbol]];
 
-    public Symbols : Hashtable[int, ISymbol].ValueCollection { get { _nameTable.Values } }
+    public Symbols : Hashtable[int, Ref[ISymbol]].ValueCollection { get { _nameTable.Values } }
 
     public Define[TSymbol](declaration : Declaration, context : DependentPropertyEvalContext) : TSymbol
       where TSymbol : ISymbol
@@ -40,24 +40,27 @@ namespace Nitra.Runtime.Binding
       match (this.TryGetSymbol(name))
       {
         | null => () // это первое объявление символа с таким именем в этом scope-е
-        | ambiguousSymbol is IAmbiguousSymbol =>
-          ambiguousSymbols = HashSet(ambiguousSymbol.Ambiguous);
-          foreach (symbol is TSymbol in ambiguousSymbol.Ambiguous)
+        | Unresolved => assert(false)
+        | Ambiguous as sym =>
+          ambiguousSymbols = HashSet(sym.Ambiguities);
+          foreach (symbol is TSymbol in sym.Ambiguities)
           {
             when (symbol.CanMerge(declaration))
               candidateSymbols.Add(symbol);
           }
 
-        | symbol is TSymbol =>
+        | Some as r =>
           ambiguousSymbols = HashSet();
-          _ = ambiguousSymbols.Add(symbol);
+          _ = ambiguousSymbols.Add(r.Symbol);
 
-          when (symbol.CanMerge(declaration))
-            candidateSymbols.Add(symbol);
+          match (r.Symbol)
+          {
+            | symbol is TSymbol =>
+              when (symbol.CanMerge(declaration))
+                candidateSymbols.Add(symbol);
 
-        | symbol =>
-          ambiguousSymbols = HashSet();
-          _ = ambiguousSymbols.Add(symbol);
+            | _ => ()
+          }
       }
 
       def concreteSymbol =
@@ -69,7 +72,7 @@ namespace Nitra.Runtime.Binding
         };
 
       if (ambiguousSymbols : object == null)
-        _nameTable.Add(name.Id, concreteSymbol);
+        _nameTable.Add(name.Id, Ref.Some(declaration.File, declaration.Span, concreteSymbol));
       else when (ambiguousSymbols.Add(concreteSymbol))
       {
         // фильтруем без учета конкретного типа
@@ -82,7 +85,7 @@ namespace Nitra.Runtime.Binding
               foreach (d in ambiguous.Declarations)
                 nested.Hint(d.Name, "previous definition.");
         }
-        _nameTable[name.Id] = AmbiguousSymbol(ambiguousSymbols.NToList());
+        _nameTable[name.Id] = Ref.Ambiguous(declaration.File, declaration.Span, ambiguousSymbols.NToList());
       }
 
       (concreteSymbol :> DeclaredSymbol).AddDeclaration(declaration);
@@ -95,7 +98,7 @@ namespace Nitra.Runtime.Binding
       concreteSymbol
     }
 
-    internal TryGetSymbol(name : Name) : ISymbol
+    internal TryGetSymbol(name : Name) : Ref[ISymbol]
     {
       mutable old;
       when (_nameTable.TryGetValue(name.Id, out old))
@@ -104,7 +107,7 @@ namespace Nitra.Runtime.Binding
       null
     }
 
-    internal TryGetSymbol(name : Reference) : ISymbol
+    internal TryGetSymbol(name : Reference) : Ref[ISymbol]
     {
       mutable old;
       when (_nameTable.TryGetValue(name.Id, out old))
@@ -113,22 +116,31 @@ namespace Nitra.Runtime.Binding
       null
     }
 
-    public override BindMany(reference : Reference, results : ref LightList[ISymbol]) : void
+    public override BindMany[TSymbol](reference : Reference, results : ref LightList[TSymbol]) : void
     {
       match (TryGetSymbol(reference))
       {
-        | null                  => ()
-        | a is IAmbiguousSymbol => results.AddRange(a.Ambiguous);
-        | result                => results.Add(result);
+        | null => ()
+        | Unresolved => assert(false)
+        | Some as sym =>
+          match (sym.Symbol)
+          {
+            | result is TSymbol => results.Add(result);
+            | _ => ()
+          }
+
+        | Ambiguous as sym =>
+          foreach (result is TSymbol in sym.Ambiguities)
+            results.Add(result);
       }
     }
 
     public override MakeCompletionList(prefix : string) : Seq[ISymbol]
     {
       if (string.IsNullOrEmpty(prefix))
-        Symbols
+        Symbols.SelectMany(s => s.GetSymbols())
       else
-        Symbols.Where(s => s.Name.StartsWith(prefix, StringComparison.InvariantCultureIgnoreCase))
+        Symbols.Where(s => s.Name.StartsWith(prefix, StringComparison.InvariantCultureIgnoreCase)).SelectMany(s => s.GetSymbols())
     }
 
     public override ToString() : string

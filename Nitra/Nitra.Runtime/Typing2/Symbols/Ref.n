@@ -1,0 +1,149 @@
+﻿using Nitra.Declarations;
+using Nitra.ProjectSystem;
+using Nitra.Internal;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Runtime.Binding
+{
+  public delegate ResolutionAlgorithm[TSymbol](ambiguities : list[TSymbol]) : LightList[TSymbol]
+    where TSymbol : ISymbol2;
+
+  [Record]
+  public variant Ref[TSymbol] : IRef
+    where TSymbol : ISymbol2
+  {
+    public abstract File        : File   { get; }
+    public abstract Span        : NSpan  { get; }
+    public abstract Name        : string { get; }
+    public abstract IsNameValid : bool   { get; }
+
+    IsAmbiguous : bool implements IAst.IsAmbiguous { get { false } }
+    IsMissing   : bool implements IAst.IsMissing   { get { false } }
+
+    public IsAllPropertiesEvaluated : bool  { get { true } }
+    public PropertiesEvalState      : int   { get { 0 } }
+
+    [PropertyAttribute("Nitra.Runtime.Binding.IRef.Symbol", 0, false, true)]
+    public abstract Symbol            : TSymbol { get; }
+    public abstract IsSymbolEvaluated : bool    { get; }
+
+    SymbolImpl : ISymbol2 implements IRef.Symbol
+    {
+      get { Symbol }
+      set { _ = value; assert(false) }
+    }
+
+    public Accept(visitor : Nitra.Declarations.IAstVisitor) : void { _ = visitor; }
+    public EvalProperties(context : DependentPropertyEvalContext) : void { _ = context; }
+    public ResetProperties() : void { }
+
+    public virtual TryResolve(reference : Reference, algorithm : ResolutionAlgorithm[TSymbol]) : Ref[TSymbol]
+    {
+      IgnoreParams();
+      this
+    }
+
+    public Resolve(reference : Reference, algorithm : ResolutionAlgorithm[TSymbol]) : Ref[TSymbol]
+    {
+      def sym = TryResolve(reference, algorithm);
+      SymbolUtils.ReportError(reference, sym);
+      sym
+    }
+
+    public abstract ToXaml() : string;
+    public abstract GetSymbols() : Seq[ISymbol2];
+
+    | Some
+      {
+        public override File        : File   { get; }
+        public override Span        : NSpan  { get; }
+        public override Name        : string { get { Symbol.Name } }
+        public override IsNameValid : bool   { get { Symbol.IsNameValid } }
+
+        [PropertyAttribute("Nitra.Runtime.Binding.IRef.Symbol", 0, false, true)]
+        public override Symbol            : TSymbol { get; }
+        public override IsSymbolEvaluated : bool    { get { true } }
+
+        public override GetSymbols() : Seq[ISymbol2] { [Symbol] }
+        public override ToXaml() : string { Symbol.ToXaml() }
+        public override ToString() : string { Symbol.ToString() }
+      }
+
+    | Unresolved
+      {
+        public Reference : Reference { get; }
+
+        public override File        : File   { get { Reference.File } }
+        public override Span        : NSpan  { get { Reference.Span } }
+        public override Name        : string { get { Reference.Text } }
+        public override IsNameValid : bool   { get { true } }
+
+        [PropertyAttribute("Nitra.Runtime.Binding.IRef.Symbol", 0, false, true)]
+        public override Symbol            : TSymbol { get { assert(false, "Property 'Symbol' has no value.") } }
+        public override IsSymbolEvaluated : bool    { get { false } }
+
+        public override GetSymbols() : Seq[ISymbol2] { Enumerable.Empty() }
+        public override ToXaml() : string { Reference.Text + " <Span Foreground='blue'>unresolved</Span>" }
+        public override ToString() : string { Reference.Text + " (Error)" }
+      }
+
+    | Ambiguous
+      {
+        public override File        : File   { get; }
+        public override Span        : NSpan  { get; }
+        public override Name        : string { get { Ambiguities.Head.Name } }
+        public override IsNameValid : bool   { get { Ambiguities.Head.IsNameValid } }
+
+        public Ambiguities : list[TSymbol] { get; }
+
+        [PropertyAttribute("Nitra.Runtime.Binding.IRef.Symbol", 0, false, true)]
+        public override Symbol              : TSymbol       { get { if (_resolutionResult : object != null) _resolutionResult else assert(false, "Property 'Symbol' has no value.") } }
+        public override IsSymbolEvaluated   : bool          { get { _resolutionResult : object != null } }
+        public          FilteredAmbiguities : list[TSymbol] { get { _filteredAmbiguities ?? [] } }
+        public          AllDeclarations     : Seq[Declaration]
+        {
+          get
+          {
+            foreach (a in _filteredAmbiguities ?? Ambiguities)
+              foreach (d in a.Declarations)
+                yield d;
+          }
+        }
+
+        [RecordIgnore] private mutable _filteredAmbiguities : list[TSymbol];
+        [RecordIgnore] private mutable _resolutionResult    : TSymbol;
+
+        public SetResolutionResult(value : TSymbol) : void
+        {
+          assert2(_resolutionResult : object == null);
+
+          _resolutionResult    = value;
+          _filteredAmbiguities = [value];
+        }
+
+        public SetResolutionResultList(values : list[TSymbol]) : void
+        {
+          assert2(_filteredAmbiguities == null);
+
+          _filteredAmbiguities = values;
+        }
+
+        public override TryResolve(reference : Reference, algorithm : ResolutionAlgorithm[TSymbol]) : Ref[TSymbol]
+        {
+          SymbolUtils.TryResolve(reference, this, algorithm);
+        }
+
+        public override GetSymbols() : Seq[ISymbol2] { _filteredAmbiguities ?? Ambiguities }
+        public override ToXaml() : string { if (IsSymbolEvaluated) Symbol.ToXaml() else Ambiguities.Head.Name + " <Span Foreground='blue'>ambiguous</Span>" }
+        public override ToString() : string { if (IsSymbolEvaluated) Symbol.ToString() else $<#Ambiguous: ..$(Ambiguities; " "; _.FullName)#> }
+      }
+  }
+}
