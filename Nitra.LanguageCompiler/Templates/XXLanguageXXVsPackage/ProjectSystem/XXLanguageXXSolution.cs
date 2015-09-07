@@ -25,10 +25,17 @@ namespace XXNamespaceXX.ProjectSystem
     {
       _solution = solution;
       changeManager.Changed2.Advise(lifetime, Handler);
-      lifetime.AddAction(_projectsMap.Clear);
+      lifetime.AddAction(Close);
     }
 
-      public override IEnumerable<Project> Projects { get { return _projectsMap.Values; } }
+    private void Close()
+    {
+      foreach (var project in _projectsMap.Values)
+        project.Dispose();
+      _projectsMap.Clear();
+    }
+
+    public override IEnumerable<Project> Projects { get { return _projectsMap.Values; } }
 
     private void Handler(ChangeEventArgs changeEventArgs)
     {

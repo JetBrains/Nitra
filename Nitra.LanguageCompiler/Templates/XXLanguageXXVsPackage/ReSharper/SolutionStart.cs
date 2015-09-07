@@ -7,11 +7,10 @@ using JetBrains.ProjectModel;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Data.Core;
 
-using XXNamespaceXX.ProjectSystem;
-
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using XXNamespaceXX.ProjectSystem;
 
 namespace XXNamespaceXX
 {

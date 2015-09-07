@@ -11,10 +11,10 @@ using JetBrains.ReSharper.Psi;
 
 namespace XXNamespaceXX.ProjectSystem
 {
-  public class XXLanguageXProject : Project
+  public class XXLanguageXProject : Project, IDisposable
   {
     private readonly IProject _project;
-    private readonly Dictionary<IPsiSourceFile, XXLanguageXFile> _projectsMap = new Dictionary<IPsiSourceFile, XXLanguageXFile>();
+    private readonly Dictionary<IProjectFile, XXLanguageXFile> _projectsMap = new Dictionary<IProjectFile, XXLanguageXFile>();
 
     public XXLanguageXProject(IProject project)
     {
@@ -25,22 +25,29 @@ namespace XXNamespaceXX.ProjectSystem
 
     public void TryRemoveFile(IProjectFile file)
     {
-      foreach (var psiSourceFile in file.ToSourceFiles())
+      XXLanguageXFile result;
+      if (_projectsMap.TryGetValue(file, out result))
       {
-        XXLanguageXFile result;
-        if (_projectsMap.TryGetValue(psiSourceFile, out result))
-          _projectsMap.Remove(psiSourceFile);
+        result.Dispose();
+        _projectsMap.Remove(file);
       }
     }
 
     public void TryAddFile(IProjectFile file)
     {
-      foreach (var psiSourceFile in file.ToSourceFiles())
+      XXLanguageXFile nitraFile;
+      if (!_projectsMap.TryGetValue(file, out nitraFile))
       {
-        XXLanguageXFile nitraFile;
-        if (!_projectsMap.TryGetValue(psiSourceFile, out nitraFile))
-          _projectsMap.Add(psiSourceFile, new XXLanguageXFile(null, psiSourceFile));
+        var sourceFile = file.ToSourceFile();
+        _projectsMap.Add(file, new XXLanguageXFile(null /*TODO: add statistics*/, sourceFile, this));
       }
+    }
+
+    public void Dispose()
+    {
+      foreach (var file in _projectsMap.Values)
+        file.Dispose();
+      _projectsMap.Clear();
     }
   }
 }

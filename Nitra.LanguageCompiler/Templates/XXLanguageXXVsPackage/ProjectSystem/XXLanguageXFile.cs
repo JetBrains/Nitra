@@ -12,7 +12,7 @@ using Nitra;
 
 namespace XXNamespaceXX.ProjectSystem
 {
-  class XXLanguageXFile : ConcreteFile
+  class XXLanguageXFile : ConcreteFile, IDisposable
   {
     private readonly IPsiSourceFile _psiSourceFile;
     private readonly XXLanguageXProject _project;
@@ -22,6 +22,12 @@ namespace XXNamespaceXX.ProjectSystem
     {
       _psiSourceFile = psiSourceFile;
       _project = project;
+      psiSourceFile.Document.DocumentChanged += Document_DocumentChanged;
+    }
+
+    void Document_DocumentChanged(object sender, JetBrains.DataFlow.EventArgs<JetBrains.DocumentModel.DocumentChange> args)
+    {
+      
     }
 
     public override SourceSnapshot GetSource()
@@ -42,6 +48,11 @@ namespace XXNamespaceXX.ProjectSystem
     public override string FullName
     {
       get { return _psiSourceFile.GetLocation().FullPath; }
+    }
+
+    public void Dispose()
+    {
+      _psiSourceFile.Document.DocumentChanged -= Document_DocumentChanged;
     }
   }
 }
