@@ -671,16 +671,15 @@ namespace Nitra.Visualizer
       {
         var span = reference.Span;
 
-        if (!span.IntersectsWith(_span) || !reference.IsSymbolEvaluated)
+        if (!span.IntersectsWith(_span) || !reference.IsRefEvaluated)
           return;
 
-        var sym = reference.Symbol.IsResolved ? reference.Symbol.ResolutionResult : reference.Symbol;
-        var spanClass = sym.SpanClass;
-        
+        var spanClass = reference.Ref.SpanClass;
+
         if (spanClass == "Default")
           return;
 
-        SpanInfos.Add(new SpanInfo(span, new SpanClass(sym.SpanClass)));
+        SpanInfos.Add(new SpanInfo(span, new SpanClass(spanClass)));
       }
     }
 
@@ -1330,9 +1329,10 @@ namespace Nitra.Visualizer
         {
           var content = symbol.ToXaml();
           var description = content;
-          var amb = symbol as IAmbiguousSymbol;
-          if (amb != null)
-            description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
+          // TODO: починить отображение неоднозначностей
+          //var amb = symbol as IAmbiguousSymbol;
+          //if (amb != null)
+          //  description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
           completionList.Add(new CompletionData(replacementSpan, symbol.Name, content, description, priority: 1.0));
         }
 
