@@ -10,16 +10,13 @@ using System.Linq;
 using JetBrains.Application.changes;
 using JetBrains.DataFlow;
 using JetBrains.ProjectModel;
-using Nitra.CSharp;
 
 namespace XXNamespaceXX.ProjectSystem
 {
   public class XXLanguageXXSolution : Solution
   {
     private readonly ISolution _solution;
-    private readonly Dictionary<IProject, XXLanguageXProject> _projectsMap = new Dictionary<IProject, XXLanguageXProject>();
-
-    //public ReadOnlyObservableCollection<XXLanguageXProject> XXLanguageXProjects { get; private set; }
+    private readonly Dictionary<IProject, XXLanguageXXProject> _projectsMap = new Dictionary<IProject, XXLanguageXXProject>();
 
     public XXLanguageXXSolution(Lifetime lifetime, ChangeManager changeManager, ISolution solution)
     {
@@ -42,8 +39,6 @@ namespace XXNamespaceXX.ProjectSystem
       var projectModelChange = changeEventArgs.ChangeMap.GetChange<ProjectModelChange>(_solution);
       if (projectModelChange != null)
       {
-        //Debug.WriteLine(projectModelChange.Dump());
-        //Do(projectModelChange);
         projectModelChange.Accept(new RecursiveProjectModelChangeDeltaVisitor(FWithDelta, FWithItemDelta));
       }
     }
@@ -52,11 +47,10 @@ namespace XXNamespaceXX.ProjectSystem
 
     private void FWithItemDelta(ProjectItemChange obj)
     {
-      //Debug.WriteLine(obj.Dump());
       var item = obj.ProjectItem;
 
       var file = item as IProjectFile;
-      if (file != null && file.LanguageType.Is<NitraCSharpFileType>())
+      if (file != null && file.LanguageType.Is<XXLanguageXXFileType>())
       {
         if (obj.IsRemoved)
         {
@@ -71,16 +65,15 @@ namespace XXNamespaceXX.ProjectSystem
       }
     }
 
-    private XXLanguageXProject GetProject(IProject project)
+    private XXLanguageXXProject GetProject(IProject project)
     {
-      XXLanguageXProject result;
+      XXLanguageXXProject result;
       if (_projectsMap.TryGetValue(project, out result))
         return result;
 
-      result = new XXLanguageXProject(project);
+      result = new XXLanguageXXProject(project);
       
       _projectsMap.Add(project, result);
-      //XXLanguageXProjects.Add(result);
 
       return result;
     }

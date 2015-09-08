@@ -12,12 +12,12 @@ using Nitra;
 
 namespace XXNamespaceXX.ProjectSystem
 {
-  class XXLanguageXFile : ConcreteFile, IDisposable
+  class XXLanguageXXFile : ConcreteFile, IDisposable
   {
     private readonly IPsiSourceFile _psiSourceFile;
-    private readonly XXLanguageXProject _project;
+    private readonly XXLanguageXXProject _project;
 
-    public XXLanguageXFile(FileStatistics statistics, IPsiSourceFile psiSourceFile, XXLanguageXProject project)
+    public XXLanguageXXFile(FileStatistics statistics, IPsiSourceFile psiSourceFile, XXLanguageXXProject project)
       : base(null)// TODO: add ruleDescriptor
     {
       _psiSourceFile = psiSourceFile;

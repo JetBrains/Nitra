@@ -11,12 +11,12 @@ using JetBrains.ReSharper.Psi;
 
 namespace XXNamespaceXX.ProjectSystem
 {
-  public class XXLanguageXProject : Project, IDisposable
+  public class XXLanguageXXProject : Project, IDisposable
   {
     private readonly IProject _project;
-    private readonly Dictionary<IProjectFile, XXLanguageXFile> _projectsMap = new Dictionary<IProjectFile, XXLanguageXFile>();
+    private readonly Dictionary<IProjectFile, XXLanguageXXFile> _projectsMap = new Dictionary<IProjectFile, XXLanguageXXFile>();
 
-    public XXLanguageXProject(IProject project)
+    public XXLanguageXXProject(IProject project)
     {
       _project = project;
     }
@@ -25,7 +25,7 @@ namespace XXNamespaceXX.ProjectSystem
 
     public void TryRemoveFile(IProjectFile file)
     {
-      XXLanguageXFile result;
+      XXLanguageXXFile result;
       if (_projectsMap.TryGetValue(file, out result))
       {
         result.Dispose();
@@ -35,11 +35,11 @@ namespace XXNamespaceXX.ProjectSystem
 
     public void TryAddFile(IProjectFile file)
     {
-      XXLanguageXFile nitraFile;
+      XXLanguageXXFile nitraFile;
       if (!_projectsMap.TryGetValue(file, out nitraFile))
       {
         var sourceFile = file.ToSourceFile();
-        _projectsMap.Add(file, new XXLanguageXFile(null /*TODO: add statistics*/, sourceFile, this));
+        _projectsMap.Add(file, new XXLanguageXXFile(null /*TODO: add statistics*/, sourceFile, this));
       }
     }
 

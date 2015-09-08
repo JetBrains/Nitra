@@ -7,26 +7,25 @@ using JetBrains.ProjectModel;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Data.Core;
 
+using XXNamespaceXX.ProjectSystem;
+
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using XXNamespaceXX.ProjectSystem;
 
 namespace XXNamespaceXX
 {
   [SolutionComponent]
-  public class SolutionStart
+  public class ReSharperSolution
   {
-    private readonly XXLanguageXXSolution _solution;
+    public static XXLanguageXXSolution NitraSolution { get; private set; }
 
-    public SolutionStart(Lifetime lifetime, ChangeManager changeManager, ISolution solution)
+    public ReSharperSolution(Lifetime lifetime, ChangeManager changeManager, ISolution solution)
     {
-      _solution = new XXLanguageXXSolution(lifetime, changeManager, solution);
+      NitraSolution = new XXLanguageXXSolution(lifetime, changeManager, solution);
     }
-  }
 
-  [ZoneMarker]
-  public class ZoneMarker
-  {
+    [ZoneMarker]
+    public class ZoneMarker { }
   }
 }
