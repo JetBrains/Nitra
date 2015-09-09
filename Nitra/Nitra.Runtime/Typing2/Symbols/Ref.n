@@ -1,0 +1,166 @@
+﻿using Nitra.Declarations;
+using Nitra.ProjectSystem;
+using Nitra.Internal;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Runtime.Binding
+{
+  [Record]
+  public variant Ref[TSymbol] : IRef
+    where TSymbol : ISymbol2
+  {
+    public abstract Name        : string { get; }
+    public abstract IsNameValid : bool   { get; }
+    public abstract FullName    : string { get; }
+    public abstract Kind        : string { get; }
+    public abstract SpanClass   : string { get; }
+    public          File        : File   { get; }
+    public          Span        : NSpan  { get; }
+
+    IsAmbiguous : bool  implements IAst.IsAmbiguous { get { false } }
+    IsMissing   : bool  implements IAst.IsMissing   { get { false } }
+
+    public IsAllPropertiesEvaluated : bool  { get { true } }
+    public PropertiesEvalState      : int   { get { 0 } }
+
+    [PropertyAttribute("Nitra.Runtime.Binding.IRef.Symbol", 0, false, true)]
+    public abstract Symbol            : TSymbol { get; }
+    public abstract IsSymbolEvaluated : bool    { get; }
+
+    SymbolImpl : ISymbol2 implements IRef.Symbol
+    {
+      get { Symbol }
+      set { _ = value; assert(false) }
+    }
+
+    Accept(visitor : Nitra.Declarations.IAstVisitor) : void implements IAst.Accept { _ = visitor; }
+    public EvalProperties(context : DependentPropertyEvalContext) : void { _ = context; }
+    public ResetProperties() : void { }
+
+    public abstract TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+      where TConcreteSymbol : ISymbol2;
+
+    public Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+      where TConcreteSymbol : ISymbol2
+    {
+      def r = TryResolve(algorithm);
+      SymbolUtils.ReportError(r);
+      r
+    }
+
+    public          ToXaml()   : string { Name + " <Span Foreground='blue'>" + Kind + "</Span>" }
+    public override ToString() : string { Name + " (" + Kind + ")" }
+    public abstract GetSymbols() : Seq[ISymbol2];
+
+    | Some
+      {
+        public override Name        : string { get { Symbol.Name } }
+        public override IsNameValid : bool   { get { Symbol.IsNameValid } }
+        public override FullName    : string { get { Symbol.FullName } }
+        public override Kind        : string { get { Symbol.Kind } }
+        public override SpanClass   : string { get { Symbol.SpanClass } }
+
+        [PropertyAttribute("Nitra.Runtime.Binding.IRef.Symbol", 0, false, true)]
+        public override Symbol            : TSymbol { get; }
+        public override IsSymbolEvaluated : bool    { get { true } }
+
+        public override TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+        {
+          def algorithm = algorithm ?? ResolutionAlgorithms.TryCast;
+
+          match (algorithm(Symbol))
+          {
+            | VSome(symbol) => Ref.Some(File, Span, symbol)
+            | VNone         => Ref.Unresolved(File, Span, Name, ResolutionSource.Resolve(this))
+          }
+        }
+
+        public override GetSymbols() : Seq[ISymbol2] { array[Symbol] }
+        public override GetHashCode() : int { Symbol.GetHashCode() }
+        public override Equals(other : object) : bool
+        {
+          | other is Some => this.Symbol.Equals(other.Symbol)
+          | _ => false
+        }
+      }
+
+    | Unresolved
+      {
+        public override Name        : string           { get; }
+        public          Source      : ResolutionSource { get; }
+        public override IsNameValid : bool             { get { true } }
+        public override FullName    : string           { get { Name } }
+        public override Kind        : string           { get { "unresolved" } }
+        public override SpanClass   : string           { get { "Error" } }
+
+        [PropertyAttribute("Nitra.Runtime.Binding.IRef.Symbol", 0, false, true)]
+        public override Symbol            : TSymbol { get { assert(false, "Ref is unresolved.") } }
+        public override IsSymbolEvaluated : bool    { get { false } }
+
+        public override TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+        {
+          _ = algorithm;
+          Ref.Unresolved(File, Span, Name, ResolutionSource.Resolve(this))
+        }
+
+        public override GetSymbols() : Seq[ISymbol2] { Enumerable.Empty() }
+        public override GetHashCode() : int { Name.GetHashCode() }
+        public override Equals(other : object) : bool
+        {
+          | other is Unresolved => EqualityComparer.Default.Equals(this.File, other.File) && this.Span.Equals(other.Span) && StringComparer.Ordinal.Equals(this.Name, other.Name)
+          | _ => false
+        }
+      }
+
+    | Ambiguous
+      {
+        public          Ambiguities : list[TSymbol]    { get; }
+        public          Source      : ResolutionSource { get; }
+
+        public override Name        : string { get { Ambiguities.Head.Name } }
+        public override IsNameValid : bool   { get { Ambiguities.Head.IsNameValid } }
+        public override FullName    : string { get { Ambiguities.Head.FullName } }
+        public override Kind        : string { get { "ambiguous" } }
+        public override SpanClass   : string { get { "Error" } }
+
+        [PropertyAttribute("Nitra.Runtime.Binding.IRef.Symbol", 0, false, true)]
+        public override Symbol            : TSymbol          { get { assert(false, "Ref is ambiguous.") } }
+        public override IsSymbolEvaluated : bool             { get { false } }
+        public          AllDeclarations   : Seq[Declaration] { get { Ambiguities.SelectMany(_.Declarations) } }
+
+        public override TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+        {
+          def algorithm = algorithm ?? ResolutionAlgorithms.TryCast;
+
+          def results = LightList.[TConcreteSymbol]();
+          foreach (s in Ambiguities)
+            when (algorithm(s) is VSome(symbol))
+              results.Add(symbol);
+
+          match (results.Count)
+          {
+            | 0 => Ref.Unresolved(File, Span, Name, ResolutionSource.Resolve(this))
+            | 1 => Ref.Some(File, Span, results.FirstItem)
+            | _ => Ref.Ambiguous(File, Span, results.ToNList(), ResolutionSource.Resolve(this))
+          }
+        }
+
+        public override GetSymbols() : Seq[ISymbol2] { Ambiguities }
+        public override ToString() : string { $<#$Kind: ..$(Ambiguities; " "; _.FullName)#> }
+        public override GetHashCode() : int { Ambiguities.GetHashCode() }
+        public override Equals(other : object) : bool
+        {
+          | other is Ambiguous => this.Ambiguities.Equals(other.Ambiguities)
+          | _ => false
+        }
+      }
+  }
+}

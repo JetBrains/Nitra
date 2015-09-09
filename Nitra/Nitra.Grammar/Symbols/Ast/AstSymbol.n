@@ -1,4 +1,5 @@
 ﻿using Nitra.Model;
+using Nitra.Runtime.GraphUtils;
 using Nitra.Serialization;
 
 using Nemerle;
@@ -15,12 +16,12 @@ using System.Linq;
 namespace Nitra.Typing
 {
   [Record]
-  public abstract class AstSymbol : PropertyContainerSymbol
+  public abstract class AstSymbol : PropertyContainerSymbol, IGraphNode[AstSymbol]
   {
-    public abstract Parents                  : list[AstSymbol]               { get; }
-    public abstract IsDeclaration            : bool                          { get; }
-    public abstract Cardinality              : AstCardinality                { get; }
-    public abstract Symbol                   : SymbolRef[SymbolSymbol]       { get; }
+    public abstract Parents       : list[AstSymbol] implements IGraphNode[AstSymbol].Connections { get; }
+    public abstract IsDeclaration : bool                          { get; }
+    public abstract Cardinality   : AstCardinality                { get; }
+    public abstract Symbol        : SymbolRef[SymbolSymbol]       { get; }
     public override GetParents() : Seq[PropertyContainerSymbol] { Parents }
 
     public AllBaseAsts : Seq[AstSymbol]
@@ -51,7 +52,17 @@ namespace Nitra.Typing
       {
         unless (_isCyclic)
         {
-          Node.Project.Error(this.FirstLocation, $"Declaration '$(FullName)' is cyclic.");
+          foreach (group when group.Nodes.Count > 1 in GraphAlgorithms.FindStronglyConnectedComponents([this]))
+          {
+            def firstSymbol = group.Nodes.FirstItem;
+            using (root = Node.Project.RootError(firstSymbol.FirstLocation, $"Declaration '$(firstSymbol.FullName)' is cyclic."))
+            {
+              foreach (symbol in group.Nodes with i)
+                when (i > 0)
+                  root.Hint(symbol.FirstLocation, $"Circular base declaration dependency '$(symbol.FullName)' for declaration '$(firstSymbol.FullName)'.");
+            }
+          }
+
           _isCyclic = true;
         }
       }
@@ -85,7 +96,7 @@ namespace Nitra.Typing
 
     public override LookupProperty(name : string) : ValueOption[PropertySymbol]
     {
-      assert(_allProperties != null);
+      TypeInheritance();
 
       mutable symbol;
       if (_allProperties.TryGetValue(name, out symbol))
@@ -101,7 +112,11 @@ namespace Nitra.Typing
 
     private TryOverrideSymbolProperty(symbol : SymbolSymbol) : void
     {
-      when (LookupProperty("Symbol") is VSome(DependentPropertySymbol as symbolProperty))
+      assert(_allProperties != null);
+
+      mutable foundSymbol;
+      when (_allProperties.TryGetValue("Symbol", out foundSymbol))
+      when (foundSymbol is DependentPropertySymbol as symbolProperty)
       {
         def newSymbolProperty = ChemicalDependentPropertySymbol(FirstLocation, "Symbol")
           .SetAssemblyId(AssemblyIds.CurrentAssembly)
