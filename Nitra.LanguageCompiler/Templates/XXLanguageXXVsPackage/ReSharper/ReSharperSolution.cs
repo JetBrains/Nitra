@@ -18,11 +18,11 @@ namespace XXNamespaceXX
   [SolutionComponent]
   public class ReSharperSolution
   {
-    public static XXLanguageXXSolution NitraSolution { get; private set; }
+    public static XXLanguageXXSolution NitraSolution = new XXLanguageXXSolution();
 
     public ReSharperSolution(Lifetime lifetime, ChangeManager changeManager, ISolution solution)
     {
-      NitraSolution = new XXLanguageXXSolution(lifetime, changeManager, solution);
+      NitraSolution.Open(lifetime, changeManager, solution);
     }
 
     [ZoneMarker]

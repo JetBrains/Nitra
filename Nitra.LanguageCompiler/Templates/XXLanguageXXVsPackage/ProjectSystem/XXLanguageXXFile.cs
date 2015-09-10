@@ -16,12 +16,14 @@ namespace XXNamespaceXX.ProjectSystem
   {
     private readonly IPsiSourceFile _psiSourceFile;
     private readonly XXLanguageXXProject _project;
+    private readonly string _fullName;
 
     public XXLanguageXXFile(FileStatistics statistics, IPsiSourceFile psiSourceFile, XXLanguageXXProject project)
       : base(null)// TODO: add ruleDescriptor
     {
       _psiSourceFile = psiSourceFile;
-      _project = project;
+      _fullName      = psiSourceFile.GetLocation().FullPath;
+      _project       = project;
       psiSourceFile.Document.DocumentChanged += Document_DocumentChanged;
     }
 
@@ -47,7 +49,7 @@ namespace XXNamespaceXX.ProjectSystem
 
     public override string FullName
     {
-      get { return _psiSourceFile.GetLocation().FullPath; }
+      get { return _fullName; }
     }
 
     public void Dispose()
