@@ -1338,7 +1338,11 @@ namespace Nitra.Visualizer
 
         var literal = elem as string;
         if (literal != null)
-          completionList.Add(new CompletionData(replacementSpan, literal, Utils.Escape(literal), Utils.Escape(literal), priority: 2.0));
+        {
+          var escaped = Utils.Escape(literal);
+          var xaml = "<Span Foreground='blue'>" + escaped + "</Span>";
+          completionList.Add(new CompletionData(replacementSpan, literal, xaml, "keyword " + xaml, priority: 2.0));
+        }
       }
 
       return completionList;
