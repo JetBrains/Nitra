@@ -36,7 +36,7 @@ namespace XXNamespaceXX.ProjectSystem
       }
     }
 
-    internal NitraCSharpFile TryAddFile(IProjectFile file)
+    internal XXLanguageXXFile TryAddFile(IProjectFile file)
     {
       XXLanguageXXFile nitraFile;
       if (!_filesMap.TryGetValue(file, out nitraFile))

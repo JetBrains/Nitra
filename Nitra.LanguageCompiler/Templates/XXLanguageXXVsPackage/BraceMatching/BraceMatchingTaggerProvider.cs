@@ -33,7 +33,8 @@ namespace XXNamespaceXX
         return (ITagger<T>)braceMatchingTagger;
 
       var parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, dataHostService, XXLanguageXXVsPackage.Language);
-      var tagger = new BraceMatchingTagger(Constants.ErrorClassificationTypeName, parseAgent, textView, buffer);
+      var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
+      var tagger = new BraceMatchingTagger(Constants.ErrorClassificationTypeName, parseAgent, textView, buffer, nitraSolutionService);
       buffer.Properties.AddProperty(TextBufferProperties.BraceMatchingTagger, tagger);
       return (ITagger<T>)tagger;
     }

@@ -20,7 +20,8 @@ namespace XXNamespaceXX
 
     public ICompletionSource TryCreateCompletionSource(ITextBuffer textBuffer)
     {
-      return new NitraCompletionSource(textBuffer, _textDocumentFactoryService, _navigatorService, NitraVsUtils.GetGlobalProvider<IVsDataHostService>(), XXLanguageXXVsPackage.Language);
+      var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
+      return new NitraCompletionSource(textBuffer, _textDocumentFactoryService, _navigatorService, NitraVsUtils.GetGlobalProvider<IVsDataHostService>(), XXLanguageXXVsPackage.Language, nitraSolutionService);
     }
   }
 }
