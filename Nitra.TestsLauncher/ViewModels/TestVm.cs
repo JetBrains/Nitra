@@ -40,8 +40,8 @@ namespace Nitra.ViewModels
       public int _completionStartPos = -1;
       public string _completionPrefix = null;
 
-      public TestFile([NotNull] TestVm test, FsProject<IAst> project, FileStatistics statistics)
-        : base(test.TestPath, test.TestSuit.StartRule, project, test.TestSuit.CompositeGrammar, statistics)
+      public TestFile([NotNull] TestVm test, FsProject<IAst> project, string language, FileStatistics statistics)
+        : base(test.TestPath, test.TestSuit.StartRule, language, project, test.TestSuit.CompositeGrammar, statistics)
       {
         if (test == null) throw new ArgumentNullException("test");
         _test = test;
@@ -79,7 +79,7 @@ namespace Nitra.ViewModels
       _testFolder = parent as TestFolderVm;
       TestPath = testPath;
       TestSuit = _testFolder == null ? (TestSuitVm)parent : _testFolder.TestSuit;
-
+      
       if (_testFolder != null)
       {
         Statistics            = null;
@@ -88,7 +88,7 @@ namespace Nitra.ViewModels
           _testFolder.ParseTreeStatistics.ReplaceSingleSubtask(Name),
           _testFolder.AstStatistics.ReplaceSingleSubtask(Name),
           _testFolder.DependPropsStatistics);
-        _file = new TestFile(this, _testFolder.Project, FileStatistics);
+        _file = new TestFile(this, _testFolder.Project, TestSuit.Language, FileStatistics);
       }
       else
       {
@@ -100,7 +100,7 @@ namespace Nitra.ViewModels
           Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties"));
         var solution = new FsSolution<IAst>();
         var project = new FsProject<IAst>(solution);
-        _file = new TestFile(this, project, FileStatistics);
+        _file = new TestFile(this, project, TestSuit.Language, FileStatistics);
       }
 
       if (TestSuit.TestState == TestState.Ignored)

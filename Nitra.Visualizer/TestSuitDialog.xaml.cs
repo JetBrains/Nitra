@@ -46,6 +46,8 @@ namespace Nitra.Visualizer
 
       this.Title = create ? "New test suit" : "Edit test suit";
 
+      _languageName.Text = baseTestSuit != null ? baseTestSuit.Language : "<none>";
+
       var root = baseTestSuit != null ? baseTestSuit.Solution.RootFolder : Path.GetDirectoryName(_settings.CurrentSolution);
       _rootFolder = root;
       _testsRootTextBlock.Text = root;
@@ -61,7 +63,7 @@ namespace Nitra.Visualizer
       {
         if (string.IsNullOrWhiteSpace(paths))
         {
-          _assemblies.Text = paths = string.Join(Environment.NewLine, baseTestSuit.LibPaths);
+          _assemblies.Text = paths = string.Join(Environment.NewLine, baseTestSuit != null ? baseTestSuit.LibPaths : new string[0]);
         }
         this._testSuitName.Text = baseTestSuit == null ? "" : baseTestSuit.Name;
       }
@@ -366,7 +368,7 @@ namespace Nitra.Visualizer
         else
           Directory.CreateDirectory(path);
 
-        var xml = Utils.MakeXml(root, syntaxModules, startRule);
+        var xml = Utils.MakeXml(root, syntaxModules, startRule, _languageName.Text);
         var configPath = Path.Combine(path, "config.xml");
         xml.Save(configPath);
         TestSuitName = testSuitName;

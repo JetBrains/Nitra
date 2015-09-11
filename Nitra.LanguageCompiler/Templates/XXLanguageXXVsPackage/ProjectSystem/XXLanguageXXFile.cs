@@ -14,12 +14,14 @@ namespace XXNamespaceXX.ProjectSystem
 {
   class XXLanguageXXFile : ConcreteFile, IDisposable
   {
+    private static readonly StartRuleDescriptor StartRule = XXStartRuleDescXX;
+    private static readonly CompositeGrammar    Grammar   = XXSyntaxModulesXX;
     private readonly IPsiSourceFile _psiSourceFile;
     private readonly XXLanguageXXProject _project;
     private readonly string _fullName;
 
     public XXLanguageXXFile(FileStatistics statistics, IPsiSourceFile psiSourceFile, XXLanguageXXProject project)
-      : base(null)// TODO: add ruleDescriptor
+      : base(StartRule, Grammar, null)// TODO: add statistics
     {
       _psiSourceFile = psiSourceFile;
       _fullName      = psiSourceFile.GetLocation().FullPath;
@@ -27,9 +29,11 @@ namespace XXNamespaceXX.ProjectSystem
       psiSourceFile.Document.DocumentChanged += Document_DocumentChanged;
     }
 
+    public override string Language { get { return "XXLanguageXX"; } }
+
     void Document_DocumentChanged(object sender, JetBrains.DataFlow.EventArgs<JetBrains.DocumentModel.DocumentChange> args)
     {
-      
+      ResetCache();
     }
 
     public override SourceSnapshot GetSource()

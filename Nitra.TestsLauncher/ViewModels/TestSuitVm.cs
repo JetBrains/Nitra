@@ -27,6 +27,7 @@ namespace Nitra.ViewModels
     public override string Hint { get { return _hint; } }
     public string[] LibPaths { get; private set; }
     public IEnumerable<GrammarDescriptor> AllSynatxModules { get; private set; }
+    public string Language { get; private set; }
 
     readonly string _rootPath;
     private CompositeGrammar _compositeGrammar;
@@ -48,6 +49,8 @@ namespace Nitra.ViewModels
       {
         var root = XElement.Load(gonfigPath);
         var libs = root.Elements("Lib").ToList();
+        var language = root.Attribute("Language");
+        Language = language == null ? "<none>" : language.Value;
         LibPaths = libs.Where(lib => lib.Attribute("Path") != null).Select(lib => lib.Attribute("Path").Value).ToArray();
         AllSynatxModules = LibPaths.SelectMany(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib)), config)).ToArray();
         var result =
@@ -124,7 +127,7 @@ namespace Nitra.ViewModels
 
     public CompositeGrammar CompositeGrammar { get { return _compositeGrammar = ParserHost.Instance.MakeCompositeGrammar(SynatxModules); } }
 
-    public XElement Xml { get { return Utils.MakeXml(_rootPath, SynatxModules, StartRule); } }
+    public XElement Xml { get { return Utils.MakeXml(_rootPath, SynatxModules, StartRule, Language); } }
 
     public RecoveryAlgorithm RecoveryAlgorithm { get; set; }
 

@@ -83,7 +83,7 @@ namespace Nitra.Visualizer
       return testSuitName.Any(invalidChars.Contains);
     }
 
-    public static XElement MakeXml([NotNull] string root, [NotNull] IEnumerable<GrammarDescriptor> syntaxModules, [NotNull] RuleDescriptor startRule)
+    public static XElement MakeXml([NotNull] string root, [NotNull] IEnumerable<GrammarDescriptor> syntaxModules, [NotNull] RuleDescriptor startRule, string language)
     {
       //  <Config>
       //    <Lib Path="../sss/Json.Grammar.dll"><SyntaxModule Name="JasonParser" /></Lib>
@@ -99,7 +99,7 @@ namespace Nitra.Visualizer
                 mod.Rules.Contains(startRule) ? new XAttribute("StartRule", startRule.Name) : null))
             ));
 
-      return new XElement("Config", libs);
+      return new XElement("Config", new XAttribute("Language", language), libs);
     }
 
     public static bool IsEmpty(this IEnumerable seq)
