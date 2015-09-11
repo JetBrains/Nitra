@@ -271,43 +271,62 @@ namespace Nitra.Compiler
       match (path)
       {
         | DeclaredProperty(This, DependentPropertySymbol as symbol, _) when dependentProperties.TryGetValue(symbol, out bitField) => dependentProperties[symbol].Read()
-        | DeclaredProperty(obj, DependentPropertySymbol as symbol, _) => CallIsPropertyEvaluated(CompilePath(obj), symbol)
+        | DeclaredProperty(obj, DependentPropertySymbol as symbol, _) with isEvaluatedName = GetIsEvaluatedPropertyName(symbol)
+        | DependentProperty(obj, _, isEvaluatedName) => CallIsPropertyEvaluated(CompilePath(obj), isEvaluatedName)
         | _ => <[ true ]>
       }
     }
 
     protected static GenerateHasValueCheck(properties : SCG.List[DependencyPath], dependentProperties : SCG.Dictionary[DependentPropertySymbol, BitField]) : PExpr
     {
-      def makeKey(obj : DependencyPath.DeclaredProperty) : DependencyPath * bool
+      def makeKey(obj : DependencyPath) : DependencyPath * bool
       {
-        def hasMask = if (obj.Path is DependencyPath.This) dependentProperties.ContainsKey(obj.Symbol :> DependentPropertySymbol) else obj.Mask != 0;
-        (obj.Path, hasMask)
+        | DeclaredProperty(This as path, DependentPropertySymbol as symbol,    _) => (path, dependentProperties.ContainsKey(symbol))
+        | DeclaredProperty(        path, DependentPropertySymbol,           mask) => (path, mask != 0)
+        | DependentProperty(path, _, _) => (path, false)
+        | _ => assert(false)
+      }
+      def getBitField(obj : DependencyPath) : BitField
+      {
+        | DeclaredProperty(_, DependentPropertySymbol as symbol, _) => dependentProperties[symbol]
+        | _ => assert(false)
+      }
+      def getMask(obj : DependencyPath) : int
+      {
+        | DeclaredProperty(_, _, mask) => mask
+        | _ => assert(false)
+      }
+      def getIsEvaluatedName(obj : DependencyPath) : string
+      {
+        | DeclaredProperty(_, DependentPropertySymbol as symbol, _) => GetIsEvaluatedPropertyName(symbol)
+        | DependentProperty(_, _, isEvaluatedName) => isEvaluatedName
+        | _ => assert(false)
       }
 
       mutable acc;
-      foreach (g in properties.OfType.[DependencyPath.DeclaredProperty]().Where(p => p.Symbol is DependentPropertySymbol).GroupBy(makeKey))
+      foreach (g in properties.Where(_.IsDependent).GroupBy(makeKey))
       {
         match (g.Key)
         {
-          | (DependencyPath.This, true) => PExprUtils.CombineAnd(ref acc, BitField.CheckAll(g.Select(item => dependentProperties[item.Symbol :> DependentPropertySymbol])));
+          | (DependencyPath.This, true) => PExprUtils.CombineAnd(ref acc, BitField.CheckAll(g.Select(getBitField)));
           | (path, true) when g.Count() > 1 =>
             mutable mask;
             foreach (item in g)
-              mask |= item.Mask;
+              mask |= getMask(item);
             PExprUtils.CombineAnd(ref acc, <[ unchecked($(CompilePath(path)).PropertiesEvalState & $(mask : int) == $(mask : int) ) ]>);
 
           | (path, _) =>
             foreach (item in g)
-              PExprUtils.CombineAnd(ref acc, CallIsPropertyEvaluated(CompilePath(path), item.Symbol :> DependentPropertySymbol));
+              PExprUtils.CombineAnd(ref acc, CallIsPropertyEvaluated(CompilePath(path), getIsEvaluatedName(item)));
         }
       }
 
       acc ?? <[ true ]>
     }
 
-    private static CallIsPropertyEvaluated(obj : PExpr, symbol : DependentPropertySymbol) : PExpr
+    private static CallIsPropertyEvaluated(obj : PExpr, isEvaluatedName : string) : PExpr
     {
-      <[ $obj.$(GetIsEvaluatedPropertyName(symbol) : usesite) ]>
+      <[ $obj.$(isEvaluatedName : usesite) ]>
     }
 
     public static CompilePath(path : DependencyPath) : PExpr
@@ -315,7 +334,8 @@ namespace Nitra.Compiler
       | This           => <[ this ]>
       | Variable(name) => <[ $(name : usesite) ]>
       | DeclaredProperty(path, symbol, _) with name = symbol.Name
-      | CustomProperty(path, name) => <[ $(CompilePath(path)).$(name : usesite) ]>
+      | DependentProperty(path, name, _)
+      | SimpleProperty(path, name) => <[ $(CompilePath(path)).$(name : usesite) ]>
     }
   }
 }
