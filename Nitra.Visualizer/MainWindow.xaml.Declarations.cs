@@ -313,7 +313,24 @@ namespace Nitra.Visualizer
 
       var ast = tvi.Tag as IAst;
       if (ast != null)
+      {
         SelectText(ast);
+        return;
+      }
+
+      var r = tvi.Tag as IRef;
+      if (r != null && r.IsSymbolEvaluated)
+      {
+        SelectText(r.File, r.Span);
+        return;
+      }
+
+      var tr = tvi.Tag as ITypeReference;
+      if (tr != null)
+      {
+        SelectText(tr.File, tr.Span);
+        return;
+      }
 
       TrySelectTextForSymbol(tvi.Tag as Symbol2, tvi);
     }
