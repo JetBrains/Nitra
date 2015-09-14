@@ -33,7 +33,6 @@ namespace XXNamespaceXX.ProjectSystem
       _solution = solution;
       changeManager.Changed2.Advise(lifetime, Handler);
       lifetime.AddAction(Close);
-      _fileOpenNotifyRequest.Clear();
       IsOpened = true;
     }
 
@@ -44,6 +43,7 @@ namespace XXNamespaceXX.ProjectSystem
         project.Dispose();
       _projectsMap.Clear();
       _solution = null;
+      _fileOpenNotifyRequest.Clear();
     }
 
     public override IEnumerable<Project> Projects { get { return _projectsMap.Values; } }

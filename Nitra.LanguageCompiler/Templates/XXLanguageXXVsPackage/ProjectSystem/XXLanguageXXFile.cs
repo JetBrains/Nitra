@@ -34,6 +34,7 @@ namespace XXNamespaceXX.ProjectSystem
     void Document_DocumentChanged(object sender, JetBrains.DataFlow.EventArgs<JetBrains.DocumentModel.DocumentChange> args)
     {
       ResetCache();
+      Project.UpdateProperties();
     }
 
     public override SourceSnapshot GetSource()
