@@ -16,7 +16,7 @@ namespace XXNamespaceXX.ProjectSystem
   {
     private readonly IProject _project;
     private readonly Dictionary<IProjectFile, XXLanguageXXFile> _filesMap     = new Dictionary<IProjectFile, XXLanguageXXFile>();
-    private readonly Dictionary<string,       XXLanguageXXFile> _filePathsMap = new Dictionary<string,       XXLanguageXXFile>();
+    private readonly Dictionary<string,       XXLanguageXXFile> _filePathsMap = new Dictionary<string,       XXLanguageXXFile>(StringComparer.OrdinalIgnoreCase);
 
     public XXLanguageXXProject(IProject project)
     {
