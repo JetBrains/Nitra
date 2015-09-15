@@ -91,6 +91,13 @@ namespace Nitra.Compiler
         PExprUtils.FromQualifiedMember(self, statement.Path);
       }
 
+      def makeCall(call : DependentStatement.Call) : PExpr
+      {
+        def methodName = Name.NameInCurrentColor(call.MethodName.Value, call.NemerleEnv);
+        def arguments  = call.Arguments.Map(prepareExpr);
+        <[ $(compilePath(call)).$(methodName : name)(..$arguments) ]>
+      }
+
       def body = SCG.List();
 
       foreach (statement in (symbol :> IDependentStatementContainer).GetStatements())
@@ -99,12 +106,10 @@ namespace Nitra.Compiler
         {
           match (statement)
           {
-            | Assign(rawExpr)          => body.Add(<[ $(compilePath(statement)) = Nitra.PExprAnchor($(prepareExpr(rawExpr))) ]>);
-            | Call(name, rawArgs, env) =>
-              def methodName = Name.NameInCurrentColor(name.Value, env);
-              def arguments  = rawArgs.Map(prepareExpr);
-              body.Add(<[ Nitra.PExprAnchor($(compilePath(statement)).$(methodName : name)(..$arguments)) ]>);
-
+            | Assign(rawExpr)                => body.Add(<[ $(compilePath(statement)) = Nitra.PExprAnchor($(prepareExpr(rawExpr))) ]>);
+            | Call(Condition=None()) as call => body.Add(<[ Nitra.PExprAnchor($(makeCall(call))) ]>);
+            | Call(Condition=Some(DependentStatementCondition.When(expr)))   as call => body.Add(<[ Nitra.PExprAnchor(match ($(prepareExpr(expr))) { true  => $(makeCall(call)) | _ => () }) ]>);
+            | Call(Condition=Some(DependentStatementCondition.Unless(expr))) as call => body.Add(<[ Nitra.PExprAnchor(match ($(prepareExpr(expr))) { false => $(makeCall(call)) | _ => () }) ]>);
             | Add(rawExpr) =>
               def typer     = Typer(mb);
               def typedPath = typer.TryTyping(fun() { typer.TypeExpr(compilePath(statement)) });
@@ -434,20 +439,17 @@ namespace Nitra.Compiler
           | TExpr.DebugInfo as e => addAssigns(e.expr)
           | TExpr.Sequence as e => addAssigns(e.e1); addAssigns(e.e2);
           | TExpr.Assign(target, TExpr.MacroEnvelope(_, m, source, rawSourceExpr)) as e when IsPExprAnchor(m) => addKey(e.Location, target, source, rawSourceExpr);
-          | TExpr.MacroEnvelope(_, m, TExpr.Call, _) when IsPExprAnchor(m) => ()
+          | TExpr.MacroEnvelope(_, m, TExpr.Call, _)
+          | TExpr.MacroEnvelope(_, m, TExpr.Match, _) when IsPExprAnchor(m) => ()
           | e => ErrorUnexpectedExpr(e)
         }
       }
-      def calcDependents(expr : TExpr) : void
+      def processCall(expr : TExpr.Call, rawExpr : PExpr, conditionExpr : TExpr) : void
       {
         match (expr)
         {
-          | TExpr.Delayed as e => ErrorDelayedTypingDetected(e)
-          | TExpr.DebugInfo as e => calcDependents(e.expr)
-          | TExpr.Sequence as e => calcDependents(e.e1); calcDependents(e.e2);
-          | TExpr.Assign(target, TExpr.MacroEnvelope(_, m, source, _)) when IsPExprAnchor(m) => processAssign(target, source);
-          | TExpr.MacroEnvelope(_, m, TExpr.Call(TExpr.MethodRef(obj, meth, _, _), _, _) as callExpr, rawExpr)
-          | TExpr.MacroEnvelope(_, m, TExpr.Call(TExpr.StaticRef(_, IMethod(IsExtension=true) as meth, _), Parm(_, obj, _, _) :: _, _) as callExpr, rawExpr) when IsPExprAnchor(m) =>
+          | TExpr.Call(TExpr.MethodRef(obj, meth, _, _), _, _)
+          | TExpr.Call(TExpr.StaticRef(_, IMethod(IsExtension=true) as meth, _), Parm(_, obj, _, _) :: _, _) =>
             def path     = makePath(obj);
             def code     = PropertyDependencyCode.Source(rawExpr.Location, tb, expr.Type, rawExpr);
             def isStaged = obj.Type.TryRequire(Environment.StagedTypeVar);
@@ -460,8 +462,26 @@ namespace Nitra.Compiler
               else
                 PropertyDependencyCall.Normal(symbol, rawExpr.Location, path, code);
 
-            addNodesDependentOnAssignedProperty(callExpr, node);
+            addNodesDependentOnAssignedProperty(expr, node);
+            when (conditionExpr : object != null)
+              addNodesDependentOnAssignedProperty(conditionExpr, node);
+
             calls.Add(node);
+
+          | e => ErrorUnexpectedExpr(e)
+        }
+      }
+      def calcDependents(expr : TExpr) : void
+      {
+        match (expr)
+        {
+          | TExpr.Delayed as e => ErrorDelayedTypingDetected(e)
+          | TExpr.DebugInfo as e => calcDependents(e.expr)
+          | TExpr.Sequence as e => calcDependents(e.e1); calcDependents(e.e2);
+          | TExpr.Assign(target, TExpr.MacroEnvelope(_, m, source, _)) when IsPExprAnchor(m) => processAssign(target, source);
+          | TExpr.MacroEnvelope(_, m, TExpr.Call as callExpr, rawExpr) with conditionExpr = null
+          | TExpr.MacroEnvelope(_, m, TExpr.Match(conditionExpr, [Match_case(_, TExpr.Call as callExpr, _), Match_case(_, TExpr.Literal(Literal.Void), _)]), rawExpr) when IsPExprAnchor(m) =>
+            processCall(callExpr, rawExpr, conditionExpr);
 
           | TExpr.MacroEnvelope(_, _, e, _)
           | e => ErrorUnexpectedExpr(e)
