@@ -10,6 +10,9 @@ using System.Diagnostics;
 using System.Linq;
 using JetBrains.Application.changes;
 using JetBrains.DataFlow;
+using JetBrains.DocumentManagers;
+using JetBrains.DocumentManagers.impl;
+using JetBrains.DocumentModel;
 using JetBrains.ProjectModel;
 using JetBrains.ReSharper.Psi;
 
@@ -23,15 +26,18 @@ namespace XXNamespaceXX.ProjectSystem
     private readonly Dictionary<IProject, XXLanguageXXProject> _projectsMap = new Dictionary<IProject, XXLanguageXXProject>();
     private readonly Dictionary<string, Action<File>> _fileOpenNotifyRequest = new Dictionary<string, Action<File>>(StringComparer.OrdinalIgnoreCase);
 
+    private DocumentManager _documentManager;
+
     public XXLanguageXXSolution()
     {
     }
 
-    public void Open(Lifetime lifetime, ChangeManager changeManager, ISolution solution)
+    public void Open(Lifetime lifetime, ChangeManager changeManager, ISolution solution, DocumentManager documentManager)
     {
       Debug.Assert(!IsOpened);
 
       _solution = solution;
+      _documentManager = documentManager;
       changeManager.Changed2.Advise(lifetime, Handler);
       lifetime.AddAction(Close);
     }
@@ -58,6 +64,40 @@ namespace XXNamespaceXX.ProjectSystem
 
         projectModelChange.Accept(new RecursiveProjectModelChangeDeltaVisitor(FWithDelta, FWithItemDelta));
       }
+
+      {
+        var documentChange = changeEventArgs.ChangeMap.GetChange<ProjectFileDocumentChange>(_documentManager.ChangeProvider);
+        if (documentChange != null)
+          if (OnFileChanged(documentChange.ProjectFile, documentChange))
+            return;
+      }
+
+      {
+        var documentChange = changeEventArgs.ChangeMap.GetChange<DocumentChange>(_documentManager.ChangeProvider);
+        if (documentChange != null)
+          if (OnFileChanged(_documentManager.GetProjectFile(documentChange.Document), documentChange))
+            return;
+      }
+    }
+
+    private bool OnFileChanged(IProjectFile projectFile, DocumentChange documentChange)
+    {
+      var project = projectFile.GetProject();
+      if (project != null)
+      {
+        NitraCSharpProject nitraProject;
+        if (_projectsMap.TryGetValue(project, out nitraProject))
+        {
+          var nitraFile = nitraProject.TryGetFile(projectFile);
+          if (nitraFile != null)
+          {
+            nitraFile.OnFileChanged(documentChange);
+            return true;
+          }
+        }
+      }
+
+      return false;
     }
 
     private void FWithDelta(ProjectModelChange obj) { }

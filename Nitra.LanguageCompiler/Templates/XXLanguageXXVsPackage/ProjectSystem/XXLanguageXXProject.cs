@@ -50,6 +50,13 @@ namespace XXNamespaceXX.ProjectSystem
       return nitraFile;
     }
 
+    internal XXLanguageXXFile TryGetFile(IProjectFile file)
+    {
+      XXLanguageXXFile nitraFile;
+      _filesMap.TryGetValue(file, out nitraFile);
+      return nitraFile;
+    }
+
     [CanBeNull]
     internal XXLanguageXXFile TryGetFile([NotNull] string filePath)
     {
