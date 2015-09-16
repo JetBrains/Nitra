@@ -60,7 +60,11 @@ namespace XXNamespaceXX.ProjectSystem
       if (projectModelChange != null)
       {
         if (projectModelChange.ContainsChangeType(ProjectModelChangeType.PROJECT_MODEL_CACHES_READY))
+        {
+          foreach (var project in _projectsMap.Values)
+            project.UpdateProperties();
           IsOpened = true;
+        }
 
         projectModelChange.Accept(new RecursiveProjectModelChangeDeltaVisitor(FWithDelta, FWithItemDelta));
       }
