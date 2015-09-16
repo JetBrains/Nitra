@@ -85,7 +85,7 @@ namespace XXNamespaceXX.ProjectSystem
       var project = projectFile.GetProject();
       if (project != null)
       {
-        NitraCSharpProject nitraProject;
+        XXLanguageXXProject nitraProject;
         if (_projectsMap.TryGetValue(project, out nitraProject))
         {
           var nitraFile = nitraProject.TryGetFile(projectFile);
