@@ -3,6 +3,10 @@ using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Operations;
 
+using Nitra.Runtime.Binding;
+using Nitra.ProjectSystem;
+using Nitra.Declarations;
+
 using Nemerle;
 using Nemerle.Collections;
 using Nemerle.Imperative;
@@ -17,12 +21,12 @@ namespace Nitra.VisualStudio
 {
   public class NitraCompletionSource : ICompletionSource
   {
-    _textBuffer                 : ITextBuffer;
-    _textDocumentFactoryService : ITextDocumentFactoryService;
-    _navigatorService           : ITextStructureNavigatorSelectorService;
-    _language                   : Language;
-    _dataHostService            : IVsDataHostService;
-    _nitraSolutionService       : INitraSolutionService;
+            _textBuffer                 : ITextBuffer;
+            _textDocumentFactoryService : ITextDocumentFactoryService;
+            _navigatorService           : ITextStructureNavigatorSelectorService;
+            _language                   : Language;
+            _dataHostService            : IVsDataHostService;
+    mutable _file                       : File;
     
     public this(
       textBuffer                 : ITextBuffer,
@@ -32,18 +36,22 @@ namespace Nitra.VisualStudio
       language                   : Language,
       nitraSolutionService       : INitraSolutionService)
     {
-      _nitraSolutionService       = nitraSolutionService;
       _dataHostService            = dataHostService;
       _textBuffer                 = textBuffer;
       _textDocumentFactoryService = textDocumentFactoryService;
       _navigatorService           = navigatorService;
       _language                   = language;
+      def path = textBuffer.GetFilePath();
+      nitraSolutionService.NotifiWhenFileIsOpened(path, SetFile);
     }
     
+    SetFile(file : File) : void
+    {
+      _file = file;
+    }
+
     public AugmentCompletionSession(session : ICompletionSession, completionSets : IList[CompletionSet]) : void
     {
-      def completions = List();
-      
       def snapshot = _textBuffer.CurrentSnapshot;
       def triggerPoint = session.GetTriggerPoint(snapshot);
 
@@ -58,16 +66,43 @@ namespace Nitra.VisualStudio
 
       def applicableTo = snapshot.CreateTrackingSpan(SnapshotSpan(start, triggerPoint.Value), SpanTrackingMode.EdgeInclusive);
 
-      def parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(_textBuffer, _textDocumentFactoryService, _dataHostService, _language);
-      def completionPrefix = snapshot.GetText(applicableTo.GetSpan(snapshot));
-      def literals = parseAgent.GetCompletionList(snapshot, _textBuffer.GetFilePath(), start.Position, completionPrefix);
-      
-      foreach (literal in literals)
-        completions.Add(Completion(literal));
-      
+      //def completionPrefix = snapshot.GetText(applicableTo.GetSpan(snapshot));
+      def completions = CompleteWord(start.Position, _file.ParseResult, _file.Ast);
+     
       completionSets.Add(CompletionSet("All", "All", applicableTo, completions, Enumerable.Empty()));
     }
     
     public Dispose() : void { }
+
+    private CompleteWord(pos : int, parseResult : IParseResult, astRoot : IAst) : List[Completion]
+    {
+      mutable replacementSpan;
+      def result = NitraUtils.CompleteWord(pos, parseResult, astRoot, out replacementSpan);
+      def completionList = List();
+
+      foreach (elem in result)
+      {
+        when (elem is Symbol2 as symbol when symbol.IsNameValid)
+        {
+          def content = symbol.ToXaml();
+          def description = content;
+          // TODO: починить отображение неоднозначностей
+          //var amb = symbol as IAmbiguousSymbol;
+          //if (amb != null)
+          //  description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
+          completionList.Add(Completion(symbol.Name));//, content, description, priority: 1.0));
+        }
+
+        when (elem is string as literal)
+        {
+          completionList.Add(Completion(literal));//, content, description, priority: 1.0));
+        //  def escaped = Utils.Escape(literal);
+        //  def xaml = "<Span Foreground='blue'>" + escaped + "</Span>";
+        //  completionList.Add(Completion(replacementSpan, literal, xaml, "keyword " + xaml, priority: 2.0));
+        }
+      }
+
+      completionList
+    }
   }
 }
