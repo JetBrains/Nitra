@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Linq;
+using JetBrains.DataFlow;
+using JetBrains.DocumentModel;
 using JetBrains.ProjectModel;
 using JetBrains.ReSharper.Psi;
 using Nitra;
@@ -26,15 +28,9 @@ namespace XXNamespaceXX.ProjectSystem
       _psiSourceFile = psiSourceFile;
       _fullName      = psiSourceFile.GetLocation().FullPath;
       _project       = project;
-      psiSourceFile.Document.DocumentChanged += Document_DocumentChanged;
     }
 
     public override string Language { get { return "XXLanguageXX"; } }
-
-    void Document_DocumentChanged(object sender, JetBrains.DataFlow.EventArgs<JetBrains.DocumentModel.DocumentChange> args)
-    {
-      ResetCache();
-    }
 
     public override SourceSnapshot GetSource()
     {
@@ -58,7 +54,12 @@ namespace XXNamespaceXX.ProjectSystem
 
     public void Dispose()
     {
-      _psiSourceFile.Document.DocumentChanged -= Document_DocumentChanged;
+    }
+
+    public void OnFileChanged(DocumentChange documentChange)
+    {
+      ResetCache();
+      Project.UpdateProperties();
     }
   }
 }

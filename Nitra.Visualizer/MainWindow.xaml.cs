@@ -122,9 +122,9 @@ namespace Nitra.Visualizer
         { "StringEx",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
         { "Char",                 new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkRed) } },
         { "Marker",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.LightBlue) } },
-        { "NitraCSharpType",      new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkCyan) } },
-        { "NitraCSharpNamespace", new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Chocolate) } },
-        { "NitraCSharpAlias",     new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkViolet) } },
+        { "Type",                 new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkCyan) } },
+        { "Namespace",            new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Chocolate) } },
+        { "Alias",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkViolet) } },
         { "Error",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Red) } },
       };
 

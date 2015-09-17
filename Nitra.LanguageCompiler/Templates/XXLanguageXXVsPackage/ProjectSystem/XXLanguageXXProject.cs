@@ -16,7 +16,7 @@ namespace XXNamespaceXX.ProjectSystem
   {
     private readonly IProject _project;
     private readonly Dictionary<IProjectFile, XXLanguageXXFile> _filesMap     = new Dictionary<IProjectFile, XXLanguageXXFile>();
-    private readonly Dictionary<string,       XXLanguageXXFile> _filePathsMap = new Dictionary<string,       XXLanguageXXFile>();
+    private readonly Dictionary<string,       XXLanguageXXFile> _filePathsMap = new Dictionary<string,       XXLanguageXXFile>(StringComparer.OrdinalIgnoreCase);
 
     public XXLanguageXXProject(IProject project)
     {
@@ -47,6 +47,13 @@ namespace XXNamespaceXX.ProjectSystem
         _filePathsMap.Add(nitraFile.FullName, nitraFile);
       }
 
+      return nitraFile;
+    }
+
+    internal XXLanguageXXFile TryGetFile(IProjectFile file)
+    {
+      XXLanguageXXFile nitraFile;
+      _filesMap.TryGetValue(file, out nitraFile);
       return nitraFile;
     }
 

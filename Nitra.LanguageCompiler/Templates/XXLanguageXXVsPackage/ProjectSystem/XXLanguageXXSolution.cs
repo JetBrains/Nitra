@@ -10,7 +10,11 @@ using System.Diagnostics;
 using System.Linq;
 using JetBrains.Application.changes;
 using JetBrains.DataFlow;
+using JetBrains.DocumentManagers;
+using JetBrains.DocumentManagers.impl;
+using JetBrains.DocumentModel;
 using JetBrains.ProjectModel;
+using JetBrains.ReSharper.Psi;
 
 namespace XXNamespaceXX.ProjectSystem
 {
@@ -20,21 +24,22 @@ namespace XXNamespaceXX.ProjectSystem
 
     private ISolution _solution;
     private readonly Dictionary<IProject, XXLanguageXXProject> _projectsMap = new Dictionary<IProject, XXLanguageXXProject>();
-    private readonly Dictionary<string, Action<File>> _fileOpenNotifyRequest = new Dictionary<string, Action<File>>();
+    private readonly Dictionary<string, Action<File>> _fileOpenNotifyRequest = new Dictionary<string, Action<File>>(StringComparer.OrdinalIgnoreCase);
+
+    private DocumentManager _documentManager;
 
     public XXLanguageXXSolution()
     {
     }
 
-    public void Open(Lifetime lifetime, ChangeManager changeManager, ISolution solution)
+    public void Open(Lifetime lifetime, ChangeManager changeManager, ISolution solution, DocumentManager documentManager)
     {
       Debug.Assert(!IsOpened);
 
       _solution = solution;
+      _documentManager = documentManager;
       changeManager.Changed2.Advise(lifetime, Handler);
       lifetime.AddAction(Close);
-      _fileOpenNotifyRequest.Clear();
-      IsOpened = true;
     }
 
     private void Close()
@@ -44,6 +49,7 @@ namespace XXNamespaceXX.ProjectSystem
         project.Dispose();
       _projectsMap.Clear();
       _solution = null;
+      _fileOpenNotifyRequest.Clear();
     }
 
     public override IEnumerable<Project> Projects { get { return _projectsMap.Values; } }
@@ -53,8 +59,49 @@ namespace XXNamespaceXX.ProjectSystem
       var projectModelChange = changeEventArgs.ChangeMap.GetChange<ProjectModelChange>(_solution);
       if (projectModelChange != null)
       {
+        if (projectModelChange.ContainsChangeType(ProjectModelChangeType.PROJECT_MODEL_CACHES_READY))
+        {
+          foreach (var project in _projectsMap.Values)
+            project.UpdateProperties();
+          IsOpened = true;
+        }
+
         projectModelChange.Accept(new RecursiveProjectModelChangeDeltaVisitor(FWithDelta, FWithItemDelta));
       }
+
+      {
+        var documentChange = changeEventArgs.ChangeMap.GetChange<ProjectFileDocumentChange>(_documentManager.ChangeProvider);
+        if (documentChange != null)
+          if (OnFileChanged(documentChange.ProjectFile, documentChange))
+            return;
+      }
+
+      {
+        var documentChange = changeEventArgs.ChangeMap.GetChange<DocumentChange>(_documentManager.ChangeProvider);
+        if (documentChange != null)
+          if (OnFileChanged(_documentManager.GetProjectFile(documentChange.Document), documentChange))
+            return;
+      }
+    }
+
+    private bool OnFileChanged(IProjectFile projectFile, DocumentChange documentChange)
+    {
+      var project = projectFile.GetProject();
+      if (project != null)
+      {
+        XXLanguageXXProject nitraProject;
+        if (_projectsMap.TryGetValue(project, out nitraProject))
+        {
+          var nitraFile = nitraProject.TryGetFile(projectFile);
+          if (nitraFile != null)
+          {
+            nitraFile.OnFileChanged(documentChange);
+            return true;
+          }
+        }
+      }
+
+      return false;
     }
 
     private void FWithDelta(ProjectModelChange obj) { }
@@ -66,14 +113,18 @@ namespace XXNamespaceXX.ProjectSystem
       var file = item as IProjectFile;
       if (file != null && file.LanguageType.Is<XXLanguageXXFileType>())
       {
-        if (obj.IsRemoved)
+        if (obj.IsRemoved || obj.IsMovedOut)
         {
           var project = GetProject(obj.OldParentFolder.GetProject());
           project.TryRemoveFile(file);
         }
-        else if (obj.IsAdded)
+        else if (obj.IsAdded || obj.IsMovedIn)
         {
           var project = GetProject(file.GetProject());
+          var sourceFile = file.ToSourceFile();
+          if (sourceFile == null)
+            return;
+
           var nitraFile = project.TryAddFile(file);
           Action<File> oldHandler;
           if (_fileOpenNotifyRequest.TryGetValue(nitraFile.FullName, out oldHandler))
@@ -109,9 +160,8 @@ namespace XXNamespaceXX.ProjectSystem
             continue;
 
           handler(file);
+          return;
         }
-
-        return;
       }
 
       Action<File> oldHandler;

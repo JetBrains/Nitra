@@ -30,9 +30,8 @@ namespace XXNamespaceXX
       if (buffer.Properties.TryGetProperty(TextBufferProperties.OutliningTagger, out tagger))
         return (ITagger<T>)tagger;
 
-      var parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, NitraVsUtils.GetGlobalProvider<IVsDataHostService>(), XXLanguageXXVsPackage.Language);
       var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
-      tagger = new OutliningTagger(parseAgent, buffer, nitraSolutionService);
+      tagger = new OutliningTagger(buffer, nitraSolutionService);
       buffer.Properties.AddProperty(TextBufferProperties.OutliningTagger, tagger);
       return (ITagger<T>)tagger;
     }

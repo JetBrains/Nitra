@@ -33,9 +33,8 @@ namespace XXNamespaceXX
         return classifier;
 
       var dataHostService = NitraVsUtils.GetGlobalProvider<IVsDataHostService>();
-      var parseAgent = NitraVsUtils.TryGetOrCreateParseAgent(buffer, _textDocumentFactoryService, dataHostService, XXLanguageXXVsPackage.Language);
       var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
-      classifier = new NitraClassifier(parseAgent, buffer, _classificationTypeRegistry, dataHostService, nitraSolutionService);
+      classifier = new NitraClassifier(buffer, _classificationTypeRegistry, dataHostService, nitraSolutionService);
       buffer.Properties.AddProperty(TextBufferProperties.NitraClassifier, classifier);
       return classifier;
     }

@@ -127,7 +127,7 @@ namespace XXNamespaceXX
 
     public void ReportParseErrors(IParseResult parseResult, ITextSnapshot snapshot)
     {
-      _errorListProvider.SuspendRefresh(); 
+      _errorListProvider.SuspendRefresh();
       try
       {
         // remove any previously created errors to get a clean start
@@ -140,19 +140,21 @@ namespace XXNamespaceXX
           // creates the instance that will be added to the Error List
           var nSpan = error.Location.Span;
           var span = new Span(nSpan.StartPos, nSpan.Length);
+          if (span.Start >= snapshot.Length)
+            continue;
           ErrorTask task = new ErrorTask();
           task.Category = TaskCategory.All;
           task.Priority = TaskPriority.Normal;
           task.Document = _textBuffer.Properties.GetProperty<ITextDocument>(typeof(ITextDocument)).FilePath;
           task.ErrorCategory = TranslateErrorCategory(error);
           task.Text = error.Text;
-          task.Line = _textBuffer.CurrentSnapshot.GetLineNumberFromPosition(span.Start);
-          task.Column = span.Start - _textBuffer.CurrentSnapshot.GetLineFromLineNumber(task.Line).Start;
+          task.Line = snapshot.GetLineNumberFromPosition(span.Start);
+          task.Column = span.Start - snapshot.GetLineFromLineNumber(task.Line).Start;
           task.Navigate += OnTaskNavigate;
           _errorListProvider.Tasks.Add(task);
           _previousErrors.Add(task);
 
-          var trackingSpan = _textBuffer.CurrentSnapshot.CreateTrackingSpan(span, SpanTrackingMode.EdgeNegative);
+          var trackingSpan = snapshot.CreateTrackingSpan(span, SpanTrackingMode.EdgeNegative);
           _squiggleTagger.CreateTagSpan(trackingSpan, new ErrorTag("syntax error", error.Text));
           _previousSquiggles.Add(new TrackingTagSpan<IErrorTag>(trackingSpan, new ErrorTag("syntax error", error.Text)));
         }
