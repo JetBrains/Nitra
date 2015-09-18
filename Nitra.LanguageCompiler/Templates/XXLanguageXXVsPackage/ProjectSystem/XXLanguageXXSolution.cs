@@ -50,6 +50,7 @@ namespace XXNamespaceXX.ProjectSystem
       _projectsMap.Clear();
       _solution = null;
       _fileOpenNotifyRequest.Clear();
+      _documentManager = null;
     }
 
     public override IEnumerable<Project> Projects { get { return _projectsMap.Values; } }

@@ -1,16 +1,18 @@
-﻿using Nitra.Declarations;
+﻿using Nitra;
+using Nitra.Declarations;
 using Nitra.ProjectSystem;
+using Nitra.VisualStudio.Coloring;
 
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Linq;
+
 using JetBrains.DataFlow;
 using JetBrains.DocumentModel;
 using JetBrains.ProjectModel;
 using JetBrains.ReSharper.Psi;
-using Nitra;
 
 namespace XXNamespaceXX.ProjectSystem
 {
@@ -21,6 +23,7 @@ namespace XXNamespaceXX.ProjectSystem
     private readonly IPsiSourceFile _psiSourceFile;
     private readonly XXLanguageXXProject _project;
     private readonly string _fullName;
+    private int _errorCount;
 
     public XXLanguageXXFile(FileStatistics statistics, IPsiSourceFile psiSourceFile, XXLanguageXXProject project)
       : base(StartRule, Grammar, null)// TODO: add statistics
@@ -60,6 +63,13 @@ namespace XXNamespaceXX.ProjectSystem
     {
       ResetCache();
       Project.UpdateProperties();
+
+      var visitor = new CalcSymbolErrorsAstVisitor();
+      this.Ast.Accept(visitor);
+      var errorCount = visitor.ErrorCount;
+      if (_errorCount != errorCount)
+        OnRedraw();
+      _errorCount = errorCount;
     }
   }
 }
