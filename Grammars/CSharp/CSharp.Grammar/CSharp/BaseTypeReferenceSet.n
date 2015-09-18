@@ -1,4 +1,5 @@
 ﻿using Nitra;
+using Nitra.Declarations;
 using Nitra.Runtime.Binding;
 using Nitra.Staging;
 
@@ -16,23 +17,26 @@ namespace CSharp
 {
   public sealed class BaseTypeReferenceSet : IStaged
   {
-    public this(creationStage : int)
+    public this(context : DependentPropertyEvalContext)
     {
-      CreationStage = creationStage;
+      context.NotifyStagedObjectCreated(out CreatedOnStage, out CreatedOnIterationNumber);
       _parentTypes  = HashSet();
     }
 
     private mutable _isEvaluationInProgress : bool;
     private mutable _isCycled               : bool;
     private mutable _ancestorTypes          : HashSet[TypeReference];
-    private mutable _ancestorScope          : Scope;
+    private mutable _parentScope            : Scope;
+    private mutable _parentClass            : option[TypeReference];
     private         _parentTypes            : HashSet[TypeReference];
 
-    public CreationStage  : int                { get; }
-    public IsCycled       : bool               { get { _ = GetAncestorTypes(); _isCycled } }
-    public AncestorTypes  : Seq[TypeReference] { get { GetAncestorTypes() } }
-    public ParentTypes    : Seq[TypeReference] { get { _parentTypes } }
-    public AncestorScope  : Scope              { get { _ = GetAncestorTypes(); _ancestorScope } }
+    public CreatedOnStage           : int                   { get; }
+    public CreatedOnIterationNumber : int                   { get; }
+    public IsCycled                 : bool                  { get { TryEvaluateHierarchy(); _isCycled } }
+    public AncestorTypes            : Seq[TypeReference]    { get { TryEvaluateHierarchy(); _ancestorTypes } }
+    public ParentTypes              : Seq[TypeReference]    { get { _parentTypes } }
+    public ParentScope              : Scope                 { get { TryEvaluateHierarchy(); _parentScope } }
+    public ParentClass              : option[TypeReference] { get { TryEvaluateHierarchy(); _parentClass } }
 
     [StagedInit]
     public AddParent(type : TypeReference) : void
@@ -53,48 +57,55 @@ namespace CSharp
 
     public ContainsAncestor(type : TypeReference) : bool
     {
-      GetAncestorTypes().Contains(type)
+      TryEvaluateHierarchy();
+      _ancestorTypes.Contains(type)
     }
 
-    private GetAncestorTypes() : HashSet[TypeReference]
+    private TryEvaluateHierarchy() : void
     {
       when (_ancestorTypes != null)
-        return _ancestorTypes;
+        return;
 
       if (_isEvaluationInProgress)
       {
         _isCycled      = true;
         _ancestorTypes = HashSet();
-        _ancestorScope = EmptyScope.Instance;
+        _parentScope   = EmptyScope.Instance;
       }
       else
       {
         _isEvaluationInProgress = true;
 
-        def result = HashSet(_parentTypes);
-        foreach (type when type.Ref.IsSymbolEvaluated in _parentTypes)
+        def ancestorTypes = HashSet(_parentTypes);
+        mutable parentClass : option[_];
+        mutable parentScope;
+
+        foreach (TypeReference(Ref = IRef(IsSymbolEvaluated = true, Symbol = GenericContainerTypeSymbol as symbol)) as type in _parentTypes)
         {
-          when (type.Ref.Symbol is GenericContainerTypeSymbol as symbol)
+          def parentTypeSet = symbol.BaseTypeSet;
+          ancestorTypes.UnionWith(parentTypeSet.AncestorTypes);
+
+          when (type.IsClass && (parentClass : object) == null)
           {
-            def parentTypeSet = symbol.BaseTypeSet;
-            result.UnionWith(parentTypeSet.AncestorTypes);
+            parentClass = Some(type);
+            parentScope = HidingScope(symbol.MemberScope, parentTypeSet.ParentScope);
           }
         }
 
         unless (_isCycled)
         {
-          _ancestorTypes = result;
-          _ancestorScope = EmptyScope.Instance; //TODO: make scope!
+          _ancestorTypes = ancestorTypes;
+          _parentClass   = if (parentClass : object == null) None() else parentClass; // operator '??' unwraps option[T]
+          _parentScope   = parentScope ?? EmptyScope.Instance;
         }
 
         _isEvaluationInProgress = false;
       }
-      _ancestorTypes
     }
 
     public override ToString() : string
     {
-      $"$CreationStage: ..$_parentTypes"
+      $"$CreatedOnStage($CreatedOnIterationNumber): ..$_parentTypes"
     }
   }
 }
