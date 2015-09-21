@@ -127,6 +127,7 @@ namespace Nitra.Visualizer
         { "Property",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Goldenrod) } },
         { "Field",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Goldenrod) } },
         { "Constant",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Goldenrod) } },
+        { "Parameter",            new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Goldenrod) } },
         { "Namespace",            new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Chocolate) } },
         { "Alias",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkViolet) } },
         { "Error",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Red) } },
