@@ -8,13 +8,29 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Diagnostics;
 using System.Linq;
+using JetBrains.ActionManagement;
+using JetBrains.Annotations;
 using JetBrains.Application.changes;
+using JetBrains.Application.CommandProcessing;
+using JetBrains.Application.DataContext;
 using JetBrains.DataFlow;
 using JetBrains.DocumentManagers;
 using JetBrains.DocumentManagers.impl;
 using JetBrains.DocumentModel;
 using JetBrains.ProjectModel;
+using JetBrains.ReSharper.Feature.Services.LiveTemplates.LiveTemplates;
+using JetBrains.ReSharper.Feature.Services.Lookup;
+using JetBrains.ReSharper.Feature.Services.Navigation.ContextNavigation;
+using JetBrains.ReSharper.Feature.Services.Util;
+using JetBrains.ReSharper.Features.Intellisense.CodeCompletion.CSharp.Rules.SourceTemplates;
+using JetBrains.ReSharper.Features.Navigation.Features.GoToDeclaration;
 using JetBrains.ReSharper.Psi;
+using JetBrains.ReSharper.Psi.Files;
+using JetBrains.ReSharper.Psi.Tree;
+using JetBrains.TextControl;
+using JetBrains.TextControl.Util;
+using JetBrains.UI.ActionsRevised;
+using JetBrains.UI.ActionSystem.Text;
 
 namespace XXNamespaceXX.ProjectSystem
 {
@@ -25,6 +41,7 @@ namespace XXNamespaceXX.ProjectSystem
     private ISolution _solution;
     private readonly Dictionary<IProject, XXLanguageXXProject> _projectsMap = new Dictionary<IProject, XXLanguageXXProject>();
     private readonly Dictionary<string, Action<File>> _fileOpenNotifyRequest = new Dictionary<string, Action<File>>(StringComparer.OrdinalIgnoreCase);
+    private IActionManager _actionManager;
 
     private DocumentManager _documentManager;
 
@@ -32,7 +49,14 @@ namespace XXNamespaceXX.ProjectSystem
     {
     }
 
-    public void Open(Lifetime lifetime, ChangeManager changeManager, ISolution solution, DocumentManager documentManager)
+    public void Open(
+      Lifetime lifetime, 
+      ChangeManager changeManager,
+      ISolution solution,
+      DocumentManager documentManager,
+      IActionManager actionManager,
+      ICommandProcessor commandProcessor,
+      TextControlChangeUnitFactory changeUnitFactory)
     {
       Debug.Assert(!IsOpened);
 
@@ -40,6 +64,15 @@ namespace XXNamespaceXX.ProjectSystem
       _documentManager = documentManager;
       changeManager.Changed2.Advise(lifetime, Handler);
       lifetime.AddAction(Close);
+      var expandAction = actionManager.Defs.TryGetActionDefById(GotoDeclarationAction.ACTION_ID);
+      if (expandAction != null)
+      {
+        var postfixHandler = new GotoDeclarationHandler(commandProcessor, changeUnitFactory, this);
+
+        lifetime.AddBracket(
+          FOpening: () => actionManager.Handlers.AddHandler(expandAction, postfixHandler),
+          FClosing: () => actionManager.Handlers.RemoveHandler(expandAction, postfixHandler));
+      }
     }
 
     private void Close()
@@ -134,7 +167,7 @@ namespace XXNamespaceXX.ProjectSystem
       }
     }
 
-    private XXLanguageXXProject GetProject(IProject project)
+    public XXLanguageXXProject GetProject(IProject project)
     {
       XXLanguageXXProject result;
       if (_projectsMap.TryGetValue(project, out result))

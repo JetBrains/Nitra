@@ -7,7 +7,6 @@ using Microsoft.VisualStudio.Utilities;
 
 using Nitra.VisualStudio;
 using Nitra.VisualStudio.Outlining;
-using Nitra.VisualStudio.Parsing;
 
 using System;
 using System.Collections.Generic;

@@ -6,7 +6,6 @@ using Microsoft.VisualStudio.Text.Tagging;
 using Microsoft.VisualStudio.Utilities;
 
 using Nitra.VisualStudio;
-using Nitra.VisualStudio.Parsing;
 
 using System;
 using System.Linq;

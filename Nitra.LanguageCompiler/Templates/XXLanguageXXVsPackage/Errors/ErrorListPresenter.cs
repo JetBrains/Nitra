@@ -16,7 +16,6 @@ using System.Diagnostics;
 ﻿using Nitra;
 using Nitra.ProjectSystem;
 ﻿using Nitra.VisualStudio;
-﻿using Nitra.VisualStudio.Parsing;
 
 namespace XXNamespaceXX
 {
@@ -162,20 +161,20 @@ namespace XXNamespaceXX
       finally { _errorListProvider.ResumeRefresh(); }
     }
 
-    public void ReportParseException(ParseFailedEventArgs arg)
+    public void ReportParseException(Exception exception, string fileName, ITextSnapshot snapshot)
     {
-      var pfe = arg.Exception as ParsingFailureException;
+      var pfe = exception as ParsingFailureException;
 
       if (pfe != null)
-        ReportParseErrors(pfe.ParseResult, arg.Snapshot);
+        ReportParseErrors(pfe.ParseResult, snapshot);
       else
       {
         var error = new ErrorTask();
         error.ErrorCategory = TaskErrorCategory.Error;
-        error.Category = TaskCategory.All;
-        error.Text = "INE: " + arg.Exception.Message + Environment.NewLine + @"Please contact developers.";
+        error.Category      = TaskCategory.All;
+        error.Text          = "INE: " + exception.Message + Environment.NewLine + @"Please contact developers.";
         error.ErrorCategory = TaskErrorCategory.Error;
-        error.Document = arg.FileName;
+        error.Document      = fileName;
         _errorListProvider.Tasks.Add(error);
       }
     }

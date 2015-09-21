@@ -6,7 +6,6 @@ using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Utilities;
 
 using Nitra.VisualStudio.Coloring;
-using Nitra.VisualStudio.Parsing;
 
 using System;
 using System.Collections.Generic;

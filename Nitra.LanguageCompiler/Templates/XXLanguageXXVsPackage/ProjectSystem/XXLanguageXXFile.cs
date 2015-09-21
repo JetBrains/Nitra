@@ -37,7 +37,7 @@ namespace XXNamespaceXX.ProjectSystem
 
     public override SourceSnapshot GetSource()
     {
-      return new SourceSnapshot(_psiSourceFile.Document.GetText());// TODO: add path
+      return new SourceSnapshot(_psiSourceFile.Document.GetText(), this);// TODO: add path
     }
 
     public override Project Project

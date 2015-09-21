@@ -12,7 +12,10 @@ using XXNamespaceXX.ProjectSystem;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using JetBrains.ActionManagement;
+using JetBrains.Application.CommandProcessing;
 using JetBrains.DocumentManagers;
+using JetBrains.TextControl.Util;
 
 namespace XXNamespaceXX
 {
@@ -21,9 +24,9 @@ namespace XXNamespaceXX
   {
     public static readonly XXLanguageXXSolution XXLanguageXXSolution = new XXLanguageXXSolution();
 
-    public ReSharperSolution(Lifetime lifetime, ChangeManager changeManager, ISolution solution, DocumentManager documentManager)
+    public ReSharperSolution(Lifetime lifetime, ChangeManager changeManager, ISolution solution, DocumentManager documentManager, IActionManager actionManager, ICommandProcessor commandProcessor, TextControlChangeUnitFactory changeUnitFactory)
     {
-      XXLanguageXXSolution.Open(lifetime, changeManager, solution, documentManager);
+      XXLanguageXXSolution.Open(lifetime, changeManager, solution, documentManager, actionManager, commandProcessor, changeUnitFactory);
     }
 
     [ZoneMarker]

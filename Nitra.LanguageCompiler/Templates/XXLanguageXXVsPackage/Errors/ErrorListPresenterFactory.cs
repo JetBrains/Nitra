@@ -28,7 +28,7 @@ namespace XXNamespaceXX
     public void TextViewCreated(IWpfTextView textView)
     {
       // Add the error list support to the just created view
-      textView.TextBuffer.Properties.GetOrCreateSingletonProperty<IErrorsReporter>(() =>
+      textView.TextBuffer.Properties.GetOrCreateSingletonProperty<ErrorListPresenter>(() =>
           new ErrorListPresenter(textView.TextBuffer, _errorProviderFactory, _serviceProviderServiceProvider)
       );
     }
