@@ -135,13 +135,13 @@ namespace XXNamespaceXX.ProjectSystem
 
           var decls = visitor.Refs.Where(r => r.IsSymbolEvaluated).SelectMany(r => r.Symbol.Declarations).ToArray();
 
-          //if (decls.Length == 0)
-          //{
-          //  if (visitor.Names.Count == 0)
-          //    return;
-          //
-          //  decls = visitor.Names.Where(n => n.IsSymbolEvaluated).SelectMany(s => s.Declarations).ToArray();
-          //}
+          if (decls.Length == 0)
+          {
+            if (visitor.Names.Count == 0)
+              return;
+          
+            decls = visitor.Names.Where(n => n.IsSymbolEvaluated).SelectMany(n => n.Symbol.Declarations).ToArray();
+          }
 
           if (decls.Length == 1)
             Navigate(decls[0], solution, project, popupWindowContext);
@@ -159,7 +159,8 @@ namespace XXNamespaceXX.ProjectSystem
                 var decl = (Declaration)args.Key;
                 var loc = decl.Name.ToLocation();
 
-                args.Descriptor.Style |= MenuItemStyle.Enabled; //visitor.Symbols.Contains(decl.Symbol) ? MenuItemStyle.None : args.Descriptor.Style = MenuItemStyle.Enabled;
+               //args.Descriptor.Style |= MenuItemStyle.Enabled;
+                args.Descriptor.Style |= visitor.Names.Contains(decl.Name) ? MenuItemStyle.None : args.Descriptor.Style = MenuItemStyle.Enabled;
                 args.Descriptor.Text = new RichText(Path.GetFileName(decl.File.FullName)).Append(" ").Append("(" + loc.EndLineColumn + ")", TextStyle.FromForeColor(Color.RoyalBlue));
                 args.Descriptor.Tooltip =
                   new RichText(decl.Symbol.Kind, TextStyle.FromForeColor(Color.Blue))
