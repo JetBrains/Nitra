@@ -10,6 +10,7 @@ using System.Diagnostics;
 using System.Linq;
 using JetBrains.ActionManagement;
 using JetBrains.Annotations;
+using JetBrains.Application;
 using JetBrains.Application.changes;
 using JetBrains.Application.CommandProcessing;
 using JetBrains.Application.DataContext;
@@ -31,10 +32,11 @@ using JetBrains.TextControl;
 using JetBrains.TextControl.Util;
 using JetBrains.UI.ActionsRevised;
 using JetBrains.UI.ActionSystem.Text;
+using JetBrains.UI.PopupMenu;
 
 namespace XXNamespaceXX.ProjectSystem
 {
-  public class XXLanguageXXSolution : Solution, INitraSolutionService
+  public partial class XXLanguageXXSolution : Solution, INitraSolutionService
   {
     public bool IsOpened { get; private set; }
 
@@ -42,6 +44,7 @@ namespace XXNamespaceXX.ProjectSystem
     private readonly Dictionary<IProject, XXLanguageXXProject> _projectsMap = new Dictionary<IProject, XXLanguageXXProject>();
     private readonly Dictionary<string, Action<File>> _fileOpenNotifyRequest = new Dictionary<string, Action<File>>(StringComparer.OrdinalIgnoreCase);
     private IActionManager _actionManager;
+    private JetPopupMenus _jetPopupMenus;
 
     private DocumentManager _documentManager;
 
@@ -49,25 +52,19 @@ namespace XXNamespaceXX.ProjectSystem
     {
     }
 
-    public void Open(
-      Lifetime lifetime, 
-      ChangeManager changeManager,
-      ISolution solution,
-      DocumentManager documentManager,
-      IActionManager actionManager,
-      ICommandProcessor commandProcessor,
-      TextControlChangeUnitFactory changeUnitFactory)
+    public void Open(Lifetime lifetime, IShellLocks shellLocks, ChangeManager changeManager, ISolution solution, DocumentManager documentManager, IActionManager actionManager, ICommandProcessor commandProcessor, TextControlChangeUnitFactory changeUnitFactory, JetPopupMenus jetPopupMenus)
     {
       Debug.Assert(!IsOpened);
 
       _solution = solution;
       _documentManager = documentManager;
+      _jetPopupMenus = jetPopupMenus;
       changeManager.Changed2.Advise(lifetime, Handler);
       lifetime.AddAction(Close);
       var expandAction = actionManager.Defs.TryGetActionDefById(GotoDeclarationAction.ACTION_ID);
       if (expandAction != null)
       {
-        var postfixHandler = new GotoDeclarationHandler(commandProcessor, changeUnitFactory, this);
+        var postfixHandler = new GotoDeclarationHandler(lifetime, shellLocks, commandProcessor, changeUnitFactory, this);
 
         lifetime.AddBracket(
           FOpening: () => actionManager.Handlers.AddHandler(expandAction, postfixHandler),

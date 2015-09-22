@@ -16,6 +16,7 @@ using JetBrains.ActionManagement;
 using JetBrains.Application.CommandProcessing;
 using JetBrains.DocumentManagers;
 using JetBrains.TextControl.Util;
+using JetBrains.UI.PopupMenu;
 
 namespace XXNamespaceXX
 {
@@ -24,9 +25,9 @@ namespace XXNamespaceXX
   {
     public static readonly XXLanguageXXSolution XXLanguageXXSolution = new XXLanguageXXSolution();
 
-    public ReSharperSolution(Lifetime lifetime, ChangeManager changeManager, ISolution solution, DocumentManager documentManager, IActionManager actionManager, ICommandProcessor commandProcessor, TextControlChangeUnitFactory changeUnitFactory)
+    public ReSharperSolution(Lifetime lifetime, IShellLocks shellLocks, ChangeManager changeManager, ISolution solution, DocumentManager documentManager, IActionManager actionManager, ICommandProcessor commandProcessor, TextControlChangeUnitFactory changeUnitFactory, JetPopupMenus jetPopupMenus)
     {
-      XXLanguageXXSolution.Open(lifetime, changeManager, solution, documentManager, actionManager, commandProcessor, changeUnitFactory);
+      XXLanguageXXSolution.Open(lifetime, shellLocks, changeManager, solution, documentManager, actionManager, commandProcessor, changeUnitFactory, jetPopupMenus);
     }
 
     [ZoneMarker]
