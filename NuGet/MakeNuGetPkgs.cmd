@@ -1,6 +1,6 @@
-echo Star off %0
+echo Executing %0
 set version=%1
-set Configuration=Debug
+set Configuration=%2
 set Solution=..
 set ExternalTools=%Solution%\ExternalTools
 set NuGet=%ExternalTools%\NuGet.exe
