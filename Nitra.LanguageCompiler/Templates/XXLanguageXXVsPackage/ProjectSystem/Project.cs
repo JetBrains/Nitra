@@ -18,9 +18,10 @@ namespace XXNamespaceXX.ProjectSystem
     private readonly Dictionary<IProjectFile, XXLanguageXXFile> _filesMap     = new Dictionary<IProjectFile, XXLanguageXXFile>();
     private readonly Dictionary<string,       XXLanguageXXFile> _filePathsMap = new Dictionary<string,       XXLanguageXXFile>(StringComparer.OrdinalIgnoreCase);
 
-    public XXLanguageXXProject(IProject project)
+    public XXLanguageXXProject(XXLanguageXXSolution solution, IProject project)
     {
       _project = project;
+      Solution = solution;
     }
 
     public override IEnumerable<File> Files { get { return _filesMap.Values; } }

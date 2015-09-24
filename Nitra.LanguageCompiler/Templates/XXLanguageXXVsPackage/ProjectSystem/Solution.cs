@@ -24,6 +24,7 @@ using JetBrains.ReSharper.Feature.Services.Lookup;
 using JetBrains.ReSharper.Feature.Services.Navigation.ContextNavigation;
 using JetBrains.ReSharper.Feature.Services.Util;
 using JetBrains.ReSharper.Features.Intellisense.CodeCompletion.CSharp.Rules.SourceTemplates;
+using JetBrains.ReSharper.Features.Navigation.Features.FindUsages;
 using JetBrains.ReSharper.Features.Navigation.Features.GoToDeclaration;
 using JetBrains.ReSharper.Psi;
 using JetBrains.ReSharper.Psi.Files;
@@ -70,6 +71,13 @@ namespace XXNamespaceXX.ProjectSystem
           FOpening: () => actionManager.Handlers.AddHandler(expandAction, postfixHandler),
           FClosing: () => actionManager.Handlers.RemoveHandler(expandAction, postfixHandler));
       }
+      
+      var findUsagesAction = actionManager.Defs.GetActionDef<FindUsagesAction>();
+      var findUsagesHandler = new FindUsagesHandler(lifetime, shellLocks, commandProcessor, changeUnitFactory, this);
+
+      lifetime.AddBracket(
+        FOpening: () => actionManager.Handlers.AddHandler(findUsagesAction, findUsagesHandler),
+        FClosing: () => actionManager.Handlers.RemoveHandler(findUsagesAction, findUsagesHandler));
     }
 
     private void Close()
@@ -170,7 +178,7 @@ namespace XXNamespaceXX.ProjectSystem
       if (_projectsMap.TryGetValue(project, out result))
         return result;
 
-      result = new XXLanguageXXProject(project);
+      result = new XXLanguageXXProject(this, project);
       
       _projectsMap.Add(project, result);
 

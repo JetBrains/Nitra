@@ -55,15 +55,19 @@ namespace XXNamespaceXX.ProjectSystem
 {
   public partial class XXLanguageXXSolution : Solution, INitraSolutionService
   {
-    private class GotoDeclarationHandler : IExecutableAction
+    private class FindUsagesHandler : IExecutableAction
     {
-      [NotNull] private readonly ICommandProcessor _commandProcessor;
-      [NotNull] private readonly TextControlChangeUnitFactory _changeUnitFactory;
-      [NotNull] private readonly XXLanguageXXSolution _nitraSolution;
-      [NotNull] private readonly Lifetime _lifetime;
+      [NotNull]
+      private readonly ICommandProcessor _commandProcessor;
+      [NotNull]
+      private readonly TextControlChangeUnitFactory _changeUnitFactory;
+      [NotNull]
+      private readonly XXLanguageXXSolution _nitraSolution;
+      [NotNull]
+      private readonly Lifetime _lifetime;
       private readonly IShellLocks _shellLocks;
 
-      public GotoDeclarationHandler(Lifetime lifetime, IShellLocks shellLocks, ICommandProcessor commandProcessor, TextControlChangeUnitFactory changeUnitFactory, XXLanguageXXSolution nitraSolution)
+      public FindUsagesHandler(Lifetime lifetime, IShellLocks shellLocks, ICommandProcessor commandProcessor, TextControlChangeUnitFactory changeUnitFactory, XXLanguageXXSolution nitraSolution)
       {
         _lifetime = lifetime;
         _shellLocks = shellLocks;
@@ -116,58 +120,69 @@ namespace XXNamespaceXX.ProjectSystem
             return;
 
           var pos = documentOffset.Value;
-          var visitor = new CollectSymbolsAndRefsInSpanAstVisitor(new NSpan(pos));
-          nitraFile.Ast.Accept(visitor);
+          var symbolCollector = new CollectSymbolsAndRefsInSpanAstVisitor(new NSpan(pos));
+          nitraFile.Ast.Accept(symbolCollector);
+
 
           var popupWindowContext = context.GetData(JetBrains.UI.DataConstants.PopupWindowContextSource);
           if (popupWindowContext == null)
             return;
 
-          var decls = visitor.Refs.Where(r => r.IsSymbolEvaluated).SelectMany(r => r.Symbol.Declarations).ToArray();
+          var symbols = symbolCollector.Refs.Where(r => r.IsSymbolEvaluated).Select(r => r.Symbol).ToArray();
 
-          if (decls.Length == 0)
+          if (symbols.Length == 0)
           {
-            if (visitor.Names.Count == 0)
+            if (symbolCollector.Names.Count == 0)
               return;
-          
-            decls = visitor.Names.Where(n => n.IsSymbolEvaluated).SelectMany(n => n.Symbol.Declarations).ToArray();
+
+            symbols = symbolCollector.Names.Where(n => n.IsSymbolEvaluated).Select(n => n.Symbol).ToArray();
           }
 
-          if (decls.Length == 1)
-            Navigate(decls[0], solution, project, popupWindowContext);
-          else
+          List<IOccurence> items = new List<IOccurence>();
+          var s = nitraFile.Project.Solution;
+
+          foreach (var p in s.Projects)
           {
-            var jetPopupMenus = _nitraSolution._jetPopupMenus;
-            jetPopupMenus.Show(_lifetime, JetPopupMenu.ShowWhen.NoItemsBannerIfNoItems, (lifetime, menu) =>
+            foreach (var file in p.Files)
             {
-              menu.ItemKeys.AddRange(Sorter(decls));
-              menu.PopupWindowContext = popupWindowContext.Create(lifetime);
-              menu.Caption.Value = WindowlessControl.Create("Declaration of " + string.Join(", ", decls.Select(d => d.Name.Text)));
-              menu.NoItemsBanner = WindowlessControl.Create("There are no declarations.");
-              menu.DescribeItem.Advise(lifetime, args =>
-              {
-                var decl = (Declaration)args.Key;
-                var loc = decl.Name.ToLocation();
 
-               //args.Descriptor.Style |= MenuItemStyle.Enabled;
-                args.Descriptor.Style |= visitor.Names.Contains(decl.Name) ? MenuItemStyle.None : args.Descriptor.Style = MenuItemStyle.Enabled;
-                args.Descriptor.Text = new RichText(Path.GetFileName(decl.File.FullName)).Append(" ").Append("(" + loc.EndLineColumn + ")", TextStyle.FromForeColor(Color.RoyalBlue));
-                args.Descriptor.Tooltip =
-                  new RichText(decl.Symbol.Kind, TextStyle.FromForeColor(Color.Blue))
-                  .Append(" ")
-                  .Append(decl.Name.Text, new TextStyle(FontStyle.Bold));
-                //args.Descriptor.ShortcutText = XamlToRichText(decl.ToXaml());
-                //args.Descriptor.Icon = ;
-              });
-              menu.ItemClicked.Advise(lifetime, arg => _shellLocks.ExecuteOrQueueReadLock("Nitra GoTo Declaration", () =>
+              foreach (var symbol in symbols)
               {
-                var decl = (Declaration) arg;
-                Navigate(decl, solution, project, popupWindowContext);
-              }));
-            });
+                var collectRefs = new CollectSymbolRefsAstVisitor(symbol);
+                file.Ast.Accept(collectRefs);
+
+                foreach (var r in collectRefs.FoundSymbols)
+                {
+                  var refNitraFile = r.File as XXLanguageXXFile; // TODO: add INitraReSharperFile
+                  if (refNitraFile == null)
+                    continue;
+                  items.Add(new RangeOccurence(refNitraFile.PsiSourceFile, new DocumentRange(refNitraFile.Document, new TextRange(r.Span.StartPos, r.Span.EndPos))));
+                }
+              }
+            }
           }
+
+          var descriptor = new NitraOccurenceBrowserDescriptor(solution, items);
+          FindResultsBrowser.ShowResults(descriptor);
         }
         nextExecute();
+      }
+
+      private class NitraOccurenceBrowserDescriptor : OccurenceBrowserDescriptor
+      {
+        public NitraOccurenceBrowserDescriptor([NotNull] ISolution solution, ICollection<IOccurence> items) : base(solution)
+        {
+          Title.Value = "Nitra ...";
+          SetResults(items);
+        }
+
+        public override TreeModel Model
+        {
+          get
+          {
+            return OccurenceSections.Select(section => section.Model).FirstOrDefault();
+          }
+        }
       }
 
       private IEnumerable<Declaration> Sorter(IEnumerable<Declaration> decls)
@@ -179,10 +194,10 @@ namespace XXNamespaceXX.ProjectSystem
       {
         var nitraSymbolFile = decl.File;
         var symbolProjectFile = GrtProjectFile(project, decl.File);
-        
+
         if (symbolProjectFile != null)
           symbolProjectFile = GrtSolutionFile(solution, decl.File);
-        
+
         if (symbolProjectFile != null)
         {
           var r = new ProjectFileTextRange(symbolProjectFile, decl.Name.Span.StartPos, TargetFrameworkId.Default);
