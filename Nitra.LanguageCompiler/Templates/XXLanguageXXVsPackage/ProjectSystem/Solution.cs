@@ -202,6 +202,11 @@ namespace XXNamespaceXX.ProjectSystem
         _fileOpenNotifyRequest.Add(filePath, handler);
     }
 
+    public bool IsNitraFile(IPsiSourceFile sourceFile)
+    {
+      return GetNitraFile(sourceFile) != null;
+    }
+
     [CanBeNull]
     [ContractAnnotation("null <= null")]
     public XXLanguageXXFile GetNitraFile(IPsiSourceFile sourceFile)

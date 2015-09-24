@@ -5,13 +5,42 @@ using JetBrains.ReSharper.Psi;
 using JetBrains.Util;
 
 using XXNamespaceXX.ProjectSystem;
+using Nitra;
 using Nitra.ProjectSystem;
 
 using System;
 using System.Collections.Generic;
+using XXNamespaceXX;
+
+[assembly: RegisterStaticHighlightingsGroup(NitraError.NitraErrorGroup, "XXLanguageXX Errors", false)]
 
 namespace XXNamespaceXX
 {
+  [Language(typeof(XXLanguageXXLanguage))]
+  public class NitraDaemonBehavior : ILanguageSpecificDaemonBehavior
+  {
+    public ErrorStripeRequest InitialErrorStripe(IPsiSourceFile sourceFile)
+    {
+      var isNitraFile = ReSharperSolution.XXLanguageXXSolution.IsNitraFile(sourceFile);
+      return isNitraFile ? ErrorStripeRequest.STRIPE_AND_ERRORS : ErrorStripeRequest.NONE;
+    }
+
+    public bool CanShowErrorBox
+    {
+      get { return true; }
+    }
+
+    public bool RunInSolutionAnalysis
+    {
+      get { return true; }
+    }
+
+    public bool RunInFindCodeIssues
+    {
+      get { return true; }
+    }
+  }
+
   [DaemonStage]
   public class CompilerMessagesDaemon : IDaemonStage
   {
@@ -22,8 +51,8 @@ namespace XXNamespaceXX
 
     public ErrorStripeRequest NeedsErrorStripe(IPsiSourceFile sourceFile, IContextBoundSettingsStore settingsStore)
     {
-      var nitraFile = ReSharperSolution.XXLanguageXXSolution.GetNitraFile(sourceFile);
-      return nitraFile == null ? ErrorStripeRequest.NONE : ErrorStripeRequest.STRIPE_AND_ERRORS;
+      var isNitraFile = ReSharperSolution.XXLanguageXXSolution.IsNitraFile(sourceFile);
+      return isNitraFile ? ErrorStripeRequest.STRIPE_AND_ERRORS : ErrorStripeRequest.NONE;
     }
   }
 
@@ -50,6 +79,9 @@ namespace XXNamespaceXX
 
       foreach (var message in messages)
       {
+        if (_daemonProcess.InterruptFlag)
+          return;
+
         var highlighting = new NitraError(message);
         consumer.ConsumeHighlighting(new HighlightingInfo(highlighting.DocumentRange, highlighting));
         //highlightingInfos.Add(new HighlightingInfo(highlighting.DocumentRange, highlighting));
@@ -65,9 +97,11 @@ namespace XXNamespaceXX
     }
   }
 
-  [StaticSeverityHighlighting(Severity.ERROR, "XXLanguageXXErrors", OverlapResolve = OverlapResolveKind.ERROR)]
+  [StaticSeverityHighlighting(Severity.ERROR, NitraErrorGroup, OverlapResolve = OverlapResolveKind.ERROR)]
   public class NitraError : IHighlighting
   {
+    public const string NitraErrorGroup = "XXLanguageXXErrors";
+
     public XXLanguageXXFile NitraFile { get; private set; }
     private readonly CompilerMessage _compilerMessage;
     public DocumentRange DocumentRange { get; private set; }
