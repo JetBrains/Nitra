@@ -16,7 +16,7 @@ using JetBrains.ReSharper.Psi;
 
 namespace XXNamespaceXX.ProjectSystem
 {
-  class XXLanguageXXFile : ConcreteFile, IDisposable
+  public class XXLanguageXXFile : ConcreteFile, IDisposable
   {
     private static readonly StartRuleDescriptor StartRule = XXStartRuleDescXX;
     private static readonly CompositeGrammar    Grammar   = XXSyntaxModulesXX;
@@ -53,6 +53,21 @@ namespace XXNamespaceXX.ProjectSystem
     public override string FullName
     {
       get { return _fullName; }
+    }
+
+    public IPsiSourceFile PsiSourceFile
+    {
+      get { return _psiSourceFile; }
+    }
+
+    public IProjectFile ProjectFile
+    {
+      get { return _psiSourceFile.ToProjectFile(); }
+    }
+
+    public IDocument Document
+    {
+      get { return _psiSourceFile.Document; }
     }
 
     public void Dispose()

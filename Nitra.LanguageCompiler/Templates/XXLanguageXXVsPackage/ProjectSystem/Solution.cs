@@ -201,5 +201,30 @@ namespace XXNamespaceXX.ProjectSystem
       else
         _fileOpenNotifyRequest.Add(filePath, handler);
     }
+
+    [CanBeNull]
+    [ContractAnnotation("null <= null")]
+    public XXLanguageXXFile GetNitraFile(IPsiSourceFile sourceFile)
+    {
+      if (sourceFile == null)
+        return null;
+
+      var projectFile = sourceFile.ToProjectFile();
+      if (projectFile == null)
+        return null;
+      
+      var project = projectFile.GetProject();
+      if (project == null)
+        return null;
+
+      XXLanguageXXProject _nitraProject;
+
+      if (!_projectsMap.TryGetValue(project, out _nitraProject))
+        return null;
+
+      XXLanguageXXFile _nitraFile;
+
+      return _nitraProject.TryGetFile(projectFile);
+    }
   }
 }
