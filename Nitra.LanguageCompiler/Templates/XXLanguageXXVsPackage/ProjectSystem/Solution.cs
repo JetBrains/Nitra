@@ -18,7 +18,9 @@ using JetBrains.DataFlow;
 using JetBrains.DocumentManagers;
 using JetBrains.DocumentManagers.impl;
 using JetBrains.DocumentModel;
+using JetBrains.Metadata.Reader.API;
 using JetBrains.ProjectModel;
+using JetBrains.ProjectModel.Model2.Assemblies.Interfaces;
 using JetBrains.ReSharper.Feature.Services.LiveTemplates.LiveTemplates;
 using JetBrains.ReSharper.Feature.Services.Lookup;
 using JetBrains.ReSharper.Feature.Services.Navigation.ContextNavigation;
@@ -34,6 +36,7 @@ using JetBrains.TextControl.Util;
 using JetBrains.UI.ActionsRevised;
 using JetBrains.UI.ActionSystem.Text;
 using JetBrains.UI.PopupMenu;
+using JetBrains.Util;
 
 namespace XXNamespaceXX.ProjectSystem
 {
@@ -100,9 +103,9 @@ namespace XXNamespaceXX.ProjectSystem
       {
         if (projectModelChange.ContainsChangeType(ProjectModelChangeType.PROJECT_MODEL_CACHES_READY))
         {
+          IsOpened = true;
           foreach (var project in _projectsMap.Values)
             project.UpdateProperties();
-          IsOpened = true;
         }
 
         projectModelChange.Accept(new RecursiveProjectModelChangeDeltaVisitor(FWithDelta, FWithItemDelta));
@@ -142,8 +145,32 @@ namespace XXNamespaceXX.ProjectSystem
 
       return false;
     }
+    
+    private void FWithDelta(ProjectModelChange obj)
+    {
+      var reference = obj as ProjectReferenceTargetChange;
+      if (reference != null)
+      {
+        var assembly = reference.NewReferenceTarget as IAssembly;
+        if (assembly != null)
+        {
+          var projectElement = reference.ProjectModelElement as IProjectElement;
+          if (projectElement == null)
+            return;
 
-    private void FWithDelta(ProjectModelChange obj) { }
+          var project = GetProject(projectElement.GetProject());
+
+          using (var loader = new MetadataLoader())
+          {
+            var path = assembly.GetFiles().First().Location;
+            var metadataAssembly = loader.LoadFrom(path, x => true);
+            foreach (var a in metadataAssembly.CustomAttributesTypeNames)
+              if (a.FullName.EqualTo("Nitra.GrammarsAttribute"))
+                project.TryAddNitraExtensionAssemblyReference(path);
+          }
+        }
+      }
+    }
 
     private void FWithItemDelta(ProjectItemChange obj)
     {

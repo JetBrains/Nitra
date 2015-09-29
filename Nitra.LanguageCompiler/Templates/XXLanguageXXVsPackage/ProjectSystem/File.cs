@@ -70,6 +70,11 @@ namespace XXNamespaceXX.ProjectSystem
       get { return _psiSourceFile.Document; }
     }
 
+    protected override ParseSession GetParseSession()
+    {
+      return new ParseSession(_ruleDescriptor, _compositeGrammar, compilerMessages: _parseMessages, dynamicExtensions: _project.GrammarDescriptors);
+    }
+
     public void Dispose()
     {
     }

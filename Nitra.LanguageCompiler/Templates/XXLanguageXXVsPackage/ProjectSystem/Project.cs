@@ -6,9 +6,11 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Linq;
+using System.Reflection;
 using JetBrains.Annotations;
 using JetBrains.ProjectModel;
 using JetBrains.ReSharper.Psi;
+using JetBrains.Util;
 
 namespace XXNamespaceXX.ProjectSystem
 {
@@ -17,12 +19,15 @@ namespace XXNamespaceXX.ProjectSystem
     private readonly IProject _project;
     private readonly Dictionary<IProjectFile, XXLanguageXXFile> _filesMap     = new Dictionary<IProjectFile, XXLanguageXXFile>();
     private readonly Dictionary<string,       XXLanguageXXFile> _filePathsMap = new Dictionary<string,       XXLanguageXXFile>(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<GrammarDescriptor>                _nitraAssemblies = new HashSet<GrammarDescriptor>();
 
     public XXLanguageXXProject(XXLanguageXXSolution solution, IProject project)
     {
       _project = project;
       Solution = solution;
     }
+
+    public IEnumerable<GrammarDescriptor> GrammarDescriptors { get { return _nitraAssemblies; }}
 
     public override IEnumerable<File> Files { get { return _filesMap.Values; } }
 
@@ -68,6 +73,31 @@ namespace XXNamespaceXX.ProjectSystem
       XXLanguageXXFile nitraFile;
       _filePathsMap.TryGetValue(filePath, out nitraFile);
       return nitraFile;
+    }
+
+    static GrammarDescriptor[] LoadAssembly(string assemblyFilePath)
+    {
+      var assembly = Assembly.ReflectionOnlyLoadFrom(assemblyFilePath);
+      var runtime = typeof(ParseResult).Assembly.GetName();
+      foreach (var reference in assembly.GetReferencedAssemblies())
+      {
+        if (reference.Name == runtime.Name)
+        {
+          if (reference.Version == runtime.Version)
+            break;
+          throw new ApplicationException("Assembly '" + assemblyFilePath + "' use incompatible runtime (Nitra.Runtime.dll) version " + reference.Version
+            + ". The current runtime has version " + runtime.Version + ".");
+        }
+      }
+      assembly = Assembly.LoadFrom(assemblyFilePath);
+      return GrammarDescriptor.GetDescriptors(assembly);
+    }
+
+    internal void TryAddNitraExtensionAssemblyReference(FileSystemPath path)
+    {
+      var pathString = path.FileAccessPath;
+      var grammagDescriptors = LoadAssembly(pathString);
+      _nitraAssemblies.AddRange(grammagDescriptors);
     }
 
     public void Dispose()
