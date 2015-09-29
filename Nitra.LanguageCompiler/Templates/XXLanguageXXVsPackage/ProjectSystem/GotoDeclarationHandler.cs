@@ -91,83 +91,94 @@ namespace XXNamespaceXX.ProjectSystem
 
       public void Execute(IDataContext context, DelegateExecute nextExecute)
       {
-        var solution = context.GetData(JetBrains.ProjectModel.DataContext.DataConstants.SOLUTION);
-        if (solution != null)
+        var callNext = true;
+        try
         {
-          var documentOffset = context.GetData(JetBrains.DocumentModel.DataConstants.DOCUMENT_OFFSET);
-          if (documentOffset == null)
-            return;
-
-          //var psiServices = solution.GetPsiServices();
-          var psiFile = documentOffset.Document.GetPsiSourceFile(solution);
-          if (psiFile == null)
-            return;
-          var projectFile = psiFile.ToProjectFile();
-          if (projectFile == null)
-            return;
-          var project = projectFile.GetProject();
-          if (project == null)
-            return;
-          var nitraProject = _nitraSolution.GetProject(project);
-          if (nitraProject == null)
-            return;
-          var nitraFile = nitraProject.TryGetFile(projectFile);
-          if (nitraFile == null)
-            return;
-
-          var pos = documentOffset.Value;
-          var visitor = new CollectSymbolsAndRefsInSpanAstVisitor(new NSpan(pos));
-          nitraFile.Ast.Accept(visitor);
-
-          var popupWindowContext = context.GetData(JetBrains.UI.DataConstants.PopupWindowContextSource);
-          if (popupWindowContext == null)
-            return;
-
-          var decls = visitor.Refs.Where(r => r.IsSymbolEvaluated).SelectMany(r => r.Symbol.Declarations).ToArray();
-
-          if (decls.Length == 0)
+          var solution = context.GetData(JetBrains.ProjectModel.DataContext.DataConstants.SOLUTION);
+          if (solution != null)
           {
-            if (visitor.Names.Count == 0)
+            var documentOffset = context.GetData(JetBrains.DocumentModel.DataConstants.DOCUMENT_OFFSET);
+            if (documentOffset == null)
               return;
-          
-            decls = visitor.Names.Where(n => n.IsSymbolEvaluated).SelectMany(n => n.Symbol.Declarations).ToArray();
-          }
 
-          if (decls.Length == 1)
-            Navigate(decls[0], solution, project, popupWindowContext);
-          else
-          {
-            var jetPopupMenus = _nitraSolution._jetPopupMenus;
-            jetPopupMenus.Show(_lifetime, JetPopupMenu.ShowWhen.NoItemsBannerIfNoItems, (lifetime, menu) =>
+            //var psiServices = solution.GetPsiServices();
+            var psiFile = documentOffset.Document.GetPsiSourceFile(solution);
+            if (psiFile == null)
+              return;
+            var projectFile = psiFile.ToProjectFile();
+            if (projectFile == null)
+              return;
+            var project = projectFile.GetProject();
+            if (project == null)
+              return;
+            var nitraProject = _nitraSolution.GetProject(project);
+            if (nitraProject == null)
+              return;
+            var nitraFile = nitraProject.TryGetFile(projectFile);
+            if (nitraFile == null)
+              return;
+
+            var pos = documentOffset.Value;
+            var visitor = new CollectSymbolsAndRefsInSpanAstVisitor(new NSpan(pos));
+            nitraFile.Ast.Accept(visitor);
+
+            var popupWindowContext = context.GetData(JetBrains.UI.DataConstants.PopupWindowContextSource);
+            if (popupWindowContext == null)
+              return;
+
+            var decls = visitor.Refs.Where(r => r.IsSymbolEvaluated).SelectMany(r => r.Symbol.Declarations).Where(d => !d.File.IsFake).ToArray();
+
+            if (decls.Length == 0)
             {
-              menu.ItemKeys.AddRange(Sorter(decls));
-              menu.PopupWindowContext = popupWindowContext.Create(lifetime);
-              menu.Caption.Value = WindowlessControl.Create("Declaration of " + string.Join(", ", decls.Select(d => d.Name.Text)));
-              menu.NoItemsBanner = WindowlessControl.Create("There are no declarations.");
-              menu.DescribeItem.Advise(lifetime, args =>
-              {
-                var decl = (Declaration)args.Key;
-                var loc = decl.Name.ToLocation();
+              if (visitor.Names.Count == 0)
+                return;
 
-               //args.Descriptor.Style |= MenuItemStyle.Enabled;
-                args.Descriptor.Style |= visitor.Names.Contains(decl.Name) ? MenuItemStyle.None : args.Descriptor.Style = MenuItemStyle.Enabled;
-                args.Descriptor.Text = new RichText(Path.GetFileName(decl.File.FullName)).Append(" ").Append("(" + loc.EndLineColumn + ")", TextStyle.FromForeColor(Color.RoyalBlue));
-                args.Descriptor.Tooltip =
-                  new RichText(decl.Symbol.Kind, TextStyle.FromForeColor(Color.Blue))
-                  .Append(" ")
-                  .Append(decl.Name.Text, new TextStyle(FontStyle.Bold));
-                //args.Descriptor.ShortcutText = XamlToRichText(decl.ToXaml());
-                //args.Descriptor.Icon = ;
-              });
-              menu.ItemClicked.Advise(lifetime, arg => _shellLocks.ExecuteOrQueueReadLock("Nitra GoTo Declaration", () =>
+              decls = visitor.Names.Where(n => n.IsSymbolEvaluated).SelectMany(n => n.Symbol.Declarations).Where(d => !d.File.IsFake).ToArray();
+            }
+
+            if (decls.Length == 0)
+              return;
+            if (decls.Length == 1)
+              Navigate(decls[0], solution, project, popupWindowContext);
+            else
+            {
+              callNext = false;
+              var jetPopupMenus = _nitraSolution._jetPopupMenus;
+              jetPopupMenus.Show(_lifetime, JetPopupMenu.ShowWhen.NoItemsBannerIfNoItems, (lifetime, menu) =>
               {
-                var decl = (Declaration) arg;
-                Navigate(decl, solution, project, popupWindowContext);
-              }));
-            });
+                menu.ItemKeys.AddRange(Sorter(decls));
+                menu.PopupWindowContext = popupWindowContext.Create(lifetime);
+                menu.Caption.Value = WindowlessControl.Create("Declaration of " + string.Join(", ", decls.Select(d => d.Name.Text)));
+                menu.NoItemsBanner = WindowlessControl.Create("There are no declarations.");
+                menu.DescribeItem.Advise(lifetime, args =>
+                {
+                  var decl = (Declaration)args.Key;
+                  var loc = decl.Name.ToLocation();
+
+                  //args.Descriptor.Style |= MenuItemStyle.Enabled;
+                  args.Descriptor.Style |= visitor.Names.Contains(decl.Name) ? MenuItemStyle.None : args.Descriptor.Style = MenuItemStyle.Enabled;
+                  args.Descriptor.Text = new RichText(Path.GetFileName(decl.File.FullName)).Append(" ").Append("(" + loc.EndLineColumn + ")", TextStyle.FromForeColor(Color.RoyalBlue));
+                  args.Descriptor.Tooltip =
+                    new RichText(decl.Symbol.Kind, TextStyle.FromForeColor(Color.Blue))
+                    .Append(" ")
+                    .Append(decl.Name.Text, new TextStyle(FontStyle.Bold));
+                  //args.Descriptor.ShortcutText = XamlToRichText(decl.ToXaml());
+                  //args.Descriptor.Icon = ;
+                });
+                menu.ItemClicked.Advise(lifetime, arg => _shellLocks.ExecuteOrQueueReadLock("Nitra GoTo Declaration", () =>
+                {
+                  var decl = (Declaration)arg;
+                  Navigate(decl, solution, project, popupWindowContext);
+                }));
+              });
+            }
           }
         }
-        nextExecute();
+        finally
+        {
+          if (callNext)
+            nextExecute();
+        }
       }
 
       private IEnumerable<Declaration> Sorter(IEnumerable<Declaration> decls)
