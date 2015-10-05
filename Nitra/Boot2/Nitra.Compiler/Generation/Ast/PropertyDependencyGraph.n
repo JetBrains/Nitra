@@ -1,0 +1,149 @@
+﻿using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.ProjectSystem;
+using Nitra.Runtime.GraphUtils;
+using Nitra.Typing;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.IO;
+
+namespace Nitra.Compiler
+{
+  [Record]
+  internal sealed class PropertyDependencyGraph
+  {
+    public this(propertyContainer : PropertyContainerSymbol)
+    {
+      this(propertyContainer, Hashtable(), List())
+    }
+
+    public PropertyContainer : PropertyContainerSymbol;
+    public Nodes             : Hashtable[DependencyPath, PropertyDependencyNode];
+    public Calls             : List[PropertyDependencyCall];
+
+    public GetOrderedNodes() : array[PropertyDependencyNode]
+    {
+      def nodes = array(Nodes.Count);
+      Nodes.Values.CopyTo(nodes, 0);
+      Array.Sort(nodes, PropertyDependencyNode.Compare);
+      nodes
+    }
+
+    public Save() : void
+    {
+      assert(PropertyContainer.IsAbstract);
+
+      def getMethodName(node : IPropertyDependencyNode, code : PropertyDependencyCode) : string
+      {
+        match (code)
+        {
+          | Compiled(methodName)         => methodName
+          | Source(tb, returnType, expr) =>
+            Util.locate(code.Location,
+            {
+              def methodName = node.CreateMethodName();
+              tb.Define(<[ decl:
+                  public static $(methodName : global)($("self" : global) : this, $("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : $(returnType : typed)
+                  {
+                    _ = self;
+                    _ = context;
+                    $expr
+                  }
+              ]>);
+              methodName
+            })
+        }
+      }
+
+      def map = Dictionary();
+      foreach (node in Nodes.Values with i)
+        map.Add(node, i);
+
+      def dataNodes = List();
+      foreach (node in Nodes.Values)
+      {
+        mutable dependenedOn = [];
+        foreach (dependency in node.DependendOn)
+          dependenedOn ::= map[dependency];
+
+        def dataNode =
+          match (node)
+          {
+            | Assign(code) => PropertyDependencyNodeData.Assign(node.NitraLocation, node.DeclaredIn, node.Path, dependenedOn, node.IsStaged, getMethodName(node, code))
+            | Use          => PropertyDependencyNodeData.Use   (node.NitraLocation, node.DeclaredIn, node.Path, dependenedOn, node.IsStaged)
+          };
+
+        dataNodes.Add(dataNode);
+      }
+
+      def dataCalls = List();
+      foreach (call in Calls)
+      {
+        mutable dependenedOn = [];
+        foreach (dependency in call.DependendOn)
+          dependenedOn ::= map[dependency];
+
+        def dataCall =
+          match (call)
+          {
+            | Normal     => PropertyDependencyCallData.Normal    (call.NitraLocation, call.DeclaredIn, dependenedOn, call.Path, getMethodName(call, call.Code))
+            | Collect => PropertyDependencyCallData.Collect(call.NitraLocation, call.DeclaredIn, dependenedOn, call.Path, getMethodName(call, call.Code))
+            | StagedUse  => PropertyDependencyCallData.StagedUse (call.NitraLocation, call.DeclaredIn, dependenedOn, call.Path, getMethodName(call, call.Code))
+          };
+
+        dataCalls.Add(dataCall);
+      }
+
+      PropertyContainer.SetPropertyDependency(PropertyDependencyData(dataNodes.ToNList(), dataCalls.ToNList()));
+    }
+
+    public static Load(propertyContainerSymbol : PropertyContainerSymbol) : array[PropertyDependencyNode] * array[PropertyDependencyCall]
+    {
+      assert(propertyContainerSymbol.IsAbstract);
+
+      def dataNodes = propertyContainerSymbol.PropertyDependency.Nodes.ToArray();
+      def nodes   = array(dataNodes.Length);
+      foreach (n in dataNodes with i)
+      {
+        | Use                => nodes[i] = PropertyDependencyNode.Use(n.DeclaredIn, n.Path, n.NLocation(), n.IsStaged);
+        | Assign(methodName) =>
+          def loc  = n.NLocation();
+          def code = PropertyDependencyCode.Compiled(loc, methodName);
+          nodes[i] = PropertyDependencyNode.Assign(n.DeclaredIn, n.Path, loc, n.IsStaged, code);
+      }
+
+      foreach (n in nodes with i)
+        n.DependendOn.UnionWith(dataNodes[i].DependendOn.Select(to => nodes[to]));
+
+      def dataCalls = propertyContainerSymbol.PropertyDependency.Calls.ToArray();
+      def calls = array(dataCalls.Length);
+      foreach (c in dataCalls with i)
+      {
+        def loc  = c.NLocation();
+        def code = PropertyDependencyCode.Compiled(loc, c.CompiledMethodName);
+        calls[i] = 
+          match (c)
+          {
+            | Normal     => PropertyDependencyCall.Normal    (c.DeclaredIn, loc, c.Path, code)
+            | Collect => PropertyDependencyCall.Collect(c.DeclaredIn, loc, c.Path, code)
+            | StagedUse  => PropertyDependencyCall.StagedUse (c.DeclaredIn, loc, c.Path, code)
+          };
+      }
+
+      foreach (c in calls with i)
+        c.DependendOn.UnionWith(dataCalls[i].DependendOn.Select(to => nodes[to]));
+
+      (nodes, calls)
+    }
+  }
+}

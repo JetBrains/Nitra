@@ -182,7 +182,7 @@ namespace Nitra
         else try
         {
           def project = UpdateCurrentProjectContext();
-          def file    = InMemoryNemerleFile(project, source);
+          def file    = project.CreateNemerleFile(source);
           Parse(file)
         }
         catch { | e => Message.Error("Exception: " + e.Message); }
@@ -235,6 +235,11 @@ namespace Nitra
 
       foreach (start in fileParseTrees)
         start.TypeAst();
+
+      foreach (start in fileParseTrees)
+        start.TypeSymbolMembers();
+
+      TypingUtils.SetOutDependentProperties(project);
 
       TypingUtils.SetNameReferenceSyntaxMapping(project);
 
@@ -290,56 +295,53 @@ namespace Nitra
       def environment = project.Environment;
 
       def syntaxModuleEmitters = Manager.GetListUserData.[SyntaxModuleEmitter]();
-      foreach (syntaxModule in environment.Root.GetDescendants.[SyntaxModuleSymbol]())
-      {
-        | ExternalSyntaxModuleSymbol => ()
-        | _ => syntaxModuleEmitters.Add(SyntaxModuleEmitter(environment, syntaxModule));
-      }
+      foreach (syntaxModule when syntaxModule.AssemblyId == AssemblyIds.CurrentAssembly in environment.Root.GetDescendants.[SyntaxModuleSymbol]())
+        syntaxModuleEmitters.Add(SyntaxModuleEmitter(environment, syntaxModule));
 
-      def astEmitters = Manager.GetListUserData.[AstEmitter]();
-      def astEmitterParents = SCG.Dictionary();
-      foreach (extendAst in environment.Root.GetDescendants.[ExtendAstSymbol]())
-      {
-        | ExternalExtendAstSymbol => ()
-        | _ =>
-          def emitter = ExtendAstEmitter(environment, extendAst);
-          astEmitterParents.Add(extendAst, emitter);
-          astEmitters.Add(emitter)
-      }
+      def astEmitters     = Manager.GetListUserData.[AstEmitter]();
+      def astEmitterTable = SCG.Dictionary();
 
-      def visitedAstSymbols = SCG.HashSet();
       def makeAstEmitter(astSymbol : AstSymbol) : void
       {
-        when (visitedAstSymbols.Add(astSymbol))
+        when (astSymbol.AssemblyId == AssemblyIds.CurrentAssembly)
+        unless (astEmitterTable.ContainsKey(astSymbol))
         {
-          foreach (baseAst in astSymbol.BaseAsts)
+          foreach (baseAst in astSymbol.Parents)
             makeAstEmitter(baseAst);
 
-          match (astSymbol)
-          {
-            | ExternalAbstractAstSymbol   => ()
-            | AbstractAstSymbol      as s => astEmitters.Add(AbstractAstEmitter(environment, s))
-            | ExternalSimpleAstSymbol     => ()
-            | SimpleAstSymbol        as s => astEmitters.Add(SimpleAstEmitter(environment, s))
-            | ExternalExtensionAstSymbol  => ()
-            | ExtensionAstSymbol     as s =>
-              def parent  = astEmitterParents[s.BaseAst.GetValue(project)];
-              def emitter = ExtensionAstEmitter(parent, s);
-              astEmitters.Add(emitter);
+          def astEmitter =
+            match (astSymbol)
+            {
+              | AbstractAstSymbol                                  as s => AbstractAstEmitter(environment, s)
+              | SimpleAstSymbol(DefinedIn = SymbolRef.None)        as s => SimpleAstEmitter(environment, s, null)
+              | SimpleAstSymbol(DefinedIn = SymbolRef.Some(owner)) as s => SimpleAstEmitter(environment, s, astEmitterTable[owner])
+              | _ => assert(false)
+            };
 
-            | ExternalExtensibleAstSymbol => ()
-            | ExtensibleAstSymbol    as s =>
-              def emitter = ExtensibleAstEmitter(environment, s);
-              astEmitterParents.Add(s, emitter);
-              astEmitters.Add(emitter);
-
-            | _ => ()
-          }
+          astEmitterTable.Add(astSymbol, astEmitter);
+          astEmitters.Add(astEmitter);
         }
       }
 
       foreach (astSymbol in environment.Root.GetDescendants.[AstSymbol]())
         makeAstEmitter(astSymbol);
+
+      def symbolEmitters = Manager.GetListUserData.[SymbolEmitter]();
+
+      def visitedSymbolSymbols = SCG.HashSet();
+      def makeSymbolSymbol(symbolSymbol : SymbolSymbol) : void
+      {
+        when (symbolSymbol.AssemblyId == AssemblyIds.CurrentAssembly)
+        when (visitedSymbolSymbols.Add(symbolSymbol))
+        {
+          foreach (baseSymbol in symbolSymbol.Parents)
+            makeSymbolSymbol(baseSymbol);
+
+          symbolEmitters.Add(SymbolEmitter(environment, symbolSymbol));
+        }
+      }
+      foreach (symbolSymbol in environment.Root.GetDescendants.[SymbolSymbol]())
+        makeSymbolSymbol(symbolSymbol);
 
       def externalSymbolEmitters = Manager.GetListUserData.[ExternalSymbolEmitter]();
       def serializationEmitter   = Manager.CreateBinarySerializationEmitter(NitraBinarySerializationMessageEmitter(), NitraSymbolRefBinarySerializationEmitterExtension(environment));
@@ -386,10 +388,17 @@ namespace Nitra
 
     private DefineAsts() : void
     {
-      def astEmitters = Manager.GetListUserData.[AstEmitter]();
+      def astEmitters    = Manager.GetListUserData.[AstEmitter]();
+      def symbolEmitters = Manager.GetListUserData.[SymbolEmitter]();
+
       foreach (emitter in astEmitters)
         emitter.DefineTypes();
+      foreach (emitter in symbolEmitters)
+        emitter.DefineTypes();
+
       foreach (emitter in astEmitters)
+        emitter.DefineMembers();
+      foreach (emitter in symbolEmitters)
         emitter.DefineMembers();
     }
 
@@ -438,6 +447,12 @@ namespace Nitra
 
     private EmitAsts() : void
     {
+      def symbolEmitters = Manager.GetListUserData.[SymbolEmitter]();
+      try
+        foreach (emitter in symbolEmitters)
+          emitter.Emit();
+      finally ResetListUserData.[SymbolEmitter]();
+
       def astEmitters = Manager.GetListUserData.[AstEmitter]();
       try
         foreach (emitter in astEmitters)
@@ -475,14 +490,11 @@ namespace Nitra
 
     private WriteMetadata(project : Project) : void
     {
-      unless (Manager.IsIntelliSenseMode)
-      {
-        def metadataFileName = Manager.Options.OutputFileName + ".nitrametadata";
-        using(symbolWriter = MetadataWriter(FileStream(metadataFileName, FileMode.Create, FileAccess.Write), project))
-          symbolWriter.WriteSymbols();
+      def metadataFileName = Manager.Options.OutputFileName + ".nitrametadata";
+      using(symbolWriter = MetadataWriter(FileStream(metadataFileName, FileMode.Create, FileAccess.Write), project))
+        symbolWriter.WriteSymbols();
 
-        Manager.Options.EmbeddedResources ::= metadataFileName + ",Nitra.Metadata";
-      }
+      Manager.Options.EmbeddedResources ::= metadataFileName + ",Nitra.Metadata";
     }
 
     public BeforeTypedMembers() : void
@@ -508,7 +520,13 @@ namespace Nitra
           DefineParseTree();
           DefineParsers();
 
-          WriteMetadata(project);
+          def writeMetadataCallback(_)
+          {
+            WriteMetadata(project);
+            Manager.BeforeSaveAssembly -= writeMetadataCallback;
+          }
+          unless (Manager.IsIntelliSenseMode)
+            Manager.BeforeSaveAssembly += writeMetadataCallback;
         }
         finally ResetListUserData.[G.Start]();
     }
