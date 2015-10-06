@@ -18,44 +18,30 @@ namespace Nitra.Runtime.Binding
 {
   public class TableScope : Scope
   {
-    public this()
+    public this(owner : string)
     {
+      _owner = owner;
       _nameTable = Hashtable();
     }
 
-    private _nameTable : Hashtable[int, ISymbol];
+    private _owner : string;
+    private _nameTable : Hashtable[int, list[ISymbol]]; //TODO: replace with LightList[ISymbol]?
 
-    public Symbols : Hashtable[int, ISymbol].ValueCollection { get { _nameTable.Values } }
+    public Symbols : Hashtable[int, list[ISymbol]].ValueCollection { get { _nameTable.Values } }
 
-    public Define[TSymbol](declaration : Declaration) : TSymbol
+    public Define[TSymbol](declaration : Declaration, context : DependentPropertyEvalContext) : TSymbol
       where TSymbol : ISymbol
     {
       def     name             = declaration.Name;
       def     candidateSymbols = LightList();
       mutable ambiguousSymbols : HashSet[ISymbol2];
 
-      // пробуем смерджить
-      match (this.TryGetSymbol(name))
+      mutable lookupResult;
+      when (_nameTable.TryGetValue(name.Id, out lookupResult))
       {
-        | null => () // это первое объявление символа с таким именем в этом scope-е
-        | ambiguousSymbol is IAmbiguousSymbol =>
-          ambiguousSymbols = HashSet(ambiguousSymbol.Ambiguous);
-          foreach (symbol is TSymbol in ambiguousSymbol.Ambiguous)
-          {
-            when (symbol.IsMergeKeyEquals(declaration) && symbol.MergeCondition(declaration))
-              candidateSymbols.Add(symbol);
-          }
-
-        | symbol is TSymbol =>
-          ambiguousSymbols = HashSet();
-          _ = ambiguousSymbols.Add(symbol);
-
-          when (symbol.IsMergeKeyEquals(declaration) && symbol.MergeCondition(declaration))
-            candidateSymbols.Add(symbol);
-
-        | symbol =>
-          ambiguousSymbols = HashSet();
-          _ = ambiguousSymbols.Add(symbol);
+        ambiguousSymbols = HashSet(lookupResult);
+        foreach (symbol is TSymbol when symbol.CanMerge(declaration) in lookupResult)
+          candidateSymbols.Add(symbol);
       }
 
       def concreteSymbol =
@@ -67,11 +53,11 @@ namespace Nitra.Runtime.Binding
         };
 
       if (ambiguousSymbols : object == null)
-        _nameTable.Add(name.Id, concreteSymbol);
+        _nameTable.Add(name.Id, [concreteSymbol]);
       else when (ambiguousSymbols.Add(concreteSymbol))
       {
         // фильтруем без учета конкретного типа
-        def realAmbiguousSymbols = ambiguousSymbols.FilterToArray(s => !concreteSymbol.Equals(s) && s.IsMergeKeyEquals(declaration));
+        def realAmbiguousSymbols = ambiguousSymbols.FilterToArray(s => !concreteSymbol.Equals(s) && s.IsSameIdentity(declaration));
         when (realAmbiguousSymbols.Length > 0)
         {
           def cm = AstContext.CompilerMessages;
@@ -80,10 +66,12 @@ namespace Nitra.Runtime.Binding
               foreach (d in ambiguous.Declarations)
                 nested.Hint(d.Name, "previous definition.");
         }
-        _nameTable[name.Id] = AmbiguousSymbol(ambiguousSymbols.NToList());
+        _nameTable[name.Id] = ambiguousSymbols.NToList();
       }
 
       (concreteSymbol :> DeclaredSymbol).AddDeclaration(declaration);
+      when (candidateSymbols.Count == 0)
+        concreteSymbol.EvalProperties(context); // initialize symbol default values
 
       assert(!name.IsSymbolEvaluated);
       name.Symbol = concreteSymbol;
@@ -91,45 +79,27 @@ namespace Nitra.Runtime.Binding
       concreteSymbol
     }
 
-    internal TryGetSymbol(name : Name) : ISymbol
+    public override BindMany[TSymbol](reference : Reference, results : ref LightList[TSymbol]) : void
     {
-      mutable old;
-      when (_nameTable.TryGetValue(name.Id, out old))
-        return old;
-
-      null
-    }
-
-    internal TryGetSymbol(name : Reference) : ISymbol
-    {
-      mutable old;
-      when (_nameTable.TryGetValue(name.Id, out old))
-        return old;
-
-      null
-    }
-
-    public override BindMany(reference : Reference, results : ref LightList[ISymbol]) : void
-    {
-      match (TryGetSymbol(reference))
+      mutable lookupResult;
+      when (_nameTable.TryGetValue(reference.Id, out lookupResult))
       {
-        | null                  => ()
-        | a is IAmbiguousSymbol => results.AddRange(a.Ambiguous);
-        | result                => results.Add(result);
+        foreach (result is TSymbol in lookupResult)
+          results.Add(result);
       }
     }
 
-    public override MakeComletionList(prefix : string) : Seq[ISymbol]
+    public override MakeCompletionList(prefix : string) : Seq[ISymbol]
     {
       if (string.IsNullOrEmpty(prefix))
-        Symbols
+        _nameTable.Values.SelectMany(s => s)
       else
-        Symbols.Where(s => s.Name.StartsWith(prefix, StringComparison.InvariantCultureIgnoreCase))
+        _nameTable.Where(pair => StringIndex.GetText(pair.Key).StartsWith(prefix, StringComparison.InvariantCultureIgnoreCase)).SelectMany(pair => pair.Value)
     }
 
     public override ToString() : string
     {
-      $<#[..$(_nameTable.Keys; ", "; StringIndex.GetText)]#>
+      $<#$_owner[..$(_nameTable.Keys; ", "; StringIndex.GetText)]#>
     }
   }
 }
