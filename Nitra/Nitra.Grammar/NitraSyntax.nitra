@@ -196,6 +196,129 @@ syntax module NitraSyntax
       }
   }
 
+  syntax LanguageProperty
+  {
+    CollectGlobalSymbols(language : ParsedLanguageSymbol) : void;
+    [Cached] MakeContext(parent : Context) : Context = parent;
+    Typing() : void {}
+
+    | Style = "style" sm Name sm StyleBody
+      {
+        override CollectGlobalSymbols
+        {
+          def symbol = ParsedStyleSymbol(this);
+          _ = language.Node.AddAndReport(symbol, Name.Location);
+          StyleBody.CollectProperties(symbol);
+        }
+      }
+
+    | SpanClass = "span" sm "class" sm Name sm MatchTokensOpt=("regex" sm RegexExpression sm)? StyleReference
+      {
+        syntax StyleReference
+        {
+          CollectGlobalSymbols(language : ParsedLanguageSymbol, spanClass : SpanClassSymbol) : void;
+          StyleRef(context : Context) : SymbolRef[StyleSymbol];
+
+          | Reference = "=" sm QualifiedName ";"
+            {
+              override CollectGlobalSymbols { _ = language; _ = spanClass; }
+              override StyleRef = context.TryBind(QualifiedName);
+            }
+          | StyleBody
+            {
+              [Cached] private MakeSymbol(spanClass : SpanClassSymbol) : ParsedStyleSymbol = ParsedStyleSymbol(spanClass.FirstLocation, spanClass.Name);
+              override CollectGlobalSymbols
+              {
+                def symbol = MakeSymbol(spanClass);
+                _ = language.Node.AddAndReport(symbol, spanClass.FirstLocation);
+                StyleBody.CollectProperties(symbol);
+              }
+              override StyleRef
+              {
+                _ = context;
+                SymbolRef.Some(Symbol.FirstLocation, false, Symbol)
+              }
+            }
+        }
+
+        override CollectGlobalSymbols
+        {
+          def symbol = ParsedSpanClassSymbol(this, language);
+          _ = language.Node.AddAndReport(symbol, Name.Location);
+          StyleReference.CollectGlobalSymbols(language, symbol);
+        }
+        [Cached] private StyleRef() : SymbolRef[StyleSymbol] = StyleReference.StyleRef(this.Context);
+        [Cached] private RegularRule() : option[RegularRule]
+        {
+          if (MatchTokensOpt.HasValue)
+          {
+            def rr = MatchTokensOpt.Value.Item2.Typing();
+            rr.ValidateRegularRule(this.Context);
+            Some(rr)
+          }
+          else
+            None()
+        }
+        override Typing
+        {
+          _ = StyleRef();
+          _ = RegularRule();
+        }
+      }
+
+    | SyntaxModule              = "syntax" sm "module" sm Module=QualifiedIdentifier RuleOpt=(sm "start" sm "rule" sm QualifiedName)? ";"
+      {
+        override CollectGlobalSymbols { _ = language; }
+      }
+
+    | FileExtension             = "extension" sm "=" sm Ext=FileExtension ";"
+      {
+        regex FileExtension = "." IdentifierPartCharacters+;
+
+        override CollectGlobalSymbols = language.SetFileExtension(this.Location, GetText(Ext));
+      }
+    | Company                   = "company"          sm "=" sm Name=(!";" Any)* ";" { override CollectGlobalSymbols = language.SetCompany                 (this.Location, GetText(Name)); }
+    | Description               = "description"      sm "=" sm Text=(!";" Any)* ";" { override CollectGlobalSymbols = language.SetLanguageDescription     (this.Location, GetText(Text)); }
+    | Authors                   = "authors"          sm "=" sm Text=(!";" Any)* ";" { override CollectGlobalSymbols = language.SetAuthors                 (this.Location, GetText(Text)); }
+    | Copyright                 = "copyright"        sm "=" sm Text=(!";" Any)* ";" { override CollectGlobalSymbols = language.SetCopyright               (this.Location, GetText(Text)); }
+    | LicenseUrl                = "license" sm "url" sm "=" sm Text=(!";" Any)* ";" { override CollectGlobalSymbols = language.SetLicenseUrl              (this.Location, GetText(Text)); }
+    | RequireLicenseAcceptance  = "require" sm "license" sm "acceptance" ";"        { override CollectGlobalSymbols = language.SetRequireLicenseAcceptance(this.Location, true); }
+  }
+
+  syntax StyleBody =  outline_begin_before nl "{" inl Properties=StyleProperty* d "}" outline_end_before nl
+  {
+    CollectProperties(style : ParsedStyleSymbol) : void = foreach (p in Properties) p.CollectProperties(style);
+  }
+
+  syntax StyleProperty
+  {
+    CollectProperties(style : ParsedStyleSymbol) : void;
+
+    | ForegroundColor = "ForegroundColor" sm "=" sm Color ";" { override CollectProperties = style.SetForegroundColor(this.Location, Color.Value(style.Node.Project)); }
+  }
+
+  syntax Color
+  {
+    Value(_compilerMessages : ICompilerMessages) : System.Drawing.Color;
+
+    | Hex   = HexColor
+      {
+        regex HexColor = '#' HexDigit{6};
+        override Value = System.Drawing.Color.FromArgb(HexToInt(this, HexColor.StartPos + 1, HexColor.EndPos));
+      }
+    | Named = Identifier
+      {
+        override Value
+        {
+          def colorName = Identifier.Value();
+          def result    = System.Drawing.Color.FromName(colorName);
+          unless (result.IsKnownColor)
+            _compilerMessages.Error(Identifier, $"Unknown color name '$colorName'.");
+          result
+        }
+      }
+  }
+
   syntax AstInheritance = ":" sm BaseAsts=(QualifiedIdentifier; "," sm)+
   {
     Typing(context : Context, isDeclaration : bool) : list[AstSymbol] = TypingUtils.BindAstInheritanceList(this.BaseAsts.Item1, context, isDeclaration);
@@ -710,8 +833,7 @@ syntax module NitraSyntax
           def context1 = MakeInitialContext(SyntaxModuleContext(parent, Name));
           def context2 = Usings.MakeContext(context1);
           def context3 = SyntaxModuleBodyContext(context2);
-          def finalContext = MakeFinalContext(FoldThrough(SyntaxModuleMembers, context3, _.MakeContext(_)));
-          Utils.RegisterGlobalSpanClassSymbols(context1.SyntaxModuleSymbol, finalContext);
+          def _context4 = MakeFinalContext(FoldThrough(SyntaxModuleMembers, context3, _.MakeContext(_)));
           parent
         }
         [Cached] private MakeTokenLiteralNames() : Map[string, Nitra.Model.Identifier] = FoldThrough(SyntaxModuleMembers, Map(), _.GetTokenLiteralNames(_));
@@ -722,6 +844,27 @@ syntax module NitraSyntax
           foreach (decl in SyntaxModuleMembers)
             decl.Typing();
         }
+        override TypeSymbolMembers {}
+      }
+
+    | Language = "language" sm Name outline_begin_before nl "{" inl Properties=LanguageProperty* d "}" outline_end_before nl
+      {
+        override CollectGlobalSymbols
+        {
+          def symbol = ParsedLanguageSymbol(this);
+          _ = ns.Node.AddAndReport(symbol, Name.Location);
+          foreach (property in Properties)
+            property.CollectGlobalSymbols(symbol);
+        }
+        override MakeContext
+        {
+          def context = parent;
+          foreach (property in Properties)
+            _ = property.MakeContext(context);
+          context
+        }
+        override Typing = foreach (property in Properties) property.Typing();
+        override TypeSyntaxMappings {}
         override TypeSymbolMembers {}
       }
   }
@@ -877,28 +1020,6 @@ syntax module NitraSyntax
           FoldThrough(StringLiterals.Item1, result, (strLit, result) => result.Replace(strLit.Value(), name))
         }
         override MakeContext = TokenLiteralContext(parent, Name, StringLiterals.Item1);
-      }
-    | SpanClass           = "span"    sm "class"  sm Name MatchTokens=("=" RegexExpression)?                ";"nl
-      {
-        [Cached] private MakeSymbol(context : Context) : SpanClassSymbol
-        {
-          def symbol = ParsedSpanClassSymbol(this, context);
-          context.Project.AddSymbolDef(symbol, Name.Location);
-          symbol
-        }
-        [Cached] private RegularRule() : option[RegularRule] = MatchTokens.Map(t =>
-        {
-          def rr = t.Item2.Typing();
-          rr.ValidateRegularRule(this.Context);
-          rr
-        });
-        override MakeContext
-        {
-          def context = SpanClassContext(parent, MakeSymbol(parent));
-          _ = MatchTokens.Map(t => t.Item2.MakeContext(context));
-          context
-        }
-        override Typing { _ = RegularRule(); }
       }
     | KeywordRegex        = "keyword" sm "regex"  sm MatchTokens=RegexExpression sm "rule" sm QualifiedName ";"nl
       {
