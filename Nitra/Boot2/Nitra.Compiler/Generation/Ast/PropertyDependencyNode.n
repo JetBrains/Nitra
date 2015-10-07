@@ -1,0 +1,215 @@
+﻿using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.ProjectSystem;
+using Nitra.Runtime.GraphUtils;
+using Nitra.Typing;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.IO;
+
+namespace Nitra.Compiler
+{
+  internal interface IPropertyDependencyNode
+  {
+    DeclaredIn  : PropertyContainerSymbol         { get; }
+    Location    : Nemerle.Compiler.Location       { get; }
+    DependendOn : HashSet[PropertyDependencyNode] { get; }
+    Path        : DependencyPath                  { get; }
+    IsStaged    : bool                            { get; }
+    CreateMethodName() : string;
+  }
+
+  /// Node of a property dependency graph.
+  internal variant PropertyDependencyNode : IGraphNode[PropertyDependencyNode], IPropertyDependencyNode
+  {
+    public DeclaredIn    : PropertyContainerSymbol   { get; }
+    public Path          : DependencyPath            { get; }
+    public Location      : Nemerle.Compiler.Location { get; }
+    public NitraLocation : Location                  { get { (DeclaredIn.Node.Project :> NitraProject).MakeNitraLocation(Location) } }
+    public IsStaged      : bool                      { get; }
+
+    public this(declaredIn : PropertyContainerSymbol, path : DependencyPath, location : Nemerle.Compiler.Location, isStaged : bool)
+      requires !(path is DependencyPath.This)
+    {
+      DeclaredIn = declaredIn;
+      Path       = path;
+      Location   = location;
+      IsStaged   = isStaged;
+    }
+
+    | Assign { Code : PropertyDependencyCode; }
+    | Use
+
+    public          IsDependent : bool                        { get { Path.IsDependent } }
+    public          State       : PropertyDependencyNodeState { get { _state } }
+    public          Order       : int                         { get { _order } }
+
+    [RecordIgnore] mutable _state : PropertyDependencyNodeState;
+    [RecordIgnore] mutable _order : int = -1;
+    [RecordIgnore] public DependendOn : HashSet[PropertyDependencyNode] implements IGraphNode[PropertyDependencyNode].Connections { get; default HashSet(); }
+
+    public static Compare(l : PropertyDependencyNode, r : PropertyDependencyNode) : int
+    {
+      l.Order - r.Order
+    }
+
+    public CreateMethodName() : string
+    {
+      $"Eval-$Path"
+    }
+
+#pragma warning disable 10003
+
+    public static Visualize(symbol : PropertyContainerSymbol, nodes : Seq[PropertyDependencyNode], typeName : string) : void
+    {
+      def nodeId = Dictionary();
+      foreach (node in nodes with index)
+        nodeId[node] = index;
+
+      def name(node : PropertyDependencyNode) { nodeId[node]; }
+      def label(node : PropertyDependencyNode) { X.DotEscape(node.ToString()) }
+
+      def edges = List();
+
+      foreach (node in nodes.OrderBy(n => n.Order))
+        foreach (to in node.DependendOn.OrderBy(n => n.Order))
+          edges.Add($<#$(name(node)) -> $(name(to))#>);
+
+      def color(node : PropertyDependencyNode)
+      {
+        | Assign   => if (symbol : object == node.DeclaredIn) "blue" else "darkgreen"
+        | Use as u => if (u.IsDependent) "black" else "red"
+      }
+      def content = $<#
+        digraph $(typeName)_
+        {
+          rankdir=LR;
+          compound=true;
+          label="The properties dependency graph for $typeName";
+
+          ..$(nodes; "\r\n            "; n => $<#$(name(n)) [label="$(label(n))" color=$(color(n)) shape=box]#>)
+
+          ..$(edges; "\r\n            ")
+        }
+      #>;
+
+      X.ExecuteDot(content);
+    }
+
+#pragma warning restore 10003
+
+    public static TryBreakCyclesInStructuralProperties(graph : Seq[PropertyDependencyNode]) : void
+    {
+      mutable isCycled = false;
+      def components = GraphAlgorithms.FindStronglyConnectedComponents(graph).ToArray();
+
+      foreach (component when component.Nodes.Count > 1 in components)
+      {
+        isCycled = true;
+        foreach (node in component.Nodes)
+        {
+          node._state = PropertyDependencyNodeState.Cycling;
+          node._order = -10;
+        }
+      }
+      
+      when (isCycled)
+        foreach (p is PropertyDependencyNode.Use when !p.IsDependent && p.State == PropertyDependencyNodeState.Cycling && p.Path.IsSinglePropertyPath in graph)
+          _ = p.DependendOn.RemoveWhere(dependOn => dependOn.State == PropertyDependencyNodeState.Cycling);
+    }
+
+
+    public static Sort(graphNodes : Seq[PropertyDependencyNode]) : bool
+    {
+      foreach (node in graphNodes)
+        node._state = PropertyDependencyNodeState.None;
+      otherwise
+        return false; // graph is empty
+
+      mutable index = 0;
+      mutable cycling = false;
+
+      def roots = GetRoots(graphNodes).ToArray();
+      
+      foreach (node in roots)
+        cycling |= node.Sort(ref index);
+      otherwise
+      {
+        foreach (node in graphNodes)
+          node._state = PropertyDependencyNodeState.Cycling;
+        return true;
+      }
+
+      cycling
+    }
+
+    /// Return: true - cycling; false - OK
+    public Sort(index : ref int) : bool
+    {
+      mutable cycling = false;
+      this._state = PropertyDependencyNodeState.Cycling;
+
+      foreach (to in DependendOn)
+      {
+        if (to._state == PropertyDependencyNodeState.None)
+          when (to.Sort(ref index))
+            cycling |= true;
+        else when (to._state == PropertyDependencyNodeState.Cycling)
+          cycling |= true;
+      }
+
+      if (cycling)
+      {
+        this._order = -1;
+        true
+      }
+      else
+      {
+        this._state = PropertyDependencyNodeState.Visited;
+        this._order = index;
+        index++;
+        false
+      }
+    }
+
+    public static GetRoots(graphNodes : Seq[PropertyDependencyNode]) : Seq[PropertyDependencyNode]
+    {
+      def hasEdgeTo = HashSet();
+
+      foreach (node in graphNodes)
+        hasEdgeTo.UnionWith(node.DependendOn);
+
+      foreach (node in graphNodes)
+        unless (hasEdgeTo.Contains(node))
+          yield node;
+    }
+
+    public override ToString() : string
+    {
+      _order + "(" + _state + ")" + ": " +
+      match (this)
+      {
+        | Assign(code) =>
+          def loc = NitraLocation;
+          if (loc.IsEmpty)
+            $"$Path = $code"
+          else
+            loc.GetText()
+
+        | Use => Path.ToString()
+      }
+    }
+
+    private static _trimChars : array[char] = array['\n', '\r', ' ', '\t'];
+  }
+}

@@ -21,7 +21,6 @@ namespace Nitra.Compiler
     private mutable _ambiguousTb       : TypeBuilder;
     private         _listEmitter       : ListAstEmitter;
     private         _optionEmitter     : OptionAstEmitter;
-    private mutable _symbolTb          : TypeBuilder;
 
     public this(environment : EmitterEnvironment, symbol : AbstractAstSymbol)
     {
@@ -29,6 +28,12 @@ namespace Nitra.Compiler
       this._symbol        = symbol;
       this._listEmitter   = ListAstEmitter(environment, symbol);
       this._optionEmitter = OptionAstEmitter(environment, symbol);
+    }
+
+    public override DefineNestedType(decl : ClassMember.TypeDeclaration) : TypeBuilder
+    {
+      assert(_tb != null);
+      _tb.DefineNestedType(decl)
     }
 
     public override DefineTypes() : void
@@ -39,7 +44,7 @@ namespace Nitra.Compiler
 
         def baseTypes = SCG.List();
         baseTypes.Add(<[ $(Environment.AstTypeVar : typed) ]>);
-        foreach (baseAst in _symbol.BaseAsts)
+        foreach (baseAst in _symbol.Parents)
           baseTypes.Add(<[ $(Environment.GetAstType(baseAst) : typed) ]>);
 
         _tb = NemerleEnv.Define(<[ decl:
@@ -53,16 +58,6 @@ namespace Nitra.Compiler
 
         _listEmitter.DefineTypes(_tb);
         _optionEmitter.DefineTypes(_tb);
-
-        when (_symbol.IsDeclaration)
-        {
-          def baseSymbolTypes = MakeSymbolClassBaseTypes(_symbol, <[ Nitra.Runtime.Binding.ISymbol2 ]>);
-          _symbolTb = NemerleEnv.Define(<[ decl:
-            public partial interface $(_symbol.SymbolClassName : usesite) : ..$baseSymbolTypes
-            {
-            }
-          ]>);
-        }
       })
     }
 
@@ -74,17 +69,16 @@ namespace Nitra.Compiler
       missingBody.Add(<[ this.File = file ]>);
       missingBody.Add(<[ this.Span = span ]>);
 
-      def dependentProps = SCG.Dictionary();
-
-      def implementSimpleProperty(propertySymbol : AstPropertySymbol, propertyType : FixedType) : string
+      def implementStructuralProperty(propertySymbol : PropertySymbol, propertyType : FixedType) : string
       {
         def name = propertySymbol.Name;
-        when (propertySymbol.DeclaringAst == _symbol)
-          _tb.Define(<[ decl: $(name : usesite) : $(propertyType : typed) { get; } ]>);
+        when (propertySymbol.PropertyContainer == _symbol)
+          _tb.Define(<[ decl: [$(MakePropertyAttribute(propertySymbol))] $(name : usesite) : $(propertyType : typed) { get; } ]>);
 
         def backingFieldName = Util.tmpname(name);
         _ambiguousTb.Define(<[ decl: private $(backingFieldName : usesite) : $(propertyType : typed) ]>);
         _ambiguousTb.Define(<[ decl:
+          [$(MakePropertyAttribute(propertySymbol))]
           public $(name : usesite) : $(propertyType : typed)
           {
             get
@@ -100,12 +94,13 @@ namespace Nitra.Compiler
       }
 
       def thisType = _tb.GetMemType();
+      def dependentProps = SCG.List();
 
       foreach (s in _symbol.AllProperties)
       {
-        | SimpleAstPropertySymbol as propertySymbol =>
-          def propertyType     = TypeCompiler.CompileSimplePropertyType(propertySymbol);
-          def backingFieldName = implementSimpleProperty(propertySymbol, propertyType.Type);
+        | StructuralPropertySymbol as propertySymbol =>
+          def propertyType     = TypeCompiler.CompileStructuralPropertyType(propertySymbol);
+          def backingFieldName = implementStructuralProperty(propertySymbol, propertyType.Type);
           match (propertyType)
           {
             | Ast         =>
@@ -118,22 +113,21 @@ namespace Nitra.Compiler
             | Span        => missingBody.Add(<[ this.$(backingFieldName : usesite) = span ]>);
           }
 
-        | ProjectedAstPropertySymbol as propertySymbol =>
+        | ProjectedPropertySymbol as propertySymbol =>
           def propertyType     = TypeCompiler.CompileProjectedPropertyType(propertySymbol);
-          def backingFieldName = implementSimpleProperty(propertySymbol, propertyType);
+          def backingFieldName = implementStructuralProperty(propertySymbol, propertyType);
           if (propertyType.Equals(thisType))
             missingBody.Add(<[ this.$(backingFieldName : usesite) = this ]>);
           else when (propertySymbol.ProjectionType is Some(projectionType))
             missingBody.Add(<[ this.$(backingFieldName : usesite) = $(GetMissingAstCtor(Environment, projectionType))(file, span) ]>);
 
-        | DependentAstPropertySymbol as propertySymbol =>
-          def propertyRef = DependentAstPropertyRef.Reflected(propertySymbol, -1);
-          dependentProps.Add(propertySymbol, propertyRef);
+        | DependentPropertySymbol as propertySymbol =>
+          dependentProps.Add(propertySymbol);
 
-          when (propertySymbol.DeclaringAst == _symbol)
+          when (propertySymbol.PropertyContainer == _symbol)
             DefineInterfaceDependentProperty(propertySymbol, _tb, propertySymbol.OverrideProperty.HasValue);
 
-          DefineAmbiguousDependentProperty(propertyRef);
+          DefineAmbiguousDependentProperty(propertySymbol, 0);
 
         | _ => assert(false)
       }
@@ -152,10 +146,7 @@ namespace Nitra.Compiler
         }
       ]>);
 
-      DefineResetPropertiesMethod(null, _ambiguousTb);
-      DefineIsAllPropertiesEvaluatedProperty(null, _ambiguousTb);
-
-      when (_symbol.IsDeclaration)
+      when (_symbol.Symbol.HasValue)
         _ambiguousTb.Define(<[ decl:
           public CreateSymbol() : Nitra.Runtime.Binding.ISymbol2
           {
@@ -164,101 +155,73 @@ namespace Nitra.Compiler
         ]>);
     }
 
-    private DefineAmbiguousDependentProperty(propertyRef : DependentAstPropertyRef) : void
+    private DefineAmbiguousDependentProperty(symbol : DependentPropertySymbol, mask : int) : void
     {
-      def propertyType    = TypeCompiler.CompileDependentPropertyType(propertyRef.Symbol);
-      def name            = propertyRef.Symbol.Name;
-      def isEvaluatedName = GetIsEvaluatedPropertyName(propertyRef.Symbol);
-      def mods            = AttributesAndModifiers(NemerleAttributes.Public, [MakeDependentPropertyAttribute(propertyRef.Symbol, propertyRef.Index)]);
-      match (propertyRef.Symbol.Direction)
-      {
-        | In  =>
-          def backingFieldName = Util.tmpname(propertyRef.Symbol.Name);
-          def hasValueBit = _ambiguousTb.GetBitFieldManager().Allocate();
-          _ambiguousTb.Define(<[ decl:  private mutable $(backingFieldName : usesite) : $(propertyType : typed) ]>);
-          _ambiguousTb.Define(<[ decl:
-            ..$mods $(name : usesite) : $(propertyType : typed)
+      def propertyType    = TypeCompiler.CompileDependentPropertyType(symbol);
+      def name            = symbol.Name;
+      def isEvaluatedName = GetIsEvaluatedPropertyName(symbol);
+      def mods            = AttributesAndModifiers(NemerleAttributes.Public, [MakePropertyAttribute(symbol, mask)]);
+      def backingFieldName = Util.tmpname(symbol.Name);
+      def hasValueBit = _ambiguousTb.GetBitFieldManager().Allocate();
+      _ambiguousTb.Define(<[ decl:  private mutable $(backingFieldName : usesite) : $(propertyType : typed) ]>);
+      _ambiguousTb.Define(<[ decl:
+        ..$mods $(name : usesite) : $(propertyType : typed)
+        {
+          get
+          {
+            if (this.IsAmbiguous)
+              this.Ambiguities[0].$(name : usesite)
+            else
             {
-              get
-              {
-                if (this.IsAmbiguous)
-                  this.Ambiguities[0].$(name : usesite)
-                else
-                {
-                  unless ($(hasValueBit.Read()))
-                    $(MakeAccessAssertion(propertyRef));
-                  this.$(backingFieldName : usesite)
-                }
-              }
-              set
-              {
-                if (this.IsAmbiguous)
-                  foreach (ambiguity in this.Ambiguities)
-                    ambiguity.$(name : usesite) = value;
-                else unless ($(hasValueBit.Read()))
-                {
-                  this.$(backingFieldName : usesite) = value;
-                  $(hasValueBit.Set());
-                }
-              }
+              unless ($(hasValueBit.Read()))
+                $(MakeAccessAssertion(symbol));
+              this.$(backingFieldName : usesite)
             }
-          ]>);
+          }
+          set
+          {
+            if (this.IsAmbiguous)
+              foreach (ambiguity in this.Ambiguities)
+                ambiguity.$(name : usesite) = value;
+            else unless ($(hasValueBit.Read()))
+            {
+              this.$(backingFieldName : usesite) = value;
+              $(hasValueBit.Set());
+            }
+          }
+        }
+      ]>);
 
-          _ambiguousTb.Define(<[ decl:
-            public $(isEvaluatedName : usesite) : bool
-            {
-              get
-              {
-                if (this.IsAmbiguous)
-                  this.Ambiguities[0].$(isEvaluatedName : usesite)
-                else
-                  $(hasValueBit.Read())
-              }
-            }
-          ]>);
+      _ambiguousTb.Define(<[ decl:
+        public $(isEvaluatedName : usesite) : bool
+        {
+          get
+          {
+            if (this.IsAmbiguous)
+              this.Ambiguities[0].$(isEvaluatedName : usesite)
+            else
+              $(hasValueBit.Read())
+          }
+        }
+      ]>);
 
-        | Out =>
-          _ambiguousTb.Define(<[ decl:
-            ..$mods $(name : usesite) : $(propertyType : typed)
-            {
-              get
-              {
-                if (this.IsAmbiguous)
-                  this.Ambiguities[0].$(name : usesite)
-                else
-                  $(MakeAccessAssertion(propertyRef));
-              }
-            }
-          ]>);
-
-          _ambiguousTb.Define(<[ decl:
-            public $(isEvaluatedName : usesite) : bool
-            {
-              get
-              {
-                if (this.IsAmbiguous)
-                  this.Ambiguities[0].$(isEvaluatedName : usesite)
-                else
-                  false
-              }
-            }
-          ]>);
-      }
+      DefineDependenPropertyOverrideSetter(_ambiguousTb, symbol);
     }
 
     public override Emit() : void
     {
       assert(_tb != null);
-      _tb.Compile();
-
       assert(_ambiguousTb != null);
+
+      DefineDependentPropertiesInheritableEvaluation(_tb, _symbol);
+      DefineResetPropertiesMethod(null, _ambiguousTb);
+      DefineIsAllPropertiesEvaluatedProperty(null, _ambiguousTb);
+
+      _tb.Compile();
       _ambiguousTb.Compile();
 
       _listEmitter.Emit();
       _optionEmitter.Emit();
-
-      when (_symbolTb != null)
-        _symbolTb.Compile();
     }
   }
 }

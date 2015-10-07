@@ -1,0 +1,95 @@
+﻿using Nitra.Model;
+using Nitra.ProjectSystem;
+using Nitra.Serialization;
+
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Typing
+{
+  [Record]
+  public abstract class PropertyContainerSymbol : SingleDefSymbol
+  {
+    public abstract AllProperties            : Seq[PropertySymbol]              { get; }
+    public abstract InitializedOutProperties : list[DependentPropertySymbol]    { get; }
+    public abstract IsAbstract               : bool                             { get; }
+    public abstract PropertyDependency       : PropertyDependencyData           { get; }
+
+    public Properties : Seq[PropertySymbol]
+    {
+      get { this.Node.GetChildren.[PropertySymbol]() }
+    }
+
+    public abstract GetAncestors() : Seq[PropertyContainerSymbol];
+    public abstract GetParents() : Seq[PropertyContainerSymbol];
+    public abstract LookupProperty(name : string) : ValueOption[PropertySymbol];
+    public virtual SetPropertyDependency(_graph : PropertyDependencyData) : void
+    {
+      throw NotSupportedException("SetPropertyDependency is not supported");
+    }
+
+    protected CollectInheritedProperties(ancestors : Seq[PropertyContainerSymbol], table : SCG.Dictionary[string, PropertySymbol]) : void
+    {
+      foreach (s1 in ancestors)
+      {
+        foreach (p1 when p1.OverrideProperty.IsNone in s1.Properties)
+        {
+          mutable p2;
+          if (table.TryGetValue(p1.Name, out p2))
+          {
+            def s2 = p2.PropertyContainer;
+            using (root = Node.Project.RootError(this.FirstLocation, $"Inherited $(s1.Description) '$(s1.FullName)' and $(s2.Description) '$(s2.FullName)' have properties with same name '$(p1.Name)'."))
+            {
+              root.Hint(p1.FirstLocation, "Property declaration.");
+              root.Hint(p2.FirstLocation, "Property declaration.");
+            }
+          }
+          else
+            table.Add(p1.Name, p1)
+        }
+      }
+    }
+
+    protected CollectDeclaredProperties(table : SCG.Dictionary[string, PropertySymbol]) : void
+    {
+      foreach (p in Properties)
+      {
+        if (p.OverrideProperty is SymbolRef.Some(originalProperty))
+        {
+          mutable existingProperty;
+          if (table.TryGetValue(p.Name, out existingProperty) && originalProperty : object == existingProperty)
+            table[p.Name] = p;
+          else
+            Node.Project.Error(p.FirstLocation, $"Invalid property '$(p.Name)'override.");
+        }
+        else
+        {
+          mutable existingProperty;
+          if (table.TryGetValue(p.Name, out existingProperty))
+          {
+            def s = existingProperty.PropertyContainer;
+            using (root = Node.Project.RootError(p.FirstLocation, $"Redefinition of property '$(p.Name)', property inherited from $(s.Description) '$(s.FullName)'."))
+              root.Hint(existingProperty.FirstLocation, "Property declaration.");
+          }
+          else
+            table.Add(p.Name, p);
+        }
+      }
+    }
+
+    protected AddStatementImpl(statement : DependentStatement, assignments : SCG.List[DependentStatement], initializedOutProperties : ref list[DependentPropertySymbol]) : void
+    {
+      assignments.Add(statement);
+      when (statement.Path is [Identifier(Value = propertyName)])
+      when (LookupProperty(propertyName) is VSome(DependentPropertySymbol(Direction = Out) as propertySymbol))
+        initializedOutProperties ::= propertySymbol;
+    }
+  }
+}

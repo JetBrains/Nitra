@@ -1,7 +1,9 @@
 ﻿using Nitra.Model;
+using Nitra.Runtime.GraphUtils;
 using Nitra.Serialization;
 
 using Nemerle;
+using Nemerle.Imperative;
 using Nemerle.Collections;
 using Nemerle.Extensions;
 using Nemerle.Text;
@@ -14,47 +16,20 @@ using System.Linq;
 namespace Nitra.Typing
 {
   [Record]
-  public abstract class AstSymbol : SingleDefSymbol
+  public abstract class AstSymbol : PropertyContainerSymbol, IGraphNode[AstSymbol]
   {
-    public abstract BaseAsts                 : list[AstSymbol]                  { get; }
-    public abstract InitializedOutProperties : list[DependentAstPropertySymbol] { get; }
-    public abstract IsDeclaration            : bool                             { get; }
-    public abstract Cardinality              : AstCardinality                   { get; }
-
-    public SymbolClassName : string
-    {
-      get
-      {
-        assert(IsDeclaration);
-        Name + "Symbol"
-      }
-    }
-
-    public SymbolClassFullName : list[string]
-    {
-      get
-      {
-        def nsParts =
-          if (this is ExtensionAstSymbol)
-            Node.Parent.Parent.FullNameParts
-          else
-            Node.Parent.FullNameParts;
-
-        nsParts + [SymbolClassName]
-      }
-    }
-
-    public Properties : Seq[AstPropertySymbol]
-    {
-      get { this.Node.GetChildren.[AstPropertySymbol]() }
-    }
+    public abstract Parents       : list[AstSymbol] implements IGraphNode[AstSymbol].Connections { get; }
+    public abstract IsDeclaration : bool                          { get; }
+    public abstract Cardinality   : AstCardinality                { get; }
+    public abstract Symbol        : SymbolRef[SymbolSymbol]       { get; }
+    public override GetParents() : Seq[PropertyContainerSymbol] { Parents }
 
     public AllBaseAsts : Seq[AstSymbol]
     {
       get { TypeInheritance(); _allBaseAsts }
     }
 
-    public AllProperties : Seq[AstPropertySymbol]
+    public override AllProperties : Seq[PropertySymbol]
     {
       get { TypeInheritance(); _allProperties.Values }
     }
@@ -67,7 +42,7 @@ namespace Nitra.Typing
     }
 
     [RecordIgnore] private mutable _allBaseAsts         : HashSet[AstSymbol];
-    [RecordIgnore] private mutable _allProperties       : Dictionary[string, AstPropertySymbol];
+    [RecordIgnore] private mutable _allProperties       : Dictionary[string, PropertySymbol];
     [RecordIgnore] private mutable _isTypingInheritance : bool;
     [RecordIgnore] private mutable _isCyclic            : bool;
 
@@ -77,7 +52,17 @@ namespace Nitra.Typing
       {
         unless (_isCyclic)
         {
-          Node.Project.Error(this.FirstLocation, $"Declaration '$(FullName)' is cyclic.");
+          foreach (group when group.Nodes.Count > 1 in GraphAlgorithms.FindStronglyConnectedComponents([this]))
+          {
+            def firstSymbol = group.Nodes.FirstItem;
+            using (root = Node.Project.RootError(firstSymbol.FirstLocation, $"Declaration '$(firstSymbol.FullName)' is cyclic."))
+            {
+              foreach (symbol in group.Nodes with i)
+                when (i > 0)
+                  root.Hint(symbol.FirstLocation, $"Circular base declaration dependency '$(symbol.FullName)' for declaration '$(firstSymbol.FullName)'.");
+            }
+          }
+
           _isCyclic = true;
         }
       }
@@ -89,67 +74,29 @@ namespace Nitra.Typing
           _allBaseAsts   = HashSet();
           _allProperties = Dictionary(StringComparer.Ordinal);
 
-          foreach (a in BaseAsts)
-          {
-            _ = _allBaseAsts.Add(a);
+          foreach (a when _allBaseAsts.Add(a) in Parents)
             _allBaseAsts.UnionWith(a.AllBaseAsts);
-          }
 
           unless (_isCyclic)
-          {
-            foreach (ast1 in _allBaseAsts)
-            {
-              foreach (p1 when p1.OverrideProperty.IsNone in ast1.Properties)
-              {
-                mutable p2;
-                if (_allProperties.TryGetValue(p1.Name, out p2))
-                {
-                  def ast2 = p2.DeclaringAst;
-                  using (root = Node.Project.RootError(this.FirstLocation, $"Declaration '$(FullName)' inherits declaration '$(ast1.FullName)' and declaration '$(ast2.FullName)' which both have property '$(p1.Name)'."))
-                  {
-                    root.Hint(p1.FirstLocation, "Property declaration.");
-                    root.Hint(p2.FirstLocation, "Property declaration.");
-                  }
-                }
-                else
-                  _allProperties.Add(p1.Name, p1)
-              }
-            }
+            CollectInheritedProperties(_allBaseAsts, _allProperties);
 
-            when (IsDeclaration)
-              TryOverrideSymbolProperty();
-          }
+          when (CreateSymbolSymbol() is SymbolRef.Some(symbolSymbol))
+            TryOverrideSymbolProperty(symbolSymbol);
 
-          foreach (p in Properties)
-          {
-            if (p.OverrideProperty is SymbolRef.Some(originalProperty))
-            {
-              mutable existingProperty;
-              if (_allProperties.TryGetValue(p.Name, out existingProperty) && originalProperty : object == existingProperty)
-                _allProperties[p.Name] = p;
-              else
-                Node.Project.Error(p.FirstLocation, $"Invalid  property '$(p.Name)'override.");
-            }
-            else
-            {
-              mutable existingProperty;
-              if (_allProperties.TryGetValue(p.Name, out existingProperty))
-              {
-                using (root = Node.Project.RootError(p.FirstLocation, $"Redefinition of property '$(p.Name)', property inherited from declaration '$(existingProperty.DeclaringAst.FullName)'."))
-                  root.Hint(existingProperty.FirstLocation, "Property declaration.");
-              }
-              else
-                _allProperties.Add(p.Name, p);
-            }
-          }
+          CollectDeclaredProperties(_allProperties);
         }
         finally _isTypingInheritance = false;
       }
     }
 
-    public LookupProperty(name : string) : ValueOption[AstPropertySymbol]
+    public override GetAncestors() : Seq[PropertyContainerSymbol]
     {
-      assert(_allProperties != null);
+      AllBaseAsts
+    }
+
+    public override LookupProperty(name : string) : ValueOption[PropertySymbol]
+    {
+      TypeInheritance();
 
       mutable symbol;
       if (_allProperties.TryGetValue(name, out symbol))
@@ -158,32 +105,72 @@ namespace Nitra.Typing
         VNone()
     }
 
-    protected AddAssignmentImpl(assignment : DependentPropertyAssignment, assignments : List[DependentPropertyAssignment], initializedOutProperties : ref list[DependentAstPropertySymbol]) : void
+    protected virtual CreateSymbolSymbol() : SymbolRef[SymbolSymbol]
     {
-      assignments.Add(assignment);
-      when (assignment.Path is [Identifier(Value = propertyName)])
-      {
-        when (LookupProperty(propertyName) is VSome(DependentAstPropertySymbol(Direction = Out) as propertySymbol))
-        {
-          initializedOutProperties ::= propertySymbol;
-        }
-      }
+      Symbol
     }
 
-    private TryOverrideSymbolProperty() : void
+    private TryOverrideSymbolProperty(symbol : SymbolSymbol) : void
     {
-      when (LookupProperty("Symbol") is VSome(OutAstPropertySymbol as symbolProperty))
+      assert(_allProperties != null);
+
+      mutable foundSymbol;
+      when (_allProperties.TryGetValue("Symbol", out foundSymbol))
+      when (foundSymbol is DependentPropertySymbol as symbolProperty)
       {
-        def newSymbolProperty = ChemicalOutAstPropertySymbol(FirstLocation, "Symbol")
+        def newSymbolProperty = ChemicalDependentPropertySymbol(FirstLocation, "Symbol")
           .SetAssemblyId(AssemblyIds.CurrentAssembly)
-          .SetAstType(symbolProperty.AstType)
+          .SetPropertyContainer(this)
+          .SetDirection(symbolProperty.Direction)
           .SetLinkedProperty(SymbolRef.None(Location.Default, true))
           .SetOverrideProperty(SymbolRef.Some(Location.Default, true, symbolProperty))
           .SetStage(symbolProperty.Stage)
-          .SetType(Utils.MakeNTypeQualified(FirstLocation, SymbolClassFullName));
+          .SetType(Utils.MakeNTypeQualified(FirstLocation, symbol.Node.FullNameParts));
 
         _ = Node.AddAndReport(newSymbolProperty, FirstLocation)
       }
+    }
+
+    protected CreateSymbolSymbolImpl(makeSymbol : list[SymbolSymbol] -> SymbolSymbol) : SymbolRef[SymbolSymbol]
+    {
+      if (IsDeclaration)
+      {
+        mutable baseSymbols = [];
+        mutable sealedSymbolFromBase;
+        foreach (baseAst in Parents)
+        {
+          when (baseAst.Symbol is SymbolRef.Some(s))
+          {
+            if (s.IsAbstract)
+              baseSymbols ::= s;
+            else
+            {
+              sealedSymbolFromBase = s;
+              break;
+            }
+          }
+        }
+
+        if (sealedSymbolFromBase : object == null)
+          SymbolRef.Some(FirstLocation, true, makeSymbol(baseSymbols));
+        else
+        {
+          foreach (baseAst in Parents)
+          {
+            when (baseAst.Symbol is SymbolRef.Some(s))
+            unless (sealedSymbolFromBase.IsSubtypeOf(s))
+              using (root = Node.Project.RootError(FirstLocation, $"Symbol inheritance is not available from sealed symbol '$(sealedSymbolFromBase.FullName)'."))
+              {
+                root.Hint(sealedSymbolFromBase.FirstLocation, "Sealed symbol.");
+                break;
+              }
+          }
+
+          SymbolRef.Some(FirstLocation, true, sealedSymbolFromBase);
+        }
+      }
+      else
+        SymbolRef.None(FirstLocation, true);
     }
   }
 }
