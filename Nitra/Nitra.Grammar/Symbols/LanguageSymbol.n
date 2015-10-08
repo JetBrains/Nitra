@@ -28,9 +28,139 @@ namespace Nitra.Typing
     public abstract LicenseUrl               : string                    { get; }
     public abstract RequireLicenseAcceptance : bool                      { get; }
 
+    public SpanClasses : Seq[SpanClassSymbol]
+    {
+      get { this.Node.GetChildren.[SpanClassSymbol]() }
+    }
+
     Connections : Seq[LanguageSymbol] implements IGraphNode[LanguageSymbol].Connections
     {
       get { if (Parent is SymbolRef.Some(parent)) [parent] else [] }
+    }
+
+    public Ancestors : Seq[LanguageSymbol]
+    {
+      get { TypeInheritance(); _ancestors }
+    }
+
+    public AllSpanClasses : Seq[SpanClassSymbol]
+    {
+      get { TypeInheritance(); _allSpanClasses.Values }
+    }
+
+    public SpanClassesWithMatchers : Seq[SpanClassSymbol]
+    {
+      [RecordIgnore] mutable spanClasses : array[SpanClassSymbol];
+      get
+      {
+        when (spanClasses : object == null)
+          spanClasses = AllSpanClasses.FilterToArray(x => x.RegularRule.HasValue);
+        spanClasses
+      }
+    }
+
+    public IsSubtypeOf(other : LanguageSymbol) : bool
+    {
+      TypeInheritance();
+
+      this == other || _ancestors.Contains(other)
+    }
+
+    [RecordIgnore] private mutable _ancestors           : HashSet[LanguageSymbol];
+    [RecordIgnore] private mutable _allSpanClasses      : Dictionary[string, SpanClassSymbol];
+    [RecordIgnore] private mutable _isTypingInheritance : bool;
+    [RecordIgnore] private mutable _isCyclic            : bool;
+
+    public TypeInheritance() : void
+    {
+      if (_isTypingInheritance)
+      {
+        unless (_isCyclic)
+        {
+          foreach (group when group.Nodes.Count > 1 in GraphAlgorithms.FindStronglyConnectedComponents([this]))
+          {
+            def firstSymbol = group.Nodes.FirstItem;
+            using (root = Node.Project.RootError(firstSymbol.FirstLocation, $"Language '$(firstSymbol.FullName)' is cyclic."))
+            {
+              foreach (symbol in group.Nodes with i)
+                when (i > 0)
+                  root.Hint(symbol.FirstLocation, $"Circular base language dependency '$(symbol.FullName)' for language '$(firstSymbol.FullName)'.");
+            }
+          }
+
+          _isCyclic = true;
+        }
+      }
+      else when (_ancestors : object == null)
+      {
+        _isTypingInheritance = true;
+        try
+        {
+          _ancestors      = HashSet();
+          _allSpanClasses = Dictionary(StringComparer.Ordinal);
+
+          when (Parent is SymbolRef.Some(parentLanguage))
+          {
+            _ = _ancestors.Add(parentLanguage);
+            _ancestors.UnionWith(parentLanguage.Ancestors);
+          }
+
+          unless (_isCyclic)
+            CollectInheritedSpanClasses(_ancestors, _allSpanClasses);
+
+          CollectDeclaredSpanClasses(_allSpanClasses);
+        }
+        finally _isTypingInheritance = false;
+      }
+    }
+
+    public LookupSpanClass(name : string) : ValueOption[SpanClassSymbol]
+    {
+      TypeInheritance();
+
+      mutable symbol;
+      if (_allSpanClasses.TryGetValue(name, out symbol))
+        VSome(symbol)
+      else
+        VNone()
+    }
+
+    private CollectInheritedSpanClasses(ancestors : Seq[LanguageSymbol], table : Dictionary[string, SpanClassSymbol]) : void
+    {
+      foreach (s1 in ancestors)
+      {
+        foreach (p1 in s1.SpanClasses)
+        {
+          mutable p2;
+          if (table.TryGetValue(p1.Name, out p2))
+          {
+            def s2 = p2.DeclaringLanguage;
+            using (root = Node.Project.RootError(this.FirstLocation, $"Inherited language '$(s1.FullName)' and language '$(s2.FullName)' have span classes with same name '$(p1.Name)'."))
+            {
+              root.Hint(p1.FirstLocation, "Span class declaration.");
+              root.Hint(p2.FirstLocation, "Span class declaration.");
+            }
+          }
+          else
+            table.Add(p1.Name, p1)
+        }
+      }
+    }
+
+    private CollectDeclaredSpanClasses(table : Dictionary[string, SpanClassSymbol]) : void
+    {
+      foreach (p in SpanClasses)
+      {
+        mutable existingSpanClass;
+        if (table.TryGetValue(p.Name, out existingSpanClass))
+        {
+          def s = existingSpanClass.DeclaringLanguage;
+          using (root = Node.Project.RootError(p.FirstLocation, $"Redefinition of span class '$(p.Name)', span class inherited from language '$(s.FullName)'."))
+            root.Hint(existingSpanClass.FirstLocation, "Span class declaration.");
+        }
+        else
+          table.Add(p.Name, p);
+      }
     }
   }
 
@@ -46,7 +176,7 @@ namespace Nitra.Typing
       _properties = PropertyBag(this);
     }
 
-    public override Parent                   : SymbolRef[LanguageSymbol] { get { _node.Parent } }
+    public override Parent                   : SymbolRef[LanguageSymbol] { get { _node.Parent() } }
     public override FileExtension            : string                    { get { _properties.GetProperty("FileExtension",            string.Empty) } }
     public override Company                  : string                    { get { _properties.GetProperty("Company",                  string.Empty) } }
     public override LanguageDescription      : string                    { get { _properties.GetProperty("LanguageDescription",      string.Empty) } }
