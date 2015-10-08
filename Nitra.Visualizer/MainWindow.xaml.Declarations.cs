@@ -319,7 +319,7 @@ namespace Nitra.Visualizer
       }
 
       var r = tvi.Tag as IRef;
-      if (r != null && r.IsSymbolEvaluated)
+      if (r != null)
       {
         SelectText(r.File, r.Span);
         return;
