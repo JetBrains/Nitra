@@ -24,9 +24,9 @@ namespace Nitra.Visualizer
     {
       _buffer = new StringBuilder();
       _writer = new StringWriter(_buffer);
-      _missingNodeClass = new SpanClass(missingNodeClass);
-      _debugClass = new SpanClass(debugClass);
-      _garbageClass = new SpanClass(garbageClass);
+      _missingNodeClass = new SpanClass(Language.Instance, missingNodeClass, missingNodeClass, null);
+      _debugClass = new SpanClass(Language.Instance, debugClass, debugClass, null);
+      _garbageClass = new SpanClass(Language.Instance, garbageClass, garbageClass, null);
     }
 
     protected override void Garbage(IPrettyPrintSource source, NSpan skip)

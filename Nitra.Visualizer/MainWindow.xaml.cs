@@ -669,7 +669,7 @@ namespace Nitra.Visualizer
         if (spanClass == "Default")
           return;
 
-        SpanInfos.Add(new SpanInfo(span, new SpanClass(sym.SpanClass)));
+        SpanInfos.Add(new SpanInfo(span, new SpanClass(Nitra.Language.Instance, sym.SpanClass, sym.SpanClass, null)));
       }
 
       public void Visit(Reference reference)
@@ -684,7 +684,7 @@ namespace Nitra.Visualizer
         if (spanClass == "Default")
           return;
 
-        SpanInfos.Add(new SpanInfo(span, new SpanClass(spanClass)));
+        SpanInfos.Add(new SpanInfo(span, new SpanClass(Nitra.Language.Instance, spanClass, spanClass, null)));
       }
     }
 
