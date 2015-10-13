@@ -1,0 +1,165 @@
+﻿using Nitra.Model;
+using Nitra.Typing;
+
+using Nemerle;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Compiler
+{
+  internal class LanguageEmitter
+  {
+    public Environment   : EmitterEnvironment { get; }
+    public Env           : GlobalEnv          { get; }
+    public Symbol        : LanguageSymbol     { get; }
+
+    public this(environment : EmitterEnvironment, language : LanguageSymbol)
+    {
+      Environment = environment;
+      Env         = environment.NamespaceOfSymbol(language);
+      Symbol      = language;
+    }
+
+    private mutable _tb : TypeBuilder;
+
+    public DefineTypes() : void
+    {
+      assert(_tb : object == null);
+      Util.locate(Symbol.FirstLocation.NLocation(),
+      {
+        def baseLanguage =
+          if (Symbol.Parent is SymbolRef.Some(parent))
+            Environment.GetLanguageType(parent)
+          else
+            Environment.Manager.InternalType.Object;
+
+        _tb = Env.Define(<[ decl:
+          public partial class $(Symbol.Name : usesite) : $(baseLanguage : typed)
+          {
+            protected this() {}
+
+            private static new _instance : this = $(Symbol.Name : usesite)();
+            public static new Instance : this { get { _instance } }
+          }
+        ]>);
+      });
+    }
+    
+    public DefineMembers() : void
+    {
+      assert(_tb : object != null);
+
+      def localStyles = Dictionary();
+
+      foreach (style in Symbol.Styles)
+      {
+        Util.locate(style.FirstLocation.NLocation(),
+        {
+          def backingFieldName = Util.tmpname(style.Name);
+          _tb.Define(<[ decl:
+            private static $(backingFieldName : usesite) : Nitra.Style = Nitra.Style(
+              _instance,
+              $(style.Name : string),
+              $(style.FullName : string),
+              $(style.ForegroundColor : int));
+          ]>);
+          _tb.Define(<[ decl:
+            public static $(Util.MakeStyleName(style) : usesite) : Nitra.Style { get { $(backingFieldName : usesite) } }
+          ]>);
+
+          localStyles.Add(style, backingFieldName); 
+        });
+      }
+
+      def makeStyleExpr(_)
+      {
+        | SymbolRef.Some(style) when style.DeclaringLanguage : object == Symbol => <[ $(localStyles[style] : usesite) ]>
+        | SymbolRef.Some(style) => Environment.MakeStyleRef(style)
+        | SymbolRef.None => assert2(false); <[ null ]>
+      }
+
+      def localSpanClasses = List();
+
+      foreach (spanClass in Symbol.SpanClasses)
+      {
+        Util.locate(spanClass.FirstLocation.NLocation(),
+        {
+          def backingFieldName = Util.tmpname(spanClass.Name);
+          _tb.Define(<[ decl:
+            private static $(backingFieldName : usesite) : Nitra.SpanClass = Nitra.SpanClass(
+              _instance,
+              $(spanClass.Name : string),
+              $(spanClass.FullName : string),
+              $(makeStyleExpr(spanClass.Style)));
+          ]>);
+          _tb.Define(<[ decl:
+            public static $(Util.MakeSpanClassName(spanClass) : usesite) : Nitra.SpanClass { get { $(backingFieldName : usesite) } }
+          ]>);
+
+          localSpanClasses.Add(backingFieldName);
+        });
+      }
+
+      def nameToExpr(n : string) : PExpr { <[ $(n : usesite) ]> }
+
+      Util.locate(Symbol.FirstLocation.NLocation(),
+      {
+        def parentExpr =
+          if (Symbol.Parent is SymbolRef.Some(parent))
+            <[ $(Environment.GetLanguageType(parent) : typed).Instance ]>
+          else
+            <[ null ]>;
+
+        def licenseUrlExpr =
+          if (string.IsNullOrEmpty(Symbol.LicenseUrl))
+            <[ null ]>
+          else
+            <[ System.Uri($(Symbol.LicenseUrl : string), System.UriKind.Absolute) ]>;
+
+        _tb.Define(<[ decl: ..$(MakeMods()) Parent                   : Nitra.Language { get { $parentExpr } } ]>);
+        _tb.Define(<[ decl: ..$(MakeMods()) Name                     : string         { get { $(Symbol.Name : string) } } ]>);
+        _tb.Define(<[ decl: ..$(MakeMods()) FullName                 : string         { get { $(Symbol.FullName : string) } } ]>);
+        _tb.Define(<[ decl: ..$(MakeMods()) FileExtensions           : list[string]   { get { [..$(Symbol.FileExtensions.Map(s => <[ $(s : string) ]>))] } } ]>);
+        _tb.Define(<[ decl: ..$(MakeMods()) Company                  : string         { get { $(Symbol.Company                  : string) } } ]>);
+        _tb.Define(<[ decl: ..$(MakeMods()) Description              : string         { get { $(Symbol.LanguageDescription      : string) } } ]>);
+        _tb.Define(<[ decl: ..$(MakeMods()) Authors                  : string         { get { $(Symbol.Authors                  : string) } } ]>);
+        _tb.Define(<[ decl: ..$(MakeMods()) Copyright                : string         { get { $(Symbol.Copyright                : string) } } ]>);
+        _tb.Define(<[ decl: ..$(MakeMods()) LicenseUrl               : System.Uri     { get { $licenseUrlExpr } } ]>);
+        _tb.Define(<[ decl: ..$(MakeMods()) RequireLicenseAcceptance : bool           { get { $(Symbol.RequireLicenseAcceptance : bool  ) } } ]>);
+        _tb.Define(<[ decl: ..$(MakeMods()) GetDeclaredStyles() : array[Nitra.Style] { array[..$(localStyles.Values.MapToList(nameToExpr))] } ]>);
+        _tb.Define(<[ decl: ..$(MakeMods()) GetDeclaredSpanClasses() : array[Nitra.SpanClass] { array[..$(localSpanClasses.MapToList(nameToExpr))] } ]>);
+        _tb.Define(<[ decl: ..$(MakeMods()) GetDeclaredGrammars() : array[Nitra.GrammarDescriptor] { array[..$(Symbol.SyntaxModules.MapToList(_.GetGrammarDescriptorRef()))] } ]>);
+
+        def startRuleExpr =
+          if (Symbol.StartRule is SymbolRef.Some(startRule))
+            startRule.GetRuleDescriptorRef()
+          else
+            <[ null ]>;
+
+        _tb.Define(<[ decl: ..$(MakeMods()) StartRule : Nitra.StartRuleDescriptor { get { $startRuleExpr } } ]>);
+      });
+    }
+
+    private MakeMods() : AttributesAndModifiers
+    {
+      if (Symbol.Parent.HasValue)
+        AttributesAndModifiers(NemerleAttributes.Public %| NemerleAttributes.Override, [])
+      else
+        AttributesAndModifiers(NemerleAttributes.Public %| NemerleAttributes.Virtual, [])
+    }
+    
+    public Emit() : void
+    {
+      assert(_tb : object != null);
+
+      _tb.Compile();
+    }
+  }
+}

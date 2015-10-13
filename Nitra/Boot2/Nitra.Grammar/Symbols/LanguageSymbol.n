@@ -1,0 +1,242 @@
+﻿using Nitra.Model;
+using Nitra.Runtime.GraphUtils;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Extensions;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+using G = NitraSyntaxParseTree;
+
+namespace Nitra.Typing
+{
+  [Record, ExportableSymbol]
+  public abstract class LanguageSymbol : SingleDefSymbol, INamespaceMember, IGraphNode[LanguageSymbol]
+  {
+    public override Description              : string                      { get "language" }
+    public abstract Parent                   : SymbolRef[LanguageSymbol]   { get; }
+    public abstract FileExtensions           : list[string]                { get; }
+    public abstract Company                  : string                      { get; }
+    public abstract LanguageDescription      : string                      { get; }
+    public abstract Authors                  : string                      { get; }
+    public abstract Copyright                : string                      { get; }
+    public abstract LicenseUrl               : string                      { get; }
+    public abstract RequireLicenseAcceptance : bool                        { get; }
+    public abstract SyntaxModules            : list[SyntaxModuleSymbol]    { get; }
+    public abstract StartRule                : SymbolRef[SyntaxRuleSymbol] { get; }
+
+    public SpanClasses : Seq[SpanClassSymbol]
+    {
+      get { this.Node.GetChildren.[SpanClassSymbol]() }
+    }
+
+    public Styles : Seq[StyleSymbol]
+    {
+      get { this.Node.GetChildren.[StyleSymbol]() }
+    }
+
+    Connections : Seq[LanguageSymbol] implements IGraphNode[LanguageSymbol].Connections
+    {
+      get { if (Parent is SymbolRef.Some(parent)) [parent] else [] }
+    }
+
+    public Ancestors : Seq[LanguageSymbol]
+    {
+      get { TypeInheritance(); _ancestors }
+    }
+
+    public AllSpanClasses : Seq[SpanClassSymbol]
+    {
+      get { TypeInheritance(); _allSpanClasses.Values }
+    }
+
+    public SpanClassesWithMatchers : Seq[SpanClassSymbol]
+    {
+      [RecordIgnore] mutable spanClasses : array[SpanClassSymbol];
+      get
+      {
+        when (spanClasses : object == null)
+          spanClasses = AllSpanClasses.FilterToArray(x => x.RegularRule.HasValue);
+        spanClasses
+      }
+    }
+
+    public IsSubtypeOf(other : LanguageSymbol) : bool
+    {
+      TypeInheritance();
+
+      this == other || _ancestors.Contains(other)
+    }
+
+    [RecordIgnore] private mutable _ancestors           : HashSet[LanguageSymbol];
+    [RecordIgnore] private mutable _allSpanClasses      : Dictionary[string, SpanClassSymbol];
+    [RecordIgnore] private mutable _isTypingInheritance : bool;
+    [RecordIgnore] private mutable _isCyclic            : bool;
+
+    public TypeInheritance() : void
+    {
+      if (_isTypingInheritance)
+      {
+        unless (_isCyclic)
+        {
+          foreach (group when group.Nodes.Count > 1 in GraphAlgorithms.FindStronglyConnectedComponents([this]))
+          {
+            def firstSymbol = group.Nodes.FirstItem;
+            using (root = Node.Project.RootError(firstSymbol.FirstLocation, $"Language '$(firstSymbol.FullName)' is cyclic."))
+            {
+              foreach (symbol in group.Nodes with i)
+                when (i > 0)
+                  root.Hint(symbol.FirstLocation, $"Circular base language dependency '$(symbol.FullName)' for language '$(firstSymbol.FullName)'.");
+            }
+          }
+
+          _isCyclic = true;
+        }
+      }
+      else when (_ancestors : object == null)
+      {
+        _isTypingInheritance = true;
+        try
+        {
+          _ancestors      = HashSet();
+          _allSpanClasses = Dictionary(StringComparer.Ordinal);
+
+          when (Parent is SymbolRef.Some(parentLanguage))
+          {
+            _ = _ancestors.Add(parentLanguage);
+            _ancestors.UnionWith(parentLanguage.Ancestors);
+          }
+
+          unless (_isCyclic)
+            CollectInheritedSpanClasses(_ancestors, _allSpanClasses);
+
+          CollectDeclaredSpanClasses(_allSpanClasses);
+        }
+        finally _isTypingInheritance = false;
+      }
+    }
+
+    public LookupSpanClass(name : string) : ValueOption[SpanClassSymbol]
+    {
+      TypeInheritance();
+
+      mutable symbol;
+      if (_allSpanClasses.TryGetValue(name, out symbol))
+        VSome(symbol)
+      else
+        VNone()
+    }
+
+    private CollectInheritedSpanClasses(ancestors : Seq[LanguageSymbol], table : Dictionary[string, SpanClassSymbol]) : void
+    {
+      foreach (s1 in ancestors)
+      {
+        foreach (p1 in s1.SpanClasses)
+        {
+          mutable p2;
+          if (table.TryGetValue(p1.Name, out p2))
+          {
+            def s2 = p2.DeclaringLanguage;
+            using (root = Node.Project.RootError(this.FirstLocation, $"Inherited language '$(s1.FullName)' and language '$(s2.FullName)' have span classes with same name '$(p1.Name)'."))
+            {
+              root.Hint(p1.FirstLocation, "Span class declaration.");
+              root.Hint(p2.FirstLocation, "Span class declaration.");
+            }
+          }
+          else
+            table.Add(p1.Name, p1)
+        }
+      }
+    }
+
+    private CollectDeclaredSpanClasses(table : Dictionary[string, SpanClassSymbol]) : void
+    {
+      foreach (p in SpanClasses)
+      {
+        mutable existingSpanClass;
+        if (table.TryGetValue(p.Name, out existingSpanClass))
+        {
+          def s = existingSpanClass.DeclaringLanguage;
+          using (root = Node.Project.RootError(p.FirstLocation, $"Redefinition of span class '$(p.Name)', span class inherited from language '$(s.FullName)'."))
+            root.Hint(existingSpanClass.FirstLocation, "Span class declaration.");
+        }
+        else
+          table.Add(p.Name, p);
+      }
+    }
+  }
+
+  public sealed class ParsedLanguageSymbol : LanguageSymbol
+  {
+    private         _node           : G.NamespaceMember.Language;
+    private         _properties     : PropertyBag;
+    private mutable _syntaxModules  : list[SyntaxModuleSymbol];
+    private mutable _startRule      : SymbolRef[SyntaxRuleSymbol];
+    private mutable _fileExtensions : list[string];
+
+    public this(node : G.NamespaceMember.Language)
+    {
+      base(node.Name, node.Name.Value());
+      _node           = node;
+      _properties     = PropertyBag(this);
+      _syntaxModules  = [];
+      _startRule      = SymbolRef.None(FirstLocation, true);
+      _fileExtensions = [];
+    }
+
+    public override Parent                   : SymbolRef[LanguageSymbol]   { get { _node.Parent() } }
+    public override SyntaxModules            : list[SyntaxModuleSymbol]    { get { _syntaxModules } }
+    public override StartRule                : SymbolRef[SyntaxRuleSymbol] { get { _startRule } }
+    public override FileExtensions           : list[string]                { get { _fileExtensions } }
+    public override Company                  : string                      { get { _properties.GetProperty("Company",                  string.Empty) } }
+    public override LanguageDescription      : string                      { get { _properties.GetProperty("LanguageDescription",      string.Empty) } }
+    public override Authors                  : string                      { get { _properties.GetProperty("Authors",                  string.Empty) } }
+    public override Copyright                : string                      { get { _properties.GetProperty("Copyright",                string.Empty) } }
+    public override LicenseUrl               : string                      { get { _properties.GetProperty("LicenseUrl",               string.Empty) } }
+    public override RequireLicenseAcceptance : bool                        { get { _properties.GetProperty("RequireLicenseAcceptance", false) } }
+
+    internal SetCompany                 (loc : Location, value : string) : void { _properties.SetProperty("Company",                  loc, value) }
+    internal SetLanguageDescription     (loc : Location, value : string) : void { _properties.SetProperty("LanguageDescription",      loc, value) }
+    internal SetAuthors                 (loc : Location, value : string) : void { _properties.SetProperty("Authors",                  loc, value) }
+    internal SetCopyright               (loc : Location, value : string) : void { _properties.SetProperty("Copyright",                loc, value) }
+    internal SetRequireLicenseAcceptance(loc : Location, value : bool)   : void { _properties.SetProperty("RequireLicenseAcceptance", loc, value) }
+    internal SetLicenseUrl              (loc : Location, value : string) : void
+    {
+      mutable unused;
+      unless (Uri.TryCreate(value, UriKind.Absolute, out unused))
+        Node.Project.Error(loc, "Invalid absolute URL specified.");
+
+      _properties.SetProperty("LicenseUrl", loc, value)
+    }
+
+    internal AddSyntaxModule(loc : Location, syntaxModule : SyntaxModuleSymbol) : void
+    {
+      when (_syntaxModules.Contains(syntaxModule))
+        Node.Project.Error(loc, $"Duplicated reference to syntax module '$(syntaxModule.FullName)'.");
+
+      _syntaxModules ::= syntaxModule;
+    }
+
+    internal SetStartRule(startRule : SymbolRef[SyntaxRuleSymbol]) : void
+    {
+      if (_startRule is SymbolRef.None(IsGenerated = true))
+        _startRule = startRule
+      else
+        using (root = Node.Project.RootError(startRule, "Redefinition of start rule"))
+          root.Hint(_startRule, "First seen here");
+    }
+
+    internal AddFileExtension(loc : Location, ext : string) : void
+    {
+      when (_fileExtensions.Contains(ext))
+        Node.Project.Error(loc, $"Duplicated file extension '$ext'.");
+
+      _fileExtensions ::= ext;
+    }
+  }
+}

@@ -368,6 +368,14 @@ namespace Nitra
       MakeSymbolRefWithMessages(bindingResult, context)
     }
 
+    public BindByHierarchy[T](this symbol : Symbol, name : G.QualifiedIdentifier, compilerMessages : ICompilerMessages) : SymbolRef[T]
+      where T: Symbol
+    {
+      def candidates    = symbol.Node.BindMany(name.CalcLocations());
+      def bindingResult = BindingUtils.MakeBindingResult(name.Location, candidates);
+      MakeSymbolRefWithMessages(bindingResult, compilerMessages)
+    }
+
     public BindByHierarchy[T](this symbol : Symbol, name : G.Identifier, compilerMessages : ICompilerMessages) : SymbolRef[T]
       where T: Symbol
     {
@@ -502,25 +510,13 @@ namespace Nitra
         Location(source, tok)
     }
 
-    public RegisterGlobalSpanClassSymbols(syntaxModuleSymbol : ParsedSyntaxModuleSymbol, context : Context) : void
-    {
-      def overridenSpanClasses = HashSet();
-      def loop(_ : SpanClassContext)
-      {
-        | null => ()
-        | context =>
-          when (overridenSpanClasses.Add(context.SpanClass.Name))
-            _ = syntaxModuleSymbol.Node.AddAndReport.[SpanClassSymbol](context.SpanClass, context.SpanClass.FirstLocation);
-          loop(context.TryGetParent())
-      }
-      loop(context.TryGetContext())
-    }
-
     public StringRuleTyping(loc : Location, value : string, fieldName : option[string], context : Context) : Rule
     {
       def newFieldName   = MakeLiteralName(fieldName, value, context);
       def loc            = loc.FromEnd();
-      Rule.String(loc, newFieldName, value, false, GetSpanClassForString(context, loc, value))
+      def languageRef    = context.GetContext.[SyntaxModuleContext]().SyntaxModuleSymbol.Language;
+      def spanClass      = if (languageRef is SymbolRef.Some(language)) GetSpanClassForString(language, value) else null;
+      Rule.String(loc, newFieldName, value, false, spanClass)
     }
 
     public MakeNamespaceSymbol(currentNs : NamespaceSymbol, path : list[Nitra.Location]) : NamespaceSymbol
@@ -556,47 +552,11 @@ namespace Nitra
       enter(currentNs, path)
     }
 
-    public GetSpanClassForString(context : Context, location : Location, str : string) : SpanClassSymbol
+    public GetSpanClassForString(language : LanguageSymbol, str : string) : SpanClassSymbol
     {
-      def getAllSpanClassSymbolFromImportedModule(context : Context, result : List[SpanClassSymbol]) : void
-      {
-        match (context)
-        {
-          | null => assert2(false);
-          | RootContext => ()
-          | OpenNamespaceOrTypeContext(OpenSymbol = Some(mod is SyntaxModuleSymbol)) =>
-            result.AddRange(mod.Node.GetChildren.[SpanClassSymbol]());
-            getAllSpanClassSymbolFromImportedModule(context.Parent, result);
-
-          | _ => getAllSpanClassSymbolFromImportedModule(context.Parent, result)
-        }
-      }
-      def tryFindInOpenModules() : SpanClassSymbol
-      {
-        def result = List();
-        getAllSpanClassSymbolFromImportedModule(context, result);
-        def suitable = result.Filter(_.Matcher(str));
-
-        match (suitable)
-        {
-          | [one] => one
-          | []    => null
-          | _ :: _    =>
-            context.Error(location,
-              $<#Ambiguity between imported span class matchers for the "$str" literal rule. Define the span class matcher for this rule in the current syntax module.#>);
-            null
-        }
-      }
-
-      def loop(context : Context) : SpanClassSymbol
-      {
-        | null => null
-        | SyntaxModuleContext => tryFindInOpenModules()
-        | SpanClassContext(SpanClass = spanClass) when spanClass.Matcher(str) => spanClass
-        | _ => loop(context.Parent)
-      }
-
-      loop(context)
+      foreach (spanClass when spanClass.Matcher(str) in language.SpanClassesWithMatchers)
+        return spanClass;
+      null
     }
 
     [DebuggerStepThroughAttribute]
