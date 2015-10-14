@@ -36,16 +36,8 @@ namespace XXNamespaceXX
   [Guid(GuidList.GuidXXLanguageXXVsPackagePkgString)]
   public sealed class XXLanguageXXVsPackage : Package
   {
-    internal static Language Language { get; private set; }
-
     static XXLanguageXXVsPackage()
     {
-      var path = GetPlaginPath();
-      Language = new Language("XXLanguageXX",
-        NitraFileExtensionsAndContentTypeDefinition.FileExtensions.NToList(),
-        XXStartSyntaxModuleXX,
-        XXStartRuleXX,
-        new[] { XXParserAssembliesXX }.NToList());
     }
 
     public static string GetPlaginPath()
