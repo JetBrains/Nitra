@@ -108,6 +108,7 @@ namespace Nitra
       Extensibles = extensibleRules.Map(data => data.Parsers.Filter(_ != null)).Flatten().ToArray();
 
       InitMandatoryTokenCount();
+      InitConditionalEmpty();
 
       foreach (ruleParser in Simples)     ruleParser.ParsingSequence = ParsingSequence.CreateSimple(ruleParser, ruleIdBuilder, this);
       foreach (ruleParser in Prefixs)     ruleParser.ParsingSequence = ParsingSequence.CreateExtension(ruleParser, ruleIdBuilder, this);
@@ -193,6 +194,71 @@ namespace Nitra
             bpMap["+" + precedence.Name] = (bindingPower + 1) * 2 + 1;
           }
         BindingPowerMap.Add(descriptor, bpMap);
+      }
+    }
+
+    private InitConditionalEmpty() : void
+    {
+      mutable updated = true;
+      def seqMap = Hashtable.[_, SCG.HashSet[SubruleInfo.PredicateDelegate]]();
+      def subruleMap = Hashtable.[_, SCG.HashSet[SubruleInfo.PredicateDelegate]]();
+      def initConditionalEmpty(seq)
+      {
+        def seqPredicates = seqMap.GetValue(seq, SCG.HashSet);
+        def seqCount = seqPredicates.Count;
+        mutable seqHead = true;
+        foreach (subrule in seq.Subrules)
+        {
+          def subrulePredicates = subruleMap.GetValue(subrule, SCG.HashSet);
+          def subruleCount = subrulePredicates.Count;
+          subrulePredicates.UnionWith([subrule.HeadPredicate, null]);
+          match (subrule)
+          {
+            | Empty                        => ()
+            | RegularCall                  => ()
+            | TokenString                  => ()
+            | ExtensibleCall    as subrule =>
+              when (subrule.CanParseEmptyString)
+                subrulePredicates.UnionWith(subrule.RuleParser.PrefixRules.SelectMany(r => { initConditionalEmpty(r.SequenceInfo); seqMap[r.SequenceInfo] }));
+
+            | SimpleCall        as subrule =>
+              when (subrule.CanParseEmptyString)
+              {
+                initConditionalEmpty(subrule.RuleParser.SequenceInfo);
+                subrulePredicates.UnionWith(seqMap[subrule.RuleParser.SequenceInfo]);
+              }
+
+            | Option            as subrule =>
+              initConditionalEmpty(subrule.Rule);
+
+            | List              as subrule =>
+              initConditionalEmpty(subrule.Item);
+
+            | ListWithSeparator as subrule =>
+              initConditionalEmpty(subrule.Item);
+              initConditionalEmpty(subrule.Separator);
+
+            | ListItem                     => assert(false);
+            | Marker                       => assert(false);
+          }
+          updated = updated || subrulePredicates.Count != subruleCount;
+          when (seqHead)
+            seqPredicates.UnionWith(subrulePredicates);
+          seqHead = seqHead && subrule.CanParseEmptyString;
+        }
+        updated = updated || seqPredicates.Count != seqCount;
+      }
+      while (updated)
+      {
+        updated = false;
+        foreach (ruleParser in Simples)                    initConditionalEmpty(ruleParser.SequenceInfo);
+        foreach (ruleParser in Prefixs)                    initConditionalEmpty(ruleParser.SequenceInfo);
+        foreach (ruleParser in Postfixs)                   initConditionalEmpty(ruleParser.SequenceInfo);
+      }
+      foreach ((subrule, predicates) when predicates.Count > 1 in subruleMap.KeyValuePairs)
+      {
+        _ = predicates.Remove(null);
+        subrule.ConditionalEmpty = predicates.ToArray();
       }
     }
 
