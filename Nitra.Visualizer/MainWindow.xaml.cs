@@ -666,10 +666,10 @@ namespace Nitra.Visualizer
         var sym = name.Symbol;
         var spanClass = sym.SpanClass;
 
-        if (spanClass == "Default")
+        if (spanClass == Nitra.Language.DefaultSpanClass)
           return;
 
-        SpanInfos.Add(new SpanInfo(span, new SpanClass(Nitra.Language.Instance, sym.SpanClass, sym.SpanClass, null)));
+        SpanInfos.Add(new SpanInfo(span, spanClass));
       }
 
       public void Visit(Reference reference)
@@ -681,10 +681,10 @@ namespace Nitra.Visualizer
 
         var spanClass = reference.Ref.SpanClass;
 
-        if (spanClass == "Default")
+        if (spanClass == Nitra.Language.DefaultSpanClass)
           return;
 
-        SpanInfos.Add(new SpanInfo(span, new SpanClass(Nitra.Language.Instance, spanClass, spanClass, null)));
+        SpanInfos.Add(new SpanInfo(span, spanClass));
       }
     }
 
