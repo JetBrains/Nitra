@@ -25,12 +25,11 @@ syntax module NitraSyntax : NitraLang
 
   keyword regex IdentifierStartCharacter (IdentifierPartCharacters | '-')* rule S;
 
-  alias Name            = Identifier;
   alias QualifiedName   = QualifiedIdentifier;
 
   regex PredefinedType = "void" | "int" | "string";
 
-  regex Keyword = "as" | "syntax" | "declaration" | "declarations" | "ast" | "asts" | "extend" | "module"
+  regex KeywordToken = "as" | "syntax" | "declaration" | "declarations" | "ast" | "asts" | "extend" | "module"
                 | "marker" | "map" | "token" | "field" | "span" | "alias" | "regex" | "literal" | "decompose"
                 | "multiple" | "optional" | "abstract" | "in" | "out" | "inout" | "class"
                 | "rule" | "precedence" | "using" | "namespace" | PredefinedType | "right-associative";
@@ -41,14 +40,31 @@ syntax module NitraSyntax : NitraLang
     | [SpanClass(MultilineComment)] MultiLineComment
   }
 
-  token Identifier                       = !(Keyword !IdentifierPartCharacters) IdentifierBody
+  [Keyword]
+  token Keyword = Name=KeywordToken !IdentifierPartCharacters;
+
+  [Reference]
+  token Reference = !Keyword At="@"? IdentifierBody
+  {
+    Value() : string = GetText(IdentifierBody);
+    Identifier() : Nitra.Model.Identifier = Nitra.Model.Identifier(this, IdentifierBody);
+  }
+
+  [Name]
+  token Name = !Keyword At="@"? IdentifierBody
+  {
+    Value() : string = GetText(IdentifierBody);
+    Identifier() : Nitra.Model.Identifier = Nitra.Model.Identifier(this, IdentifierBody);
+  }
+
+  token Text  = !Keyword At="@"? IdentifierBody
   {
     Value() : string = GetText(IdentifierBody);
     Identifier() : Nitra.Model.Identifier = Nitra.Model.Identifier(this, IdentifierBody);
   }
 
   [ExplicitSpaces]
-  syntax QualifiedIdentifier              = Names=(Identifier; s "." s)+
+  syntax QualifiedIdentifier              = Names=(Reference; s "." s)+
   {
     Identifiers() : list[Nitra.Model.Identifier] = Names.Item1.Identifiers();
     Parts() : list[string] = Names.Item1.MapToList(_.Value());
@@ -113,16 +129,16 @@ syntax module NitraSyntax : NitraLang
     | Braces  = "[" (NitraType; "," sm; ?)+ "]" { override Typing = this.NitraTypes.Item1.MapToList(t => t.Typing(context)[0]); }
   }
 
-  syntax NitraTypeName = Identifier NitraTypeArguments?
+  syntax NitraTypeName = Reference NitraTypeArguments?
   {
     Typing(context : Context) : TypeNamePart
     {
-      def name = this.Identifier.GetText();
+      def name = this.Reference.GetText();
       def env  = context.GetNemerleEnvironment();
       if (this.NitraTypeArgumentsOpt.HasValue)
-        TypeNamePart(this.Identifier.Location + this.NitraTypeArgumentsOpt.Location, name, this.NitraTypeArgumentsOpt.Value.Typing(context), env)
+        TypeNamePart(this.Reference.Location + this.NitraTypeArgumentsOpt.Location, name, this.NitraTypeArgumentsOpt.Value.Typing(context), env)
       else
-        TypeNamePart(this.Identifier.Location, name, [], env)
+        TypeNamePart(this.Reference.Location, name, [], env)
     }
   }
 
@@ -325,14 +341,14 @@ syntax module NitraSyntax : NitraLang
         regex HexColor = '#' HexDigit{6};
         override Value = System.Drawing.Color.FromArgb(HexToInt(this, HexColor.StartPos + 1, HexColor.EndPos));
       }
-    | Named = Identifier
+    | Named = ColorName=Text
       {
         override Value
         {
-          def colorName = Identifier.Value();
+          def colorName = ColorName.Value();
           def result    = System.Drawing.Color.FromName(colorName);
           unless (result.IsKnownColor)
-            _compilerMessages.Error(Identifier, $"Unknown color name '$colorName'.");
+            _compilerMessages.Error(ColorName, $"Unknown color name '$colorName'.");
           result
         }
       }
@@ -621,7 +637,7 @@ syntax module NitraSyntax : NitraLang
         override Typing {}
         override TypeProperties = DependentAddStatement.Typing(this.PropertyContainer, this.Context);
       }
-    | Decompose = "decompose" Name outline_begin_before nl "{" inl Properties=ProjectedProperty* d "}" outline_end_before nl
+    | Decompose = "decompose" Name=Reference outline_begin_before nl "{" inl Properties=ProjectedProperty* d "}" outline_end_before nl
       {
         syntax ProjectedProperty = Name sm ":" NitraType ";" nl
         {
@@ -930,15 +946,15 @@ syntax module NitraSyntax : NitraLang
     | "Prefix"               { override Options = inOptions.SetOperatorInfo(this, OperatorInfo.Prefix); }
     | "Postfix"              { override Options = inOptions.SetOperatorInfo(this, OperatorInfo.Postfix); }
     | "Infix"                { override Options = inOptions.SetOperatorInfo(this, OperatorInfo.Infix); }
-    | SpanClass              = AttributeName="SpanClass" "(" Identifier ")"
+    | SpanClass              = AttributeName="SpanClass" "(" Reference ")"
       {
         override Options
         {
           def languageRef = Context.GetContext.[SyntaxModuleContext]().SyntaxModuleSymbol.Language;
           if (languageRef is SymbolRef.Some(language))
           {
-            if (language.LookupSpanClass(this.Identifier.Value()) is VSome(spanClass))
-              inOptions.SetSpanClass(this.Identifier, spanClass)
+            if (language.LookupSpanClass(this.Reference.Value()) is VSome(spanClass))
+              inOptions.SetSpanClass(this.Reference, spanClass)
             else
               inOptions
           }
@@ -1103,7 +1119,7 @@ syntax module NitraSyntax : NitraLang
         override MakeContext { _ = Expr.MakeContext(parent); parent }
         override MakeType   = this.Expr.MakeType(ruleSymbol, typeHintOpt);
       }
-    | Identifier = !(ReservedWords !IdentifierPartCharacters) Identifier
+    | Identifier = !(ReservedWords !IdentifierPartCharacters) Reference
       {
         regex ReservedWords = "Some" | "None";
         override MakeContext = parent;
@@ -1150,9 +1166,9 @@ syntax module NitraSyntax : NitraLang
         override MakeContext { _ = this.Expr.MakeContext(parent); foreach (item in this.MatchCases.Item1) _ = item.MakeContext(parent); parent }
         override MakeType = SyntaxMappingTyper.TypeMatch(this, ruleSymbol, typeHintOpt);
       }
-    | Fold = "fold" "(" ItemName=Identifier            sm "in" sm ItemExpr=MapSyntaxExpression
-                    ";" sm AccumulatorName1=Identifier sm "="  sm InitExpr=MapSyntaxExpression
-                    ";" sm AccumulatorName2=Identifier sm "="  sm EachExpr=MapSyntaxExpression
+    | Fold = "fold" "(" ItemName=Name                 sm "in" sm ItemExpr=MapSyntaxExpression
+                    ";" sm AccumulatorName1=Name      sm "="  sm InitExpr=MapSyntaxExpression
+                    ";" sm AccumulatorName2=Reference sm "="  sm EachExpr=MapSyntaxExpression
                     ")"
       {
         [Cached] private MakeAccumulatorSymbol() : AstVariableSymbol = ParsedAccumulatorAstVariableSymbol(this);
@@ -1203,7 +1219,7 @@ syntax module NitraSyntax : NitraLang
       }
 
     precedence MemberAccess:
-    | MemberAccess = Expr=MapSyntaxExpression "." Identifier
+    | MemberAccess = Expr=MapSyntaxExpression "." Reference
       {
         override MakeContext { _ = Expr.MakeContext(parent); parent }
         override MakeType    = SyntaxMappingTyper.TypeMemberAccess(this, ruleSymbol, typeHintOpt);
@@ -1227,7 +1243,7 @@ syntax module NitraSyntax : NitraLang
       }
   }
 
-  syntax ParseTreeFieldExpressionMapping = Expr=MapSyntaxExpression sm "->" sm AstPropertyName=Name ";"
+  syntax ParseTreeFieldExpressionMapping = Expr=MapSyntaxExpression sm "->" sm AstPropertyName=Reference ";"
   {
     [Cached] MakeContext(parent : Context) : Context { _ = Expr.MakeContext(parent); parent }
     GetSyntaxMappingField(astSymbol : AstSymbol, ruleSymbol : SyntaxRuleSymbol) : ValueOption[SyntaxMappingField]
@@ -1253,7 +1269,7 @@ syntax module NitraSyntax : NitraLang
     }
   }
 
-  syntax ParseTreeFieldCodeMapping = FieldName=Name sm "=" sm Code=MapSyntaxCode
+  syntax ParseTreeFieldCodeMapping = FieldName=Reference sm "=" sm Code=MapSyntaxCode
   {
     [Cached] MakeContext(parent : Context) : Context = parent;
     GetSyntaxMappingField(astSymbol : AstSymbol, _ruleSymbol : SyntaxRuleSymbol) : ValueOption[SyntaxMappingField]
@@ -1465,13 +1481,13 @@ syntax module NitraSyntax : NitraLang
     }
     Typing(ruleType : RuleType, context : Context) : ParseTreePattern;
 
-    | Identifier
+    | Identifier=Reference
       {
-        override BindExtensionRule        = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), false);
-        override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(this.Identifier.Location, [this.Identifier.Location], context);
-        override Typing                   = PatternTyper.TypeIdentifier(this.Location, this.Identifier.Identifier(), ruleType, context);
+        override BindExtensionRule        = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Reference, context), false);
+        override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(this.Reference.Location, [this.Reference.Location], context);
+        override Typing                   = PatternTyper.TypeIdentifier(this.Location, this.Reference.Identifier(), ruleType, context);
       }
-    | Ctor  = Identifier "(" (Pattern; "," sm)* ")"
+    | Ctor  = Identifier=Reference "(" (Pattern; "," sm)* ")"
       {
         override BindExtensionRule        = (Utils.BindByHierarchy.[ExtensionRuleSymbol](baseRuleSymbol, this.Identifier, context), true);
         override BindExtensionAst         = TypingUtils.BindAstSymbolFromMappingExtension(this.Identifier.Location, [this.Identifier.Location], context);
@@ -1756,11 +1772,25 @@ syntax module NitraSyntax : NitraLang
       }
   }
 
+  syntax PrecedenceReference2
+  {
+    GetBindingPowerInfo(context : Context, isStrong : bool) : BindingPowerInfo;
+
+    | Zero = "0" as Zero
+      {
+        override GetBindingPowerInfo { _ = context; BindingPowerInfo(PrecedenceReference.Zero(), isStrong); }
+      }
+    | Identifier = Reference
+      {
+        override GetBindingPowerInfo = BindingPowerInfo(PrecedenceReference.Name(context.Bind.[PrecedenceSymbol](this.Reference)), isStrong);
+      }
+  }
+
+
   syntax PrecedenceName
   {
     MakeContext(parent : Context, owner : IPrecedenceSymbolOwner, symbol : PrecedenceSymbol, order : PrecedenceOrderList) : Context;
     GetName() : Nitra.Model.Identifier;
-    GetBindingPowerInfo(context : Context, isStrong : bool) : BindingPowerInfo;
 
     | Zero = "0" as Zero
       {
@@ -1773,9 +1803,8 @@ syntax module NitraSyntax : NitraLang
           PrecedenceZeroContext(parent)
         }
         override GetName = Nitra.Model.Identifier(Location(this.Location.Source, this.Zero), "0");
-        override GetBindingPowerInfo { _ = context; BindingPowerInfo(PrecedenceReference.Zero(), isStrong); }
       }
-    | Identifier
+    | Identifier=Name
       {
         override MakeContext
         {
@@ -1785,8 +1814,7 @@ syntax module NitraSyntax : NitraLang
           else
             parent
         }
-        override GetName = this.Identifier.Identifier();
-        override GetBindingPowerInfo = BindingPowerInfo(PrecedenceReference.Name(context.Bind.[PrecedenceSymbol](this.Identifier)), isStrong);
+        override GetName = this.Name.Identifier();
       }
   }
 
@@ -1873,7 +1901,7 @@ syntax module NitraSyntax : NitraLang
             this.RuleBodyOpt.Value.Typing();
         }
       }
-    | Precedence = "precedence" sm PrecedenceName Order = (sm "order" sm (Name; sm "<" sm){2,})? ":"
+    | Precedence = "precedence" sm PrecedenceName Order=(sm "order" sm (Reference; sm "<" sm){2,})? ":"
       {
         [Cached] private MakeOwner(owner : IRuleDeclarationSite) : IPrecedenceSymbolOwner
         {
@@ -2191,7 +2219,7 @@ syntax module NitraSyntax : NitraLang
     | CharLiteral;
     | StringLiteral;
     | Parentheses = "(" Expression? ")";
-    | "fold" sm Identifier "(" Expression ";" (Expression; ";"sm)+ ")";
+    //| "fold" sm Identifier "(" Expression ";" (Expression; ";"sm)+ ")";
   }
 
   syntax Expression = Body=ContentOrText+
@@ -2439,7 +2467,7 @@ syntax module NitraSyntax : NitraLang
         override Typing = RuleExpression.Typing(_baseRule, _precedenceInfo, _fieldName, context, _options);
         override InferName = RuleExpression.InferName();
       }
-    | Call                            = QualifiedName BindingPower=(sm "^" sm "+"? PrecedenceName)?
+    | Call                            = QualifiedName BindingPower=(sm "^" sm "+"? PrecedenceReference2)?
       {
         override Typing = TypeCall(_baseRule, _precedenceInfo, _fieldName, context, _options, QualifiedName, BindingPower);
         override InferName = QualifiedName.LastIdentifier().Value;
