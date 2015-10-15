@@ -25,6 +25,7 @@ namespace Nitra.ViewModels
     public Exception                               Exception         { get; private set; }
     public TimeSpan                                TestTime          { get; private set; }
     public StatisticsTask.Container                Statistics        { get; private set; }
+    public string[]                                Assemblies        { get; private set; }
 
     public string _hint;
     public override string Hint { get { return _hint; } }
@@ -62,13 +63,14 @@ namespace Nitra.ViewModels
         foreach (var ext in languageAndExtensions.Item2)
           DynamicExtensions.Add(ext);
 
+        Assemblies = resolverCache.Keys.ToArray();
 
         var indent = Environment.NewLine + "  ";
         var para = Environment.NewLine + Environment.NewLine;
 
         _hint = "Language:"          + indent + Language.FullName + para
               + "DynamicExtensions:" + indent + string.Join(indent, DynamicExtensions.Select(g => g.FullName)) + para
-              + "Libraries:"         + indent + string.Join(indent, resolverCache.Keys);
+              + "Libraries:"         + indent + string.Join(indent, Assemblies);
       }
       catch (FileNotFoundException ex)
       {

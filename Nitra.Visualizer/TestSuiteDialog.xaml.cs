@@ -21,8 +21,6 @@ namespace Nitra.Visualizer
 {
   internal partial class TestSuiteDialog
   {
-    const string _showAllRules       = "<Show all rules>";
-    const string _showOnlyStratRules = "<Show only strat rules>";
     const string _assembiesToolTip   = "Enter paths to assemblies (one assembly per line)";
 
     public string TestSuiteName { get; private set; }
@@ -38,15 +36,13 @@ namespace Nitra.Visualizer
 
     public TestSuiteDialog(bool create, TestSuiteVm baseTestSuite)
     {
-      _settings     = Settings.Default;
-      _create       = create;
+      _settings      = Settings.Default;
+      _create        = create;
       _baseTestSuite = baseTestSuite;
 
       InitializeComponent();
 
       this.Title = create ? "New test suite" : "Edit test suite";
-
-      _languageName.Text = baseTestSuite != null ? baseTestSuite.Language : "<none>";
 
       var root = baseTestSuite != null ? baseTestSuite.Solution.RootFolder : Path.GetDirectoryName(_settings.CurrentSolution);
       _rootFolder = root;
@@ -63,7 +59,7 @@ namespace Nitra.Visualizer
       {
         if (string.IsNullOrWhiteSpace(paths))
         {
-          _assemblies.Text = paths = string.Join(Environment.NewLine, baseTestSuite != null ? baseTestSuite.LibPaths : new string[0]);
+          _assemblies.Text = paths = string.Join(Environment.NewLine, baseTestSuite != null ? baseTestSuite.Assemblies : new string[0]);
         }
         this._testSuiteName.Text = baseTestSuite == null ? "" : baseTestSuite.Name;
       }
@@ -177,7 +173,7 @@ namespace Nitra.Visualizer
           _startRuleComboBox.SelectedItem = index >= 0 ? rules[index] : rules[0];
         }
 
-        rules.Insert(0, showOnlyStratRules ? _showAllRules : _showOnlyStratRules);
+        rules.Insert(0, showOnlyStratRules ? _showAllRules : _showOnlyStartRules);
       }
       else if (showOnlyStratRules)
         rules.Insert(0, _showAllRules);
@@ -202,13 +198,6 @@ namespace Nitra.Visualizer
       }
     }
 
-    private static IOrderedEnumerable<RuleDescriptor> GetRules(SyntaxModuleVm syntaxModule)
-    {
-      return syntaxModule.GrammarDescriptor.Rules
-        .Where(r => r is ExtensibleRuleDescriptor || r is SimpleRuleDescriptor)
-        .OrderBy(r => r.ToString());
-    }
-
     private GrammarDescriptor[] GetSelectedGrammarDescriptor()
     {
       var syntaxModules = _syntaxModules.ItemsSource as ObservableCollection<SyntaxModuleVm>;
@@ -225,12 +214,12 @@ namespace Nitra.Visualizer
       UpdateStartRules(true);
     }
 
-    private void _startRuleComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void _languageComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
 // ReSharper disable RedundantCast
-      if (_startRuleComboBox.SelectedItem == (object)_showAllRules)
+      if (_languageComboBox.SelectedItem == (object)_showAllRules)
         UpdateStartRules(false);
-      else if (_startRuleComboBox.SelectedItem == (object)_showOnlyStratRules)
+      else if (_languageComboBox.SelectedItem == (object)_showOnlyStartRules)
         UpdateStartRules(true);
 // ReSharper restore RedundantCast
 
