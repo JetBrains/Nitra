@@ -12,6 +12,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Nitra.Visualizer.Serialization;
 
 namespace Nitra.Visualizer
 {
@@ -19,7 +20,7 @@ namespace Nitra.Visualizer
   {
     static readonly Regex _configRx = new Regex(@"[\\/](Release|Debug)[\\/]", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    public static GrammarDescriptor[] LoadAssembly(string assemblyFilePath, string config)
+    public static Assembly LoadAssembly(string assemblyFilePath, string config)
     {
       assemblyFilePath = UpdatePathForConfig(assemblyFilePath, config);
 
@@ -36,7 +37,8 @@ namespace Nitra.Visualizer
         }
       }
       assembly = Assembly.LoadFrom(assemblyFilePath);
-      return GrammarDescriptor.GetDescriptors(assembly);
+
+      return assembly;
     }
 
     public static string UpdatePathForConfig(string assemblyFilePath, string config)
@@ -83,23 +85,9 @@ namespace Nitra.Visualizer
       return testSuitName.Any(invalidChars.Contains);
     }
 
-    public static XElement MakeXml([NotNull] string root, [NotNull] IEnumerable<GrammarDescriptor> syntaxModules, [NotNull] RuleDescriptor startRule, string language)
+    public static string MakeXml([NotNull] string root, [NotNull] Language language, [NotNull] IEnumerable<GrammarDescriptor> dynamicExtensions)
     {
-      //  <Config>
-      //    <Lib Path="../sss/Json.Grammar.dll"><SyntaxModule Name="JasonParser" /></Lib>
-      //    <Lib Path="../sss/JsonEx.dll"><SyntaxModule Name="JsonEx" StartRule="Start" /></Lib>
-      //  </Config>
-      var libs = syntaxModules.GroupBy(m => MakeRelativePath(@from:root, isFromDir:true, to:m.GetType().Assembly.Location, isToDir:false))
-        .Select(asm =>
-          new XElement("Lib",
-            new XAttribute("Path", asm.Key),
-            asm.Select(mod =>
-              new XElement("SyntaxModule",
-                new XAttribute("Name", mod.FullName),
-                mod.Rules.Contains(startRule) ? new XAttribute("StartRule", startRule.Name) : null))
-            ));
-
-      return new XElement("Config", new XAttribute("Language", language), libs);
+      return SerializationHelper.Serialize(language, dynamicExtensions, path => MakeRelativePath(@from: root, isFromDir: true, to: path, isToDir: false));
     }
 
     public static bool IsEmpty(this IEnumerable seq)

@@ -40,8 +40,8 @@ namespace Nitra.ViewModels
       public int _completionStartPos = -1;
       public string _completionPrefix = null;
 
-      public TestFile([NotNull] TestVm test, FsProject<IAst> project, string language, FileStatistics statistics)
-        : base(test.TestPath, test.TestSuit.StartRule, language, project, test.TestSuit.CompositeGrammar, statistics)
+      public TestFile([NotNull] TestVm test, Language language, FsProject<IAst> project, FileStatistics statistics)
+        : base(test.TestPath, language, project, statistics)
       {
         if (test == null) throw new ArgumentNullException("test");
         _test = test;
@@ -52,7 +52,7 @@ namespace Nitra.ViewModels
         var session = base.GetParseSession();
         session.CompletionStartPos = _completionStartPos;
         session.CompletionPrefix   = _completionPrefix;
-        session.DynamicExtensions  = _test.TestSuit.AllSynatxModules;
+        session.DynamicExtensions  = _test.TestSuit.DynamicExtensions;
         switch (_test.TestSuit.RecoveryAlgorithm)
         {
           case RecoveryAlgorithm.Smart:      session.OnRecovery = ParseSession.SmartRecovery; break;
@@ -88,7 +88,7 @@ namespace Nitra.ViewModels
           _testFolder.ParseTreeStatistics.ReplaceSingleSubtask(Name),
           _testFolder.AstStatistics.ReplaceSingleSubtask(Name),
           _testFolder.DependPropsStatistics);
-        _file = new TestFile(this, _testFolder.Project, TestSuit.Language, FileStatistics);
+        _file = new TestFile(this, TestSuit.Language, _testFolder.Project, FileStatistics);
       }
       else
       {
@@ -100,7 +100,7 @@ namespace Nitra.ViewModels
           Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties"));
         var solution = new FsSolution<IAst>();
         var project = new FsProject<IAst>(solution);
-        _file = new TestFile(this, project, TestSuit.Language, FileStatistics);
+        _file = new TestFile(this, TestSuit.Language, project, FileStatistics);
       }
 
       if (TestSuit.TestState == TestState.Ignored)
