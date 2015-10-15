@@ -12,14 +12,14 @@ namespace Nitra.ViewModels
   public class TestFolderVm : FullPathVm, ITest, ITestTreeContainerNode
   {
     public string                       TestPath          { get; private set; }
-    public TestSuitVm                   TestSuit          { get; private set; }
+    public TestSuiteVm                   TestSuite          { get; private set; }
     public string                       Name              { get { return Path.GetFileNameWithoutExtension(TestPath); } }
     public ObservableCollection<TestVm> Tests             { get; private set; }
     public IEnumerable<ITest>           Children          { get { return Tests; } }
     //public ObservableCollection<IAst>   CompilationUnits  { get; private set; }
 
-    public TestFolderVm(string testPath, TestSuitVm testSuit)
-      : base(testSuit, testPath)
+    public TestFolderVm(string testPath, TestSuiteVm testSuite)
+      : base(testSuite, testPath)
     {
       var solution = new FsSolution<IAst>();
       this.Project = new FsProject<IAst>(solution);
@@ -31,14 +31,14 @@ namespace Nitra.ViewModels
       DependPropsStatistics = Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties");
 
       TestPath = testPath;
-      TestSuit = testSuit;
-      if (TestSuit.TestState == TestState.Ignored)
+      TestSuite = testSuite;
+      if (TestSuite.TestState == TestState.Ignored)
         TestState = TestState.Ignored;
 
-      string testSuitPath = base.FullPath;
+      string testSuitePath = base.FullPath;
       var tests = new ObservableCollection<TestVm>();
 
-      var paths = Directory.GetFiles(testSuitPath, "*.test");
+      var paths = Directory.GetFiles(testSuitePath, "*.test");
       foreach (var path in paths.OrderBy(f => f))
         tests.Add(new TestVm(path, this));
 

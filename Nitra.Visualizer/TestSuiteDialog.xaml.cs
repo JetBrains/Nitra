@@ -19,43 +19,43 @@ using System.Windows.Threading;
 
 namespace Nitra.Visualizer
 {
-  internal partial class TestSuitDialog
+  internal partial class TestSuiteDialog
   {
     const string _showAllRules       = "<Show all rules>";
     const string _showOnlyStratRules = "<Show only strat rules>";
     const string _assembiesToolTip   = "Enter paths to assemblies (one assembly per line)";
 
-    public string TestSuitName { get; private set; }
+    public string TestSuiteName { get; private set; }
 
     readonly Settings _settings;
     bool _nameUpdate;
     bool _nameChangedByUser;
     readonly bool _create;
     private string _rootFolder;
-    private TestSuitVm _baseTestSuit;
+    private TestSuiteVm _baseTestSuite;
 
     readonly DispatcherTimer _timer = new DispatcherTimer();
 
-    public TestSuitDialog(bool create, TestSuitVm baseTestSuit)
+    public TestSuiteDialog(bool create, TestSuiteVm baseTestSuite)
     {
       _settings     = Settings.Default;
       _create       = create;
-      _baseTestSuit = baseTestSuit;
+      _baseTestSuite = baseTestSuite;
 
       InitializeComponent();
 
-      this.Title = create ? "New test suit" : "Edit test suit";
+      this.Title = create ? "New test suite" : "Edit test suite";
 
-      _languageName.Text = baseTestSuit != null ? baseTestSuit.Language : "<none>";
+      _languageName.Text = baseTestSuite != null ? baseTestSuite.Language : "<none>";
 
-      var root = baseTestSuit != null ? baseTestSuit.Solution.RootFolder : Path.GetDirectoryName(_settings.CurrentSolution);
+      var root = baseTestSuite != null ? baseTestSuite.Solution.RootFolder : Path.GetDirectoryName(_settings.CurrentSolution);
       _rootFolder = root;
       _testsRootTextBlock.Text = root;
       var paths =
-        baseTestSuit == null
+        baseTestSuite == null
         ? "" 
         : string.Join(Environment.NewLine,
-        baseTestSuit.SynatxModules.Select(m =>
+        baseTestSuite.SynatxModules.Select(m =>
           Utils.MakeRelativePath(@from: root, isFromDir: true, to: m.GetType().Assembly.Location, isToDir: false)).Distinct());
       _assemblies.Text = paths;
 
@@ -63,27 +63,27 @@ namespace Nitra.Visualizer
       {
         if (string.IsNullOrWhiteSpace(paths))
         {
-          _assemblies.Text = paths = string.Join(Environment.NewLine, baseTestSuit != null ? baseTestSuit.LibPaths : new string[0]);
+          _assemblies.Text = paths = string.Join(Environment.NewLine, baseTestSuite != null ? baseTestSuite.LibPaths : new string[0]);
         }
-        this._testSuitName.Text = baseTestSuit == null ? "" : baseTestSuit.Name;
+        this._testSuiteName.Text = baseTestSuite == null ? "" : baseTestSuite.Name;
       }
 
       UpdateSyntaxModules(paths, root);
 
       var items = (ObservableCollection<SyntaxModuleVm>)_syntaxModules.ItemsSource;
-      if (baseTestSuit != null)
+      if (baseTestSuite != null)
       {
-        var selectedSynatxModules = baseTestSuit.SynatxModules.Join(items, d => d, suit => suit.GrammarDescriptor, (d, suit) => suit);
+        var selectedSynatxModules = baseTestSuite.SynatxModules.Join(items, d => d, suite => suite.GrammarDescriptor, (d, suite) => suite);
         foreach (var selectedSynatxModule in selectedSynatxModules)
           selectedSynatxModule.IsChecked = true;
       }
 
-      UpdateStartRules(baseTestSuit == null || baseTestSuit.StartRule == null || baseTestSuit.StartRule.IsStartRule);
+      UpdateStartRules(baseTestSuite == null || baseTestSuite.StartRule == null || baseTestSuite.StartRule.IsStartRule);
 
-      if (baseTestSuit != null && baseTestSuit.StartRule != null)
+      if (baseTestSuite != null && baseTestSuite.StartRule != null)
       {
         foreach (var x in _startRuleComboBox.ItemsSource)
-          if (x == baseTestSuit.StartRule)
+          if (x == baseTestSuite.StartRule)
             _startRuleComboBox.SelectedItem = x;
       }
 
@@ -184,7 +184,7 @@ namespace Nitra.Visualizer
 
       _startRuleComboBox.ItemsSource = rules;
 
-      if (string.IsNullOrWhiteSpace(_testSuitName.Text) || !_nameChangedByUser)
+      if (string.IsNullOrWhiteSpace(_testSuiteName.Text) || !_nameChangedByUser)
         UpdateName();
     }
 
@@ -194,7 +194,7 @@ namespace Nitra.Visualizer
       _nameUpdate = true;
       try
       {
-        _testSuitName.Text = MakeName();
+        _testSuiteName.Text = MakeName();
       }
       finally
       {
@@ -234,26 +234,26 @@ namespace Nitra.Visualizer
         UpdateStartRules(true);
 // ReSharper restore RedundantCast
 
-      if (string.IsNullOrWhiteSpace(_testSuitName.Text) || !_nameChangedByUser)
+      if (string.IsNullOrWhiteSpace(_testSuiteName.Text) || !_nameChangedByUser)
         UpdateName();
     }
 
-    private void _testSuitName_TextChanged(object sender, TextChangedEventArgs e)
+    private void _testSuiteName_TextChanged(object sender, TextChangedEventArgs e)
     {
       if (_nameUpdate)
         return;
       _nameChangedByUser = true;
     }
 
-    private void _testSuitName_KeyUp(object sender, KeyEventArgs e)
+    private void _testSuiteName_KeyUp(object sender, KeyEventArgs e)
     {
       if (e.Key == Key.F5)
         UpdateName();
     }
 
-    private void _testSuitName_LostFocus(object sender, RoutedEventArgs e)
+    private void _testSuiteName_LostFocus(object sender, RoutedEventArgs e)
     {
-      if (string.IsNullOrWhiteSpace(_testSuitName.Text))
+      if (string.IsNullOrWhiteSpace(_testSuiteName.Text))
         UpdateName();
     }
 
@@ -302,29 +302,29 @@ namespace Nitra.Visualizer
 
     private void _okButton_Click(object sender, RoutedEventArgs e)
     {
-      var testSuitName = _testSuitName.Text;
+      var testSuiteName = _testSuiteName.Text;
 
-      if (string.IsNullOrWhiteSpace(testSuitName))
+      if (string.IsNullOrWhiteSpace(testSuiteName))
       {
-        MessageBox.Show(this, "Name of test suit can't be empty.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-        _testSuitName.Focus();
+        MessageBox.Show(this, "Name of test suite can't be empty.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        _testSuiteName.Focus();
         return;
       }
 
       var root = Path.GetFullPath(_rootFolder);
-      var path = Path.Combine(root, testSuitName);
+      var path = Path.Combine(root, testSuiteName);
 
       if (Directory.Exists(path) && _create)
       {
-        MessageBox.Show(this, "The test suit '" + testSuitName + "' already exists.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-        _testSuitName.Focus();
+        MessageBox.Show(this, "The test suite '" + testSuiteName + "' already exists.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        _testSuiteName.Focus();
         return;
       }
 
-      if (Utils.IsInvalidDirName(testSuitName))
+      if (Utils.IsInvalidDirName(testSuiteName))
       {
-        MessageBox.Show(this, "Name of test suit is invalid.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-        _testSuitName.Focus();
+        MessageBox.Show(this, "Name of test suite is invalid.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        _testSuiteName.Focus();
         return;
       }
 
@@ -359,11 +359,11 @@ namespace Nitra.Visualizer
 
       try
       {
-        if (_baseTestSuit != null && _baseTestSuit.Name != testSuitName && Directory.Exists(_baseTestSuit.FullPath))
+        if (_baseTestSuite != null && _baseTestSuite.Name != testSuiteName && Directory.Exists(_baseTestSuite.FullPath))
         {
           Directory.CreateDirectory(path);
-          FileSystem.CopyDirectory(_baseTestSuit.FullPath, path, UIOption.AllDialogs);
-          Directory.Delete(_baseTestSuit.FullPath, recursive: true);
+          FileSystem.CopyDirectory(_baseTestSuite.FullPath, path, UIOption.AllDialogs);
+          Directory.Delete(_baseTestSuite.FullPath, recursive: true);
         }
         else
           Directory.CreateDirectory(path);
@@ -371,7 +371,7 @@ namespace Nitra.Visualizer
         var xml = Utils.MakeXml(root, syntaxModules, startRule, _languageName.Text);
         var configPath = Path.Combine(path, "config.xml");
         xml.Save(configPath);
-        TestSuitName = testSuitName;
+        TestSuiteName = testSuiteName;
       }
       catch (Exception ex)
       {

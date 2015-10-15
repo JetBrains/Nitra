@@ -10,7 +10,7 @@ namespace Nitra.ViewModels
 {
   public class SolutionVm : ITestTreeNode
   {
-    public ObservableCollection<TestSuitVm> TestSuits { get; private set; }
+    public ObservableCollection<TestSuiteVm> TestSuites { get; private set; }
     public bool IsDirty { get; private set; }
     public string SolutinFilePath { get; private set; }
     public string RootFolder { get; private set; }
@@ -32,34 +32,34 @@ namespace Nitra.ViewModels
       var suits   = File.ReadAllLines(solutinFilePath);
       var rootDir = Path.GetDirectoryName(solutinFilePath);
       Debug.Assert(rootDir != null, "rootDir != null");
-      TestSuits   = new ObservableCollection<TestSuitVm>();
+      TestSuites   = new ObservableCollection<TestSuiteVm>();
 
-      foreach (var aSuit in suits)
+      foreach (var aSuite in suits)
       {
-        var suit = aSuit.Trim();
+        var suite = aSuite.Trim();
         
-        if (string.IsNullOrEmpty(suit))
+        if (string.IsNullOrEmpty(suite))
           continue;
 
-        var testSuit = new TestSuitVm(this, suit, config);
+        var testSuite = new TestSuiteVm(this, suite, config);
         
         if (selectePath != null)
         {
-          if (testSuit.FullPath == selectePath)
-            testSuit.IsSelected = true; // Прикольно что по другому фокус не изменить!
-          else foreach (var test in testSuit.Tests)
+          if (testSuite.FullPath == selectePath)
+            testSuite.IsSelected = true; // Прикольно что по другому фокус не изменить!
+          else foreach (var test in testSuite.Tests)
             if (test.FullPath == selectePath)
               test.IsSelected = true;
         }
       }
 
-      TestSuits.CollectionChanged += TestSuits_CollectionChanged;
+      TestSuites.CollectionChanged += TestSuites_CollectionChanged;
       IsDirty = false;
     }
 
     public string Name { get { return Path.GetFileName(SolutinFilePath); } }
 
-    void TestSuits_CollectionChanged(object sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    void TestSuites_CollectionChanged(object sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
       IsDirty = true;
     }
@@ -71,8 +71,8 @@ namespace Nitra.ViewModels
 
       var builder = new StringBuilder();
 
-      foreach (var testSuitVm in TestSuits)
-        builder.AppendLine(testSuitVm.Name);
+      foreach (var testSuiteVm in TestSuites)
+        builder.AppendLine(testSuiteVm.Name);
 
       File.WriteAllText(SolutinFilePath, builder.ToString(), Encoding.UTF8);
 
@@ -84,10 +84,10 @@ namespace Nitra.ViewModels
       return Name;
     }
 
-    public string[] GetUnattachedTestSuits()
+    public string[] GetUnattachedTestSuites()
     {
       var dir = Path.GetDirectoryName(SolutinFilePath);
-      return Directory.GetDirectories(dir ?? "").Select(Path.GetFileName).Except(TestSuits.Select(s => s.Name)).ToArray();
+      return Directory.GetDirectories(dir ?? "").Select(Path.GetFileName).Except(TestSuites.Select(s => s.Name)).ToArray();
     }
 
     public ITestTreeNode Parent

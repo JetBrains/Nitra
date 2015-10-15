@@ -13,7 +13,7 @@ using System.Reflection;
 
 namespace Nitra.ViewModels
 {
-  public class TestSuitVm : FullPathVm, ITestTreeContainerNode
+  public class TestSuiteVm : FullPathVm, ITestTreeContainerNode
   {
     public SolutionVm                              Solution          { get; private set; }
     public string                                  Name              { get; private set; }
@@ -21,7 +21,7 @@ namespace Nitra.ViewModels
     public ObservableCollection<GrammarDescriptor> DynamicExtensions { get; private set; }
     public ObservableCollection<ITest>             Tests             { get; private set; }
     public IEnumerable<ITest>                      Children          { get { return Tests; } }
-    public string                                  TestSuitPath      { get; set; }
+    public string                                  TestSuitePath     { get; set; }
     public Exception                               Exception         { get; private set; }
     public TimeSpan                                TestTime          { get; private set; }
     public StatisticsTask.Container                Statistics        { get; private set; }
@@ -31,18 +31,18 @@ namespace Nitra.ViewModels
 
     readonly string _rootPath;
 
-    public TestSuitVm(SolutionVm solution, string name, string config)
+    public TestSuiteVm(SolutionVm solution, string name, string config)
       : base(solution, Path.Combine(solution.RootFolder, name))
     {
       Statistics = new StatisticsTask.Container("TestSuite", "Test Suite");
-      string testSuitPath = base.FullPath;
+      string testSuitePath = base.FullPath;
       var rootPath = solution.RootFolder;
       Solution = solution;
       _rootPath = rootPath;
-      TestSuitPath = testSuitPath;
+      TestSuitePath = testSuitePath;
       DynamicExtensions = new ObservableCollection<GrammarDescriptor>();
 
-      var configPath = Path.GetFullPath(Path.Combine(testSuitPath, "config.xml"));
+      var configPath = Path.GetFullPath(Path.Combine(testSuitePath, "config.xml"));
 
       try
       {
@@ -77,7 +77,7 @@ namespace Nitra.ViewModels
         string additionMsg = null;
 
         if (ex.FileName.EndsWith("config.xml", StringComparison.OrdinalIgnoreCase))
-          additionMsg = @"The configuration file (config.xml) not exists in the test suit folder.";
+          additionMsg = @"The configuration file (config.xml) does not exist in the test suite folder.";
         else if (ex.FileName.EndsWith("Nitra.Runtime.dll", StringComparison.OrdinalIgnoreCase))
           additionMsg = @"Try to recompile the parser.";
 
@@ -92,13 +92,13 @@ namespace Nitra.ViewModels
         _hint = "Failed to load test suite:" + Environment.NewLine + ex.GetType().Name + ":" + ex.Message;
       }
 
-      Name = Path.GetFileName(testSuitPath);
+      Name = Path.GetFileName(testSuitePath);
 
       var tests = new ObservableCollection<ITest>();
 
-      if (Directory.Exists(testSuitPath))
+      if (Directory.Exists(testSuitePath))
       {
-        var paths = Directory.GetFiles(testSuitPath, "*.test").Concat(Directory.GetDirectories(testSuitPath));
+        var paths = Directory.GetFiles(testSuitePath, "*.test").Concat(Directory.GetDirectories(testSuitePath));
         foreach (var path in paths.OrderBy(f => f))
           if (Directory.Exists(path))
             tests.Add(new TestFolderVm(path, this));
@@ -107,12 +107,12 @@ namespace Nitra.ViewModels
       }
       else if (TestState != TestState.Ignored)
       {
-        _hint = "The test suite folder '" + Path.GetDirectoryName(testSuitPath) + "' not exists.";
+        _hint = "The test suite folder '" + Path.GetDirectoryName(testSuitePath) + "'does not exist.";
         TestState = TestState.Ignored;
       }
 
       Tests = tests;
-      solution.TestSuits.Add(this);
+      solution.TestSuites.Add(this);
     }
 
     public string Xml { get { return Utils.MakeXml(_rootPath, Language, DynamicExtensions); } }
@@ -191,8 +191,8 @@ namespace Nitra.ViewModels
 
     public void Remove()
     {
-      var fullPath = TestFullPath(this.TestSuitPath);
-      Solution.TestSuits.Remove(this);
+      var fullPath = TestFullPath(this.TestSuitePath);
+      Solution.TestSuites.Remove(this);
       Solution.Save();
       if (Directory.Exists(fullPath))
         Directory.Delete(fullPath, true);

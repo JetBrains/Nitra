@@ -79,10 +79,10 @@ namespace Nitra.Visualizer
       return assemblyPaths.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.RemoveEmptyEntries);
     }
 
-    public static bool IsInvalidDirName(string testSuitName)
+    public static bool IsInvalidDirName(string testSuiteName)
     {
       var invalidChars = Path.GetInvalidFileNameChars();
-      return testSuitName.Any(invalidChars.Contains);
+      return testSuiteName.Any(invalidChars.Contains);
     }
 
     public static string MakeXml([NotNull] string root, [NotNull] Language language, [NotNull] IEnumerable<GrammarDescriptor> dynamicExtensions)
