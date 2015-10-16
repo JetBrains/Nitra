@@ -41,21 +41,24 @@ namespace Nitra.ViewModels
       Solution = solution;
       _rootPath = rootPath;
       TestSuitePath = testSuitePath;
+      Language = Language.Instance;
       DynamicExtensions = new ObservableCollection<GrammarDescriptor>();
 
       var configPath = Path.GetFullPath(Path.Combine(testSuitePath, "config.xml"));
 
       try
       {
-        var resolverCache = new Dictionary<string, Assembly>();
+        var assemblyRelativePaths = new Dictionary<string, Assembly>();
 
         var languageAndExtensions = SerializationHelper.Deserialize(File.ReadAllText(configPath),
           path =>
           {
-            var fullPath = Path.GetFullPath(Path.Combine(rootPath, path));
             Assembly result;
-            if (!resolverCache.TryGetValue(fullPath, out result))
-              resolverCache.Add(fullPath, result = Utils.LoadAssembly(fullPath, config));
+            if (!assemblyRelativePaths.TryGetValue(path, out result))
+            {
+              var fullPath = Path.GetFullPath(Path.Combine(rootPath, path));
+              assemblyRelativePaths.Add(path, result = Utils.LoadAssembly(fullPath, config));
+            }
             return result;
           });
 
@@ -63,7 +66,7 @@ namespace Nitra.ViewModels
         foreach (var ext in languageAndExtensions.Item2)
           DynamicExtensions.Add(ext);
 
-        Assemblies = resolverCache.Keys.ToArray();
+        Assemblies = assemblyRelativePaths.Keys.ToArray();
 
         var indent = Environment.NewLine + "  ";
         var para = Environment.NewLine + Environment.NewLine;
