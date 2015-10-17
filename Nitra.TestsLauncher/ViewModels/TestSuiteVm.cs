@@ -25,10 +25,12 @@ namespace Nitra.ViewModels
     public Exception                               Exception         { get; private set; }
     public TimeSpan                                TestTime          { get; private set; }
     public StatisticsTask.Container                Statistics        { get; private set; }
-    public string[]                                Assemblies        { get; private set; }
+    public Assembly[]                              Assemblies        { get; private set; }
 
     public string _hint;
     public override string Hint { get { return _hint; } }
+
+    public static Assembly[] NoAssembiles = new Assembly[0];
 
     readonly string _rootPath;
 
@@ -43,6 +45,7 @@ namespace Nitra.ViewModels
       TestSuitePath = testSuitePath;
       Language = Language.Instance;
       DynamicExtensions = new ObservableCollection<GrammarDescriptor>();
+      Assemblies = NoAssembiles;
 
       var configPath = Path.GetFullPath(Path.Combine(testSuitePath, "config.xml"));
 
@@ -53,12 +56,10 @@ namespace Nitra.ViewModels
         var languageAndExtensions = SerializationHelper.Deserialize(File.ReadAllText(configPath),
           path =>
           {
+            var fullPath = Path.GetFullPath(Path.Combine(rootPath, path));
             Assembly result;
-            if (!assemblyRelativePaths.TryGetValue(path, out result))
-            {
-              var fullPath = Path.GetFullPath(Path.Combine(rootPath, path));
-              assemblyRelativePaths.Add(path, result = Utils.LoadAssembly(fullPath, config));
-            }
+            if (!assemblyRelativePaths.TryGetValue(fullPath, out result))
+              assemblyRelativePaths.Add(fullPath, result = Utils.LoadAssembly(fullPath, config));
             return result;
           });
 
@@ -66,14 +67,14 @@ namespace Nitra.ViewModels
         foreach (var ext in languageAndExtensions.Item2)
           DynamicExtensions.Add(ext);
 
-        Assemblies = assemblyRelativePaths.Keys.ToArray();
+        Assemblies = assemblyRelativePaths.Values.ToArray();
 
         var indent = Environment.NewLine + "  ";
         var para = Environment.NewLine + Environment.NewLine;
 
         _hint = "Language:"          + indent + Language.FullName + para
               + "DynamicExtensions:" + indent + string.Join(indent, DynamicExtensions.Select(g => g.FullName)) + para
-              + "Libraries:"         + indent + string.Join(indent, Assemblies);
+              + "Libraries:"         + indent + string.Join(indent, assemblyRelativePaths.Keys);
       }
       catch (FileNotFoundException ex)
       {

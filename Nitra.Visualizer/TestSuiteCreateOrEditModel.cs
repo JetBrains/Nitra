@@ -1,12 +1,11 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Windows;
-using System.Windows.Threading;
+using Nitra.ViewModels;
 using Nitra.Visualizer.Properties;
 
 namespace Nitra.Visualizer
@@ -22,7 +21,7 @@ namespace Nitra.Visualizer
       Title = isCreate ? "New test suite" : "Edit test suite";
       RootFolder = Path.GetDirectoryName(_settings.CurrentSolution);
       Languages = new ObservableCollection<Language>();
-      DynamicExtensions = new ObservableCollection<GrammarDescriptor>();
+      DynamicExtensions = new ObservableCollection<DynamicExtensionModel>();
     }
 
     public string Title
@@ -92,12 +91,13 @@ namespace Nitra.Visualizer
     }
 
     public static readonly DependencyProperty NormalizedAssembliesProperty =
-        DependencyProperty.Register("NormalizedAssemblies", typeof(Assembly[]), typeof(TestSuiteCreateOrEditModel), new UIPropertyMetadata(new Assembly[0], OnNormalizedAssembliesChanged));
+        DependencyProperty.Register("NormalizedAssemblies", typeof(Assembly[]), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata(TestSuiteVm.NoAssembiles, OnNormalizedAssembliesChanged));
 
     private static void OnNormalizedAssembliesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-      var model = (TestSuiteCreateOrEditModel)d;
-      var oldLanguages = new HashSet<Language>(model.Languages);
+      var model                = (TestSuiteCreateOrEditModel)d;
+      var oldLanguages         = model.Languages.ToHashSet();
+      var oldDynamicExtensions = model.DynamicExtensions.ToDictionary(x => x.Descriptor);
       foreach (var assembly in (Assembly[])e.NewValue)
       {
         foreach (var language in Language.GetLanguages(assembly))
@@ -105,9 +105,37 @@ namespace Nitra.Visualizer
           if (!oldLanguages.Remove(language))
             model.Languages.Add(language);
         }
+
+        foreach (var descriptor in GrammarDescriptor.GetDescriptors(assembly))
+        {
+          if (!oldDynamicExtensions.Remove(descriptor))
+            model.DynamicExtensions.Add(new DynamicExtensionModel(descriptor));
+        }
       }
       foreach (var language in oldLanguages)
         model.Languages.Remove(language);
+      foreach (var pair in oldDynamicExtensions)
+        model.DynamicExtensions.Remove(pair.Value);
+    }
+
+    public Language SelectedLanguage
+    {
+      get { return (Language)GetValue(SelectedLanguageProperty); }
+      set { SetValue(SelectedLanguageProperty, value); }
+    }
+
+    public static readonly DependencyProperty SelectedLanguageProperty =
+        DependencyProperty.Register("SelectedLanguage", typeof(Language), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata(null, OnSelectedLanguageChanged));
+
+    private static void OnSelectedLanguageChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+      var model = (TestSuiteCreateOrEditModel)d;
+      var newLanguage = (Language)e.NewValue;
+      if (newLanguage == null)
+        return;
+
+      foreach (var dynamicExtension in model.DynamicExtensions)
+        dynamicExtension.IsEnabled = !newLanguage.CompositeGrammar.Grammars.Contains(dynamicExtension.Descriptor);
     }
 
     public ObservableCollection<Language> Languages
@@ -116,10 +144,55 @@ namespace Nitra.Visualizer
       private set;
     }
 
-    public ObservableCollection<GrammarDescriptor> DynamicExtensions
+    public ObservableCollection<DynamicExtensionModel> DynamicExtensions
     {
       get;
       private set;
+    }
+  }
+
+  internal sealed class DynamicExtensionModel : DependencyObject
+  {
+    private readonly GrammarDescriptor _descriptor;
+
+    public DynamicExtensionModel(GrammarDescriptor descriptor)
+    {
+      _descriptor = descriptor;
+    }
+
+    public GrammarDescriptor Descriptor
+    {
+      get { return _descriptor; }
+    }
+
+    public string Name
+    {
+      get { return _descriptor.FullName; }
+    }
+
+    public bool IsChecked
+    {
+      get { return (bool)GetValue(IsCheckedProperty); }
+      set { SetValue(IsCheckedProperty, value); }
+    }
+
+    public static readonly DependencyProperty IsCheckedProperty =
+        DependencyProperty.Register("IsChecked", typeof(bool), typeof(DynamicExtensionModel), new FrameworkPropertyMetadata(false));
+
+    public bool IsEnabled
+    {
+      get { return (bool)GetValue(IsEnabledProperty); }
+      set { SetValue(IsEnabledProperty, value); }
+    }
+
+    public static readonly DependencyProperty IsEnabledProperty =
+        DependencyProperty.Register("IsEnabled", typeof(bool), typeof(DynamicExtensionModel), new FrameworkPropertyMetadata(true, OnIsEnabledChanged));
+
+    private static void OnIsEnabledChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+      var model = (DynamicExtensionModel)d;
+      if (!(bool)e.NewValue)
+        model.IsChecked = false;
     }
   }
 }

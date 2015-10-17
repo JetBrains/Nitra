@@ -23,7 +23,7 @@ namespace Nitra.Visualizer
   {
     const string _assembiesToolTip   = "Enter paths to assemblies (one assembly per line)";
 
-    private readonly TestSuiteCreateOrEditModel _dataContext;
+    private readonly TestSuiteCreateOrEditModel _model;
     private readonly DispatcherTimer _timer;
 
     public TestSuiteDialog(bool isCreate, TestSuiteVm baseTestSuite)
@@ -32,35 +32,27 @@ namespace Nitra.Visualizer
       _timer.Interval = TimeSpan.FromSeconds(1.3);
       _timer.Tick += _assembliesEdit_timer_Tick;
 
-      DataContext = _dataContext = new TestSuiteCreateOrEditModel(Settings.Default, isCreate);
+      DataContext = _model = new TestSuiteCreateOrEditModel(Settings.Default, isCreate);
 
       InitializeComponent();
 
       if (baseTestSuite != null)
       {
-        _dataContext.RootFolder = baseTestSuite.Solution.RootFolder;
-        _dataContext.SuiteName = baseTestSuite.Name;
-        _dataContext.Assemblies = string.Join(Environment.NewLine, baseTestSuite.Assemblies);
+        _model.RootFolder = baseTestSuite.Solution.RootFolder;
+        _model.SuiteName = baseTestSuite.Name;
+        _model.NormalizedAssemblies = baseTestSuite.Assemblies;
 
         if (baseTestSuite.Language != Nitra.Language.Instance)
-          _languageComboBox.SelectedValue = baseTestSuite.Language;
+          _model.SelectedLanguage = baseTestSuite.Language;
       }
 
-      _assemblies.Text = _dataContext.Assemblies;
+      _assemblies.Text = _model.NormalizedAssembliesText;
       _assemblies.TextChanged += _assemblies_TextChanged;
     }
 
     public string TestSuiteName
     {
-      get { return _dataContext.SuiteName; }
-    }
-
-    private void CheckBox_Changed(object sender, RoutedEventArgs e)
-    {
-    }
-
-    private void _languageComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
+      get { return _model.SuiteName; }
     }
 
     private void _testSuiteName_TextChanged(object sender, TextChangedEventArgs e)
@@ -88,22 +80,22 @@ namespace Nitra.Visualizer
     void _assembliesEdit_timer_Tick(object sender, EventArgs e)
     {
       _timer.Stop();
-      _dataContext.Assemblies = _assemblies.Text;
+      _model.Assemblies = _assemblies.Text;
     }
 
     private void _assemblies_LostFocus(object sender, RoutedEventArgs e)
     {
       _timer.Stop();
-      _dataContext.Assemblies = _assemblies.Text;
-      _assemblies.Text = _dataContext.NormalizedAssembliesText;
+      _model.Assemblies = _assemblies.Text;
+      _assemblies.Text = _model.NormalizedAssembliesText;
     }
 
     private void _assemblies_KeyUp(object sender, KeyEventArgs e)
     {
       if (e.Key == Key.F5)
       {
-        _dataContext.Assemblies = _assemblies.Text;
-        _assemblies.Text = _dataContext.NormalizedAssembliesText;
+        _model.Assemblies = _assemblies.Text;
+        _assemblies.Text = _model.NormalizedAssembliesText;
       }
     }
 
@@ -195,7 +187,7 @@ namespace Nitra.Visualizer
       var dialog = new OpenFileDialog
       {
         DefaultExt = ".dll",
-        InitialDirectory = _dataContext.RootFolder,
+        InitialDirectory = _model.RootFolder,
         Filter = "Parser library (.dll)|*.dll|Parser application (.exe)|*.exe",
         Title = "Load parser"
       };
