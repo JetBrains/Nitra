@@ -15,6 +15,8 @@ namespace Nitra.ViewModels
 {
   public class TestSuiteVm : FullPathVm, ITestTreeContainerNode
   {
+    public static string ConfigFileName = "config.xml";
+
     public SolutionVm                              Solution          { get; private set; }
     public string                                  Name              { get; private set; }
     public Language                                Language          { get; private set; }
@@ -47,7 +49,7 @@ namespace Nitra.ViewModels
       DynamicExtensions = new ObservableCollection<GrammarDescriptor>();
       Assemblies = NoAssembiles;
 
-      var configPath = Path.GetFullPath(Path.Combine(testSuitePath, "config.xml"));
+      var configPath = Path.GetFullPath(Path.Combine(testSuitePath, ConfigFileName));
 
       try
       {

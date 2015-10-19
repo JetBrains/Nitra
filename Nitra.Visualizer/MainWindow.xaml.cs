@@ -86,6 +86,7 @@ namespace Nitra.Visualizer
     public MainWindow()
     {
       _settings = Settings.Default;
+      _highlightingStyles = new Dictionary<string, HighlightingColor>(StringComparer.OrdinalIgnoreCase);
 
       ToolTipService.ShowDurationProperty.OverrideMetadata(
         typeof(DependencyObject),
@@ -107,31 +108,6 @@ namespace Nitra.Visualizer
       _parseTimer.Elapsed      += _parseTimer_Elapsed;
 
       _text.TextArea.Caret.PositionChanged += Caret_PositionChanged;
-
-      _highlightingStyles = new Dictionary<string, HighlightingColor>(StringComparer.OrdinalIgnoreCase)
-      {
-        { "Keyword",              new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Blue) } },
-        { "Comment",              new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "InlineComment",        new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "MultilineComment",     new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "Number",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Magenta) } },
-        { "Operator",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
-        { "OpenBrace",            new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
-        { "CloseBrace",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
-        { "String",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
-        { "StringEx",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
-        { "Char",                 new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkRed) } },
-        { "Marker",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.LightBlue) } },
-        { "Type",                 new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkCyan) } },
-        { "Method",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkGoldenrod) } },
-        { "Property",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Goldenrod) } },
-        { "Field",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Goldenrod) } },
-        { "Constant",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Goldenrod) } },
-        { "Parameter",            new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Goldenrod) } },
-        { "Namespace",            new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Chocolate) } },
-        { "Alias",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkViolet) } },
-        { "Error",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Red) } },
-      };
 
       _foldingManager    = FoldingManager.Install(_text.TextArea);
       _textMarkerService = new TextMarkerService(_text.Document);
@@ -1039,7 +1015,7 @@ namespace Nitra.Visualizer
       if (_solution == null)
         return;
       var currentTestSuite = _currentTestSuite;
-      var dialog = new TestSuiteDialog(create, currentTestSuite) { Owner = this };
+      var dialog = new TestSuiteDialog(create, currentTestSuite, _settings) { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
         if (currentTestSuite != null)
@@ -1080,10 +1056,7 @@ namespace Nitra.Visualizer
         if (test != null)
         {
           _parseResult = null;
-          _currentTestSuite = test.TestSuite;
-          _currentTest = test;
-          _currentTestFolder = test.Parent as TestFolderVm;
-          _text.Text = test.Code;
+          ChangeCurrentTest(test.TestSuite, test.Parent as TestFolderVm, test, test.Code);
           ShowDiff(test);
         }
 
@@ -1091,20 +1064,14 @@ namespace Nitra.Visualizer
         if (testFolder != null)
         {
           ClearAll();
-          _currentTestFolder = testFolder;
-          _currentTestSuite = testFolder.TestSuite;
-          _currentTest = null;
-          _text.Text = "";
+          ChangeCurrentTest(testFolder.TestSuite, testFolder, null, "");
         }
 
         var testSuite = e.NewValue as TestSuiteVm;
         if (testSuite != null)
         {
           ClearAll();
-          _currentTestFolder = null;
-          _currentTest = null;
-          _text.Text = "";
-          _currentTestSuite = testSuite;
+          ChangeCurrentTest(testSuite, null, null, "");
           _para.Inlines.Clear();
         }
       }
@@ -1115,6 +1082,25 @@ namespace Nitra.Visualizer
       SaveSelectedTestAndTestSuite();
       _settings.Save();
       Reparse();
+    }
+
+    private void ChangeCurrentTest(TestSuiteVm newTestSuite, TestFolderVm newTestFolder, TestVm newTest, string code)
+    {
+      if (newTestSuite != _currentTestSuite && newTestSuite != null)
+      {
+        _highlightingStyles.Clear();
+        foreach (var spanClass in newTestSuite.Language.GetSpanClasses())
+        {
+          _highlightingStyles.Add(spanClass.Name, new HighlightingColor
+          {
+            Foreground = new SimpleHighlightingBrush(ColorFromArgb(spanClass.Style.ForegroundColor))
+          });
+        }
+      }
+      _currentTestSuite = newTestSuite;
+      _currentTestFolder = newTestFolder;
+      _currentTest = newTest;
+      _text.Text = code;
     }
 
     private void OnRemoveTestSuite(object sender, ExecutedRoutedEventArgs e)
@@ -1661,6 +1647,14 @@ namespace Nitra.Visualizer
           suite.Tests[index].IsSelected = true;
         else if (index > 0)
           suite.Tests[index - 1].IsSelected = true;
+      }
+    }
+
+    public Color ColorFromArgb(int argb)
+    {
+      unchecked
+      {
+        return Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb);
       }
     }
   }

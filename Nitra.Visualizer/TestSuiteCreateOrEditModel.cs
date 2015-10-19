@@ -18,11 +18,19 @@ namespace Nitra.Visualizer
     {
       _settings = settings;
 
+      IsCreate = isCreate;
       Title = isCreate ? "New test suite" : "Edit test suite";
       RootFolder = Path.GetDirectoryName(_settings.CurrentSolution);
       Languages = new ObservableCollection<Language>();
       DynamicExtensions = new ObservableCollection<DynamicExtensionModel>();
     }
+
+    public bool IsCreate
+    {
+      get;
+      private set;
+    }
+
 
     public string Title
     {
@@ -133,6 +141,11 @@ namespace Nitra.Visualizer
       var newLanguage = (Language)e.NewValue;
       if (newLanguage == null)
         return;
+
+      var oldLanguage = (Language)e.OldValue;
+      var suiteName = model.SuiteName;
+      if (string.IsNullOrEmpty(suiteName) || (oldLanguage != null && suiteName == oldLanguage.Name))
+        model.SuiteName = newLanguage.Name;
 
       foreach (var dynamicExtension in model.DynamicExtensions)
         dynamicExtension.IsEnabled = !newLanguage.CompositeGrammar.Grammars.Contains(dynamicExtension.Descriptor);

@@ -25,14 +25,17 @@ namespace Nitra.Visualizer
 
     private readonly TestSuiteCreateOrEditModel _model;
     private readonly DispatcherTimer _timer;
+    private readonly TestSuiteVm _baseTestSuite;
 
-    public TestSuiteDialog(bool isCreate, TestSuiteVm baseTestSuite)
+    public TestSuiteDialog(bool isCreate, TestSuiteVm baseTestSuite, Settings settings)
     {
+      _baseTestSuite = baseTestSuite;
+
       _timer = new DispatcherTimer();
       _timer.Interval = TimeSpan.FromSeconds(1.3);
       _timer.Tick += _assembliesEdit_timer_Tick;
 
-      DataContext = _model = new TestSuiteCreateOrEditModel(Settings.Default, isCreate);
+      DataContext = _model = new TestSuiteCreateOrEditModel(settings, isCreate);
 
       InitializeComponent();
 
@@ -53,22 +56,6 @@ namespace Nitra.Visualizer
     public string TestSuiteName
     {
       get { return _model.SuiteName; }
-    }
-
-    private void _testSuiteName_TextChanged(object sender, TextChangedEventArgs e)
-    {
-    }
-
-    private void _testSuiteName_KeyUp(object sender, KeyEventArgs e)
-    {
-      //if (e.Key == Key.F5)
-      //  UpdateName();
-    }
-
-    private void _testSuiteName_LostFocus(object sender, RoutedEventArgs e)
-    {
-      //if (string.IsNullOrWhiteSpace(_testSuiteName.Text))
-      //  UpdateName();
     }
 
     private void _assemblies_TextChanged(object sender, TextChangedEventArgs e)
@@ -101,82 +88,69 @@ namespace Nitra.Visualizer
 
     private void _okButton_Click(object sender, RoutedEventArgs e)
     {
-      //var testSuiteName = _testSuiteName.Text;
+      var testSuiteName = TestSuiteName;
 
-      //if (string.IsNullOrWhiteSpace(testSuiteName))
-      //{
-      //  MessageBox.Show(this, "Name of test suite can't be empty.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-      //  _testSuiteName.Focus();
-      //  return;
-      //}
+      if (string.IsNullOrWhiteSpace(testSuiteName))
+      {
+        MessageBox.Show(this, "Name of test suite can't be empty.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        _testSuiteName.Focus();
+        return;
+      }
 
-      //var root = Path.GetFullPath(_rootFolder);
-      //var path = Path.Combine(root, testSuiteName);
+      var root = Path.GetFullPath(_model.RootFolder);
+      var path = Path.Combine(root, testSuiteName);
 
-      //if (Directory.Exists(path) && _create)
-      //{
-      //  MessageBox.Show(this, "The test suite '" + testSuiteName + "' already exists.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-      //  _testSuiteName.Focus();
-      //  return;
-      //}
+      if (Directory.Exists(path) && _model.IsCreate)
+      {
+        MessageBox.Show(this, "The test suite '" + testSuiteName + "' already exists.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        _testSuiteName.Focus();
+        return;
+      }
 
-      //if (Utils.IsInvalidDirName(testSuiteName))
-      //{
-      //  MessageBox.Show(this, "Name of test suite is invalid.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-      //  _testSuiteName.Focus();
-      //  return;
-      //}
+      if (Utils.IsInvalidDirName(testSuiteName))
+      {
+        MessageBox.Show(this, "Name of test suite is invalid.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        _testSuiteName.Focus();
+        return;
+      }
 
-      //MakeAllPathsRelative();
+      var assemblies = _model.NormalizedAssemblies;
 
-      //var assemblyPaths = Utils.GetAssemblyPaths(_assemblies.Text);
+      if (assemblies.Length == 0)
+      {
+        MessageBox.Show(this, "No one valid library in library list.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        _assemblies.Focus();
+        return;
+      }
 
-      //if (assemblyPaths.Length == 0)
-      //{
-      //  MessageBox.Show(this, "No one valid library in library list.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-      //  _assemblies.Focus();
-      //  return;
-      //}
+      var selectedLanguage = _model.SelectedLanguage;
 
-      //var syntaxModules = GetSelectedGrammarDescriptor();
+      if (selectedLanguage == null)
+      {
+        MessageBox.Show(this, "Langauge is not selected.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        _languageComboBox.Focus();
+        return;
+      }
 
-      //if (syntaxModules.Length == 0)
-      //{
-      //  MessageBox.Show(this, "No syntax module is selected.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-      //  _syntaxModules.Focus();
-      //  return;
-      //}
+      try
+      {
+        Directory.CreateDirectory(path);
+        if (_baseTestSuite != null && _baseTestSuite.Name != testSuiteName && Directory.Exists(_baseTestSuite.FullPath))
+        {
+          FileSystem.CopyDirectory(_baseTestSuite.FullPath, path, UIOption.AllDialogs);
+          Directory.Delete(_baseTestSuite.FullPath, recursive: true);
+        }
 
-      //var startRule = _startRuleComboBox.SelectedItem as RuleDescriptor;
-
-      //if (startRule == null)
-      //{
-      //  MessageBox.Show(this, "No a start rule is selected.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-      //  _syntaxModules.Focus();
-      //  return;
-      //}
-
-      //try
-      //{
-      //  if (_baseTestSuite != null && _baseTestSuite.Name != testSuiteName && Directory.Exists(_baseTestSuite.FullPath))
-      //  {
-      //    Directory.CreateDirectory(path);
-      //    FileSystem.CopyDirectory(_baseTestSuite.FullPath, path, UIOption.AllDialogs);
-      //    Directory.Delete(_baseTestSuite.FullPath, recursive: true);
-      //  }
-      //  else
-      //    Directory.CreateDirectory(path);
-
-      //  var xml = Utils.MakeXml(root, syntaxModules, startRule, _languageName.Text);
-      //  var configPath = Path.Combine(path, "config.xml");
-      //  xml.Save(configPath);
-      //  TestSuiteName = testSuiteName;
-      //}
-      //catch (Exception ex)
-      //{
-      //  MessageBox.Show(this, ex.GetType().Name + ":" + ex.Message, "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-      //  return;
-      //}
+        var dynamicExtensions = _model.DynamicExtensions.Where(x => x.IsEnabled && x.IsChecked).Select(x => x.Descriptor);
+        var xml               = Utils.MakeXml(root, selectedLanguage, dynamicExtensions);
+        var configPath        = Path.Combine(path, TestSuiteVm.ConfigFileName);
+        File.WriteAllText(configPath, xml);
+      }
+      catch (Exception ex)
+      {
+        MessageBox.Show(this, ex.GetType().Name + ":" + ex.Message, "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        return;
+      }
 
       this.DialogResult = true;
       Close();
