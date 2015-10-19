@@ -8,77 +8,75 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
+using Nitra.Visualizer.Serialization;
+using System.Reflection;
 
 namespace Nitra.ViewModels
 {
-  public class TestSuitVm : FullPathVm, ITestTreeContainerNode
+  public class TestSuiteVm : FullPathVm, ITestTreeContainerNode
   {
-    public SolutionVm Solution { get; private set; }
-    public string Name { get; private set; }
-    public ObservableCollection<GrammarDescriptor>  SynatxModules    { get; private set; }
-    public StartRuleDescriptor                      StartRule        { get; private set; }
-    public ObservableCollection<ITest>              Tests            { get; private set; }
-    public IEnumerable<ITest>                       Children         { get { return Tests; } }
-    public string                                   TestSuitPath     { get; set; }
-    public Exception                                Exception        { get; private set; }
-    public TimeSpan                                 TestTime         { get; private set; }
-    public StatisticsTask.Container                 Statistics       { get; private set; }
+    public static string ConfigFileName = "config.xml";
+
+    public SolutionVm                              Solution          { get; private set; }
+    public string                                  Name              { get; private set; }
+    public Language                                Language          { get; private set; }
+    public ObservableCollection<GrammarDescriptor> DynamicExtensions { get; private set; }
+    public ObservableCollection<ITest>             Tests             { get; private set; }
+    public IEnumerable<ITest>                      Children          { get { return Tests; } }
+    public string                                  TestSuitePath     { get; set; }
+    public Exception                               Exception         { get; private set; }
+    public TimeSpan                                TestTime          { get; private set; }
+    public StatisticsTask.Container                Statistics        { get; private set; }
+    public Assembly[]                              Assemblies        { get; private set; }
+
     public string _hint;
     public override string Hint { get { return _hint; } }
-    public string[] LibPaths { get; private set; }
-    public IEnumerable<GrammarDescriptor> AllSynatxModules { get; private set; }
-    public string Language { get; private set; }
+
+    public static Assembly[] NoAssembiles = new Assembly[0];
 
     readonly string _rootPath;
-    private CompositeGrammar _compositeGrammar;
 
-    public TestSuitVm(SolutionVm solution, string name, string config)
+    public TestSuiteVm(SolutionVm solution, string name, string config)
       : base(solution, Path.Combine(solution.RootFolder, name))
     {
       Statistics = new StatisticsTask.Container("TestSuite", "Test Suite");
-      string testSuitPath = base.FullPath;
+      string testSuitePath = base.FullPath;
       var rootPath = solution.RootFolder;
       Solution = solution;
       _rootPath = rootPath;
-      TestSuitPath = testSuitPath;
-      SynatxModules = new ObservableCollection<GrammarDescriptor>();
+      TestSuitePath = testSuitePath;
+      Language = Language.Instance;
+      DynamicExtensions = new ObservableCollection<GrammarDescriptor>();
+      Assemblies = NoAssembiles;
 
-      var gonfigPath = Path.GetFullPath(Path.Combine(testSuitPath, "config.xml"));
+      var configPath = Path.GetFullPath(Path.Combine(testSuitePath, ConfigFileName));
 
       try
       {
-        var root = XElement.Load(gonfigPath);
-        var libs = root.Elements("Lib").ToList();
-        var language = root.Attribute("Language");
-        Language = language == null ? "<none>" : language.Value;
-        LibPaths = libs.Where(lib => lib.Attribute("Path") != null).Select(lib => lib.Attribute("Path").Value).ToArray();
-        AllSynatxModules = LibPaths.SelectMany(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib)), config)).ToArray();
-        var result =
-          libs.Select(lib => Utils.LoadAssembly(Path.GetFullPath(Path.Combine(rootPath, lib.Attribute("Path").Value)), config)
-            .Join(lib.Elements("SyntaxModule"),
-              m => m.FullName,
-              m => m.Attribute("Name").Value,
-              (m, info) => new { Module = m, StartRule = GetStartRule(info.Attribute("StartRule"), m) }));
+        var assemblyRelativePaths = new Dictionary<string, Assembly>();
 
-
-
-        foreach (var x in result.SelectMany(lib => lib))
-        {
-          SynatxModules.Add(x.Module);
-          if (x.StartRule != null)
+        var languageAndExtensions = SerializationHelper.Deserialize(File.ReadAllText(configPath),
+          path =>
           {
-            Debug.Assert(StartRule == null);
-            StartRule = x.StartRule;
-          }
-        }
-        var startRuleName = StartRule == null ? "" : StartRule.Name;
+            var fullPath = Path.GetFullPath(Path.Combine(rootPath, path));
+            Assembly result;
+            if (!assemblyRelativePaths.TryGetValue(fullPath, out result))
+              assemblyRelativePaths.Add(fullPath, result = Utils.LoadAssembly(fullPath, config));
+            return result;
+          });
+
+        Language = languageAndExtensions.Item1;
+        foreach (var ext in languageAndExtensions.Item2)
+          DynamicExtensions.Add(ext);
+
+        Assemblies = assemblyRelativePaths.Values.ToArray();
 
         var indent = Environment.NewLine + "  ";
         var para = Environment.NewLine + Environment.NewLine;
 
-        _hint = "Libraries:" + indent + string.Join(indent, libs.Select(lib => Utils.UpdatePathForConfig(lib.Attribute("Path").Value, config))) + para
-               + "Syntax modules:" + indent + string.Join(indent, SynatxModules.Select(m => m.FullName)) + para
-               + "Start rule:" + indent + startRuleName;
+        _hint = "Language:"          + indent + Language.FullName + para
+              + "DynamicExtensions:" + indent + string.Join(indent, DynamicExtensions.Select(g => g.FullName)) + para
+              + "Libraries:"         + indent + string.Join(indent, assemblyRelativePaths.Keys);
       }
       catch (FileNotFoundException ex)
       {
@@ -87,7 +85,7 @@ namespace Nitra.ViewModels
         string additionMsg = null;
 
         if (ex.FileName.EndsWith("config.xml", StringComparison.OrdinalIgnoreCase))
-          additionMsg = @"The configuration file (config.xml) not exists in the test suit folder.";
+          additionMsg = @"The configuration file (config.xml) does not exist in the test suite folder.";
         else if (ex.FileName.EndsWith("Nitra.Runtime.dll", StringComparison.OrdinalIgnoreCase))
           additionMsg = @"Try to recompile the parser.";
 
@@ -102,13 +100,13 @@ namespace Nitra.ViewModels
         _hint = "Failed to load test suite:" + Environment.NewLine + ex.GetType().Name + ":" + ex.Message;
       }
 
-      Name = Path.GetFileName(testSuitPath);
+      Name = Path.GetFileName(testSuitePath);
 
       var tests = new ObservableCollection<ITest>();
 
-      if (Directory.Exists(testSuitPath))
+      if (Directory.Exists(testSuitePath))
       {
-        var paths = Directory.GetFiles(testSuitPath, "*.test").Concat(Directory.GetDirectories(testSuitPath));
+        var paths = Directory.GetFiles(testSuitePath, "*.test").Concat(Directory.GetDirectories(testSuitePath));
         foreach (var path in paths.OrderBy(f => f))
           if (Directory.Exists(path))
             tests.Add(new TestFolderVm(path, this));
@@ -117,25 +115,17 @@ namespace Nitra.ViewModels
       }
       else if (TestState != TestState.Ignored)
       {
-        _hint = "The test suite folder '" + Path.GetDirectoryName(testSuitPath) + "' not exists.";
+        _hint = "The test suite folder '" + Path.GetDirectoryName(testSuitePath) + "'does not exist.";
         TestState = TestState.Ignored;
       }
 
       Tests = tests;
-      solution.TestSuits.Add(this);
+      solution.TestSuites.Add(this);
     }
 
-    public CompositeGrammar CompositeGrammar { get { return _compositeGrammar = ParserHost.Instance.MakeCompositeGrammar(SynatxModules); } }
-
-    public XElement Xml { get { return Utils.MakeXml(_rootPath, SynatxModules, StartRule, Language); } }
+    public string Xml { get { return Utils.MakeXml(_rootPath, Language, DynamicExtensions); } }
 
     public RecoveryAlgorithm RecoveryAlgorithm { get; set; }
-
-    private static StartRuleDescriptor GetStartRule(XAttribute startRule, GrammarDescriptor m)
-    {
-      return startRule == null ? null : m.Rules.OfType<StartRuleDescriptor>().First(r => r.Name == startRule.Value);
-    }
-
 
     public void TestStateChanged()
     {
@@ -163,21 +153,19 @@ namespace Nitra.ViewModels
     [CanBeNull]
     public IParseResult Run([NotNull] string code, [CanBeNull] string gold = null, int completionStartPos = -1, string completionPrefix = null, RecoveryAlgorithm recoveryAlgorithm = RecoveryAlgorithm.Smart)
     {
-      _compositeGrammar = ParserHost.Instance.MakeCompositeGrammar(SynatxModules);
-
       var source = new SourceSnapshot(code);
 
-      if (StartRule == null)
+      if (Language.StartRule == null)
         return null;
 
       try
       {
-        var parseSession = new ParseSession(StartRule,
-          compositeGrammar:   _compositeGrammar,
+        var parseSession = new ParseSession(Language.StartRule,
+          compositeGrammar:   Language.CompositeGrammar,
           completionPrefix:   completionPrefix,
           completionStartPos: completionStartPos,
           parseToEndOfString: true,
-          dynamicExtensions:  AllSynatxModules,
+          dynamicExtensions:  DynamicExtensions,
           statistics:         Statistics);
         switch (recoveryAlgorithm)
         {
@@ -198,7 +186,7 @@ namespace Nitra.ViewModels
 
     public void ShowGrammar()
     {
-      var xtml = _compositeGrammar.ToHtml();
+      var xtml = Language.CompositeGrammar.ToHtml();
       var filePath = Path.ChangeExtension(Path.GetTempFileName(), ".html");
       xtml.Save(filePath, SaveOptions.DisableFormatting);
       Process.Start(filePath);
@@ -211,8 +199,8 @@ namespace Nitra.ViewModels
 
     public void Remove()
     {
-      var fullPath = TestFullPath(this.TestSuitPath);
-      Solution.TestSuits.Remove(this);
+      var fullPath = TestFullPath(this.TestSuitePath);
+      Solution.TestSuites.Remove(this);
       Solution.Save();
       if (Directory.Exists(fullPath))
         Directory.Delete(fullPath, true);

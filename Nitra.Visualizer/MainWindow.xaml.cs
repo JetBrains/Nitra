@@ -73,7 +73,7 @@ namespace Nitra.Visualizer
     ParseTree _parseTree;
     readonly Settings _settings;
     private SolutionVm _solution;
-    private TestSuitVm _currentTestSuit;
+    private TestSuiteVm _currentTestSuite;
     private TestFolderVm _currentTestFolder;
     private TestVm _currentTest;
     private readonly PependentPropertyGrid _propertyGrid;
@@ -86,6 +86,7 @@ namespace Nitra.Visualizer
     public MainWindow()
     {
       _settings = Settings.Default;
+      _highlightingStyles = new Dictionary<string, HighlightingColor>(StringComparer.OrdinalIgnoreCase);
 
       ToolTipService.ShowDurationProperty.OverrideMetadata(
         typeof(DependencyObject),
@@ -107,31 +108,6 @@ namespace Nitra.Visualizer
       _parseTimer.Elapsed      += _parseTimer_Elapsed;
 
       _text.TextArea.Caret.PositionChanged += Caret_PositionChanged;
-
-      _highlightingStyles = new Dictionary<string, HighlightingColor>(StringComparer.OrdinalIgnoreCase)
-      {
-        { "Keyword",              new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Blue) } },
-        { "Comment",              new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "InlineComment",        new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "MultilineComment",     new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Green) } },
-        { "Number",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Magenta) } },
-        { "Operator",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
-        { "OpenBrace",            new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
-        { "CloseBrace",           new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Navy) } },
-        { "String",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
-        { "StringEx",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Maroon) } },
-        { "Char",                 new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkRed) } },
-        { "Marker",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.LightBlue) } },
-        { "Type",                 new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkCyan) } },
-        { "Method",               new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkGoldenrod) } },
-        { "Property",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Goldenrod) } },
-        { "Field",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Goldenrod) } },
-        { "Constant",             new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Goldenrod) } },
-        { "Parameter",            new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Goldenrod) } },
-        { "Namespace",            new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Chocolate) } },
-        { "Alias",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.DarkViolet) } },
-        { "Error",                new HighlightingColor { Foreground = new SimpleHighlightingBrush(Colors.Red) } },
-      };
 
       _foldingManager    = FoldingManager.Install(_text.TextArea);
       _textMarkerService = new TextMarkerService(_text.Document);
@@ -158,7 +134,7 @@ namespace Nitra.Visualizer
       if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) != 0)
         return;
       if (_solution != null)
-        SelectTest(_settings.SelectedTestSuit, _settings.SelectedTest, _settings.SelectedTestFolder);
+        SelectTest(_settings.SelectedTestSuite, _settings.SelectedTest, _settings.SelectedTestFolder);
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -175,7 +151,7 @@ namespace Nitra.Visualizer
       _settings.LastTextInput = _text.Text;
       _settings.ActiveTabIndex = _tabControl.SelectedIndex;
 
-      SaveSelectedTestAndTestSuit();
+      SaveSelectedTestAndTestSuite();
       _settings.Save();
     }
 
@@ -193,11 +169,11 @@ namespace Nitra.Visualizer
       return WindowPlacement.GetPlacement(handle);
     }
 
-    private void SaveSelectedTestAndTestSuit()
+    private void SaveSelectedTestAndTestSuite()
     {
-      if (_currentTestSuit != null)
+      if (_currentTestSuite != null)
       {
-        _settings.SelectedTestSuit = _currentTestSuit.TestSuitPath;
+        _settings.SelectedTestSuite = _currentTestSuite.TestSuitePath;
         var test = _testsTreeView.SelectedItem as TestVm;
         _settings.SelectedTest = test == null ? null : test.Name;
         var testFolder = test == null ? null : test.Parent as TestFolderVm;
@@ -221,7 +197,7 @@ namespace Nitra.Visualizer
 
       _solution = new SolutionVm(_settings.CurrentSolution, selectedPath, _settings.Config);
       this.Title = _solution.Name + " - " + Constants.AppName;
-      _testsTreeView.ItemsSource = _solution.TestSuits;
+      _testsTreeView.ItemsSource = _solution.TestSuites;
     }
 
     private void textBox1_GotFocus(object sender, RoutedEventArgs e)
@@ -373,14 +349,14 @@ namespace Nitra.Visualizer
     private void TryReportError()
     {
       if (_parseResult == null)
-        if (_currentTestSuit.Exception != null)
+        if (_currentTestSuite.Exception != null)
         {
-          var msg = "Exception: " + _currentTestSuit.Exception.Message;
+          var msg = "Exception: " + _currentTestSuite.Exception.Message;
           _status.Text = msg;
 
           var errorNode = new TreeViewItem();
           errorNode.Header = "(1,1): " + msg;
-          errorNode.Tag = _currentTestSuit.Exception;
+          errorNode.Tag = _currentTestSuite.Exception;
           errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
           _errorsTreeView.Items.Add(errorNode);
 
@@ -597,7 +573,7 @@ namespace Nitra.Visualizer
       _astRoot = null;
       _parseResult = null;
 
-      if (_currentTestSuit == null || _currentTest == null)
+      if (_currentTestSuite == null || _currentTest == null)
         return;
 
       try
@@ -813,45 +789,45 @@ namespace Nitra.Visualizer
 
     private void CommandBinding_CanAddTest(object sender, CanExecuteRoutedEventArgs e)
     {
-      e.CanExecute = _currentTestSuit != null;
+      e.CanExecute = _currentTestSuite != null;
       e.Handled = true;
     }
 
     private void AddTest()
     {
-      if (_currentTestSuit == null)
+      if (_currentTestSuite == null)
       {
-        MessageBox.Show(this, "Select a test suit first.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        MessageBox.Show(this, "Select a test suite first.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
         return;
       }
 
       if (_needUpdateTextPrettyPrint)
         UpdateTextPrettyPrint();
-      var testSuitPath = _currentTestSuit.TestSuitPath;
+      var testSuitePath = _currentTestSuite.TestSuitePath;
       var selectedTestFolder = _currentTestFolder == null ? null : _currentTestFolder.Name;
-      var dialog = new AddTest(TestFullPath(testSuitPath), _text.Text, _prettyPrintTextBox.Text) { Owner = this };
+      var dialog = new AddTest(TestFullPath(testSuitePath), _text.Text, _prettyPrintTextBox.Text) { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
         var testName = dialog.TestName;
         LoadTests();
-        SelectTest(testSuitPath, testName, selectedTestFolder);
+        SelectTest(testSuitePath, testName, selectedTestFolder);
       }
     }
 
-    private void SelectTest(string testSuitPath, string testName, string selectedTestFolder)
+    private void SelectTest(string testSuitePath, string testName, string selectedTestFolder)
     {
       if (!CheckTestFolder())
       {
-        MessageBox.Show(this, "The test folder does not exists.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        MessageBox.Show(this, "The test folder does not exist.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
         return;
       }
 
-      var testSuits = (ObservableCollection<TestSuitVm>) _testsTreeView.ItemsSource;
+      var testSuites = (ObservableCollection<TestSuiteVm>) _testsTreeView.ItemsSource;
 
-      if (testSuits == null)
+      if (testSuites == null)
         return;
 
-      var result = (ITestTreeContainerNode)testSuits.FirstOrDefault(ts => ts.FullPath == testSuitPath);
+      var result = (ITestTreeContainerNode)testSuites.FirstOrDefault(ts => ts.FullPath == testSuitePath);
       if (result == null)
         return;
       if (selectedTestFolder != null)
@@ -889,14 +865,14 @@ namespace Nitra.Visualizer
       if (_testsTreeView.ItemsSource == null)
         return;
 
-      var testSuits = (ObservableCollection<TestSuitVm>)_testsTreeView.ItemsSource;
+      var testSuites = (ObservableCollection<TestSuiteVm>)_testsTreeView.ItemsSource;
 
-      foreach (var testSuit in testSuits)
+      foreach (var testSuite in testSuites)
       {
-        foreach (var test in testSuit.Tests)
+        foreach (var test in testSuite.Tests)
           RunTest(test);
 
-        testSuit.TestStateChanged();
+        testSuite.TestStateChanged();
       }
     }
 
@@ -1029,23 +1005,23 @@ namespace Nitra.Visualizer
       };
     }
 
-    private void OnAddTestSuit(object sender, ExecutedRoutedEventArgs e)
+    private void OnAddTestSuite(object sender, ExecutedRoutedEventArgs e)
     {
-      EditTestSuit(true);
+      EditTestSuite(true);
     }
 
-    private void EditTestSuit(bool create)
+    private void EditTestSuite(bool create)
     {
       if (_solution == null)
         return;
-      var currentTestSuit = _currentTestSuit;
-      var dialog = new TestSuitDialog(create, currentTestSuit) { Owner = this };
+      var currentTestSuite = _currentTestSuite;
+      var dialog = new TestSuiteDialog(create, currentTestSuite, _settings) { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
-        if (currentTestSuit != null)
-          _solution.TestSuits.Remove(currentTestSuit);
-        var testSuit = new TestSuitVm(_solution, dialog.TestSuitName, _settings.Config);
-        testSuit.IsSelected = true;
+        if (currentTestSuite != null)
+          _solution.TestSuites.Remove(currentTestSuite);
+        var testSuite = new TestSuiteVm(_solution, dialog.TestSuiteName, _settings.Config);
+        testSuite.IsSelected = true;
         _solution.Save();
       }
     }
@@ -1080,10 +1056,7 @@ namespace Nitra.Visualizer
         if (test != null)
         {
           _parseResult = null;
-          _currentTestSuit = test.TestSuit;
-          _currentTest = test;
-          _currentTestFolder = test.Parent as TestFolderVm;
-          _text.Text = test.Code;
+          ChangeCurrentTest(test.TestSuite, test.Parent as TestFolderVm, test, test.Code);
           ShowDiff(test);
         }
 
@@ -1091,20 +1064,14 @@ namespace Nitra.Visualizer
         if (testFolder != null)
         {
           ClearAll();
-          _currentTestFolder = testFolder;
-          _currentTestSuit = testFolder.TestSuit;
-          _currentTest = null;
-          _text.Text = "";
+          ChangeCurrentTest(testFolder.TestSuite, testFolder, null, "");
         }
 
-        var testSuit = e.NewValue as TestSuitVm;
-        if (testSuit != null)
+        var testSuite = e.NewValue as TestSuiteVm;
+        if (testSuite != null)
         {
           ClearAll();
-          _currentTestFolder = null;
-          _currentTest = null;
-          _text.Text = "";
-          _currentTestSuit = testSuit;
+          ChangeCurrentTest(testSuite, null, null, "");
           _para.Inlines.Clear();
         }
       }
@@ -1112,26 +1079,45 @@ namespace Nitra.Visualizer
       {
         _loading = false;
       }
-      SaveSelectedTestAndTestSuit();
+      SaveSelectedTestAndTestSuite();
       _settings.Save();
       Reparse();
     }
 
-    private void OnRemoveTestSuit(object sender, ExecutedRoutedEventArgs e)
+    private void ChangeCurrentTest(TestSuiteVm newTestSuite, TestFolderVm newTestFolder, TestVm newTest, string code)
     {
-      if (_solution == null || _currentTestSuit == null)
+      if (newTestSuite != _currentTestSuite && newTestSuite != null)
+      {
+        _highlightingStyles.Clear();
+        foreach (var spanClass in newTestSuite.Language.GetSpanClasses())
+        {
+          _highlightingStyles.Add(spanClass.Name, new HighlightingColor
+          {
+            Foreground = new SimpleHighlightingBrush(ColorFromArgb(spanClass.Style.ForegroundColor))
+          });
+        }
+      }
+      _currentTestSuite = newTestSuite;
+      _currentTestFolder = newTestFolder;
+      _currentTest = newTest;
+      _text.Text = code;
+    }
+
+    private void OnRemoveTestSuite(object sender, ExecutedRoutedEventArgs e)
+    {
+      if (_solution == null || _currentTestSuite == null)
         return;
 
-      if (MessageBox.Show(this, "Do you want to delete the '" + _currentTestSuit.Name + "' test suit?\r\nAll test will be deleted!", "Visualizer!", MessageBoxButton.YesNo,
+      if (MessageBox.Show(this, "Do you want to delete the '" + _currentTestSuite.Name + "' test suite?\r\nAll test will be deleted!", "Visualizer!", MessageBoxButton.YesNo,
         MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
         return;
 
-      _currentTestSuit.Remove();
+      _currentTestSuite.Remove();
     }
 
-    private void CommandBinding_CanRemoveTestSuit(object sender, CanExecuteRoutedEventArgs e)
+    private void CommandBinding_CanRemoveTestSuite(object sender, CanExecuteRoutedEventArgs e)
     {
-      e.CanExecute = _currentTestSuit != null;
+      e.CanExecute = _currentTestSuite != null;
       e.Handled = true;
     }
 
@@ -1147,18 +1133,18 @@ namespace Nitra.Visualizer
         if (test != null)
         {
           RunTest(test);
-          test.TestSuit.TestStateChanged();
+          test.TestSuite.TestStateChanged();
 
           if (test.TestState == TestState.Failure)
             _testResultDiffTabItem.IsSelected = true;
         }
       }
-      var testSuit = _testsTreeView.SelectedItem as TestSuitVm;
-      if (testSuit != null)
+      var testSuite = _testsTreeView.SelectedItem as TestSuiteVm;
+      if (testSuite != null)
       {
-        foreach (var test in testSuit.Tests)
+        foreach (var test in testSuite.Tests)
           RunTest(test);
-        testSuit.TestStateChanged();
+        testSuite.TestStateChanged();
       }
     }
 
@@ -1172,7 +1158,7 @@ namespace Nitra.Visualizer
         e.CanExecute = true;
         e.Handled = true;
       }
-      else if (_testsTreeView.SelectedItem is TestSuitVm)
+      else if (_testsTreeView.SelectedItem is TestSuiteVm)
       {
         e.CanExecute = true;
         e.Handled = true;
@@ -1203,7 +1189,7 @@ namespace Nitra.Visualizer
         try
         {
           test.Update(_text.Text, _prettyPrintTextBox.Text);
-          test.TestSuit.TestStateChanged();
+          test.TestSuite.TestStateChanged();
         }
         catch (Exception ex)
         {
@@ -1266,15 +1252,15 @@ namespace Nitra.Visualizer
 
     private void OnShowGrammar(object sender, ExecutedRoutedEventArgs e)
     {
-      if (_currentTestSuit == null)
+      if (_currentTestSuite == null)
         return;
 
-      _currentTestSuit.ShowGrammar();
+      _currentTestSuite.ShowGrammar();
     }
 
     private void CommandBinding_CanShowGrammar(object sender, CanExecuteRoutedEventArgs e)
     {
-      e.CanExecute = _currentTestSuit != null;
+      e.CanExecute = _currentTestSuite != null;
       e.Handled = true;
     }
 
@@ -1426,7 +1412,7 @@ namespace Nitra.Visualizer
     {
       _settings.CurrentSolution = solutionFilePath;
       _solution = new SolutionVm(solutionFilePath, null, _settings.Config);
-      _testsTreeView.ItemsSource = _solution.TestSuits;
+      _testsTreeView.ItemsSource = _solution.TestSuites;
       RecentFileList.InsertFile(solutionFilePath);
     }
 
@@ -1449,11 +1435,11 @@ namespace Nitra.Visualizer
 
     private ContextMenu _defaultContextMenu;
 
-    private void OnAddExistsTestSuit(object sender, ExecutedRoutedEventArgs e)
+    private void OnAddExistsTestSuite(object sender, ExecutedRoutedEventArgs e)
     {
-      var unattachedTestSuits = _solution.GetUnattachedTestSuits();
+      var unattachedTestSuites = _solution.GetUnattachedTestSuites();
       var menu = new ContextMenu();
-      foreach (var name in unattachedTestSuits)
+      foreach (var name in unattachedTestSuites)
       {
         var item = new MenuItem();
         item.Header = name;
@@ -1476,14 +1462,14 @@ namespace Nitra.Visualizer
     {
       var rootDir = Path.GetDirectoryName(_solution.SolutinFilePath) ?? "";
       var name = (string)((MenuItem)e.Source).Header;
-      var testSuit = new TestSuitVm(_solution, name, _settings.Config);
-      testSuit.IsSelected = true;
+      var testSuite = new TestSuiteVm(_solution, name, _settings.Config);
+      testSuite.IsSelected = true;
       _solution.Save();
     }
 
-    private void CommandBinding_CanAddExistsTestSuit(object sender, CanExecuteRoutedEventArgs e)
+    private void CommandBinding_CanAddExistsTestSuite(object sender, CanExecuteRoutedEventArgs e)
     {
-      Debug.WriteLine("CanAddExistsTestSuit");
+      Debug.WriteLine("CanAddExistsTestSuite");
       e.Handled = true;
 
       if (_solution == null)
@@ -1492,28 +1478,28 @@ namespace Nitra.Visualizer
         return;
       }
 
-      var unattachedTestSuits = _solution.GetUnattachedTestSuits();
+      var unattachedTestSuites = _solution.GetUnattachedTestSuites();
 
-      e.CanExecute = unattachedTestSuits.Length > 0;
+      e.CanExecute = unattachedTestSuites.Length > 0;
 
       Debug.WriteLine("e.CanExecute = " + e.CanExecute);
     }
 
-    private void CommandBinding_CanOnAddTestSuit(object sender, CanExecuteRoutedEventArgs e)
+    private void CommandBinding_CanOnAddTestSuite(object sender, CanExecuteRoutedEventArgs e)
     {
       e.CanExecute = _solution != null;
       e.Handled = true;
     }
 
-    private void OnEditTestSuit(object sender, ExecutedRoutedEventArgs e)
+    private void OnEditTestSuite(object sender, ExecutedRoutedEventArgs e)
     {
-      EditTestSuit(false);
+      EditTestSuite(false);
     }
 
-    private void CommandBinding_CanOnEditTestSuit(object sender, CanExecuteRoutedEventArgs e)
+    private void CommandBinding_CanOnEditTestSuite(object sender, CanExecuteRoutedEventArgs e)
     {
       e.Handled = true;
-      e.CanExecute = _currentTestSuit != null;
+      e.CanExecute = _currentTestSuite != null;
     }
 
     private void RecentFileList_OnMenuClick(object sender, RecentFileList.MenuClickEventArgs e)
@@ -1565,8 +1551,8 @@ namespace Nitra.Visualizer
         if (!Directory.Exists(dirPath))
           Directory.CreateDirectory(dirPath);
 
-        testFolder = new TestFolderVm(dirPath, test.TestSuit);
-        var suite = (TestSuitVm)test.Parent;
+        testFolder = new TestFolderVm(dirPath, test.TestSuite);
+        var suite = (TestSuiteVm)test.Parent;
         var index = suite.Tests.IndexOf(test);
         suite.Tests[index] = testFolder;
 
@@ -1638,9 +1624,9 @@ namespace Nitra.Visualizer
         }
         else
         {
-          var suite = test.TestSuit;
+          var suite = test.TestSuite;
           var index = suite.Tests.IndexOf(test);
-          test.TestSuit.Tests.Remove(test);
+          test.TestSuite.Tests.Remove(test);
           if (index < suite.Tests.Count)
             suite.Tests[index].IsSelected = true;
           else if (index > 0)
@@ -1654,13 +1640,21 @@ namespace Nitra.Visualizer
       {
         if (Directory.Exists(testFolder.TestPath))
           FileSystem.DeleteDirectory(testFolder.TestPath, UIOption.OnlyErrorDialogs, RecycleOption.DeletePermanently);
-        var suite = testFolder.TestSuit;
+        var suite = testFolder.TestSuite;
         var index = suite.Tests.IndexOf(testFolder);
         suite.Tests.Remove(testFolder);
         if (index < suite.Tests.Count)
           suite.Tests[index].IsSelected = true;
         else if (index > 0)
           suite.Tests[index - 1].IsSelected = true;
+      }
+    }
+
+    public Color ColorFromArgb(int argb)
+    {
+      unchecked
+      {
+        return Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb);
       }
     }
   }

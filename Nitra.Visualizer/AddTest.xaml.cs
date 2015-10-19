@@ -13,13 +13,13 @@ namespace Nitra.Visualizer
   /// </summary>
   public partial class AddTest
   {
-    readonly string _testSuitPath;
+    readonly string _testSuitePath;
     readonly string _code;
     readonly string _gold;
 
-    public AddTest(string testSuitPath, string code, string gold)
+    public AddTest(string testSuitePath, string code, string gold)
     {
-      _testSuitPath = testSuitPath;
+      _testSuitePath = testSuitePath;
       _code = code;
       _gold = gold;
 
@@ -29,7 +29,7 @@ namespace Nitra.Visualizer
 
     private string MakeDefaultName()
     {
-      var path = _testSuitPath;
+      var path = _testSuitePath;
 
       if (!Directory.Exists(path))
         Directory.CreateDirectory(path);
@@ -68,7 +68,7 @@ namespace Nitra.Visualizer
 
     private void _okButton_Click(object sender, RoutedEventArgs e)
     {
-      var path = _testSuitPath;
+      var path = _testSuitePath;
       var filePath = Path.Combine(path, _testName.Text) + ".test";
 
       try

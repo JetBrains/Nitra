@@ -18,22 +18,23 @@ namespace XXNamespaceXX.ProjectSystem
 {
   public class XXLanguageXXFile : ConcreteFile, IDisposable
   {
-    private static readonly StartRuleDescriptor StartRule = XXStartRuleDescXX;
-    private static readonly CompositeGrammar    Grammar   = XXSyntaxModulesXX;
     private readonly IPsiSourceFile _psiSourceFile;
     private readonly XXLanguageXXProject _project;
     private readonly string _fullName;
     private int _errorCount;
 
     public XXLanguageXXFile(FileStatistics statistics, IPsiSourceFile psiSourceFile, XXLanguageXXProject project)
-      : base(StartRule, Grammar, null)// TODO: add statistics
+      : base(null)// TODO: add statistics
     {
       _psiSourceFile = psiSourceFile;
       _fullName      = psiSourceFile.GetLocation().FullPath;
       _project       = project;
     }
 
-    public override string Language { get { return "XXLanguageXX"; } }
+    public override Language Language
+    {
+      get { return XXLanguageInstanceXX; }
+    }
 
     public override SourceSnapshot GetSource()
     {
@@ -72,7 +73,9 @@ namespace XXNamespaceXX.ProjectSystem
 
     protected override ParseSession GetParseSession()
     {
-      return new ParseSession(_ruleDescriptor, _compositeGrammar, compilerMessages: _parseMessages, dynamicExtensions: _project.GrammarDescriptors);
+      var session = base.GetParseSession();
+      session.DynamicExtensions = _project.GrammarDescriptors;
+      return session;
     }
 
     public void Dispose()

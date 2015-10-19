@@ -23,14 +23,14 @@ namespace Nitra.ViewModels
     public FsFile<IAst>             File { get { return _file; } }
     private readonly TestFile       _file;
 
-    public TestSuitVm               TestSuit              { get; private set; }
+    public TestSuiteVm              TestSuite             { get; private set; }
     public string                   Name                  { get { return Path.GetFileNameWithoutExtension(TestPath); } }
     public string                   PrettyPrintResult     { get; private set; }
     public Exception                Exception             { get; private set; }
     public TimeSpan                 TestTime              { get; private set; }
     public StatisticsTask.Container Statistics            { get; private set; }
     public FileStatistics           FileStatistics        { get; private set; }
-    public bool                     IsSingleFileTest       { get { return Parent is TestSuitVm; } }
+    public bool                     IsSingleFileTest       { get { return Parent is TestSuiteVm; } }
 
     private TestFolderVm _testFolder;
 
@@ -40,8 +40,8 @@ namespace Nitra.ViewModels
       public int _completionStartPos = -1;
       public string _completionPrefix = null;
 
-      public TestFile([NotNull] TestVm test, FsProject<IAst> project, string language, FileStatistics statistics)
-        : base(test.TestPath, test.TestSuit.StartRule, language, project, test.TestSuit.CompositeGrammar, statistics)
+      public TestFile([NotNull] TestVm test, Language language, FsProject<IAst> project, FileStatistics statistics)
+        : base(test.TestPath, language, project, statistics)
       {
         if (test == null) throw new ArgumentNullException("test");
         _test = test;
@@ -52,8 +52,8 @@ namespace Nitra.ViewModels
         var session = base.GetParseSession();
         session.CompletionStartPos = _completionStartPos;
         session.CompletionPrefix   = _completionPrefix;
-        session.DynamicExtensions  = _test.TestSuit.AllSynatxModules;
-        switch (_test.TestSuit.RecoveryAlgorithm)
+        session.DynamicExtensions  = _test.TestSuite.DynamicExtensions;
+        switch (_test.TestSuite.RecoveryAlgorithm)
         {
           case RecoveryAlgorithm.Smart:      session.OnRecovery = ParseSession.SmartRecovery; break;
           case RecoveryAlgorithm.Panic:      session.OnRecovery = ParseSession.PanicRecovery; break;
@@ -78,7 +78,7 @@ namespace Nitra.ViewModels
     {
       _testFolder = parent as TestFolderVm;
       TestPath = testPath;
-      TestSuit = _testFolder == null ? (TestSuitVm)parent : _testFolder.TestSuit;
+      TestSuite = _testFolder == null ? (TestSuiteVm)parent : _testFolder.TestSuite;
       
       if (_testFolder != null)
       {
@@ -88,7 +88,7 @@ namespace Nitra.ViewModels
           _testFolder.ParseTreeStatistics.ReplaceSingleSubtask(Name),
           _testFolder.AstStatistics.ReplaceSingleSubtask(Name),
           _testFolder.DependPropsStatistics);
-        _file = new TestFile(this, _testFolder.Project, TestSuit.Language, FileStatistics);
+        _file = new TestFile(this, TestSuite.Language, _testFolder.Project, FileStatistics);
       }
       else
       {
@@ -100,10 +100,10 @@ namespace Nitra.ViewModels
           Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties"));
         var solution = new FsSolution<IAst>();
         var project = new FsProject<IAst>(solution);
-        _file = new TestFile(this, project, TestSuit.Language, FileStatistics);
+        _file = new TestFile(this, TestSuite.Language, project, FileStatistics);
       }
 
-      if (TestSuit.TestState == TestState.Ignored)
+      if (TestSuite.TestState == TestState.Ignored)
         TestState = TestState.Ignored;
 
     }
@@ -172,7 +172,7 @@ namespace Nitra.ViewModels
 
     public void CheckGold(RecoveryAlgorithm recoveryAlgorithm)
     {
-      if (TestSuit.TestState == TestState.Ignored)
+      if (TestSuite.TestState == TestState.Ignored)
         return;
 
       
@@ -196,7 +196,7 @@ namespace Nitra.ViewModels
       var goldFullPath = Path.ChangeExtension(fullPath, ".gold");
       if (IOFile.Exists(goldFullPath))
         IOFile.Delete(goldFullPath);
-      var tests = TestSuit.Tests;
+      var tests = TestSuite.Tests;
       var index = tests.IndexOf(this);
       tests.Remove(this);
       if (tests.Count > 0)

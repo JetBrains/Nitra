@@ -30,7 +30,7 @@ namespace Nitra.TestsLauncher
       if (!File.Exists(solutinFilePath ?? ""))
       {
         Console.ForegroundColor = ConsoleColor.Red;
-        Console.WriteLine("The solutin '" + solutinFilePath + "' not exists.");
+        Console.WriteLine("The solution '" + solutinFilePath + "' does not exist.");
         Console.ResetColor();
         return;
       }
@@ -98,26 +98,26 @@ namespace Nitra.TestsLauncher
     static void Start(string solutinFilePath, string config)
     {
       var solution = new SolutionVm(solutinFilePath, null, config);
-      var testSuits = solution.TestSuits;
+      var testSuites = solution.TestSuites;
 
-      var maxNameLen = CalcMaxNameLen(testSuits);
+      var maxNameLen = CalcMaxNameLen(testSuites);
       var someTestsFailed = false;
-      var someTestSuitsFailedToLoad = false;
+      var someTestSuitesFailedToLoad = false;
 
-      foreach (var suit in testSuits)
+      foreach (var suite in testSuites)
       {
-        PrintLine("Test suit: " + suit.Name);
+        PrintLine("Test suite: " + suite.Name);
         Indent();
 
-        if (suit.TestState == TestState.Ignored)
+        if (suite.TestState == TestState.Ignored)
         {
-          PrintLine(suit.Hint, ConsoleColor.Red);
-          someTestSuitsFailedToLoad = true;
+          PrintLine(suite.Hint, ConsoleColor.Red);
+          someTestSuitesFailedToLoad = true;
           Unindent();
           continue;
         }
 
-        foreach (var test in suit.Tests)
+        foreach (var test in suite.Tests)
         {
           var dots = maxNameLen - test.Name.Length;
           Print(test.Name + " " + new string('.', dots) + " ");
@@ -138,14 +138,14 @@ namespace Nitra.TestsLauncher
         Unindent();
       }
 
-      if (someTestSuitsFailedToLoad)
+      if (someTestSuitesFailedToLoad)
         PrintLine("Some test suits is failed to load!", ConsoleColor.Red);
       if (someTestsFailed)
         PrintLine("Some tests is failed!", ConsoleColor.Red);
 
       Console.WriteLine("done...");
 
-      if (someTestsFailed || someTestSuitsFailedToLoad)
+      if (someTestsFailed || someTestSuitesFailedToLoad)
       {
         //Console.ReadLine();
         Environment.Exit(-1);
@@ -257,12 +257,12 @@ namespace Nitra.TestsLauncher
       return gold.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
     }
 
-    private static int CalcMaxNameLen(IEnumerable<TestSuitVm> testSuits)
+    private static int CalcMaxNameLen(IEnumerable<TestSuiteVm> testSuites)
     {
       int maxNameLen = 0;
 
-      foreach (var suit in testSuits)
-        foreach (var test in suit.Tests)
+      foreach (var suite in testSuites)
+        foreach (var test in suite.Tests)
           if (test.Name.Length > maxNameLen)
             maxNameLen = test.Name.Length;
       maxNameLen += 3;
