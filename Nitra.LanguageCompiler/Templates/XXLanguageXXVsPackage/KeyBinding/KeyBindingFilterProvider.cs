@@ -29,7 +29,7 @@ namespace XXNamespaceXX
     public void VsTextViewCreated(IVsTextView textViewAdapter)
     {
       var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
-      new KeyBindingCommandFilter(textViewAdapter, _textDocumentFactoryService, _serviceProvider, _completionBroker, _adaptersFactory, NitraVsUtils.GetGlobalProvider<IVsDataHostService>(), nitraSolutionService);
+      new KeyBindingCommandFilter(textViewAdapter, _serviceProvider, _completionBroker, _adaptersFactory, nitraSolutionService);
     }
   }
 }

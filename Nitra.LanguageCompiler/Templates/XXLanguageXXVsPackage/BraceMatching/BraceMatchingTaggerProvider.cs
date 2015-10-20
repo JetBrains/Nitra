@@ -25,8 +25,6 @@ namespace XXNamespaceXX
 
     public ITagger<T> CreateTagger<T>(ITextView textView, ITextBuffer buffer) where T : ITag
     {
-      var dataHostService = NitraVsUtils.GetGlobalProvider<IVsDataHostService>();
-
       BraceMatchingTagger braceMatchingTagger;
       if (buffer.Properties.TryGetProperty(TextBufferProperties.BraceMatchingTagger, out braceMatchingTagger))
         return (ITagger<T>)braceMatchingTagger;

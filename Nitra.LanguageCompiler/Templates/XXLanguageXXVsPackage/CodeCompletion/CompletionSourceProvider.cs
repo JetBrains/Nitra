@@ -21,7 +21,7 @@ namespace XXNamespaceXX
     public ICompletionSource TryCreateCompletionSource(ITextBuffer textBuffer)
     {
       var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
-      return new NitraCompletionSource(textBuffer, _textDocumentFactoryService, _navigatorService, NitraVsUtils.GetGlobalProvider<IVsDataHostService>(), nitraSolutionService);
+      return new NitraCompletionSource(textBuffer, _textDocumentFactoryService, _navigatorService, nitraSolutionService);
     }
   }
 }
