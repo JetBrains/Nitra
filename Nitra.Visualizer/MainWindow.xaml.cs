@@ -1315,7 +1315,7 @@ namespace Nitra.Visualizer
 
       foreach (var elem in result)
       {
-        var symbol = elem as Symbol2;
+        var symbol = elem as DeclarationSymbol;
         if (symbol != null && symbol.IsNameValid)
         {
           var content = symbol.ToXaml();
