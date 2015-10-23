@@ -46,7 +46,7 @@ namespace Nitra.Compiler
       Util.locate(symbol.FirstLocation.NLocation(), tb.Manager.MacroColors.InGlobalColor(fun()
       {
         def evalMethod = CompileStatements(tb, symbol, <[ decl:
-          public override EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void { }
+          ..$(GetDependentEvaluationModifiers()) EvalProperties($("context" : global) : Nitra.Declarations.DependentPropertyEvalContext) : void { }
         ]>);
 
         def graph = TypeDependentEvaluation(evalMethod, symbol);
@@ -238,7 +238,10 @@ namespace Nitra.Compiler
           if (graph.Nodes.TryGetValue(node.Path, out existingNode))
           {
             when (existingNode.DeclaredIn : object == node.DeclaredIn)
+            {
+              replacementList.Add(node, existingNode);
               continue;
+            }
 
             match (node, existingNode)
             {
@@ -253,6 +256,13 @@ namespace Nitra.Compiler
 
               | (Assign, Assign) =>
                 if (existingNode.DeclaredIn : object == symbol)
+                  replacementList.Add(node, existingNode);
+                else if (node.DeclaredIn.IsSubtypeOf(existingNode.DeclaredIn))
+                {
+                  graph.Nodes[node.Path] = node;
+                  replacementList.Add(existingNode, node);
+                }
+                else if (existingNode.DeclaredIn.IsSubtypeOf(node.DeclaredIn))
                   replacementList.Add(node, existingNode);
                 else
                 {
@@ -528,16 +538,21 @@ namespace Nitra.Compiler
         }
       }
 
-      def collectDependendOn(node : IPropertyDependencyNode) : SCG.List[DependencyPath] * SCG.List[DependencyPath]
+      def collectDependendOn(node : IPropertyDependencyNode, checkedPaths : SCG.HashSet[DependencyPath] = null) : SCG.List[DependencyPath] * SCG.List[DependencyPath]
       {
         def collect(node : IPropertyDependencyNode, properties : SCG.List[DependencyPath], stagedProperties : SCG.List[DependencyPath], visited : SCG.HashSet[IPropertyDependencyNode]) : void
         {
           unless (visited.Add(node))
             return;
+
+          when (node.Path is DeclaredProperty(This, StructuralPropertySymbol, _))
+            return;
+
           foreach (p in node.DependendOn)
           {
             collect(p, properties, stagedProperties, visited);
-            properties.Add(p.Path);
+            unless (checkedPaths?.Contains(p.Path))
+              properties.Add(p.Path);
             when (p.IsStaged)
               stagedProperties.Add(p.Path);
           }
@@ -593,21 +608,37 @@ namespace Nitra.Compiler
       {
         <[ when (context.Pass > $(CompilePath(call.Path)).CreatedOnPass) $expr ]>
       }
+      def makeIsEvaluatedCheck(path : DependencyPath, dependentProperties) : PExpr * SCG.HashSet[DependencyPath]
+      {
+        mutable checkedPaths;
+        mutable acc;
+
+        def loop(_ : ValueOption[DependencyPath])
+        {
+          | VSome(path) =>
+            when (checkedPaths : object == null)
+              checkedPaths = SCG.HashSet();
+            _ = checkedPaths.Add(path);
+            PExprUtils.CombineAnd(ref acc, GenerateHasValueCheck(path, dependentProperties));
+            loop(path.BasePath)
+
+          | VNone => ()
+        }
+        loop(path.BasePath);
+
+        PExprUtils.CombineAnd(ref acc, <[ ! $(GenerateHasValueCheck(path, dependentProperties)) ]>);
+        (acc, checkedPaths)
+      }
 
       foreach (node in dependencyGraph.GetOrderedNodes())
       {
         | Assign(code) =>
-          def expr1 = Util.locate(code.Location, <[ $(CompilePath(node.Path)) = $(compileCode(node.DeclaredIn, code)) ]>);
-          def expr2 =
-          <[
-            unless ($(GenerateHasValueCheck(node.Path, dependentProperties)))
-            {
-              $expr1;
-              context.CalculatedCountInc();
-            }
-          ]>;
-          def (properties, stagedProperties) = collectDependendOn(node);
-          def expr3 = makeCondition(properties, stagedProperties, expr2, <[ context.DeferredCountInc() ]>);
+          def (predicate, checkedPaths)      = makeIsEvaluatedCheck(node.Path, dependentProperties);
+          def (properties, stagedProperties) = collectDependendOn(node, checkedPaths);
+          def expr1 = Util.locate(code.Location, <[ $(CompilePath(node.Path)) = $(compileCode(node.DeclaredIn, code)); context.CalculatedCountInc(); ]>);
+          def expr2 = makeCondition(properties, stagedProperties, expr1, <[ context.DeferredCountInc() ]>);
+          def expr3 = <[ when ($predicate) $expr2; ]>;
+
           if (node.Path is DeclaredProperty(_, DependentPropertySymbol(Stage = propertyStage), _))
             result.Add(makeStageCheck(propertyStage, expr3));
           else

@@ -286,7 +286,7 @@ namespace Nitra.Visualizer
       if (e.NewValue != null)
       {
         var obj = ((TreeViewItem) e.NewValue).Tag;
-        var symbol = obj as Symbol2;
+        var symbol = obj as DeclarationSymbol;
         var id = symbol != null ? symbol.Id : (obj == null ? 0 : obj.GetHashCode());
         try
         {
@@ -332,10 +332,10 @@ namespace Nitra.Visualizer
         return;
       }
 
-      TrySelectTextForSymbol(tvi.Tag as Symbol2, tvi);
+      TrySelectTextForSymbol(tvi.Tag as DeclarationSymbol, tvi);
     }
 
-    private void TrySelectTextForSymbol(Symbol2 symbol, TreeViewItem tvi)
+    private void TrySelectTextForSymbol(DeclarationSymbol symbol, TreeViewItem tvi)
     {
       if (symbol != null)
       {
