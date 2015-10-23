@@ -38,29 +38,36 @@ namespace Nitra.Compiler
         {
           | ParsedAbstractSymbolSymbol =>
             _tb = nemerleEnv.Define(<[ decl:
-              public partial interface $(_symbol.Name : usesite) : ..$(MakeSymbolClassBaseTypes(<[ Nitra.Runtime.Binding.ISymbol2 ]>))
+              public partial interface $(_symbol.Name : usesite) : ..$(MakeSymbolClassBaseTypes())
               {
                 new Declarations : System.Collections.Generic.IEnumerable[$(astType : typed)] { get; }
               }
             ]>);
 
           | ParsedSimpleSymbolSymbol as symbol =>
+            def canMergeExpr       = if (symbol.CanMergeExpr       is Some(expr)) expr else <[ _ = candidate; false ]>;
+            def isSameIdentityExpr = if (symbol.IsSameIdentityExpr is Some(expr)) expr else <[ _ = candidate; true ]>;
+            def afterStageExpr     = if (symbol.AfterStageExpr     is Some(expr)) expr else <[ _ = stage ]>;
+
             _tb = nemerleEnv.Define(<[ decl:
-              public partial class $(_symbol.Name : usesite) : ..$(MakeSymbolClassBaseTypes(<[ Nitra.Runtime.Binding.DeclaredSymbol ]>))
+              public partial class $(_symbol.Name : usesite) : ..$(MakeSymbolClassBaseTypes())
               {
                 public this()
                 {
+                  _id               = Nitra.Runtime.Binding.SymbolUtils.CreateSymbolId();
                   _isNameValid      = false;
                   _declarationStore = null;
                 }
 
-                public override Name         : string { get { Nitra.Runtime.Binding.SymbolUtils.GetSymbolName.[$(astType : typed)](_isNameValid, _declarationStore) } }
-                public override IsNameValid  : bool   { get { _isNameValid } }
+                public Id           : int    { get { _id } }
+                public Name         : string { get { Nitra.Runtime.Binding.SymbolUtils.GetSymbolName.[$(astType : typed)](_isNameValid, _declarationStore) } }
+                public IsNameValid  : bool   { get { _isNameValid } }
 
+                private         _id               : int;
                 private mutable _isNameValid      : bool;
                 private mutable _declarationStore : object;
 
-                public override GetDeclarationsUntyped() : System.Collections.Generic.IEnumerable[Nitra.Runtime.Binding.Declaration]
+                public GetDeclarationsUntyped() : System.Collections.Generic.IEnumerable[Nitra.Runtime.Binding.Declaration]
                 {
                   Nitra.Runtime.Binding.SymbolUtils.GetDeclarationsUntyped.[$(astType : typed)](_declarationStore)
                 }
@@ -70,33 +77,46 @@ namespace Nitra.Compiler
                   get { Nitra.Runtime.Binding.SymbolUtils.GetDeclarations.[$(astType : typed)](_declarationStore) }
                 }
 
-                protected sealed override AddDeclaration(newDeclaration : Nitra.Runtime.Binding.Declaration) : void
+                public AddDeclaration(newDeclaration : Nitra.Runtime.Binding.Declaration) : void
                 {
                   Nitra.Runtime.Binding.SymbolUtils.AddDeclaration.[$(astType : typed)](newDeclaration, ref _isNameValid, ref _declarationStore)
                 }
+
+                public CanMerge($("candidate": global) : Nitra.Runtime.Binding.Declaration) : bool
+                {
+                  $canMergeExpr
+                }
+
+                public IsSameIdentity($("candidate": global) : Nitra.Runtime.Binding.Declaration) : bool
+                {
+                  $isSameIdentityExpr
+                }
+
+                public AfterStage($("stage": global) : int) : void
+                {
+                  $afterStageExpr
+                }
+
+                public ToXaml() : string
+                {
+                  Nitra.Runtime.Binding.SymbolUtils.ToXaml(this)
+                }
+
+                public override ToString() : string
+                {
+                  Nitra.Runtime.Binding.SymbolUtils.ToString(this)
+                }
               }
             ]>);
-
-            when (symbol.KindExpr is Some(expr))
-              _tb.Define(<[ decl: public override Kind : string { get { $expr } } ]>);
-
-            when (symbol.SpanClassExpr is Some(expr))
-              _tb.Define(<[ decl: public override SpanClass : Nitra.SpanClass { get { $expr } } ]>);
-
-            when (symbol.FullNameExpr is Some(expr))
-              _tb.Define(<[ decl: public override FullName : string { get { $expr } } ]>);
 
           | _ => assert(false)
         }
       });
     }
+    
+    private _dependentPropBits : SCG.Dictionary[DependentPropertySymbol, BitField] = SCG.Dictionary();
 
     public DefineMembers() : void
-    {
-      assert(_tb : object != null);
-    }
-
-    public Emit() : void
     {
       assert(_tb : object != null);
 
@@ -111,25 +131,36 @@ namespace Nitra.Compiler
 
             | _ => assert(false)
           }
-          DefineDependentPropertiesInheritableEvaluation(_tb, _symbol);
 
         | ParsedSimpleSymbolSymbol =>
-          def dependentPropBits   = SCG.Dictionary();
-
           foreach (s in _symbol.AllProperties)
           {
             | DependentPropertySymbol as propertySymbol =>
               def bit    = _tb.GetBitFieldManager().Allocate();
               def mask   = if (bit.IsFromFirstField) bit.Mask else 0;
               def bitKey = if (propertySymbol.OverrideProperty is SymbolRef.Some(DependentPropertySymbol as originalPropertySymbol)) originalPropertySymbol else propertySymbol;
-              dependentPropBits.Add(bitKey, bit);
+              _dependentPropBits.Add(bitKey, bit);
 
               DefineDependentProperty(_tb, propertySymbol, bit, mask, NemerleModifiers.Public | NemerleModifiers.Virtual);
 
             | _ => assert(false)
           }
 
-          DefineDependentPropertiesSealedEvaluation(_tb, _symbol, dependentPropBits, SCG.Dictionary());
+        | _ => assert(false)
+      }
+    }
+
+    public Emit() : void
+    {
+      assert(_tb : object != null);
+
+      match (_symbol)
+      {
+        | ParsedAbstractSymbolSymbol =>
+          DefineDependentPropertiesInheritableEvaluation(_tb, _symbol);
+
+        | ParsedSimpleSymbolSymbol =>
+          DefineDependentPropertiesSealedEvaluation(_tb, _symbol, _dependentPropBits, SCG.Dictionary());
           DefinePropertiesEvalState(_tb, null);
           DefineResetPropertiesMethod(_tb, null);
           DefineIsAllPropertiesEvaluatedProperty(_tb, null);
@@ -140,10 +171,14 @@ namespace Nitra.Compiler
       _tb.Compile();
     }
 
-    private MakeSymbolClassBaseTypes(baseType : PExpr) : SCG.List[PExpr]
+    protected override GetDependentEvaluationModifiers() : AttributesAndModifiers
+    {
+      AttributesAndModifiers(NemerleAttributes.Public, [])
+    }
+
+    private MakeSymbolClassBaseTypes() : SCG.List[PExpr]
     {
       def baseTypes = SCG.List();
-      baseTypes.Add(baseType);
       foreach (baseSymbol in _symbol.Parents)
         baseTypes.Add(<[ $(Environment.GetSymbolClass(baseSymbol) : typed) ]>);
       baseTypes
