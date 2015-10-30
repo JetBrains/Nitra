@@ -18,13 +18,6 @@ namespace Nitra.Serialization2
 {
   public sealed class MetadataWriter
   {
-    [Record]
-    private sealed class TypeDescriptor
-    {
-      public Id   : int  { get; }
-      public Type : Type { get; }
-    }
-    
     public this(project : Project)
     {
       Project = project;
@@ -32,16 +25,26 @@ namespace Nitra.Serialization2
 
     public Project : Project { get; }
 
-    private _typeDescriptors : Dictionary[Type, TypeDescriptor]   = Dictionary();
-    private _symbols         : Dictionary[DeclarationSymbol, int] = Dictionary();
+    private _typeDescriptors : Dictionary[Type, MetadataTypeDescriptor]   = Dictionary();
+    private _symbols         : Dictionary[DeclarationSymbol, int]         = Dictionary();
 
-    private GetTypeDescriptor(obj : ISerializable) : TypeDescriptor
+    private GetTypeDescriptor(type : Type) : MetadataTypeDescriptor
     {
-      def type = obj.GetType();
       mutable descriptor;
       unless (_typeDescriptors.TryGetValue(type, out descriptor))
       {
-        descriptor = TypeDescriptor(_typeDescriptors.Count + 1, type);
+        descriptor =
+          if (type.IsGenericTypeDefinition)
+            MetadataTypeDescriptor.GenericDefinition(_typeDescriptors.Count + 1, type, type.GetGenericArguments().Length)
+          else if (type.IsGenericType)
+          {
+            def definition = GetTypeDescriptor(type.GetGenericTypeDefinition());
+            def arguments  = type.GetGenericArguments().MapToList(GetTypeDescriptor);
+            MetadataTypeDescriptor.Generic(_typeDescriptors.Count + 1, type, definition, arguments);
+          }
+          else
+            MetadataTypeDescriptor.Simple(_typeDescriptors.Count + 1, type);
+
         _typeDescriptors.Add(type, descriptor);
       }
       descriptor
@@ -51,7 +54,7 @@ namespace Nitra.Serialization2
     {
       if (obj != null)
       {
-        def descriptor = GetTypeDescriptor(obj);
+        def descriptor = GetTypeDescriptor(obj.GetType());
         writer.Write(descriptor.Id : int);
         obj.Serialize(writer, this);
       }
@@ -87,17 +90,29 @@ namespace Nitra.Serialization2
 
         using (writer = BinaryWriter(stream, MetadataDefaults.Encoding, true))
         {
-          def typeGroups = _typeDescriptors.Values.GroupBy(d => d.Type.Assembly).ToList();
-          writer.Write(typeGroups.Count : int);
-          foreach (group in typeGroups)
+          def normalTypes = _typeDescriptors.Values.Where(t => !(t is MetadataTypeDescriptor.Generic)).GroupBy(d => d.Type.Assembly).ToList();
+          writer.Write(normalTypes.Count : int);
+          foreach (group in normalTypes)
           {
             writer.Write(group.Key.FullName);
             writer.Write(group.Count() : int);
-            foreach (type in group)
+            foreach (type in group.OrderBy(t => t.Id))
             {
               writer.Write(type.Type.FullName);
               writer.Write(type.Id : int);
+              def argCount = if (type is MetadataTypeDescriptor.GenericDefinition(argCount)) argCount else 0;
+              writer.Write(argCount : int);
             }
+          }
+
+          def genericTypes = _typeDescriptors.Values.OfType.[MetadataTypeDescriptor.Generic]().OrderBy(t => t.Id).ToList();
+          writer.Write(genericTypes.Count : int);
+          foreach (type in genericTypes)
+          {
+            writer.Write(type.Id : int);
+            writer.Write(type.Definition.Id : int);
+            foreach (arg in type.Arguments)
+              writer.Write(arg.Id : int);
           }
         }
 

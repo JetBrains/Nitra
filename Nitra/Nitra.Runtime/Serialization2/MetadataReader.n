@@ -3,6 +3,7 @@ using Nitra.Runtime.Binding;
 using Nitra.Staging;
 
 using Nemerle;
+using Nemerle.Imperative;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -27,6 +28,7 @@ namespace Nitra.Serialization2
     public Project       : Project  { get; }
     public ErrorLocation : Location { get; }
 
+    private _typeDescriptors         : Dictionary[int, MetadataTypeDescriptor] = Dictionary();
     private _deserializationHandlers : Dictionary[int, DeserializationHandler] = Dictionary();
     private _symbols                 : Dictionary[int, DeclarationSymbol] = Dictionary();
 
@@ -36,11 +38,8 @@ namespace Nitra.Serialization2
       def descriptor = reader.ReadInt32();
       if (descriptor != 0)
       {
-        mutable handler;
-        unless (_deserializationHandlers.TryGetValue(descriptor, out handler))
-          assert(false, $"Cannot deserialize '$(typeof(T))': deserialization handler '$descriptor' not found.");
-
-        def result = handler.Invoke(reader, this);
+        def handler = GetDeserializationHandler(descriptor);
+        def result  = handler.Invoke(reader, this);
         result :> T
       }
       else
@@ -60,6 +59,7 @@ namespace Nitra.Serialization2
     public ReadRoot[T](stream : Stream) : T
       where T: ISerializable
     {
+      _typeDescriptors.Clear();
       _deserializationHandlers.Clear();
       _symbols.Clear();
 
@@ -75,9 +75,36 @@ namespace Nitra.Serialization2
           {
             def typeName = reader.ReadString();
             def id       = reader.ReadInt32();
-            def handler  = LoadDeserializationHandler(assembly, typeName);
-            _deserializationHandlers.Add(id, handler)
+            def argCount = reader.ReadInt32();
+            def type     = LoadType(assembly, typeName);
+            def descriptor =
+              if (argCount > 0)
+                MetadataTypeDescriptor.GenericDefinition(id, type, argCount)
+              else
+                MetadataTypeDescriptor.Simple(id, type);
+
+            _typeDescriptors.Add(id, descriptor)
           }
+        }
+
+        def genericTypeCount = reader.ReadInt32();
+        for (mutable typeIndex = 0; typeIndex < genericTypeCount; ++typeIndex)
+        {
+          def id            = reader.ReadInt32();
+          def definitionId  = reader.ReadInt32();
+          def definition    = _typeDescriptors[definitionId] :> MetadataTypeDescriptor.GenericDefinition;
+          def arguments     = array(definition.ArgumentCount);
+          def argumentTypes = array(arguments.Length);
+          for (mutable index = 0; index < arguments.Length; ++index)
+          {
+            def argumentId       = reader.ReadInt32();
+            def argument         = _typeDescriptors[argumentId];
+            arguments[index]     = argument;
+            argumentTypes[index] = argument.Type;
+          }
+          def type       = definition.Type.MakeGenericType(argumentTypes);
+          def descriptor = MetadataTypeDescriptor.Generic(id, type, definition, arguments.ToNList());
+          _typeDescriptors.Add(id, descriptor)
         }
 
         ReadObject(reader);
@@ -86,16 +113,32 @@ namespace Nitra.Serialization2
 
     private LoadAssembly(fullName : string) : Assembly
     {
+      foreach (assembly in AppDomain.CurrentDomain.GetAssemblies())
+        when(assembly.FullName == fullName)
+          return assembly;
       Assembly.Load(fullName)
     }
 
-    private LoadDeserializationHandler(assembly : Assembly, typeName : string) : DeserializationHandler
+    private LoadType(assembly : Assembly, typeName : string) : Type
     {
-      def type   = assembly.GetType(typeName, throwOnError = false);
+      def type = assembly.GetType(typeName, throwOnError = false);
       assert(type != null, $"Failed to find type '$typeName' from assembly '$assembly'.");
-      def method = type.GetMethod("Deserialize", BindingFlags.Public | BindingFlags.Static);
-      assert(method != null, $"Failed to find method 'Deserialize' in type '$type'.");
-      method.CreateDelegate(typeof(DeserializationHandler)) :> DeserializationHandler
+      type
+    }
+
+    private GetDeserializationHandler(id : int) : DeserializationHandler
+    {
+      mutable handler;
+      unless (_deserializationHandlers.TryGetValue(id, out handler))
+      {
+        def type   = _typeDescriptors[id].Type;
+        def method = type.GetMethod("Deserialize", BindingFlags.Public | BindingFlags.Static);
+        assert(method != null, $"Failed to find method 'Deserialize' in type '$type'.");
+        handler = method.CreateDelegate(typeof(DeserializationHandler)) :> DeserializationHandler;
+        
+        _deserializationHandlers.Add(id, handler);
+      }
+      handler
     }
 
     public CreateSymbol[T](id : int, symbol : out T) : bool
