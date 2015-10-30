@@ -8,6 +8,7 @@ using Nemerle.Text;
 using Nemerle.Utility;
 
 using System;
+using System.Reflection;
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
@@ -16,6 +17,8 @@ namespace Nitra.Serialization2
 {
   public sealed class MetadataReader
   {
+    private delegate DeserializationHandler(reader : BinaryReader, metadataReader : MetadataReader) : ISerializable;
+    
     public this(project : Project)
     {
       Project = project;
@@ -24,10 +27,67 @@ namespace Nitra.Serialization2
     public Project       : Project  { get; }
     public ErrorLocation : Location { get; }
 
+    private _deserializationHandlers : Dictionary[int, DeserializationHandler] = Dictionary();
+
     public ReadObject[T](reader : BinaryReader) : T
       where T: ISerializable
     {
-      assert(false);
+      def descriptor = reader.ReadInt32();
+
+      mutable handler;
+      unless (_deserializationHandlers.TryGetValue(descriptor, out handler))
+        assert(false, $"Cannot deserialize '$(typeof(T))': deserialization handler '$descriptor' not found.");
+
+      def result = handler.Invoke(reader, this);
+      result :> T
+    }
+
+    public ReadObjects[T](reader : BinaryReader) : array[T]
+      where T: ISerializable
+    {
+      def count  = reader.ReadInt32();
+      def buffer = array(count);
+      for (mutable i = 0; i < buffer.Length; ++i)
+        buffer[i] = ReadObject(reader);
+      buffer
+    }
+
+    public ReadRoot[T](stream : Stream) : T
+      where T: ISerializable
+    {
+      _deserializationHandlers.Clear();
+
+      using (reader = BinaryReader(stream, MetadataDefaults.Encoding, true))
+      {
+        def assemblyCount = reader.ReadInt32();
+        for (mutable assemblyIndex = 0; assemblyIndex < assemblyCount; ++assemblyIndex)
+        {
+          def fullName = reader.ReadString();
+          def assembly = LoadAssembly(fullName);
+          def typeCount = reader.ReadInt32();
+          for (mutable typeIndex = 0; typeIndex < typeCount; ++typeIndex)
+          {
+            def typeName = reader.ReadString();
+            def id       = reader.ReadInt32();
+            def handler  = LoadDeserializationHandler(assembly, typeName);
+            _deserializationHandlers.Add(id, handler)
+          }
+        }
+
+        ReadObject(reader);
+      }
+    }
+
+    private LoadAssembly(fullName : string) : Assembly
+    {
+      Assembly.Load(fullName)
+    }
+
+    private LoadDeserializationHandler(assembly : Assembly, typeName : string) : DeserializationHandler
+    {
+      def type   = assembly.GetType(typeName, throwOnError = false);
+      assert(type != null, $"Failed to find type '$typeName' from assembly '$assembly'.");
+      Delegate.CreateDelegate(typeof(DeserializationHandler), type, "Deserialize", false) :> DeserializationHandler
     }
   }
 }

@@ -8,6 +8,8 @@ using Nemerle.Text;
 using Nemerle.Utility;
 
 using System;
+using System.Text;
+using System.Reflection;
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
@@ -16,6 +18,13 @@ namespace Nitra.Serialization2
 {
   public sealed class MetadataWriter
   {
+    [Record]
+    private sealed class TypeDescriptor
+    {
+      public Id   : int  { get; }
+      public Type : Type { get; }
+    }
+    
     public this(project : Project)
     {
       Project = project;
@@ -23,9 +32,70 @@ namespace Nitra.Serialization2
 
     public Project : Project { get; }
 
+    private _typeDescriptors : Dictionary[Type, TypeDescriptor] = Dictionary();
+
+    private GetTypeDescriptor(obj : ISerializable) : TypeDescriptor
+    {
+      def type = obj.GetType();
+      mutable descriptor;
+      unless (_typeDescriptors.TryGetValue(type, out descriptor))
+      {
+        descriptor = TypeDescriptor(_typeDescriptors.Count + 1, type);
+        _typeDescriptors.Add(type, descriptor);
+      }
+      descriptor
+    }
+
     public WriteObject(obj : ISerializable, writer : BinaryWriter) : void
     {
-      assert(false);
+      def descriptor = GetTypeDescriptor(obj);
+      writer.Write(descriptor.Id : int);
+      obj.Serialize(writer, this);
+    }
+
+    public WriteObjects[T](items : list[T], writer : BinaryWriter) : void
+      where T: ISerializable
+    {
+      writer.Write(items.Length : int);
+      foreach (item in items)
+        WriteObject(item, writer);
+    }
+
+    public WriteObjects[T](items : System.Collections.Generic.ICollection[T], writer : BinaryWriter) : void
+      where T: ISerializable
+    {
+      writer.Write(items.Count : int);
+      foreach (item in items)
+        WriteObject(item, writer);
+    }
+
+    public WriteRoot(root : ISerializable, stream : Stream) : void
+    {
+      _typeDescriptors.Clear();
+
+      using (buffer = MemoryStream())
+      {
+        using (writer = BinaryWriter(buffer, MetadataDefaults.Encoding, true))
+          WriteObject(root, writer);
+
+        using (writer = BinaryWriter(stream, MetadataDefaults.Encoding, true))
+        {
+          def typeGroups = _typeDescriptors.Values.GroupBy(d => d.Type.Assembly).ToList();
+          writer.Write(typeGroups.Count : int);
+          foreach (group in typeGroups)
+          {
+            writer.Write(group.Key.FullName);
+            writer.Write(group.Count() : int);
+            foreach (type in group)
+            {
+              writer.Write(type.Type.FullName);
+              writer.Write(type.Id : int);
+            }
+          }
+        }
+
+        buffer.WriteTo(stream);
+      }
     }
   }
 }
