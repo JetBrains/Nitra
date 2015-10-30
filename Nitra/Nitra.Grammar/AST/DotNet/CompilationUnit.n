@@ -1,5 +1,8 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -12,6 +15,8 @@ using Nitra.Runtime.Binding;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+
+using NRB = Nitra.Runtime.Binding;
 
 namespace Nitra.Runtime.Binding
 {
@@ -33,7 +38,7 @@ namespace DotNet
       rootNamespace.Parent = null;
       rootNamespace.FullName = "";
 
-      CreateBuiltInSymbols(rootNamespace, context);
+      CreateNemerleSymbols(rootNamespace, context);
 
       foreach (file in files)
         when (file.Ast is CompilationUnit as cu)
@@ -47,11 +52,121 @@ namespace DotNet
       AstUtils.EvalProperties(context, files, "Scopes", 1, rootNamespace);
 
       AstUtils.EvalProperties(context, files, "Type bodies binding", 2, rootNamespace);
+    } 
+
+    class Compiler : ManagerClass
+    {
+      public this ()
+      {
+        base (CompilationOptions());
+        InitCompiler ();
+        LoadExternalLibraries ();
+      }
+    }
+    
+    private static CreateNemerleSymbols(rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : void
+    {
+      when (ManagerClass.Instance == null)
+        ManagerClass.Instance = Compiler();
+        
+      def manager       = ManagerClass.Instance;
+      def nemerleNsRoot = manager.NameTree.NamespaceTree;
+      def fakeSnapshot  = SourceSnapshot("");
+      def file          = fakeSnapshot.File;
+      def span          = NSpan(0);
+      def revMap        = Hashtable();
+      
+      def loadNsMemebers(node : NamespaceTree.Node, parent : DotNet.NamespaceSymbol) : void
+      {
+        def addTopType(name : NRB.Name, tycon : TypeInfo) : void
+        {
+          def kind = tycon.GetTydecl();
+          match (kind)
+          {
+            | Interface
+            | Class =>
+              def symbol = if (tycon.IsInterface) TopInterfaceSymbol() else if (tycon.IsValueType) TopStructSymbol() else TopClassSymbol();
+              symbol.TypeParametersCount = tycon.TyparmsCount;
+              symbol.TypeParameters = Utils.CreateTypeParameters(tycon.TyparmsCount);
+              def decl   = ExternalDeclaration(name, symbol);
+              _ = parent.MemberTable.Define(decl, context, null);
+              symbol.Parent = parent;
+              revMap[symbol] = node;
+                
+            | Alias         =>
+              def symbol = TypeAliasSymbol();
+              def decl   = ExternalDeclaration(name, symbol);
+              _ = parent.MemberTable.Define(decl, context, null);
+              symbol.Parent = parent;
+              revMap[symbol] = node;
+
+            | Variant       => ()
+            | VariantOption => ()
+            | Enum          =>
+              def symbol = TopEnumSymbol();
+              def decl   = ExternalDeclaration(name, symbol);
+              _ = parent.MemberTable.Define(decl, context, null);
+              symbol.Parent = parent;
+              revMap[symbol] = node;
+          }
+        }
+        node.EnsureCached();
+        
+        def name = NRB.Name(file, span, node.PartName);
+   
+        match (node.Value)
+        {
+          | No                               => ()
+          | MacroCall                        => ()
+          | null                             => ()
+          | NamespaceReference               => 
+            def decl   = DotNet.ExternalNamespace(file, span, name);
+            def symbol = parent.MemberTable.Define(decl, context, null);
+            //symbol.AddDeclaration(decl);
+            symbol.Parent = parent;
+            revMap[symbol] = node;
+            foreach (subNode in node.Children.Values)
+              loadNsMemebers(subNode, symbol);
+            
+          | Cached(tycon) =>  addTopType(name, tycon);
+          | CachedAmbiguous(elems)       => foreach (e in elems) addTopType(name, e);
+          | NotLoaded(_externalType)     => assert2(false)
+          | NotLoadedList(_externalType) => assert2(false)
+        }
+      }
+      
+      revMap[rootNamespace] = nemerleNsRoot;
+      rootNamespace.EvalProperties(context);
+      loadNsMemebers(nemerleNsRoot, rootNamespace);
+    }
+  }
+  
+  class ExternalDeclaration : Nitra.Declarations.DeclarationBase, Declaration
+  {
+    mutable _symbol : DeclarationSymbol;
+    
+    public this(name : NRB.Name, symbol : DeclarationSymbol)
+    {
+      this.File = name.File;
+      this.Span = name.Span;
+      __NameImpl = name;
+      _symbol = symbol;
+      IsSymbolEvaluated = true;
     }
 
-    private static CreateBuiltInSymbols(rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : void
+    public CreateSymbol() : DeclarationSymbol { _symbol }
+    
+    public IsSymbolEvaluated : bool { get; }
+    
+    public Name : NRB.Name { get { __NameImpl } }
+    
+    public Symbol : DeclarationSymbol
     {
-      IgnoreParams();
+      get { _symbol }
+      set { _symbol = value; }
     }
+    
+    public ContainingTable : TableScope { get; set; }
+    public IsContainingTableEvaluated : bool { get { ContainingTable != null } }
   }
 }
