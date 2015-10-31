@@ -59,6 +59,12 @@ namespace DotNet
       public this ()
       {
         base (CompilationOptions());
+        def localPath = IO.Path.GetFullPath(Uri(typeof(ManagerClass).Assembly.CodeBase).LocalPath);
+        def macroLibPath = localPath;
+        def compilerDir = IO.Path.GetDirectoryName(localPath);
+        this.Options.DoNotLoadMacros = true;
+        this.Options.MacrosToLoad ::= macroLibPath;
+        this.Options.LibraryPaths ::= compilerDir;
         InitCompiler ();
         LoadExternalLibraries ();
       }
@@ -67,52 +73,53 @@ namespace DotNet
     private static CreateNemerleSymbols(rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : void
     {
       when (ManagerClass.Instance == null)
+      {
         ManagerClass.Instance = Compiler();
+      }
         
       def manager       = ManagerClass.Instance;
       def nemerleNsRoot = manager.NameTree.NamespaceTree;
       def fakeSnapshot  = SourceSnapshot("");
       def file          = fakeSnapshot.File;
       def span          = NSpan(0);
-      def revMap        = Hashtable();
       
       def loadNsMemebers(node : NamespaceTree.Node, parent : DotNet.NamespaceSymbol) : void
       {
-        def addTopType(name : NRB.Name, tycon : TypeInfo) : void
+        def addTopType(node : NamespaceTree.Node, tycon : TypeInfo) : void
         {
+          def name = NRB.Name(file, span, node.PartName);
           def kind = tycon.GetTydecl();
           match (kind)
           {
             | Interface
             | Class =>
-              def symbol = if (tycon.IsInterface) TopInterfaceSymbol() else if (tycon.IsValueType) TopStructSymbol() else TopClassSymbol();
+              def symbol : TopGenericEntitySymbol = 
+                           if (tycon.IsDelegate) TopDelegateSymbol() 
+                      else if (tycon.IsInterface) TopInterfaceSymbol()
+                      else if (tycon.IsValueType) TopStructSymbol()
+                      else TopClassSymbol();
               symbol.TypeParametersCount = tycon.TyparmsCount;
               symbol.TypeParameters = Utils.CreateTypeParameters(tycon.TyparmsCount);
-              def decl   = ExternalDeclaration(name, symbol);
+              def decl   = ExternalDeclaration(name, symbol, node);
               _ = parent.MemberTable.Define(decl, context, null);
               symbol.Parent = parent;
-              revMap[symbol] = node;
                 
             | Alias         =>
               def symbol = TypeAliasSymbol();
-              def decl   = ExternalDeclaration(name, symbol);
+              def decl   = ExternalDeclaration(name, symbol, node);
               _ = parent.MemberTable.Define(decl, context, null);
               symbol.Parent = parent;
-              revMap[symbol] = node;
 
             | Variant       => ()
             | VariantOption => ()
             | Enum          =>
               def symbol = TopEnumSymbol();
-              def decl   = ExternalDeclaration(name, symbol);
+              def decl   = ExternalDeclaration(name, symbol, node);
               _ = parent.MemberTable.Define(decl, context, null);
               symbol.Parent = parent;
-              revMap[symbol] = node;
           }
         }
         node.EnsureCached();
-        
-        def name = NRB.Name(file, span, node.PartName);
    
         match (node.Value)
         {
@@ -120,50 +127,51 @@ namespace DotNet
           | MacroCall                        => ()
           | null                             => ()
           | NamespaceReference               => 
-            def decl   = DotNet.ExternalNamespace(file, span, name);
-            def symbol = parent.MemberTable.Define(decl, context, null);
-            //symbol.AddDeclaration(decl);
+            def symbol = NamespaceSymbol();
+            def decl   = ExternalDeclaration(NRB.Name(file, span, node.PartName), symbol, node);
+            _ = parent.MemberTable.Define(decl, context, null);
             symbol.Parent = parent;
-            revMap[symbol] = node;
-            foreach (subNode in node.Children.Values)
+            foreach (subNode in node.Children.Values.ToArray())
               loadNsMemebers(subNode, symbol);
             
-          | Cached(tycon) =>  addTopType(name, tycon);
-          | CachedAmbiguous(elems)       => foreach (e in elems) addTopType(name, e);
+          | Cached(tycon) =>  addTopType(node, tycon);
+          | CachedAmbiguous(elems)       => foreach (e in elems) addTopType(node, e);
           | NotLoaded(_externalType)     => assert2(false)
           | NotLoadedList(_externalType) => assert2(false)
         }
       }
       
-      revMap[rootNamespace] = nemerleNsRoot;
       rootNamespace.EvalProperties(context);
-      loadNsMemebers(nemerleNsRoot, rootNamespace);
+      
+      foreach (node in nemerleNsRoot.Children.Values)
+        loadNsMemebers(node, rootNamespace);
     }
   }
   
   class ExternalDeclaration : Nitra.Declarations.DeclarationBase, Declaration
   {
     mutable _symbol : DeclarationSymbol;
+    _nemerleTrypeTreeNode : NamespaceTree.Node;
     
-    public this(name : NRB.Name, symbol : DeclarationSymbol)
+    public this(name : NRB.Name, symbol : DeclarationSymbol, nemerleTrypeTreeNode : NamespaceTree.Node)
     {
       this.File = name.File;
       this.Span = name.Span;
       __NameImpl = name;
       _symbol = symbol;
-      IsSymbolEvaluated = true;
+      _nemerleTrypeTreeNode = nemerleTrypeTreeNode;
     }
 
     public CreateSymbol() : DeclarationSymbol { _symbol }
     
-    public IsSymbolEvaluated : bool { get; }
+    public IsSymbolEvaluated : bool { get; private set; }
     
     public Name : NRB.Name { get { __NameImpl } }
     
     public Symbol : DeclarationSymbol
     {
       get { _symbol }
-      set { _symbol = value; }
+      set { IsSymbolEvaluated = true; _symbol = value; }
     }
     
     public ContainingTable : TableScope { get; set; }
