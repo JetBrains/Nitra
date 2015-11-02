@@ -30,7 +30,7 @@ namespace Nitra.Serialization2
 
     private _typeDescriptors         : Dictionary[int, MetadataTypeDescriptor] = Dictionary();
     private _deserializationHandlers : Dictionary[int, DeserializationHandler] = Dictionary();
-    private _symbols                 : Dictionary[int, DeclarationSymbol] = Dictionary();
+    private _objects                 : Dictionary[int, ISerializable]          = Dictionary();
 
     public ReadObject[T](reader : BinaryReader) : T
       where T: ISerializable
@@ -59,12 +59,9 @@ namespace Nitra.Serialization2
     public ReadRoot[T](stream : Stream) : T
       where T: ISerializable
     {
-      _typeDescriptors.Clear();
-      _deserializationHandlers.Clear();
-      _symbols.Clear();
-
-      using (reader = BinaryReader(stream, MetadataDefaults.Encoding, true))
+      try
       {
+        def reader = BinaryReader(stream, MetadataDefaults.Encoding);
         def assemblyCount = reader.ReadInt32();
         for (mutable assemblyIndex = 0; assemblyIndex < assemblyCount; ++assemblyIndex)
         {
@@ -109,6 +106,12 @@ namespace Nitra.Serialization2
 
         ReadObject(reader);
       }
+      finally
+      {
+        _typeDescriptors.Clear();
+        _deserializationHandlers.Clear();
+        _objects.Clear();
+      }
     }
 
     private LoadAssembly(fullName : string) : Assembly
@@ -134,27 +137,27 @@ namespace Nitra.Serialization2
         def type   = _typeDescriptors[id].Type;
         def method = type.GetMethod("Deserialize", BindingFlags.Public | BindingFlags.Static);
         assert(method != null, $"Failed to find method 'Deserialize' in type '$type'.");
-        handler = method.CreateDelegate(typeof(DeserializationHandler)) :> DeserializationHandler;
-        
+        handler = Delegate.CreateDelegate(typeof(DeserializationHandler), method) :> DeserializationHandler;
+
         _deserializationHandlers.Add(id, handler);
       }
       handler
     }
 
-    public BeginReadSymbol[T](reader : BinaryReader, symbol : out T) : bool
-      where T: DeclarationSymbol, new()
+    public BeginReadObject[T](reader : BinaryReader, obj : out T, factory : Func[T] = null) : bool
+      where T: ISerializable
     {
-      def id      = reader.ReadInt32();
-      def hasBody = reader.ReadBoolean();
+      def rawId = reader.ReadInt32();
+      def (id, hasBody) = if (rawId < 0) (~rawId, true) else (rawId, false);
 
-      mutable existingSymbol;
-      if (_symbols.TryGetValue(id, out existingSymbol))
-        symbol = existingSymbol :> T;
+      mutable existingObject;
+      if (_objects.TryGetValue(id, out existingObject))
+        obj = existingObject :> T;
       else
       {
-        def newSymbol = T();
-        _symbols.Add(id, newSymbol);
-        symbol = newSymbol;
+        def newObj = if (factory == null) Activator.CreateInstance() else factory();
+        _objects.Add(id, newObj);
+        obj = newObj;
       }
 
       hasBody
