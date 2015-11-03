@@ -19,11 +19,13 @@ namespace Nitra.Compiler
     public override TypeCompiler : NTypeCompiler      { get { Environment.DefaultTypeCompiler } }
     private         _symbol      : SymbolSymbol;
     private mutable _tb          : TypeBuilder;
+    private         _serializationEmitter : BinarySerializationEmitter;
 
-    public this(environment : EmitterEnvironment, symbol : SymbolSymbol)
+    public this(environment : EmitterEnvironment, symbol : SymbolSymbol, serializationEmitter : BinarySerializationEmitter)
     {
-      Environment = environment;
-      _symbol     = symbol;
+      Environment           = environment;
+      _symbol               = symbol;
+      _serializationEmitter = serializationEmitter;
     }
 
     public DefineTypes() : void
@@ -44,67 +46,15 @@ namespace Nitra.Compiler
               }
             ]>);
 
-          | ParsedSimpleSymbolSymbol as symbol =>
-            def canMergeExpr       = if (symbol.CanMergeExpr       is Some(expr)) expr else <[ _ = candidate; false ]>;
-            def isSameIdentityExpr = if (symbol.IsSameIdentityExpr is Some(expr)) expr else <[ _ = candidate; true ]>;
-            def afterStageExpr     = if (symbol.AfterStageExpr     is Some(expr)) expr else <[ _ = stage ]>;
-
+          | ParsedSimpleSymbolSymbol =>
             _tb = nemerleEnv.Define(<[ decl:
-              public partial class $(_symbol.Name : usesite) : ..$(MakeSymbolClassBaseTypes())
+              public partial class $(_symbol.Name : usesite) : ..$(MakeSymbolClassBaseTypes(<[ Nitra.Runtime.Binding.SymbolBase ]>))
               {
-                public this()
-                {
-                  _id               = Nitra.Runtime.Binding.SymbolUtils.CreateSymbolId();
-                  _isNameValid      = false;
-                  _declarationStore = null;
-                }
-
-                public Id           : int    { get { _id } }
-                public Name         : string { get { Nitra.Runtime.Binding.SymbolUtils.GetSymbolName.[$(astType : typed)](_isNameValid, _declarationStore) } }
-                public IsNameValid  : bool   { get { _isNameValid } }
-
-                private         _id               : int;
-                private mutable _isNameValid      : bool;
-                private mutable _declarationStore : object;
-
-                public GetDeclarationsUntyped() : System.Collections.Generic.IEnumerable[Nitra.Runtime.Binding.Declaration]
-                {
-                  Nitra.Runtime.Binding.SymbolUtils.GetDeclarationsUntyped.[$(astType : typed)](_declarationStore)
-                }
+                public this() { }
 
                 public Declarations : System.Collections.Generic.IEnumerable[$(astType : typed)]
                 {
-                  get { Nitra.Runtime.Binding.SymbolUtils.GetDeclarations.[$(astType : typed)](_declarationStore) }
-                }
-
-                public AddDeclaration(newDeclaration : Nitra.Runtime.Binding.Declaration) : void
-                {
-                  Nitra.Runtime.Binding.SymbolUtils.AddDeclaration.[$(astType : typed)](newDeclaration, ref _isNameValid, ref _declarationStore)
-                }
-
-                public CanMerge($("candidate": global) : Nitra.Runtime.Binding.Declaration) : bool
-                {
-                  $canMergeExpr
-                }
-
-                public IsSameIdentity($("candidate": global) : Nitra.Runtime.Binding.Declaration) : bool
-                {
-                  $isSameIdentityExpr
-                }
-
-                public AfterStage($("stage": global) : int) : void
-                {
-                  $afterStageExpr
-                }
-
-                public ToXaml() : string
-                {
-                  Nitra.Runtime.Binding.SymbolUtils.ToXaml(this)
-                }
-
-                public override ToString() : string
-                {
-                  Nitra.Runtime.Binding.SymbolUtils.ToString(this)
+                  get { GetDeclarationsOfType() }
                 }
               }
             ]>);
@@ -113,7 +63,7 @@ namespace Nitra.Compiler
         }
       });
     }
-    
+
     private _dependentPropBits : SCG.Dictionary[DependentPropertySymbol, BitField] = SCG.Dictionary();
 
     public DefineMembers() : void
@@ -132,7 +82,16 @@ namespace Nitra.Compiler
             | _ => assert(false)
           }
 
-        | ParsedSimpleSymbolSymbol =>
+        | ParsedSimpleSymbolSymbol as symbol =>
+          when (symbol.CanMergeExpr is Some(expr))
+            _tb.Define(<[ decl: public override CanMerge($("candidate": global) : Nitra.Runtime.Binding.Declaration) : bool { $expr } ]>);
+
+          when (symbol.IsSameIdentityExpr is Some(expr))
+            _tb.Define(<[ decl: public override IsSameIdentity($("candidate": global) : Nitra.Runtime.Binding.Declaration) : bool { $expr } ]>);
+
+          when (symbol.AfterStageExpr is Some(expr))
+            _tb.Define(<[ decl: public override AfterStage($("stage": global) : int) : void { $expr } ]>);
+
           foreach (s in _symbol.AllProperties)
           {
             | DependentPropertySymbol as propertySymbol =>
@@ -165,6 +124,56 @@ namespace Nitra.Compiler
           DefineResetPropertiesMethod(_tb, null);
           DefineIsAllPropertiesEvaluatedProperty(_tb, null);
 
+          def serializationMembers = _tb.GetMembers().Filter(fun (m)
+          {
+            | IProperty as p =>
+              match (Environment.LookupPropertySymbol(p))
+              {
+                | DeclaredProperty(DependentPropertySymbol as dependentProperty, _) => _dependentPropBits.ContainsKey(dependentProperty)
+                | _ => false
+              }
+
+            | _ => false
+          });
+
+          def symbolType = _tb.GetMemType();
+
+          def serializeBody = _serializationEmitter.MakeMembersSerializationCode(symbolType, serializationMembers, <[ this ]>, [ <[ metadataWriter ]> ]);
+          _tb.Define(<[ decl:
+            public Serialize(writer : System.IO.BinaryWriter, metadataWriter : Nitra.Serialization2.MetadataWriter) : void
+            {
+              unchecked when (metadataWriter.BeginWriteObject(this, writer))
+              {
+                def isNameValid = IsNameValid;
+                writer.Write(isNameValid : bool);
+                when (isNameValid)
+                  writer.Write(Name : string);
+
+                $serializeBody;
+                writer.Write($(Nitra.Serialization.TypeTag.Empty :> byte));
+              }
+            }
+          ]>);
+
+          def deserializeBody = _serializationEmitter.MakeMembersDeserializationCode(symbolType, serializationMembers, <[ symbol ]>, [ <[ metadataReader ]> ]);
+          _tb.Define(<[ decl:
+            public static Deserialize(reader : System.IO.BinaryReader, metadataReader : Nitra.Serialization2.MetadataReader) : $(symbolType : typed)
+            {
+              mutable symbol;
+              unchecked when (metadataReader.BeginReadObject.[$(symbolType : typed)](reader, out symbol, null))
+              {
+                def isNameValid = reader.ReadBoolean();
+                when (isNameValid)
+                {
+                  def name = reader.ReadString();
+                  symbol.UpdateName(Nitra.Runtime.Binding.StringIndex.GetId(name));
+                }
+                $deserializeBody;
+              }
+              symbol
+            }
+          ]>);
+
         | _ => assert(false)
       }
 
@@ -176,9 +185,12 @@ namespace Nitra.Compiler
       AttributesAndModifiers(NemerleAttributes.Public, [])
     }
 
-    private MakeSymbolClassBaseTypes() : SCG.List[PExpr]
+    private MakeSymbolClassBaseTypes(baseType : PExpr = null) : SCG.List[PExpr]
     {
       def baseTypes = SCG.List();
+      when (baseType != null)
+        baseTypes.Add(baseType);
+
       foreach (baseSymbol in _symbol.Parents)
         baseTypes.Add(<[ $(Environment.GetSymbolClass(baseSymbol) : typed) ]>);
       baseTypes

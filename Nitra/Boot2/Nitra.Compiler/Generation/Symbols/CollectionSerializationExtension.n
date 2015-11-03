@@ -1,0 +1,130 @@
+﻿using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Compiler
+{
+  using TypeTag = Nitra.Serialization.TypeTag;
+
+  internal sealed class CollectionSerializationExtension : IBinarySerializationEmitterExtension
+  {
+    public this(environment : EmitterEnvironment)
+    {
+      _environment = environment;
+    }
+
+    _environment : EmitterEnvironment;
+
+    public CreateParameters(_emitter : BinarySerializationEmitter) : void
+    {
+    }
+
+    private delegate Writer(itemType : FixedType, emitter : BinarySerializationEmitter) : PExpr;
+    private delegate Reader(itemType : FixedType, emitter : BinarySerializationEmitter) : PExpr;
+
+    private SupportedTypes : array[TypeInfo * Writer * Reader]
+    {
+      mutable _supportedTypes : array[TypeInfo * Writer * Reader] = null;
+      get
+      {
+        when (_supportedTypes : object == null)
+        {
+          _supportedTypes = array
+          [
+            (_environment.Manager.InternalType.Nemerle_list_tc,                                                           Writer(WriteCollection), Reader(ReadNemerleList)),
+            (_environment.Manager.CoreEnv.LookupType(["System", "Collections", "Generic", "IList"],       null, 1).Value, Writer(WriteCollection), Reader(ReadCollection)),
+            (_environment.Manager.CoreEnv.LookupType(["System", "Collections", "Generic", "ICollection"], null, 1).Value, Writer(WriteCollection), Reader(ReadCollection)),
+            (_environment.Manager.CoreEnv.LookupType(["System", "Collections", "Generic", "IEnumerable"], null, 1).Value, Writer(WriteCollection), Reader(ReadCollection)),
+          ];
+        }
+        _supportedTypes
+      }
+    }
+
+    public IsSupportedType(type : FixedType) : bool
+    {
+      | Array(_, 1) => true
+      | Class(ty, [_]) =>
+        foreach ((t, _writer, _reader) when t.Equals(ty) in SupportedTypes)
+          return true;
+        false
+
+      | _ => false
+    }
+
+    public MakeWriteCode(type : FixedType, emitter : BinarySerializationEmitter) : PExpr
+    {
+      match (type)
+      {
+        | Array(itemType, 1)   => WriteCollection(itemType.Fix(), emitter)
+        | Class(ty, [itemType]) =>
+          foreach ((t, writer, _reader) when t.Equals(ty) in SupportedTypes)
+            return writer.Invoke(itemType.Fix(), emitter);
+          assert(false);
+
+        | _ => assert(false);
+      }
+    }
+
+    public MakeReadCode(type : FixedType, emitter : BinarySerializationEmitter) : PExpr
+    {
+      match (type)
+      {
+        | Array(itemType, 1)    => ReadArray(itemType.Fix(), emitter)
+        | Class(ty, [itemType]) =>
+          foreach ((t, _writer, reader) when t.Equals(ty) in SupportedTypes)
+            return reader.Invoke(itemType.Fix(), emitter);
+          assert(false);
+
+        | _ => assert(false);
+      }
+    }
+
+    private WriteCollection(type : FixedType, emitter : BinarySerializationEmitter) : PExpr
+    {
+      <[
+        foreach (item in obj)
+          $(emitter.MakeWriteCode(type, <[ item ]>, "i"));
+        writer.Write($(TypeTag.Empty :> byte));
+      ]>
+    }
+
+    private ReadCollection(type : FixedType, emitter : BinarySerializationEmitter) : PExpr
+    {
+      <[
+        _ = typeCode;
+        def buffer = System.Collections.Generic.List.[$(type : typed)]();
+        def loop()
+        {
+          def typeCode = $(emitter.ReadTypeTag());
+          when (typeCode != Nitra.Serialization.TypeTag.Empty)
+          {
+            def fieldName = reader.ReadString();
+            buffer.Add($(emitter.MakeReadCode(type)));
+            loop();
+          }
+        }
+        loop();
+        buffer
+      ]>
+    }
+
+    private ReadNemerleList(type : FixedType, emitter : BinarySerializationEmitter) : PExpr
+    {
+      <[ Nemerle.Collections.NCollectionsExtensions.NToList($(ReadCollection(type, emitter))); ]>
+    }
+
+    private ReadArray(type : FixedType, emitter : BinarySerializationEmitter) : PExpr
+    {
+      <[ $(ReadCollection(type, emitter)).ToArray(); ]>
+    }
+  }
+}
