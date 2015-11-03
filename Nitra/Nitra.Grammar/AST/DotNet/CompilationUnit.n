@@ -29,6 +29,14 @@ namespace DotNet
   
   public partial class CompilationUnit : AstBase, IProjectSupport, NamespaceBody
   {
+    public RefreshReferences(project : Project) : void
+    {
+    }
+    
+    public RefreshSources(project : Project) : void
+    {
+    }
+    
     public RefreshProject(files : Seq[File]) : void
     {
       def files         = files.ToArray();
@@ -38,14 +46,13 @@ namespace DotNet
       rootNamespace.Parent = null;
       rootNamespace.FullName = "";
 
-      CreateNemerleSymbols(rootNamespace, context);
+      def rootScope = CreateNemerleSymbols(rootNamespace, context);
 
       foreach (file in files)
         when (file.Ast is CompilationUnit as cu)
           cu.RootNamespace = rootNamespace;
       AstUtils.EvalProperties(context, files, "SymbolHierarchy", 0, rootNamespace);
 
-      def rootScope = rootNamespace.Scope;
       foreach (file in files)
         when (file.Ast is CompilationUnit as cu)
           cu.Scope = rootScope;
@@ -70,18 +77,20 @@ namespace DotNet
       }
     }
     
-    private static CreateNemerleSymbols(rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : void
+    private static CreateNemerleSymbols(rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : Scope
     {
       when (ManagerClass.Instance == null)
       {
         ManagerClass.Instance = Compiler();
       }
         
-      def manager       = ManagerClass.Instance;
-      def nemerleNsRoot = manager.NameTree.NamespaceTree;
-      def fakeSnapshot  = SourceSnapshot("");
-      def file          = fakeSnapshot.File;
-      def span          = NSpan(0);
+      def manager         = ManagerClass.Instance;
+      def nemerleNsRoot   = manager.NameTree.NamespaceTree;
+      def fakeSnapshot    = SourceSnapshot("");
+      def file            = fakeSnapshot.File;
+      def span            = NSpan(0);
+      def nodeToSymbolMap = Hashtable();
+      def alaises         = List();
       
       def loadNsMemebers(node : NamespaceTree.Node, parent : DotNet.NamespaceSymbol) : void
       {
@@ -98,25 +107,32 @@ namespace DotNet
                       else if (tycon.IsInterface) TopInterfaceSymbol()
                       else if (tycon.IsValueType) TopStructSymbol()
                       else TopClassSymbol();
+              nodeToSymbolMap[tycon] = symbol;
               symbol.TypeParametersCount = tycon.TyparmsCount;
               symbol.TypeParameters = Utils.CreateTypeParameters(tycon.TyparmsCount);
-              def decl   = ExternalDeclaration(name, symbol, node);
+              def decl   = ExternalTypeDeclaration(name, symbol, tycon);
               _ = parent.MemberTable.Define(decl, context, null);
               symbol.Parent = parent;
+              symbol.EvalProperties(context);
                 
             | Alias         =>
               def symbol = TypeAliasSymbol();
-              def decl   = ExternalDeclaration(name, symbol, node);
+              def decl   = ExternalTypeDeclaration(name, symbol, tycon);
               _ = parent.MemberTable.Define(decl, context, null);
               symbol.Parent = parent;
+              alaises.Add(symbol);
+              nodeToSymbolMap[tycon] = symbol;
+              symbol.EvalProperties(context);
 
             | Variant       => ()
             | VariantOption => ()
             | Enum          =>
               def symbol = TopEnumSymbol();
-              def decl   = ExternalDeclaration(name, symbol, node);
+              def decl   = ExternalTypeDeclaration(name, symbol, tycon);
               _ = parent.MemberTable.Define(decl, context, null);
+              nodeToSymbolMap[tycon] = symbol;
               symbol.Parent = parent;
+              symbol.EvalProperties(context);
           }
         }
         node.EnsureCached();
@@ -128,9 +144,10 @@ namespace DotNet
           | null                             => ()
           | NamespaceReference               => 
             def symbol = NamespaceSymbol();
-            def decl   = ExternalDeclaration(NRB.Name(file, span, node.PartName), symbol, node);
+            def decl   = ExternalNamespaceDeclaration(NRB.Name(file, span, node.PartName), symbol, node);
             _ = parent.MemberTable.Define(decl, context, null);
             symbol.Parent = parent;
+            symbol.EvalProperties(context);
             foreach (subNode in node.Children.Values.ToArray())
               loadNsMemebers(subNode, symbol);
             
@@ -145,21 +162,58 @@ namespace DotNet
       
       foreach (node in nemerleNsRoot.Children.Values)
         loadNsMemebers(node, rootNamespace);
+        
+      def nodeToSymbolMap = nodeToSymbolMap;
+      
+      foreach (alais in alaises)
+      {
+        def decl = alais.GetDeclarationsUntyped().First() :> ExternalTypeDeclaration;
+        def a = decl.NemerleTypeInfo.GetTydecl() :> Typedtree.TypeDeclaration.Alias;
+        def typeInfo = a.ty.TypeInfo;
+        when (typeInfo != null)
+          alais.ReplacementSymbol = nodeToSymbolMap[typeInfo];
+        //alais.ReplacementScope  = alais.ReplacementSymbol.Scope;
+      }
+      
+      def bind(scope : Scope, name : string) : Ref[NamespaceSymbol]
+      {
+        scope.TryBind(Reference(file, span, name)).TryResolve.[NamespaceSymbol]()
+      }
+      def res1 = bind(rootNamespace.MemberTable, "Nemerle");
+      
+      when (res1.IsSymbolEvaluated)
+      {
+        def res2 = bind(res1.Symbol.MemberTable, "Core");
+        when (res2.IsSymbolEvaluated)
+          return res2.Symbol.MemberTable.HideWith(rootNamespace.MemberTable);
+      }
+
+      rootNamespace.MemberTable
     }
   }
-  
+
+  [Record]
+  class ExternalTypeDeclaration : ExternalDeclaration
+  {
+    public NemerleTypeInfo : TypeInfo { get; private set; }
+  }
+
+  [Record]
+  class ExternalNamespaceDeclaration : ExternalDeclaration
+  {
+    public NemerleNode : NamespaceTree.Node { get; private set; }
+  }
+
   class ExternalDeclaration : Nitra.Declarations.DeclarationBase, Declaration
   {
     mutable _symbol : DeclarationSymbol;
-    _nemerleTrypeTreeNode : NamespaceTree.Node;
     
-    public this(name : NRB.Name, symbol : DeclarationSymbol, nemerleTrypeTreeNode : NamespaceTree.Node)
+    public this(name : NRB.Name, symbol : DeclarationSymbol)
     {
       this.File = name.File;
       this.Span = name.Span;
       __NameImpl = name;
       _symbol = symbol;
-      _nemerleTrypeTreeNode = nemerleTrypeTreeNode;
     }
 
     public CreateSymbol() : DeclarationSymbol { _symbol }
