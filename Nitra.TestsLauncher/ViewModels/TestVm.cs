@@ -143,6 +143,7 @@ namespace Nitra.ViewModels
     [CanBeNull]
     public bool Run(RecoveryAlgorithm recoveryAlgorithm = RecoveryAlgorithm.Smart, int completionStartPos = -1, string completionPrefix = null)
     {
+      var project = _file.Project;
       _file._completionStartPos = completionStartPos;
       _file._completionPrefix   = completionPrefix;
       _file.ResetCache();
@@ -158,9 +159,18 @@ namespace Nitra.ViewModels
       var projectSupport = _file.Ast as IProjectSupport;
 
       if (projectSupport != null)
-        projectSupport.RefreshProject(files);
+      {
+        if (project.Data == null)
+        {
+          projectSupport.RefreshReferences(project);
+          projectSupport.RefreshSources(project);
+        }
+
+        projectSupport.RefreshProject(project);
+      }
       else if (_testFolder != null)
-        throw new InvalidOperationException("The '" + _file.Ast.GetType().Name + "' type must implement IProjectSupport, to be used in a multi-file test.");
+        throw new InvalidOperationException("The '" + _file.Ast.GetType().Name +
+                                            "' type must implement IProjectSupport, to be used in a multi-file test.");
       else
       {
         var context = new DependentPropertyEvalContext();
