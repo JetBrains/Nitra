@@ -1,4 +1,5 @@
 ﻿using Nitra.Declarations;
+using Nitra.ProjectSystem;
 using Nitra.Serialization2;
 
 using Nemerle;
@@ -16,14 +17,14 @@ namespace Nitra.Runtime.Binding
 {
   public class TableScope : Scope
   {
-    public this(owner : string)
+    public this(title : string)
     {
-      _owner = owner;
+      _title     = title;
       _nameTable = Hashtable();
     }
 
-    private mutable _owner : string;
-    private _nameTable : Hashtable[int, list[DeclarationSymbol]]; //TODO: replace with LightList[DeclarationSymbol]?
+    private mutable _title     : string;
+    private         _nameTable : Hashtable[int, list[DeclarationSymbol]]; //TODO: replace with LightList[DeclarationSymbol]?
 
     public Symbols : Hashtable[int, list[DeclarationSymbol]].ValueCollection { get { _nameTable.Values } }
 
@@ -48,7 +49,11 @@ namespace Nitra.Runtime.Binding
       def concreteSymbol =
         match (candidateSymbols.Count)
         {
-          | 0 => declaration.CreateSymbol() :> TSymbol;
+          | 0 =>
+            def newSymbol = (declaration :> DeclarationBase).CreateSymbol();
+            (newSymbol :> SymbolBase).Owner = this;
+            newSymbol :> TSymbol;
+
           | 1 => candidateSymbols[0] // merge
           | _ => assert(false)
         };
@@ -80,6 +85,49 @@ namespace Nitra.Runtime.Binding
       concreteSymbol
     }
 
+    public override FindMany[TSymbol](predicate : Predicate[TSymbol], results : ref LightList[TSymbol]) : void
+    {
+      foreach (symbols in _nameTable.Values)
+        foreach (symbol is TSymbol when predicate(symbol) in symbols)
+          results.Add(symbol);
+    }
+    
+    public Undefine(shouldRemove : Predicate[Declaration]) : void
+    {
+      def undefine(lst : list[DeclarationSymbol]) : list[DeclarationSymbol]
+      {
+        | []      => []
+        | x :: xs =>
+          assert(x.Owner : object == this, $"Symbol '$x' is not defined in table scope.");
+
+          def survivedDeclarations = x.RemoveDeclarations(shouldRemove);
+          if (survivedDeclarations > 0)
+          {
+            def newXs = undefine(xs);
+            if (newXs : object != xs)
+              x :: newXs
+            else
+              lst
+          }
+          else
+          {
+            (x :> SymbolBase).Owner = null;
+            undefine(xs)
+          }
+      }
+
+      foreach (pair in _nameTable.ToArray())
+      {
+        def newList = undefine(pair.Value);
+
+        when (newList : object != pair.Value)
+          if (newList.IsEmpty)
+            _nameTable.Remove(pair.Key);
+          else
+            _nameTable[pair.Key] = newList;
+      }
+    }
+
     public override BindMany[TSymbol](reference : Reference, results : ref LightList[TSymbol]) : void
     {
       mutable lookupResult;
@@ -89,7 +137,7 @@ namespace Nitra.Runtime.Binding
           results.Add(result);
       }
     }
-
+    
     public override MakeCompletionList(prefix : string) : Seq[DeclarationSymbol]
     {
       if (string.IsNullOrEmpty(prefix))
@@ -100,14 +148,14 @@ namespace Nitra.Runtime.Binding
 
     public override ToString() : string
     {
-      $<#$_owner[..$(_nameTable.Keys; ", "; StringIndex.GetText)]#>
+      $<#$_title[..$(_nameTable.Keys; ", "; StringIndex.GetText)]#>
     }
 
     public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
     {
       when (metadataWriter.BeginWriteObject(this, writer))
       {
-        writer.Write(_owner : string);
+        writer.Write(_title : string);
         writer.Write(_nameTable.Count : int);
         foreach (pair in _nameTable)
         {
@@ -122,7 +170,7 @@ namespace Nitra.Runtime.Binding
       mutable scope;
       when (metadataReader.BeginReadObject(reader, out scope, _tableScopeFactory))
       {
-        scope._owner = reader.ReadString();
+        scope._title = reader.ReadString();
 
         def nameCount = reader.ReadInt32();
         for (mutable i = 0; i < nameCount; ++i)
@@ -130,6 +178,8 @@ namespace Nitra.Runtime.Binding
           def name    = reader.ReadString();
           def symbols = metadataReader.ReadObjects(reader);
           scope._nameTable.Add(StringIndex.GetId(name), symbols.ToNList());
+          foreach (symbol in symbols)
+            (symbol :> SymbolBase).Owner = scope;
         }
       }
       scope

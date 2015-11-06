@@ -5,6 +5,7 @@ using Nitra.Internal;
 using Nitra.Serialization2;
 
 using Nemerle;
+using Nemerle.Assertions;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
@@ -20,6 +21,10 @@ namespace Nitra.Runtime.Binding
   {
     Name        : string    { get; }
     IsNameValid : bool      { get; }
+
+    IsUnresolved : bool  { get; }
+    IsAmbiguous  : bool  { get; }
+    Ambiguities  : Seq[DeclarationSymbol] { get; }
 
     [DependentProperty("IsFullNameEvaluated")]
     FullName            : string { get; }
@@ -41,10 +46,13 @@ namespace Nitra.Runtime.Binding
     Scope             : Scope    { get; }
     IsScopeEvaluated  : bool     { get; }
 
-    TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[ISymbol2, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
-      where TConcreteSymbol : ISymbol2;
+    [DependentProperty("IsResolvedToEvaluated")]
+    ResolvedTo            : IRef { get; }
+    IsResolvedToEvaluated : bool { get; }
+    
     Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[ISymbol2, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
       where TConcreteSymbol : ISymbol2;
+
     GetSymbols() : Seq[ISymbol2];
   }
 
@@ -72,7 +80,28 @@ namespace Nitra.Runtime.Binding
     [DependentProperty("IsSymbolEvaluated")]
     public abstract Symbol            : TSymbol { get; }
     public abstract IsSymbolEvaluated : bool    { get; }
-
+    
+    [RecordIgnore]
+    protected mutable _resolvedTo : IRef;
+    public ResolvedTo             : IRef { get { _resolvedTo } }
+    public IsResolvedToEvaluated  : bool { get { _resolvedTo != null } }
+    
+    public virtual IsUnresolved : bool  { get { false } }
+    public virtual IsAmbiguous  : bool  { get { false } }
+    
+    AmbiguitiesImpl : Seq[DeclarationSymbol]
+      implements IRef.Ambiguities
+    {
+      get
+      {
+        match (this)
+        {
+          | Ambiguous as a => a.Ambiguities
+          | _ => []
+        }
+      }
+    }
+    
     public IsAllPropertiesEvaluated : bool  { get { true } }
     public PropertiesEvalState      : int   { get { 0 } }
 
@@ -87,15 +116,17 @@ namespace Nitra.Runtime.Binding
       get { if (IsSymbolEvaluated) Symbol.IsScopeEvaluated else true }
     }
 
-    TryResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[ISymbol2, TConcreteSymbol]) : Ref[TConcreteSymbol]
+    public Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
       where TConcreteSymbol : ISymbol2
-      implements IRef.TryResolve
     {
-      // type cast avoids invalid IL
-      TryResolve((algorithm : object) :> ResolutionAlgorithm[TSymbol, TConcreteSymbol])
+      def algorithm = algorithm ?? ResolutionAlgorithms.TryCast;
+      
+      def result = ResolveImpl.[TConcreteSymbol](algorithm);
+      _resolvedTo = result;
+      result
     }
-
-    ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[ISymbol2, TConcreteSymbol]) : Ref[TConcreteSymbol]
+    
+    ResolveItfImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[ISymbol2, TConcreteSymbol]) : Ref[TConcreteSymbol]
       where TConcreteSymbol : ISymbol2
       implements IRef.Resolve
     {
@@ -103,16 +134,8 @@ namespace Nitra.Runtime.Binding
       Resolve((algorithm : object) :> ResolutionAlgorithm[TSymbol, TConcreteSymbol])
     }
 
-    public abstract TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+    protected abstract ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
       where TConcreteSymbol : ISymbol2;
-
-    public Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
-      where TConcreteSymbol : ISymbol2
-    {
-      def r = TryResolve(algorithm);
-      SymbolUtils.ReportError(r);
-      r
-    }
 
     public override ToString() : string { Name + " (" + Kind + ")" }
     public abstract GetSymbols() : Seq[ISymbol2];
@@ -139,10 +162,8 @@ namespace Nitra.Runtime.Binding
         public override Symbol            : TSymbol { get; }
         public override IsSymbolEvaluated : bool    { get { true } }
 
-        public override TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+        protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
         {
-          def algorithm = algorithm ?? ResolutionAlgorithms.TryCast;
-
           match (algorithm(Symbol))
           {
             | VSome(symbol) => Ref.Some(File, Span, symbol)
@@ -198,7 +219,9 @@ namespace Nitra.Runtime.Binding
         public override Symbol            : TSymbol { get { assert(false, "Ref is unresolved.") } }
         public override IsSymbolEvaluated : bool    { get { false } }
 
-        public override TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+        public override IsUnresolved : bool  { get { true } }
+        
+        protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
         {
           _ = algorithm;
           Ref.Unresolved(File, Span, Name, ResolutionSource.Resolve(this))
@@ -251,10 +274,10 @@ namespace Nitra.Runtime.Binding
         public override IsSymbolEvaluated : bool             { get { false } }
         public          AllDeclarations   : Seq[Declaration] { get { Ambiguities.SelectMany(_.Declarations) } }
 
-        public override TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+        public override IsAmbiguous  : bool  { get { true } }
+        
+        protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
         {
-          def algorithm = algorithm ?? ResolutionAlgorithms.TryCast;
-
           def results = LightList.[TConcreteSymbol]();
           foreach (s in Ambiguities)
             when (algorithm(s) is VSome(symbol))

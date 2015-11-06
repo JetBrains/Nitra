@@ -68,29 +68,13 @@ syntax module NitraSyntax : NitraLang
   //
 
   [StartRule]
-  syntax Start = NamespaceBody
-  {
-    CollectGlobalSymbols(rootNs : NamespaceSymbol) : void = NamespaceBody.CollectGlobalSymbols(rootNs);
-    [Cached] MakeContext(parent : Context) : Context = NamespaceBody.MakeContext(parent);
-    TypeSyntaxMappings() : void = NamespaceBody.TypeSyntaxMappings();
-    TypeAst() : void = NamespaceBody.TypeAst();
-    TypeLanguage() : void = NamespaceBody.TypeLanguage();
-    Typing() : void = NamespaceBody.Typing();
-    TypeSymbolMembers() : void = NamespaceBody.TypeSymbolMembers();
-  }
-
-  syntax Usings = outline_hiden outline_begin Using* outline_end_before
-  {
-    MakeContext(parent : Context) : Context = FoldThrough(Usings, parent, _.MakeContext(_));
-  }
-
-  syntax NamespaceBody = Usings NamespaceMember*
+  syntax Start = NamespaceMember*
   {
     CollectGlobalSymbols(rootNs : NamespaceSymbol) : void = foreach (topDecl in NamespaceMembers) topDecl.CollectGlobalSymbols(rootNs);
     [Cached] MakeContext(parent : Context) : Context
     {
-      def context1 = Usings.MakeContext(parent);
-      def context2 = PassThrough(NamespaceMembers, context1, _.MakeContext(_));
+      //assert2(false);
+      def context2 = PassThrough(NamespaceMembers, parent, _.MakeContext(_));
       context2
     }
     TypeSyntaxMappings() : void = foreach (topDecl in NamespaceMembers) topDecl.TypeSyntaxMappings();
@@ -98,6 +82,26 @@ syntax module NitraSyntax : NitraLang
     TypeLanguage() : void = foreach (topDecl in NamespaceMembers) topDecl.TypeLanguage();
     Typing() : void = foreach (topDecl in NamespaceMembers) topDecl.Typing();
     TypeSymbolMembers() : void = foreach (topDecl in NamespaceMembers) topDecl.TypeSymbolMembers();
+  }
+
+  syntax NamespaceBody = NamespaceMember*
+  {
+    CollectGlobalSymbols(rootNs : NamespaceSymbol) : void = foreach (topDecl in NamespaceMembers) topDecl.CollectGlobalSymbols(rootNs);
+    [Cached] MakeContext(parent : Context) : Context
+    {
+      def context2 = PassThrough(NamespaceMembers, parent, _.MakeContext(_));
+      context2
+    }
+    TypeSyntaxMappings() : void = foreach (topDecl in NamespaceMembers) topDecl.TypeSyntaxMappings();
+    TypeAst() : void = foreach (topDecl in NamespaceMembers) topDecl.TypeAst();
+    TypeLanguage() : void = foreach (topDecl in NamespaceMembers) topDecl.TypeLanguage();
+    Typing() : void = foreach (topDecl in NamespaceMembers) topDecl.Typing();
+    TypeSymbolMembers() : void = foreach (topDecl in NamespaceMembers) topDecl.TypeSymbolMembers();
+  }
+
+  syntax Usings = outline_hiden outline_begin Using* outline_end_before
+  {
+    MakeContext(parent : Context) : Context = FoldThrough(Usings, parent, _.MakeContext(_));
   }
 
   syntax Using
@@ -415,7 +419,7 @@ syntax module NitraSyntax : NitraLang
     }
   }
 
-  syntax DependentCallStatement = Condition* Path=(Name ".")* Name OpenBrace="(" Arguments=(ArgumentExpression; "," sm)* CloseBrace=")" ";"
+  syntax DependentCallStatement = Condition* Path=(Name ".")* Name=Reference OpenBrace="(" Arguments=(ArgumentExpression; "," sm)* CloseBrace=")" ";"
   {
     syntax Condition
     {
@@ -740,6 +744,18 @@ syntax module NitraSyntax : NitraLang
     Typing() : void {}
     TypeSymbolMembers() : void {}
 
+    | UsingOpen  = "using" sm NamespaceOrType=QualifiedReference ";" nl
+      {
+        override CollectGlobalSymbols { _ = ns; }
+        override MakeContext = OpenNamespaceOrTypeContext(parent, NamespaceOrType);
+      }
+
+    | UsingAlias = "using" Name sm "=" sm NamespaceOrType=QualifiedReference ";" nl
+      {
+        override CollectGlobalSymbols { _ = ns; }
+        override MakeContext = NamespaceOrTypeAliasContext(parent, Name, NamespaceOrType);
+      }
+
     | Ast = Header sm Name AstInheritance? Body=AstBody
       {
         syntax Header
@@ -828,9 +844,22 @@ syntax module NitraSyntax : NitraLang
         }
       }
 
-    | Namespace   = "namespace"   sm QualifiedReference outline_begin_before nl "{" inl NamespaceBody      d "}" outline_end_before nl
+    | Namespace   = "namespace"   sm NamespaceName outline_begin_before nl "{" inl NamespaceBody d "}" outline_end_before nl
       {
-        [Cached] private MakeCurrentSymbol(ns : NamespaceSymbol) : NamespaceSymbol = MakeNamespaceSymbol(ns, QualifiedReference.CalcLocations());
+        [ExplicitSpaces]
+        syntax NamespaceName = Path=(Name s "." s)* Name
+        {
+          CalcLocations() : list[Nitra.Location]
+          {
+            def path = List(Path.Count + 1);
+            foreach (x in Path)
+              path.Add(x.Item1.Location);
+            path.Add(Name.Location);
+            path.ToNList()
+          }
+        }
+
+        [Cached] private MakeCurrentSymbol(ns : NamespaceSymbol) : NamespaceSymbol = MakeNamespaceSymbol(ns, NamespaceName.CalcLocations());
         override CollectGlobalSymbols = NamespaceBody.CollectGlobalSymbols(MakeCurrentSymbol(ns));
         override MakeContext
         {
@@ -1066,7 +1095,7 @@ syntax module NitraSyntax : NitraLang
       {
         override MakeContext = RuleAlias.MakeContext(parent);
       }
-    | TokenLiteral        = "literal"             sm Name  sm "="  sm (StringLiteral; ","sm)+               ";"nl
+    | TokenLiteral = "literal" sm Name=Text sm "="  sm (StringLiteral; ","sm)+ ";"nl
       {
         override GetTokenLiteralNames
         {
@@ -1652,7 +1681,7 @@ syntax module NitraSyntax : NitraLang
     }
   }
 
-  syntax SimpleRule = RuleAttributes Header sm Name sm "=" sm RuleExpression RuleBody
+  syntax SimpleRule = RuleAttributes Header sm Name sm "=" sm Expression=RuleExpression RuleBody
   {
     token Header
     {
@@ -1694,7 +1723,7 @@ syntax module NitraSyntax : NitraLang
       _ = this.RuleBody.MakeContext(context);
       parent
     }
-    [Cached] private MakeTypedRule()   : Rule.Sequence = TypeRuleExpression(this.Symbol.Options, this.RuleBody.Context, RuleExpression.Typing(None(), PrecedenceInfo.None, None(), this.RuleBody.Context, this.Symbol.Options));
+    [Cached] private MakeTypedRule()   : Rule.Sequence = TypeRuleExpression(this.Symbol.Options, this.RuleBody.Context, Expression.Typing(None(), PrecedenceInfo.None, None(), this.RuleBody.Context, this.Symbol.Options));
     TypeSyntaxMappings() : void    = this.RuleBody.TypeSyntaxMappings();
     Typing() : void
     {
@@ -2402,14 +2431,14 @@ syntax module NitraSyntax : NitraLang
       }
 
     precedence FieldName2:
-    | FieldName2                      = Name sm "=" sm RuleExpression ^ FieldName2
+    | FieldName2                      = Name=Text sm "=" sm RuleExpression ^ FieldName2
       {
         override Typing = RuleExpression.Typing(_baseRule, _precedenceInfo, Some(Name.Value()), context, _options);
         override InferName = Name.GetText();
       }
 
     precedence FieldName1:
-    | FieldName1                      = RuleExpression ^ FieldName1 sm "as" sm Name
+    | FieldName1                      = RuleExpression ^ FieldName1 sm "as" sm Name=Text
       {
         override Typing = RuleExpression.Typing(_baseRule, _precedenceInfo, Some(Name.Value()), context, _options);
         override InferName = Name.GetText();
