@@ -148,29 +148,25 @@ namespace Nitra.Serialization2
     public BeginReadObject[T](reader : BinaryReader, obj : out T, factory : Func[BinaryReader, MetadataReader, T] = null) : bool
       where T: ISerializable
     {
-      def rawId = reader.ReadInt32();
-      def (id, hasBody) = if (rawId < 0) (~rawId, true) else (rawId, false);
-
-      mutable existingObject;
-      if (_objects.TryGetValue(id, out existingObject))
-        obj = existingObject :> T;
-      else
+      def id = reader.ReadInt32();
+      if (id < 0)
       {
         def newObj = if (factory == null) Activator.CreateInstance() else factory(reader, this);
-        _objects.Add(id, newObj);
+        _objects.Add(~id, newObj);
         obj = newObj;
+        true
       }
-
-      hasBody
+      else
+      {
+        obj = _objects[id] :> T;
+        false
+      }
     }
 
     public BeginReadSymbol[T](reader : BinaryReader, obj : out T) : bool
       where T: DeclarationSymbol
     {
-      if (BeginReadObject(reader, out obj, SymbolFactory))
-        obj.AssemblyId == Nitra.Typing.AssemblyIds.CurrentAssembly
-      else
-        false
+      BeginReadObject(reader, out obj, SymbolFactory)
     }
 
     private static SymbolFactory[T](reader : BinaryReader, metadataReader : MetadataReader) : T
@@ -194,19 +190,25 @@ namespace Nitra.Serialization2
 
         def containingSymbol = metadataReader.ReadObject.[DeclarationSymbol](reader);
 
-        def reference = Reference(null, NSpan(), nameId);
-        def r         = containingSymbol.Scope.TryBind(reference);
-        if (r.IsSymbolEvaluated)
-          r.Symbol
-        else if (assemblyId == Nitra.Typing.AssemblyIds.NoAssembly)
+        def reference      = Reference(null, NSpan(), nameId);
+        mutable candidates = LightList();
+        containingSymbol.Scope.BindMany(reference, ref candidates);
+        match (candidates.Count)
         {
-          def symbol = Activator.CreateInstance();
-          symbol.AssemblyId = assemblyId;
-          (symbol :> SymbolBase).UpdateName(nameId);
-          symbol
+          | 0 =>
+            if (assemblyId == Nitra.Typing.AssemblyIds.NoAssembly)
+            {
+              def symbol = Activator.CreateInstance();
+              symbol.AssemblyId = assemblyId;
+              (symbol :> SymbolBase).UpdateName(nameId);
+              symbol
+            }
+            else
+              assert(false, $"Failed to lookup reference to external symbol '$reference'");
+
+          | 1 => candidates.FirstItem
+          | _ => assert(false, $"Ambiguous symbol reference '$reference'");
         }
-        else
-          assert(false, "Failed to lookup reference to external symbol '$r'");
       }
     }
   }
