@@ -1,6 +1,7 @@
 ﻿using Nitra.Typing;
 
 using Nemerle;
+using Nemerle.Imperative;
 using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
@@ -124,21 +125,37 @@ namespace Nitra.Compiler
           DefineResetPropertiesMethod(_tb, null);
           DefineIsAllPropertiesEvaluatedProperty(_tb, null);
 
-          def serializationMembers = _tb.GetMembers().Filter(fun (m)
+          def memberTable = SCG.Dictionary();
+          foreach (p is IProperty in _tb.GetMembers())
           {
-            | IProperty as p =>
-              match (Environment.LookupPropertySymbol(p))
-              {
-                | DeclaredProperty(DependentPropertySymbol as dependentProperty, _) when dependentProperty.Name != "AssemblyId" => _dependentPropBits.ContainsKey(dependentProperty)
-                | _ => false
-              }
+            when (Environment.LookupPropertySymbol(p) is DeclaredProperty(DependentPropertySymbol as dependentProperty, _))
+            when (_dependentPropBits.ContainsKey(dependentProperty))
+              memberTable.Add(p, dependentProperty);
+          }
 
-            | _ => false
-          });
+          def serializationMembers = memberTable.Keys.ToArray();
+
+          // make Scope property first when serializing/deserializing
+          for (mutable index = serializationMembers.Length - 1; index > 1; --index)
+          {
+            def current = serializationMembers[index];
+            when (current.Name == "Scope")
+            {
+              serializationMembers[index] = serializationMembers[0];
+              serializationMembers[0]     = current;
+              break;
+            }
+          }
 
           def symbolType = _tb.GetMemType();
 
-          def serializeBody = _serializationEmitter.MakeMembersSerializationCode(symbolType, serializationMembers, <[ this ]>, [ <[ metadataWriter ]> ]);
+          def serializeBody = _serializationEmitter.MakeMembersSerializationCode(symbolType, serializationMembers, <[ this ]>, [ <[ metadataWriter ]> ],
+            fun (objAccess : PExpr, member : IMember, expr : PExpr) : PExpr
+            {
+              def isEvaluated = GetIsEvaluatedPropertyName(memberTable[member]);
+              <[ when ($objAccess.$(isEvaluated : usesite)) $expr ]>
+            });
+
           _tb.Define(<[ decl:
             public Serialize(writer : System.IO.BinaryWriter, metadataWriter : Nitra.Serialization2.MetadataWriter) : void
             {
@@ -150,7 +167,13 @@ namespace Nitra.Compiler
             }
           ]>);
 
-          def deserializeBody = _serializationEmitter.MakeMembersDeserializationCode(symbolType, serializationMembers, <[ symbol ]>, [ <[ metadataReader ]> ]);
+          def deserializeBody = _serializationEmitter.MakeMembersDeserializationCode(symbolType, serializationMembers, <[ symbol ]>, [ <[ metadataReader ]> ],
+            fun(objAccess : PExpr, member : IMember, expr : PExpr) : PExpr
+            {
+              def isEvaluated = GetIsEvaluatedPropertyName(memberTable[member]);
+              <[ unless ($objAccess.$(isEvaluated : usesite)) $expr ]>
+            });
+
           _tb.Define(<[ decl:
             public static Deserialize(reader : System.IO.BinaryReader, metadataReader : Nitra.Serialization2.MetadataReader) : $(symbolType : typed)
             {

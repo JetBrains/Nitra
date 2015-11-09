@@ -20,14 +20,16 @@ namespace Nitra.Serialization2
   {
     private delegate DeserializationHandler(reader : BinaryReader, metadataReader : MetadataReader) : ISerializable;
 
-    public this(project : Project)
+    public this(project : Project, file : Nitra.ProjectSystem.File)
     {
       Project       = project;
+      File          = file;
       ErrorLocation = Location.Default;
     }
 
-    public Project       : Project  { get; }
-    public ErrorLocation : Location { get; }
+    public Project       : Project                  { get; }
+    public File          : Nitra.ProjectSystem.File { get; }
+    public ErrorLocation : Location                 { get; }
 
     private _typeDescriptors         : Dictionary[int, MetadataTypeDescriptor] = Dictionary();
     private _deserializationHandlers : Dictionary[int, DeserializationHandler] = Dictionary();
@@ -165,53 +167,56 @@ namespace Nitra.Serialization2
       }
     }
 
-    public BeginReadSymbol[T](reader : BinaryReader, obj : out T) : bool
-      where T: DeclarationSymbol
+    public BeginReadSymbol[TSymbol](reader : BinaryReader, obj : out TSymbol) : bool
+      where TSymbol: DeclarationSymbol, new()
     {
-      BeginReadObject(reader, out obj, SymbolFactory)
-    }
-
-    private static SymbolFactory[T](reader : BinaryReader, metadataReader : MetadataReader) : T
-      where T: DeclarationSymbol
-    {
-      def assemblyId  = reader.ReadByte();
-      def isNameValid = reader.ReadBoolean();
-      def nameId      = if (isNameValid) StringIndex.GetId(reader.ReadString()) else 0;
-
-      if (assemblyId == Nitra.Typing.AssemblyIds.CurrentAssembly)
+      if (BeginReadObject(reader, out obj))
       {
-        def symbol = Activator.CreateInstance();
-        symbol.AssemblyId = assemblyId;
-        when (isNameValid)
-          (symbol :> SymbolBase).UpdateName(nameId);
-        symbol
+        def isNameValid = reader.ReadBoolean();
+        def nameId      = if (isNameValid) StringIndex.GetId(reader.ReadString()) else 0;
+
+        def owner           = ReadObject.[ISerializable](reader);
+        def containingScope =
+          match (owner)
+          {
+            | null                        => null
+            | scope  is Scope             => scope
+            | symbol is DeclarationSymbol => symbol.Scope
+            | _ => assert(false)
+          };
+
+        def isParsed = reader.ReadBoolean();
+        if (isParsed)
+        {
+          def name        = Name(this.File, NSpan(), nameId);
+          def declaration = ExternalDeclaration.[TSymbol](name);
+          if (containingScope : object != null)
+            obj = (containingScope :> TableScope).Define(declaration, null);
+          else
+          {
+            obj = declaration.CreateSymbol() :> TSymbol;
+            (obj :> SymbolBase).AddDeclaration(declaration);
+          }
+        }
+        else
+        {
+          assert(isNameValid,                      "External symbol has no name.");
+          assert(containingScope : object != null, "External symbol has no owner scope.");
+
+          def reference      = Reference(this.File, NSpan(), nameId);
+          mutable candidates = LightList();
+          containingScope.BindMany(reference, ref candidates);
+          match (candidates.Count)
+          {
+            | 0 => assert(false, $"Failed to lookup reference to external symbol '$reference'");
+            | 1 => obj = candidates.FirstItem
+            | _ => assert(false, $"Ambiguous symbol reference '$reference'");
+          }
+        }
+        isParsed
       }
       else
-      {
-        assert(isNameValid, "Failed to deserialize reference to external symbol");
-
-        def containingSymbol = metadataReader.ReadObject.[DeclarationSymbol](reader);
-
-        def reference      = Reference(null, NSpan(), nameId);
-        mutable candidates = LightList();
-        containingSymbol.Scope.BindMany(reference, ref candidates);
-        match (candidates.Count)
-        {
-          | 0 =>
-            if (assemblyId == Nitra.Typing.AssemblyIds.NoAssembly)
-            {
-              def symbol = Activator.CreateInstance();
-              symbol.AssemblyId = assemblyId;
-              (symbol :> SymbolBase).UpdateName(nameId);
-              symbol
-            }
-            else
-              assert(false, $"Failed to lookup reference to external symbol '$reference'");
-
-          | 1 => candidates.FirstItem
-          | _ => assert(false, $"Ambiguous symbol reference '$reference'");
-        }
-      }
+        false
     }
   }
 }
