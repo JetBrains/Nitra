@@ -11,8 +11,8 @@ using System;
 using System.Text;
 using System.Reflection;
 using System.IO;
-using System.Collections.Generic;
 using System.Linq;
+using SCG = System.Collections.Generic;
 
 namespace Nitra.Serialization2
 {
@@ -25,8 +25,9 @@ namespace Nitra.Serialization2
 
     public Project : Project { get; }
 
-    private _typeDescriptors : Dictionary[Type, MetadataTypeDescriptor]   = Dictionary();
-    private _objects         : Dictionary[ISerializable, int]             = Dictionary();
+    private _typeDescriptors : SCG.Dictionary[Type, MetadataTypeDescriptor]   = SCG.Dictionary();
+    private _objects         : SCG.Dictionary[ISerializable, int]             = SCG.Dictionary();
+    private _symbols         : SCG.Queue[DeclarationSymbol]                   = SCG.Queue();
 
     private GetTypeDescriptor(type : Type) : MetadataTypeDescriptor
     {
@@ -48,11 +49,6 @@ namespace Nitra.Serialization2
         _typeDescriptors.Add(type, descriptor);
       }
       descriptor
-    }
-
-    public IsObjectWritten(obj : ISerializable) : bool
-    {
-      _objects.ContainsKey(obj)
     }
 
     public WriteObject(obj : ISerializable, writer : BinaryWriter) : void
@@ -90,10 +86,21 @@ namespace Nitra.Serialization2
         _objects[root]       = MetadataDefaults.RootSymbolId;
         _objects[root.Scope] = MetadataDefaults.RootScopeId;
 
-        using (buffer = MemoryStream())
+        using (symbolBuffer = MemoryStream())
         {
-          def writer = BinaryWriter(buffer, MetadataDefaults.Encoding);
-          (root.Scope :> TableScope).WriteSymbols(writer, this);
+          def symbolWriter = BinaryWriter(symbolBuffer, MetadataDefaults.Encoding);
+          (root.Scope :> TableScope).EnqueueSymbols(this);
+
+          mutable symbolCount = 0;
+          while (_symbols.Count > 0)
+          {
+            def symbol = _symbols.Dequeue();
+            unless (_objects.ContainsKey(symbol))
+            {
+              WriteObject(symbol, symbolWriter);
+              ++symbolCount;
+            }
+          }
 
           def writer = BinaryWriter(stream, MetadataDefaults.Encoding);
           def normalTypes = _typeDescriptors.Values.Where(t => !(t is MetadataTypeDescriptor.Generic)).GroupBy(d => d.Type.Assembly).ToList();
@@ -121,13 +128,15 @@ namespace Nitra.Serialization2
               writer.Write(arg.Id : int);
           }
 
-          buffer.WriteTo(stream);
+          writer.Write(symbolCount);
+          symbolBuffer.WriteTo(stream);
         }
       }
       finally
       {
         _typeDescriptors.Clear();
         _objects.Clear();
+        _symbols.Clear();
       }
     }
 
@@ -154,9 +163,20 @@ namespace Nitra.Serialization2
       {
         writer.Write(obj.InitialName);
 
-        def containingScope  = obj.Owner;
-        def containingSymbol = containingScope?.Owner;
-        WriteObject(containingSymbol ?? containingScope, writer);
+        def containingScope = obj.Owner;
+        def container =
+          if (containingScope : object != null)
+          {
+            def containingSymbol = containingScope.Owner;
+            if (containingSymbol != null && containingSymbol.IsScopeEvaluated && containingSymbol.Scope : object == containingScope)
+              containingSymbol
+            else
+              containingScope
+          }
+          else
+            null;
+
+        WriteObject(container, writer);
 
         def isParsed = obj.HasParsedDeclarations;
         writer.Write(isParsed : bool);
@@ -164,6 +184,11 @@ namespace Nitra.Serialization2
       }
       else
         false
+    }
+
+    internal EnqueueSymbol(symbol : DeclarationSymbol) : void
+    {
+      _symbols.Enqueue(symbol)
     }
   }
 }
