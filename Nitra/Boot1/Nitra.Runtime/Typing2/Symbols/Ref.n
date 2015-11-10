@@ -2,22 +2,29 @@
 using Nitra.Declarations;
 using Nitra.ProjectSystem;
 using Nitra.Internal;
+using Nitra.Serialization2;
 
 using Nemerle;
+using Nemerle.Assertions;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
 
 using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 
 namespace Nitra.Runtime.Binding
 {
-  public interface IRef : ILocated
+  public interface IRef : ILocated, ISerializable
   {
     Name        : string    { get; }
     IsNameValid : bool      { get; }
+
+    IsUnresolved : bool  { get; }
+    IsAmbiguous  : bool  { get; }
+    Ambiguities  : Seq[DeclarationSymbol] { get; }
 
     [DependentProperty("IsFullNameEvaluated")]
     FullName            : string { get; }
@@ -39,10 +46,13 @@ namespace Nitra.Runtime.Binding
     Scope             : Scope    { get; }
     IsScopeEvaluated  : bool     { get; }
 
-    TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[ISymbol2, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
-      where TConcreteSymbol : ISymbol2;
+    [DependentProperty("IsResolvedToEvaluated")]
+    ResolvedTo            : IRef { get; }
+    IsResolvedToEvaluated : bool { get; }
+    
     Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[ISymbol2, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
       where TConcreteSymbol : ISymbol2;
+
     GetSymbols() : Seq[ISymbol2];
   }
 
@@ -50,7 +60,7 @@ namespace Nitra.Runtime.Binding
   public variant Ref[TSymbol] : IRef
     where TSymbol : ISymbol2
   {
-    public          File        : File      { get; }
+    public          File        : Nitra.ProjectSystem.File { get; }
     public          Span        : NSpan     { get; }
     public abstract Name        : string    { get; }
     public abstract IsNameValid : bool      { get; }
@@ -70,7 +80,28 @@ namespace Nitra.Runtime.Binding
     [DependentProperty("IsSymbolEvaluated")]
     public abstract Symbol            : TSymbol { get; }
     public abstract IsSymbolEvaluated : bool    { get; }
-
+    
+    [RecordIgnore]
+    protected mutable _resolvedTo : IRef;
+    public ResolvedTo             : IRef { get { _resolvedTo } }
+    public IsResolvedToEvaluated  : bool { get { _resolvedTo != null } }
+    
+    public virtual IsUnresolved : bool  { get { false } }
+    public virtual IsAmbiguous  : bool  { get { false } }
+    
+    AmbiguitiesImpl : Seq[DeclarationSymbol]
+      implements IRef.Ambiguities
+    {
+      get
+      {
+        match (this)
+        {
+          | Ambiguous as a => a.Ambiguities
+          | _ => []
+        }
+      }
+    }
+    
     public IsAllPropertiesEvaluated : bool  { get { true } }
     public PropertiesEvalState      : int   { get { 0 } }
 
@@ -85,15 +116,17 @@ namespace Nitra.Runtime.Binding
       get { if (IsSymbolEvaluated) Symbol.IsScopeEvaluated else true }
     }
 
-    TryResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[ISymbol2, TConcreteSymbol]) : Ref[TConcreteSymbol]
+    public Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
       where TConcreteSymbol : ISymbol2
-      implements IRef.TryResolve
     {
-      // type cast avoids invalid IL
-      TryResolve((algorithm : object) :> ResolutionAlgorithm[TSymbol, TConcreteSymbol])
+      def algorithm = algorithm ?? ResolutionAlgorithms.TryCast;
+      
+      def result = ResolveImpl.[TConcreteSymbol](algorithm);
+      _resolvedTo = result;
+      result
     }
-
-    ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[ISymbol2, TConcreteSymbol]) : Ref[TConcreteSymbol]
+    
+    ResolveItfImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[ISymbol2, TConcreteSymbol]) : Ref[TConcreteSymbol]
       where TConcreteSymbol : ISymbol2
       implements IRef.Resolve
     {
@@ -101,19 +134,12 @@ namespace Nitra.Runtime.Binding
       Resolve((algorithm : object) :> ResolutionAlgorithm[TSymbol, TConcreteSymbol])
     }
 
-    public abstract TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+    protected abstract ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
       where TConcreteSymbol : ISymbol2;
-
-    public Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
-      where TConcreteSymbol : ISymbol2
-    {
-      def r = TryResolve(algorithm);
-      SymbolUtils.ReportError(r);
-      r
-    }
 
     public override ToString() : string { Name + " (" + Kind + ")" }
     public abstract GetSymbols() : Seq[ISymbol2];
+    public abstract Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void;
 
     | Some
       {
@@ -136,10 +162,8 @@ namespace Nitra.Runtime.Binding
         public override Symbol            : TSymbol { get; }
         public override IsSymbolEvaluated : bool    { get { true } }
 
-        public override TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+        protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
         {
-          def algorithm = algorithm ?? ResolutionAlgorithms.TryCast;
-
           match (algorithm(Symbol))
           {
             | VSome(symbol) => Ref.Some(File, Span, symbol)
@@ -157,6 +181,19 @@ namespace Nitra.Runtime.Binding
         {
           | other is Some => this.Symbol.Equals(other.Symbol)
           | _ => false
+        }
+
+        public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+        {
+          metadataWriter.WriteObject(File, writer);
+          metadataWriter.WriteObject(Symbol, writer);
+        }
+
+        public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+        {
+          def file   = metadataReader.ReadObject(reader);
+          def symbol = metadataReader.ReadObject(reader);
+          Ref.Some(file, NSpan(), symbol)
         }
       }
 
@@ -182,7 +219,9 @@ namespace Nitra.Runtime.Binding
         public override Symbol            : TSymbol { get { assert(false, "Ref is unresolved.") } }
         public override IsSymbolEvaluated : bool    { get { false } }
 
-        public override TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+        public override IsUnresolved : bool  { get { true } }
+        
+        protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
         {
           _ = algorithm;
           Ref.Unresolved(File, Span, Name, ResolutionSource.Resolve(this))
@@ -194,6 +233,19 @@ namespace Nitra.Runtime.Binding
         {
           | other is Unresolved => EqualityComparer.Default.Equals(this.File, other.File) && this.Span.Equals(other.Span) && StringComparer.Ordinal.Equals(this.Name, other.Name)
           | _ => false
+        }
+
+        public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+        {
+          metadataWriter.WriteObject(File, writer);
+          writer.Write(Name : string);
+        }
+
+        public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+        {
+          def file = metadataReader.ReadObject(reader);
+          def name = reader.ReadString();
+          Ref.Unresolved(file, NSpan(), name, null)
         }
       }
 
@@ -222,10 +274,10 @@ namespace Nitra.Runtime.Binding
         public override IsSymbolEvaluated : bool             { get { false } }
         public          AllDeclarations   : Seq[Declaration] { get { Ambiguities.SelectMany(_.Declarations) } }
 
-        public override TryResolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+        public override IsAmbiguous  : bool  { get { true } }
+        
+        protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
         {
-          def algorithm = algorithm ?? ResolutionAlgorithms.TryCast;
-
           def results = LightList.[TConcreteSymbol]();
           foreach (s in Ambiguities)
             when (algorithm(s) is VSome(symbol))
@@ -250,6 +302,19 @@ namespace Nitra.Runtime.Binding
         {
           | other is Ambiguous => this.Ambiguities.Equals(other.Ambiguities)
           | _ => false
+        }
+
+        public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+        {
+          metadataWriter.WriteObject(File, writer);
+          metadataWriter.WriteObjects(Ambiguities, writer);
+        }
+
+        public static Deserialize(reader : BinaryReader, metadataReader : MetadataReader) : this
+        {
+          def file    = metadataReader.ReadObject(reader);
+          def symbols = metadataReader.ReadObjects(reader);
+          Ref.Ambiguous(file, NSpan(), symbols.ToNList(), null);
         }
       }
   }
