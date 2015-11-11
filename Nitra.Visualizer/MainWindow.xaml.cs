@@ -488,7 +488,7 @@ namespace Nitra.Visualizer
         if (style.Value.Foreground is SimpleHighlightingBrush)
         {
           var color = ((SimpleHighlightingBrush) style.Value.Foreground).Brush.Color;
-          spanStyles.Append('.').Append(style.Key).Append("{color:rgb(").Append(color.R).Append(',').Append(color.G).Append(',').Append(color.B).AppendLine(");}");
+          spanStyles.Append('.').Append(style.Key.Replace('.', '-')).Append("{color:rgb(").Append(color.R).Append(',').Append(color.G).Append(',').Append(color.B).AppendLine(");}");
         }
       }
       var html = Properties.Resources.PrettyPrintDoughnut.Replace("{spanclasses}", spanStyles.ToString()).Replace("{prettyprint}", htmlWriter.ToString());
@@ -686,20 +686,20 @@ namespace Nitra.Visualizer
         foreach (var span in spans)
         {
           HighlightingColor color;
-          if (_highlightingStyles.TryGetValue(span.SpanClass.Name, out color))
+          if (!_highlightingStyles.TryGetValue(span.SpanClass.FullName, out color))
           {
-            var startOffset = Math.Max(line.Offset, span.Span.StartPos);
-            var endOffset = Math.Min(line.EndOffset, span.Span.EndPos);
-            var section = new HighlightedSection
-            {
-              Offset = startOffset,
-              Length = endOffset - startOffset,
-              Color = color
-            };
-            e.Sections.Add(section);
+            color = MakeHighlightingColor(span.SpanClass);
+            _highlightingStyles.Add(span.SpanClass.FullName, color);
           }
-          else
-            Debug.WriteLine("Span class '" + span.SpanClass.Name + "' not found in styles");
+          var startOffset = Math.Max(line.Offset, span.Span.StartPos);
+          var endOffset = Math.Min(line.EndOffset, span.Span.EndPos);
+          var section = new HighlightedSection
+          {
+            Offset = startOffset,
+            Length = endOffset - startOffset,
+            Color = color
+          };
+          e.Sections.Add(section);
         }
       }
       catch (Exception ex) { Debug.WriteLine(ex.GetType().Name + ":" + ex.Message); }
@@ -1090,17 +1090,20 @@ namespace Nitra.Visualizer
       {
         _highlightingStyles.Clear();
         foreach (var spanClass in newTestSuite.Language.GetSpanClasses())
-        {
-          _highlightingStyles.Add(spanClass.Name, new HighlightingColor
-          {
-            Foreground = new SimpleHighlightingBrush(ColorFromArgb(spanClass.Style.ForegroundColor))
-          });
-        }
+          _highlightingStyles.Add(spanClass.FullName, MakeHighlightingColor(spanClass));
       }
       _currentTestSuite = newTestSuite;
       _currentTestFolder = newTestFolder;
       _currentTest = newTest;
       _text.Text = code;
+    }
+
+    private HighlightingColor MakeHighlightingColor(SpanClass spanClass)
+    {
+      return new HighlightingColor
+      {
+        Foreground = new SimpleHighlightingBrush(ColorFromArgb(spanClass.Style.ForegroundColor))
+      };
     }
 
     private void OnRemoveTestSuite(object sender, ExecutedRoutedEventArgs e)

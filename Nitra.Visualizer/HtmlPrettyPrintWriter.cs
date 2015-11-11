@@ -166,7 +166,7 @@ namespace Nitra.Visualizer
       if (spanClass != null)
       {
         _writer.Write("<span class=\"");
-        WebUtility.HtmlEncode(spanClass.Name, _writer);
+        WebUtility.HtmlEncode(spanClass.FullName.Replace('.', '-'), _writer);
         _writer.Write("\">");
       }
       WebUtility.HtmlEncode(text, _writer);

@@ -19,17 +19,15 @@ namespace Nitra.Serialization2
   public sealed class MetadataReader
   {
     private delegate DeserializationHandler(reader : BinaryReader, metadataReader : MetadataReader) : ISerializable;
-
-    public this(project : Project, file : Nitra.ProjectSystem.File)
+    
+    public this(project : Project)
     {
       Project       = project;
-      File          = file;
       ErrorLocation = Location.Default;
     }
 
-    public Project       : Project                  { get; }
-    public File          : Nitra.ProjectSystem.File { get; }
-    public ErrorLocation : Location                 { get; }
+    public Project       : Project  { get; }
+    public ErrorLocation : Location { get; }
 
     private _typeDescriptors         : Dictionary[int, MetadataTypeDescriptor] = Dictionary();
     private _deserializationHandlers : Dictionary[int, DeserializationHandler] = Dictionary();
@@ -59,13 +57,11 @@ namespace Nitra.Serialization2
       buffer
     }
 
-    public ReadRoot(root : DeclarationSymbol, stream : Stream) : void
+    public ReadRoot[T](stream : Stream) : T
+      where T: ISerializable
     {
       try
       {
-        _objects[MetadataDefaults.RootSymbolId] = root;
-        _objects[MetadataDefaults.RootScopeId]  = root.Scope;
-
         def reader = BinaryReader(stream, MetadataDefaults.Encoding);
         def assemblyCount = reader.ReadInt32();
         for (mutable assemblyIndex = 0; assemblyIndex < assemblyCount; ++assemblyIndex)
@@ -109,9 +105,7 @@ namespace Nitra.Serialization2
           _typeDescriptors.Add(id, descriptor)
         }
 
-        def symbolCount = reader.ReadInt32();
-        repeat (symbolCount)
-          _ = ReadObject(reader);
+        ReadObject(reader);
       }
       finally
       {
@@ -151,80 +145,23 @@ namespace Nitra.Serialization2
       handler
     }
 
-    public BeginReadObject[T](reader : BinaryReader, obj : out T, factory : Func[BinaryReader, MetadataReader, T] = null) : bool
+    public BeginReadObject[T](reader : BinaryReader, obj : out T, factory : Func[T] = null) : bool
       where T: ISerializable
     {
-      def id = reader.ReadInt32();
-      if (id < 0)
+      def rawId = reader.ReadInt32();
+      def (id, hasBody) = if (rawId < 0) (~rawId, true) else (rawId, false);
+
+      mutable existingObject;
+      if (_objects.TryGetValue(id, out existingObject))
+        obj = existingObject :> T;
+      else
       {
-        def newObj = if (factory == null) Activator.CreateInstance() else factory(reader, this);
-        _objects.Add(~id, newObj);
+        def newObj = if (factory == null) Activator.CreateInstance() else factory();
+        _objects.Add(id, newObj);
         obj = newObj;
-        true
       }
-      else
-      {
-        obj = _objects[id] :> T;
-        false
-      }
-    }
 
-    public BeginReadSymbol[TSymbol](reader : BinaryReader, obj : out TSymbol) : bool
-      where TSymbol: DeclarationSymbol, new()
-    {
-      def id = reader.ReadInt32();
-      if (id < 0)
-      {
-        def nameText        = reader.ReadString();
-        def owner           = ReadObject.[ISerializable](reader);
-        def containingScope =
-          match (owner)
-          {
-            | null                        => null
-            | scope  is Scope             => scope
-            | symbol is DeclarationSymbol => symbol.Scope
-            | _ => assert(false)
-          };
-
-        def isParsed = reader.ReadBoolean();
-        obj =
-          if (isParsed)
-          {
-            def name        = Name(this.File, NSpan(), nameText);
-            def declaration = ExternalDeclaration.[TSymbol](name);
-            if (containingScope : object != null)
-              (containingScope :> TableScope).Define(declaration, null);
-            else
-            {
-              def symbol = declaration.CreateSymbol() :> TSymbol;
-              (symbol :> SymbolBase).AddDeclaration(declaration);
-              name.Symbol = symbol;
-              symbol
-            }
-          }
-          else
-          {
-            assert(containingScope : object != null, "External symbol has no owner scope.");
-
-            def reference      = Reference(this.File, NSpan(), nameText);
-            mutable candidates = LightList();
-            containingScope.BindMany(reference, ref candidates);
-            match (candidates.Count)
-            {
-              | 0 => assert(false, $"Failed to lookup reference to external symbol '$reference'");
-              | 1 => candidates.FirstItem
-              | _ => assert(false, $"Ambiguous symbol reference '$reference'");
-            }
-          };
-
-        _objects.Add(~id, obj);
-        isParsed
-      }
-      else
-      {
-        obj = _objects[id] :> TSymbol;
-        false
-      }
+      hasBody
     }
   }
 }
