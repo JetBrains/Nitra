@@ -122,5 +122,181 @@ namespace DotNet
       else
         ParsedValue(parsedValue.Span.StartPos)
     }
+
+    public MakeNamespaceFullName(parentFullName : string, name : string) : string
+    {
+      if (string.IsNullOrEmpty(parentFullName))
+        name
+      else
+        parentFullName + "." + name
+    }
+
+    public IsSameIdentity(typeParametersCount : int, candidate : Declaration) : bool
+    {
+      match (candidate)
+      {
+        | DotNet.GenericType as t => t.TypeParameterAliases.Count == typeParametersCount
+        | Namespace
+        | DotNet.Type             => typeParametersCount == 0
+        | _                       => false
+      }
+    }
+
+    public CanMerge[T](typeParametersCount : int, candidate : Declaration) : bool
+      where T : GenericType
+    {
+      match (candidate)
+      {
+        | genericType is T => genericType.TypeParameterAliases.Count == typeParametersCount
+        | _ => false
+      }
+    }
+
+     public CanMerge[T](symbol : GenericEntitySymbol, candidate : Declaration) : bool
+      where T : GenericEntity
+    {
+      match (candidate)
+      {
+        | genericType is T => genericType.TypeParameterAliases.Count == symbol.TypeParametersCount
+        | _ => false
+      }
+    }
+
+    public CanMerge[T](symbol : GenericContainerTypeSymbol, candidate : Declaration) : bool
+      where T : GenericContainerType
+    {
+      match (candidate)
+      {
+        | genericType is T => genericType.TypeParameterAliases.Count == symbol.TypeParametersCount && symbol.IsPartial && genericType.IsPartial.ValueOrDefault
+        | _ => false
+      }
+    }
+    
+    public FilterResolved(refs : array[Ref[DeclarationSymbol]]) : array[TypeSymbol]
+    {
+      def lst = List(refs.Length);
+
+      foreach (r in refs)
+      {
+        def r2 = r.Resolve.[TypeSymbol]();
+        when (r2.IsSymbolEvaluated)
+          lst.Add(r2.Symbol);
+      }
+
+      lst.ToArray()
+    }
+
+    public CreateNestedConstructedTypeSymbol(t : NestedGenericTypeSymbol, parentTypeSubst : TypeSymbol, context : DependentPropertyEvalContext) : ConstructedTypeSymbol
+    {
+      def resultSymbol      = NestedConstructedTypeSymbol();
+      resultSymbol.Parent   = parentTypeSubst;
+      resultSymbol.TypeSubst = resultSymbol;
+      foreach (decl in t.Declarations)
+        resultSymbol.AddDeclaration(decl);
+      resultSymbol.TypeInfo = t;
+      resultSymbol.Args     = t.TypeParameters.ToArray();
+      resultSymbol.EvalProperties(context);
+      resultSymbol
+    }
+
+    public CreateNestedConstructedTypeSymbol(file : File, span : NSpan, parentTypeSubst : TypeSymbol, typeInfo : GenericTypeSymbol, arguments : IList[TypeSymbol], context : DependentPropertyEvalContext) : ConstructedTypeSymbol
+    {
+      def name              = Name(file, span, "#ConstructedType");
+      def decl              = NestedConstructedType(file, span, name);
+      def resultSymbol      = NestedConstructedTypeSymbol();
+      resultSymbol.Parent   = parentTypeSubst;
+      resultSymbol.TypeSubst = resultSymbol;
+      name.Symbol = resultSymbol;
+      resultSymbol.AddDeclaration(decl);
+      resultSymbol.TypeInfo = typeInfo;
+      resultSymbol.Args     = arguments;
+      resultSymbol.EvalProperties(context);
+      resultSymbol
+    }
+
+    public CreateConstructedTypeSymbol(file : File, span : NSpan, typeInfo : GenericTypeSymbol, arguments : IList[TypeSymbol], context : DependentPropertyEvalContext) : ConstructedTypeSymbol
+    {
+      def name              = Name(file, span, "#ConstructedType");
+      def decl              = TopConstructedType(file, span, name);
+      def resultSymbol      = TopConstructedTypeSymbol();
+      name.Symbol = resultSymbol;
+      resultSymbol.AddDeclaration(decl);
+      resultSymbol.TypeInfo = typeInfo;
+      resultSymbol.Args     = arguments;
+      resultSymbol.EvalProperties(context);
+      resultSymbol
+    }
+
+    public MakeConstructedType(ast : ILocated, args : array[Ref[DeclarationSymbol]], context : DependentPropertyEvalContext) : ResolutionAlgorithm[DeclarationSymbol, DeclarationSymbol]
+    {
+      mutable allArgumentsResolved = true;
+      def resolvedArgs = array(args.Length);
+      foreach (arg in args with index)
+      {
+        def resolvedArg = arg.Resolve.[TypeSymbol]();
+        if (resolvedArg.IsSymbolEvaluated)
+          resolvedArgs[index] = resolvedArg.Symbol
+        else
+        {
+          allArgumentsResolved = false; 
+          resolvedArgs[index]  = null;
+        }
+      }
+
+      fun (symbol)
+      {
+        def makeArguments(symbol : GenericTypeSymbol)
+        {
+          mutable argsWithTemplates = resolvedArgs;
+          unless (allArgumentsResolved)
+          {
+            def typeParameters = symbol.TypeParameters;
+            argsWithTemplates  = array(resolvedArgs.Length);
+            foreach (arg in resolvedArgs with index)
+              argsWithTemplates[index] = arg ?? typeParameters[index];
+          }
+          argsWithTemplates
+        }
+
+        match (symbol)
+        {
+          | symbol is NestedGenericTypeSymbol => VSome(CreateNestedConstructedTypeSymbol(ast.File, ast.Span, symbol.Parent.TypeSubst, symbol, makeArguments(symbol), context))
+          | symbol is TopGenericTypeSymbol    => VSome(CreateConstructedTypeSymbol(ast.File, ast.Span, symbol, makeArguments(symbol), context))
+          | _ => VNone()
+        }
+      }
+    }
+
+    public GetTypeParametersCount(declaration : Declaration) : int
+    {
+      (declaration :> GenericEntity).TypeParameterAliases?.Count
+    }
+
+    public GetTypeParameter(alias : TypeParameterAlias, typeParameterSymbols : IList[TypeParameterSymbol], IndexIn : int) : TypeParameterSymbol
+    {
+      def typeParameterSymbol = typeParameterSymbols[IndexIn];
+      typeParameterSymbol.AddAliasSymbol(alias);
+      typeParameterSymbol
+    }
+
+    public NoTypeParameters : array[TypeParameterSymbol] = array(0);
+
+    public CreateTypeParameters(count : int) : array[TypeParameterSymbol]
+    {
+      if (count == 0)
+        NoTypeParameters
+      else
+      {
+        def result = array(count);
+        for (mutable i = 0; i < result.Length; ++i)
+          result[i] = TypeParameterSymbol();
+        result
+      }
+    }
+
+    public IsPartial(declarations : Seq[GenericContainerType]) : bool
+    {
+      declarations.FirstOrDefault()?.IsPartial.ValueOrDefault
+    }
   }
 }
