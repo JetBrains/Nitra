@@ -1,0 +1,133 @@
+﻿using Nitra;
+using Nitra.Declarations;
+using Nitra.Runtime.Binding;
+using Nitra.Serialization2;
+using Nitra.Staging;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace DotNet
+{
+  public sealed class BaseTypeReferenceSet : ICollector
+  {
+    private this(parentTypes : Seq[TypeSymbol])
+    {
+      _parentTypes = HashSet(parentTypes);
+    }
+
+    public this(context : DependentPropertyEvalContext)
+    {
+      context.NotifyCollectorCreated(out CreatedOnStage, out CreatedOnPass);
+      _parentTypes  = HashSet();
+    }
+
+    private mutable _isEvaluationInProgress : bool;
+    private mutable _isCycled               : bool;
+    private mutable _ancestorTypes          : HashSet[TypeSymbol];
+    private mutable _parentScope            : Scope;
+    private mutable _parentClass            : option[TypeSymbol];
+    private         _parentTypes            : HashSet[TypeSymbol];
+
+    public CreatedOnStage           : int                   { get; }
+    public CreatedOnPass : int                   { get; }
+    public IsCycled                 : bool                  { get { TryEvaluateHierarchy(); _isCycled } }
+    public AncestorTypes            : Seq[TypeSymbol]    { get { TryEvaluateHierarchy(); _ancestorTypes } }
+    public ParentTypes              : Seq[TypeSymbol]    { get { _parentTypes } }
+    public ParentScope              : Scope                 { get { TryEvaluateHierarchy(); _parentScope } }
+    public ParentClass              : option[TypeSymbol] { get { TryEvaluateHierarchy(); _parentClass } }
+
+    [Collect]
+    public AddParent(type : TypeSymbol) : void
+    {
+      _ = _parentTypes.Add(type);
+    }
+
+    [Collect]
+    public AddParent(set : Seq[TypeSymbol]) : void
+    {
+      _parentTypes.UnionWith(set);
+    }
+
+    public ContainsParent(type : TypeSymbol) : bool
+    {
+      _parentTypes.Contains(type)
+    }
+
+    public ContainsAncestor(type : TypeSymbol) : bool
+    {
+      TryEvaluateHierarchy();
+      _ancestorTypes.Contains(type)
+    }
+
+    private TryEvaluateHierarchy() : void
+    {
+      when (_ancestorTypes != null)
+        return;
+
+      if (_isEvaluationInProgress)
+      {
+        _isCycled      = true;
+        _ancestorTypes = HashSet();
+        _parentClass   = None();
+        _parentScope   = EmptyScope.Instance;
+      }
+      else
+      {
+        _isEvaluationInProgress = true;
+
+        def ancestorTypes = HashSet(_parentTypes);
+        mutable parentClass : option[TypeSymbol];
+        mutable parentScope;
+        // TypeReference(Ref = IRef(IsSymbolEvaluated = true, Symbol = GenericContainerTypeSymbol as symbol))
+        foreach (type in _parentTypes)
+        {
+          when (type is ConstructedTypeSymbol(IsTypeInfoEvaluated=true, TypeInfo=GenericContainerTypeSymbol as symbol))
+          {
+            // TODO: need subst of type parameters
+            def parentTypeSet = symbol.BaseTypeSet;
+            ancestorTypes.UnionWith(parentTypeSet.AncestorTypes);
+
+            when ((type is TopClassSymbol || type is NestedClassSymbol) && (parentClass : object) == null)
+            {
+              parentClass = Some(type);
+              parentScope = parentTypeSet.ParentScope.HideWith(symbol.MemberTable);
+            }
+          }
+        }
+
+        unless (_isCycled)
+        {
+          _ancestorTypes = ancestorTypes;
+          _parentClass   = if (parentClass : object == null) None() else parentClass; // operator '??' unwraps option[T]
+          _parentScope   = parentScope ?? EmptyScope.Instance;
+        }
+
+        _isEvaluationInProgress = false;
+      }
+    }
+
+    public Serialize(writer : IO.BinaryWriter, metadataWriter : MetadataWriter) : void
+    {
+      metadataWriter.WriteObjects(_parentTypes, writer)
+    }
+
+    public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+    {
+      def parentTypes = metadataReader.ReadObjects(reader);
+      BaseTypeReferenceSet(parentTypes)
+    }
+    
+    public override ToString() : string
+    {
+      $"$CreatedOnStage($CreatedOnPass): ..$_parentTypes"
+    }
+  }
+}
