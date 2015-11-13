@@ -49,7 +49,7 @@ namespace Nitra.Runtime.Binding
     [DependentProperty("IsResolvedToEvaluated")]
     ResolvedTo            : IRef { get; }
     IsResolvedToEvaluated : bool { get; }
-    
+
     Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[ISymbol2, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
       where TConcreteSymbol : ISymbol2;
 
@@ -80,15 +80,17 @@ namespace Nitra.Runtime.Binding
     [DependentProperty("IsSymbolEvaluated")]
     public abstract Symbol            : TSymbol { get; }
     public abstract IsSymbolEvaluated : bool    { get; }
-    
+
     [RecordIgnore]
-    protected mutable _resolvedTo : IRef;
+    private mutable _resolvedTo : IRef;
+
+    [DependentProperty("IsResolvedToEvaluated")]
     public ResolvedTo             : IRef { get { _resolvedTo } }
     public IsResolvedToEvaluated  : bool { get { _resolvedTo != null } }
-    
+
     public virtual IsUnresolved : bool  { get { false } }
     public virtual IsAmbiguous  : bool  { get { false } }
-    
+
     AmbiguitiesImpl : Seq[DeclarationSymbol]
       implements IRef.Ambiguities
     {
@@ -101,7 +103,7 @@ namespace Nitra.Runtime.Binding
         }
       }
     }
-    
+
     public IsAllPropertiesEvaluated : bool  { get { true } }
     public PropertiesEvalState      : int   { get { 0 } }
 
@@ -118,14 +120,15 @@ namespace Nitra.Runtime.Binding
 
     public Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
       where TConcreteSymbol : ISymbol2
+      requires !IsResolvedToEvaluated
     {
       def algorithm = algorithm ?? ResolutionAlgorithms.TryCast;
-      
+
       def result = ResolveImpl.[TConcreteSymbol](algorithm);
       _resolvedTo = result;
       result
     }
-    
+
     ResolveItfImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[ISymbol2, TConcreteSymbol]) : Ref[TConcreteSymbol]
       where TConcreteSymbol : ISymbol2
       implements IRef.Resolve
@@ -134,12 +137,19 @@ namespace Nitra.Runtime.Binding
       Resolve((algorithm : object) :> ResolutionAlgorithm[TSymbol, TConcreteSymbol])
     }
 
-    protected abstract ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+    protected abstract ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
       where TConcreteSymbol : ISymbol2;
 
     public override ToString() : string { Name + " (" + Kind + ")" }
     public abstract GetSymbols() : Seq[ISymbol2];
     public abstract Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void;
+
+    protected static TryResolveAlias[TConcreteSymbol](symbol : DeclarationSymbol, algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol], result : ref ValueOption[TConcreteSymbol]) : void
+      where TConcreteSymbol : ISymbol2
+    {
+      when (symbol is AliasSymbol(IsReplacementEvaluated = true, Replacement = IRef(IsSymbolEvaluated = true, Symbol = s is TSymbol)))
+        result = algorithm(s);
+    }
 
     | Some
       {
@@ -162,9 +172,12 @@ namespace Nitra.Runtime.Binding
         public override Symbol            : TSymbol { get; }
         public override IsSymbolEvaluated : bool    { get { true } }
 
-        protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+        protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
         {
-          match (algorithm(Symbol))
+          mutable result = algorithm(Symbol);
+          unless (result.HasValue)
+            TryResolveAlias(Symbol, algorithm, ref result);
+          match (result)
           {
             | VSome(symbol) => Ref.Some(File, Span, symbol)
             | VNone         => Ref.Unresolved(File, Span, Name, ResolutionSource.Resolve(this))
@@ -221,7 +234,7 @@ namespace Nitra.Runtime.Binding
 
         public override IsUnresolved : bool  { get { true } }
         
-        protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+        protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
         {
           _ = algorithm;
           Ref.Unresolved(File, Span, Name, ResolutionSource.Resolve(this))
@@ -245,7 +258,7 @@ namespace Nitra.Runtime.Binding
         {
           def file = metadataReader.ReadObject(reader);
           def name = reader.ReadString();
-          Ref.Unresolved(file, NSpan(), name, null)
+          Ref.Unresolved(file, NSpan(), name, ResolutionSource.Unknown())
         }
       }
 
@@ -275,13 +288,18 @@ namespace Nitra.Runtime.Binding
         public          AllDeclarations   : Seq[Declaration] { get { Ambiguities.SelectMany(_.Declarations) } }
 
         public override IsAmbiguous  : bool  { get { true } }
-        
-        protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+
+        protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
         {
           def results = LightList.[TConcreteSymbol]();
-          foreach (s in Ambiguities)
-            when (algorithm(s) is VSome(symbol))
+          foreach (symbol in Ambiguities)
+          {
+            mutable result = algorithm(symbol);
+            unless (result.HasValue)
+              TryResolveAlias(symbol, algorithm, ref result);
+            when (result is VSome(symbol))
               results.Add(symbol);
+          }
 
           match (results.Count)
           {
@@ -314,7 +332,7 @@ namespace Nitra.Runtime.Binding
         {
           def file    = metadataReader.ReadObject(reader);
           def symbols = metadataReader.ReadObjects(reader);
-          Ref.Ambiguous(file, NSpan(), symbols.ToNList(), null);
+          Ref.Ambiguous(file, NSpan(), symbols.ToNList(), ResolutionSource.Unknown())
         }
       }
   }
