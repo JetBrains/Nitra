@@ -47,7 +47,7 @@ namespace DotNet
       
       def removeParsedSymbols(tableScope : TableScope)
       {
-        tableScope.Undefine(decl => !(decl is ExternalDeclaration));
+        tableScope.Undefine(_.IsParsed);
         foreach (symbols in tableScope.Symbols)
         foreach (symbol is NamespaceSymbol in symbols)
           removeParsedSymbols(symbol.MemberTable);
@@ -107,10 +107,9 @@ namespace DotNet
           def result = array(count);
           for (mutable i = 0; i < result.Length; ++i)
           {
-            def tps = TypeParameterSymbol();
-            def name = NRB.Name(file, span, if (count <= 1) "T" else "T" + i);
-            def decl = TypeParameterStubDeclaration(name, tps);
-            tps.AddDeclaration(decl);
+            def name  = NRB.Name(file, span, if (count <= 1) "T" else "T" + i);
+            def tps   = TypeParameterStubDeclaration(name).DefineSymbol();
+            tps.EvalProperties(context);
             result[i] = tps;
           }
           result
@@ -127,18 +126,17 @@ namespace DotNet
           mutable typarms = tycon.Typarms;
           for (mutable i = 0; i < result.Length; ++i)
           {
-            def tp = typarms.Head;
-            def tps = TypeParameterSymbol();
-            def name = NRB.Name(file, span, tp.Name);
-            def decl = TypeParameterDeclaration(name, tps, tp);
-            tps.AddDeclaration(decl);
+            def tp    = typarms.Head;
+            def name  = NRB.Name(file, span, tp.Name);
+            def tps   = TypeParameterDeclaration(name, tp).DefineSymbol();
+            tps.EvalProperties(context);
             result[i] = tps;
-            typarms = typarms.Tail;
+            typarms   = typarms.Tail;
           }
           result
         }
       }
-      def mekeTypeParameters(symbol : GenericTypeSymbol, tycon : TypeInfo) : void
+      def makeTypeParameters(symbol : GenericTypeSymbol, tycon : TypeInfo) : void
       {
         symbol.TypeParametersCount = tycon.TyparmsCount;
         symbol.TypeParameters = createTypeParameters(tycon);
@@ -152,35 +150,30 @@ namespace DotNet
           match (kind)
           {
             | Interface
-            | Class => ();
-              def symbol : TopGenericTypeSymbol = 
-                           if (tycon.IsDelegate) TopDelegateSymbol() 
-                      else if (tycon.IsInterface) TopInterfaceSymbol()
-                      else if (tycon.IsValueType) TopStructSymbol()
-                      else TopClassSymbol();
-              mekeTypeParameters(symbol, tycon);
+            | Class =>
+              def symbol : TopGenericTypeSymbol =
+                       if (tycon.IsDelegate)  ExternalTypeDeclaration.[TopDelegateSymbol](name, tycon).DefineSymbol(parent.MemberTable) 
+                  else if (tycon.IsInterface) ExternalTypeDeclaration.[TopInterfaceSymbol](name, tycon).DefineSymbol(parent.MemberTable)
+                  else if (tycon.IsValueType) ExternalTypeDeclaration.[TopStructSymbol](name, tycon).DefineSymbol(parent.MemberTable)
+                  else                        ExternalTypeDeclaration.[TopClassSymbol](name, tycon).DefineSymbol(parent.MemberTable);
+              makeTypeParameters(symbol, tycon);
               symbol.Parent = parent;
               nodeToSymbolMap[tycon] = symbol;
-              def decl   = ExternalTypeDeclaration(name, symbol, tycon);
-              _ = parent.MemberTable.Define(decl, context, null);
               symbol.EvalProperties(context);
                 
             | Alias         =>
-              def symbol = TypeAliasSymbol();
-              def decl   = ExternalTypeDeclaration(name, symbol, tycon);
-              mekeTypeParameters(symbol, tycon);
+              def symbol = ExternalTypeDeclaration.[TypeAliasSymbol](name, tycon).DefineSymbol(parent.MemberTable);
+              makeTypeParameters(symbol, tycon);
               symbol.Parent = parent;
               aliases.Add(symbol);
-              _ = parent.MemberTable.Define(decl, context, null);
+
               nodeToSymbolMap[tycon] = symbol;
               symbol.EvalProperties(context);
           
             | Variant       => ()
             | VariantOption => ()
-            | Enum          => ();
-              def symbol = TopEnumSymbol();
-              def decl   = ExternalTypeDeclaration(name, symbol, tycon);
-              _ = parent.MemberTable.Define(decl, context, null);
+            | Enum          =>
+              def symbol = ExternalTypeDeclaration.[TopEnumSymbol](name, tycon).DefineSymbol(parent.MemberTable);
               nodeToSymbolMap[tycon] = symbol;
               symbol.Parent = parent;
               symbol.EvalProperties(context);
@@ -194,9 +187,8 @@ namespace DotNet
           | MacroCall                        => ()
           | null                             => ()
           | NamespaceReference               => 
-            def symbol = NamespaceSymbol();
-            def decl   = ExternalNamespaceDeclaration(NRB.Name(file, span, node.PartName), symbol, node);
-            _ = parent.MemberTable.Define(decl, context, null);
+            def name   = NRB.Name(file, span, node.PartName);
+            def symbol = ExternalNamespaceDeclaration(name, node).DefineSymbol(parent.MemberTable);
             symbol.Parent = parent;
             symbol.EvalProperties(context);
             foreach (subNode in node.Children.Values.ToArray())
@@ -218,7 +210,7 @@ namespace DotNet
 
       foreach (alias in aliases)
       {
-        def decl     = alias.GetDeclarationsUntyped().First() :> ExternalTypeDeclaration;
+        def decl     = alias.FirstDeclarationOrDefault :> IExternalTypeDeclaration;
         def a        = decl.NemerleTypeInfo.GetTydecl() :> Typedtree.TypeDeclaration.Alias;
         def typeInfo = a.ty.TypeInfo;
         alias.Replacement =
@@ -238,7 +230,7 @@ namespace DotNet
             | x is GenericContainerTypeSymbol =>
               def baseTypeSet = BaseTypeReferenceSet(context);
               x.BaseTypeSet = baseTypeSet;
-              def decl = x.FirstDeclarationOrDefault :> ExternalTypeDeclaration;
+              def decl = x.FirstDeclarationOrDefault :> IExternalTypeDeclaration;
               def ti = decl.NemerleTypeInfo;
               def superTypes = ti.GetDirectSuperTypes();
               foreach (superType in superTypes)
@@ -281,20 +273,18 @@ namespace DotNet
         def builtinsNs = bind(nemerleNs.Symbol.MemberTable, "Builtins");
         unless (builtinsNs.IsSymbolEvaluated)
           return;
-          
+
         def parent = rootNamespace;
         for (mutable i = 2; i <= 20; i++)
         {
-          def symbol = TypeAliasSymbol();
           def realSymbolRef = bindTuple(builtinsNs.Symbol.MemberTable, i);
-          def realSymbol = realSymbolRef.Symbol;
-          def name   = NRB.Name(file, span, "#Tuple");
+          def realSymbol    = realSymbolRef.Symbol;
+          def realDecl      = realSymbol.FirstDeclarationOrDefault :> IExternalTypeDeclaration;
+          def name          = NRB.Name(file, span, "#Tuple");
+          def symbol        = ExternalTypeDeclaration.[TypeAliasSymbol](name, realDecl.NemerleTypeInfo).DefineSymbol(parent.MemberTable);
           symbol.TypeParametersCount = i;
-          symbol.TypeParameters = AstUtils.CreateTypeParameters(i);
-          def realDecl = (realSymbol :> SymbolBase).FirstDeclarationOrDefault :> ExternalTypeDeclaration;
-          def decl   = ExternalTypeDeclaration(name, symbol, realDecl.NemerleTypeInfo);
-          _ = parent.MemberTable.Define(decl, context, null);
-          symbol.Parent = parent;
+          symbol.TypeParameters      = AstUtils.CreateTypeParameters(i);
+          symbol.Parent              = parent;
           symbol.EvalProperties(context);
         }
       }
@@ -308,14 +298,12 @@ namespace DotNet
         def parent = nitraNs.Symbol;
         def makeIntrinsic(parent : NamespaceSymbol, typeName : string) : void
         {
-          def name = NRB.Name(file, span, typeName);
-          def symbol = TypeAliasSymbol();
-          def decl   = IntrinsicDeclaration(name, symbol);
+          def name   = NRB.Name(file, span, typeName);
+          def symbol = IntrinsicDeclaration.[TypeAliasSymbol](name).DefineSymbol(parent.MemberTable);
           symbol.TypeParametersCount = 1;
           symbol.TypeParameters = createTxTypeParameters(1);
           symbol.Parent = parent;
           aliases.Add(symbol);
-          _ = parent.MemberTable.Define(decl, context, null);
           symbol.EvalProperties(context);
         }
       
@@ -360,58 +348,40 @@ namespace DotNet
   }
 
   [Record]
-  class IntrinsicDeclaration : ExternalDeclaration
+  class IntrinsicDeclaration[TSymbol] : ExternalDeclaration[TSymbol]
+    where TSymbol : DeclarationSymbol
   {
   }
 
   [Record]
-  class TypeParameterDeclaration : ExternalDeclaration
+  class TypeParameterDeclaration : ExternalDeclaration[TypeParameterSymbol]
   {
     public NemerleTypeParam : StaticTypeVar;
+    public override CreateSymbol() : DeclarationSymbol { TypeParameterSymbol() }
   }
 
   [Record]
-  class TypeParameterStubDeclaration : ExternalDeclaration
+  class TypeParameterStubDeclaration : ExternalDeclaration[TypeParameterSymbol]
   {
+    public override CreateSymbol() : DeclarationSymbol { TypeParameterSymbol() }
   }
-  
+
+  interface IExternalTypeDeclaration
+  {
+    NemerleTypeInfo : TypeInfo { get; }
+  }
+
   [Record]
-  class ExternalTypeDeclaration : ExternalDeclaration
+  class ExternalTypeDeclaration[TSymbol] : ExternalDeclaration[TSymbol], IExternalTypeDeclaration
+    where TSymbol : DeclarationSymbol
   {
     public NemerleTypeInfo : TypeInfo { get; private set; }
   }
 
   [Record]
-  class ExternalNamespaceDeclaration : ExternalDeclaration
+  class ExternalNamespaceDeclaration : ExternalDeclaration[NamespaceSymbol]
   {
     public NemerleNode : NamespaceTree.Node { get; private set; }
-  }
-
-  class ExternalDeclaration : Nitra.Declarations.DeclarationBase, Declaration
-  {
-    mutable _symbol : DeclarationSymbol;
-    
-    public this(name : NRB.Name, symbol : DeclarationSymbol)
-    {
-      this.File = name.File;
-      this.Span = name.Span;
-      __NameImpl = name;
-      _symbol = symbol;
-    }
-
-    public override CreateSymbol() : DeclarationSymbol { _symbol }
-    
-    public IsSymbolEvaluated : bool { get; private set; }
-    
-    public Name : NRB.Name { get { __NameImpl } }
-    
-    public Symbol : DeclarationSymbol
-    {
-      get { _symbol }
-      set { IsSymbolEvaluated = true; _symbol = value; }
-    }
-    
-    public ContainingTable : TableScope { get; set; }
-    public IsContainingTableEvaluated : bool { get { ContainingTable != null } }
+    public override CreateSymbol() : DeclarationSymbol { NamespaceSymbol() }
   }
 }
