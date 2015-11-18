@@ -311,24 +311,10 @@ namespace Nitra.Visualizer
       if (!tvi.IsSelected)
         return;
 
-      var ast = tvi.Tag as IAst;
-      if (ast != null)
+      var loc = tvi.Tag as ILocated;
+      if (loc != null)
       {
-        SelectText(ast);
-        return;
-      }
-
-      var r = tvi.Tag as IRef;
-      if (r != null)
-      {
-        SelectText(r.File, r.Span);
-        return;
-      }
-
-      var tr = tvi.Tag as ITypeReference;
-      if (tr != null)
-      {
-        SelectText(tr.File, tr.Span);
+        SelectText(loc);
         return;
       }
 
@@ -364,9 +350,9 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void SelectText(IAst ast)
+    private void SelectText(ILocated loc)
     {
-      SelectText(ast.File, ast.Span);
+      SelectText(loc.File, loc.Span);
     }
 
     private void SelectText(Location loc)
