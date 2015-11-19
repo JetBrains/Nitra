@@ -104,7 +104,16 @@ namespace XXNamespaceXX.ProjectSystem
         if (projectModelChange.ContainsChangeType(ProjectModelChangeType.PROJECT_MODEL_CACHES_READY))
         {
           IsOpened = true;
-          foreach (var project in _projectsMap.Values)
+
+          var values = _projectsMap.Values.ToArray();
+
+          foreach (var project in values)
+            project.RefreshReferences();
+
+          foreach (var project in values)
+            project.RefreshSources();
+
+          foreach (var project in values)
             project.UpdateProperties();
         }
 
