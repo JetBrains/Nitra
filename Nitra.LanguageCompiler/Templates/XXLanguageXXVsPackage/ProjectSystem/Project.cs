@@ -107,5 +107,5 @@ namespace XXNamespaceXX.ProjectSystem
       _filesMap.Clear();
       _filePathsMap.Clear();
     }
-  }
-}
+  } // class
+}  // namespace
