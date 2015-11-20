@@ -203,7 +203,15 @@ namespace XXNamespaceXX.ProjectSystem
           var nitraFile = project.TryAddFile(file);
 
           if (IsOpened)
+          {
+            if (project.Data == null)
+            {
+              project.RefreshReferences();
+              project.RefreshSources();
+            }
+
             project.UpdateProperties();
+          }
 
           Action<File> oldHandler;
           if (_fileOpenNotifyRequest.TryGetValue(nitraFile.FullName, out oldHandler))
