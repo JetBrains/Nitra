@@ -655,7 +655,11 @@ namespace Nitra.Visualizer
         if (!span.IntersectsWith(_span) || !reference.IsRefEvaluated)
           return;
 
-        var spanClass = reference.Ref.SpanClass;
+        IRef r = reference.Ref;
+        while (r.IsResolvedToEvaluated)
+          r = r.ResolvedTo;
+
+        var spanClass = r.SpanClass;
 
         if (spanClass == Nitra.Language.DefaultSpanClass)
           return;
