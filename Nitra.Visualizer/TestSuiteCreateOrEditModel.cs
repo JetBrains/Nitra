@@ -81,6 +81,41 @@ namespace Nitra.Visualizer
       model.NormalizedAssemblies = normalizedAssemblies.ToArray();
     }
 
+    public string LibReferences
+    {
+      get { return (string)GetValue(AssembliesProperty); }
+      set { SetValue(AssembliesProperty, value); }
+    }
+
+    public static readonly DependencyProperty LibReferencesProperty =
+        DependencyProperty.Register("Assemblies", typeof(string), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata("", OnLibReferencesChanged));
+
+    private static void OnLibReferencesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+      var model = (TestSuiteCreateOrEditModel)d;
+      var normalized = new List<string>();
+      foreach (var libPath in Utils.GetAssemblyPaths((string)e.NewValue))
+      {
+        var fullAssemblyPath = Path.GetFullPath(Path.IsPathRooted(libPath) ? libPath : Path.Combine(model.RootFolder, libPath));
+        var relativePath = Utils.MakeRelativePath(model.RootFolder, true, fullAssemblyPath, false);
+        normalized.Add(relativePath);
+      }
+      model.NormalizedLibReferences = normalized.ToArray();
+    }
+
+    public string[] NormalizedLibReferences { get; set; }
+
+    public string NormalizedLibReferencesText
+    {
+      get
+      {
+        var text = new StringBuilder();
+        foreach (var assembly in NormalizedAssemblies)
+          text.AppendLine(Utils.MakeRelativePath(@from: RootFolder, isFromDir: true, @to: assembly.Location, @isToDir: false));
+        return text.ToString();
+      }
+    }
+
     public string NormalizedAssembliesText
     {
       get
