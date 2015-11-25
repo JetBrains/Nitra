@@ -10,6 +10,8 @@ using System.Linq;
 using System.Xml.Linq;
 using Nitra.Visualizer.Serialization;
 using System.Reflection;
+using Nitra.ProjectSystem;
+using File = System.IO.File;
 
 namespace Nitra.ViewModels
 {
@@ -28,11 +30,12 @@ namespace Nitra.ViewModels
     public TimeSpan                                TestTime          { get; private set; }
     public StatisticsTask.Container                Statistics        { get; private set; }
     public Assembly[]                              Assemblies        { get; private set; }
+    public LibReference[]                          Libs              { get; private set; }
 
     public string _hint;
     public override string Hint { get { return _hint; } }
 
-    public static Assembly[] NoAssembiles = new Assembly[0];
+    public static readonly Assembly[] NoAssembiles = new Assembly[0];
 
     readonly string _rootPath;
 
@@ -48,6 +51,7 @@ namespace Nitra.ViewModels
       Language = Language.Instance;
       DynamicExtensions = new ObservableCollection<GrammarDescriptor>();
       Assemblies = NoAssembiles;
+      Libs = new LibReference[0];
 
       var configPath = Path.GetFullPath(Path.Combine(testSuitePath, ConfigFileName));
 
@@ -70,6 +74,8 @@ namespace Nitra.ViewModels
           DynamicExtensions.Add(ext);
 
         Assemblies = assemblyRelativePaths.Values.ToArray();
+
+        Libs = languageAndExtensions.Item3;
 
         var indent = Environment.NewLine + "  ";
         var para = Environment.NewLine + Environment.NewLine;
@@ -123,7 +129,7 @@ namespace Nitra.ViewModels
       solution.TestSuites.Add(this);
     }
 
-    public string Xml { get { return Utils.MakeXml(_rootPath, Language, DynamicExtensions); } }
+    public string Xml { get { return Utils.MakeXml(_rootPath, Language, DynamicExtensions, Libs); } }
 
     public RecoveryAlgorithm RecoveryAlgorithm { get; set; }
 

@@ -99,7 +99,7 @@ namespace Nitra.ViewModels
           Statistics.ReplaceSingleSubtask("Ast", "AST Creation"),
           Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties"));
         var solution = new FsSolution<IAst>();
-        var project = new FsProject<IAst>(solution);
+        var project = new FsProject<IAst>(solution, Path.GetDirectoryName(testPath), TestSuite.Libs);
         _file = new TestFile(this, TestSuite.Language, project, FileStatistics);
       }
 

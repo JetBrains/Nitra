@@ -22,7 +22,15 @@ namespace Nitra.ViewModels
       : base(testSuite, testPath)
     {
       var solution = new FsSolution<IAst>();
-      this.Project = new FsProject<IAst>(solution);
+      this.Project = new FsProject<IAst>(solution, testPath, testSuite.Libs.Select(
+        lib =>
+        {
+          var file = lib as FileLibReference;
+          if (file == null || Path.IsPathRooted(file.Path))
+            return lib;
+
+          return new FileLibReference(Path.Combine(@"..", file.Path));
+        }));
 
       Statistics            = new StatisticsTask.Container("Total");
       ParsingStatistics     = Statistics.ReplaceContainerSubtask("Parsing");

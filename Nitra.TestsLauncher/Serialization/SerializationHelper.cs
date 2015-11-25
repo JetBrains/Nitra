@@ -1,4 +1,6 @@
-﻿using System;
+﻿using Nitra.ProjectSystem;
+
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -11,20 +13,21 @@ namespace Nitra.Visualizer.Serialization
   {
     private static XmlSerializer _serializer = new XmlSerializer(typeof(Language));
 
-    public static string Serialize(Nitra.Language language, IEnumerable<GrammarDescriptor> dynamicExtensions, Func<string, string> pathConverter)
+    public static string Serialize(Nitra.Language language, IEnumerable<GrammarDescriptor> dynamicExtensions, LibReference[] libs, Func<string, string> pathConverter)
     {
       var writer = new StringWriter();
       var data = new Language
       {
         Name = language.FullName,
         Path = pathConverter(language.GetType().Assembly.Location),
-        DynamicExtensions = dynamicExtensions.Select(g => new DynamicExtension { Name = g.FullName, Path = pathConverter(g.GetType().Assembly.Location) }).ToArray()
+        DynamicExtensions = dynamicExtensions.Select(g => new DynamicExtension { Name = g.FullName, Path = pathConverter(g.GetType().Assembly.Location) }).ToArray(),
+        Libs = libs.Select(x =>  x.Serialize()).ToArray()
       };
       _serializer.Serialize(writer, data);
       return writer.ToString();
     }
 
-    public static Tuple<Nitra.Language, GrammarDescriptor[]> Deserialize(string text, Func<string, Assembly> assemblyResolver)
+    public static Tuple<Nitra.Language, GrammarDescriptor[], LibReference[]> Deserialize(string text, Func<string, Assembly> assemblyResolver)
     {
       var reader = new StringReader(text);
       var languageInfo = (Language)_serializer.Deserialize(reader);
@@ -44,7 +47,11 @@ namespace Nitra.Visualizer.Serialization
         dynamicExtensions.Add(descriptor);
       }
 
-      return Tuple.Create(language, dynamicExtensions.ToArray());
+      var libs = languageInfo.Libs == null 
+        ? new LibReference[0]
+        : languageInfo.Libs.Select(LibReference.Deserialize).ToArray();
+
+      return Tuple.Create(language, dynamicExtensions.ToArray(), libs);
     }
   }
 
@@ -57,6 +64,8 @@ namespace Nitra.Visualizer.Serialization
     public string Path { get; set; }
 
     public DynamicExtension[] DynamicExtensions { get; set; }
+
+    public string[] Libs { get; set; }
   }
 
   public sealed class DynamicExtension

@@ -1,12 +1,15 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Windows;
+using Nitra.ProjectSystem;
 using Nitra.ViewModels;
 using Nitra.Visualizer.Properties;
+using File = System.IO.File;
 
 namespace Nitra.Visualizer
 {
@@ -41,6 +44,11 @@ namespace Nitra.Visualizer
     public static readonly DependencyProperty TitleProperty =
         DependencyProperty.Register("Title", typeof(string), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata(""));
 
+    public string SuitPath
+    {
+      get { return Path.Combine(Path.GetFullPath(RootFolder), SuiteName); }
+    }
+
     public string RootFolder
     {
       get { return (string)GetValue(RootFolderProperty); }
@@ -72,57 +80,70 @@ namespace Nitra.Visualizer
     {
       var model = (TestSuiteCreateOrEditModel)d;
       var normalizedAssemblies = new List<Assembly>();
+      var suitPath = model.SuitPath;
       foreach (var assemblyPath in Utils.GetAssemblyPaths((string)e.NewValue))
       {
-        var fullAssemblyPath = Path.IsPathRooted(assemblyPath) ? assemblyPath : Path.Combine(model.RootFolder, assemblyPath);
+        var fullAssemblyPath = Path.IsPathRooted(assemblyPath) ? assemblyPath : Path.Combine(suitPath, assemblyPath);
         var assembly = Utils.LoadAssembly(fullAssemblyPath, model._settings.Config);
         normalizedAssemblies.Add(assembly);
       }
       model.NormalizedAssemblies = normalizedAssemblies.ToArray();
     }
 
-    public string LibReferences
+    public string Libs
     {
-      get { return (string)GetValue(AssembliesProperty); }
-      set { SetValue(AssembliesProperty, value); }
+      get { return (string)GetValue(LibsProperty); }
+      set { SetValue(LibsProperty, value); }
     }
 
-    public static readonly DependencyProperty LibReferencesProperty =
-        DependencyProperty.Register("Assemblies", typeof(string), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata("", OnLibReferencesChanged));
+    public static readonly DependencyProperty LibsProperty =
+        DependencyProperty.Register("Libs", typeof(string), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata("", OnLibsChanged));
 
-    private static void OnLibReferencesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    private static void OnLibsChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
       var model = (TestSuiteCreateOrEditModel)d;
-      var normalized = new List<string>();
+      var normalized = new HashSet<LibReference>();
+      var suitPath = model.SuitPath;
+
       foreach (var libPath in Utils.GetAssemblyPaths((string)e.NewValue))
       {
-        var fullAssemblyPath = Path.GetFullPath(Path.IsPathRooted(libPath) ? libPath : Path.Combine(model.RootFolder, libPath));
-        var relativePath = Utils.MakeRelativePath(model.RootFolder, true, fullAssemblyPath, false);
-        normalized.Add(relativePath);
+        var fullAssemblyPath = Path.GetFullPath(Path.IsPathRooted(libPath) ? libPath : Path.Combine(suitPath, libPath));
+
+        if (File.Exists(fullAssemblyPath))
+        {
+          var relativePath = Utils.MakeRelativePath(suitPath, true, fullAssemblyPath, false);
+          normalized.Add(new FileLibReference(relativePath));
+        }
+        else
+          // treat as assembly full name
+          normalized.Add(new FullNameLibReference(libPath));
       }
-      model.NormalizedLibReferences = normalized.ToArray();
+      model.NormalizedLibs = normalized.ToArray();
     }
 
-    public string[] NormalizedLibReferences { get; set; }
-
-    public string NormalizedLibReferencesText
+    public string NormalizedLibsText
     {
-      get
-      {
-        var text = new StringBuilder();
-        foreach (var assembly in NormalizedAssemblies)
-          text.AppendLine(Utils.MakeRelativePath(@from: RootFolder, isFromDir: true, @to: assembly.Location, @isToDir: false));
-        return text.ToString();
-      }
+      get { return string.Join<LibReference>(Environment.NewLine, NormalizedLibs); }
     }
+
+    public LibReference[] NormalizedLibs
+    {
+      get { return (LibReference[])GetValue(NormalizedLibsProperty); }
+      set { SetValue(NormalizedLibsProperty, value); }
+    }
+
+    // Using a DependencyProperty as the backing store for NormalizedLibReferences.  This enables animation, styling, binding, etc...
+    public static readonly DependencyProperty NormalizedLibsProperty =
+        DependencyProperty.Register("NormalizedLibs", typeof(LibReference[]), typeof(TestSuiteCreateOrEditModel), new PropertyMetadata(new LibReference[0]));
 
     public string NormalizedAssembliesText
     {
       get
       {
         var text = new StringBuilder();
+        var suitPath = SuitPath;
         foreach (var assembly in NormalizedAssemblies)
-          text.AppendLine(Utils.MakeRelativePath(@from: RootFolder, isFromDir: true, @to: assembly.Location, @isToDir: false));
+          text.AppendLine(Utils.MakeRelativePath(@from: suitPath, isFromDir: true, @to: assembly.Location, @isToDir: false));
         return text.ToString();
       }
     }

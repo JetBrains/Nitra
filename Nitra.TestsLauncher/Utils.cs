@@ -12,6 +12,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Nitra.ProjectSystem;
 using Nitra.Visualizer.Serialization;
 
 namespace Nitra.Visualizer
@@ -85,9 +86,9 @@ namespace Nitra.Visualizer
       return testSuiteName.Any(invalidChars.Contains);
     }
 
-    public static string MakeXml([NotNull] string root, [NotNull] Language language, [NotNull] IEnumerable<GrammarDescriptor> dynamicExtensions)
+    public static string MakeXml([NotNull] string root, [NotNull] Language language, [NotNull] IEnumerable<GrammarDescriptor> dynamicExtensions, LibReference[] libs)
     {
-      return SerializationHelper.Serialize(language, dynamicExtensions, path => MakeRelativePath(@from: root, isFromDir: true, to: path, isToDir: false));
+      return SerializationHelper.Serialize(language, dynamicExtensions, libs, path => MakeRelativePath(@from: root, isFromDir: true, to: path, isToDir: false));
     }
 
     public static bool IsEmpty(this IEnumerable seq)
