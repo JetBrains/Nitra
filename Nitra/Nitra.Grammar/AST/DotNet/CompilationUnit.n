@@ -24,49 +24,66 @@ namespace DotNet
   {
     public RefreshReferences(project : Project) : void
     {
-      def context       = NitraDependentPropertyEvalContext();
-      def rootNamespace = NamespaceSymbol();
+      def oldManager = ManagerClass.Instance;
+      try
+      {
+        def manager : ManagerClass = Compiler(project);
+        ManagerClass.Instance = manager;
+        def context       = NitraDependentPropertyEvalContext();
+        def rootNamespace = NamespaceSymbol();
 
-      rootNamespace.MemberTable = TableScope("<root namespace>", rootNamespace);
-      rootNamespace.Parent      = null;
-      rootNamespace.FullName    = "";
+        rootNamespace.MemberTable = TableScope("<root namespace>", rootNamespace);
+        rootNamespace.Parent      = null;
+        rootNamespace.FullName    = "";
       
-      def rootScope = CreateNemerleSymbols(project, rootNamespace, context);
-      project.Data = (context, rootNamespace, rootScope, ManagerClass.Instance);
+        def rootScope = CreateNemerleSymbols(project, manager, rootNamespace, context);
+        project.Data = (context, rootNamespace, rootScope, manager);
+      }
+      finally ManagerClass.Instance = oldManager;
     }
     
     public RefreshSources(project : Project) : void
     {
       IgnoreParams();
+      def oldManager = ManagerClass.Instance;
+      try
+      {
+      }
+      finally ManagerClass.Instance = oldManager;
     }
     
     public RefreshProject(project : Project) : void
     {
-      def files         = project.Files.ToArray();
+      def oldManager = ManagerClass.Instance;
+      def files      = project.Files.ToArray();
       def (context, rootNamespace, rootScope, manager) = project.Data :> (NitraDependentPropertyEvalContext * NamespaceSymbol * Scope * ManagerClass);
-      ManagerClass.Instance = manager;
-      
-      def removeParsedSymbols(tableScope : TableScope)
+      try
       {
-        tableScope.Undefine(_.IsParsed);
-        foreach (symbols in tableScope.Symbols)
-        foreach (symbol is NamespaceSymbol in symbols)
-          removeParsedSymbols(symbol.MemberTable);
+        ManagerClass.Instance = manager;
+      
+        def removeParsedSymbols(tableScope : TableScope)
+        {
+          tableScope.Undefine(_.IsParsed);
+          foreach (symbols in tableScope.Symbols)
+          foreach (symbol is NamespaceSymbol in symbols)
+            removeParsedSymbols(symbol.MemberTable);
+        }
+      
+        removeParsedSymbols(rootNamespace.MemberTable);
+      
+        foreach (file in files)
+          when (file.Ast is CompilationUnit as cu)
+            cu.RootNamespace = rootNamespace;
+        AstUtils.EvalProperties(context, files, "SymbolHierarchy", 0, rootNamespace);
+
+        foreach (file in files)
+          when (file.Ast is CompilationUnit as cu)
+            cu.Scope = rootScope;
+        AstUtils.EvalProperties(context, files, "Scopes", 1, rootNamespace);
+
+        AstUtils.EvalProperties(context, files, "Type bodies binding", 2, rootNamespace);
       }
-      
-      removeParsedSymbols(rootNamespace.MemberTable);
-      
-      foreach (file in files)
-        when (file.Ast is CompilationUnit as cu)
-          cu.RootNamespace = rootNamespace;
-      AstUtils.EvalProperties(context, files, "SymbolHierarchy", 0, rootNamespace);
-
-      foreach (file in files)
-        when (file.Ast is CompilationUnit as cu)
-          cu.Scope = rootScope;
-      AstUtils.EvalProperties(context, files, "Scopes", 1, rootNamespace);
-
-      AstUtils.EvalProperties(context, files, "Type bodies binding", 2, rootNamespace);
+      finally ManagerClass.Instance = oldManager;
     } 
 
     class Compiler : ManagerClass
@@ -80,30 +97,25 @@ namespace DotNet
         this.Options.DoNotLoadMacros = true;
         this.Options.MacrosToLoad ::= macroLibPath;
         this.Options.LibraryPaths ::= compilerDir;
-        foreach (lib in project.Libs)
-        {
-          | FullNameLibReference     => this.Options.ReferencedLibraries ::= lib.ToString();
-          | FileLibReference as file => this.Options.ReferencedLibraries ::= IO.Path.GetFullPath(IO.Path.Combine(project.ProjectDir, file.Path));
-          | _ => assert2(false, "Not supported LibReference");
-        }
+        when (project.Libs != null)
+          foreach (lib in project.Libs)
+          {
+            | FullNameLibReference     => this.Options.ReferencedLibraries ::= lib.ToString();
+            | FileLibReference as file => this.Options.ReferencedLibraries ::= IO.Path.GetFullPath(IO.Path.Combine(project.ProjectDir, file.Path));
+            | _ => assert2(false, "Not supported LibReference");
+          }
         InitCompiler ();
         LoadExternalLibraries ();
       }
     }
     
-    private static CreateNemerleSymbols(project : Project, rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : Scope
+    private static CreateNemerleSymbols(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : Scope
     {
-      when (ManagerClass.Instance == null)
-      {
-        ManagerClass.Instance = Compiler(project);
-      }
-        
-      def manager         = ManagerClass.Instance;
-      def nemerleNsRoot   = manager.NameTree.NamespaceTree;
-      def file            = SourceSnapshot.Default.File;
-      def span            = NSpan(0);
-      def nodeToSymbolMap = Hashtable.[TypeInfo, TypeSymbol]();
-      def aliases         = List();
+      def nemerleNsRoot     = manager.NameTree.NamespaceTree;
+      def file              = SourceSnapshot.Default.File;
+      def span              = NSpan(0);
+      def nodeToSymbolMap   = Hashtable.[TypeInfo, TypeSymbol]();
+      def aliases           = List();
 
       def createTypeParameters(tycon : TypeInfo) : array[TypeParameterSymbol]
       {
@@ -144,7 +156,7 @@ namespace DotNet
             | Interface
             | Class =>
               def symbol : TopGenericTypeSymbol =
-                       if (tycon.IsDelegate)  ExternalTypeDeclaration.[TopDelegateSymbol](name, tycon).DefineSymbol(parent.MemberTable) 
+                        if (tycon.IsDelegate)  ExternalTypeDeclaration.[TopDelegateSymbol](name, tycon).DefineSymbol(parent.MemberTable) 
                   else if (tycon.IsInterface) ExternalTypeDeclaration.[TopInterfaceSymbol](name, tycon).DefineSymbol(parent.MemberTable)
                   else if (tycon.IsValueType) ExternalTypeDeclaration.[TopStructSymbol](name, tycon).DefineSymbol(parent.MemberTable)
                   else                        ExternalTypeDeclaration.[TopClassSymbol](name, tycon).DefineSymbol(parent.MemberTable);
