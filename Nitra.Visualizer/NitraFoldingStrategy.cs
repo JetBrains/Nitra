@@ -23,7 +23,7 @@ namespace Nitra.Visualizer
       }
 
       try
-      {
+      {//parseResult.SourceSnapshot
         var timer = Stopwatch.StartNew();
         var outlining = new List<OutliningInfo>();
         parseResult.GetOutlining(outlining);
