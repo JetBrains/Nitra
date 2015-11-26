@@ -159,15 +159,7 @@ namespace Nitra.ViewModels
       var projectSupport = _file.Ast as IProjectSupport;
 
       if (projectSupport != null)
-      {
-        if (project.Data == null)
-        {
-          projectSupport.RefreshReferences(project);
-          projectSupport.RefreshSources(project);
-        }
-
         projectSupport.RefreshProject(project);
-      }
       else if (_testFolder != null)
         throw new InvalidOperationException("The '" + _file.Ast.GetType().Name +
                                             "' type must implement IProjectSupport, to be used in a multi-file test.");

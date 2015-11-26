@@ -19,12 +19,15 @@ namespace XXNamespaceXX.ProjectSystem
     private readonly IProject _project;
     private readonly Dictionary<IProjectFile, XXLanguageXXFile> _filesMap     = new Dictionary<IProjectFile, XXLanguageXXFile>();
     private readonly Dictionary<string,       XXLanguageXXFile> _filePathsMap = new Dictionary<string,       XXLanguageXXFile>(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<GrammarDescriptor>                _nitraAssemblies = new HashSet<GrammarDescriptor>();
+    private readonly HashSet<GrammarDescriptor> _nitraAssemblies = new HashSet<GrammarDescriptor>();
+    internal readonly List<LibReference> _libs = new List<LibReference>();
 
     public XXLanguageXXProject(XXLanguageXXSolution solution, IProject project)
     {
-      _project = project;
-      Solution = solution;
+      _project    = project;
+      Solution    = solution;
+      Libs        = _libs;
+      ProjectDir  = project.ProjectLocationLive.Value.FileAccessPath;
     }
 
     public IEnumerable<GrammarDescriptor> GrammarDescriptors { get { return _nitraAssemblies; }}
@@ -106,6 +109,7 @@ namespace XXNamespaceXX.ProjectSystem
         file.Dispose();
       _filesMap.Clear();
       _filePathsMap.Clear();
+      _libs.Clear();
     }
   } // class
 }  // namespace

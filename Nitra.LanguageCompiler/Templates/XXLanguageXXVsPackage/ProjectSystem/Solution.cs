@@ -107,14 +107,12 @@ namespace XXNamespaceXX.ProjectSystem
 
           var values = _projectsMap.Values.ToArray();
 
-          foreach (var project in values)
-            project.RefreshReferences();
 
           foreach (var project in values)
-            project.RefreshSources();
-
-          foreach (var project in values)
+          {
+            project.Data = null;
             project.UpdateProperties();
+          }
         }
 
         projectModelChange.Accept(new RecursiveProjectModelChangeDeltaVisitor(FWithDelta, FWithItemDelta));
@@ -169,14 +167,20 @@ namespace XXNamespaceXX.ProjectSystem
 
           var project = GetProject(projectElement.GetProject());
 
+          project.Data = null;
+
           using (var loader = new MetadataLoader())
           {
             var path = assembly.GetFiles().First().Location;
+            project._libs.Add(new FileLibReference(path.ToString()));
             var metadataAssembly = loader.LoadFrom(path, x => true);
             foreach (var a in metadataAssembly.CustomAttributesTypeNames)
               if (a.FullName.EqualTo("Nitra.GrammarsAttribute"))
                 project.TryAddNitraExtensionAssemblyReference(path);
           }
+
+          if (IsOpened)
+            project.UpdateProperties();
         }
       }
     }
@@ -203,15 +207,7 @@ namespace XXNamespaceXX.ProjectSystem
           var nitraFile = project.TryAddFile(file);
 
           if (IsOpened)
-          {
-            if (project.Data == null)
-            {
-              project.RefreshReferences();
-              project.RefreshSources();
-            }
-
             project.UpdateProperties();
-          }
 
           Action<File> oldHandler;
           if (_fileOpenNotifyRequest.TryGetValue(nitraFile.FullName, out oldHandler))
