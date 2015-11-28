@@ -190,7 +190,7 @@ namespace XXNamespaceXX.ProjectSystem
       var item = obj.ProjectItem;
 
       var file = item as IProjectFile;
-      if (file != null && file.LanguageType.Is<XXLanguageXXFileType>())
+      if (file != null && item.ParentFolder != null && file.LanguageType.Is<XXLanguageXXFileType>())
       {
         if (obj.IsRemoved || obj.IsMovedOut)
         {
