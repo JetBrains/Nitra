@@ -540,7 +540,7 @@ namespace Nitra.Compiler
 
       def collectDependendOn(node : IPropertyDependencyNode, checkedPaths : SCG.HashSet[DependencyPath] = null) : SCG.List[DependencyPath] * SCG.List[DependencyPath]
       {
-        def collect(node : IPropertyDependencyNode, properties : SCG.List[DependencyPath], stagedProperties : SCG.List[DependencyPath], visited : SCG.HashSet[IPropertyDependencyNode]) : void
+        def collect(node : IPropertyDependencyNode, properties : SCG.List[DependencyPath], collectorProperties : SCG.List[DependencyPath], visited : SCG.HashSet[IPropertyDependencyNode]) : void
         {
           unless (visited.Add(node))
             return;
@@ -550,28 +550,28 @@ namespace Nitra.Compiler
 
           foreach (p in node.DependendOn)
           {
-            collect(p, properties, stagedProperties, visited);
+            collect(p, properties, collectorProperties, visited);
             unless (checkedPaths?.Contains(p.Path))
               properties.Add(p.Path);
-            when (p.IsStaged)
-              stagedProperties.Add(p.Path);
+            when (p.IsCollector)
+              collectorProperties.Add(p.Path);
           }
         }
 
         def properties       = SCG.List();
-        def stagedProperties = SCG.List();
+        def collectorProperties = SCG.List();
         when (node.DependendOn.Count > 0)
-          collect(node, properties, stagedProperties, SCG.HashSet());
-        (properties, stagedProperties)
+          collect(node, properties, collectorProperties, SCG.HashSet());
+        (properties, collectorProperties)
       }
 
-      def makeCondition(properties : SCG.List[DependencyPath], stagedProperties : SCG.List[DependencyPath], trueExpr : PExpr, falseExpr : PExpr = null) : PExpr
+      def makeCondition(properties : SCG.List[DependencyPath], collectorProperties : SCG.List[DependencyPath], trueExpr : PExpr, falseExpr : PExpr = null) : PExpr
       {
         mutable pred;
         when (properties.Count > 0)
           PExprUtils.CombineAnd(ref pred, GenerateHasValueCheck(properties, dependentProperties));
 
-        foreach (path in stagedProperties)
+        foreach (path in collectorProperties)
           PExprUtils.CombineAnd(ref pred, <[ context.Pass > $(CompilePath(path)).CreatedOnPass ]>);
 
         match (pred)
@@ -626,10 +626,10 @@ namespace Nitra.Compiler
       foreach (node in dependencyGraph.GetOrderedNodes())
       {
         | Assign(code) =>
-          def (predicate, checkedPaths)      = makeIsEvaluatedCheck(node.Path, dependentProperties);
-          def (properties, stagedProperties) = collectDependendOn(node, checkedPaths);
+          def (predicate, checkedPaths)         = makeIsEvaluatedCheck(node.Path, dependentProperties);
+          def (properties, collectorProperties) = collectDependendOn(node, checkedPaths);
           def expr1 = Util.locate(code.Location, <[ $(CompilePath(node.Path)) = $(compileCode(node.DeclaredIn, code)); context.CalculatedCountInc(); ]>);
-          def expr2 = makeCondition(properties, stagedProperties, expr1, <[ context.DeferredCountInc() ]>);
+          def expr2 = makeCondition(properties, collectorProperties, expr1, <[ context.DeferredCountInc() ]>);
           def expr3 = <[ when ($predicate) $expr2; ]>;
           def expr4 = TryAddStageCheck(node.Path, expr3);
           result.Add(expr4);
@@ -641,8 +641,8 @@ namespace Nitra.Compiler
 
       foreach (call in dependencyGraph.Calls)
       {
-        def (properties, stagedProperties) = collectDependendOn(call);
-        _ = stagedProperties.RemoveAll(x => x.Equals(call.Path));
+        def (properties, collectorProperties) = collectDependendOn(call);
+        _ = collectorProperties.RemoveAll(x => x.Equals(call.Path));
         def bit   = tb.GetBitFieldManager().Allocate();
         def expr1 = <[ $(compileCode(call.DeclaredIn, call.Code)); $(bit.Set()); ]>;
         def expr2 = 
@@ -662,7 +662,7 @@ namespace Nitra.Compiler
             | Collect => makeInitIterationNumberCheck(call, expr1)
             | StagedUse  => makeUseIterationNumberCheck(call, expr1)
           };
-        def expr3 = makeCondition(properties, stagedProperties, expr2);
+        def expr3 = makeCondition(properties, collectorProperties, expr2);
         def expr4 = <[ unless ($(bit.Read())) $expr3 ]>;
         result.Add(expr4);
       }
