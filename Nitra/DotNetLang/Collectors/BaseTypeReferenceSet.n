@@ -32,17 +32,19 @@ namespace DotNet
     private mutable _isEvaluationInProgress : bool;
     private mutable _isCycled               : bool;
     private mutable _ancestorTypes          : HashSet[TypeSymbol];
-    private mutable _parentScope            : Scope;
-    private mutable _parentClass            : option[TypeSymbol];
+    private mutable _parentClassScope       : Scope;
+    private mutable _parentFullScope        : Scope;
     private         _parentTypes            : HashSet[TypeSymbol];
 
-    public CreatedOnStage : int                { get; }
-    public CreatedOnPass  : int                { get; }
-    public IsCycled       : bool               { get { TryEvaluateHierarchy(); _isCycled } }
-    public AncestorTypes  : Seq[TypeSymbol]    { get { TryEvaluateHierarchy(); _ancestorTypes } }
-    public ParentTypes    : Seq[TypeSymbol]    { get { _parentTypes } }
-    public ParentScope    : Scope              { get { TryEvaluateHierarchy(); _parentScope } }
-    public ParentClass    : option[TypeSymbol] { get { TryEvaluateHierarchy(); _parentClass } }
+    public CreatedOnStage       : int                { get; }
+    public CreatedOnPass        : int                { get; }
+    public IsCycled             : bool               { get { TryEvaluateHierarchy(); _isCycled } }
+    public AncestorTypes        : Seq[TypeSymbol]    { get { TryEvaluateHierarchy(); _ancestorTypes } }
+    public ParentTypes          : Seq[TypeSymbol]    { get { _parentTypes } }
+    public ParentClassScope     : Scope              { get { TryEvaluateHierarchy(); _parentClassScope } }
+    public ParentStructScope    : Scope              { get { EmptyScope.Instance } } //TODO: use scope of System.ValueType type
+    public ParentInterfaceScope : Scope              { get { ParentFullScope } } //TODO: gather only Interface types from parent type lists and System.Object
+    public ParentFullScope      : Scope              { get { TryEvaluateHierarchy(); _parentFullScope } }
 
     [Collect]
     public AddParent(type : TypeSymbol) : void
@@ -74,49 +76,39 @@ namespace DotNet
 
       if (_isEvaluationInProgress)
       {
-        _isCycled      = true;
-        _ancestorTypes = HashSet();
-        _parentClass   = None();
-        _parentScope   = EmptyScope.Instance;
+        _isCycled         = true;
+        _ancestorTypes    = HashSet();
+        _parentClassScope = EmptyScope.Instance;
+        _parentFullScope  = EmptyScope.Instance;
       }
       else
       {
         _isEvaluationInProgress = true;
 
         def ancestorTypes = HashSet(_parentTypes);
-        mutable parentClass : option[TypeSymbol];
-        mutable parentScope;
+        mutable parentClassScope;
+        mutable parentFullScope = EmptyScope.Instance : Scope;
         foreach (type in _parentTypes)
         {
-          | SupportsInheritanceTypeSymbol(BaseTypeSet = parentTypeSet) as symbol =>
-            ancestorTypes.UnionWith(parentTypeSet.AncestorTypes);
-
-            when (parentClass : object == null)
-            when (symbol is ClassSymbol(MemberTable = scope))
-            {
-              parentClass = Some(type);
-              parentScope = parentTypeSet.ParentScope.HideWith(scope);
-            }
-
-          | ConstructedTypeSymbol(IsTypeInfoEvaluated = true, TypeInfo = GenericContainerTypeSymbol(BaseTypeSet = parentTypeSet) as symbol) =>
+          | SupportsInheritanceTypeSymbol(BaseTypeSet = parentTypeSet, MemberTable = symbolScope) as symbol
+          | ConstructedTypeSymbol(IsTypeInfoEvaluated = true, TypeInfo = GenericContainerTypeSymbol(BaseTypeSet = parentTypeSet, MemberTable = symbolScope) as symbol) =>
             // TODO: need subst of type parameters
             ancestorTypes.UnionWith(parentTypeSet.AncestorTypes);
 
-            when (parentClass : object == null)
-            when (symbol is ClassSymbol(MemberTable = scope))
-            {
-              parentClass = Some(type);
-              parentScope = parentTypeSet.ParentScope.HideWith(scope);
-            }
+            parentFullScope = parentFullScope.UnionWith(parentTypeSet.ParentFullScope.HideWith(symbolScope));
+
+            when (parentClassScope : object == null)
+            when (symbol is ClassSymbol)
+              parentClassScope = parentTypeSet.ParentClassScope.HideWith(symbolScope);
 
           | _ => ()
         }
 
         unless (_isCycled)
         {
-          _ancestorTypes = ancestorTypes;
-          _parentClass   = if (parentClass : object == null) None() else parentClass; // operator '??' unwraps option[T]
-          _parentScope   = parentScope ?? EmptyScope.Instance;
+          _ancestorTypes    = ancestorTypes;
+          _parentClassScope = parentClassScope ?? EmptyScope.Instance;
+          _parentFullScope  = parentFullScope;
         }
 
         _isEvaluationInProgress = false;
