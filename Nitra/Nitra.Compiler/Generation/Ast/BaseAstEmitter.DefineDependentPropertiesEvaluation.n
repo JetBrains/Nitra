@@ -538,30 +538,41 @@ namespace Nitra.Compiler
         }
       }
 
-      def collectDependendOn(node : IPropertyDependencyNode, checkedPaths : SCG.HashSet[DependencyPath] = null) : SCG.List[DependencyPath] * SCG.List[DependencyPath]
+      def collectDependendOn(node : IPropertyDependencyNode, checkedPaths : SCG.HashSet[DependencyPath]) : SCG.List[DependencyPath] * SCG.List[DependencyPath]
       {
-        def collect(node : IPropertyDependencyNode, properties : SCG.List[DependencyPath], collectorProperties : SCG.List[DependencyPath], visited : SCG.HashSet[IPropertyDependencyNode]) : void
+        def properties          = SCG.List();
+        def collectorProperties = SCG.List();
+
+        def walkPath(path : DependencyPath)
         {
-          unless (visited.Add(node))
-            return;
+          mutable nodeForPath;
+          when (dependencyGraph.Nodes.TryGetValue(path, out nodeForPath) && nodeForPath.IsCollector)
+            collectorProperties.Add(path);
 
-          when (!node.Path.IsDependent && node.Path.IsSinglePropertyPath)
-            return;
-
-          foreach (p in node.DependendOn)
+          match (path)
           {
-            collect(p, properties, collectorProperties, visited);
-            unless (checkedPaths?.Contains(p.Path))
-              properties.Add(p.Path);
-            when (p.IsCollector)
-              collectorProperties.Add(p.Path);
+            | This | Variable => ()
+            | SimpleProperty(p, _) => walkPath(p)
+            | DeclaredProperty(p, s, _) =>
+              when (checkedPaths.Add(path))
+              {
+                walkPath(p);
+                when (s is DependentPropertySymbol)
+                  properties.Add(path);
+              }
+
+            | DependentProperty(p, _, _) =>
+              when (checkedPaths.Add(path))
+              {
+                walkPath(p);
+                properties.Add(path);
+              }
           }
         }
 
-        def properties          = SCG.List();
-        def collectorProperties = SCG.List();
-        when (node.DependendOn.Count > 0)
-          collect(node, properties, collectorProperties, SCG.HashSet());
+        foreach (dependency in node.DependendOn)
+          walkPath(dependency.Path);
+
         (properties, collectorProperties)
       }
 
@@ -603,14 +614,12 @@ namespace Nitra.Compiler
       }
       def makeIsEvaluatedCheck(path : DependencyPath, dependentProperties) : PExpr * SCG.HashSet[DependencyPath]
       {
-        mutable checkedPaths;
+        def checkedPaths = SCG.HashSet();
         mutable acc;
 
         def loop(_ : ValueOption[DependencyPath])
         {
           | VSome(path) =>
-            when (checkedPaths : object == null)
-              checkedPaths = SCG.HashSet();
             _ = checkedPaths.Add(path);
             PExprUtils.CombineAnd(ref acc, GenerateHasValueCheck(path, dependentProperties));
             loop(path.BasePath)
@@ -641,7 +650,7 @@ namespace Nitra.Compiler
 
       foreach (call in dependencyGraph.Calls)
       {
-        def (properties, collectorProperties) = collectDependendOn(call);
+        def (properties, collectorProperties) = collectDependendOn(call, SCG.HashSet());
         _ = collectorProperties.RemoveAll(x => x.Equals(call.Path));
         def bit   = tb.GetBitFieldManager().Allocate();
         def expr1 = <[ $(compileCode(call.DeclaredIn, call.Code)); $(bit.Set()); ]>;
