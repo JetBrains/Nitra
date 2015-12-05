@@ -29,7 +29,6 @@ using System.Windows.Threading;
 using Nitra.Visualizer.Controls;
 using Microsoft.VisualBasic.FileIO;
 using Nitra.ProjectSystem;
-using Nitra.Runtime.Binding;
 using Nitra.Runtime.Highlighting;
 using CheckBox = System.Windows.Controls.CheckBox;
 using Clipboard = System.Windows.Clipboard;
