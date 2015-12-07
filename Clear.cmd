@@ -41,3 +41,16 @@ set RemoveCmd=rmdir /S /Q
 %RemoveCmd% Ide\NitraLangVsPackage
 %RemoveCmd% packages\
 %RemoveCmd% VisualStudioExtensions\NitraVsPackage\packages\
+
+MKDIR bin\Debug\NuGetSource
+MKDIR bin\Release\NuGetSource
+
+IF "%NemerleBinPathRoot%" NEQ "" GOTO CopyNemerleNuGetPkgs
+IF "%ProgramFiles(x86)%" == "" ( SET NemerleBinPathRoot=%ProgramFiles(x86)% ) ELSE ( SET NemerleBinPathRoot=%ProgramFiles% )
+SET NemerleBinPathRoot=%NemerleBinPathRoot%\Nemerle\
+
+:CopyNemerleNuGetPkgs
+
+copy "%NemerleBinPathRoot%Net-4.0\*.nupkg" bin\Debug\NuGetSource\ /B
+copy "%NemerleBinPathRoot%Net-4.0\*.nupkg" bin\Release\NuGetSource\ /B
+@echo Done
