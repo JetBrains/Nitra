@@ -177,7 +177,7 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void ReadValue(TreeViewItem tvi, object obj, Type t, PropertyInfo prop)
+    private void ReadValue(TreeViewItem tvi, object obj, System.Type t, PropertyInfo prop)
     {
       var isEvalPropName = "Is" + prop.Name + "Evaluated";
       var isEvalProp = t.GetProperty(isEvalPropName);
