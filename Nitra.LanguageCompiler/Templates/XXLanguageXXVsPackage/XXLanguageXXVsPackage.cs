@@ -40,7 +40,7 @@ namespace XXNamespaceXX
     {
     }
 
-    public static string GetPlaginPath()
+    public static string GetPluginPath()
     {
       var codeBase = typeof(XXLanguageXXVsPackage).Assembly.CodeBase;
       var uri = new UriBuilder(codeBase);
