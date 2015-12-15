@@ -12,14 +12,6 @@ namespace Nitra.Declarations
 {
   public abstract class TypeUnifier
   {
-    [Record]
-    private struct TypeVarState
-    {
-      public Var                   : TypeVarSymbol;
-      public BaseTypeConstraint    : TypeSymbol;
-      public DerivedTypeConstraint : TypeSymbol;
-    }
-
     private _typeVarInitContext : DependentPropertyEvalContext = DependentPropertyEvalContext();
 
     public abstract IsSubtype(subtype : TypeSymbol, supertype : TypeSymbol) : bool;
@@ -75,7 +67,7 @@ namespace Nitra.Declarations
       result
     }
 
-    private Unify(t1 : TypeSymbol, t2 : TypeSymbol, updatedVariables : ref LightList[TypeVarState]) : bool
+    private Unify(t1 : TypeSymbol, t2 : TypeSymbol, updatedVariables : ref LightList[TypeVarSymbol]) : bool
     {
       match (UnwrapTypeVar(t1), UnwrapTypeVar(t2))
       {
@@ -87,10 +79,14 @@ namespace Nitra.Declarations
             | (true,  false) => newBaseTypeConstraint = v1.BaseTypeConstraint;
             | (false,  true) => newBaseTypeConstraint = v2.BaseTypeConstraint;
             | (true,   true) =>
-              if (IsSubtype(v1.BaseTypeConstraint, v2.BaseTypeConstraint))
-                newBaseTypeConstraint = v1.BaseTypeConstraint
-              else if (IsSubtype(v2.BaseTypeConstraint, v1.BaseTypeConstraint))
-                newBaseTypeConstraint = v2.BaseTypeConstraint
+              def c1 = v1.BaseTypeConstraint;
+              def c2 = v2.BaseTypeConstraint;
+              if (c1.Equals(c2))
+                newBaseTypeConstraint = c1
+              else if (IsSubtype(c1, c2))
+                newBaseTypeConstraint = c1
+              else if (IsSubtype(c2, c1))
+                newBaseTypeConstraint = c2
               else
                 return false; // base type constraints are not compatible
           }
@@ -102,10 +98,14 @@ namespace Nitra.Declarations
             | (true,  false) => newDerivedTypeConstraint = v1.DerivedTypeConstraint;
             | (false,  true) => newDerivedTypeConstraint = v2.DerivedTypeConstraint;
             | (true,   true) =>
-              if (IsSubtype(v1.DerivedTypeConstraint, v2.DerivedTypeConstraint))
-                newDerivedTypeConstraint = v2.DerivedTypeConstraint
-              else if (IsSubtype(v2.DerivedTypeConstraint, v1.DerivedTypeConstraint))
-                newDerivedTypeConstraint = v1.DerivedTypeConstraint
+              def c1 = v1.DerivedTypeConstraint;
+              def c2 = v2.DerivedTypeConstraint;
+              if (c1.Equals(c2))
+                newDerivedTypeConstraint = c1
+              else if (IsSubtype(c1, c2))
+                newDerivedTypeConstraint = c2
+              else if (IsSubtype(c2, c1))
+                newDerivedTypeConstraint = c1
               else
                 return false; // derived type constraints are not compatible
           }
@@ -128,11 +128,19 @@ namespace Nitra.Declarations
 
         | (type, var is TypeVarSymbol)
         | (var is TypeVarSymbol, type) =>
-          when (var.IsBaseTypeConstraintEvaluated && !IsSubtype(type, var.BaseTypeConstraint))
-            return false; // base type constraint not satisfied
+          when (var.IsBaseTypeConstraintEvaluated)
+          {
+            def baseTypeConstraint = var.BaseTypeConstraint;
+            unless (type.Equals(baseTypeConstraint) || IsSubtype(type, baseTypeConstraint))
+              return false; // base type constraint not satisfied
+          }
 
-          when (var.IsDerivedTypeConstraintEvaluated && !IsSubtype(var.DerivedTypeConstraint, type))
-            return false; // derived type constraint not satisfied
+          when (var.IsDerivedTypeConstraintEvaluated)
+          {
+            def derivedTypeConstraint = var.DerivedTypeConstraint;
+            unless (type.Equals(derivedTypeConstraint) || IsSubtype(derivedTypeConstraint, type))
+              return false; // derived type constraint not satisfied
+          }
 
           BindTypeVar(var, type, ref updatedVariables);
           true
@@ -162,7 +170,7 @@ namespace Nitra.Declarations
       }
     }
 
-    private Unify(ts1 : ref LightList[TypeSymbol], ts2 : ref LightList[TypeSymbol], updatedVariables : ref LightList[TypeVarState]) : bool
+    private Unify(ts1 : ref LightList[TypeSymbol], ts2 : ref LightList[TypeSymbol], updatedVariables : ref LightList[TypeVarSymbol]) : bool
     {
       when (ts1.Count != ts2.Count)
         return false;
@@ -174,39 +182,38 @@ namespace Nitra.Declarations
       true
     }
 
-    private UnwrapTypeVar(t : TypeSymbol) : TypeSymbol
+    private static UnwrapTypeVar(t : TypeSymbol) : TypeSymbol
     {
       | tv is TypeVarSymbol when tv.IsTypeEvaluated => UnwrapTypeVar(tv.Type)
       | _ => t
     }
 
-    private BindTypeVar(var : TypeVarSymbol, type : TypeSymbol, updatedVariables : ref LightList[TypeVarState]) : void
+    private static BindTypeVar(var : TypeVarSymbol, type : TypeSymbol, updatedVariables : ref LightList[TypeVarSymbol]) : void
     {
-      def state = TypeVarState(var,
-        if (var.IsBaseTypeConstraintEvaluated)    var.BaseTypeConstraint    else null,
-        if (var.IsDerivedTypeConstraintEvaluated) var.DerivedTypeConstraint else null);
-
       var.Type = type;
-      updatedVariables.Add(state);
+      updatedVariables.Add(var);
     }
 
-    private ResetTypeVars(vars : ref LightList[TypeVarState]) : void
+    private ResetTypeVars(vars : ref LightList[TypeVarSymbol]) : void
     {
       def e = vars.GetEnumerator();
       when (e.MoveNext())
       {
         do
         {
-          def state = e.Current;
-          state.Var.ResetProperties();
+          def var                   = e.Current;
+          def baseTypeConstraint    = if (var.IsBaseTypeConstraintEvaluated)    var.BaseTypeConstraint    else null;
+          def derivedTypeConstraint = if (var.IsDerivedTypeConstraintEvaluated) var.DerivedTypeConstraint else null;
 
-          when (state.BaseTypeConstraint : object != null)
-            state.Var.BaseTypeConstraint = state.BaseTypeConstraint;
+          var.ResetProperties();
 
-          when (state.DerivedTypeConstraint : object != null)
-            state.Var.DerivedTypeConstraint = state.DerivedTypeConstraint;
+          when (baseTypeConstraint : object != null)
+            var.BaseTypeConstraint = baseTypeConstraint;
 
-          state.Var.EvalProperties(_typeVarInitContext);
+          when (derivedTypeConstraint : object != null)
+            var.DerivedTypeConstraint = derivedTypeConstraint;
+
+          var.EvalProperties(_typeVarInitContext);
         }
         while (e.MoveNext())
       }
