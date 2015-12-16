@@ -50,7 +50,7 @@ namespace XXNamespaceXX.ProjectSystem
     private IActionManager _actionManager;
     private JetPopupMenus _jetPopupMenus;
 
-    private DocumentManager _documentManager;
+    public DocumentManager DocumentManager { get; private set; }
 
     public XXLanguageXXSolution()
     {
@@ -61,7 +61,7 @@ namespace XXNamespaceXX.ProjectSystem
       Debug.Assert(!IsOpened);
 
       _solution = solution;
-      _documentManager = documentManager;
+      DocumentManager = documentManager;
       _jetPopupMenus = jetPopupMenus;
       changeManager.Changed2.Advise(lifetime, Handler);
       lifetime.AddAction(Close);
@@ -91,7 +91,7 @@ namespace XXNamespaceXX.ProjectSystem
       _projectsMap.Clear();
       _solution = null;
       _fileOpenNotifyRequest.Clear();
-      _documentManager = null;
+      DocumentManager = null;
     }
 
     public override IEnumerable<Project> Projects { get { return _projectsMap.Values; } }
@@ -119,16 +119,16 @@ namespace XXNamespaceXX.ProjectSystem
       }
 
       {
-        var documentChange = changeEventArgs.ChangeMap.GetChange<ProjectFileDocumentChange>(_documentManager.ChangeProvider);
+        var documentChange = changeEventArgs.ChangeMap.GetChange<ProjectFileDocumentChange>(DocumentManager.ChangeProvider);
         if (documentChange != null)
           if (OnFileChanged(documentChange.ProjectFile, documentChange))
             return;
       }
 
       {
-        var documentChange = changeEventArgs.ChangeMap.GetChange<DocumentChange>(_documentManager.ChangeProvider);
+        var documentChange = changeEventArgs.ChangeMap.GetChange<DocumentChange>(DocumentManager.ChangeProvider);
         if (documentChange != null)
-          if (OnFileChanged(_documentManager.GetProjectFile(documentChange.Document), documentChange))
+          if (OnFileChanged(DocumentManager.GetProjectFile(documentChange.Document), documentChange))
             return;
       }
     }
@@ -261,6 +261,34 @@ namespace XXNamespaceXX.ProjectSystem
 
     [CanBeNull]
     [ContractAnnotation("null <= null")]
+    public XXLanguageXXFile GetNitraFile(IDocument doc)
+    {
+      if (doc == null)
+        return null;
+
+      var projectFile = DocumentManager.TryGetProjectFile(doc);
+      if (projectFile == null)
+        return null;
+
+      return GetNitraFile(projectFile);
+    }
+
+    public XXLanguageXXFile GetNitraFile(IProjectFile projectFile)
+    {
+      var project = projectFile.GetProject();
+      if (project == null)
+        return null;
+
+      XXLanguageXXProject nitraLangProject;
+
+      if (!_projectsMap.TryGetValue(project, out nitraLangProject))
+        return null;
+
+      return nitraLangProject.TryGetFile(projectFile);
+    }
+
+    [CanBeNull]
+    [ContractAnnotation("null <= null")]
     public XXLanguageXXFile GetNitraFile(IPsiSourceFile sourceFile)
     {
       if (sourceFile == null)
@@ -269,19 +297,8 @@ namespace XXNamespaceXX.ProjectSystem
       var projectFile = sourceFile.ToProjectFile();
       if (projectFile == null)
         return null;
-      
-      var project = projectFile.GetProject();
-      if (project == null)
-        return null;
 
-      XXLanguageXXProject _nitraProject;
-
-      if (!_projectsMap.TryGetValue(project, out _nitraProject))
-        return null;
-
-      XXLanguageXXFile _nitraFile;
-
-      return _nitraProject.TryGetFile(projectFile);
+      return GetNitraFile(projectFile);
     }
   }
 }
