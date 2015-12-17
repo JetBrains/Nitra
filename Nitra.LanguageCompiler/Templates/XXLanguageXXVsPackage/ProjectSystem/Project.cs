@@ -1,4 +1,5 @@
-﻿using Nitra.Declarations;
+﻿using Nitra;
+using Nitra.Declarations;
 using Nitra.ProjectSystem;
 
 using System;
