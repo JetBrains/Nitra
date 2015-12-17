@@ -132,7 +132,7 @@ namespace Nitra
 
       def symbol = RuleListTypeSymbol();
       symbol.ElemType = elemType;
-      symbol.Scope    = ListRuleTypeScope(elemType);
+      symbol.Scope    = ListRuleTypeScope(symbol);
       context.Init(symbol)
     }
 
@@ -143,7 +143,7 @@ namespace Nitra
 
       def symbol = RuleOptionTypeSymbol();
       symbol.ValueType = valueType;
-      symbol.Scope     = OptionRuleTypeScope(valueType);
+      symbol.Scope     = OptionRuleTypeScope(symbol);
       context.Init(symbol)
     }
 
@@ -189,6 +189,27 @@ namespace Nitra
       optionSymbol.ValueType = valueType;
       optionSymbol.EvalProperties(context);
       optionSymbol
+    }
+
+    public CreateFunctionType(loc : ILocated, thisType : TypeSymbol, parameters : IList[TypeSymbol], returnType : TypeSymbol, context : DependentPropertyEvalContext) : FunctionTypeSymbol
+    {
+      def parametersWithThis = List();
+      parametersWithThis.Add(thisType);
+      parametersWithThis.AddRange(parameters);
+      CreateFunctionType(loc, parametersWithThis, returnType, context)
+    }
+
+    public CreateFunctionType(loc : ILocated, parameters : IList[TypeSymbol], returnType : TypeSymbol, context : DependentPropertyEvalContext) : FunctionTypeSymbol
+    {
+      def name = Name(loc.File, loc.Span, "#Func");
+      def decl = FunctionType(loc.File, loc.Span, name);
+      def funcSymbol = FunctionTypeSymbol();
+      funcSymbol.AddDeclaration(decl);
+      name.Symbol = funcSymbol;
+      funcSymbol.Parameters = parameters;
+      funcSymbol.ReturnType = returnType;
+      funcSymbol.EvalProperties(context);
+      funcSymbol
     }
 
     public BindAstExtension(name : Reference, scope : Scope, defaultReturnType : AstTypeSymbol) : Ref[AstTypeSymbol]
@@ -339,6 +360,34 @@ namespace Nitra
     {
       _ = AstTypeUnifier.Instance.Unify(t1, t2);
       r
+    }
+
+    public CreateImplicitRuleTypeCast(loc : ILocated, thisType : TypeSymbol, expectedType : TypeSymbol, context : DependentPropertyEvalContext) : Ref[FunctionTypeSymbol]
+    {
+      mutable validCasts = LightList();
+
+      when (expectedType : object != WellKnownSymbols.AnyType)
+      {
+        def castTemplate = CreateFunctionType(loc, array[thisType], AstTypeUnifier.Instance.CreateTypeVar(expectedType, null), context);
+        def canBeImplicitCast(mapSyntax : MapSyntaxSymbol) : bool
+        {
+          mapSyntax.IsTypeEvaluated && AstTypeUnifier.Instance.TryUnify(mapSyntax.Type, castTemplate);
+        }
+        def scope = if (thisType.IsScopeEvaluated) thisType.Scope else EmptyScope.Instance;
+        scope.FindMany.[MapSyntaxSymbol](canBeImplicitCast, ref validCasts);
+      }
+
+      match (validCasts.Count)
+      {
+        | 0 => Ref.Some(loc.File, loc.Span, CreateFunctionType(loc, array[thisType], thisType, context)) // return identity function
+        | 1 => Ref.Some(loc.File, loc.Span, validCasts.FirstItem.Type :> FunctionTypeSymbol)             // return type cast function
+        | _ =>
+          mutable functionTypes = [];
+          def e = validCasts.GetEnumerator();
+          while(e.MoveNext())
+            functionTypes ::= e.Current.Type :> FunctionTypeSymbol;
+          Ref.Ambiguous(loc.File, loc.Span, functionTypes, ResolutionSource.Unknown())
+      }
     }
   } // module
 } // namespace
