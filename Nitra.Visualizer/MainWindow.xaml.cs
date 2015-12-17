@@ -1300,7 +1300,7 @@ namespace Nitra.Visualizer
       if(_parseResult == null || _astRoot == null)
         return;
 
-      var completionList = CompleteWord(pos, _parseResult, _astRoot);
+      var completionList = CompleteWord(pos, _astRoot);
 
       _completionWindow = new CompletionWindow(_text.TextArea);
       IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
@@ -1313,9 +1313,10 @@ namespace Nitra.Visualizer
       _completionWindow.Closed += delegate { _completionWindow = null; };
     }
 
-    private List<CompletionData> CompleteWord(int pos, IParseResult parseResult, IAst astRoot)
+    private List<CompletionData> CompleteWord(int pos, IAst astRoot)
     {
       NSpan replacementSpan;
+      var parseResult = astRoot.File.ParseResult;
       var result = NitraUtils.CompleteWord(pos, parseResult, astRoot, out replacementSpan);
       var completionList = new List<CompletionData>();
 
