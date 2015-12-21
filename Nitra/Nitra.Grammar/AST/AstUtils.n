@@ -104,10 +104,7 @@ namespace Nitra
       {
         | 0 => WellKnownSymbols.VoidRuleType
         | 1 => args[0]
-        | _ => 
-          def symbol = RuleTupleTypeSymbol();
-          symbol.ElemTypes = args;
-          context.Init(symbol)
+        | _ => CreateTupleRuleType(args, context)
       }
     }
 
@@ -118,11 +115,16 @@ namespace Nitra
         | (false,  true) => arg2
         | (true,  false) => arg1
         | (false, false) => WellKnownSymbols.VoidRuleType
-        | (true,   true) => 
-            def symbol = RuleTupleTypeSymbol();
-            symbol.ElemTypes = array[arg1, arg2];
-            context.Init(symbol)
+        | (true,   true) => CreateTupleRuleType(array[arg1, arg2], context)
       }
+    }
+
+    public CreateTupleRuleType(args : IList[RuleTypeSymbol], context : DependentPropertyEvalContext) : RuleTypeSymbol
+    {
+      def symbol = RuleTupleTypeSymbol();
+      symbol.ElemTypes = args;
+      symbol.EvalProperties(context);
+      symbol
     }
 
     public InitList(context : DependentPropertyEvalContext, elemType : RuleTypeSymbol) : RuleTypeSymbol
@@ -143,6 +145,20 @@ namespace Nitra
       def symbol = RuleOptionTypeSymbol();
       symbol.ValueType = valueType;
       context.Init(symbol)
+    }
+
+    public CreateRuleTypeVar(context : DependentPropertyEvalContext) : RuleTypeVarSymbol
+    {
+      def symbol = RuleTypeVarSymbol();
+      symbol.EvalProperties(context);
+      symbol
+    }
+
+    public CreateAstTypeVar(context : DependentPropertyEvalContext) : AstTypeVarSymbol
+    {
+      def symbol = AstTypeVarSymbol();
+      symbol.EvalProperties(context);
+      symbol
     }
 
     public CreateListAstType(loc : ILocated, item : Ref[DeclarationSymbol], context : DependentPropertyEvalContext) : Ref[DeclarationSymbol]
@@ -251,12 +267,6 @@ namespace Nitra
       ThisDeclaration(file, span, Name(file, span, "this"))
     }
 
-    public TryCast[TTarget](this symbol : DeclarationSymbol, file : File, span : NSpan) : Ref[TTarget]
-      where TTarget : DeclarationSymbol
-    {
-      Ref.Some(file, span, symbol).Resolve()
-    }
-
     public CreateMapSyntaxName(parseTree : ParseTree) : Name
     {
       Name(parseTree.File, parseTree.Span.FromStart(), GetAstId)
@@ -310,36 +320,43 @@ namespace Nitra
       }
     }
 
-    public TypeParseTreePatternTuple(this loc : IAst, expectedType : TypeSymbol, members : Nitra.Ast.ParseTreePattern.IAstList) : void
+    public TypeParseTreePatternTuple(loc : IAst, expectedType : TypeSymbol, members : Nitra.Ast.ParseTreePattern.IAstList, context : DependentPropertyEvalContext) : TypeSymbol
     {
-      def getNonVoidFieldTypes(fields : IList[RuleFieldSymbol]) : IList[RuleTypeSymbol]
+      if (expectedType is SyntaxRuleSymbol(IsFieldsEvaluated = true, Fields = fields) as returnType)
       {
-        def result = List();
+        def nonVoidTypes = List();
         foreach (field when field.IsTypeEvaluated in fields)
         {
           when (field.Type is RuleTypeSymbol as t)
           unless (t is RuleVoidTypeSymbol)
-            result.Add(t);
+            nonVoidTypes.Add(t);
         }
-        result
+        TypeParseTreePatternCtor(loc, members, nonVoidTypes, returnType)
       }
-
-      match (expectedType)
+      else
       {
-        | RuleTupleTypeSymbol(IsElemTypesEvaluated = true, ElemTypes = expectedMembers)
-        | SyntaxRuleSymbol(IsFieldsEvaluated = true, Fields = fields) with expectedMembers = getNonVoidFieldTypes(fields) =>
-          def expectedCount = expectedMembers.Count;
-          def existingCount = members.Count;
-          if (existingCount == expectedCount)
-          {
-            foreach (memberExpectedType in expectedMembers with index)
-              members[index].ExpectedType = memberExpectedType;
-          }
-          else
-            loc.Error($"Expected tuple pattern of $expectedCount, got tuple pattern of $existingCount.");
-
-        | _ => loc.Error($"Expected syntax rule of parse tree tuple, got '$expectedType'");
+        def args = array(members.Count);
+        foreach (m in members with index)
+        {
+          def typeVar = CreateRuleTypeVar(context);
+          args[index] = typeVar;
+          m.ExpectedType = typeVar;
+        }
+        CreateTupleRuleType(args, context)
       }
+    }
+
+    public TypeParseTreePatternCtor(loc : IAst, members : Nitra.Ast.ParseTreePattern.IAstList, expectedMemberTypes : IList[TypeSymbol], returnType : TypeSymbol) : TypeSymbol
+    {
+      if (members.Count == expectedMemberTypes.Count)
+      {
+        foreach (type in expectedMemberTypes with index)
+          members[index].ExpectedType = type;
+      }
+      else
+        loc.Error($"Expected pattern of $(expectedMemberTypes.Count), got pattern of $(members.Count).");
+
+      returnType
     }
 
     public IsSubtypeOf(this symbol1 : TypeSymbol, symbol2 : TypeSymbol) : bool
@@ -349,7 +366,7 @@ namespace Nitra
 
     public TypeOptionExpression(loc : ILocated, expectedType : TypeSymbol, context : DependentPropertyEvalContext) : TypeSymbol
     {
-      def t = CreateOptionAstType(loc, AstTypeVarSymbol(), context);
+      def t = CreateOptionAstType(loc, CreateAstTypeVar(context), context);
       _ = AstTypeUnifier.Instance.Unify(t, expectedType);
       t
     }
