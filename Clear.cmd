@@ -12,6 +12,8 @@ set RemoveCmd=rmdir /S /Q
 %RemoveCmd% Grammars\Samples\Calculator\Sample.Calc.Quotation\bin\
 %RemoveCmd% Grammars\Samples\Calculator\Sample.Calc.Quotation\obj\
 %RemoveCmd% Grammars\Samples\Calculator\Sample.Num\obj\
+%RemoveCmd% Nitra\DotNetLang\bin\
+%RemoveCmd% Nitra\DotNetLang\obj\
 %RemoveCmd% Nitra\Nitra\bin\
 %RemoveCmd% Nitra\Nitra\obj\
 %RemoveCmd% Nitra\Nitra.Compiler\obj\
