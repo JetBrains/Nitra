@@ -665,6 +665,10 @@ namespace Nitra.Visualizer
 
         SpanInfos.Add(new SpanInfo(span, spanClass));
       }
+
+      public void Visit(IRef r)
+      {
+      }
     }
 
     private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)
