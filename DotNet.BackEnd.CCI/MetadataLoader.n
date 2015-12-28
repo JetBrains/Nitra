@@ -1,0 +1,160 @@
+﻿using DotNet;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra;
+using Nitra.Declarations;
+using Nitra.ProjectSystem;
+
+using Microsoft.Cci;
+
+using System;
+using System.IO;
+using System.Diagnostics;
+using System.Collections.Generic;
+using System.Linq;
+
+using NRB = Nitra.Declarations;
+
+namespace Nitra.BackEnd.Cci
+{
+  [Record]
+  public class MetadataHost
+  {
+    public CciHost : IMetadataHost { get; protected set; }
+    
+    public this() { this(PeReader.DefaultHost()) }
+    
+    public LoadExternalSymbols(project : Project, context : DependentPropertyEvalContext) : NamespaceSymbol
+    {
+      //def nodeToSymbolMap   = Hashtable.[TypeInfo, TypeSymbol]();
+      def noFile = SourceSnapshot.Default.File;
+      def noSpan = NSpan(0);
+      def noLoc  = Location(noFile, noSpan);
+      def rootNamespace = NamespaceSymbol();
+      rootNamespace.MemberTable = TableScope("<root namespace>", rootNamespace);
+      rootNamespace.DeclaredIn  = null;
+      rootNamespace.FullName    = "";
+      def libs = project.Libs;
+      def createTypeParameters(cciType : ITypeDefinition) : array[TypeParameterSymbol]
+      {
+        def count = cciType.GenericParameterCount : int;
+        if (count == 0)
+          AstUtils.NoTypeParameters
+        else
+        {
+          def result = array(count);
+          foreach (tp in cciType.GenericParameters with i)
+          {
+            def name  = NRB.Name(noFile, noSpan, tp.Name.Value); // TODO: type.Name.UniqueKey
+            def tps   = TypeParameterDeclaration(name, tp).DefineSymbol();
+            tps.EvalProperties(context);
+            result[i] = tps;
+          }
+          result
+        }
+      }
+      def makeTypeParameters(symbol : GenericTypeSymbol, cciType : ITypeDefinition) : void
+      {
+        unless (symbol.IsTypeParametersCountEvaluated)
+          symbol.TypeParametersCount = cciType.GenericParameterCount;
+        unless (symbol.IsTypeParametersEvaluated)
+          symbol.TypeParameters = createTypeParameters(cciType);
+      }
+      
+      def host = CciHost;
+      
+      foreach(lib in libs)
+      {
+        | name is FullNameLibReference with filePath = name.Path
+        | file is FileLibReference     with filePath = file.Path =>
+          def fullPath = Path.GetFullPath(IO.Path.Combine(project.ProjectDir, filePath));
+            
+          when (!File.Exists(fullPath))
+          {
+            project.CompilerMessages.Error(noLoc, "The referenced file '" + fullPath + "' is not found.");
+            continue;
+          }
+            
+          def unit = host.LoadUnitFrom(fullPath) :> IAssembly;
+          
+          when (unit == null || unit.Equals(Dummy.Module) || unit.Equals(Dummy.Assembly))
+          {
+            project.CompilerMessages.Error(noLoc, "The referenced file '" + fullPath + "' is not .Net assembly.");
+            continue;
+          }
+          
+          def loadNsMember(member : INamespaceMember, declaredIn : NamespaceSymbol) : void
+          {
+            match (member)
+            {
+              | type is INamespaceTypeDefinition =>
+                def name = Name(noFile, noSpan, type.Name.Value); // TODO: type.Name.UniqueKey
+                def symbol : NamespaceMemberDeclarationSymbol =
+                         if (type.IsDelegate)  ExternalTypeDeclaration.[TopDelegateSymbol] (name, type).DefineSymbol(declaredIn.MemberTable) 
+                    else if (type.IsInterface) ExternalTypeDeclaration.[TopInterfaceSymbol](name, type).DefineSymbol(declaredIn.MemberTable)
+                    else if (type.IsValueType) ExternalTypeDeclaration.[TopStructSymbol]   (name, type).DefineSymbol(declaredIn.MemberTable)
+                    else if (type.IsEnum)      ExternalTypeDeclaration.[TopEnumSymbol]     (name, type).DefineSymbol(declaredIn.MemberTable)
+                    else                       ExternalTypeDeclaration.[TopClassSymbol]    (name, type).DefineSymbol(declaredIn.MemberTable);
+                
+                when (symbol is TopGenericTypeSymbol as genericSymbol)
+                  makeTypeParameters(genericSymbol, type);
+                unless (symbol.IsDeclaredInEvaluated)
+                  symbol.DeclaredIn = declaredIn;
+                //nodeToSymbolMap[tycon] = symbol;
+                symbol.Scope = EmptyScope.Instance; // TODO: fill with type members
+                symbol.EvalProperties(context);
+                      
+              | cciNs is INamespaceDefinition => //loadNsMembers(ns, nsSymbol.MemberTable)
+                def name   = NRB.Name(noFile, noSpan, cciNs.Name.Value); // TODO: ns.Name.UniqueKey
+                def symbol = ExternalNamespaceDeclaration(name, cciNs).DefineSymbol(declaredIn.MemberTable);
+                unless (symbol.IsDeclaredInEvaluated)
+                  symbol.DeclaredIn = declaredIn;
+                symbol.EvalProperties(context);
+                foreach (subMember in cciNs.Members)
+                  loadNsMember(subMember, symbol);
+                
+              | _ => {}
+            }
+          }
+              
+          foreach (subMember in unit.NamespaceRoot.Members)
+            loadNsMember(subMember, rootNamespace);
+            
+        | _ => throw NotImplementedException("Loading types from " + lib + " not supported yet.")
+      }
+      
+      rootNamespace
+    }
+  }
+
+  [Record]
+  class ExternalNamespaceDeclaration : ExternalDeclaration[NamespaceSymbol]
+  {
+    public Namespace : INamespaceDefinition { get; private set; }
+    public override CreateSymbol() : DeclarationSymbol { NamespaceSymbol() }
+  }
+  
+  interface IExternalTypeDeclaration
+  {
+    Type : INamespaceTypeDefinition { get; }
+  }
+
+  [Record]
+  class ExternalTypeDeclaration[TSymbol] : ExternalDeclaration[TSymbol], IExternalTypeDeclaration
+    where TSymbol : DeclarationSymbol
+  {
+    public Type : INamespaceTypeDefinition { get; private set; }
+  }
+
+  [Record]
+  class TypeParameterDeclaration : ExternalDeclaration[TypeParameterSymbol]
+  {
+    public TypeParam : IGenericTypeParameter;
+    public override CreateSymbol() : DeclarationSymbol { TypeParameterSymbol() }
+  }
+}
