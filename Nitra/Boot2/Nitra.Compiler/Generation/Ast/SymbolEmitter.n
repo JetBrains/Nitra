@@ -21,12 +21,14 @@ namespace Nitra.Compiler
     private         _symbol      : SymbolSymbol;
     private mutable _tb          : TypeBuilder;
     private         _serializationEmitter : BinarySerializationEmitter;
+    private         _ownerEmitter         : AstEmitter;
 
-    public this(environment : EmitterEnvironment, symbol : SymbolSymbol, serializationEmitter : BinarySerializationEmitter)
+    public this(environment : EmitterEnvironment, symbol : SymbolSymbol, serializationEmitter : BinarySerializationEmitter, ownerEmitter : AstEmitter)
     {
       Environment           = environment;
       _symbol               = symbol;
       _serializationEmitter = serializationEmitter;
+      _ownerEmitter         = ownerEmitter;
     }
 
     public DefineTypes() : void
@@ -40,7 +42,7 @@ namespace Nitra.Compiler
         match(_symbol)
         {
           | ParsedAbstractSymbolSymbol =>
-            _tb = nemerleEnv.Define(<[ decl:
+            _tb = CreateTypeBuilder(nemerleEnv, _ownerEmitter, <[ decl:
               public partial interface $(_symbol.Name : usesite) : ..$(MakeSymbolClassBaseTypes())
               {
                 new Declarations : System.Collections.Generic.IEnumerable[$(astType : typed)] { get; }
@@ -48,8 +50,8 @@ namespace Nitra.Compiler
             ]>);
 
           | ParsedSimpleSymbolSymbol =>
-            _tb = nemerleEnv.Define(<[ decl:
-              public partial class $(_symbol.Name : usesite) : ..$(MakeSymbolClassBaseTypes(<[ Nitra.Declarations.SymbolBase ]>))
+            _tb = CreateTypeBuilder(nemerleEnv, _ownerEmitter, <[ decl:
+              public partial class $(_symbol.Name : usesite) : ..$(MakeSymbolClassBaseTypes(<[ $(Environment.SymbolBaseTypeVar : typed) ]>))
               {
                 public this() { }
 
@@ -83,26 +85,7 @@ namespace Nitra.Compiler
             | _ => assert(false)
           }
 
-        | ParsedSimpleSymbolSymbol as symbol =>
-          foreach ((identifier, expr) in symbol.BuiltInMethods)
-          {
-            Util.locate(identifier.NLocation(),
-            {
-              def (returnType, parms) =
-                match (identifier.Value)
-                {
-                  | "CanMerge" | "IsSameIdentity" => (<[ bool ]>,   [<[ parameter: $("candidate" : global) : Nitra.Declarations.Declaration ]>])
-                  | "AfterStage"                  => (<[ void ]>,   [<[ parameter: $("stage" : global) : int ]>])
-                  | "ToXaml"                      => (<[ string ]>, [])
-                  | "ToString"                    => (<[ string ]>, [])
-                  | "GetHashCode"                 => (<[ int ]>,    [])
-                  | "Equals"                      => (<[ bool ]>,   [<[ parameter: $("other": global) : object ]>])
-                  | _ => assert(false, "Unknown built-in method name")
-                };
-              _tb.Define(<[ decl: public override $(identifier.Value : usesite)(..$parms) : $returnType { IgnoreParams(); $expr } ]>)
-            });
-          }
-
+        | ParsedSimpleSymbolSymbol =>
           foreach (s in _symbol.AllProperties)
           {
             | DependentPropertySymbol as propertySymbol =>
@@ -111,7 +94,7 @@ namespace Nitra.Compiler
               def bitKey = if (propertySymbol.OverrideProperty is SymbolRef.Some(DependentPropertySymbol as originalPropertySymbol)) originalPropertySymbol else propertySymbol;
               _dependentPropBits.Add(bitKey, bit);
 
-              DefineDependentProperty(_tb, propertySymbol, bit, mask, NemerleModifiers.Public | NemerleModifiers.Virtual);
+              DefineDependentProperty(_tb, propertySymbol, bit, mask, NemerleModifiers.Public | NemerleModifiers.Virtual, acceptVisitorBody = null);
 
             | _ => assert(false)
           }
@@ -129,7 +112,17 @@ namespace Nitra.Compiler
         | ParsedAbstractSymbolSymbol =>
           DefineDependentPropertiesInheritableEvaluation(_tb, _symbol);
 
-        | ParsedSimpleSymbolSymbol =>
+        | ParsedSimpleSymbolSymbol(BuiltInMethods = methodOverrides) =>
+          foreach ((identifier, expr) in methodOverrides)
+          {
+            Util.locate(identifier.NLocation(),
+            {
+              def [IMethod as method] = Environment.SymbolBaseTypeInfo.LookupMember(identifier.Value);
+              def parms = method.GetParameters().Map(p => <[ parameter: $(p.Name : global) : $(p.Type : typed) ]>);
+              _tb.Define(<[ decl: public override $(identifier.Value : usesite)(..$parms) : $(method.ReturnType : typed) { IgnoreParams(); $expr } ]>);
+            });
+          }
+
           DefineDependentPropertiesSealedEvaluation(_tb, _symbol, _dependentPropBits, SCG.Dictionary());
           DefinePropertiesEvalState(_tb, null);
           DefineResetPropertiesMethod(_tb, null);
