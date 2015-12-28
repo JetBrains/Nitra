@@ -1,4 +1,5 @@
 ﻿using Nitra;
+using Nitra.BackEnd.Cci;
 using Nitra.Declarations;
 using Nitra.Internal;
 using Nitra.ProjectSystem;
@@ -7,6 +8,7 @@ using DotNet;
 
 using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -14,98 +16,81 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
+using NRB = Nitra.Declarations;
+
 namespace CSharp
 {
   public partial class CompilationUnit : AstBase, IProjectSupport, NamespaceBody
   {
-    public RefreshReferences(project : Project) : void { IgnoreParams(); }
+    public RefreshReferences(project : Project) : void
+    {
+      def noFile           = SourceSnapshot.Default.File;
+      def noSpan           = NSpan(0);
+      def noTypeParameters = array(0);
+      def bindNs(scope : Scope, name : string) : Ref[NamespaceSymbol]
+      {
+        scope.Bind.[NamespaceSymbol](Reference(noFile, noSpan, name))
+      }
+      def bindType(scope : Scope, name : string) : Ref[TopGenericTypeSymbol]
+      {
+        scope.Bind.[TopGenericTypeSymbol](Reference(noFile, noSpan, name))
+      }
+      def defineAlias(context : DependentPropertyEvalContext, systemNs : NamespaceSymbol, declaredIn : NamespaceSymbol, name : string, aliasName : string) : void
+      {
+        def symbolRef  = bindType(systemNs.Scope, name);
+        unless (symbolRef.IsSymbolEvaluated)
+          return;
+          
+        def symbol     = symbolRef.Symbol;
+        def decl       = symbol.FirstDeclarationOrDefault :> IExternalTypeDeclaration;
+        def aliasDecl  = ExternalTypeDeclaration.[TypeAliasSymbol](NRB.Name(noFile, noSpan, aliasName), decl.Type);
+        def alias      = aliasDecl.DefineSymbol(declaredIn.MemberTable);
+        alias.TypeParametersCount = 0;
+        alias.TypeParameters      = noTypeParameters;
+        alias.DeclaredIn          = declaredIn;
+        alias.EvalProperties(context);
+      }
+
+      def backEnd = CciBackEnd();
+      def context = DependentPropertyEvalContext();
+      def rootNamespace = backEnd.LoadExternalSymbols(project, context);
+      def systemNsRef = bindNs(rootNamespace.Scope, "System");
+      when (systemNsRef.IsSymbolEvaluated)
+      {
+        def systemNs = systemNsRef.Symbol;
+      
+        defineAlias(context, systemNs, rootNamespace, "Object",  "object");
+        defineAlias(context, systemNs, rootNamespace, "Void",    "void");
+        defineAlias(context, systemNs, rootNamespace, "String",  "string");
+        defineAlias(context, systemNs, rootNamespace, "Boolean", "bool");
+        defineAlias(context, systemNs, rootNamespace, "Byte",    "byte");
+        defineAlias(context, systemNs, rootNamespace, "SByte",   "sbyte");
+        defineAlias(context, systemNs, rootNamespace, "Int16",   "short");
+        defineAlias(context, systemNs, rootNamespace, "UInt16",  "ushort");
+        defineAlias(context, systemNs, rootNamespace, "Int32",   "int");
+        defineAlias(context, systemNs, rootNamespace, "UInt32",  "uint");
+        defineAlias(context, systemNs, rootNamespace, "Int64",   "long");
+        defineAlias(context, systemNs, rootNamespace, "UInt64",  "ulong");
+        defineAlias(context, systemNs, rootNamespace, "Single",  "float");
+        defineAlias(context, systemNs, rootNamespace, "Double",  "double");
+        defineAlias(context, systemNs, rootNamespace, "Decimal", "decimal");
+        defineAlias(context, systemNs, rootNamespace, "Char",    "char");
+      }
+
+      project.Data = (backEnd, context, rootNamespace);
+    }
+    
     public RefreshProject(project : Project) : void
     {
       when (project.Data == null)
         RefreshReferences(project);
 
-      def context       = DependentPropertyEvalContext();
-      def rootNamespace = NamespaceSymbol();
-      rootNamespace.MemberTable = TableScope("<root namespace>", rootNamespace);
-      rootNamespace.DeclaredIn = null;
-      rootNamespace.FullName = "";
-
-      CreateBuiltInSymbols(rootNamespace, context);
+      def (_backEnd, context, rootNamespace) = project.Data :> CciBackEnd * DependentPropertyEvalContext * NamespaceSymbol;
 
       def evalHost = CSharpProjectEvalPropertiesHost(project, rootNamespace);
       evalHost.EvalProperties(context, "SymbolHierarchy", 0);
       evalHost.EvalProperties(context, "Scopes", 1);
       evalHost.EvalProperties(context, "Type bodies binding", 2);
-    }
-
-    private static CreateBuiltInSymbols(rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : void
-    {
-      def initNamespace(declaredIn : NamespaceSymbol, symbol : NamespaceSymbol)
-      {
-        symbol.DeclaredIn  = declaredIn;
-        symbol.FullName    = AstUtils.MakeNamespaceFullName(declaredIn.FullName, symbol.Name);
-        symbol.MemberTable = TableScope(symbol.ToString(), symbol);
-      }
-
-      def initType[TSymbol](declaredIn : NamespaceSymbol, symbol : TSymbol, baseType : TypeSymbol) : void
-        where TSymbol : GenericContainerTypeSymbol, NamespaceMemberDeclarationSymbol
-      {
-        symbol.DeclaredIn          = declaredIn;
-        symbol.FullName            = AstUtils.MakeNamespaceFullName(declaredIn.FullName, symbol.Name);
-        symbol.MemberTable         = TableScope(symbol.ToString(), symbol);
-        symbol.IsPartial           = false;
-        symbol.BaseTypeSet         = BaseTypeReferenceSet(context);
-        symbol.TypeParametersCount = 0;
-        symbol.Flags               = ModifierSet(context);
-
-        symbol.Flags.Add(Modifiers.Public);
-        when (baseType : object != null)
-          symbol.BaseTypeSet.AddParent(baseType);
-      }
-
-      def systemNamespace = CreateBuiltInSymbol.[NamespaceSymbol](rootNamespace, "System", context, initNamespace);
-      def objectClass     = CreateBuiltInSymbol.[TopClassSymbol](systemNamespace, "Object", context, initType(_, _, null));
-      def valueTypeStruct = CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "ValueType", context, initType(_, _, objectClass));
-
-      def initClass(parent : NamespaceSymbol, symbol : TopClassSymbol) : void { initType(parent, symbol, objectClass) }
-      def initStruct(parent : NamespaceSymbol, symbol : TopStructSymbol) : void { initType(parent, symbol, valueTypeStruct) }
-
-      def makeAlias(typeSymbol : TypeSymbol, alias : string) : void
-      {
-        _ = CreateBuiltInSymbol.[BuiltInTypeAliasSymbol](rootNamespace, alias, context,
-          fun(_, aliasSymbol)
-          {
-            aliasSymbol.Replacement = Ref.Some(SourceSnapshot.Default.File, NSpan(0), typeSymbol);
-          });
-      }
-
-      makeAlias(objectClass, "object");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "Void", context, initStruct), "void");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "Boolean", context, initStruct), "bool");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "Byte", context, initStruct), "byte");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "SByte", context, initStruct), "sbyte");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "Int16", context, initStruct), "short");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "UInt16", context, initStruct), "ushort");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "Int32", context, initStruct), "int");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "UInt32", context, initStruct), "uint");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "Int64", context, initStruct), "long");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "UInt64", context, initStruct), "ulong");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "Single", context, initStruct), "float");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "Double", context, initStruct), "double");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "Decimal", context, initStruct), "decimal");
-      makeAlias(CreateBuiltInSymbol.[TopStructSymbol](systemNamespace, "Char", context, initStruct), "char");
-      makeAlias(CreateBuiltInSymbol.[TopClassSymbol](systemNamespace, "String", context, initClass), "string");
-      makeAlias(CreateBuiltInSymbol.[TopClassSymbol](rootNamespace, "#Dynamic", context, initClass), "dynamic");
-    }
-
-    private static CreateBuiltInSymbol[TSymbol](parent : NamespaceSymbol, nameText : string, context : DependentPropertyEvalContext, init : NamespaceSymbol * TSymbol -> void) : TSymbol
-      where TSymbol : DeclarationSymbol, new()
-    {
-      def name   = Name(SourceSnapshot.Default.File, NSpan(), nameText);
-      def symbol = ExternalDeclaration.[TSymbol](name).DefineSymbol(parent.MemberTable);
-      init(parent, symbol);
-      symbol.EvalProperties(context);
-      symbol
     }
   }
 
