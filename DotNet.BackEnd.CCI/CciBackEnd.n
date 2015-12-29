@@ -31,7 +31,7 @@ namespace Nitra.BackEnd.Cci
     
     public LoadExternalSymbols(project : Project, context : DependentPropertyEvalContext) : NamespaceSymbol
     {
-      //def nodeToSymbolMap   = Hashtable.[TypeInfo, TypeSymbol]();
+      def nodeToSymbolMap   = Hashtable.[ITypeDefinition, TypeSymbol]();
       def noFile = SourceSnapshot.Default.File;
       def noSpan = NSpan(0);
       def noLoc  = Location(noFile, noSpan);
@@ -93,7 +93,7 @@ namespace Nitra.BackEnd.Cci
           {
             match (member)
             {
-              | type is INamespaceTypeDefinition =>
+              | type is INamespaceTypeDefinition when type.IsPublic =>
                 def name = Name(noFile, noSpan, type.Name.Value); // TODO: type.Name.UniqueKey
                 def symbol : NamespaceMemberDeclarationSymbol =
                          if (type.IsDelegate)  ExternalTypeDeclaration.[TopDelegateSymbol] (name, type).DefineSymbol(declaredIn.MemberTable) 
@@ -106,7 +106,7 @@ namespace Nitra.BackEnd.Cci
                   makeTypeParameters(genericSymbol, type);
                 unless (symbol.IsDeclaredInEvaluated)
                   symbol.DeclaredIn = declaredIn;
-                //nodeToSymbolMap[tycon] = symbol;
+                nodeToSymbolMap[type] = symbol :> TypeSymbol;
                 symbol.Scope = EmptyScope.Instance; // TODO: fill with type members
                 symbol.EvalProperties(context);
                       
@@ -128,6 +128,93 @@ namespace Nitra.BackEnd.Cci
             
         | _ => throw NotImplementedException("Loading types from " + lib + " not supported yet.")
       }
+
+      assert(true);
+      def singleDimensionArray = SingleDimensionArraySymbol();
+      singleDimensionArray.TypeParametersCount = 0;
+      singleDimensionArray.EvalProperties(context);
+      def cciObject = host.PlatformType.SystemObject.ResolvedType;
+      mutable objectSymbol;
+      unless (nodeToSymbolMap.TryGetValue(cciObject, out objectSymbol))
+        return rootNamespace;
+      
+      def makeSymbol(cciTypeReference : ITypeReference) : TypeSymbol
+      {
+        | t is IGenericTypeParameter =>
+          def typeInfo = makeSymbol(t.DefiningType) :> GenericTypeSymbol;
+          def tp = typeInfo.TypeParameters[t.Index];
+          tp
+          
+        | t is IArrayTypeReference =>
+          def args = array[makeSymbol(t.ElementType)];
+          def typeInfo = if (t.IsVector) singleDimensionArray : ArraySymbol
+                         else 
+                         {
+                           def a = MultiDimensionArraySymbol();
+                           a.TypeParametersCount = 0;
+                           a.Rank        = t.Rank;
+                           //a.LowerBounds = t.LowerBounds.ToArray();
+                           //a.Sizes       = t.Sizes.ToArray();
+                           a.EvalProperties(context);
+                           a
+                         };
+          def constructedType = TopConstructedTypeSymbol();
+          constructedType.TypeInfo = typeInfo;
+          constructedType.Args = args;
+          constructedType.EvalProperties(context);
+          constructedType
+        
+        | t is ITypeDefinition =>
+          def nodeToSymbolMap = nodeToSymbolMap;
+          mutable typeSymbol;
+          if (nodeToSymbolMap.TryGetValue(t, out typeSymbol))
+          {
+            typeSymbol
+          }
+          else
+          {
+            // the type definition not found
+            objectSymbol
+          }
+          
+        | t is IGenericTypeInstanceReference =>
+          def typeInfo = makeSymbol(t.GenericType) :> GenericTypeSymbol;
+          def args = t.GenericArguments.Select(makeSymbol).ToArray();
+
+          def constructedType = TopConstructedTypeSymbol();
+          constructedType.TypeInfo = typeInfo;
+          constructedType.Args = args;
+          constructedType.EvalProperties(context);
+          constructedType
+               
+        | _ =>
+          def nodeToSymbolMap = nodeToSymbolMap;
+          mutable typeSymbol;
+          if (nodeToSymbolMap.TryGetValue(cciTypeReference.ResolvedType, out typeSymbol))
+          {
+            typeSymbol
+          }
+          else
+          {
+            objectSymbol
+          }
+      }
+            
+      foreach (x in nodeToSymbolMap)
+      {
+        def cciType = x.Key;
+        when (x.Value is SupportsInheritanceTypeSymbol as type)
+        {
+          type.BaseTypeSet = BaseTypeReferenceSet(context);
+          foreach (cciBaseClasse in cciType.BaseClasses)
+          {
+            def typeSymbol = makeSymbol(cciBaseClasse);
+            type.BaseTypeSet.AddParent(typeSymbol);
+          }
+        }
+      }
+
+      assert(true);
       
       rootNamespace
     }

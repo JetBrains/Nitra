@@ -39,6 +39,8 @@ namespace Nitra.ViewModels
 
     readonly string _rootPath;
 
+    private static LibReference[] AllLibs;
+
     public TestSuiteVm(SolutionVm solution, string name, string config)
       : base(solution, Path.Combine(solution.RootFolder, name))
     {
@@ -75,7 +77,13 @@ namespace Nitra.ViewModels
 
         Assemblies = assemblyRelativePaths.Values.ToArray();
 
-        Libs = languageAndExtensions.Item3;
+        if (AllLibs == null)
+        {
+          var asms = AppDomain.CurrentDomain.GetAssemblies();
+          AllLibs = asms.Where(a => !a.IsDynamic && File.Exists(a.Location)).Select(a => (LibReference)new FileLibReference(a.Location)).ToArray();
+        }
+
+        Libs = AllLibs;//languageAndExtensions.Item3;
 
         var indent = Environment.NewLine + "  ";
         var para = Environment.NewLine + Environment.NewLine;
