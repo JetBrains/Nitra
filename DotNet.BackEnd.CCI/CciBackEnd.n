@@ -25,16 +25,20 @@ namespace Nitra.BackEnd.Cci
   [Record]
   public class CciBackEnd : IBackEnd
   {
+    public static NoLoc : Location = Location(SourceSnapshot.Default.File, NSpan(0));
     public CciHost : IMetadataHost { get; protected set; }
     
     public this() { this(PeReader.DefaultHost()) }
     
     public LoadExternalSymbols(project : Project, context : DependentPropertyEvalContext) : NamespaceSymbol
     {
-      def keyToSymbolMap    = Hashtable.[uint, TypeSymbol]();
-      def noFile = SourceSnapshot.Default.File;
-      def noSpan = NSpan(0);
-      def noLoc  = Location(noFile, noSpan);
+      Debug.WriteLine("LoadExternalSymbols started");
+      
+      def timer = Stopwatch.StartNew();
+      def cciInternedKeyToSymbolMap = Hashtable.[uint, TypeSymbol]();
+      def noLoc  = NoLoc;
+      def noFile = noLoc.Source.File;
+      def noSpan = noLoc.Span;
       def rootNamespace = NamespaceSymbol();
       rootNamespace.MemberTable = TableScope("<root namespace>", rootNamespace);
       rootNamespace.DeclaredIn  = null;
@@ -122,7 +126,7 @@ namespace Nitra.BackEnd.Cci
                 unless (symbol.IsDeclaredInEvaluated)
                   symbol.DeclaredIn = declaredIn;
                 def typeSymbol = symbol :> TypeSymbol;
-                keyToSymbolMap[type.InternedKey] = typeSymbol; 
+                cciInternedKeyToSymbolMap[type.InternedKey] = typeSymbol; 
                 symbol.Scope = EmptyScope.Instance; // TODO: fill with type members
                 symbol.EvalProperties(context);
                       
@@ -145,14 +149,33 @@ namespace Nitra.BackEnd.Cci
         | _ => throw NotImplementedException("Loading types from " + lib + " not supported yet.")
       }
 
+      Debug.WriteLine($"Read external symbols took: $(timer.Elapsed)");
+            
+      InitBaseTypeSet(context, cciInternedKeyToSymbolMap);
+      
+      Debug.WriteLine($"Total of LoadExternalSymbols took: $(timer.Elapsed)");
+
+      rootNamespace
+    }
+    
+    public Dispose() : void
+    {
+      when ((CciHost : object) is IDisposable as d)
+        d.Dispose();
+    }
+    
+    InitBaseTypeSet(context : DependentPropertyEvalContext, cciInternedKeyToSymbolMap : Hashtable[uint, TypeSymbol]) : void
+    {
+      def host   = CciHost;
+      
       assert(true);
       def singleDimensionArray = SingleDimensionArraySymbol();
       singleDimensionArray.TypeParametersCount = 0;
       singleDimensionArray.EvalProperties(context);
       def cciObject = host.PlatformType.SystemObject.ResolvedType;
       mutable objectSymbol;
-      unless (keyToSymbolMap.TryGetValue(cciObject.InternedKey, out objectSymbol))
-        return rootNamespace;
+      unless (cciInternedKeyToSymbolMap.TryGetValue(cciObject.InternedKey, out objectSymbol))
+        return;
       def timer = Stopwatch.StartNew();
       mutable resolvs = 0;
       mutable resolvedByKey = 0;
@@ -168,16 +191,16 @@ namespace Nitra.BackEnd.Cci
         | t is IArrayTypeReference =>
           def args = array[makeSymbol(t.ElementType)];
           def typeInfo = if (t.IsVector) singleDimensionArray : ArraySymbol
-                         else 
-                         {
-                           def a = MultiDimensionArraySymbol();
-                           a.TypeParametersCount = 0;
-                           a.Rank        = t.Rank;
-                           //a.LowerBounds = t.LowerBounds.ToArray();
-                           //a.Sizes       = t.Sizes.ToArray();
-                           a.EvalProperties(context);
-                           a
-                         };
+                          else 
+                          {
+                            def a = MultiDimensionArraySymbol();
+                            a.TypeParametersCount = 0;
+                            a.Rank        = t.Rank;
+                            //a.LowerBounds = t.LowerBounds.ToArray();
+                            //a.Sizes       = t.Sizes.ToArray();
+                            a.EvalProperties(context);
+                            a
+                          };
           def constructedType = TopConstructedTypeSymbol();
           constructedType.TypeInfo = typeInfo;
           constructedType.Args = args;
@@ -185,9 +208,9 @@ namespace Nitra.BackEnd.Cci
           constructedType
         
         | t is ITypeDefinition =>
-          def keyToSymbolMap = keyToSymbolMap;
+          def cciInternedKeyToSymbolMap = cciInternedKeyToSymbolMap;
           mutable typeSymbol;
-          if (keyToSymbolMap.TryGetValue(t.InternedKey, out typeSymbol))
+          if (cciInternedKeyToSymbolMap.TryGetValue(t.InternedKey, out typeSymbol))
           {
             typeSymbol
           }
@@ -209,10 +232,10 @@ namespace Nitra.BackEnd.Cci
                
         | _ =>
           resolvs++;
-          def keyToSymbolMap = keyToSymbolMap;
+          def cciInternedKeyToSymbolMap = cciInternedKeyToSymbolMap;
           mutable typeSymbol;
           
-          if (keyToSymbolMap.TryGetValue(cciTypeReference.InternedKey, out typeSymbol))
+          if (cciInternedKeyToSymbolMap.TryGetValue(cciTypeReference.InternedKey, out typeSymbol))
           {
             resolvedByKey++;
             typeSymbol
@@ -223,7 +246,7 @@ namespace Nitra.BackEnd.Cci
           }
       }
             
-      foreach (x in keyToSymbolMap.Values)
+      foreach (x in cciInternedKeyToSymbolMap.Values)
       {
         def cciType = (x.FirstDeclarationOrDefault :> IExternalTypeDeclaration).Type;
         when (x is SupportsInheritanceTypeSymbol as type)
@@ -243,12 +266,11 @@ namespace Nitra.BackEnd.Cci
         }
       }
 
-      Debug.WriteLine($"Took: $(timer.Elapsed) resolvs=$resolvs, resolvedByKey=$resolvedByKey, resolvedByResolvedTypeProp=$resolvedByResolvedTypeProp");
+      Debug.WriteLine($"InitBaseTypeSet took: $(timer.Elapsed) resolvs=$resolvs, resolvedByKey=$resolvedByKey, resolvedByResolvedTypeProp=$resolvedByResolvedTypeProp");
       assert(true);
-      
-      rootNamespace
     }
   }
+  
 
   [Record]
   public class ExternalNamespaceDeclaration : ExternalDeclaration[NamespaceSymbol]
