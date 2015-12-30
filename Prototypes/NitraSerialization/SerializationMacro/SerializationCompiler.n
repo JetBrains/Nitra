@@ -1,0 +1,157 @@
+﻿using Nemerle;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Serialization
+{
+  public sealed class SerializationCompiler
+  {
+    public Manager              : ManagerClass             { get; }
+    public Formatter            : SerializationFormatter   { get; }
+    public SerializationFactory : TypeSerializationFactory { get; }
+    public HelperTb             : TypeBuilder              { get { _helperTb } }
+    public HelperTypeVar        : FixedType                { get { _helperTypeVar } }
+
+    private mutable _helperTb        : TypeBuilder;
+    private mutable _helperTypeVar   : FixedType;
+    private         _helperName      : string;
+    private         _writeParameters : list[SerializationParameter];
+    private         _readParameters  : list[SerializationParameter];
+    private         _typesToProcess  : SCG.Queue[FixedType]                                = SCG.Queue();
+    private         _builders        : SCG.Dictionary[FixedType, TypeSerializationBuilder] = SCG.Dictionary();
+
+    public MappedMemberAttribute : TypeInfo
+    {
+      mutable _mappedMemberAttribute : TypeInfo;
+      get
+      {
+        when (_mappedMemberAttribute : object == null)
+          _mappedMemberAttribute = Manager.LookupTypeInfo("Nemerle.Internal.MappedMemberAttribute", 0);
+        _mappedMemberAttribute
+      }
+    }
+
+    public this(
+      manager              : ManagerClass,
+      formatter            : SerializationFormatter,
+      serializationFactory : TypeSerializationFactory,
+      writeParameters      : list[SerializationParameter] = null,
+      readParameters       : list[SerializationParameter] = null,
+      helperName           : string = null)
+    {
+      Manager              = manager;
+      Formatter            = formatter;
+      SerializationFactory = serializationFactory;
+      _helperName          = if (string.IsNullOrEmpty(helperName)) "SerializationHelper" else helperName;
+      _writeParameters     = writeParameters ?? [];
+      _readParameters      = readParameters  ?? [];
+    }
+
+    public EnqueueType(type : FixedType) : TypeSerializationBuilder
+    {
+      when (_helperTb : object == null)
+      {
+        def env        = Manager.CoreEnv.EnterIntoNamespace(["Nitra", "Internal"]);
+        _helperTb      = env.Define(<[ decl: internal partial module $(_helperName : usesite) { } ]>);
+        _helperTypeVar = _helperTb.GetMemType();
+      }
+
+      mutable builder;
+      unless (_builders.TryGetValue(type, out builder))
+      {
+        builder = SerializationFactory.CreateBuilder(this, type);
+        _builders.Add(type, builder);
+        _typesToProcess.Enqueue(type);
+      }
+      builder
+    }
+
+    public Emit() : void
+    {
+      when (_helperTb : object != null)
+      {
+        while (_typesToProcess.Count > 0)
+        {
+          def type    = _typesToProcess.Dequeue();
+          def builder = _builders[type];
+          builder.Emit();
+        }
+
+        _helperTb.Compile();
+      }
+    }
+
+    public CallWriteMethod(methodName : string, obj : PExpr) : PExpr
+    {
+      assert(_helperTypeVar : object != null);
+
+      def args = obj :: MakeArguments(Formatter.WriteParameters, MakeArguments(_writeParameters, []));
+      <[ $(_helperTypeVar : typed).$(methodName : global)(..$args) ]>
+    }
+
+    public DefineWriteMethod(methodName : string, type : FixedType, body : PExpr) : void
+    {
+      assert(_helperTb : object != null);
+
+      def parms =
+           <[ parameter: $("obj" : global) : $(type : typed) ]>
+        :: MakeParameters(Formatter.WriteParameters, MakeParameters(_writeParameters, []));
+
+      _helperTb.Define(<[ decl:
+        public $(methodName : usesite)(..$parms) : void
+        {
+          $body
+        }
+      ]>)
+    }
+
+    public CallReadMethod(methodName : string, memberName : PExpr, typeTag : PExpr) : PExpr
+    {
+      assert(_helperTypeVar : object != null);
+
+      def args = memberName :: typeTag :: MakeArguments(Formatter.ReadParameters, MakeArguments(_readParameters, []));
+      <[ $(_helperTypeVar : typed).$(methodName : global)(..$args) ]>
+    }
+
+    public DefineReadMethod(methodName : string, type : FixedType, body : PExpr) : void
+    {
+      assert(_helperTb : object != null);
+
+      def parms =
+           <[ parameter: $("memberName" : global) : System.String               ]>
+        :: <[ parameter: $("typeTag"    : global) : Nitra.Serialization.TypeTag ]>
+        :: MakeParameters(Formatter.ReadParameters, MakeParameters(_readParameters, []));
+
+      _helperTb.Define(<[ decl:
+        public $(methodName : usesite)(..$parms) : $(type : typed)
+        {
+          $body
+        }
+      ]>)
+    }
+
+    private static MakeParameters(parms : list[SerializationParameter], tail : list[PParameter]) : list[PParameter]
+    {
+      match (parms)
+      {
+        | []             => tail
+        | first :: other => <[ parameter: $(first.Name : global) : $(first.Type) ]> :: MakeParameters(other, tail)
+      }
+    }
+
+    private static MakeArguments(parms : list[SerializationParameter], tail : list[PExpr]) : list[PExpr]
+    {
+      match (parms)
+      {
+        | []             => tail
+        | first :: other => <[ $(first.Name : global) ]> :: MakeArguments(other, tail)
+      }
+    }
+  }
+}

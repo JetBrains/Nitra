@@ -1,0 +1,135 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Reflection;
+using System.Text.RegularExpressions;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Serialization
+{
+  [Record]
+  public class RecordTypeSerializationBuilder : ComplexTypeSerializationBuilder
+  {
+    public override Tag : TypeTag { get { TypeTag.Object } }
+
+    public sealed override Emit() : void
+    {
+      def members = GetMembers();
+      Compiler.DefineWriteMethod(WriteMethodName, Type, GetWriteBody(members));
+      Compiler.DefineReadMethod(ReadMethodName, Type, GetReadBody(members));
+    }
+
+    protected virtual GetMembers() : list[IMember * TypeSerializationBuilder]
+    {
+      def typeInfo  = Type.TypeInfo;
+      def members   = typeInfo.GetMembers(BindingFlags.Public | BindingFlags.Instance).Filter(m => m is IField || m is IProperty);
+      def memberMap = members.ToDictionary(m => m.Name);
+      def ctors     = typeInfo.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+
+      mutable result;
+
+      foreach (ctor in ctors)
+        when (ctor.IsCustomAttributeDefined("Nemerle.Internal.RecordCtorAttribute"))
+          when (result == null || ctor.Header.Parameters.Length > result.Header.Parameters.Length)
+            result = ctor;
+
+      def makeMember(p : TParameter) : IMember * TypeSerializationBuilder
+      {
+        match (p.AttributesAndModifiers.FindAttribute(Compiler.MappedMemberAttribute, Compiler.Manager.CoreEnv))
+        {
+          | Some(<[ $_($(name : string)) ]>) =>
+            def member               = memberMap[name];
+            def memberType           = Type.TypeOfMember(member).Fix();
+            def serializationBuilder = Compiler.EnqueueType(memberType);
+            (member, serializationBuilder)
+
+          | _ => assert3(false)
+        }
+      }
+
+      if (result == null)
+        []
+      else
+        result.Header.Parameters.Map(makeMember)
+    }
+
+    protected virtual GetWriteBody(members : list[IMember * TypeSerializationBuilder]) : PExpr
+    {
+      def formatter = Compiler.Formatter;
+      def buffer    = SCG.List();
+      WriteMembers(buffer, members, formatter);
+      <[ { ..$buffer } ]>
+    }
+
+    protected virtual GetReadBody(members : list[IMember * TypeSerializationBuilder]) : PExpr
+    {
+      def formatter = Compiler.Formatter;
+      def buffer    = SCG.List();
+      buffer.Add(formatter.TestTypeTag(<[ memberName ]>, <[ typeTag ]>, Tag));
+      ReadMembers(buffer, members, formatter, ctorArgs => <[ $(Type : typed)(..$ctorArgs) ]>);
+      <[ { ..$buffer } ]>
+    }
+
+    protected static WriteMembers(buffer : SCG.List[PExpr], members : list[IMember * TypeSerializationBuilder], formatter : SerializationFormatter) : void
+    {
+      foreach ((member, serializationBuilder) in members)
+      {
+        buffer.Add(formatter.WriteTag(serializationBuilder.Tag));
+        buffer.Add(formatter.WriteString(GetMemberName(member)));
+        buffer.Add(serializationBuilder.Write(<[ obj.$(member.Name : usesite) ]>));
+      }
+      buffer.Add(formatter.WriteEnd());
+    }
+
+    protected static ReadMembers(buffer : SCG.List[PExpr], members : list[IMember * TypeSerializationBuilder], formatter : SerializationFormatter, resultCtor : list[PExpr] -> PExpr) : void
+    {
+      def ctorArgs       = SCG.List();
+      def fieldNameCases = SCG.List();
+      foreach ((member, serializationBuilder) in members)
+      {
+        def varName = "____" + member.Name;
+        buffer.Add(<[ mutable $(varName : usesite) : $(serializationBuilder.Type : typed) ]>);
+        ctorArgs.Add(<[ $(varName : usesite) ]>);
+        def memberName = GetMemberName(member);
+        fieldNameCases.Add(<[ case: | $(memberName : string) => $(varName : usesite) = $(serializationBuilder.Read(<[ fieldName ]>, <[ typeTag ]>)) ]>)
+      }
+      fieldNameCases.Add(<[ case: | name => $(formatter.EmitFatalError(<[ "Unknown member '" + name + "'." ]>)) ]>);
+
+      buffer.Add(<[
+        def loop()
+        {
+          def typeTag = $(formatter.ReadTag());
+          when (typeTag != Nitra.Serialization.TypeTag.Empty)
+          {
+            def fieldName = $(formatter.ReadString());
+            match (fieldName)
+            {
+              ..$fieldNameCases
+            }
+            loop()
+          }
+        }
+      ]>);
+      buffer.Add(resultCtor(ctorArgs.ToNList()));
+    }
+
+    private static _extractNameRx : Regex = Regex(@"_N_((\w|\d|_)+)_\d+", RegexOptions.Compiled);
+
+    private static GetMemberName(member : IMember) : string
+    {
+      def res = _extractNameRx.Match(member.Name);
+
+      if (res.Success)
+        res.Groups[1].Value
+      else
+        member.Name
+    }
+  }
+}

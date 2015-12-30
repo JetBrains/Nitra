@@ -1,0 +1,68 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Serialization
+{
+  public sealed class VariantTypeSerializationBuilder : ComplexTypeSerializationBuilder
+  {
+    public override Tag : TypeTag { get { TypeTag.Variant } }
+
+    private _optionTypes : list[FixedType];
+
+    public this(compiler : SerializationCompiler, type : FixedType, options : list[TypeInfo])
+    {
+      base(compiler, type);
+      // HACK: нужно разбираться, как правильно связать типы вхождений вариантов
+      _optionTypes = options.Map(o => compiler.Manager.CoreEnv.BindFixedType(<[ $(type : typed).$(o.Name : usesite) ]>));
+    }
+
+    public override Emit() : void
+    {
+      def formatter  = Compiler.Formatter;
+      def writeCases = SCG.List();
+      def readCases  = SCG.List();
+
+      foreach (optionType in _optionTypes)
+      {
+        def serializationBuilder = Compiler.EnqueueType(optionType);
+        def optionName           = optionType.TypeInfo.Name;
+        writeCases.Add(<[ case:
+          | $(optionName : usesite) =>
+            {
+              $(formatter.WriteString(optionName));
+              $(serializationBuilder.Write(<[ obj ]>));
+            }
+        ]>);
+
+        readCases.Add(<[ case:
+          | $(optionName : string) => $(serializationBuilder.Read(<[ memberName ]>, <[ typeTag ]>));
+        ]>);
+      }
+      readCases.Add(<[ case: | name => $(formatter.EmitFatalError(<[ "Unknown variant option '" + name + "'." ]>)) ]>);
+
+      def writeBody = <[
+        match (obj)
+        {
+          ..$writeCases
+        }
+      ]>;
+      Compiler.DefineWriteMethod(WriteMethodName, Type, writeBody);
+
+      def readBody = <[
+        match (obj)
+        {
+          ..$readCases
+        }
+      ]>;
+      Compiler.DefineReadMethod(ReadMethodName, Type, readBody);
+    }
+  }
+}
