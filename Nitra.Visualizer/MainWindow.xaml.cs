@@ -281,19 +281,26 @@ namespace Nitra.Visualizer
       //_reflectionTreeView.BringIntoView(result);
     }
 
-    private TreeViewItem FindNode(TreeViewItem item, int pos)
+    private TreeViewItem FindNode(TreeViewItem item, int pos, List<NSpan> checkedSpans = null)
     {
+      checkedSpans = checkedSpans ?? new List<NSpan>();
       var ast = item.Tag as IAst;
 
       if (ast == null)
         return null;
+
+      foreach (var span in checkedSpans)
+          if (ast.Span == span && checkedSpans.Count != 1)
+              return item;
+      
+      checkedSpans.Add(ast.Span);
 
       if (ast.Span.IntersectsWith(pos))
       {
         item.IsExpanded = true;
         foreach (TreeViewItem subItem in item.Items)
         {
-          var result = FindNode(subItem, pos);
+          var result = FindNode(subItem, pos, checkedSpans);
           if (result != null)
             return result;
         }
