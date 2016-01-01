@@ -8,7 +8,6 @@ using Nemerle.Utility;
 
 using System;
 using System.Reflection;
-using System.Text.RegularExpressions;
 using System.Linq;
 using SCG = System.Collections.Generic;
 
@@ -19,7 +18,7 @@ namespace Nitra.Serialization
   {
     public override Tag : TypeTag { get { TypeTag.Object } }
 
-    [RecordIgnore] private mutable _members : list[string * string * TypeSerializationBuilder];
+    [RecordIgnore] private mutable _members : SCG.List[RecordMemberInfo];
     
     protected override CollectTypeData() : void
     {
@@ -37,98 +36,48 @@ namespace Nitra.Serialization
           when (result == null || ctor.Header.Parameters.Length > result.Header.Parameters.Length)
             result = ctor;
 
-      def makeMember(p : TParameter) : string * string * TypeSerializationBuilder
+      _members = SCG.List();
+      when (result : object != null)
       {
-        match (p.AttributesAndModifiers.FindAttribute(Compiler.MappedMemberAttribute, Compiler.Manager.CoreEnv))
+        foreach (p in result.Header.Parameters)
         {
-          | Some(<[ $_($(name : string)) ]>) =>
-            def member               = memberMap[name];
-            def memberType           = Type.TypeOfMember(member).Fix();
-            def serializationBuilder = Compiler.EnqueueType(memberType);
-            (member.Name, GetMemberName(member), serializationBuilder)
+          match (p.AttributesAndModifiers.FindAttribute(Compiler.MappedMemberAttribute, Compiler.Manager.CoreEnv))
+          {
+            | Some(<[ $_($(name : string)) ]>) =>
+              def member               = memberMap[name];
+              def memberType           = Type.TypeOfMember(member).Fix();
+              def serializationBuilder = Compiler.EnqueueType(memberType);
+              _members.Add(RecordMemberInfo(member, serializationBuilder))
 
-          | _ => assert3(false)
+            | _ => assert3(false)
+          }
         }
       }
-
-      if (result == null)
-        _members = []
-      else
-        _members = result.Header.Parameters.Map(makeMember)
     }
 
     protected override GenerateWriteBody(body : SCG.List[PExpr]) : void
     {
       assert(_members : object != null);
 
-      foreach ((originalName, normalizedName, serializationBuilder) in _members)
-      {
-        body.Add(Formatter.WriteTag(serializationBuilder.Tag));
-        body.Add(Formatter.WriteString(normalizedName));
-        body.Add(serializationBuilder.Write(<[ obj.$(originalName : usesite) ]>));
-      }
-      body.Add(Formatter.WriteEnd());
+      Formatter.WriteRecordMembers(body, _members, () => <[ obj ]>, (expr, _) => expr);
     }
 
     protected override GenerateReadBody(body : SCG.List[PExpr]) : void
     {
       assert(_members : object != null);
 
-      def ctorArgs       = SCG.List();
-      def fieldNameCases = SCG.List();
-      foreach ((originalName, normalizedName, serializationBuilder) in _members)
+      def getVarName(member) { "____" + member.OriginalName }
+      def ctorArgs = SCG.List();
+      foreach (member in _members)
       {
-        def varName = "____" + originalName;
-        body.Add(<[ mutable $(varName : usesite) : $(serializationBuilder.Type : typed) ]>);
+        def varName = getVarName(member);
+        body.Add(<[ mutable $(varName : usesite) : $(member.Builder.Type : typed) ]>);
         ctorArgs.Add(<[ $(varName : usesite) ]>);
-        fieldNameCases.Add(<[ case: | $(normalizedName : string) => $(varName : usesite) = $(serializationBuilder.Read(<[ fieldName ]>, <[ typeTag ]>)) ]>)
       }
-      def unknownFieldCase = Formatter.EmitFatalError(<[ "Unknown member '" + fieldName + "'." ]>);
-      if (fieldNameCases.Count > 0)
-      {
-        fieldNameCases.Add(<[ case: | _ => $unknownFieldCase ]>);
 
-        body.Add(<[
-          def loop()
-          {
-            def typeTag = $(Formatter.ReadTag());
-            when (typeTag != Nitra.Serialization.TypeTag.Empty)
-            {
-              def fieldName = $(Formatter.ReadString());
-              match (fieldName)
-              {
-                ..$fieldNameCases
-              }
-              loop()
-            }
-          }
-        ]>);
-        body.Add(<[ loop() ]>);
-      }
-      else
-      {
-        body.Add(<[
-          def typeTag = $(Formatter.ReadTag());
-          when (typeTag != Nitra.Serialization.TypeTag.Empty)
-          {
-            def fieldName = $(Formatter.ReadString());
-            $unknownFieldCase;
-          }
-        ]>);
-      }
+      Formatter.ReadRecordMembers(body, _members, (expr, member) => <[ $(getVarName(member) : usesite) = $expr ]>);
+
       body.Add(<[ $(Type : typed)(..$ctorArgs) ]>);
-    }
-
-    private static _extractNameRx : Regex = Regex(@"_N_((\w|\d|_)+)_\d+", RegexOptions.Compiled);
-
-    private static GetMemberName(member : IMember) : string
-    {
-      def res = _extractNameRx.Match(member.Name);
-
-      if (res.Success)
-        res.Groups[1].Value
-      else
-        member.Name
     }
   }
 }
