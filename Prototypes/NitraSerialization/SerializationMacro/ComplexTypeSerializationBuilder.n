@@ -6,8 +6,7 @@ using Nemerle.Text;
 using Nemerle.Utility;
 
 using System;
-using System.Collections.Generic;
-using System.Linq;
+using SCG = System.Collections.Generic;
 
 namespace Nitra.Serialization
 {
@@ -18,21 +17,102 @@ namespace Nitra.Serialization
       base(compiler, type);
 
       def id = compiler.Manager.GetNewId().ToString();
-      WriteMethodName = "_N_" + type + "_Write_" + id;
-      ReadMethodName  = "_N_" + type + "_Read__" + id;
+      _writeMethodName = "_N_" + type + "_Write_" + id;
+      _readMethodName  = "_N_" + type + "_Read__" + id;
     }
 
-    public WriteMethodName : string { get; }
-    public ReadMethodName  : string { get; }
+    private _writeMethodName : string;
+    private _readMethodName  : string;
 
-    public override Write(obj : PExpr) : PExpr
+    private HelperTb : TypeBuilder
     {
-      Compiler.CallWriteMethod(WriteMethodName, obj);
+      mutable _helperTb : TypeBuilder;
+      get
+      {
+        when (_helperTb : object == null)
+          _helperTb = Compiler.InitHelperTb();
+        _helperTb;
+      }
     }
 
-    public override Read(memberName : PExpr, typeTag : PExpr) : PExpr
+    private HelperTypeVar : FixedType
     {
-      Compiler.CallReadMethod(ReadMethodName, memberName, typeTag);
+      mutable _helperTypeVar : FixedType;
+      get
+      {
+        when (_helperTypeVar : object == null)
+          _helperTypeVar = HelperTb.GetMemType();
+        _helperTypeVar
+      }
+    }
+
+    public sealed override Write(obj : PExpr) : PExpr
+    {
+      def args = obj :: MakeArguments(Formatter.WriteParameters, MakeArguments(Compiler.WriteParameters, []));
+      <[ $(HelperTypeVar : typed).$(_writeMethodName : global)(..$args) ]>
+    }
+
+    public sealed override Read(memberName : PExpr, typeTag : PExpr) : PExpr
+    {
+      def args = memberName :: typeTag :: MakeArguments(Formatter.ReadParameters, MakeArguments(Compiler.ReadParameters, []));
+      <[ $(HelperTypeVar : typed).$(_readMethodName : global)(..$args) ]>
+    }
+
+    protected sealed override EmitImpl() : void
+    {
+      CollectTypeData();
+
+      def writeParms =
+           <[ parameter: obj : $(Type : typed) ]>
+        :: MakeParameters(Formatter.WriteParameters, MakeParameters(Compiler.WriteParameters, []));
+
+      def writeBody = SCG.List();
+      GenerateWriteBody(writeBody);
+
+      _ = HelperTb.DefineWithSource(<[ decl:
+        public $(_writeMethodName : usesite)(..$writeParms) : void
+        {
+          ..$writeBody
+        }
+      ]>);
+
+      def readParms =
+           <[ parameter: memberName : System.String               ]>
+        :: <[ parameter: typeTag    : Nitra.Serialization.TypeTag ]>
+        :: MakeParameters(Formatter.ReadParameters, MakeParameters(Compiler.ReadParameters, []));
+
+      def readBody = SCG.List();
+      readBody.Add(Formatter.TestTypeTag(<[ memberName ]>, <[ typeTag ]>, Tag));
+      GenerateReadBody(readBody);
+
+      _ = HelperTb.DefineWithSource(<[ decl:
+        public $(_readMethodName : usesite)(..$readParms) : $(Type : typed)
+        {
+          ..$readBody
+        }
+      ]>);
+    }
+
+    protected abstract CollectTypeData() : void;
+    protected abstract GenerateWriteBody(body : SCG.List[PExpr]) : void;
+    protected abstract GenerateReadBody(body : SCG.List[PExpr]) : void;
+
+    private static MakeParameters(parms : list[SerializationParameter], tail : list[PParameter]) : list[PParameter]
+    {
+      match (parms)
+      {
+        | []             => tail
+        | first :: other => <[ parameter: $(first.Name : usesite) : $(first.Type) ]> :: MakeParameters(other, tail)
+      }
+    }
+
+    private static MakeArguments(parms : list[SerializationParameter], tail : list[PExpr]) : list[PExpr]
+    {
+      match (parms)
+      {
+        | []             => tail
+        | first :: other => <[ $(first.Name : global) ]> :: MakeArguments(other, tail)
+      }
     }
   }
 }

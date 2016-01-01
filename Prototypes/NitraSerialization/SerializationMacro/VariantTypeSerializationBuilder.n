@@ -11,58 +11,63 @@ using SCG = System.Collections.Generic;
 
 namespace Nitra.Serialization
 {
+  [Record]
   public sealed class VariantTypeSerializationBuilder : ComplexTypeSerializationBuilder
   {
     public override Tag : TypeTag { get { TypeTag.Variant } }
 
-    private _optionTypes : list[FixedType];
+                   private         _options             : list[TypeInfo];
+    [RecordIgnore] private mutable _optionsWithBuilders : SCG.List[TypeInfo * TypeSerializationBuilder];
 
-    public this(compiler : SerializationCompiler, type : FixedType, options : list[TypeInfo])
+    protected override CollectTypeData() : void
     {
-      base(compiler, type);
-      // HACK: нужно разбираться, как правильно связать типы вхождений вариантов
-      _optionTypes = options.Map(o => compiler.Manager.CoreEnv.BindFixedType(<[ $(type : typed).$(o.Name : usesite) ]>));
+      assert(_optionsWithBuilders : object == null);
+
+      _optionsWithBuilders = SCG.List();
+      foreach (opt in _options)
+      {
+        // HACK: нужно разбираться, как правильно связать типы вхождений вариантов
+        def optionType           = Compiler.Manager.CoreEnv.BindFixedType(<[ $(Type : typed).$(opt.Name : usesite) ]>);
+        def serializationBuilder = Compiler.EnqueueType(optionType);
+        _optionsWithBuilders.Add(opt, serializationBuilder);
+      }
     }
 
-    public override Emit() : void
+    protected override GenerateWriteBody(body : SCG.List[PExpr]) : void
     {
-      def formatter  = Compiler.Formatter;
-      def writeCases = SCG.List();
-      def readCases  = SCG.List();
+      assert(_optionsWithBuilders : object != null);
 
-      foreach (optionType in _optionTypes)
+      def cases = SCG.List();
+      cases.Add(<[ case: | null => $(Formatter.WriteString("")); ]>);
+      foreach ((opt, serializationBuilder) in _optionsWithBuilders)
       {
-        def serializationBuilder = Compiler.EnqueueType(optionType);
-        def optionName           = optionType.TypeInfo.Name;
-        writeCases.Add(<[ case:
-          | $(optionName : usesite) =>
+        cases.Add(<[ case:
+          | $(opt.Name : usesite) as opt =>
             {
-              $(formatter.WriteString(optionName));
-              $(serializationBuilder.Write(<[ obj ]>));
+              $(Formatter.WriteString(opt.Name));
+              $(serializationBuilder.Write(<[ opt ]>));
             }
         ]>);
+      }
 
-        readCases.Add(<[ case:
-          | $(optionName : string) => $(serializationBuilder.Read(<[ memberName ]>, <[ typeTag ]>));
+      body.Add(<[ match (obj) { ..$cases } ]>);
+    }
+
+    protected override GenerateReadBody(body : SCG.List[PExpr]) : void
+    {
+      assert(_optionsWithBuilders : object != null);
+
+      def cases = SCG.List();
+      cases.Add(<[ case: | "" => null ]>);
+      foreach ((opt, serializationBuilder) in _optionsWithBuilders)
+      {
+        cases.Add(<[ case:
+          | $(opt.Name : string) => $(serializationBuilder.Read(<[ memberName ]>, <[ typeTag ]>));
         ]>);
       }
-      readCases.Add(<[ case: | name => $(formatter.EmitFatalError(<[ "Unknown variant option '" + name + "'." ]>)) ]>);
+      cases.Add(<[ case: | name => $(Formatter.EmitFatalError(<[ "Unknown variant option '" + name + "'." ]>)) ]>);
 
-      def writeBody = <[
-        match (obj)
-        {
-          ..$writeCases
-        }
-      ]>;
-      Compiler.DefineWriteMethod(WriteMethodName, Type, writeBody);
-
-      def readBody = <[
-        match (obj)
-        {
-          ..$readCases
-        }
-      ]>;
-      Compiler.DefineReadMethod(ReadMethodName, Type, readBody);
+      body.Add(<[ match ($(Formatter.ReadString())) { ..$cases } ]>);
     }
   }
 }
