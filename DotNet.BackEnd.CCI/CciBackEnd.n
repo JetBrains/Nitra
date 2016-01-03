@@ -92,10 +92,79 @@ namespace Nitra.BackEnd.Cci
             project.CompilerMessages.Error(noLoc, "The referenced file '" + fullPath + "' is not .Net assembly.");
             continue;
           }
-          
-          def loadNestedType(cciNestedType : INestedTypeDefinition) : NestedTypeSymbol
+
+          def initTypeSymbol(typeSymbol : DeclaredTypeSymbol, type : ITypeDefinition) : void
           {
-            null
+            cciInternedKeyToSymbolMap[type.InternedKey] = typeSymbol;
+                
+            when (typeSymbol is GenericTypeSymbol as genericSymbol)
+              makeTypeParameters(genericSymbol, type);
+            
+            def modifierHost = typeSymbol;
+            def flags = ModifierSet(context);
+            mutable modifiers;
+            when (type.IsAbstract)
+              modifiers |= Modifiers.Abstract;
+            when (type.IsSealed)
+              modifiers |= Modifiers.Sealed;
+            when (type.IsStatic)
+              modifiers |= Modifiers.Static;
+
+            // Modifiers
+            match (type)
+            {
+              | INamespaceTypeDefinition as nsType => 
+                when (nsType.IsPublic)
+                  modifiers |= Modifiers.Public;
+                  
+              | INestedTypeDefinition as nsType =>
+                when (nsType.Visibility == TypeMemberVisibility.Private)
+                  modifiers |= Modifiers.Private;
+                when (nsType.Visibility == TypeMemberVisibility.Public)
+                  modifiers |= Modifiers.Public;
+                when (nsType.Visibility == TypeMemberVisibility.FamilyOrAssembly)
+                  modifiers |= (Modifiers.Protected | Modifiers.Internal);
+                when (nsType.Visibility == TypeMemberVisibility.Family)
+                  modifiers |= Modifiers.Protected;
+            }
+                
+            flags.Add(modifiers);
+            modifierHost.Flags = flags;
+
+            typeSymbol.EvalProperties(context);
+                
+            when ((typeSymbol : DeclarationSymbol) is ContainerSymbol as containerSymbol)
+            {
+              unless (containerSymbol.IsScopeEvaluated)
+                typeSymbol.Scope = containerSymbol.MemberTable;
+            }
+
+            when (typeSymbol is GenericContainerTypeSymbol as genericContainerTypeSymbol)
+            {
+              def nestedTypes = LightList();
+              foreach (cciNestedType in type.NestedTypes)
+              {
+                def visibility = cciNestedType.Visibility;
+                when (visibility != TypeMemberVisibility.Private && visibility != TypeMemberVisibility.Assembly)
+                  nestedTypes.Add(loadNestedType(cciNestedType, genericContainerTypeSymbol));
+              }
+            }
+          }
+          and loadNestedType(type : INestedTypeDefinition, declaredIn : GenericContainerTypeSymbol) : NestedTypeSymbol
+          {
+            def name = Name(noFile, noSpan, type.Name.Value); // TODO: type.Name.UniqueKey
+            def symbol : NestedTypeSymbol  =
+                     if (type.IsDelegate)  ExternalNestsdTypeDeclaration.[NestedDelegateSymbol] (name, type).DefineSymbol(declaredIn.MemberTable) 
+                else if (type.IsInterface) ExternalNestsdTypeDeclaration.[NestedInterfaceSymbol](name, type).DefineSymbol(declaredIn.MemberTable)
+                else if (type.IsEnum)      ExternalNestsdTypeDeclaration.[NestedEnumSymbol]     (name, type).DefineSymbol(declaredIn.MemberTable)
+                else if (type.IsValueType) ExternalNestsdTypeDeclaration.[NestedStructSymbol]   (name, type).DefineSymbol(declaredIn.MemberTable)
+                else                       ExternalNestsdTypeDeclaration.[NestedClassSymbol]    (name, type).DefineSymbol(declaredIn.MemberTable);
+            
+            unless (symbol.IsDeclaredInEvaluated)
+              symbol.DeclaredIn = declaredIn;
+
+            initTypeSymbol(symbol, type);
+            symbol
           }
           def loadNsMember(member : INamespaceMember, declaredIn : NamespaceSymbol) : void
           {
@@ -103,44 +172,17 @@ namespace Nitra.BackEnd.Cci
             {
               | type is INamespaceTypeDefinition when type.IsPublic =>
                 def name = Name(noFile, noSpan, type.Name.Value); // TODO: type.Name.UniqueKey
-                def symbol : NamespaceMemberDeclarationSymbol =
-                         if (type.IsDelegate)  ExternalTypeDeclaration.[TopDelegateSymbol] (name, type).DefineSymbol(declaredIn.MemberTable) 
-                    else if (type.IsInterface) ExternalTypeDeclaration.[TopInterfaceSymbol](name, type).DefineSymbol(declaredIn.MemberTable)
-                    else if (type.IsValueType) ExternalTypeDeclaration.[TopStructSymbol]   (name, type).DefineSymbol(declaredIn.MemberTable)
-                    else if (type.IsEnum)      ExternalTypeDeclaration.[TopEnumSymbol]     (name, type).DefineSymbol(declaredIn.MemberTable)
-                    else                       ExternalTypeDeclaration.[TopClassSymbol]    (name, type).DefineSymbol(declaredIn.MemberTable);
+                def symbol : TopTypeSymbol =
+                         if (type.IsDelegate)  ExternalTopTypeDeclaration.[TopDelegateSymbol] (name, type).DefineSymbol(declaredIn.MemberTable) 
+                    else if (type.IsInterface) ExternalTopTypeDeclaration.[TopInterfaceSymbol](name, type).DefineSymbol(declaredIn.MemberTable)
+                    else if (type.IsEnum)      ExternalTopTypeDeclaration.[TopEnumSymbol]     (name, type).DefineSymbol(declaredIn.MemberTable)
+                    else if (type.IsValueType) ExternalTopTypeDeclaration.[TopStructSymbol]   (name, type).DefineSymbol(declaredIn.MemberTable)
+                    else                       ExternalTopTypeDeclaration.[TopClassSymbol]    (name, type).DefineSymbol(declaredIn.MemberTable);
                 
-                when ((symbol : object) is ModifierHostSymbol as modifierHost)
-                {
-                  def flags = ModifierSet(context);
-                  mutable modifiers;
-                  when (type.IsAbstract)
-                    modifiers |= Modifiers.Abstract;
-                  when (type.IsPublic)
-                    modifiers |= Modifiers.Public;
-                  when (type.IsSealed)
-                    modifiers |= Modifiers.Sealed;
-                  when (type.IsStatic)
-                    modifiers |= Modifiers.Static;
-                  flags.Add(modifiers);
-                  modifierHost.Flags = flags;
-                }
-                
-                when (symbol is TopGenericTypeSymbol as genericSymbol)
-                  makeTypeParameters(genericSymbol, type);
                 unless (symbol.IsDeclaredInEvaluated)
                   symbol.DeclaredIn = declaredIn;
-                def typeSymbol = symbol :> TypeSymbol;
-                cciInternedKeyToSymbolMap[type.InternedKey] = typeSymbol; 
-                symbol.Scope = EmptyScope.Instance; // TODO: fill with type members
-                symbol.EvalProperties(context);
 
-                def nestedTypes = LightList();
-                foreach (cciNestedType in type.NestedTypes)
-                  nestedTypes.Add(loadNestedType(cciNestedType));
-                
-
-                
+                initTypeSymbol(symbol, type);
                       
               | cciNs is INamespaceDefinition => //loadNsMembers(ns, nsSymbol.MemberTable)
                 def name   = NRB.Name(noFile, noSpan, cciNs.Name.Value); // TODO: ns.Name.UniqueKey
@@ -293,14 +335,31 @@ namespace Nitra.BackEnd.Cci
   
   public interface IExternalTypeDeclaration
   {
+    Type : ITypeDefinition { get; }
+  }
+
+  public interface IExternalTopTypeDeclaration
+  {
     Type : INamespaceTypeDefinition { get; }
   }
 
+  public interface IExternalNestsdTypeDeclaration
+  {
+    Type : INestedTypeDefinition { get; }
+  }
+
   [Record]
-  public class ExternalTypeDeclaration[TSymbol] : ExternalDeclaration[TSymbol], IExternalTypeDeclaration
+  public class ExternalTopTypeDeclaration[TSymbol] : ExternalDeclaration[TSymbol], IExternalTopTypeDeclaration, IExternalTypeDeclaration
     where TSymbol : DeclarationSymbol
   {
     public Type : INamespaceTypeDefinition { get; private set; }
+  }
+
+  [Record]
+  public class ExternalNestsdTypeDeclaration[TSymbol] : ExternalDeclaration[TSymbol], IExternalNestsdTypeDeclaration, IExternalTypeDeclaration
+    where TSymbol : DeclarationSymbol
+  {
+    public Type : INestedTypeDefinition { get; private set; }
   }
 
   [Record]
