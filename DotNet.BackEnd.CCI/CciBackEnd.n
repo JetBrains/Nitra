@@ -26,7 +26,14 @@ namespace Nitra.BackEnd.Cci
   public class CciBackEnd : IBackEnd
   {
     public static NoLoc : Location = Location(SourceSnapshot.Default.File, NSpan(0));
+    public static NoFile = SourceSnapshot.Default.File;
+    public static NoSpan = NSpan(0);
     public CciHost : IMetadataHost { get; protected set; }
+    
+    [RecordIgnore] mutable _cciInternedKeyToSymbolMap : Hashtable.[uint, TypeSymbol];
+    [RecordIgnore] mutable _singleDimensionArray      : SingleDimensionArraySymbol;
+    [RecordIgnore] mutable _cciObject                 : INamespaceTypeDefinition;
+    [RecordIgnore] mutable _objectSymbol              : TypeSymbol;
     
     public this() { this(PeReader.DefaultHost()) }
     
@@ -35,44 +42,28 @@ namespace Nitra.BackEnd.Cci
       Debug.WriteLine("LoadExternalSymbols started");
       
       def timer = Stopwatch.StartNew();
+      _singleDimensionArray = null;
+      _cciObject = null;
+      _objectSymbol = null;
+      
       def cciInternedKeyToSymbolMap = Hashtable.[uint, TypeSymbol]();
-      def noLoc  = NoLoc;
-      def noFile = noLoc.Source.File;
-      def noSpan = noLoc.Span;
+      _cciInternedKeyToSymbolMap = cciInternedKeyToSymbolMap;
       def rootNamespace = NamespaceSymbol();
       rootNamespace.MemberTable = TableScope("<root namespace>", rootNamespace);
       rootNamespace.DeclaredIn  = null;
       rootNamespace.FullName    = "";
       rootNamespace.EvalProperties(context);
       def libs = project.Libs;
-      def createTypeParameters(cciType : ITypeDefinition) : array[TypeParameterSymbol]
-      {
-        def count = cciType.GenericParameterCount : int;
-        if (count == 0)
-          AstUtils.NoTypeParameters
-        else
-        {
-          def result = array(count);
-          foreach (tp in cciType.GenericParameters with i)
-          {
-            def name  = NRB.Name(noFile, noSpan, tp.Name.Value); // TODO: type.Name.UniqueKey
-            def tps   = TypeParameterDeclaration(name, tp).DefineSymbol();
-            tps.EvalProperties(context);
-            result[i] = tps;
-          }
-          result
-        }
-      }
-      def makeTypeParameters(symbol : GenericTypeSymbol, cciType : ITypeDefinition) : void
+      def makeTypeParameters(symbol : GenericEntitySymbol, cciType : ITypeDefinition) : void
       {
         unless (symbol.IsTypeParametersCountEvaluated)
           symbol.TypeParametersCount = cciType.GenericParameterCount;
         unless (symbol.IsTypeParametersEvaluated)
-          symbol.TypeParameters = createTypeParameters(cciType);
+          symbol.TypeParameters = CreateGenericParameters(cciType.GenericParameterCount, cciType.GenericParameters, context);
       }
       
       def host = CciHost;
-      
+
       foreach(lib in libs)
       {
         | name is FullNameLibReference with filePath = name.Path
@@ -81,7 +72,7 @@ namespace Nitra.BackEnd.Cci
             
           when (!File.Exists(fullPath))
           {
-            project.CompilerMessages.Error(noLoc, "The referenced file '" + fullPath + "' is not found.");
+            project.CompilerMessages.Error(NoLoc, "The referenced file '" + fullPath + "' is not found.");
             continue;
           }
             
@@ -89,61 +80,10 @@ namespace Nitra.BackEnd.Cci
           
           when (unit == null || unit.Equals(Dummy.Module) || unit.Equals(Dummy.Assembly))
           {
-            project.CompilerMessages.Error(noLoc, "The referenced file '" + fullPath + "' is not .Net assembly.");
+            project.CompilerMessages.Error(NoLoc, "The referenced file '" + fullPath + "' is not .Net assembly.");
             continue;
           }
 
-          def makeModifiers(visibility : TypeMemberVisibility) : Modifiers
-          {
-            mutable modifiers;
-            when (visibility == TypeMemberVisibility.Private)
-              modifiers |= Modifiers.Private;
-            when (visibility == TypeMemberVisibility.Public)
-              modifiers |= Modifiers.Public;
-            when (visibility == TypeMemberVisibility.FamilyOrAssembly)
-              modifiers |= (Modifiers.Protected | Modifiers.Internal);
-            when (visibility == TypeMemberVisibility.Family)
-              modifiers |= Modifiers.Protected;
-            modifiers
-          }
-          def loadTypeMembers(member : ITypeDefinitionMember, declaredIn : GenericContainerTypeSymbol) : void
-          {
-            def visibility = member.Visibility;
-            
-            when (visibility != TypeMemberVisibility.Public && visibility != TypeMemberVisibility.Family && visibility != TypeMemberVisibility.FamilyOrAssembly)
-              return;
-              
-            def makeStaticIf(isStatic : bool, flags : ModifierSet) : void { when (isStatic) flags.Add(Modifiers.Static) }
-            def name = Name(noFile, noSpan, member.Name.Value); // TODO: type.Name.UniqueKey
-            def flags = ModifierSet(context);
-            flags.Add(makeModifiers(visibility));
-            
-            def symbol : DeclarationSymbol =
-              match (member)
-              {
-                | m is IPropertyDefinition =>
-                  makeStaticIf(m.IsStatic, flags);
-                  def prop = ExternalPropertyDeclaration(name, m).DefineSymbol(declaredIn.MemberTable);
-                  prop.Flags = flags;
-                  prop
-                  
-                | m is IMethodDefinition   =>
-                  makeStaticIf(m.IsStatic, flags);
-                  def method = ExternalMethodDeclaration  (name, m).DefineSymbol(declaredIn.MemberTable);
-                  method.Flags = flags;
-                  method
-                  
-                | m is IFieldDefinition    =>
-                  makeStaticIf(m.IsStatic, flags);
-                  def field = ExternalFieldDeclaration   (name, m).DefineSymbol(declaredIn.MemberTable);
-                  field.Flags = flags;
-                  field
-                  
-                | m is IEventDefinition    =>                                                ExternalEventDeclaration   (name, m).DefineSymbol(declaredIn.MemberTable);
-                | _ => assert(false)
-              };
-
-          }
           def initTypeSymbol(typeSymbol : DeclaredTypeSymbol, type : ITypeDefinition) : void
           {
             cciInternedKeyToSymbolMap[type.InternedKey] = typeSymbol;
@@ -168,7 +108,7 @@ namespace Nitra.BackEnd.Cci
                 when (nsType.IsPublic)
                   modifiers |= Modifiers.Public;
                   
-              | INestedTypeDefinition as nsType => modifiers |= makeModifiers(nsType.Visibility);
+              | INestedTypeDefinition as nsType => modifiers |= MakeModifiers(nsType.Visibility);
               | _ => ()
             }
                 
@@ -193,17 +133,12 @@ namespace Nitra.BackEnd.Cci
                   nestedTypes.Add(loadNestedType(cciNestedType, genericContainerTypeSymbol));
               }
               
-              foreach (m in type.Members)
-              {
-                | _ is ITypeDefinition => ()
-                | member => loadTypeMembers(member, genericContainerTypeSymbol);
-                | _ => ()
-              }
+              genericContainerTypeSymbol.NestedTypes = nestedTypes.ToArray();
             }
           }
           and loadNestedType(type : INestedTypeDefinition, declaredIn : GenericContainerTypeSymbol) : NestedTypeSymbol
           {
-            def name = Name(noFile, noSpan, type.Name.Value); // TODO: type.Name.UniqueKey
+            def name = Name(NoFile, NoSpan, type.Name.Value); // TODO: type.Name.UniqueKey
             def symbol : NestedTypeSymbol  =
                      if (type.IsDelegate)  ExternalNestsdTypeDeclaration.[NestedDelegateSymbol] (name, type).DefineSymbol(declaredIn.MemberTable) 
                 else if (type.IsInterface) ExternalNestsdTypeDeclaration.[NestedInterfaceSymbol](name, type).DefineSymbol(declaredIn.MemberTable)
@@ -222,7 +157,7 @@ namespace Nitra.BackEnd.Cci
             match (member)
             {
               | type is INamespaceTypeDefinition when type.IsPublic =>
-                def name = Name(noFile, noSpan, type.Name.Value); // TODO: type.Name.UniqueKey
+                def name = Name(NoFile, NoSpan, type.Name.Value); // TODO: type.Name.UniqueKey
                 def symbol : TopTypeSymbol =
                          if (type.IsDelegate)  ExternalTopTypeDeclaration.[TopDelegateSymbol] (name, type).DefineSymbol(declaredIn.MemberTable) 
                     else if (type.IsInterface) ExternalTopTypeDeclaration.[TopInterfaceSymbol](name, type).DefineSymbol(declaredIn.MemberTable)
@@ -236,7 +171,7 @@ namespace Nitra.BackEnd.Cci
                 initTypeSymbol(symbol, type);
                       
               | cciNs is INamespaceDefinition => //loadNsMembers(ns, nsSymbol.MemberTable)
-                def name   = NRB.Name(noFile, noSpan, cciNs.Name.Value); // TODO: ns.Name.UniqueKey
+                def name   = NRB.Name(NoFile, NoSpan, cciNs.Name.Value); // TODO: ns.Name.UniqueKey
                 def symbol = ExternalNamespaceDeclaration(name, cciNs).DefineSymbol(declaredIn.MemberTable);
                 unless (symbol.IsDeclaredInEvaluated)
                   symbol.DeclaredIn = declaredIn;
@@ -256,7 +191,19 @@ namespace Nitra.BackEnd.Cci
 
       Debug.WriteLine($"Read external symbols took: $(timer.Elapsed)");
             
-      InitBaseTypeSet(context, cciInternedKeyToSymbolMap);
+      InitSystemTypes(context);
+      InitBaseTypeSet(context);
+      
+      foreach (genericContainerTypeSymbol is GenericContainerTypeSymbol in cciInternedKeyToSymbolMap.Values)
+      {
+        def type = (genericContainerTypeSymbol.FirstDeclarationOrDefault :> IExternalTypeDeclaration).Type;
+        foreach (m in type.Members)
+        {
+          | _ is ITypeDefinition => ()
+          | member => LoadTypeMembers(member, genericContainerTypeSymbol, context);
+          | _ => ()
+        }
+      }
       
       Debug.WriteLine($"Total of LoadExternalSymbols took: $(timer.Elapsed)");
 
@@ -268,90 +215,205 @@ namespace Nitra.BackEnd.Cci
       when ((CciHost : object) is IDisposable as d)
         d.Dispose();
     }
-    
-    InitBaseTypeSet(context : DependentPropertyEvalContext, cciInternedKeyToSymbolMap : Hashtable[uint, TypeSymbol]) : void
+
+    MakeModifiers(visibility : TypeMemberVisibility) : Modifiers
     {
-      def host   = CciHost;
-      
-      assert(true);
+      mutable modifiers;
+      when (visibility == TypeMemberVisibility.Private)
+        modifiers |= Modifiers.Private;
+      when (visibility == TypeMemberVisibility.Public)
+        modifiers |= Modifiers.Public;
+      when (visibility == TypeMemberVisibility.FamilyOrAssembly)
+        modifiers |= (Modifiers.Protected | Modifiers.Internal);
+      when (visibility == TypeMemberVisibility.Family)
+        modifiers |= Modifiers.Protected;
+      modifiers
+    }
+    
+
+    LoadTypeMembers(member : ITypeDefinitionMember, declaredIn : GenericContainerTypeSymbol, context : DependentPropertyEvalContext) : void
+    {
+      def visibility = member.Visibility;
+            
+      when (visibility != TypeMemberVisibility.Public && visibility != TypeMemberVisibility.Family && visibility != TypeMemberVisibility.FamilyOrAssembly)
+        return;
+              
+      def makeStaticIf(isStatic : bool, flags : ModifierSet) : void { when (isStatic) flags.Add(Modifiers.Static) }
+      def name = Name(NoFile, NoSpan, member.Name.Value); // TODO: type.Name.UniqueKey
+      def flags = ModifierSet(context);
+      flags.Add(MakeModifiers(visibility));
+            
+      def symbol : DeclarationSymbol =
+        match (member)
+        {
+          | m is IPropertyDefinition =>
+            makeStaticIf(m.IsStatic, flags);
+            def prop = ExternalPropertyDeclaration(name, m).DefineSymbol(declaredIn.MemberTable);
+            prop.Flags = flags;
+            unless (prop.IsDeclaredInEvaluated)
+              prop.DeclaredIn = declaredIn;
+            prop.Type = CciTypeToTypeSymbol(m.Type, context); 
+            prop
+                  
+          | m is IMethodDefinition   =>
+            makeStaticIf(m.IsStatic, flags);
+            def method = ExternalMethodDeclaration  (name, m).DefineSymbol(declaredIn.MemberTable);
+            method.Flags = flags;
+            unless (method.IsDeclaredInEvaluated)
+              method.DeclaredIn = declaredIn;
+            when (method is GenericEntitySymbol as genericSymbol)
+            {
+              unless (genericSymbol.IsTypeParametersCountEvaluated)
+                genericSymbol.TypeParametersCount = m.GenericParameterCount;
+              unless (genericSymbol.IsTypeParametersEvaluated)
+                genericSymbol.TypeParameters = CreateGenericParameters(m.GenericParameterCount, m.GenericParameters, context);
+            }
+            method.ReturnType = CciTypeToTypeSymbol(m.Type, context); 
+            method.EvalProperties(context);
+            
+            foreach (p in m.Parameters)
+            {
+              //FormalParameter
+              def parameterName = Name(NoFile, NoSpan, p.Name.Value); // TODO: type.Name.UniqueKey
+              def parameter = ExternalParameterDeclaration(parameterName, p).DefineSymbol(method.ParameterScope);
+              parameter.Type = CciTypeToTypeSymbol(p.Type, context);
+              mutable parameterModifier;
+              when (p.IsOut)
+                parameterModifier |= ParameterModifier.Out;
+              when (p.IsByReference)
+                parameterModifier |= ParameterModifier.Ref;
+              when (p.IsParameterArray)
+                parameterModifier |= ParameterModifier.Params;
+              parameter.Modifier = parameterModifier;
+              parameter.Index = p.Index;
+              parameter.EvalProperties(context);
+            }
+            method
+                  
+          | m is IFieldDefinition    =>
+            makeStaticIf(m.IsStatic, flags);
+            def field = ExternalFieldDeclaration   (name, m).DefineSymbol(declaredIn.MemberTable);
+            field.Flags = flags;
+            unless (field.IsDeclaredInEvaluated)
+              field.DeclaredIn = declaredIn;
+            field.Type = CciTypeToTypeSymbol(m.Type, context); 
+            field
+                  
+          | m is IEventDefinition    =>
+            def evnt = ExternalEventDeclaration   (name, m).DefineSymbol(declaredIn.MemberTable);
+            unless (evnt.IsDeclaredInEvaluated)
+              evnt.DeclaredIn = declaredIn;
+            evnt.Type = CciTypeToTypeSymbol(m.Type, context); 
+            evnt
+                  
+          | _ => assert(false)
+        };
+              
+        symbol.EvalProperties(context);
+    }
+
+    CciTypeToTypeSymbol(cciTypeReference : ITypeReference, context : DependentPropertyEvalContext) : TypeSymbol
+    {
+      | t is IGenericTypeParameter =>
+        def typeInfo = CciTypeToTypeSymbol(t.DefiningType, context) :> GenericTypeSymbol;
+        def tp = typeInfo.TypeParameters[t.Index];
+        tp
+          
+      | t is IArrayTypeReference =>
+        def args = array[CciTypeToTypeSymbol(t.ElementType, context)];
+        def typeInfo = if (t.IsVector) _singleDimensionArray : ArraySymbol
+                        else 
+                        {
+                          def a = MultiDimensionArraySymbol();
+                          a.TypeParametersCount = 0;
+                          a.Rank        = t.Rank;
+                          //a.LowerBounds = t.LowerBounds.ToArray();
+                          //a.Sizes       = t.Sizes.ToArray();
+                          a.EvalProperties(context);
+                          a
+                        };
+        def constructedType = TopConstructedTypeSymbol();
+        constructedType.TypeInfo = typeInfo;
+        constructedType.Args = args;
+        constructedType.EvalProperties(context);
+        constructedType
+        
+      | t is ITypeDefinition =>
+        mutable typeSymbol;
+        if (_cciInternedKeyToSymbolMap.TryGetValue(t.InternedKey, out typeSymbol))
+        {
+          typeSymbol
+        }
+        else
+        {
+          // the type definition not found
+          _objectSymbol
+        }
+          
+      | t is IGenericTypeInstanceReference =>
+        def typeInfo = CciTypeToTypeSymbol(t.GenericType, context) :> GenericTypeSymbol;
+        def args = t.GenericArguments.Select(CciTypeToTypeSymbol(_, context)).ToArray();
+
+        def constructedType = TopConstructedTypeSymbol();
+        constructedType.TypeInfo = typeInfo;
+        constructedType.Args = args;
+        constructedType.EvalProperties(context);
+        constructedType
+               
+      | _ =>
+        //resolvs++;
+        mutable typeSymbol;
+          
+        if (_cciInternedKeyToSymbolMap.TryGetValue(cciTypeReference.InternedKey, out typeSymbol))
+        {
+          //resolvedByKey++;
+          typeSymbol
+        }
+        else
+        {
+          _objectSymbol
+        }
+    }
+    
+    CreateGenericParameters(genericParameterCount : ushort, genericParams : Seq[IGenericParameter], context : DependentPropertyEvalContext) : array[TypeParameterSymbol]
+    {
+      if (genericParameterCount == 0)
+        AstUtils.NoTypeParameters
+      else
+      {
+        def result = array(genericParameterCount : int);
+        foreach (tp in genericParams with i)
+        {
+          def name  = NRB.Name(NoFile, NoSpan, tp.Name.Value); // TODO: type.Name.UniqueKey
+          def tps   = TypeParameterDeclaration(name, tp).DefineSymbol();
+          tps.EvalProperties(context);
+          result[i] = tps;
+        }
+        result
+      }
+    }
+    
+    InitSystemTypes(context : DependentPropertyEvalContext) : void
+    {
       def singleDimensionArray = SingleDimensionArraySymbol();
       singleDimensionArray.TypeParametersCount = 0;
       singleDimensionArray.EvalProperties(context);
-      def cciObject = host.PlatformType.SystemObject.ResolvedType;
-      mutable objectSymbol;
-      unless (cciInternedKeyToSymbolMap.TryGetValue(cciObject.InternedKey, out objectSymbol))
+      _singleDimensionArray = singleDimensionArray;
+      def cciObject = CciHost.PlatformType.SystemObject.ResolvedType;
+      _cciObject = cciObject; 
+      _ = _cciInternedKeyToSymbolMap.TryGetValue(cciObject.InternedKey, out _objectSymbol);
+    }
+    
+    InitBaseTypeSet(context : DependentPropertyEvalContext) : void
+    {
+      when (_objectSymbol == null)
         return;
       def timer = Stopwatch.StartNew();
       mutable resolvs = 0;
       mutable resolvedByKey = 0;
       mutable resolvedByResolvedTypeProp = 0;
       
-      def makeSymbol(cciTypeReference : ITypeReference) : TypeSymbol
-      {
-        | t is IGenericTypeParameter =>
-          def typeInfo = makeSymbol(t.DefiningType) :> GenericTypeSymbol;
-          def tp = typeInfo.TypeParameters[t.Index];
-          tp
-          
-        | t is IArrayTypeReference =>
-          def args = array[makeSymbol(t.ElementType)];
-          def typeInfo = if (t.IsVector) singleDimensionArray : ArraySymbol
-                          else 
-                          {
-                            def a = MultiDimensionArraySymbol();
-                            a.TypeParametersCount = 0;
-                            a.Rank        = t.Rank;
-                            //a.LowerBounds = t.LowerBounds.ToArray();
-                            //a.Sizes       = t.Sizes.ToArray();
-                            a.EvalProperties(context);
-                            a
-                          };
-          def constructedType = TopConstructedTypeSymbol();
-          constructedType.TypeInfo = typeInfo;
-          constructedType.Args = args;
-          constructedType.EvalProperties(context);
-          constructedType
-        
-        | t is ITypeDefinition =>
-          def cciInternedKeyToSymbolMap = cciInternedKeyToSymbolMap;
-          mutable typeSymbol;
-          if (cciInternedKeyToSymbolMap.TryGetValue(t.InternedKey, out typeSymbol))
-          {
-            typeSymbol
-          }
-          else
-          {
-            // the type definition not found
-            objectSymbol
-          }
-          
-        | t is IGenericTypeInstanceReference =>
-          def typeInfo = makeSymbol(t.GenericType) :> GenericTypeSymbol;
-          def args = t.GenericArguments.Select(makeSymbol).ToArray();
-
-          def constructedType = TopConstructedTypeSymbol();
-          constructedType.TypeInfo = typeInfo;
-          constructedType.Args = args;
-          constructedType.EvalProperties(context);
-          constructedType
-               
-        | _ =>
-          resolvs++;
-          def cciInternedKeyToSymbolMap = cciInternedKeyToSymbolMap;
-          mutable typeSymbol;
-          
-          if (cciInternedKeyToSymbolMap.TryGetValue(cciTypeReference.InternedKey, out typeSymbol))
-          {
-            resolvedByKey++;
-            typeSymbol
-          }
-          else
-          {
-            objectSymbol
-          }
-      }
-            
-      foreach (x in cciInternedKeyToSymbolMap.Values)
+      foreach (x in _cciInternedKeyToSymbolMap.Values)
       {
         def cciType = (x.FirstDeclarationOrDefault :> IExternalTypeDeclaration).Type;
         when (x is SupportsInheritanceTypeSymbol as type)
@@ -360,12 +422,12 @@ namespace Nitra.BackEnd.Cci
           type.BaseTypeSet = baseTypeSet;
           foreach (cciBaseClasse in cciType.BaseClasses)
           {
-            def typeSymbol = makeSymbol(cciBaseClasse);
+            def typeSymbol = CciTypeToTypeSymbol(cciBaseClasse, context);
             baseTypeSet.AddParent(typeSymbol);
           }
           foreach (cciInterface in cciType.Interfaces)
           {
-            def typeSymbol = makeSymbol(cciInterface);
+            def typeSymbol = CciTypeToTypeSymbol(cciInterface, context);
             baseTypeSet.AddParent(typeSymbol);
           }
         }
@@ -416,7 +478,7 @@ namespace Nitra.BackEnd.Cci
   [Record]
   public class TypeParameterDeclaration : ExternalDeclaration[TypeParameterSymbol]
   {
-    public TypeParam : IGenericTypeParameter;
+    public TypeParam : IGenericParameter;
     public override CreateSymbol() : DeclarationSymbol { TypeParameterSymbol() }
   }
 
@@ -446,5 +508,12 @@ namespace Nitra.BackEnd.Cci
   {
     public Event : IEventDefinition;
     public override CreateSymbol() : DeclarationSymbol { Member.EventSymbol() }
+  }
+
+  [Record]
+  public class ExternalParameterDeclaration : ExternalDeclaration[FormalParameterSymbol]
+  {
+    public Parameter : IParameterDefinition;
+    public override CreateSymbol() : DeclarationSymbol { FormalParameterSymbol() }
   }
 }
