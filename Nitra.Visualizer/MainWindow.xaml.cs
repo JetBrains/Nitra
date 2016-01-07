@@ -1,5 +1,4 @@
-﻿using System.Windows.Forms;
-using Common;
+﻿using Common;
 using ICSharpCode.AvalonEdit.AddIn;
 using ICSharpCode.AvalonEdit.CodeCompletion;
 using ICSharpCode.AvalonEdit.Document;
@@ -30,25 +29,22 @@ using Nitra.Visualizer.Controls;
 using Microsoft.VisualBasic.FileIO;
 using Nitra.ProjectSystem;
 using Nitra.Runtime.Highlighting;
-using CheckBox = System.Windows.Controls.CheckBox;
 using Clipboard = System.Windows.Clipboard;
 using ContextMenu = System.Windows.Controls.ContextMenu;
 using Control = System.Windows.Controls.Control;
 using DataFormats = System.Windows.DataFormats;
 using File = System.IO.File;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
-using Label = System.Windows.Controls.Label;
 using MenuItem = System.Windows.Controls.MenuItem;
 using MessageBox = System.Windows.MessageBox;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
-using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
 using Timer = System.Timers.Timer;
 using ToolTip = System.Windows.Controls.ToolTip;
 
 namespace Nitra.Visualizer
 {
   using System.Windows.Documents;
-  using Nitra.Visualizer.Interop;
+  using Interop;
   using System.Windows.Interop;
 
   /// <summary>
@@ -80,7 +76,6 @@ namespace Nitra.Visualizer
     private readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
     private List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
     private const string ErrorMarkerTag = "Error";
-    private readonly CompilerMessageList _cmpilerMessages = new CompilerMessageList();
 
     public MainWindow()
     {
@@ -278,7 +273,6 @@ namespace Nitra.Visualizer
 
       result.IsSelected = true;
       result.BringIntoView();
-      //_reflectionTreeView.BringIntoView(result);
     }
 
     private TreeViewItem FindNode(TreeViewItem item, int pos, List<NSpan> checkedSpans = null)
@@ -481,7 +475,7 @@ namespace Nitra.Visualizer
         return;
 
       var root = _parseResult.Reflect();
-      _reflectionTreeView.ItemsSource = new[] { (ReflectionStruct)root };
+      _reflectionTreeView.ItemsSource = new[] { root };
     }
 
     private void UpdateHtmlPrettyPrint()
@@ -500,11 +494,11 @@ namespace Nitra.Visualizer
       var spanStyles = new StringBuilder();
       foreach (var style in _highlightingStyles)
       {
-        if (style.Value.Foreground is SimpleHighlightingBrush)
-        {
-          var color = ((SimpleHighlightingBrush) style.Value.Foreground).Brush.Color;
-          spanStyles.Append('.').Append(style.Key.Replace('.', '-')).Append("{color:rgb(").Append(color.R).Append(',').Append(color.G).Append(',').Append(color.B).AppendLine(");}");
-        }
+        var brush = style.Value.Foreground as SimpleHighlightingBrush;
+        if (brush == null)
+          continue;
+        var color = brush.Brush.Color;
+        spanStyles.Append('.').Append(style.Key.Replace('.', '-')).Append("{color:rgb(").Append(color.R).Append(',').Append(color.G).Append(',').Append(color.B).AppendLine(");}");
       }
       var html = Properties.Resources.PrettyPrintDoughnut.Replace("{spanclasses}", spanStyles.ToString()).Replace("{prettyprint}", htmlWriter.ToString());
       prettyPrintViewer.NavigateToString(html);
@@ -539,29 +533,9 @@ namespace Nitra.Visualizer
       _text.TextArea.Caret.Show();
     }
 
-    private static string MakePath(TreeViewItem item)
-    {
-      var path = new Stack<string>();
-
-      for (var curr = item; curr != null; curr = curr.Parent as TreeViewItem)
-        path.Push(curr.Header.ToString());
-
-      return path.Count == 0 ? "" : string.Join(@"\", path);
-    }
-
     private void MenuItem_Click(object sender, RoutedEventArgs e)
     {
       this.Close();
-    }
-
-    private void FileOpenExecuted(object sender, RoutedEventArgs e)
-    {
-      var dialog = new OpenFileDialog { Filter = "C# (.cs)|*.cs|Nitra (.nitra)|*.nitra|JSON (.json)|*.json|Text (.txt)|*.txt|All|*.*" };
-// ReSharper disable once ConstantNullCoalescingCondition
-      if (dialog.ShowDialog(this) ?? false)
-      {
-        _text.Text = File.ReadAllText(dialog.FileName);
-      }
     }
 
     void _parseTimer_Elapsed(object sender, ElapsedEventArgs e)
@@ -749,22 +723,10 @@ namespace Nitra.Visualizer
       _textBox1Tooltip.IsOpen = false;
     }
 
-    private void CommandBinding_CanExecute(object sender, CanExecuteRoutedEventArgs e)
-    {
-      e.CanExecute = true;
-      e.Handled = true;
-    }
-
     private void _tabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
       UpdateInfo();
       ShowNodeForCaret();
-    }
-
-    private static string MakeStr(string str, int maxLen)
-    {
-      var padding = maxLen - str.Length + 1;
-      return new string(' ', padding) + str;
     }
 
     private void _copyButton_Click(object sender, RoutedEventArgs e)
@@ -1239,16 +1201,6 @@ namespace Nitra.Visualizer
         Dispatcher.Invoke(new Action(DoParse));
     }
 
-    private void OnTreeViewItemSelected(object sender, RoutedEventArgs e)
-    {
-      if (!Object.ReferenceEquals(sender, e.OriginalSource))
-        return;
-
-      var item = e.OriginalSource as TreeViewItem;
-      if (item != null)
-        item.BringIntoView();
-    }
-
     private void _reflectionTreeView_SelectedItemChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
       if (_doChangeCaretPos)
@@ -1487,29 +1439,10 @@ namespace Nitra.Visualizer
 
     void item_Click(object sender, RoutedEventArgs e)
     {
-      var rootDir = Path.GetDirectoryName(_solution.SolutinFilePath) ?? "";
       var name = (string)((MenuItem)e.Source).Header;
       var testSuite = new TestSuiteVm(_solution, name, _settings.Config);
       testSuite.IsSelected = true;
       _solution.Save();
-    }
-
-    private void CommandBinding_CanAddExistsTestSuite(object sender, CanExecuteRoutedEventArgs e)
-    {
-      Debug.WriteLine("CanAddExistsTestSuite");
-      e.Handled = true;
-
-      if (_solution == null)
-      {
-        e.CanExecute = false;
-        return;
-      }
-
-      var unattachedTestSuites = _solution.GetUnattachedTestSuites();
-
-      e.CanExecute = unattachedTestSuites.Length > 0;
-
-      Debug.WriteLine("e.CanExecute = " + e.CanExecute);
     }
 
     private void CommandBinding_CanOnAddTestSuite(object sender, CanExecuteRoutedEventArgs e)
@@ -1602,7 +1535,6 @@ namespace Nitra.Visualizer
       if (testFolder != null)
       {
         AddNewFileToMultitest(testFolder).IsSelected = true;
-        return;
       }
     }
 
