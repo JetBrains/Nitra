@@ -73,7 +73,7 @@ namespace Nitra.Visualizer
       {
         var type = items.GetType();
         var count = items.Count();
-        var xaml = RenderXamlForSeq(name, count);
+        var xaml = RenderXamlForSeq(name, count, items);
         tvi.Header = XamlReader.Parse(xaml);
         if (count > 0)
           tvi.Items.Add(obj);
@@ -272,11 +272,13 @@ namespace Nitra.Visualizer
 </Span>";
     }
 
-    private static string RenderXamlForSeq(string name, int count)
+    private static string RenderXamlForSeq(string name, int count, IEnumerable items)
     {
+      var txt = items.ToString();
+      txt = txt.Length > 80 ? txt.Substring(0, 80) + "…" : txt;
       return @"
 <Span xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-<Span Foreground = 'green'>" + Utils.Escape(name) + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + count + @"
+<Span Foreground = 'green'>" + Utils.Escape(name) + @"</Span> <Span Foreground = 'gray'>(List) Count: </Span> " + count + "  '" + txt + @"'
 </Span>";
     }
 
