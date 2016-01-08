@@ -133,15 +133,46 @@ namespace Nitra.Declarations
     protected abstract ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
       where TConcreteSymbol : DeclarationSymbol;
 
+    public ResolveMany[TConcreteSymbol](algorithm : ResolveManyAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
+      where TConcreteSymbol : DeclarationSymbol
+      requires !IsResolvedToEvaluated
+    {
+      def result =
+        if (algorithm : object != null)
+          ResolveManyImpl.[TConcreteSymbol](algorithm);
+        else
+          ResolveImpl.[TConcreteSymbol](ResolutionAlgorithms.TryCast);
+      _resolvedTo = result;
+      result
+    }
+
+    protected abstract ResolveManyImpl[TConcreteSymbol](algorithm : ResolveManyAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
+      where TConcreteSymbol : DeclarationSymbol;
+
     public override ToString() : string { Name + " (" + Kind + ")" }
     public abstract GetSymbols() : Seq[DeclarationSymbol];
     public abstract Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void;
 
-    protected static TryResolveAlias[TConcreteSymbol](symbol : DeclarationSymbol, algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol], result : ref ValueOption[TConcreteSymbol]) : void
+    protected static TryResolveAlias[TConcreteSymbol](symbol : DeclarationSymbol, result : ref TSymbol) : bool
+    {
+      if (symbol is AliasSymbol(IsReplacementEvaluated = true, Replacement = IRef(IsSymbolEvaluated = true, Symbol = s is TSymbol)))
+      {
+        result = s;
+        true
+      }
+      else
+        false
+    }
+
+    protected MakeResolvedRef[TConcreteSymbol](candidates : LightList[TConcreteSymbol]) : Ref[TConcreteSymbol]
       where TConcreteSymbol : DeclarationSymbol
     {
-      when (symbol is AliasSymbol(IsReplacementEvaluated = true, Replacement = IRef(IsSymbolEvaluated = true, Symbol = s is TSymbol)))
-        result = algorithm(s);
+      match (candidates.Count)
+      {
+        | 0 => Ref.Unresolved(File, Span, Name, ResolutionSource.Resolve(this))
+        | 1 => Ref.Some(File, Span, candidates.FirstItem)
+        | _ => Ref.Ambiguous(File, Span, candidates.ToNList(), ResolutionSource.Resolve(this))
+      }
     }
 
     | Some
@@ -173,12 +204,28 @@ namespace Nitra.Declarations
         {
           mutable result = algorithm(Symbol);
           unless (result.HasValue)
-            TryResolveAlias(Symbol, algorithm, ref result);
+          {
+            mutable aliasTarget;
+            when (TryResolveAlias(Symbol, ref aliasTarget))
+              result = algorithm(aliasTarget);
+          }
           match (result)
           {
             | VSome(symbol) => Ref.Some(File, Span, symbol)
             | VNone         => Ref.Unresolved(File, Span, Name, ResolutionSource.Resolve(this))
           }
+        }
+
+        protected override ResolveManyImpl[TConcreteSymbol](algorithm : ResolveManyAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
+        {
+          mutable candidates = LightList();
+          candidates.Add(Symbol);
+
+          mutable aliasTarget;
+          when (TryResolveAlias(Symbol, ref aliasTarget))
+            candidates.Add(aliasTarget);
+
+          MakeResolvedRef(algorithm(candidates))
         }
 
         public override GetSymbols() : Seq[DeclarationSymbol]
@@ -236,6 +283,12 @@ namespace Nitra.Declarations
         public override IsUnresolved : bool  { get { true } }
 
         protected override ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
+        {
+          _ = algorithm;
+          Ref.Unresolved(File, Span, Name, ResolutionSource.Resolve(this))
+        }
+
+        protected override ResolveManyImpl[TConcreteSymbol](algorithm : ResolveManyAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
         {
           _ = algorithm;
           Ref.Unresolved(File, Span, Name, ResolutionSource.Resolve(this))
@@ -328,17 +381,31 @@ namespace Nitra.Declarations
           {
             mutable result = algorithm(symbol);
             unless (result.HasValue)
-              TryResolveAlias(symbol, algorithm, ref result);
-            when (result is VSome(symbol))
-              results.Add(symbol);
+            {
+              mutable aliasTarget;
+              when (TryResolveAlias(symbol, ref aliasTarget))
+                result = algorithm(aliasTarget);
+            }
+            when (result is VSome(resolvedSymbol))
+              results.Add(resolvedSymbol);
           }
 
-          match (results.Count)
+          MakeResolvedRef(results)
+        }
+
+        protected override ResolveManyImpl[TConcreteSymbol](algorithm : ResolveManyAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
+        {
+          mutable candidates = LightList();
+          foreach (symbol in Ambiguities)
           {
-            | 0 => Ref.Unresolved(File, Span, Name, ResolutionSource.Resolve(this))
-            | 1 => Ref.Some(File, Span, results.FirstItem)
-            | _ => Ref.Ambiguous(File, Span, results.ToNList(), ResolutionSource.Resolve(this))
+            candidates.Add(symbol);
+
+            mutable aliasTarget;
+            when (TryResolveAlias(symbol, ref aliasTarget))
+              candidates.Add(aliasTarget);
           }
+
+          MakeResolvedRef(algorithm(candidates))
         }
 
         public override GetSymbols() : Seq[DeclarationSymbol]

@@ -1,0 +1,117 @@
+﻿using Nitra.Serialization;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Macros;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.Serialization2
+{
+  public macro WriteData(obj : PExpr) : PExpr
+  {
+    SerializationMacrosImpl.Write(ImplicitCTX(), obj)
+  }
+
+  public macro ReadData(type : PExpr) : PExpr
+  {
+    SerializationMacrosImpl.Read(ImplicitCTX(), type)
+  }
+
+  internal enum SymbolSerializationVersion
+  {
+    | V1
+    | V2
+  }
+
+  internal module SerializationMacrosImpl
+  {
+    public Write(typer : Typer, obj : PExpr) : PExpr
+    {
+      def compiler = InitCompiler(typer, SymbolSerializationVersion.V2);
+      def typedObj = typer.TypeExpr(obj);
+      if (typedObj.Type.Hint is Some(type))
+      {
+        def builder = compiler.EnqueueType(type);
+        builder.Emit();
+        builder.Write(<[ $(typedObj : typed) ]>);
+      }
+      else
+        typer.DelayMacro(fun(lastTry)
+        {
+          match(typedObj.Type.Hint)
+          {
+            | Some(type) =>
+              def builder = compiler.EnqueueType(type);
+              builder.Emit();
+              Some(builder.Write(<[ $(typedObj : typed) ]>))
+
+            | None =>
+              when (lastTry)
+                Message.Error(obj.Location, "Failed to evaluate type of expression. Try to specify type manually.");
+              None()
+          }
+        });
+    }
+
+    public Read(typer : Typer, typeName : PExpr) : PExpr
+    {
+      def compiler = InitCompiler(typer, SymbolSerializationVersion.V2);
+      def type     = typer.BindFixedType(typeName);
+      def builder  = compiler.EnqueueType(type);
+      builder.Emit();
+      builder.Read(<[ "<root>" ]>, builder.TagExpr);
+    }
+
+    public InitCompiler(typer : Typer, symbolVersion : SymbolSerializationVersion) : SerializationCompiler
+    {
+      def key = (typeof(SerializationCompiler), symbolVersion);
+      match (typer.CurrentMethodBuilder.UserData[key])
+      {
+        | SerializationCompiler as compiler => compiler;
+        | null =>
+          def compiler = InitCompiler(typer.Manager, symbolVersion);
+          typer.CurrentMethodBuilder.UserData[key] = compiler;
+          typer.BeforeStage2 += fun(_) { compiler.Emit() };
+          compiler
+
+        | _ => assert(false, "Expected serialization compiler instance")
+      }
+    }
+
+    public InitCompiler(manager : ManagerClass, symbolVersion : SymbolSerializationVersion) : SerializationCompiler
+    {
+      def key = (typeof(SerializationCompiler), symbolVersion);
+      match (manager.UserData[key])
+      {
+        | SerializationCompiler as compiler => compiler
+        | null =>
+          def compiler =
+            match (symbolVersion)
+            {
+              | V1 =>
+                SerializationCompiler(manager, BinarySerializationFormatter(), NitraTypeSerializationFactory(),
+                  [SerializationParameter("metadataWriter", <[ Nitra.Serialization.IMetadataWriter ]>)],
+                  [SerializationParameter("metadataReader", <[ Nitra.Serialization.IMetadataReader ]>)])
+
+              | V2 =>
+                SerializationCompiler(manager, BinarySerializationFormatter(), NitraTypeSerializationFactory(),
+                  [SerializationParameter("metadataWriter", <[ Nitra.Serialization2.MetadataWriter ]>)],
+                  [SerializationParameter("metadataReader", <[ Nitra.Serialization2.MetadataReader ]>)])
+            };
+
+          manager.UserData[key] = compiler;
+          compiler
+
+        | _ => assert(false, "Expected serialization compiler instance")
+      }
+    }
+  }
+}

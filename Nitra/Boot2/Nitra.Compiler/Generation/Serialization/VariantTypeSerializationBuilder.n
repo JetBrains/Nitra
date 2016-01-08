@@ -1,0 +1,73 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Serialization
+{
+  [Record]
+  public sealed class VariantTypeSerializationBuilder : ComplexTypeSerializationBuilder
+  {
+    public override Tag : TypeTag { get { TypeTag.Variant } }
+
+                   private         _options             : list[TypeInfo];
+    [RecordIgnore] private mutable _optionsWithBuilders : SCG.List[TypeInfo * TypeSerializationBuilder];
+
+    protected override CollectTypeData() : void
+    {
+      assert(_optionsWithBuilders : object == null);
+
+      _optionsWithBuilders = SCG.List();
+      foreach (opt in _options)
+      {
+        // HACK: нужно разбираться, как правильно связать типы вхождений вариантов
+        def optionType           = Compiler.Manager.CoreEnv.BindFixedType(<[ $(Type : typed).$(opt.Name : usesite) ]>);
+        def serializationBuilder = Compiler.EnqueueType(optionType);
+        _optionsWithBuilders.Add(opt, serializationBuilder);
+      }
+    }
+
+    protected override GenerateWriteBody(body : SCG.List[PExpr]) : void
+    {
+      assert(_optionsWithBuilders : object != null);
+
+      def cases = SCG.List();
+      cases.Add(<[ case: | null => $(Formatter.WriteString("")); ]>);
+      foreach ((opt, serializationBuilder) in _optionsWithBuilders)
+      {
+        cases.Add(<[ case:
+          | $(opt.Name : usesite) as opt =>
+            {
+              $(Formatter.WriteString(opt.Name));
+              $(serializationBuilder.Write(<[ opt ]>));
+            }
+        ]>);
+      }
+
+      body.Add(<[ match (obj) { ..$cases } ]>);
+    }
+
+    protected override GenerateReadBody(body : SCG.List[PExpr]) : void
+    {
+      assert(_optionsWithBuilders : object != null);
+
+      def cases = SCG.List();
+      cases.Add(<[ case: | "" => null ]>);
+      foreach ((opt, serializationBuilder) in _optionsWithBuilders)
+      {
+        cases.Add(<[ case:
+          | $(opt.Name : string) => $(serializationBuilder.Read(<[ memberName ]>, <[ typeTag ]>));
+        ]>);
+      }
+      cases.Add(<[ case: | name => $(Formatter.EmitFatalError(<[ "Unknown variant option '" + name + "'." ]>)) ]>);
+
+      body.Add(<[ match ($(Formatter.ReadString())) { ..$cases } ]>);
+    }
+  }
+}
