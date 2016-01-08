@@ -1,0 +1,83 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Compiler.Typedtree;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Reflection;
+using System.Linq;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Serialization
+{
+  [Record]
+  public class RecordTypeSerializationBuilder : ComplexTypeSerializationBuilder
+  {
+    public override Tag : TypeTag { get { TypeTag.Object } }
+
+    [RecordIgnore] private mutable _members : SCG.List[RecordMemberInfo];
+    
+    protected override CollectTypeData() : void
+    {
+      assert(_members : object == null);
+
+      def typeInfo  = Type.TypeInfo;
+      def members   = typeInfo.GetMembers(BindingFlags.Public | BindingFlags.Instance).Filter(m => m is IField || m is IProperty);
+      def memberMap = members.ToDictionary(m => m.Name);
+      def ctors     = typeInfo.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+
+      mutable result;
+
+      foreach (ctor in ctors)
+        when (ctor.IsCustomAttributeDefined("Nemerle.Internal.RecordCtorAttribute"))
+          when (result == null || ctor.Header.Parameters.Length > result.Header.Parameters.Length)
+            result = ctor;
+
+      _members = SCG.List();
+      when (result : object != null)
+      {
+        foreach (p in result.Header.Parameters)
+        {
+          match (p.AttributesAndModifiers.FindAttribute(Compiler.MappedMemberAttribute, Compiler.Manager.CoreEnv))
+          {
+            | Some(<[ $_($(name : string)) ]>) =>
+              def member               = memberMap[name];
+              def memberType           = Type.TypeOfMember(member).Fix();
+              def serializationBuilder = Compiler.EnqueueType(memberType);
+              _members.Add(RecordMemberInfo(member, serializationBuilder))
+
+            | _ => assert3(false)
+          }
+        }
+      }
+    }
+
+    protected override GenerateWriteBody(body : SCG.List[PExpr]) : void
+    {
+      assert(_members : object != null);
+
+      Formatter.WriteRecordMembers(body, _members, () => <[ obj ]>, (expr, _) => expr);
+    }
+
+    protected override GenerateReadBody(body : SCG.List[PExpr]) : void
+    {
+      assert(_members : object != null);
+
+      def getVarName(member) { "____" + member.OriginalName }
+      def ctorArgs = SCG.List();
+      foreach (member in _members)
+      {
+        def varName = getVarName(member);
+        body.Add(<[ mutable $(varName : usesite) : $(member.Builder.Type : typed) ]>);
+        ctorArgs.Add(<[ $(varName : usesite) ]>);
+      }
+
+      Formatter.ReadRecordMembers(body, _members, (expr, member) => <[ $(getVarName(member) : usesite) = $expr ]>);
+
+      body.Add(<[ $(Type : typed)(..$ctorArgs) ]>);
+    }
+  }
+}

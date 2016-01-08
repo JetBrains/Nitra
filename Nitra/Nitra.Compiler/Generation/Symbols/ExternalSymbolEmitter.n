@@ -9,7 +9,7 @@ using Nemerle.Utility;
 using Nitra.Serialization;
 
 using System;
-using System.Collections.Generic;
+using SCG = System.Collections.Generic;
 using System.Linq;
 
 namespace Nitra.Compiler
@@ -21,9 +21,9 @@ namespace Nitra.Compiler
     public ExternalSymbolType : TypeBuilder        { get; }
 
     private _manualReadWrite  : bool;
-    private _serializationEmitter : BinarySerializationEmitter;
+    private _serializationEmitter : SerializationCompiler;
 
-    public this (environment : EmitterEnvironment, symbolType : TypeBuilder, externalSymbolType : option[TypeBuilder], serializationEmitter : BinarySerializationEmitter)
+    public this (environment : EmitterEnvironment, symbolType : TypeBuilder, externalSymbolType : option[TypeBuilder], serializationEmitter : SerializationCompiler)
     {
       Environment           = environment;
       TargetSymbolType      = symbolType;
@@ -55,21 +55,26 @@ namespace Nitra.Compiler
       ]>);
 
       def symbolProperties = SymbolEmitterUtils.GetSymbolProperties(TargetSymbolType);
+      def symbolType       = TargetSymbolType.GetMemType();
 
       unless (_manualReadWrite)
       {
-        def serializeCode = _serializationEmitter.MakeMembersSerializationCode(
-          ExternalSymbolType.GetMemType(),
-          symbolProperties.MapFiltered(p => !p.IsExternal, _.Property),
-          <[ this ]>,
-          [ <[ metadataWriter ]> ]);
+        def serializeCode = SCG.List();
+        serializeCode.Add(<[ IgnoreParams() ]>);
+
+        def members = SCG.List();
+        foreach (p when !p.IsExternal in symbolProperties)
+        {
+          def m = p.Property;
+          members.Add(RecordMemberInfo(m, _serializationEmitter.EnqueueType(symbolType.TypeOfMember(m).Fix())));
+        }
+
+        _serializationEmitter.Formatter.WriteRecordMembers(serializeCode, members, () => <[ this ]>, (expr, _) => expr);
 
         TargetSymbolType.DefineConditional(<[ decl:
           Serialize(writer : System.IO.BinaryWriter, metadataWriter : Nitra.Serialization.IMetadataWriter) : void implements Nitra.Serialization.IExportableSymbol.Serialize
           {
-            ignore(writer, metadataWriter);
-            $serializeCode;
-            writer.Write($(TypeTag.Empty :> byte));
+            ..$serializeCode
           }
         ]>);
       }
@@ -114,11 +119,17 @@ namespace Nitra.Compiler
 
       unless (_manualReadWrite)
       {
-        def deserializeCode = _serializationEmitter.MakeMembersDeserializationCode(
-          ExternalSymbolType.GetMemType(),
-          symbolProperties.MapFiltered(p => !p.IsExternal, _.OverriddenProperty),
-          <[ this ]>,
-          [ <[ metadataReader ]> ]);
+        def deserializeCode = SCG.List();
+        deserializeCode.Add(<[ IgnoreParams() ]>);
+
+        def members = SCG.List();
+        foreach (p when !p.IsExternal in symbolProperties)
+        {
+          def m = p.OverriddenProperty;
+          members.Add(RecordMemberInfo(m, _serializationEmitter.EnqueueType(symbolType.TypeOfMember(m).Fix())));
+        }
+
+        _serializationEmitter.Formatter.ReadRecordMembers(deserializeCode, members, (expr, info) => <[ this.$(info.OriginalName : usesite) = $expr ]>);
 
         def readExternal = symbolProperties.MapFiltered(_.IsExternal,
           p => <[ this.$(p.Property.Name : usesite) = reader.ReadPropertyValue(project, this, $(p.Property.Name : string)) ]>);
@@ -126,8 +137,7 @@ namespace Nitra.Compiler
         ExternalSymbolType.DefineConditional(<[ decl:
           Deserialize(reader : System.IO.BinaryReader, metadataReader : Nitra.Serialization.IMetadataReader) : void implements Nitra.Serialization.IImportableSymbol.Deserialize
           {
-            IgnoreParams();
-            $deserializeCode;
+            ..$deserializeCode;
           }
         ]>);
         ExternalSymbolType.DefineConditional(<[ decl:

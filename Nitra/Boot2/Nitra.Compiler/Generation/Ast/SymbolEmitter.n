@@ -1,4 +1,5 @@
 ﻿using Nitra.Typing;
+using Nitra.Serialization;
 
 using Nemerle;
 using Nemerle.Imperative;
@@ -20,10 +21,10 @@ namespace Nitra.Compiler
     public override TypeCompiler : NTypeCompiler      { get { Environment.DefaultTypeCompiler } }
     private         _symbol      : SymbolSymbol;
     private mutable _tb          : TypeBuilder;
-    private         _serializationEmitter : BinarySerializationEmitter;
+    private         _serializationEmitter : SerializationCompiler;
     private         _ownerEmitter         : AstEmitter;
 
-    public this(environment : EmitterEnvironment, symbol : SymbolSymbol, serializationEmitter : BinarySerializationEmitter, ownerEmitter : AstEmitter)
+    public this(environment : EmitterEnvironment, symbol : SymbolSymbol, serializationEmitter : SerializationCompiler, ownerEmitter : AstEmitter)
     {
       Environment           = environment;
       _symbol               = symbol;
@@ -103,6 +104,12 @@ namespace Nitra.Compiler
       }
     }
 
+    [Record]
+    private sealed class SymbolMemberInfo : RecordMemberInfo
+    {
+      public IsEvaluated : string { get; }
+    }
+
     public Emit() : void
     {
       assert(_tb : object != null);
@@ -128,59 +135,58 @@ namespace Nitra.Compiler
           DefineResetPropertiesMethod(_tb, null);
           DefineIsAllPropertiesEvaluatedProperty(_tb, null);
 
-          def serializationMembers = SCG.List();
-          def memberTable          = SCG.Dictionary();
-          foreach (p is IProperty in _tb.GetMembers())
+          Util.locate(_symbol.FirstLocation.NLocation(),
           {
-            when (Environment.LookupPropertySymbol(p) is DeclaredProperty(DependentPropertySymbol as dependentProperty, _))
-            when (_dependentPropBits.ContainsKey(dependentProperty))
+            def symbolType           = _tb.GetMemType();
+            def serializationMembers = SCG.List();
+            foreach (p is IProperty in _tb.GetMembers())
             {
-              memberTable.Add(p, dependentProperty);
-
-              // make Scope properties first when serializing/deserializing
-              if (p.GetMemType().TryRequire(Environment.ScopeTypeVar))
-                serializationMembers.Insert(0, p)
-              else
-                serializationMembers.Add(p)
-            }
-          }
-
-          def symbolType = _tb.GetMemType();
-
-          def serializeBody = _serializationEmitter.MakeMembersSerializationCode(symbolType, serializationMembers, <[ this ]>, [ <[ metadataWriter ]> ],
-            fun (objAccess : PExpr, member : IMember, expr : PExpr) : PExpr
-            {
-              def isEvaluated = GetIsEvaluatedPropertyName(memberTable[member]);
-              <[ when ($objAccess.$(isEvaluated : usesite)) $expr ]>
-            });
-
-          _tb.Define(<[ decl:
-            public Serialize(writer : System.IO.BinaryWriter, metadataWriter : Nitra.Serialization2.MetadataWriter) : void
-            {
-              unchecked when (metadataWriter.BeginWriteSymbol(this, writer))
+              when (Environment.LookupPropertySymbol(p) is DeclaredProperty(DependentPropertySymbol as dependentProperty, _))
+              when (_dependentPropBits.ContainsKey(dependentProperty))
               {
-                $serializeBody;
-                writer.Write($(Nitra.Serialization.TypeTag.Empty :> byte));
+                def info = SymbolMemberInfo(p, _serializationEmitter.EnqueueType(symbolType.TypeOfMember(p).Fix()), GetIsEvaluatedPropertyName(dependentProperty));
+                // make Scope properties first when serializing/deserializing
+                if (p.GetMemType().TryRequire(Environment.ScopeTypeVar))
+                  serializationMembers.Insert(0, info)
+                else
+                  serializationMembers.Add(info)
               }
             }
-          ]>);
 
-          def deserializeBody = _serializationEmitter.MakeMembersDeserializationCode(symbolType, serializationMembers, <[ symbol ]>, [ <[ metadataReader ]> ],
-            fun(objAccess : PExpr, member : IMember, expr : PExpr) : PExpr
-            {
-              def isEvaluated = GetIsEvaluatedPropertyName(memberTable[member]);
-              <[ unless ($objAccess.$(isEvaluated : usesite)) $expr ]>
-            });
+            def serializeBody = SCG.List();
+            _serializationEmitter.Formatter.WriteRecordMembers(serializeBody, serializationMembers, () => <[ this ]>,
+              (expr, info) => <[ when (this.$(info.IsEvaluated : usesite)) $expr ]>);
 
-          _tb.Define(<[ decl:
-            public static Deserialize(reader : System.IO.BinaryReader, metadataReader : Nitra.Serialization2.MetadataReader) : $(symbolType : typed)
-            {
-              mutable symbol;
-              unchecked when (metadataReader.BeginReadSymbol.[$(symbolType : typed)](reader, out symbol))
-                $deserializeBody;
-              symbol
-            }
-          ]>);
+            _tb.Define(<[ decl:
+              public Serialize(writer : System.IO.BinaryWriter, metadataWriter : Nitra.Serialization2.MetadataWriter) : void
+              {
+                unchecked when (metadataWriter.BeginWriteSymbol(this, writer))
+                {
+                  ..$serializeBody;
+                }
+              }
+            ]>);
+
+            def deserializeBody = SCG.List();
+            _serializationEmitter.Formatter.ReadRecordMembers(deserializeBody, serializationMembers, 
+              (expr, info) => <[
+                def value = $expr;
+                unless (symbol.$(info.IsEvaluated : usesite))
+                  symbol.$(info.OriginalName : usesite) = value;
+              ]>);
+
+            _tb.Define(<[ decl:
+              public static Deserialize(reader : System.IO.BinaryReader, metadataReader : Nitra.Serialization2.MetadataReader) : $(symbolType : typed)
+              {
+                mutable symbol;
+                unchecked when (metadataReader.BeginReadSymbol.[$(symbolType : typed)](reader, out symbol))
+                {
+                  ..$deserializeBody;
+                }
+                symbol
+              }
+            ]>);
+          });
 
         | _ => assert(false)
       }
