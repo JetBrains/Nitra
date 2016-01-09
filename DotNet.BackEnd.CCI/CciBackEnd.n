@@ -92,6 +92,9 @@ namespace Nitra.BackEnd.Cci
           def initTypeSymbol(typeSymbol : DeclaredTypeSymbol, type : ITypeDefinition) : void
           {
             cciInternedKeyToSymbolMap[type.InternedKey] = typeSymbol;
+
+            when ((typeSymbol : DeclarationSymbol) is ContainerSymbol as containerSymbol)
+              containerSymbol.MemberTable = TypeMemberScope("member", containerSymbol, this);
                 
             when (typeSymbol is GenericTypeSymbol as genericSymbol)
               makeTypeParameters(genericSymbol, type);
@@ -166,7 +169,12 @@ namespace Nitra.BackEnd.Cci
                 def symbol : TopTypeSymbol =
                          if (type.IsDelegate)  ExternalTopTypeDeclaration.[TopDelegateSymbol] (name, type).DefineSymbol(declaredIn.MemberTable) 
                     else if (type.IsInterface) ExternalTopTypeDeclaration.[TopInterfaceSymbol](name, type).DefineSymbol(declaredIn.MemberTable)
-                    else if (type.IsEnum)      ExternalTopTypeDeclaration.[TopEnumSymbol]     (name, type).DefineSymbol(declaredIn.MemberTable)
+                    else if (type.IsEnum)
+                    {
+                      def en = ExternalTopTypeDeclaration.[TopEnumSymbol]     (name, type).DefineSymbol(declaredIn.MemberTable);
+                      en.UnderlyingType = CciTypeToTypeSymbol(type.UnderlyingType, context);
+                      en
+                    }
                     else if (type.IsValueType) ExternalTopTypeDeclaration.[TopStructSymbol]   (name, type).DefineSymbol(declaredIn.MemberTable)
                     else                       ExternalTopTypeDeclaration.[TopClassSymbol]    (name, type).DefineSymbol(declaredIn.MemberTable);
                 
@@ -199,21 +207,6 @@ namespace Nitra.BackEnd.Cci
       InitSystemTypes(context);
       InitBaseTypeSet(context);
       
-      def loadMembersStart = timer.Elapsed;
-      
-      foreach (genericContainerTypeSymbol is GenericContainerTypeSymbol in cciInternedKeyToSymbolMap.Values)
-      {
-        def type = (genericContainerTypeSymbol.FirstDeclarationOrDefault :> IExternalTypeDeclaration).Type;
-        foreach (m in type.Members)
-        {
-          | _ is ITypeDefinition => ()
-          | member => LoadTypeMembers(member, genericContainerTypeSymbol, context);
-          | _ => ()
-        }
-      }
-
-      timer.Stop();
-      Debug.WriteLine($"Lload members took: $(timer.Elapsed - loadMembersStart)");
       Debug.WriteLine($"Total of LoadExternalSymbols took: $(timer.Elapsed)");
 
       rootNamespace
@@ -239,8 +232,7 @@ namespace Nitra.BackEnd.Cci
       modifiers
     }
     
-
-    LoadTypeMembers(member : ITypeDefinitionMember, declaredIn : GenericContainerTypeSymbol, context : DependentPropertyEvalContext) : void
+    internal LoadTypeMembers(member : ITypeDefinitionMember, declaredIn : ContainerSymbol, context : DependentPropertyEvalContext) : void
     {
       def visibility = member.Visibility;
             
@@ -260,7 +252,7 @@ namespace Nitra.BackEnd.Cci
             def prop = ExternalPropertyDeclaration(name, m).DefineSymbol(declaredIn.MemberTable);
             prop.Flags = flags;
             unless (prop.IsDeclaredInEvaluated)
-              prop.DeclaredIn = declaredIn;
+              prop.DeclaredIn = declaredIn :> GenericContainerTypeSymbol;
             prop.Type = CciTypeToTypeSymbol(m.Type, context); 
             prop
                   
@@ -268,15 +260,14 @@ namespace Nitra.BackEnd.Cci
             makeStaticIf(m.IsStatic, flags);
             def method = ExternalMethodDeclaration  (name, m).DefineSymbol(declaredIn.MemberTable);
             method.Flags = flags;
+
             unless (method.IsDeclaredInEvaluated)
-              method.DeclaredIn = declaredIn;
-            when (method is GenericEntitySymbol as genericSymbol)
-            {
-              unless (genericSymbol.IsTypeParametersCountEvaluated)
-                genericSymbol.TypeParametersCount = m.GenericParameterCount;
-              unless (genericSymbol.IsTypeParametersEvaluated)
-                genericSymbol.TypeParameters = CreateGenericParameters(m.GenericParameterCount, m.GenericParameters, context);
-            }
+              method.DeclaredIn = declaredIn :> GenericContainerTypeSymbol;
+            unless (method.IsTypeParametersCountEvaluated)
+              method.TypeParametersCount = m.GenericParameterCount;
+            unless (method.IsTypeParametersEvaluated)
+              method.TypeParameters = CreateGenericParameters(m.GenericParameterCount, m.GenericParameters, context);
+            
             method.ReturnType = CciTypeToTypeSymbol(m.Type, context); 
             method.EvalProperties(context);
             
@@ -300,18 +291,29 @@ namespace Nitra.BackEnd.Cci
             method
                   
           | m is IFieldDefinition    =>
-            makeStaticIf(m.IsStatic, flags);
-            def field = ExternalFieldDeclaration   (name, m).DefineSymbol(declaredIn.MemberTable);
-            field.Flags = flags;
-            unless (field.IsDeclaredInEvaluated)
-              field.DeclaredIn = declaredIn;
-            field.Type = CciTypeToTypeSymbol(m.Type, context); 
-            field
+            if (member.ContainingTypeDefinition.IsEnum)
+            {
+              def field = ExternalEnumFieldDeclaration(name, m).DefineSymbol(declaredIn.MemberTable);
+              //field.Flags = flags;
+              unless (field.IsDeclaredInEvaluated)
+                field.DeclaredIn = declaredIn :> EnumSymbol;
+              field
+            }
+            else
+            {
+              makeStaticIf(m.IsStatic, flags);
+              def field = ExternalFieldDeclaration (name, m).DefineSymbol(declaredIn.MemberTable);
+              field.Flags = flags;
+              unless (field.IsDeclaredInEvaluated)
+                field.DeclaredIn = declaredIn :> GenericContainerTypeSymbol;;
+              field.Type = CciTypeToTypeSymbol(m.Type, context); 
+              field
+            }
                   
           | m is IEventDefinition    =>
             def evnt = ExternalEventDeclaration   (name, m).DefineSymbol(declaredIn.MemberTable);
             unless (evnt.IsDeclaredInEvaluated)
-              evnt.DeclaredIn = declaredIn;
+              evnt.DeclaredIn = declaredIn :> GenericContainerTypeSymbol;
             evnt.Type = CciTypeToTypeSymbol(m.Type, context); 
             evnt
                   
@@ -509,6 +511,13 @@ namespace Nitra.BackEnd.Cci
   {
     public Field : IFieldDefinition;
     public override CreateSymbol() : DeclarationSymbol { Member.FieldSymbol() }
+  }
+
+  [Record]
+  public class ExternalEnumFieldDeclaration : ExternalDeclaration[EnumMemberSymbol]
+  {
+    public Field : IFieldDefinition;
+    public override CreateSymbol() : DeclarationSymbol { EnumMemberSymbol() }
   }
 
   [Record]
