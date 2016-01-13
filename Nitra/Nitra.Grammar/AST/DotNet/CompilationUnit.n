@@ -35,13 +35,14 @@ namespace DotNet
         rootNamespace.MemberTable = TableScope("<root namespace>", rootNamespace);
         rootNamespace.DeclaredIn  = null;
         rootNamespace.FullName    = "";
-      
+
         def rootScope = CreateNemerleSymbols(project, manager, rootNamespace, context);
+        LoadNitraMetadata(project, manager, rootNamespace);
         project.Data = (context, rootNamespace, rootScope, manager);
       }
       finally ManagerClass.Instance = oldManager;
     }
-    
+
     public RefreshProject(project : Project) : void
     {
       when (project.Data == null)
@@ -52,7 +53,7 @@ namespace DotNet
       try
       {
         ManagerClass.Instance = manager;
-      
+
         def removeParsedSymbols(tableScope : TableScope)
         {
           tableScope.Undefine(_.IsParsed);
@@ -66,9 +67,12 @@ namespace DotNet
         evalHost.EvalProperties(context, "SymbolHierarchy", 0);
         evalHost.EvalProperties(context, "Scopes", 1);
         evalHost.EvalProperties(context, "Type bodies binding", 2);
+
+        unless (manager is CompilationUnit.Compiler)
+          SaveNitraMetadata(project, manager, rootNamespace);
       }
       finally ManagerClass.Instance = oldManager;
-    } 
+    }
 
     class Compiler : ManagerClass
     {
@@ -92,7 +96,55 @@ namespace DotNet
         LoadExternalLibraries ();
       }
     }
-    
+
+    private static NitraMetadataStreamName = "Nitra.Metadata2";
+
+    private static LoadNitraMetadata(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
+    {
+      def assemblyWithMetadata = Dictionary();
+      foreach (reference in manager.ReferencedAssemblies)
+      {
+        def assembly       = reference.Assembly;
+        def metadataStream = assembly.GetManifestResourceStream(NitraMetadataStreamName);
+        when (metadataStream != null)
+        {
+          def assemblyId = project.GetAssemblyId(assembly.GetName());
+          def file       = AssemblyFile(project, assembly.CodeBase);
+          assemblyWithMetadata.Add(assemblyId, (assembly, metadataStream, file));
+        }
+      }
+
+      def visitedAssemblies = HashSet();
+      def visitAssembly(assemblyId)
+      {
+        when (visitedAssemblies.Add(assemblyId))
+        {
+          mutable data;
+          when (assemblyWithMetadata.TryGetValue(assemblyId, out data))
+          {
+            def (assembly, metadataStream, file) = data;
+            foreach (dependency in assembly.GetReferencedAssemblies())
+              visitAssembly(project.GetAssemblyId(dependency));
+
+            def reader = Nitra.Serialization2.MetadataReader(project, file);
+            reader.ReadRoot(rootNamespace, metadataStream);
+          }
+        }
+      }
+
+      foreach (assemblyId in assemblyWithMetadata.Keys)
+        visitAssembly(assemblyId);
+    }
+
+    private static SaveNitraMetadata(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
+    {
+      def metadataFileName = manager.Options.OutputFileName + ".nitrametadata2";
+      def metadataWriter   = Nitra.Serialization2.MetadataWriter(project);
+      using (stream = IO.File.OpenWrite(metadataFileName))
+        metadataWriter.WriteRoot(rootNamespace, stream);
+      manager.Options.EmbeddedResources ::= metadataFileName + "," + NitraMetadataStreamName;
+    }
+
     private static CreateNemerleSymbols(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : Scope
     {
       def nemerleNsRoot     = manager.NameTree.NamespaceTree;
@@ -381,5 +433,25 @@ namespace DotNet
   {
     public NemerleNode : NamespaceTree.Node { get; private set; }
     public override CreateSymbol() : DeclarationSymbol { NamespaceSymbol() }
+  }
+
+  internal sealed class AssemblyFile : ConcreteFile
+  {
+    public this(project : Project, fullName : string)
+    {
+      base(null);
+      Project  = project;
+      FullName = fullName;
+    }
+
+    private         _fullName : string;
+    private mutable _source   : SourceSnapshot;
+
+    public override Project     : Project        { get; }
+    public override Length      : int            { get { 0 } }
+    public override FullName    : string         { get; }
+    public override Language    : Nitra.Language { get { Nitra.Language.Instance } }
+    public override GetSource() : SourceSnapshot { when(_source == null) _source = SingleLineSourceSnapshot("", this); _source }
+    public override IsFake      : bool           { get { true } }
   }
 }
