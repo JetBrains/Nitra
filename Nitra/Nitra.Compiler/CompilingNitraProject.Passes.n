@@ -1,8 +1,5 @@
-﻿using Nitra.Model;
-using Nitra.ProjectSystem;
+﻿using Nitra.ProjectSystem;
 using Nitra.Typing;
-using Nitra.Runtime;
-using Nitra.Util;
 using Nitra.Serialization;
 using Nitra.Serialization2;
 
@@ -16,12 +13,10 @@ using Nemerle.Utility;
 
 using System;
 using System.IO;
-using System.Diagnostics;
 using System.Linq;
 
 using SCG = System.Collections.Generic;
 using G = NitraSyntaxParseTree;
-using PExpr = Nemerle.Compiler.Parsetree.PExpr;
 
 [assembly: DefineSurround("ThrowOnProjectErrors", false, def prevErrorCount = this.ErrorCount, when (prevErrorCount != this.ErrorCount) throw Nemerle.Compiler.Recovery())]
 
@@ -205,75 +200,43 @@ namespace Nitra.Compiler
       def serializationEmitterV1 = SerializationMacrosImpl.GetCompiler(Manager, SymbolSerializationVersion.V1);
       def serializationEmitterV2 = SerializationMacrosImpl.GetCompiler(Manager, SymbolSerializationVersion.V2);
 
-      def languageEmitterTable = SCG.Dictionary();
-
-      def makeLanguageEmitter(languageSymbol : LanguageSymbol) : void
+      _ = MakeEmitters(languageEmitters, fun (languageSymbol, _, makeLanguageEmitter)
       {
-        when (languageSymbol.AssemblyId == AssemblyIds.CurrentAssembly)
-        unless (languageEmitterTable.ContainsKey(languageSymbol))
-        {
-          when (languageSymbol.Parent is SymbolRef.Some(parent))
-            makeLanguageEmitter(parent);
+        when (languageSymbol.Parent is SymbolRef.Some(parent))
+          makeLanguageEmitter(parent);
 
-          def languageEmitter = LanguageEmitter(environment, languageSymbol);
-          languageEmitterTable.Add(languageSymbol, languageEmitter);
-          languageEmitters.Add(languageEmitter);
-        }
-      }
+        LanguageEmitter(environment, languageSymbol);
+      });
 
-      foreach (languageSymbol in environment.Root.GetDescendants.[LanguageSymbol]())
-        makeLanguageEmitter(languageSymbol);
-      
-      foreach (syntaxModule when syntaxModule.AssemblyId == AssemblyIds.CurrentAssembly in environment.Root.GetDescendants.[SyntaxModuleSymbol]())
-        syntaxModuleEmitters.Add(SyntaxModuleEmitter(environment, syntaxModule));
+      _ = MakeEmitters(syntaxModuleEmitters, (syntaxModule, _, _) => SyntaxModuleEmitter(environment, syntaxModule));
 
-      def astEmitterTable = SCG.Dictionary();
-
-      def makeAstEmitter(astSymbol : AstSymbol) : void
+      def astEmitterTable = MakeEmitters(astEmitters, fun (astSymbol, astEmitterTable, makeAstEmitter)
       {
-        when (astSymbol.AssemblyId == AssemblyIds.CurrentAssembly)
-        unless (astEmitterTable.ContainsKey(astSymbol))
+        foreach (baseAst in astSymbol.Parents)
+          makeAstEmitter(baseAst);
+
+        match (astSymbol)
         {
-          foreach (baseAst in astSymbol.Parents)
-            makeAstEmitter(baseAst);
-
-          def astEmitter =
-            match (astSymbol)
-            {
-              | AbstractAstSymbol                                  as s => AbstractAstEmitter(environment, s)
-              | SimpleAstSymbol(DefinedIn = SymbolRef.None)        as s => SimpleAstEmitter(environment, s, null)
-              | SimpleAstSymbol(DefinedIn = SymbolRef.Some(owner)) as s => SimpleAstEmitter(environment, s, astEmitterTable[owner])
-              | _ => assert(false)
-            };
-
-          astEmitterTable.Add(astSymbol, astEmitter);
-          astEmitters.Add(astEmitter);
+          | AbstractAstSymbol                                  as s => AbstractAstEmitter(environment, s)
+          | SimpleAstSymbol(DefinedIn = SymbolRef.None)        as s => SimpleAstEmitter(environment, s, null)
+          | SimpleAstSymbol(DefinedIn = SymbolRef.Some(owner)) as s => SimpleAstEmitter(environment, s, astEmitterTable[owner])
+          | _ => assert(false)
         }
-      }
+      });
 
-      foreach (astSymbol in environment.Root.GetDescendants.[AstSymbol]())
-        makeAstEmitter(astSymbol);
-
-      def visitedSymbolSymbols = SCG.HashSet();
-      def makeSymbolSymbol(symbolSymbol : SymbolSymbol) : void
+      _ = MakeEmitters(symbolEmitters, fun(symbolSymbol, _, makeSymbolSymbol)
       {
-        when (symbolSymbol.AssemblyId == AssemblyIds.CurrentAssembly)
-        when (visitedSymbolSymbols.Add(symbolSymbol))
-        {
-          foreach (baseSymbol in symbolSymbol.Parents)
-            makeSymbolSymbol(baseSymbol);
+        foreach (baseSymbol in symbolSymbol.Parents)
+          makeSymbolSymbol(baseSymbol);
 
-          def ownerEmitter =
-            if (symbolSymbol.Declaration is SimpleAstSymbol(DefinedIn = SymbolRef.Some(owner)))
-              astEmitterTable[owner]
-            else
-              null;
+        def ownerEmitter =
+          if (symbolSymbol.Declaration is SimpleAstSymbol(DefinedIn = SymbolRef.Some(owner)))
+            astEmitterTable[owner]
+          else
+            null;
 
-          symbolEmitters.Add(SymbolEmitter(environment, symbolSymbol, serializationEmitterV2, ownerEmitter));
-        }
-      }
-      foreach (symbolSymbol in environment.Root.GetDescendants.[SymbolSymbol]())
-        makeSymbolSymbol(symbolSymbol);
+        SymbolEmitter(environment, symbolSymbol, serializationEmitterV2, ownerEmitter)
+      });
 
       while (exportableSymbolData.Count > 0)
       {
@@ -286,6 +249,24 @@ namespace Nitra.Compiler
         def data = chemicalSymbolData.Dequeue();
         chemicalSymbolEmitters.Add(ChemicalSymbolEmitter(environment, data.TypeBuilder, data.ChemicalSymbolType));
       }
+    }
+
+    private MakeEmitters[TSymbol, TEmitter](buffer : SCG.List[TEmitter], makeEmitter : TSymbol * SCG.Dictionary[TSymbol, TEmitter] * (TSymbol -> void) -> TEmitter) : SCG.Dictionary[TSymbol, TEmitter]
+      where TSymbol : Symbol
+    {
+      def table = SCG.Dictionary();
+      def visitSymbol(symbol)
+      {
+        when (symbol.AssemblyId == AssemblyIds.CurrentAssembly && !table.ContainsKey(symbol))
+        {
+          def emitter = makeEmitter(symbol, table, visitSymbol);
+          table.Add(symbol, emitter);
+          buffer.Add(emitter);
+        }
+      }
+      foreach (symbol in this.Environment.Root.GetDescendants.[TSymbol]())
+        visitSymbol(symbol);
+      table
     }
 
     private ReadMetadata() : void
