@@ -80,8 +80,8 @@ namespace Nitra.Compiler
       }
     }
 
-    private exportableSymbolData   : SCG.List[ExportableSymbolData]  = SCG.List();
-    private chemicalSymbolData     : SCG.List[ChemicalSymbolData]    = SCG.List();
+    private exportableSymbolData   : SCG.Queue[ExportableSymbolData] = SCG.Queue();
+    private chemicalSymbolData     : SCG.Queue[ChemicalSymbolData]   = SCG.Queue();
     private languageEmitters       : SCG.List[LanguageEmitter]       = SCG.List();
     private syntaxModuleEmitters   : SCG.List[SyntaxModuleEmitter]   = SCG.List();
     private astEmitters            : SCG.List[AstEmitter]            = SCG.List();
@@ -106,55 +106,60 @@ namespace Nitra.Compiler
     public AddExportableSymbol(tb : TypeBuilder, exportableSymbolType : option[TypeBuilder]) : void
     {
       def data = ExportableSymbolData(tb, exportableSymbolType);
-      exportableSymbolData.Add(data)
+      exportableSymbolData.Enqueue(data)
     }
 
     public AddChemicalSymbol(tb : TypeBuilder, chemicalSymbolType : option[TypeBuilder]) : void
     {
       def data = ChemicalSymbolData(tb, chemicalSymbolType);
-      chemicalSymbolData.Add(data);
+      chemicalSymbolData.Enqueue(data);
     }
+
+    private mutable _beforeInheritance : bool = false;
 
     public BeforeInheritance() : void
     {
+      when (_beforeInheritance)
+        return;
+      _beforeInheritance = true;
     }
 
-    private LoadParsedSymbols() : bool
+    private LoadParsedSymbols(parseTree : SCG.List[G.Start]) : bool
     {
       def errorCount = this.ErrorCount;
 
-      foreach (start in _parseTree.Values)
+      foreach (start in parseTree)
         start.CollectGlobalSymbols(this.RootNamespace);
 
       this.ErrorCount == errorCount
     }
 
-    private TypeSyntaxModules() : bool
+    private TypeSyntaxModules(parseTree : SCG.List[G.Start]) : bool
     {
       def errorCount  = this.ErrorCount;
 
       def context = RootContext(this, this.RootNamespace, Manager.CoreEnv);
 
-      foreach (start in _parseTree.Values)
+      foreach (start in parseTree)
         _ = start.MakeContext(context);
 
-      foreach (start in _parseTree.Values)
+      foreach (start in parseTree)
         start.TypeLanguage();
 
-      foreach (start in _parseTree.Values)
+      foreach (start in parseTree)
         start.Typing();
 
-      foreach (start in _parseTree.Values)
+      foreach (start in parseTree)
         start.TypeAst();
 
-      foreach (start in _parseTree.Values)
+      foreach (start in parseTree)
         start.TypeSymbolMembers();
 
       TypingUtils.SetOutDependentProperties(this);
 
       TypingUtils.SetNameReferenceSyntaxMapping(this, this.Environment.Manager);
 
-      foreach (start in _parseTree.Values)
+      foreach (start in parseTree)
         start.TypeSyntaxMappings();
 
       TypingUtils.ValidateSyntaxMapping(this);
@@ -277,13 +282,17 @@ namespace Nitra.Compiler
         makeSymbolSymbol(symbolSymbol);
 
       def serializationEmitter = SerializationMacrosImpl.InitCompiler(Manager, SymbolSerializationVersion.V1);
-      foreach (data in exportableSymbolData)
+      while (exportableSymbolData.Count > 0)
+      {
+        def data = exportableSymbolData.Dequeue();
         externalSymbolEmitters.Add(ExternalSymbolEmitter(environment, data.TypeBuilder, data.ExportableSymbolType, serializationEmitter));
-      exportableSymbolData.Clear();
+      }
 
-      foreach (data in chemicalSymbolData)
+      while (chemicalSymbolData.Count > 0)
+      {
+        def data = chemicalSymbolData.Dequeue();
         chemicalSymbolEmitters.Add(ChemicalSymbolEmitter(environment, data.TypeBuilder, data.ChemicalSymbolType));
-      chemicalSymbolData.Clear();
+      }
     }
 
     private DefineParseTree() : void
@@ -333,70 +342,52 @@ namespace Nitra.Compiler
 
     private EmitSymbols() : void
     {
-      try
+      foreach (emitter in externalSymbolEmitters)
+        emitter.Emit();
+      when (!Manager.IsIntelliSenseMode && externalSymbolEmitters.Count > 0)
       {
+        def buffer = SCG.List();
         foreach (emitter in externalSymbolEmitters)
-          emitter.Emit();
-        when (!Manager.IsIntelliSenseMode && externalSymbolEmitters.Count > 0)
-        {
-          def buffer = SCG.List();
-          foreach (emitter in externalSymbolEmitters)
-            buffer.Add(<[ typeof($(emitter.TargetSymbolType.GetMemType() : typed)) ]>);
-          Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ Nitra.Serialization.ExportableSymbolsAttribute(array[..$buffer]) ]>);
-        }
-
-        SerializationMacrosImpl.InitCompiler(Manager, SymbolSerializationVersion.V1).Emit();
+          buffer.Add(<[ typeof($(emitter.TargetSymbolType.GetMemType() : typed)) ]>);
+        Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ Nitra.Serialization.ExportableSymbolsAttribute(array[..$buffer]) ]>);
       }
-      finally externalSymbolEmitters.Clear();
 
-      try
-        foreach (emitter in chemicalSymbolEmitters)
-          emitter.Emit();
-      finally chemicalSymbolEmitters.Clear();
+      SerializationMacrosImpl.InitCompiler(Manager, SymbolSerializationVersion.V1).Emit();
+
+      foreach (emitter in chemicalSymbolEmitters)
+        emitter.Emit();
     }
 
     private EmitSyntaxModules() : void
     {
-      try
+      foreach (emitter in languageEmitters)
+        emitter.Emit();
+      when (!Manager.IsIntelliSenseMode && languageEmitters.Count > 0)
       {
+        def buffer = SCG.List();
         foreach (emitter in languageEmitters)
-          emitter.Emit();
-        when (!Manager.IsIntelliSenseMode && languageEmitters.Count > 0)
-        {
-          def buffer = SCG.List();
-          foreach (emitter in languageEmitters)
-            buffer.Add(<[ typeof($(emitter.Environment.GetLanguageType(emitter.Symbol) : typed)) ]>);
-          Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ Nitra.LanguagesAttribute(array[..$(buffer.ToNList())]) ]>);
-        }
+          buffer.Add(<[ typeof($(emitter.Environment.GetLanguageType(emitter.Symbol) : typed)) ]>);
+        Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ Nitra.LanguagesAttribute(array[..$(buffer.ToNList())]) ]>);
       }
-      finally languageEmitters.Clear();
 
-      try
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.Emit();
+      when (!Manager.IsIntelliSenseMode && syntaxModuleEmitters.Count > 0)
       {
+        def buffer = SCG.List();
         foreach (emitter in syntaxModuleEmitters)
-          emitter.Emit();
-        when (!Manager.IsIntelliSenseMode && syntaxModuleEmitters.Count > 0)
-        {
-          def buffer = SCG.List();
-          foreach (emitter in syntaxModuleEmitters)
-            buffer.Add(<[ typeof($(emitter.GrammarTB.GetMemType() : typed)) ]>);
-          Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ Nitra.GrammarsAttribute(array[..$(buffer.ToNList())]) ]>);
-        }
+          buffer.Add(<[ typeof($(emitter.GrammarTB.GetMemType() : typed)) ]>);
+        Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ Nitra.GrammarsAttribute(array[..$(buffer.ToNList())]) ]>);
       }
-      finally syntaxModuleEmitters.Clear();
     }
 
     private EmitAsts() : void
     {
-      try
-        foreach (emitter in symbolEmitters)
-          emitter.Emit();
-      finally symbolEmitters.Clear();
+      foreach (emitter in symbolEmitters)
+        emitter.Emit();
 
-      try
-        foreach (emitter in astEmitters)
-          emitter.Emit();
-      finally astEmitters.Clear();
+      foreach (emitter in astEmitters)
+        emitter.Emit();
 
       SerializationMacrosImpl.InitCompiler(Manager, SymbolSerializationVersion.V2).Emit();
     }
@@ -459,41 +450,53 @@ namespace Nitra.Compiler
       Manager.Options.EmbeddedResources ::= metadataFileName + ",Nitra.Metadata";
     }
 
+    private mutable _beforeTypedMembers : bool = false;
+
     public BeforeTypedMembers() : void
     {
-      when (_parseTree.Count > 0)
-        try
-        {
-          UpdateProperties();
+      when (_beforeTypedMembers)
+        return;
+      _beforeTypedMembers = true;
 
-          unless (ReadMetadata())
-            throw Recovery();
-          unless (LoadParsedSymbols())
-            throw Recovery();
-          unless (TypeSyntaxModules())
-            throw Recovery();
-          unless (CheckRestrictedNames())
-            throw Recovery();
+      UpdateProperties();
 
-          MakeEmitters();
+      def parseTree = SCG.List();
+      foreach (file in Files)
+        when (file.GetParseTree() is G.Start as pt)
+          parseTree.Add(pt);
 
-          DefineAsts();
-          DefineParseTree();
-          DefineParsers();
+      unless (ReadMetadata())
+        throw Recovery();
+      unless (LoadParsedSymbols(parseTree))
+        throw Recovery();
+      unless (TypeSyntaxModules(parseTree))
+        throw Recovery();
+      unless (CheckRestrictedNames())
+        throw Recovery();
 
-          def writeMetadataCallback(_)
-          {
-            WriteMetadata();
-            Manager.BeforeSaveAssembly -= writeMetadataCallback;
-          }
-          unless (Manager.IsIntelliSenseMode)
-            Manager.BeforeSaveAssembly += writeMetadataCallback;
-        }
-        finally _parseTree.Clear();
+      MakeEmitters();
+
+      DefineAsts();
+      DefineParseTree();
+      DefineParsers();
+
+      def writeMetadataCallback(_)
+      {
+        WriteMetadata();
+        Manager.BeforeSaveAssembly -= writeMetadataCallback;
+      }
+      unless (Manager.IsIntelliSenseMode)
+        Manager.BeforeSaveAssembly += writeMetadataCallback;
     }
+
+    private mutable _withTypedMembers : bool = false;
 
     public WithTypedMembers() : void
     {
+      when (_withTypedMembers)
+        return;
+      _withTypedMembers = true;
+
       DefineSymbols();
 
       EmitSymbols();
