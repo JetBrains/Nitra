@@ -48,8 +48,7 @@ MKDIR bin\Debug\NuGetSource
 MKDIR bin\Release\NuGetSource
 
 IF "%NemerleBinPathRoot%" NEQ "" GOTO CopyNemerleNuGetPkgs
-IF "%ProgramFiles(x86)%" == "" ( SET NemerleBinPathRoot=%ProgramFiles(x86)% ) ELSE ( SET NemerleBinPathRoot=%ProgramFiles% )
-SET NemerleBinPathRoot=%NemerleBinPathRoot%\Nemerle\
+SET NemerleBinPathRoot=%ProgramFiles%\Nemerle\
 
 :CopyNemerleNuGetPkgs
 
