@@ -29,8 +29,8 @@ namespace XXNamespaceXX
       if (buffer.Properties.TryGetProperty(TextBufferProperties.OutliningTagger, out tagger))
         return (ITagger<T>)tagger;
 
-      var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
-      tagger = new OutliningTagger(buffer, nitraSolutionService);
+      //var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
+      tagger = new OutliningTagger(buffer, null);
       buffer.Properties.AddProperty(TextBufferProperties.OutliningTagger, tagger);
       return (ITagger<T>)tagger;
     }

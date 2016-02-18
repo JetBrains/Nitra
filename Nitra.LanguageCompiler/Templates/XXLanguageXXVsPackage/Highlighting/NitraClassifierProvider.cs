@@ -31,8 +31,8 @@ namespace XXNamespaceXX
       if (buffer.Properties.TryGetProperty(TextBufferProperties.NitraClassifier, out classifier))
         return classifier;
 
-      var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
-      classifier = new NitraClassifier(buffer, _classificationTypeRegistry, nitraSolutionService);
+      //var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
+      classifier = new NitraClassifier(buffer, _classificationTypeRegistry, null);
       buffer.Properties.AddProperty(TextBufferProperties.NitraClassifier, classifier);
       return classifier;
     }

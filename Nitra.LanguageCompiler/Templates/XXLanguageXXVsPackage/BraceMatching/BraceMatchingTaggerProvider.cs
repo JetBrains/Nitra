@@ -29,8 +29,8 @@ namespace XXNamespaceXX
       if (buffer.Properties.TryGetProperty(TextBufferProperties.BraceMatchingTagger, out braceMatchingTagger))
         return (ITagger<T>)braceMatchingTagger;
 
-      var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
-      var tagger = new BraceMatchingTagger(Constants.ErrorClassificationTypeName, textView, buffer, nitraSolutionService);
+//      var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
+      var tagger = new BraceMatchingTagger(Constants.ErrorClassificationTypeName, textView, buffer, null);
       buffer.Properties.AddProperty(TextBufferProperties.BraceMatchingTagger, tagger);
       return (ITagger<T>)tagger;
     }
