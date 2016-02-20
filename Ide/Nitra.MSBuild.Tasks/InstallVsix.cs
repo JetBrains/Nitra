@@ -24,10 +24,10 @@ namespace Nitra.MSBuild.Tasks
 
         class VisualStudio
         { 
-            public readonly decimal Version;
+            public readonly string Version;
             public readonly string ExePath;
 
-            public VisualStudio(decimal version, string exePath)
+            public VisualStudio(string version, string exePath)
             {
                 Version = version;
                 ExePath = exePath;
@@ -73,17 +73,16 @@ namespace Nitra.MSBuild.Tasks
                 {
                     decimal v;
                     if (!decimal.TryParse(s, NumberStyles.Number, CultureInfo.InvariantCulture, out v))
-                        return new decimal?();
-                    return v;
+                        return null;
+                    return Tuple.Create(s, v);
                 })
-                .Where(x => x.HasValue)
-                .Select(x => x.Value)
-                .OrderBy(x => x)
+                .Where(x => x != null)
+                .OrderBy(x => x.Item2)
                 .Select(version =>
                     {
-                        var key = @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\VisualStudio\" + version + @"\Setup\VS";
+                        var key = @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\VisualStudio\" + version.Item1 + @"\Setup\VS";
                         var exePath = Registry.GetValue(key, "EnvironmentPath", null) as string;
-                        return exePath != null ? new VisualStudio(version, exePath) : null;
+                        return exePath != null ? new VisualStudio(version.Item1, exePath) : null;
                     })
                 .Where(x => x != null)
                 .ToArray();
