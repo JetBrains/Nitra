@@ -41,6 +41,8 @@ set RemoveCmd=rmdir /S /Q
 %RemoveCmd% Ide\CSharp.VisualStudio.Plugin\obj
 %RemoveCmd% Ide\NitraCSharpVsPackage
 %RemoveCmd% Ide\NitraLangVsPackage
+%RemoveCmd% Ide\Nitra.MSBuild.Tasks\bin
+%RemoveCmd% Ide\Nitra.MSBuild.Tasks\obj
 %RemoveCmd% packages\
 %RemoveCmd% VisualStudioExtensions\NitraVsPackage\packages\
 
