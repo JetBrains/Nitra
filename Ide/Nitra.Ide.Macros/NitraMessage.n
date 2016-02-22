@@ -1,4 +1,5 @@
 ﻿using Nemerle;
+using Nemerle.Assertions;
 using Nemerle.Collections;
 using Nemerle.Compiler;
 using Nemerle.Compiler.Parsetree;
@@ -22,66 +23,89 @@ namespace Nitra.Ide.Macros
   [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
   public macro NitraMessage(ty: TypeBuilder)
   {
-    NitraMessageImpl.Transform(Macros.ImplicitCTX(), ty)
+    NitraMessageImpl(Macros.ImplicitCTX(), ty).Transform()
   }
-  
-  module NitraMessageImpl 
+
+  class NitraMessageImpl 
   {
-    public CheckBind(typer : Typer, type : FixedType) : bool
+    _typer             : Typer;
+    _tb                : TypeBuilder;
+    _messageInterface  : FixedType;
+    _immutableArray_tc : TypeInfo;
+
+    public this([NotNull] _typer : Typer, [NotNull] _tb : TypeBuilder)
     {
-      !(type is FixedType.Void || typer.Manager.InternalType.Object.Equals(type))
+      _typer = typer;
+      _tb    = _tb;
+
+      _messageInterface = _typer.Env.BindFixedType(<[ Nitra.Messages.INitraMessage ]>);
+
+      when (CheckBind(_messageInterface))
+        Message.FatalError(_tb.Location, "Current project must contain INitraMessage interface definition in the Nitra.Messages namespace.");
+        
+      def immutableArray = _typer.Env.BindFixedType(<[ System.Collections.Immutable.ImmutableArray[_] ]>);
+
+      when (CheckBind(immutableArray))
+        Message.FatalError(_tb.Location, "Current project must contain reference to System.Collections.Immutable.dll or implement System.Collections.Immutable.ImmutableArray<>.");
+        
+      _immutableArray_tc = immutableArray.TypeInfo;
+    }
+
+    public IsSupportINitraMessage(type : FixedType) : bool
+    {
+      type.TryRequire(_messageInterface)
     }
     
-    public AddInterface(typer: Typer, tb: TypeBuilder): void
+    public IsImmutableArray(type : FixedType) : bool
     {
-       DefineMacroContext(typer);
-       when (IsSupportedType(tb))
+      type.TypeInfo?.Equals(_immutableArray_tc)
+    }
+    
+    public CheckBind(type : FixedType) : bool
+    {
+      !(type is FixedType.Void || _typer.Manager.InternalType.Object.Equals(type))
+    }
+
+    public AddInterface(): void
+    {
+      DefineMacroContext(_typer);
+      when (IsSupportedType(_tb))
+      {
+        _tb.AddImplementedInterface (<[ $(_messageInterface : typed) ]>);
+      }
+    }
+
+    public Transform(): void
+    {
+       DefineMacroContext(_typer);
+       when (IsSupportedType(_tb))
        {
-         def messageInterface = typer.Env.BindFixedType(<[ Nitra.Messages.INitraMessage ]>);
-         when (CheckBind(typer, messageInterface))
-           tb.AddImplementedInterface (<[ $(messageInterface : typed) ]>);
+          def id = GetNextMessageId(_tb.UserData);
+          _tb.Define(<[decl: public static MsgId: short { get { $id }} ]>);
+
+          def fields = _tb.GetFields().Filter(x => !x.IsStatic);
+          //_ = Diagnostics.Debugger.Launch();
+          def serializeExprs = <[ writer.Write($id); ]> :: fields.Map(x => Serialize(x));
+          def deserializeExprs = fields.Map(x => Deserialize(x));
+
+          _tb.Define(
+          <[decl: 
+            public Serialize(writer : BinaryWriter): void 
+            {
+              ..$serializeExprs
+            }
+          ]>);
+
+          _tb.Define(
+          <[decl: 
+            public Deserialize(reader : BinaryReader): $(_tb.Name: usesite)
+            {
+              ..$deserializeExprs
+            }
+          ]>);
        }
     }
-    
-    public Transform(typer: Typer, tb: TypeBuilder): void
-    {
-       DefineMacroContext(typer);
-       when (IsSupportedType(tb))
-       {
-         def messageInterface = typer.Env.BindFixedType(<[ Nitra.Messages.INitraMessage ]>);
-         if (CheckBind(typer, messageInterface))
-         {
-           def id = GetNextMessageId(tb.UserData);
-           tb.Define(<[decl: public static MsgId: short { get { $id }} ]>);
-           
-           def fields = tb.GetFields().Filter(x => !x.IsStatic);
-           //_ = Diagnostics.Debugger.Launch();
-           def serializeExprs = <[ writer.Write($id); ]> :: fields.Map(x => Serialize(x, messageInterface));
-           def deserializeExprs = fields.Map(x => Deserialize(x, messageInterface));
-             
-           tb.Define(
-           <[decl: 
-             public Serialize(writer: BinaryWriter): void 
-             {
-               ..$serializeExprs
-             }
-           ]>);
-           
-           
-           
-           tb.Define(
-           <[decl: 
-             public Deserialize(reader: BinaryReader): $(tb.Name: usesite)
-             {
-               ..$deserializeExprs
-             }
-           ]>);
-         }
-         else 
-           Message.Error(tb.Location, "Current project must contain INitraMessage interface definition");
-       }
-    }
-    
+
     GetNextMessageId(userData: System.Collections.IDictionary): short
     {
       def key = "nitra_message_id";
@@ -89,29 +113,91 @@ namespace Nitra.Ide.Macros
       userData[key] = id;
       id
     }
-    
-    IsSupportedType(tb: TypeBuilder): bool {
-      match (tb) {
-      | _ when tb.IsDelegate with n = "delegates"
-      | _ when tb.IsInterface with n = "interfaces"
-      | _ when tb.IsModule with n = "modules" => 
-          Message.Error(tb.Location, $"$n are not supported."); 
+
+    IsSupportedType(_tb: TypeBuilder): bool
+    {
+      match (_tb) {
+      | _ when _tb.IsDelegate with n = "delegates"
+      | _ when _tb.IsInterface with n = "interfaces"
+      | _ when _tb.IsModule with n = "modules" => 
+          Message.Error(_tb.Location, $"$n are not supported."); 
           false
       | _ => true
       }
     }
-    
-    Serialize(field: IField, messageInterface: FixedType): PExpr
+
+    Serialize(field : IField): PExpr
     {
-      //if (ty.GetInterfaces().Exists(x => x.Name == messageInterface.TypeInfo.Name)) 
-//        <[ $(field.Name: usesite).Serialize(writer); ]>
-  //    else 
+      def name = field.Name;
+      def type = field.GetMemType();
+      
+      if (IsSupportINitraMessage(type))
+        <[ (this.$(name : usesite) : $(_messageInterface : typed)).Serialize(writer); ]>
+      else if (type.IsPrimitive)
         <[ writer.Write($(field.Name: usesite)); ]>
+      else
+      {
+        Message.Error(field.Location, $"The NitraMessage macro support typese which implement Nitra.Messages.INitraMessage interface or primitive types. Try to add NitraMessage macro attribute to $type type.");
+        <[ () ]>
+      }
     }
-    
-    Deserialize(field: IField, messageInterface: FixedType): PExpr
+
+    Deserialize(field : IField): PExpr
     {
-      <[]> // reader.Read($(
+      def name = field.Name;
+      def type = field.GetMemType();
+
+      if (type.IsPrimitive)
+        DeserializePrimitive(type, name)
+      else if (IsImmutableArray(type))
+      {
+        <[
+          def len = reader.ReadUInt32();
+          assert(len >= 0);
+          if (len == 0)
+            System.Collections.Immutable.ImmutableArray[$(type : typed)]
+          else
+          {
+            def builder = System.Collections.Immutable.ImmutableArray[$(type : typed)].Builder();
+            
+          }
+        ]>
+      }
+      else if (IsSupportINitraMessage(type))
+        <[ (this.$(name : usesite) : $(_messageInterface : typed)).Deserialize(reader); ]>
+      else
+        assert(false)
+    }
+
+    DeserializePrimitive(type : FixedType, name : string) : PExpr
+    {
+      def ti = type.TypeInfo;
+      assert(ti != null);
+      def internalType = _typer.InternalType;
+
+      def readExpr =
+        if (internalType.Int16_tc.Equals(ti))        <[ ReadInt16 ]>
+        else if (internalType.Int32_tc.Equals(ti))   <[ ReadInt32 ]>
+        else if (internalType.Int64_tc.Equals(ti))   <[ ReadInt64 ]>
+        else if (internalType.Char_tc.Equals(ti))    <[ ReadChar ]>
+        else if (internalType.SByte_tc.Equals(ti))   <[ ReadSByte ]>
+                                                     
+        else if (internalType.UInt16_tc.Equals(ti))  <[ ReadUInt16 ]>
+        else if (internalType.UInt32_tc.Equals(ti))  <[ ReadUInt32 ]>
+        else if (internalType.UInt64_tc.Equals(ti))  <[ ReadUInt64 ]>
+        else if (internalType.Byte_tc.Equals(ti))    <[ ReadByte ]>
+                                                     
+        else if (internalType.Single_tc.Equals(ti))  <[ ReadSingle ]>
+        else if (internalType.Double_tc.Equals(ti))  <[ ReadDouble ]>
+        else if (internalType.Decimal_tc.Equals(ti)) <[ ReadDecimal ]>
+        
+        else if (internalType.Boolean_tc.Equals(ti)) <[ ReadBoolean ]>
+        
+        else if (internalType.String_tc.Equals(ti))  <[ ReadString ]>
+        else
+          assert(false);
+      
+      <[ $(name : usesite) = reader.$readExpr() ]>
     }
   }
 }
