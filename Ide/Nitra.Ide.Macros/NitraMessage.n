@@ -14,12 +14,6 @@ using System.Linq;
 
 namespace Nitra.Ide.Macros
 {
-  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
-  public macro NitraMessage(ty: TypeBuilder)
-  {
-    NitraMessageImpl.AddInterface(Macros.ImplicitCTX(), ty)
-  }
-
   [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
   public macro NitraMessage(ty: TypeBuilder)
   {
@@ -30,80 +24,111 @@ namespace Nitra.Ide.Macros
   {
     _typer             : Typer;
     _tb                : TypeBuilder;
-    _messageInterface  : FixedType;
     _immutableArray_tc : TypeInfo;
+    _binaryWriterType  : FixedType.Class;
+    _binaryReaderType  : FixedType.Class;
 
-    public this([NotNull] _typer : Typer, [NotNull] _tb : TypeBuilder)
+    public this([NotNull] typer : Typer, [NotNull] tb : TypeBuilder)
     {
       _typer = typer;
-      _tb    = _tb;
+      _tb    = tb;
 
-      _messageInterface = _typer.Env.BindFixedType(<[ Nitra.Messages.INitraMessage ]>);
+      DefineMacroContext(typer);
 
-      when (CheckBind(_messageInterface))
-        Message.FatalError(_tb.Location, "Current project must contain INitraMessage interface definition in the Nitra.Messages namespace.");
-        
-      def immutableArray = _typer.Env.BindFixedType(<[ System.Collections.Immutable.ImmutableArray[_] ]>);
+      def immutableArray = <[ ttype: System.Collections.Immutable.ImmutableArray[_] ]>;
 
-      when (CheckBind(immutableArray))
+      unless (CheckBind(immutableArray))
         Message.FatalError(_tb.Location, "Current project must contain reference to System.Collections.Immutable.dll or implement System.Collections.Immutable.ImmutableArray<>.");
-        
+
       _immutableArray_tc = immutableArray.TypeInfo;
+
+      _binaryWriterType = <[ ttype: System.IO.BinaryWriter ]>;
+      _binaryReaderType = <[ ttype: System.IO.BinaryReader ]>;
     }
 
-    public IsSupportINitraMessage(type : FixedType) : bool
+    public IsSupportSerialize(type : FixedType) : bool
     {
-      type.TryRequire(_messageInterface)
+      def members = type.TypeInfo?.LookupMember("Serialize");
+      
+      match (members)
+      {
+        | [method is MethodBuilder] => 
+          method.Header.Parameters.Length == 1 
+          && method.Header.Parameters.Head.Type.Equals(_binaryWriterType)
+          && method.ReturnType is FixedType.Void
+          && !method.IsStatic
+          && method.IsPublic
+          
+        | _ => false
+      }
     }
-    
+
+    public IsSupportDeserialize(type : FixedType) : bool
+    {
+      def members = type.TypeInfo?.LookupMember("Deserialize");
+      
+      match (members)
+      {
+        | [method is MethodBuilder] => 
+          method.Header.Parameters.Length == 1 
+          && method.Header.Parameters.Head.Type.Equals(_binaryReaderType)
+          && method.ReturnType.Equals(type)
+          && method.IsStatic
+          && method.IsPublic
+          
+        | _ => false
+      }
+    }
+
     public IsImmutableArray(type : FixedType) : bool
     {
       type.TypeInfo?.Equals(_immutableArray_tc)
     }
-    
+
+    public IsNemerleList(type : FixedType) : bool
+    {
+      type.TypeInfo?.Equals(_typer.InternalType.Nemerle_list_tc)
+    }
+
     public CheckBind(type : FixedType) : bool
     {
       !(type is FixedType.Void || _typer.Manager.InternalType.Object.Equals(type))
     }
 
-    public AddInterface(): void
+    public Transform(): void
     {
       DefineMacroContext(_typer);
       when (IsSupportedType(_tb))
       {
-        _tb.AddImplementedInterface (<[ $(_messageInterface : typed) ]>);
-      }
-    }
+        def type = _tb.GetMemType();
+        def id = GetNextMessageId(_tb.UserData);
+        _tb.Define(<[decl: public static MsgId : short { get { $id }} ]>);
 
-    public Transform(): void
-    {
-       DefineMacroContext(_typer);
-       when (IsSupportedType(_tb))
-       {
-          def id = GetNextMessageId(_tb.UserData);
-          _tb.Define(<[decl: public static MsgId: short { get { $id }} ]>);
+        def fields         = _tb.GetFields().Filter(x => !x.IsStatic);
+        def serializeExprs = <[ writer.Write($id); ]> :: fields.Map(x => Serialize(x));
 
-          def fields = _tb.GetFields().Filter(x => !x.IsStatic);
-          //_ = Diagnostics.Debugger.Launch();
-          def serializeExprs = <[ writer.Write($id); ]> :: fields.Map(x => Serialize(x));
-           def deserializeExprs = fields.Map(x => Deserialize(x)).Rev();
-
-          _tb.Define(
+        _ = _tb.DefineWithSource(
           <[decl: 
-            public Serialize(writer : BinaryWriter): void 
+            public Serialize(writer : System.IO.BinaryWriter) : void 
             {
+              writer.Write($(type : typed).MsgId);
               ..$serializeExprs
             }
           ]>);
 
-          _tb.Define(
+        def deserializeExprs = fields.Map(x => Deserialize(x)).Rev();
+
+        _ = _tb.DefineWithSource(
           <[decl: 
-             public static Deserialize(reader: BinaryReader): $(tb.Name: usesite)
+            public static Deserialize(reader : System.IO.BinaryReader) : $(type : typed)
             {
-               $(tb.Name: usesite)(..$deserializeExprs)
+              def msgId = reader.ReadInt16();
+              assert2(msgId == $(type : typed).MsgId);
+              assert(msgId == $(type : typed).MsgId);
+              $(type : typed)(..$deserializeExprs)
             }
           ]>);
-       }
+      }
     }
 
     GetNextMessageId(userData: System.Collections.IDictionary): short
@@ -116,60 +141,145 @@ namespace Nitra.Ide.Macros
 
     IsSupportedType(_tb: TypeBuilder): bool
     {
-      match (_tb) {
-      | _ when _tb.IsDelegate with n = "delegates"
-      | _ when _tb.IsInterface with n = "interfaces"
-      | _ when _tb.IsModule with n = "modules" => 
-          Message.Error(_tb.Location, $"$n are not supported."); 
-          false
-      | _ => true
+      match (_tb)
+      {
+        | _ when _tb.IsDelegate with n = "delegates"
+        | _ when _tb.IsInterface with n = "interfaces"
+        | _ when _tb.IsModule with n = "modules" => 
+            Message.Error(_tb.Location, $"$n are not supported."); 
+            false
+        | _ => true
       }
     }
 
     Serialize(field : IField): PExpr
     {
-      def name = field.Name;
       def type = field.GetMemType();
-      
-      if (IsSupportINitraMessage(type))
-        <[ (this.$(name : usesite) : $(_messageInterface : typed)).Serialize(writer); ]>
-      else if (type.IsPrimitive)
-      <[ writer.Write($(field.Name: usesite)); ]>
-      else
+      def expr = SerializeValue(type, <[ this.$(field.Name : usesite) ]>);
+      if (expr == null)
       {
+        assert2(false);
         Message.Error(field.Location, $"The NitraMessage macro support typese which implement Nitra.Messages.INitraMessage interface or primitive types. Try to add NitraMessage macro attribute to $type type.");
         <[ () ]>
+      }
+      else
+        expr
+    }
+
+    SerializeValue(type : FixedType, valueExpr : PExpr): PExpr
+    {
+      if (IsSupportSerialize(type))
+        <[ $valueExpr.Serialize(writer); ]>
+      else if (type.IsPrimitive)
+        <[ writer.Write($valueExpr); ]>
+      else if (type.Equals(_typer.InternalType.String))
+        <[ writer.Write($valueExpr ?? ""); ]>
+      else if (IsNemerleList(type))
+      {
+        def elemType = (type :> FixedType.Class).args.Head :> FixedType;
+
+        <[
+          def lst = $valueExpr;
+          def len = lst.Length;
+          writer.Write(len);
+          def loop(lst : list[_]) : void
+          {
+            | head :: tail => 
+              loop(tail); // reverse order (can cause StackOverflowException)
+              $(SerializeValue(elemType, <[ head ]>));
+
+            | null | [] => ()
+          }
+
+          loop(lst)
+        ]>
+      }
+      else if (IsImmutableArray(type))
+      {
+        def elemType = (type :> FixedType.Class).args.Head :> FixedType;
+
+        <[
+          def immutableArray = $valueExpr;
+          def len = immutableArray.Length;
+          writer.Write(len);
+          foreach (elem in immutableArray)
+              $(SerializeValue(elemType, <[ elem ]>));
+        ]>
+      }
+      else
+      {
+        null
       }
     }
 
     Deserialize(field : IField): PExpr
     {
-      def name = field.Name;
-      def type = field.GetMemType();
+      DeserializeValue(field.GetMemType())
+    }
 
-      if (type.IsPrimitive)
-        DeserializePrimitive(type, name)
+    DeserializeValue(type : FixedType) : PExpr
+    {
+      DefineMacroContext(_typer);
+
+      if (type.IsPrimitive || type.Equals(_typer.InternalType.String))
+        DeserializePrimitiveValue(type)
+      else if (IsNemerleList(type))
+      {
+        def elemType = (type :> FixedType.Class).args.Head :> FixedType;
+
+        <[
+          def len = reader.ReadUInt32();
+          assert(len >= 0);
+          def loop(i : int, result)
+          {
+            if (i > 0)
+            {
+              def value = $(DeserializeValue(elemType));
+              loop(i - 1, value :: result);
+            }
+            else result
+          }
+
+          loop(len, [])
+        ]>
+      }
       else if (IsImmutableArray(type))
       {
+        def elemType = (type :> FixedType.Class).args.Head :> FixedType;
+
         <[
           def len = reader.ReadUInt32();
           assert(len >= 0);
           if (len == 0)
-            System.Collections.Immutable.ImmutableArray[$(type : typed)]
+            System.Collections.Immutable.ImmutableArray.[$(elemType : typed)]
           else
           {
-            def builder = System.Collections.Immutable.ImmutableArray[$(type : typed)].Builder();
-            
+            def builder = System.Collections.Immutable.ImmutableArray[$(elemType : typed)].Builder();
+            def loop(i : int) : void
+            {
+              when (i > 0)
+              {
+                def value = $(DeserializeValue(elemType));
+                builder.Add(value);
+                loop(i - 1);
+              }
+            }
+
+            loop(len);
+            builder.ToImmutable();
           }
         ]>
       }
-      else if (IsSupportINitraMessage(type))
-        <[ (this.$(name : usesite) : $(_messageInterface : typed)).Deserialize(reader); ]>
+      else if (IsSupportDeserialize(type))
+        <[ $(type : typed).Deserialize(reader); ]>
       else
-        assert(false)
+      {
+        Message.Error($"Type '$type' don't support deserialization because have no method 'public static Deserialize(reader : System.IO.BinaryReader) : $type'.");
+        <[ default(type) ]>
+      }
     }
 
-    DeserializePrimitive(type : FixedType, name : string) : PExpr
+    DeserializePrimitiveValue(type : FixedType) : PExpr
     {
       def ti = type.TypeInfo;
       assert(ti != null);
@@ -181,23 +291,23 @@ namespace Nitra.Ide.Macros
         else if (internalType.Int64_tc.Equals(ti))   <[ ReadInt64 ]>
         else if (internalType.Char_tc.Equals(ti))    <[ ReadChar ]>
         else if (internalType.SByte_tc.Equals(ti))   <[ ReadSByte ]>
-                                                     
+
         else if (internalType.UInt16_tc.Equals(ti))  <[ ReadUInt16 ]>
         else if (internalType.UInt32_tc.Equals(ti))  <[ ReadUInt32 ]>
         else if (internalType.UInt64_tc.Equals(ti))  <[ ReadUInt64 ]>
         else if (internalType.Byte_tc.Equals(ti))    <[ ReadByte ]>
-                                                     
+
         else if (internalType.Single_tc.Equals(ti))  <[ ReadSingle ]>
         else if (internalType.Double_tc.Equals(ti))  <[ ReadDouble ]>
         else if (internalType.Decimal_tc.Equals(ti)) <[ ReadDecimal ]>
-        
+
         else if (internalType.Boolean_tc.Equals(ti)) <[ ReadBoolean ]>
-        
+
         else if (internalType.String_tc.Equals(ti))  <[ ReadString ]>
         else
           assert(false);
-      
-      <[ $(name : usesite) = reader.$readExpr() ]>
+
+      <[ reader.$readExpr() ]>
     }
   }
 }
