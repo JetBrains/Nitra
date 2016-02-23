@@ -105,7 +105,8 @@ namespace Nitra.Ide.Macros
     class RecordField
     {
       public Name: string;
-      public Type: FixedType
+      public Type: FixedType;
+      public Declared: bool
     }
     
     public Transform(): void
@@ -114,42 +115,54 @@ namespace Nitra.Ide.Macros
       {
         def type = _tb.GetMemType();
         def id = GetNextMessageId(_tb.UserData);
-        _tb.Define(<[decl: public static MsgId : short { get { $id }} ]>);
         def fields = GetRecordFields();
-        def serializeExprs = <[ writer.Write($(type : typed).MsgId); ]> :: fields.Map(Serialize);
+        def serializeExprs = fields.Filter(_.Declared).Map(Serialize);
+        def define(x) { _ = _tb.DefineWithSource(x) }
         
-        _ = _tb.DefineWithSource(
-          if (_tb.IsStruct)
-            <[decl: 
-              public Serialize(writer : System.IO.BinaryWriter) : void 
-              {
-                ..$(serializeExprs)
-              }
-            ]>
-          else if (_tb.GetSuperTypes().Exists(IsSupportSerialize))
-            <[decl: 
-              public override Serialize(writer : System.IO.BinaryWriter) : void 
-              {
-                base.Serialize(writer);
-                ..$(serializeExprs)
-              }
-            ]>
-          else
-            <[decl: 
-              public virtual Serialize(writer : System.IO.BinaryWriter) : void 
-              {
-                ..$(serializeExprs)
-              }
-            ]>);
+        if (_tb.IsStruct)
+        {
+          define(<[decl: public MsgId: short { get { $id }} ]>);
+          define(
+          <[decl: 
+            public Serialize(writer : System.IO.BinaryWriter) : void 
+            {
+              writer.Write(this.MsgId);
+              ..$(serializeExprs)
+            }
+          ]>);
+        }
+        else if (_tb.GetSuperTypes().Exists(IsSupportSerialize))
+        {
+          define(<[decl: public override MsgId: short { get { $id }} ]>);
+          define(<[decl: 
+            public override Serialize(writer : System.IO.BinaryWriter) : void 
+            {
+              base.Serialize(writer);
+              ..$(serializeExprs)
+            }
+          ]>);
+        }
+        else
+        {
+          define(<[decl: public virtual MsgId: short { get { $id }} ]>);
+          define(<[decl: 
+            public virtual Serialize(writer : System.IO.BinaryWriter) : void 
+            {
+              writer.Write(this.MsgId);
+              ..$(serializeExprs)
+            }
+          ]>);
+        }
 
-        _ = _tb.DefineWithSource(
+        define(
           <[decl: 
             public static Deserialize(reader : System.IO.BinaryReader) : $(type : typed)
             {
               def msgId = reader.ReadInt16();
-              assert2(msgId == $(type : typed).MsgId);
-              assert(msgId == $(type : typed).MsgId);
-              $(type : typed)(..$(fields.Map(Deserialize)))
+              def msg = $(type : typed)(..$(fields.Map(Deserialize)));
+              assert2(msgId == msg.MsgId);
+              assert(msgId == msg.MsgId);
+              msg
             }
           ]>);
       }
@@ -163,16 +176,16 @@ namespace Nitra.Ide.Macros
       def recordCtor = 
         _tb.GetConstructors(BindingFlags.Public).Find(m => m.IsCustomAttributeDefined("Nemerle.Internal.RecordCtorAttribute"));
       
-      def declaredFieldNames = _tb.GetFields(BindingFlags.DeclaredOnly).Filter(x => !x.IsStatic).Map(x => x.Name);
-      Message.Hint(declaredFieldNames.ToString());
+      def declaredFieldNames = _tb.GetFields(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public).Filter(x => !x.IsStatic).Map(x => x.Name);
       match (recordCtor)
       {
-        | Some(ctor) => ctor.GetParameters().Map(param => 
+        | Some(ctor) => 
+          ctor.GetParameters().Map(param => 
           {
             match (param.AttributesAndModifiers.FindAttributeWithArgs(mappedMemberAttr, _tb.GlobalEnv)) 
             {
-              | Some((_, [<[$(name: string)]>])) when declaredFieldNames.Contains(name) => 
-                  RecordField(name, param.Type.FixedValue)
+              | Some((_, [<[$(name: string)]>])) =>
+                  RecordField(name, param.Type.FixedValue, declaredFieldNames.Contains(name))
               | _ => assert(false)
             }
           })
