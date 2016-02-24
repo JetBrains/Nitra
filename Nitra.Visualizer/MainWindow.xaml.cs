@@ -57,6 +57,7 @@ namespace Nitra.Visualizer
     bool _doTreeOperation;
     bool _doChangeCaretPos;
     readonly Timer _parseTimer;
+    readonly Timer _nodeForCaretTimer;
     readonly Dictionary<string, HighlightingColor> _highlightingStyles;
     readonly TextMarkerService _textMarkerService;
     readonly NitraFoldingStrategy _foldingStrategy;
@@ -99,7 +100,9 @@ namespace Nitra.Visualizer
       _foldingStrategy          = new NitraFoldingStrategy();
       _textBox1Tooltip          = new ToolTip { PlacementTarget = _text };
       _parseTimer               = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
-      _parseTimer.Elapsed      += _parseTimer_Elapsed;
+      _parseTimer.Elapsed       += _parseTimer_Elapsed;
+      _nodeForCaretTimer        = new Timer {AutoReset = false, Enabled = false, Interval = 500};
+      _nodeForCaretTimer.Elapsed += _nodeForCaretTimer_Elapsed;
 
       _text.TextArea.Caret.PositionChanged += Caret_PositionChanged;
 
@@ -121,7 +124,7 @@ namespace Nitra.Visualizer
         LoadTests();
     }
 
-    private void Window_Loaded(object sender, RoutedEventArgs e)
+      private void Window_Loaded(object sender, RoutedEventArgs e)
     {
       _loading = false;
 
@@ -204,7 +207,9 @@ namespace Nitra.Visualizer
       var caretPos = _text.CaretOffset;
       _pos.Text = caretPos.ToString(CultureInfo.InvariantCulture);
       TryHighlightBraces(caretPos);
-      ShowNodeForCaret();
+
+      _nodeForCaretTimer.Stop();
+      _nodeForCaretTimer.Start();
     }
 
     private void TryHighlightBraces(int caretPos)
@@ -541,6 +546,11 @@ namespace Nitra.Visualizer
     void _parseTimer_Elapsed(object sender, ElapsedEventArgs e)
     {
       Reparse();
+    }
+
+    private void _nodeForCaretTimer_Elapsed(object sender, ElapsedEventArgs e)
+    {
+      Dispatcher.Invoke(new Action(ShowNodeForCaret));
     }
 
     private RecoveryAlgorithm GetRecoveryAlgorithm()
