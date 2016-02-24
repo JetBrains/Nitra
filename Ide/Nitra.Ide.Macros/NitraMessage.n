@@ -17,13 +17,13 @@ namespace Nitra.Ide.Macros
   [MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
   public macro NitraMessage(tb: TypeBuilder)
   {
-    tb.AddMacroAttribute(<[ Nemerle.Core.Record ]>)
+    NitraMessageImpl(Macros.ImplicitCTX(), tb).TransformBeforeTypedMembers()
   }
 
   [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
   public macro NitraMessage(tb: TypeBuilder)
   {
-    NitraMessageImpl(Macros.ImplicitCTX(), tb).Transform()
+    NitraMessageImpl(Macros.ImplicitCTX(), tb).TransformWithTypedMembers()
   }
 
   class NitraMessageImpl 
@@ -52,19 +52,27 @@ namespace Nitra.Ide.Macros
       _binaryReaderType = <[ ttype: System.IO.BinaryReader ]>;
     }
 
-    public IsSupportSerialize(type : FixedType) : bool
+    FindSerializeMethod(type: FixedType): option[MethodBuilder]
     {
       def members = type.TypeInfo?.LookupMember("Serialize");
       
       match (members)
       {
-        | [method is MethodBuilder] => 
+        | [method is MethodBuilder] => Some(method)
+        | _ => None()
+      }
+    }
+    
+    public IsSupportSerialize(type : FixedType) : bool
+    {
+      match (FindSerializeMethod(type))
+      {
+        | Some(method) => 
           method.Header.Parameters.Length == 1 
           && method.Header.Parameters.Head.Type.Equals(_binaryWriterType)
           && method.ReturnType is FixedType.Void
           && !method.IsStatic
           && method.IsPublic
-          
         | _ => false
       }
     }
@@ -109,52 +117,64 @@ namespace Nitra.Ide.Macros
       public Declared: bool
     }
     
-    public Transform(): void
+    public TransformBeforeTypedMembers(): void
     {
       when (IsSupportedType(_tb))
       {
-        def type = _tb.GetMemType();
         def id = GetNextMessageId(_tb.UserData);
-        def fields = GetRecordFields();
-        def serializeExprs = fields.Filter(_.Declared).Map(Serialize);
-        def define(x) { _ = _tb.DefineWithSource(x) }
         
         if (_tb.IsStruct)
         {
-          define(<[decl: public MsgId: short { get { $id }} ]>);
-          define(
+          Define(<[decl: public MsgId: short { get { $id }} ]>);
+          Define(
           <[decl: 
             public Serialize(writer : System.IO.BinaryWriter) : void 
             {
               writer.Write(this.MsgId);
-              ..$(serializeExprs)
             }
           ]>);
         }
         else if (_tb.GetSuperTypes().Exists(IsSupportSerialize))
         {
-          define(<[decl: public override MsgId: short { get { $id }} ]>);
-          define(<[decl: 
+          Define(<[decl: public override MsgId: short { get { $id }} ]>);
+          Define(<[decl: 
             public override Serialize(writer : System.IO.BinaryWriter) : void 
             {
               base.Serialize(writer);
-              ..$(serializeExprs)
             }
           ]>);
         }
         else
         {
-          define(<[decl: public virtual MsgId: short { get { $id }} ]>);
-          define(<[decl: 
+          Define(<[decl: public virtual MsgId: short { get { $id }} ]>);
+          Define(<[decl: 
             public virtual Serialize(writer : System.IO.BinaryWriter) : void 
             {
               writer.Write(this.MsgId);
-              ..$(serializeExprs)
             }
           ]>);
         }
+      
+        _tb.AddMacroAttribute(<[ Nemerle.Core.Record ]>);
+      }
+    }
+    
+    public TransformWithTypedMembers(): void
+    {
+      def type = _tb.GetMemType();
 
-        define(
+      when (IsSupportedType(_tb))
+      when (FindSerializeMethod(type) is Some(serializeMethod))
+      {
+        def fields = GetRecordFields();
+        
+        serializeMethod.Body = 
+        <[ 
+           $(serializeMethod.Body);
+           ..$(fields.Filter(_.Declared).Map(Serialize))
+        ]>;
+
+        Define(
           <[decl: 
             public static Deserialize(reader : System.IO.BinaryReader) : $(type : typed)
             {
@@ -167,6 +187,8 @@ namespace Nitra.Ide.Macros
           ]>);
       }
     }
+    
+    Define(member: ClassMember): void { _ = _tb.DefineWithSource(member) }
     
     GetRecordFields(): list[RecordField] 
     {
