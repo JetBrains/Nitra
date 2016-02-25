@@ -17,13 +17,13 @@ namespace Nitra.Ide.Macros
   [MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
   public macro NitraMessage(tb: TypeBuilder)
   {
-    NitraMessageImpl(Macros.ImplicitCTX(), tb).TransformBeforeTypedMembers()
+    tb.AddMacroAttribute(<[ Nemerle.Core.Record ]>)
   }
 
   [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
   public macro NitraMessage(tb: TypeBuilder)
   {
-    NitraMessageImpl(Macros.ImplicitCTX(), tb).TransformWithTypedMembers()
+    NitraMessageImpl(Macros.ImplicitCTX(), tb).Transform()
   }
 
   class NitraMessageImpl 
@@ -52,27 +52,19 @@ namespace Nitra.Ide.Macros
       _binaryReaderType = <[ ttype: System.IO.BinaryReader ]>;
     }
 
-    FindSerializeMethod(type: FixedType): option[MethodBuilder]
+    public IsSupportSerialize(type : FixedType) : bool
     {
       def members = type.TypeInfo?.LookupMember("Serialize");
       
       match (members)
       {
-        | [method is MethodBuilder] => Some(method)
-        | _ => None()
-      }
-    }
-    
-    public IsSupportSerialize(type : FixedType) : bool
-    {
-      match (FindSerializeMethod(type))
-      {
-        | Some(method) => 
+        | [method is MethodBuilder] => 
           method.Header.Parameters.Length == 1 
           && method.Header.Parameters.Head.Type.Equals(_binaryWriterType)
           && method.ReturnType is FixedType.Void
           && !method.IsStatic
           && method.IsPublic
+          
         | _ => false
       }
     }
@@ -117,64 +109,52 @@ namespace Nitra.Ide.Macros
       public Declared: bool
     }
     
-    public TransformBeforeTypedMembers(): void
+    public Transform(): void
     {
       when (IsSupportedType(_tb))
       {
+        def type = _tb.GetMemType();
         def id = GetNextMessageId(_tb.UserData);
+        def fields = GetRecordFields();
+        def serializeExprs = fields.Filter(_.Declared).Map(Serialize);
+        def define(x) { _ = _tb.DefineWithSource(x) }
         
         if (_tb.IsStruct)
         {
-          Define(<[decl: public MsgId: short { get { $id }} ]>);
-          Define(
+          define(<[decl: public MsgId: short { get { $id }} ]>);
+          define(
           <[decl: 
-            public Serialize($("writer" : global) : System.IO.BinaryWriter) : void 
+            public Serialize(writer : System.IO.BinaryWriter) : void 
             {
-              $("writer" : global).Write(this.MsgId);
+              writer.Write(this.MsgId);
+              ..$(serializeExprs)
             }
           ]>);
         }
         else if (_tb.GetSuperTypes().Exists(IsSupportSerialize))
         {
-          Define(<[decl: public override MsgId: short { get { $id }} ]>);
-          Define(<[decl: 
-            public override Serialize($("writer" : global) : System.IO.BinaryWriter) : void 
+          define(<[decl: public override MsgId: short { get { $id }} ]>);
+          define(<[decl: 
+            public override Serialize(writer : System.IO.BinaryWriter) : void 
             {
-              base.Serialize($("writer" : global));
+              base.Serialize(writer);
+              ..$(serializeExprs)
             }
           ]>);
         }
         else
         {
-          Define(<[decl: public virtual MsgId: short { get { $id }} ]>);
-          Define(<[decl: 
-            public virtual Serialize($("writer" : global) : System.IO.BinaryWriter) : void 
+          define(<[decl: public virtual MsgId: short { get { $id }} ]>);
+          define(<[decl: 
+            public virtual Serialize(writer : System.IO.BinaryWriter) : void 
             {
-              $("writer" : global).Write(this.MsgId);
+              writer.Write(this.MsgId);
+              ..$(serializeExprs)
             }
           ]>);
         }
-      
-        _tb.AddMacroAttribute(<[ Nemerle.Core.Record ]>);
-      }
-    }
-    
-    public TransformWithTypedMembers(): void
-    {
-      def type = _tb.GetMemType();
 
-      when (IsSupportedType(_tb))
-      when (FindSerializeMethod(type) is Some(serializeMethod))
-      {
-        def fields = GetRecordFields();
-        
-        serializeMethod.Body = 
-        <[ 
-           $(serializeMethod.Body);
-           ..$(fields.Filter(_.Declared).Map(Serialize))
-        ]>;
-
-        Define(
+        define(
           <[decl: 
             public static Deserialize(reader : System.IO.BinaryReader) : $(type : typed)
             {
@@ -187,8 +167,6 @@ namespace Nitra.Ide.Macros
           ]>);
       }
     }
-    
-    Define(member: ClassMember): void { _ = _tb.DefineWithSource(member) }
     
     GetRecordFields(): list[RecordField] 
     {
@@ -253,11 +231,11 @@ namespace Nitra.Ide.Macros
     SerializeValue(type : FixedType, valueExpr : PExpr): PExpr
     {
       if (IsSupportSerialize(type))
-        <[ $valueExpr.Serialize($("writer" : global)); ]>
+        <[ $valueExpr.Serialize(writer); ]>
       else if (type.IsPrimitive)
-        <[ $("writer" : global).Write($valueExpr); ]>
+        <[ writer.Write($valueExpr); ]>
       else if (type.Equals(_typer.InternalType.String))
-        <[ $("writer" : global).Write($valueExpr ?? ""); ]>
+        <[ writer.Write($valueExpr ?? ""); ]>
       else if (IsNemerleList(type))
       {
         def elemType = (type :> FixedType.Class).args.Head :> FixedType;
@@ -266,12 +244,12 @@ namespace Nitra.Ide.Macros
           def lst = $valueExpr;
           if (lst == null)
           {
-            $("writer" : global).Write(0 : UInt32)
+            writer.Write(0 : UInt32)
           }
           else
           {
             def len = lst.Length;
-            $("writer" : global).Write(len);
+            writer.Write(len);
             def loop(lst : list[_]) : void
             {
               | head :: tail => 
@@ -295,11 +273,11 @@ namespace Nitra.Ide.Macros
           // property first.
           if (immutableArray.IsDefault)
           {
-            $("writer" : global).Write(0 : UInt32); 
+            writer.Write(0 : UInt32); 
           }
           else
           {
-            $("writer" : global).Write(immutableArray.Length);
+            writer.Write(immutableArray.Length);
           
             foreach (elem in immutableArray)
               $(SerializeValue(elemType, <[ elem ]>));
