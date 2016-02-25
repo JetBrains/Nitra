@@ -52,20 +52,19 @@ namespace Nitra.Ide.Macros
       _binaryReaderType = <[ ttype: System.IO.BinaryReader ]>;
     }
 
-    public IsSupportSerialize(type : FixedType) : bool
+    public GetSerializeMethod(type : FixedType) : option[MethodBuilder]
     {
       def members = type.TypeInfo?.LookupMember("Serialize");
       
       match (members)
       {
-        | [method is MethodBuilder] => 
+        | [method is MethodBuilder] when 
           method.Header.Parameters.Length == 1 
           && method.Header.Parameters.Head.Type.Equals(_binaryWriterType)
           && method.ReturnType is FixedType.Void
           && !method.IsStatic
-          && method.IsPublic
-          
-        | _ => false
+          && method.IsPublic => Some(method)
+        | _ => None()
       }
     }
 
@@ -111,85 +110,105 @@ namespace Nitra.Ide.Macros
     
     public Transform(): void
     {
-      when (IsSupportedType(_tb))
+      match (GetSupportedType())
       {
-        def type = _tb.GetMemType();
-        def id = GetNextMessageId(_tb.UserData);
-        def fields = GetRecordFields();
-        def serializeExprs = fields.Filter(_.Declared).Map(Serialize);
-        def define(x) { _ = _tb.DefineWithSource(x) }
-        
-        if (_tb.IsStruct)
-        {
-          define(<[decl: public MsgId: short { get { $id }} ]>);
-          define(
-          <[decl: 
-            public Serialize(writer : System.IO.BinaryWriter) : void 
-            {
-              writer.Write(this.MsgId);
-              ..$(serializeExprs)
-            }
-          ]>);
-        }
-        else if (_tb.GetSuperTypes().Exists(IsSupportSerialize))
-        {
-          define(<[decl: public override MsgId: short { get { $id }} ]>);
-          define(<[decl: 
-            public override Serialize(writer : System.IO.BinaryWriter) : void 
-            {
-              base.Serialize(writer);
-              ..$(serializeExprs)
-            }
-          ]>);
-        }
-        else
-        {
-          define(<[decl: public virtual MsgId: short { get { $id }} ]>);
-          define(<[decl: 
-            public virtual Serialize(writer : System.IO.BinaryWriter) : void 
-            {
-              writer.Write(this.MsgId);
-              ..$(serializeExprs)
-            }
-          ]>);
-        }
-
-        define(
-          <[decl: 
-            public static Deserialize(reader : System.IO.BinaryReader) : $(type : typed)
-            {
-              def msgId = reader.ReadInt16();
-              def msg = $(type : typed)(..$(fields.Map(Deserialize)));
-              assert2(msgId == msg.MsgId);
-              assert(msgId == msg.MsgId);
-              msg
-            }
-          ]>);
+        | Some(SupportedType.Record) => TransformType(_tb)
+        | Some(SupportedType.Variant) =>
+          _ = _tb.DefineWithSource(<[decl: public abstract MsgId: short { get; } ]>);
+          _ = _tb.DefineWithSource(<[decl: 
+          public virtual Serialize(writer : System.IO.BinaryWriter) : void 
+          {
+            writer.Write(this.MsgId);
+          }]>);
+          _tb.GetVariantOptions().Iter(TransformType)
+        | _ => ()
       }
     }
     
-    GetRecordFields(): list[RecordField] 
+    TransformType(tb: TypeBuilder): void
+    {
+      def type = tb.GetMemType();
+      def id = GetNextMessageId(tb.UserData);
+      def fields = GetRecordFields(tb);
+      def serializeExprs = fields.Filter(_.Declared).Map(Serialize);
+      def define(x) { _ = tb.DefineWithSource(x) }
+      
+      if (tb.IsStruct)
+      {
+        define(<[decl: public MsgId: short { get { $id }} ]>);
+        define(
+        <[decl: 
+          public Serialize(writer : System.IO.BinaryWriter) : void 
+          {
+            writer.Write(this.MsgId);
+            ..$(serializeExprs)
+          }
+        ]>);
+      }
+      else if (tb.GetSuperTypes().Map(GetSerializeMethod).FindWithDefault(None(), _.IsSome) is Some(baseSerialize))
+      {
+        define(<[decl: public override MsgId: short { get { $id }} ]>);
+        
+        def serializeExprs =
+          if (baseSerialize.IsAbstract) 
+            serializeExprs
+          else 
+            <[ base.Serialize(writer); ]> :: serializeExprs;
+          
+        define(<[decl: 
+          public override Serialize(writer : System.IO.BinaryWriter) : void 
+          {
+            ..$(serializeExprs)
+          }
+        ]>);
+      }
+      else
+      {
+        define(<[decl: public virtual MsgId: short { get { $id }} ]>);
+        define(<[decl: 
+          public virtual Serialize(writer : System.IO.BinaryWriter) : void 
+          {
+            writer.Write(this.MsgId);
+            ..$(serializeExprs)
+          }
+        ]>);
+      }
+
+      define(
+        <[decl: 
+          public static Deserialize(reader : System.IO.BinaryReader) : $(type : typed)
+          {
+            def msgId = reader.ReadInt16();
+            def msg = $(type : typed)(..$(fields.Map(Deserialize)));
+            assert2(msgId == msg.MsgId);
+            assert(msgId == msg.MsgId);
+            msg
+          }
+        ]>);
+    }
+    
+    GetRecordFields(tb: TypeBuilder): list[RecordField] 
     {
       Macros.DefineCTX(_typer);
       def mappedMemberAttr = <[ ttype: Nemerle.Internal.MappedMemberAttribute; ]>.TypeInfo;
       
       def recordCtor = 
-        _tb.GetConstructors(BindingFlags.Public).Find(m => m.IsCustomAttributeDefined("Nemerle.Internal.RecordCtorAttribute"));
+        tb.GetConstructors(BindingFlags.Public).Find(m => m.IsCustomAttributeDefined("Nemerle.Internal.RecordCtorAttribute"));
       
-      def declaredFieldNames = _tb.GetFields(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public).Filter(x => !x.IsStatic).Map(x => x.Name);
+      def declaredFieldNames = tb.GetFields(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public).Filter(x => !x.IsStatic).Map(x => x.Name);
       match (recordCtor)
       {
         | Some(ctor) => 
           ctor.GetParameters().Map(param => 
           {
-            match (param.AttributesAndModifiers.FindAttributeWithArgs(mappedMemberAttr, _tb.GlobalEnv)) 
+            match (param.AttributesAndModifiers.FindAttributeWithArgs(mappedMemberAttr, tb.GlobalEnv)) 
             {
               | Some((_, [<[$(name: string)]>])) =>
                   RecordField(name, param.Type.FixedValue, declaredFieldNames.Contains(name))
               | _ => assert(false)
             }
           })
-        | None => Message.FatalError(_tb.Location, "Record constructor was not found")
+        | None => Message.FatalError(tb.Location, "Record constructor was not found")
       }
     }
 
@@ -201,16 +220,23 @@ namespace Nitra.Ide.Macros
       id
     }
 
-    IsSupportedType(_tb: TypeBuilder): bool
+    variant SupportedType
+    {
+      | Record
+      | Variant
+    }
+    
+    GetSupportedType(): option[SupportedType]
     {
       match (_tb)
       {
         | _ when _tb.IsDelegate with n = "delegates"
         | _ when _tb.IsInterface with n = "interfaces"
         | _ when _tb.IsModule with n = "modules" => 
-            Message.Error(_tb.Location, $"$n are not supported."); 
-            false
-        | _ => true
+            Message.Error(_tb.Location, $"$n are not supported.");
+            None()
+        | _ when !_tb.GetVariantOptions().IsEmpty => Some(SupportedType.Variant())
+        | _ => Some(SupportedType.Record())
       }
     }
 
@@ -230,7 +256,7 @@ namespace Nitra.Ide.Macros
 
     SerializeValue(type : FixedType, valueExpr : PExpr): PExpr
     {
-      if (IsSupportSerialize(type))
+      if (GetSerializeMethod(type).IsSome)
         <[ $valueExpr.Serialize(writer); ]>
       else if (type.IsPrimitive)
         <[ writer.Write($valueExpr); ]>
