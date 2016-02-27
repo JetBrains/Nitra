@@ -23,13 +23,12 @@ namespace Nitra.Ide.Macros
   [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
   public macro NitraMessage(tb: TypeBuilder)
   {
-    NitraMessageImpl(Macros.ImplicitCTX(), tb).Transform()
+    NitraMessageImpl(Macros.ImplicitCTX(), tb).Transform(tb)
   }
 
   class NitraMessageImpl 
   {
     _typer             : Typer;
-    _tb                : TypeBuilder;
     _immutableArray_tc : TypeInfo;
     _binaryWriterType  : FixedType.Class;
     _binaryReaderType  : FixedType.Class;
@@ -37,14 +36,11 @@ namespace Nitra.Ide.Macros
     public this([NotNull] typer : Typer, [NotNull] tb : TypeBuilder)
     {
       _typer = typer;
-      _tb    = tb;
-
       DefineMacroContext(typer);
-
       def immutableArray = <[ ttype: System.Collections.Immutable.ImmutableArray[_] ]>;
 
       unless (CheckBind(immutableArray))
-        Message.FatalError(_tb.Location, "Current project must contain reference to System.Collections.Immutable.dll or implement System.Collections.Immutable.ImmutableArray<>.");
+        Message.FatalError(tb.Location, "Current project must contain reference to System.Collections.Immutable.dll or implement System.Collections.Immutable.ImmutableArray<>.");
 
       _immutableArray_tc = immutableArray.TypeInfo;
 
@@ -91,95 +87,89 @@ namespace Nitra.Ide.Macros
       public Declared: bool
     }
     
-    public Transform(): void
+    public Transform(tb: TypeBuilder): void
     {
-      match (GetSupportedType())
+      match (GetSupportedType(tb))
       {
         | Some(ty) =>
+          def type = tb.GetMemType();
+          def getId() { MessageRegistry.Register(_typer.Manager, type) }
+          def fields = GetRecordFields(tb);
+          def serializeExprs = fields.Filter(_.Declared).Map(Serialize);
+          def define(x) { _ = tb.DefineWithSource(x) }
+          
+          match (ty)
+          {
+            | SupportedType.Struct => define(<[decl: public MsgId: short { get { $(getId()) }} ]>)
+            | SupportedType.AbstractClass
+            | SupportedType.Variant => define(<[decl: public abstract MsgId: short { get; } ]>)
+            | SupportedType.BaseClass => define(<[decl: public virtual MsgId: short { get { $(getId()) }} ]>)
+            | SupportedType.DerivedClass
+            | SupportedType.VariantOption => define(<[decl: public override MsgId: short { get { $(getId()) }} ]>)
+          }
+          
           match (ty) 
           {
-            | SupportedType.Record => TransformType(_tb)
+            | SupportedType.Struct => 
+              define(
+              <[decl: 
+                public Serialize(writer : System.IO.BinaryWriter) : void 
+                {
+                  writer.Write(this.MsgId);
+                  ..$(serializeExprs)
+                }
+              ]>)
+            | SupportedType.DerivedClass
+            | SupportedType.VariantOption =>
+                define(<[decl: 
+                  public override Serialize(writer : System.IO.BinaryWriter) : void 
+                  {
+                    base.Serialize(writer);
+                    ..$(serializeExprs)
+                  }
+                ]>);
+            | SupportedType.AbstractClass
+            | SupportedType.BaseClass
             | SupportedType.Variant =>
-                _ = _tb.DefineWithSource(<[decl: public abstract MsgId: short { get; } ]>);
-                _ = _tb.DefineWithSource(<[decl: 
+              define(<[decl: 
                 public virtual Serialize(writer : System.IO.BinaryWriter) : void 
                 {
                   writer.Write(this.MsgId);
-                }]>);
-                _tb.GetVariantOptions().Iter(TransformType)
+                  ..$(serializeExprs)
+                }
+              ]>);
+          }
+          
+          when (ty is SupportedType.Variant)
+            tb.GetVariantOptions().Iter(Transform);
+          
+          match (ty)
+          {
+            | SupportedType.Struct
+            | SupportedType.BaseClass
+            | SupportedType.DerivedClass
+            | SupportedType.VariantOption =>
+                define(
+                  <[decl: 
+                    public static Deserialize(reader : System.IO.BinaryReader) : $(type : typed)
+                    {
+                      $(type : typed)(..$(fields.Map(Deserialize)))
+                    }
+                  ]>)
+            | _ => ()
           }
           Deserializer.GenerateModule(_typer.Manager);
         | _ => ()
       }
     }
     
-    TransformType(tb: TypeBuilder): void
-    {
-      def type = tb.GetMemType();
-      def id = MessageRegistry.Register(_typer.Manager, type);
-      def fields = GetRecordFields(tb);
-      def serializeExprs = fields.Filter(_.Declared).Map(Serialize);
-      def define(x) { _ = tb.DefineWithSource(x) }
-      
-      if (tb.IsStruct)
-      {
-        define(<[decl: public MsgId: short { get { $id }} ]>);
-        define(
-        <[decl: 
-          public Serialize(writer : System.IO.BinaryWriter) : void 
-          {
-            writer.Write(this.MsgId);
-            ..$(serializeExprs)
-          }
-        ]>);
-      }
-      else if (tb.GetSuperTypes().Map(GetSerializeMethod).FindWithDefault(None(), _.IsSome) is Some(baseSerialize))
-      {
-        define(<[decl: public override MsgId: short { get { $id }} ]>);
-        
-        def serializeExprs =
-          if (baseSerialize.IsAbstract) 
-            serializeExprs
-          else 
-            <[ base.Serialize(writer); ]> :: serializeExprs;
-          
-        define(<[decl: 
-          public override Serialize(writer : System.IO.BinaryWriter) : void 
-          {
-            ..$(serializeExprs)
-          }
-        ]>);
-      }
-      else
-      {
-        define(<[decl: public virtual MsgId: short { get { $id }} ]>);
-        define(<[decl: 
-          public virtual Serialize(writer : System.IO.BinaryWriter) : void 
-          {
-            writer.Write(this.MsgId);
-            ..$(serializeExprs)
-          }
-        ]>);
-      }
-
-      define(
-        <[decl: 
-          public static Deserialize(reader : System.IO.BinaryReader) : $(type : typed)
-          {
-            $(type : typed)(..$(fields.Map(Deserialize)))
-          }
-        ]>);
-    }
-    
     GetRecordFields(tb: TypeBuilder): list[RecordField] 
     {
       Macros.DefineCTX(_typer);
       def mappedMemberAttr = <[ ttype: Nemerle.Internal.MappedMemberAttribute; ]>.TypeInfo;
-      
-      def recordCtor = 
-        tb.GetConstructors(BindingFlags.Public).Find(m => m.IsCustomAttributeDefined("Nemerle.Internal.RecordCtorAttribute"));
-      
+      def recordCtor = tb.GetConstructors().Find(m => m.IsCustomAttributeDefined("Nemerle.Internal.RecordCtorAttribute"));
       def declaredFieldNames = tb.GetFields(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public).Filter(x => !x.IsStatic).Map(x => x.Name);
+      
       match (recordCtor)
       {
         | Some(ctor) => 
@@ -198,21 +188,29 @@ namespace Nitra.Ide.Macros
 
     variant SupportedType
     {
-      | Record
+      | Struct
+      | AbstractClass
+      | BaseClass
+      | DerivedClass
       | Variant
+      | VariantOption
     }
     
-    GetSupportedType(): option[SupportedType]
+    GetSupportedType(tb: TypeBuilder): option[SupportedType]
     {
-      match (_tb)
+      match (tb)
       {
-        | _ when _tb.IsDelegate with n = "delegates"
-        | _ when _tb.IsInterface with n = "interfaces"
-        | _ when _tb.IsModule with n = "modules" => 
-            Message.Error(_tb.Location, $"$n are not supported.");
+        | _ when tb.IsDelegate with n = "delegates"
+        | _ when tb.IsInterface with n = "interfaces"
+        | _ when tb.IsModule with n = "modules" => 
+            Message.Error(tb.Location, $"$n are not supported.");
             None()
-        | _ when !_tb.GetVariantOptions().IsEmpty => Some(SupportedType.Variant())
-        | _ => Some(SupportedType.Record())
+        | _ when !tb.GetVariantOptions().IsEmpty => Some(SupportedType.Variant())
+        | _ when tb.IsVariantOption => Some(SupportedType.VariantOption())
+        | _ when tb.IsValueType => Some(SupportedType.Struct())
+        | _ when tb.GetSuperTypes().Map(GetSerializeMethod).Exists(_.IsSome) => Some(SupportedType.DerivedClass())
+        | _ when tb.IsAbstract => Some(SupportedType.AbstractClass())
+        | _ => Some(SupportedType.BaseClass())
       }
     }
 
