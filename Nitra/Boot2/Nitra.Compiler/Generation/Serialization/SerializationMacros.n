@@ -25,6 +25,12 @@ namespace Nitra.Serialization2
     SerializationMacrosImpl.Read(ImplicitCTX(), type)
   }
 
+  [MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Assembly)]
+  public macro DefineSerialization(typeName, arg1, arg2)
+  {
+    SerializationMacrosImpl.DefineSerialization(Nemerle.Macros.Manager(), typeName, arg1, arg2);
+  }
+
   internal enum SymbolSerializationVersion
   {
     | V1
@@ -35,7 +41,7 @@ namespace Nitra.Serialization2
   {
     public Write(typer : Typer, obj : PExpr) : PExpr
     {
-      def compiler = InitCompiler(typer, SymbolSerializationVersion.V2);
+      def compiler = GetCompiler(typer, SymbolSerializationVersion.V2);
       def typedObj = typer.TypeExpr(obj);
       if (typedObj.Type.Hint is Some(type))
       {
@@ -63,21 +69,53 @@ namespace Nitra.Serialization2
 
     public Read(typer : Typer, typeName : PExpr) : PExpr
     {
-      def compiler = InitCompiler(typer, SymbolSerializationVersion.V2);
+      def compiler = GetCompiler(typer, SymbolSerializationVersion.V2);
       def type     = typer.BindFixedType(typeName);
       def builder  = compiler.EnqueueType(type);
       builder.Emit();
       builder.Read(<[ "<root>" ]>, builder.TagExpr);
     }
 
-    public InitCompiler(typer : Typer, symbolVersion : SymbolSerializationVersion) : SerializationCompiler
+    public DefineSerialization(manager : ManagerClass, typeName : PExpr, arg1 : PExpr, arg2 : PExpr) : void
+    {
+      match (arg1, arg2)
+      {
+        | (<[ Write = $writeFunc ]>, <[ Read  = $readFunc  ]>)
+        | (<[ Read  = $readFunc  ]>, <[ Write = $writeFunc ]>) =>
+          def type  = manager.CoreEnv.BindFixedType(typeName);
+          def table = GetUserDefinedBuilders(manager);
+          mutable existingBuilderCtor;
+          if (table.TryGetValue(type, out existingBuilderCtor))
+            Message.Error(typeName.Location, $"Redefinition of type '$type' serialization.");
+          else
+            table.Add(type, compiler => UserDefinedTypeSerializationBuilder(compiler, type, writeFunc, readFunc))
+
+        | _ => Message.FatalError("Invalid macro arguments. Usage: DefineSerialization(TypeName, Write = writeCode, Read = readCode)");
+      }
+    }
+
+    private GetUserDefinedBuilders(manager : ManagerClass) : Dictionary[FixedType, SerializationCompiler -> UserDefinedTypeSerializationBuilder]
+    {
+      def key = (typeof(SerializationCompiler), "UserDefinedBuilders");
+      match (manager.UserData[key])
+      {
+        | null =>
+          def table = Dictionary();
+          manager.UserData.Add(key, table);
+          table
+
+        | x => x :> Dictionary[_, _]
+      }
+    }
+
+    public GetCompiler(typer : Typer, symbolVersion : SymbolSerializationVersion) : SerializationCompiler
     {
       def key = (typeof(SerializationCompiler), symbolVersion);
       match (typer.CurrentMethodBuilder.UserData[key])
       {
         | SerializationCompiler as compiler => compiler;
         | null =>
-          def compiler = InitCompiler(typer.Manager, symbolVersion);
+          def compiler = GetCompiler(typer.Manager, symbolVersion);
           typer.CurrentMethodBuilder.UserData[key] = compiler;
           typer.BeforeStage2 += fun(_) { compiler.Emit() };
           compiler
@@ -86,14 +124,14 @@ namespace Nitra.Serialization2
       }
     }
 
-    public InitCompiler(manager : ManagerClass, symbolVersion : SymbolSerializationVersion) : SerializationCompiler
+    public GetCompiler(manager : ManagerClass, symbolVersion : SymbolSerializationVersion) : SerializationCompiler
     {
       def key = (typeof(SerializationCompiler), symbolVersion);
       match (manager.UserData[key])
       {
         | SerializationCompiler as compiler => compiler
         | null =>
-          def compiler =
+          def compiler  =
             match (symbolVersion)
             {
               | V1 =>
@@ -102,7 +140,7 @@ namespace Nitra.Serialization2
                   [SerializationParameter("metadataReader", <[ Nitra.Serialization.IMetadataReader ]>)])
 
               | V2 =>
-                SerializationCompiler(manager, BinarySerializationFormatter(), NitraTypeSerializationFactory(),
+                SerializationCompiler(manager, BinarySerializationFormatter(), UserDefinedTypeSerializationFactory(GetUserDefinedBuilders(manager), NitraTypeSerializationFactory()),
                   [SerializationParameter("metadataWriter", <[ Nitra.Serialization2.MetadataWriter ]>)],
                   [SerializationParameter("metadataReader", <[ Nitra.Serialization2.MetadataReader ]>)])
             };

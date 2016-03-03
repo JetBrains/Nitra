@@ -1,0 +1,442 @@
+﻿using Nitra.ProjectSystem;
+using Nitra.Typing;
+using Nitra.Serialization;
+using Nitra.Serialization2;
+
+using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using Nemerle.Surround;
+using Nemerle.Utility;
+
+using System;
+using System.IO;
+using System.Linq;
+
+using SCG = System.Collections.Generic;
+using G = NitraSyntaxParseTree;
+
+[assembly: DefineSurround("ThrowOnProjectErrors", false, def prevErrorCount = this.ErrorCount, when (prevErrorCount != this.ErrorCount) throw Nemerle.Compiler.Recovery())]
+
+namespace Nitra.Compiler
+{
+  public sealed partial class CompilingNitraProject : NitraProject
+  {
+    private static RestrictedNames : SCG.HashSet[string] = SCG.HashSet(array[
+      // Parse tree classes
+      "Located",
+      "ParseTree",
+      "AmbiguousOrMissingNode",
+      "Nested",
+
+      // Parse tree Methods
+      "Equals",
+      "GetHashCode",
+      "GetType",
+      "ReferenceEquals",
+      "MemberwiseClone",
+      "Finalize",
+      "ToString",
+      "PrettyPrint",
+      "GetText",
+      "FirstChar",
+      "IntersectsWith",
+      "Intersection",
+      "Apply",
+      "Create",
+      "GetSourceSnapshotProvider",
+      "GetAst",
+      "GetAstUntyped",
+
+      // Parse tree Properties
+      "Location",
+      "Span",
+      "File",
+      "PrettyPrintSource",
+      "RuleDescriptor",
+      "IsMissing",
+      "IsAmbiguous",
+      "Ambiguities",
+      "AmbiguityType",
+    ]);
+
+    private static NitraMetadataStreamName = "Nitra.Metadata";
+
+    public static Instance(manager : ManagerClass) : CompilingNitraProject
+    {
+      def key = typeof(CompilingNitraProject);
+      match (manager.UserData[key])
+      {
+        | null =>
+          def project = CompilingNitraProject(manager);
+          project.Init(manager.ReferencedAssemblies.Select(a => a.Assembly.GetName()));
+          manager.UserData.Add(key, project);
+          project
+
+        | CompilingNitraProject as project => project
+        | _ => assert(false, "Unknown project type")
+      }
+    }
+
+    private exportableSymbolData   : SCG.Queue[ExportableSymbolData] = SCG.Queue();
+    private chemicalSymbolData     : SCG.Queue[ChemicalSymbolData]   = SCG.Queue();
+    private languageEmitters       : SCG.List[LanguageEmitter]       = SCG.List();
+    private syntaxModuleEmitters   : SCG.List[SyntaxModuleEmitter]   = SCG.List();
+    private astEmitters            : SCG.List[AstEmitter]            = SCG.List();
+    private symbolEmitters         : SCG.List[SymbolEmitter]         = SCG.List();
+    private externalSymbolEmitters : SCG.List[ExternalSymbolEmitter] = SCG.List();
+    private chemicalSymbolEmitters : SCG.List[ChemicalSymbolEmitter] = SCG.List();
+
+    [Record]
+    private class ExportableSymbolData
+    {
+      public TypeBuilder          : TypeBuilder         { get; }
+      public ExportableSymbolType : option[TypeBuilder] { get; }
+    }
+
+    [Record]
+    private class ChemicalSymbolData
+    {
+      public TypeBuilder          : TypeBuilder         { get; }
+      public ChemicalSymbolType   : option[TypeBuilder] { get; }
+    }
+
+    public AddExportableSymbol(tb : TypeBuilder, exportableSymbolType : option[TypeBuilder]) : void
+    {
+      def data = ExportableSymbolData(tb, exportableSymbolType);
+      exportableSymbolData.Enqueue(data)
+    }
+
+    public AddChemicalSymbol(tb : TypeBuilder, chemicalSymbolType : option[TypeBuilder]) : void
+    {
+      def data = ChemicalSymbolData(tb, chemicalSymbolType);
+      chemicalSymbolData.Enqueue(data);
+    }
+
+    private mutable _beforeInheritance : bool = false;
+
+    public BeforeInheritance() : void
+    {
+      when (_beforeInheritance)
+        return;
+      _beforeInheritance = true;
+    }
+
+    private LoadParsedSymbols(parseTree : SCG.List[G.Start]) : void
+    {
+      foreach (start in parseTree)
+        start.CollectGlobalSymbols(this.RootNamespace);
+    }
+
+    private TypeSyntaxModules(parseTree : SCG.List[G.Start]) : void
+    {
+      def context = RootContext(this, this.RootNamespace, Manager.CoreEnv);
+
+      foreach (start in parseTree)
+        _ = start.MakeContext(context);
+
+      foreach (start in parseTree)
+        start.TypeLanguage();
+
+      foreach (start in parseTree)
+        start.Typing();
+
+      foreach (start in parseTree)
+        start.TypeAst();
+
+      foreach (start in parseTree)
+        start.TypeSymbolMembers();
+
+      TypingUtils.SetOutDependentProperties(this);
+
+      TypingUtils.SetNameReferenceSyntaxMapping(this, this.Environment.Manager);
+
+      foreach (start in parseTree)
+        start.TypeSyntaxMappings();
+
+      TypingUtils.ValidateSyntaxMapping(this);
+
+      // HACK: force FSM build for each regular rule symbol (shall we make new pass in regular rule typing process?)
+      foreach (symbol in this.Environment.Root.GetDescendants.[ParsedRegularRuleSymbol]())
+        _ = symbol.Fsm;
+    }
+
+    private CheckRestrictedNames() : void
+    {
+      def check(loc : Location, name : string) : void
+      {
+        when (RestrictedNames.Contains(name))
+          this.Error(loc, $"Name '$name' is restricted due to internal use");
+      }
+
+      foreach (syntaxModule in this.Environment.Root.GetDescendants.[ParsedSyntaxModuleSymbol]())
+      {
+        foreach (ruleSymbol in syntaxModule.Node.GetDescendants.[RuleSymbol]())
+        {
+          check(ruleSymbol.FirstLocation, ruleSymbol.Name);
+
+          when (ruleSymbol is SyntaxRuleSymbol as s)
+            foreach (ruleMethodSymbol in s.RuleMethods)
+              check(ruleMethodSymbol.FirstLocation, ruleMethodSymbol.Name);
+
+          match (ruleSymbol)
+          {
+            | SimpleRuleSymbol    as s with seq = s.NonVoidSubRules
+            | ExtensionRuleSymbol as s with seq = s.NonVoidSubRules =>
+              foreach (r in seq)
+                check(r.Location, r.FieldName);
+
+            | _ => ()
+          }
+        }
+      }
+    }
+
+    private MakeEmitters() : void
+    {
+      def environment            = this.Environment;
+      def serializationEmitterV1 = SerializationMacrosImpl.GetCompiler(Manager, SymbolSerializationVersion.V1);
+      def serializationEmitterV2 = SerializationMacrosImpl.GetCompiler(Manager, SymbolSerializationVersion.V2);
+
+      _ = MakeEmitters(languageEmitters, fun (languageSymbol, _, makeLanguageEmitter)
+      {
+        when (languageSymbol.Parent is SymbolRef.Some(parent))
+          makeLanguageEmitter(parent);
+
+        LanguageEmitter(environment, languageSymbol);
+      });
+
+      _ = MakeEmitters(syntaxModuleEmitters, (syntaxModule, _, _) => SyntaxModuleEmitter(environment, syntaxModule));
+
+      def astEmitterTable = MakeEmitters(astEmitters, fun (astSymbol, astEmitterTable, makeAstEmitter)
+      {
+        foreach (baseAst in astSymbol.Parents)
+          makeAstEmitter(baseAst);
+
+        match (astSymbol)
+        {
+          | AbstractAstSymbol                                  as s => AbstractAstEmitter(environment, s)
+          | SimpleAstSymbol(DefinedIn = SymbolRef.None)        as s => SimpleAstEmitter(environment, s, null)
+          | SimpleAstSymbol(DefinedIn = SymbolRef.Some(owner)) as s => SimpleAstEmitter(environment, s, astEmitterTable[owner])
+          | _ => assert(false)
+        }
+      });
+
+      _ = MakeEmitters(symbolEmitters, fun(symbolSymbol, _, makeSymbolSymbol)
+      {
+        foreach (baseSymbol in symbolSymbol.Parents)
+          makeSymbolSymbol(baseSymbol);
+
+        def ownerEmitter =
+          if (symbolSymbol.Declaration is SimpleAstSymbol(DefinedIn = SymbolRef.Some(owner)))
+            astEmitterTable[owner]
+          else
+            null;
+
+        SymbolEmitter(environment, symbolSymbol, serializationEmitterV2, ownerEmitter)
+      });
+
+      while (exportableSymbolData.Count > 0)
+      {
+        def data = exportableSymbolData.Dequeue();
+        externalSymbolEmitters.Add(ExternalSymbolEmitter(environment, data.TypeBuilder, data.ExportableSymbolType, serializationEmitterV1));
+      }
+
+      while (chemicalSymbolData.Count > 0)
+      {
+        def data = chemicalSymbolData.Dequeue();
+        chemicalSymbolEmitters.Add(ChemicalSymbolEmitter(environment, data.TypeBuilder, data.ChemicalSymbolType));
+      }
+    }
+
+    private MakeEmitters[TSymbol, TEmitter](buffer : SCG.List[TEmitter], makeEmitter : TSymbol * SCG.Dictionary[TSymbol, TEmitter] * (TSymbol -> void) -> TEmitter) : SCG.Dictionary[TSymbol, TEmitter]
+      where TSymbol : Symbol
+    {
+      def table = SCG.Dictionary();
+      def visitSymbol(symbol)
+      {
+        when (symbol.AssemblyId == AssemblyIds.CurrentAssembly && !table.ContainsKey(symbol))
+        {
+          def emitter = makeEmitter(symbol, table, visitSymbol);
+          table.Add(symbol, emitter);
+          buffer.Add(emitter);
+        }
+      }
+      foreach (symbol in this.Environment.Root.GetDescendants.[TSymbol]())
+        visitSymbol(symbol);
+      table
+    }
+
+    private ReadMetadata() : void
+    {
+      using (loader = ExternalSymbolLoader())
+      {
+        loader.Registry.Register(typeof(SyntaxModuleSymbol).Assembly);
+        def externalSymbolPropertyReader = NitraExternalSymbolPropertyReader();
+
+        def assemblyWithMetadata = SCG.Dictionary();
+        foreach (reference in Manager.ReferencedAssemblies)
+        {
+          def assembly       = reference.Assembly;
+          def metadataStream = assembly.GetManifestResourceStream(NitraMetadataStreamName);
+          when (metadataStream != null)
+          {
+            def assemblyId = this.GetAssemblyId(assembly.GetName());
+            def location   = this.MakeFakeNitraLocation(Nemerle.Compiler.Location(assembly.Location, 1, 1, 1, 1));
+            assemblyWithMetadata.Add(assemblyId, (assembly, metadataStream, location));
+          }
+        }
+
+        def visitedAssemblies = SCG.HashSet();
+        def visitAssembly(assemblyId)
+        {
+          when (visitedAssemblies.Add(assemblyId))
+          {
+            mutable data;
+            when (assemblyWithMetadata.TryGetValue(assemblyId, out data))
+            {
+              def (assembly, metadataStream, location) = data;
+              foreach (dependency in assembly.GetReferencedAssemblies())
+                visitAssembly(this.GetAssemblyId(dependency));
+
+              def reader = MetadataReader(metadataStream, loader.Registry, externalSymbolPropertyReader, this, assemblyId, location);
+              loader.AddSource(reader, location);
+            }
+          }
+        }
+
+        foreach (assemblyId in assemblyWithMetadata.Keys)
+          visitAssembly(assemblyId);
+
+        loader.Load();
+      }
+    }
+
+    private mutable _beforeTypedMembers : bool = false;
+
+    public BeforeTypedMembers() : void
+    {
+      when (_beforeTypedMembers)
+        return;
+      _beforeTypedMembers = true;
+
+      surroundwith (ThrowOnProjectErrors) UpdateProperties();
+
+      def parseTree = SCG.List();
+      foreach (file in Files)
+        when (file.GetParseTree() is G.Start as pt)
+          parseTree.Add(pt);
+
+      surroundwith (ThrowOnProjectErrors) ReadMetadata();
+      surroundwith (ThrowOnProjectErrors) LoadParsedSymbols(parseTree);
+      surroundwith (ThrowOnProjectErrors) TypeSyntaxModules(parseTree);
+      surroundwith (ThrowOnProjectErrors) CheckRestrictedNames();
+
+      MakeEmitters();
+
+      // define types:
+
+      foreach (emitter in astEmitters)
+        emitter.DefineTypes();
+
+      foreach (emitter in symbolEmitters)
+        emitter.DefineTypes();
+
+      foreach (emitter in languageEmitters)
+        emitter.DefineTypes();
+
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.DefineSimpleParseTreeTypes();
+
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.DefineExtensionParseTreeTypes();
+
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.DefineParserTypes();
+
+      // define type members:
+
+      foreach (emitter in astEmitters)
+        emitter.DefineMembers();
+
+      foreach (emitter in symbolEmitters)
+        emitter.DefineMembers();
+
+      foreach (emitter in languageEmitters)
+        emitter.DefineMembers();
+
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.DefineParseTreeMembers();
+
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.DefineParserMethods();
+
+      def writeMetadataCallback(_)
+      {
+        def metadataFileName = Manager.Options.OutputFileName + ".nitrametadata";
+        using(symbolWriter = MetadataWriter(FileStream(metadataFileName, FileMode.Create, FileAccess.Write), this))
+          symbolWriter.WriteSymbols();
+
+        Manager.Options.EmbeddedResources ::= metadataFileName + "," + NitraMetadataStreamName;
+
+        Manager.BeforeSaveAssembly -= writeMetadataCallback;
+      }
+      unless (Manager.IsIntelliSenseMode)
+        Manager.BeforeSaveAssembly += writeMetadataCallback;
+    }
+
+    private mutable _withTypedMembers : bool = false;
+
+    public WithTypedMembers() : void
+    {
+      when (_withTypedMembers)
+        return;
+      _withTypedMembers = true;
+
+      foreach (emitter in externalSymbolEmitters)
+        emitter.DefineMembers();
+
+      foreach (emitter in chemicalSymbolEmitters)
+        emitter.DefineMembers();
+
+      foreach (emitter in externalSymbolEmitters)
+        emitter.Emit();
+
+      foreach (emitter in chemicalSymbolEmitters)
+        emitter.Emit();
+
+      foreach (emitter in languageEmitters)
+        emitter.Emit();
+
+      foreach (emitter in syntaxModuleEmitters)
+        emitter.Emit();
+
+      foreach (emitter in symbolEmitters)
+        emitter.Emit();
+
+      foreach (emitter in astEmitters)
+        emitter.Emit();
+
+      RegisterAssemblyTypes(externalSymbolEmitters, <[ Nitra.Serialization.ExportableSymbolsAttribute ]>, e => e.TargetSymbolType.GetMemType());
+      RegisterAssemblyTypes(languageEmitters,       <[ Nitra.LanguagesAttribute ]>,                       e => e.Environment.GetLanguageType(e.Symbol));
+      RegisterAssemblyTypes(syntaxModuleEmitters,   <[ Nitra.GrammarsAttribute ]>,                        e => e.GrammarTB.GetMemType());
+
+      SerializationMacrosImpl.GetCompiler(Manager, SymbolSerializationVersion.V1).Emit();
+      SerializationMacrosImpl.GetCompiler(Manager, SymbolSerializationVersion.V2).Emit();
+    }
+
+    private RegisterAssemblyTypes[T](emitters : SCG.List[T], attributeName : PExpr, getType : T -> FixedType) : void
+    {
+      when (!Manager.IsIntelliSenseMode && emitters.Count > 0)
+      {
+        def buffer = SCG.List();
+        foreach (emitter in emitters)
+          buffer.Add(<[ typeof($(getType(emitter) : typed)) ]>);
+
+        Manager.Hierarchy.AddAssemblyAttribute(Manager.CoreEnv, <[ $attributeName(array[..$buffer]) ]>);
+      }
+    }
+  }
+}
