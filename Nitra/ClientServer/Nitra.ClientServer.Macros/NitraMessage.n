@@ -1,0 +1,408 @@
+﻿using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Macros;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra.ClientServer.Macros
+{
+  [MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
+  public macro NitraMessage(tb: TypeBuilder)
+  {
+    tb.AddMacroAttribute(<[ Nemerle.Core.Record ]>)
+  }
+
+  [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
+  public macro NitraMessage(tb: TypeBuilder)
+  {
+    NitraMessageImpl(Macros.ImplicitCTX(), tb).Transform(tb)
+  }
+
+  class NitraMessageImpl 
+  {
+    _typer             : Typer;
+    _immutableArray_tc : TypeInfo;
+    _binaryWriterType  : FixedType.Class;
+    _binaryReaderType  : FixedType.Class;
+
+    public this([NotNull] typer : Typer, [NotNull] tb : TypeBuilder)
+    {
+      _typer = typer;
+      DefineMacroContext(typer);
+      def immutableArray = <[ ttype: System.Collections.Immutable.ImmutableArray[_] ]>;
+
+      unless (CheckBind(immutableArray))
+        Message.FatalError(tb.Location, "Current project must contain reference to System.Collections.Immutable.dll or implement System.Collections.Immutable.ImmutableArray<>.");
+
+      _immutableArray_tc = immutableArray.TypeInfo;
+
+      _binaryWriterType = <[ ttype: System.IO.BinaryWriter ]>;
+      _binaryReaderType = <[ ttype: System.IO.BinaryReader ]>;
+    }
+
+    public GetSerializeMethod(type : FixedType) : option[MethodBuilder]
+    {
+      def members = type.TypeInfo?.LookupMember("Serialize");
+      
+      match (members)
+      {
+        | [method is MethodBuilder] when 
+          method.Header.Parameters.Length == 1 
+          && method.Header.Parameters.Head.Type.Equals(_binaryWriterType)
+          && method.ReturnType is FixedType.Void
+          && !method.IsStatic
+          && method.IsPublic => Some(method)
+        | _ => None()
+      }
+    }
+
+    public IsImmutableArray(type : FixedType) : bool
+    {
+      type.TypeInfo?.Equals(_immutableArray_tc)
+    }
+
+    public IsNemerleList(type : FixedType) : bool
+    {
+      type.TypeInfo?.Equals(_typer.InternalType.Nemerle_list_tc)
+    }
+
+    public CheckBind(type : FixedType) : bool
+    {
+      !(type is FixedType.Void || _typer.Manager.InternalType.Object.Equals(type))
+    }
+
+    [Record]
+    class RecordField
+    {
+      public Name: string;
+      public Type: FixedType;
+      public Declared: bool
+    }
+    
+    public Transform(tb: TypeBuilder): void
+    {
+      match (GetSupportedType(tb))
+      {
+        | Some(ty) =>
+          def type = tb.GetMemType();
+          def getId() { MessageRegistry.Register(_typer.Manager, type) }
+          def fields = GetRecordFields(tb);
+          def serializeExprs = fields.Filter(_.Declared).Map(Serialize);
+          def define(x) { _ = tb.DefineWithSource(x) }
+          
+          match (ty)
+          {
+            | SupportedType.Struct => define(<[decl: public MsgId: short { get { $(getId()) }} ]>)
+            | SupportedType.AbstractClass
+            | SupportedType.Variant => define(<[decl: public abstract MsgId: short { get; } ]>)
+            | SupportedType.BaseClass => define(<[decl: public virtual MsgId: short { get { $(getId()) }} ]>)
+            | SupportedType.DerivedClass
+            | SupportedType.VariantOption => define(<[decl: public override MsgId: short { get { $(getId()) }} ]>)
+          }
+          
+          match (ty) 
+          {
+            | SupportedType.Struct => 
+              define(
+              <[decl: 
+                public Serialize(writer : System.IO.BinaryWriter) : void 
+                {
+                  writer.Write(this.MsgId);
+                  ..$(serializeExprs)
+                }
+              ]>)
+            | SupportedType.DerivedClass
+            | SupportedType.VariantOption =>
+                define(<[decl: 
+                  public override Serialize(writer : System.IO.BinaryWriter) : void 
+                  {
+                    base.Serialize(writer);
+                    ..$(serializeExprs)
+                  }
+                ]>);
+            | SupportedType.AbstractClass
+            | SupportedType.BaseClass
+            | SupportedType.Variant =>
+              define(<[decl: 
+                public virtual Serialize(writer : System.IO.BinaryWriter) : void 
+                {
+                  writer.Write(this.MsgId);
+                  ..$(serializeExprs)
+                }
+              ]>);
+          }
+          
+          when (ty is SupportedType.Variant)
+            tb.GetVariantOptions().Iter(Transform);
+          
+          match (ty)
+          {
+            | SupportedType.Struct
+            | SupportedType.BaseClass
+            | SupportedType.DerivedClass
+            | SupportedType.VariantOption =>
+                define(
+                  <[decl: 
+                    public static Deserialize(reader : System.IO.BinaryReader) : $(type : typed)
+                    {
+                      IgnoreParams();
+                      $(type : typed)(..$(fields.Map(Deserialize)))
+                    }
+                  ]>)
+            | _ => ()
+          }
+          Deserializer.GenerateModule(_typer.Manager);
+        | _ => ()
+      }
+    }
+    
+    GetRecordFields(tb: TypeBuilder): list[RecordField] 
+    {
+      Macros.DefineCTX(_typer);
+      def mappedMemberAttr = <[ ttype: Nemerle.Internal.MappedMemberAttribute; ]>.TypeInfo;
+      def recordCtor = tb.GetConstructors().Find(m => m.IsCustomAttributeDefined("Nemerle.Internal.RecordCtorAttribute"));
+      def declaredFieldNames = tb.GetFields(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public).Filter(x => !x.IsStatic).Map(x => x.Name);
+      
+      match (recordCtor)
+      {
+        | Some(ctor) => 
+          ctor.GetParameters().Map(param => 
+          {
+            match (param.AttributesAndModifiers.FindAttributeWithArgs(mappedMemberAttr, tb.GlobalEnv)) 
+            {
+              | Some((_, [<[$(name: string)]>])) =>
+                  RecordField(name, param.Type.FixedValue, declaredFieldNames.Contains(name))
+              | _ => assert(false)
+            }
+          })
+        | None => Message.FatalError(tb.Location, "Record constructor was not found")
+      }
+    }
+
+    variant SupportedType
+    {
+      | Struct
+      | AbstractClass
+      | BaseClass
+      | DerivedClass
+      | Variant
+      | VariantOption
+    }
+    
+    GetSupportedType(tb: TypeBuilder): option[SupportedType]
+    {
+      match (tb)
+      {
+        | _ when tb.IsDelegate with n = "delegates"
+        | _ when tb.IsInterface with n = "interfaces"
+        | _ when tb.IsModule with n = "modules" => 
+            Message.Error(tb.Location, $"$n are not supported.");
+            None()
+        | _ when !tb.GetVariantOptions().IsEmpty => Some(SupportedType.Variant())
+        | _ when tb.IsVariantOption => Some(SupportedType.VariantOption())
+        | _ when tb.IsValueType => Some(SupportedType.Struct())
+        | _ when tb.GetSuperTypes().Map(GetSerializeMethod).Exists(_.IsSome) => Some(SupportedType.DerivedClass())
+        | _ when tb.IsAbstract => Some(SupportedType.AbstractClass())
+        | _ => Some(SupportedType.BaseClass())
+      }
+    }
+
+    Serialize(field : RecordField): PExpr
+    {
+      def expr = SerializeValue(field.Type, <[ this.$(field.Name : usesite) ]>);
+      if (expr == null)
+      {
+        assert2(false);
+        Message.Error("The NitraMessage macro supports types which define Serialize(System.IO.BinaryWriter) method or primitive types. " +
+                      $"Try to add NitraMessage macro attribute to $(field.Type) type.");
+        <[ () ]>
+      }
+      else
+        expr
+    }
+
+    SerializeValue(type : FixedType, valueExpr : PExpr): PExpr
+    {
+      if (type.IsEnum)
+      {
+        def underlyingType = FixedType.Class(type.TypeInfo.UnderlyingType, []);
+        SerializeValue(underlyingType, <[ $valueExpr :> $(underlyingType : typed) ]>)
+      }
+      else if (GetSerializeMethod(type).IsSome)
+        <[ $valueExpr.Serialize(writer); ]>
+      else if (type.IsPrimitive)
+        <[ writer.Write($valueExpr); ]>
+      else if (type.Equals(_typer.InternalType.String))
+        <[ writer.Write($valueExpr ?? ""); ]>
+      else if (IsNemerleList(type))
+      {
+        def elemType = (type :> FixedType.Class).args.Head :> FixedType;
+
+        <[
+          def lst = $valueExpr;
+          if (lst == null)
+          {
+            writer.Write(0 : UInt32)
+          }
+          else
+          {
+            def len = lst.Length;
+            writer.Write(len);
+            def loop(lst : list[_]) : void
+            {
+              | head :: tail => 
+              loop(tail); // reverse order (can cause StackOverflowException)
+              $(SerializeValue(elemType, <[ head ]>));
+
+              | null | [] => ()
+            }
+            loop(lst)
+          }
+        ]>
+      }
+      else if (IsImmutableArray(type))
+      {
+        def elemType = (type :> FixedType.Class).args.Head :> FixedType;
+
+        <[
+          def immutableArray = $valueExpr;
+          // The default value of ImmutableArray<T> has the underlying array initialized with a null reference.
+          // Trying to call `Lenght` or `IsEmpty` on such arrays will raise an exception, so we must check `IsDefault`
+          // property first.
+          if (immutableArray.IsDefault)
+          {
+            writer.Write(0 : UInt32); 
+          }
+          else
+          {
+            writer.Write(immutableArray.Length);
+          
+            foreach (elem in immutableArray)
+              $(SerializeValue(elemType, <[ elem ]>));
+          }
+        ]>
+      }
+      else
+      {
+        null
+      }
+    }
+
+    Deserialize(field : RecordField): PExpr
+    {
+      DeserializeValue(field.Type)
+    }
+
+    DeserializeValue(type : FixedType) : PExpr
+    {
+      if (type.IsEnum)
+      {
+        def underlyingType = FixedType.Class(type.TypeInfo.UnderlyingType, []);
+        def result = DeserializePrimitiveValue(underlyingType);
+        <[ $result :> $(type : typed) ]>
+      }
+      else if (type.IsPrimitive || type.Equals(_typer.InternalType.String))
+        DeserializePrimitiveValue(type)
+      else if (IsNemerleList(type))
+      {
+        def elemType = (type :> FixedType.Class).args.Head :> FixedType;
+        <[
+          def len = reader.ReadUInt32();
+          assert(len >= 0);
+          def loop(i : uint, result)
+          {
+            if (i > 0)
+            {
+              def value = $(DeserializeValue(elemType));
+              loop(i - 1, value :: result);
+            }
+            else result
+          }
+
+          loop(len, [])
+        ]>
+      }
+      else if (IsImmutableArray(type))
+      {
+        def elemType = (type :> FixedType.Class).args.Head :> FixedType;
+
+        <[
+          def len = reader.ReadUInt32();
+          assert(len >= 0);
+          if (len == 0)
+            System.Collections.Immutable.ImmutableArray.Create.[$(elemType : typed)]()
+          else
+          {
+            def builder = System.Collections.Immutable.ImmutableArray.CreateBuilder.[$(elemType : typed)]();
+            def loop(i : uint) : void
+            {
+              when (i > 0)
+              {
+                def value = $(DeserializeValue(elemType));
+                builder.Add(value);
+                loop(i - 1);
+              }
+            }
+
+            loop(len);
+            builder.ToImmutable()
+          }
+        ]>
+      }                       
+      else if (type.IsValueType)
+      {
+        def id = MessageRegistry.Register(_typer.Manager, type);
+        <[ 
+          def id = reader.ReadInt16();
+          assert2(id == $id);
+          $(type : typed).Deserialize(reader);
+        ]>
+      }
+      else 
+        <[ Nitra.Messages.Deserializer.Deserialize.[$(type : typed)](reader); ]>
+    }
+
+    DeserializePrimitiveValue(type : FixedType) : PExpr
+    {
+      def ti = type.TypeInfo;
+      assert(ti != null);
+      def internalType = _typer.InternalType;
+
+      def getReadMethodNameExpr(ti : TypeInfo)
+      {
+        if (internalType.Int16_tc.Equals(ti))        <[ ReadInt16 ]>
+        else if (internalType.Int32_tc.Equals(ti))   <[ ReadInt32 ]>
+        else if (internalType.Int64_tc.Equals(ti))   <[ ReadInt64 ]>
+        else if (internalType.Char_tc.Equals(ti))    <[ ReadChar ]>
+        else if (internalType.SByte_tc.Equals(ti))   <[ ReadSByte ]>
+
+        else if (internalType.UInt16_tc.Equals(ti))  <[ ReadUInt16 ]>
+        else if (internalType.UInt32_tc.Equals(ti))  <[ ReadUInt32 ]>
+        else if (internalType.UInt64_tc.Equals(ti))  <[ ReadUInt64 ]>
+        else if (internalType.Byte_tc.Equals(ti))    <[ ReadByte ]>
+
+        else if (internalType.Single_tc.Equals(ti))  <[ ReadSingle ]>
+        else if (internalType.Double_tc.Equals(ti))  <[ ReadDouble ]>
+        else if (internalType.Decimal_tc.Equals(ti)) <[ ReadDecimal ]>
+
+        else if (internalType.Boolean_tc.Equals(ti)) <[ ReadBoolean ]>
+
+        else if (internalType.String_tc.Equals(ti))  <[ ReadString ]>
+        else
+          assert(false);
+      }
+
+      def readExpr = getReadMethodNameExpr(ti);
+
+      <[ reader.$readExpr() ]>
+    }
+  }
+}
