@@ -6,16 +6,13 @@ using System.Windows.Input;
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
-using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Markup;
 using System.Windows.Media;
 using Nitra.Internal;
 using Nitra.ProjectSystem;
-using Nitra.Runtime.Reflection;
 
 namespace Nitra.Visualizer
 {
@@ -72,7 +69,7 @@ namespace Nitra.Visualizer
       if (items != null && !(items is string))
       {
         var type = items.GetType();
-        var count = items.Count();
+        var count = items.OfType<object>().Count();
         var xaml = RenderXamlForSeq(name, count, items);
         tvi.Header = XamlReader.Parse(xaml);
         if (count > 0)

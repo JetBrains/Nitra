@@ -890,7 +890,7 @@ namespace Nitra.Visualizer
 
     private void RunTest(TestVm test)
     {
-      test.Run(recoveryAlgorithm: GetRecoveryAlgorithm());
+      test.Run(GetRecoveryAlgorithm());
 
       ShowDiff(test);
     }
