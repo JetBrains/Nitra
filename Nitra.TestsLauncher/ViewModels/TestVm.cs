@@ -4,13 +4,8 @@ using Nitra.Visualizer.Annotations;
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Threading;
-using System.Windows;
-using Nitra.Internal;
-using NitraFile = Nitra.ProjectSystem.File;
 using IOFile = System.IO.File;
 
 namespace Nitra.ViewModels

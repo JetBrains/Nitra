@@ -1,0 +1,90 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nemerle.Extensions;
+using Nitra.ProjectSystem;
+using System.IO;
+using System.Reflection;
+using System.Xml.Serialization;
+
+namespace Nitra.Visualizer.Serialization
+{
+  public sealed class Language
+  {
+    [XmlAttribute] public Name: string { get; set }
+    [XmlAttribute] public Path: string { get; set }
+    public DynamicExtensions: array[DynamicExtension] { get; set }
+    public Libs: array[string] { get; set }
+  }
+
+  public sealed class DynamicExtension
+  {
+    [XmlAttribute] public Name: string { get; set }
+    [XmlAttribute] public Path: string { get; set }
+  }
+  
+  public module SerializationHelper
+  {
+    _serializer: XmlSerializer = XmlSerializer(typeof(Language));
+
+    public Serialize(
+      language: Nitra.Language, 
+      dynamicExtensions: Seq[GrammarDescriptor],
+      libs: array[LibReference],
+      pathConverter: string -> string) : string
+    {
+      def writer = StringWriter();
+      def data = Language() <-
+      {
+        Name = language.FullName;
+        Path = pathConverter(language.GetType().Assembly.Location);
+        
+        DynamicExtensions = 
+          dynamicExtensions.MapToArray(g => DynamicExtension() <- { Name = g.FullName; Path = pathConverter(g.GetType().Assembly.Location) });
+            
+        Libs = libs.Select(x =>  x.Serialize()).ToArray()
+      };
+      _serializer.Serialize(writer, data);
+      writer.ToString()
+    }
+
+    public Deserialize(text: string, assemblyResolver: string -> Assembly): Nitra.Language * array[GrammarDescriptor] * array[LibReference]
+    {
+      def reader = StringReader(text);
+      def languageInfo = _serializer.Deserialize(reader) :> Language;
+      def languageAssembly = assemblyResolver(languageInfo.Path);
+      
+      def language = 
+        Nitra.Language
+          .GetLanguages(languageAssembly)
+          .FirstOrDefault(l => 
+            String.Equals(l.FullName, languageInfo.Name, StringComparison.Ordinal));
+      
+        when (language == null)
+          throw Exception($"Language '$(languageInfo.Name)' not found in assembly '$(languageAssembly.Location)");
+
+      def dynamicExtensions = List();
+      foreach (extensionInfo in languageInfo.DynamicExtensions)
+      {
+        def extensionAssembly = assemblyResolver(extensionInfo.Path);
+        
+        def descriptor = 
+          GrammarDescriptor
+            .GetDescriptors(extensionAssembly)
+            .FirstOrDefault(g => String.Equals(g.FullName, extensionInfo.Name, StringComparison.Ordinal));
+        
+          when (descriptor == null)
+            throw Exception($"Syntax module '$(extensionInfo.Name)' not found in assembly '$(extensionAssembly.Location)");
+        dynamicExtensions.Add(descriptor)
+      }
+
+      def libs = if (languageInfo.Libs == null) array[] else languageInfo.Libs.Select(LibReference.Deserialize).ToArray();
+      (language, dynamicExtensions.ToArray(), libs)
+    }
+  }
+}
