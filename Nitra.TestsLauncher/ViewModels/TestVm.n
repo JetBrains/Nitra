@@ -1,0 +1,211 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nitra.Declarations;
+using Nitra.ProjectSystem;
+using System.IO;
+using IOFile = System.IO.File;
+
+namespace Nitra.ViewModels
+{
+  public class TestVm : FullPathVm, ITest
+  {
+    public static TypingMsg: Guid = Guid.NewGuid(); 
+    public TestPath: string { get; private set }
+    public File: FsFile[IAst] { get { _file }}
+    public TestSuite: TestSuiteVm { get; private set }
+    public Name: string { get { Path.GetFileNameWithoutExtension(TestPath) }}
+    public PrettyPrintResult: string { get; private set }
+    public Exception: Exception { get; private set }
+    public TestTime: TimeSpan { get; private set }
+    public Statistics: StatisticsTask.Container { get; private set }
+    public FileStatistics: FileStatistics { get; private set }
+    public IsSingleFileTest: bool { get { Parent is TestSuiteVm }}
+    _file: TestFile;
+    _testFolder: TestFolderVm;
+
+    class TestFile : FsFile[IAst]
+    {
+      public mutable _completionStartPos: int = -1;
+      public mutable _completionPrefix: string = null;
+      _test: TestVm;
+
+      public this(test: TestVm, language: Language, project: FsProject[IAst], statistics: FileStatistics)
+      {
+        base(test.TestPath, language, project, statistics);
+        _test = test;
+      }
+
+      protected override GetParseSession(): ParseSession
+      {
+        def session = base.GetParseSession();
+        session.CompletionStartPos = _completionStartPos;
+        session.CompletionPrefix   = _completionPrefix;
+        session.DynamicExtensions  = _test.TestSuite.DynamicExtensions;
+        match (_test.TestSuite.RecoveryAlgorithm)
+        {
+          | RecoveryAlgorithm.Smart => session.OnRecovery = ParseSession.SmartRecovery
+          | RecoveryAlgorithm.Panic => session.OnRecovery = ParseSession.PanicRecovery
+          | RecoveryAlgorithm.FirstError => session.OnRecovery = ParseSession.FirsrErrorRecovery
+        }
+        session
+      }
+
+      public override GetSource(): SourceSnapshot
+      {
+        SourceSnapshot(_test.Code, this)
+      }
+
+      public override Length: int
+      {
+        get { _test.Code.Length }
+      }
+    }
+
+    public this(testPath: string, parent: ITestTreeNode)
+    {
+      base(parent, testPath);
+      _testFolder = parent :> TestFolderVm;
+      TestPath = testPath;
+      TestSuite = if (_testFolder == null) parent :> TestSuiteVm else _testFolder.TestSuite;
+      
+      if (_testFolder != null)
+      {
+        Statistics = null;
+        FileStatistics = FileStatistics(
+          _testFolder.ParsingStatistics.ReplaceSingleSubtask(Name),
+          _testFolder.ParseTreeStatistics.ReplaceSingleSubtask(Name),
+          _testFolder.AstStatistics.ReplaceSingleSubtask(Name),
+          _testFolder.DependPropsStatistics);
+        _file = TestFile(this, TestSuite.Language, _testFolder.Project, FileStatistics);
+      }
+      else
+      {
+        Statistics = StatisticsTask.Container("Total");
+        FileStatistics = FileStatistics(
+          Statistics.ReplaceSingleSubtask("Parsing"),
+          Statistics.ReplaceSingleSubtask("ParseTree"),
+          Statistics.ReplaceSingleSubtask("Ast", "AST Creation"),
+          Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties"));
+        def solution = FsSolution.[IAst]();
+        def project = FsProject(solution, Path.GetDirectoryName(testPath), TestSuite.Libs);
+        _file = TestFile(this, TestSuite.Language, project, FileStatistics);
+      }
+
+      when (TestSuite.TestState == TestState.Ignored)
+        TestState = TestState.Ignored;
+    }
+
+    public override Hint: string { get { Code } }
+    mutable _code: string;
+
+    public Code: string
+    {
+      get 
+      { 
+        when (_code == null)
+          _code = IOFile.ReadAllText(TestPath);
+        _code
+      }
+      set
+      {
+        _code = value; 
+        this.File.ResetCache();
+        def f = Action(() => { lock (this) IOFile.WriteAllText(TestPath, value); });
+        _ = f.BeginInvoke(null, null)
+      }
+    }
+
+    public Gold: string
+    {
+      get
+      {
+        def path = GolgPath;
+        if (IOFile.Exists(path))
+          IOFile.ReadAllText(path)
+        else ""
+      }
+      set { IOFile.WriteAllText(Path.ChangeExtension(TestPath, ".gold"), value); }
+    }
+
+    public GolgPath: string
+    {
+      get { Path.ChangeExtension(TestPath, ".gold") }
+    }
+
+    public Run(
+      _recoveryAlgorithm: RecoveryAlgorithm = RecoveryAlgorithm.Smart, 
+      completionStartPos: int = -1, 
+      completionPrefix: string = null) : bool
+    {
+      def project = _file.Project;
+      _file._completionStartPos = completionStartPos;
+      _file._completionPrefix   = completionPrefix;
+      _file.ResetCache();
+
+      if (_file.Ast == null) false
+      else
+      {
+        def tests = if (_testFolder == null) array[this] : Seq.[TestVm] else _testFolder.Tests;
+        def files = tests.Select(t => t.File).ToArray();
+        foreach (file in files)
+          file.DeepResetProperties();
+        
+        def projectSupport = _file.Ast :> IProjectSupport;
+        
+        if (projectSupport != null)
+          projectSupport.RefreshProject(project);
+        else if (_testFolder != null)
+          throw InvalidOperationException($"The '$(_file.Ast.GetType().Name)' type must implement IProjectSupport, to be used in a multi-file test.");
+        else
+        {
+          def context  = DependentPropertyEvalContext();
+          def evalHost = ProjectEvalPropertiesHost(files);
+          evalHost.EvalProperties(context)
+        }
+        true;
+      }
+    }
+
+    public CheckGold(_recoveryAlgorithm: RecoveryAlgorithm): void
+    {
+      unless (TestSuite.TestState == TestState.Ignored)
+      {
+        def gold = Gold;
+        def parseTree = _file.GetParseTree() : ParseTree;
+        def prettyPrintResult = parseTree.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
+        PrettyPrintResult = prettyPrintResult;
+        TestState = if (gold == prettyPrintResult) TestState.Success else TestState.Failure
+      }
+    }
+
+    public Update(code: string, gold: string): void
+    {
+      IOFile.WriteAllText(TestPath, code);
+      IOFile.WriteAllText(Path.ChangeExtension(TestPath, ".gold"), gold)
+    }
+
+    public Remove(): void
+    {
+      def fullPath = Path.GetFullPath(this.TestPath);
+      IOFile.Delete(fullPath);
+      def goldFullPath = Path.ChangeExtension(fullPath, ".gold");
+      when (IOFile.Exists(goldFullPath))
+        IOFile.Delete(goldFullPath);
+      def tests = TestSuite.Tests;
+      def index = tests.IndexOf(this);
+      _ = tests.Remove(this);
+      when (tests.Count > 0)
+        tests[index].IsSelected = true;
+    }
+
+    public override ToString(): string
+    {
+      Name
+    }
+  }
+}

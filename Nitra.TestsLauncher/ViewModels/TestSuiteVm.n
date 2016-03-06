@@ -1,0 +1,209 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Nitra.Visualizer;
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.IO;
+using System.Xml.Linq;
+using Nitra.Visualizer.Serialization;
+using System.Reflection;
+using Nitra.ProjectSystem;
+using File = System.IO.File;
+
+namespace Nitra.ViewModels
+{
+  public class TestSuiteVm : FullPathVm, ITestTreeContainerNode
+  {
+    public static ConfigFileName: string = "config.xml";
+    public Solution: SolutionVm { get; private set; }
+    public Name: string { get; private set; }
+    public Language: Language { get; private set; }
+    public DynamicExtensions: ObservableCollection[GrammarDescriptor] { get; private set; }
+    public Tests: ObservableCollection[ITest] { get; private set; }
+    public Children: Seq[ITest] { get { Tests } }
+    public TestSuitePath: string { get; set; }
+    public Exception: Exception { get; private set; }
+    public TestTime: TimeSpan { get; private set; }
+    public Statistics: StatisticsTask.Container { get; private set; }
+    public Assemblies: array[Assembly] { get; private set; }
+    public Libs: array[LibReference] { get; private set; }
+    public mutable _hint: string;
+    public override Hint: string { get { _hint } }
+    public static NoAssembiles: array[Assembly] = array[];
+    public Xml: string { get { Utils.MakeXml(_rootPath, Language, DynamicExtensions, Libs) } }
+    public RecoveryAlgorithm: RecoveryAlgorithm { get; set; }
+    _rootPath: string;
+
+    public this(solution: SolutionVm, name: string, config: string)
+    {
+      base(solution, Path.Combine(solution.RootFolder, name));
+      Statistics = StatisticsTask.Container("TestSuite", "Test Suite");
+      def testSuitePath = base.FullPath;
+      def rootPath = solution.RootFolder;
+      Solution = solution;
+      _rootPath = rootPath;
+      TestSuitePath = testSuitePath;
+      Language = Language.Instance;
+      DynamicExtensions = ObservableCollection();
+      Assemblies = NoAssembiles;
+      Libs = array[];
+      def configPath = Path.GetFullPath(Path.Combine(testSuitePath, ConfigFileName));
+
+      try
+      {
+        def assemblyRelativePaths = Dictionary();
+
+        def (language, extensions, libs) = SerializationHelper.Deserialize(File.ReadAllText(configPath),
+          path =>
+          {
+            def fullPath = Path.GetFullPath(Path.Combine(rootPath, path));
+            mutable result: Assembly;
+            unless (assemblyRelativePaths.TryGetValue(fullPath, out result))
+            {
+              result = Utils.LoadAssembly(fullPath, config);
+              assemblyRelativePaths.Add(fullPath, result);
+            }
+            result
+          });
+
+        Language = language;
+        
+        foreach (ext in extensions)
+          DynamicExtensions.Add(ext);
+
+        Assemblies = assemblyRelativePaths.Values.ToArray();
+        Libs = libs;
+
+        def indent = Environment.NewLine + "  ";
+        def para = Environment.NewLine + Environment.NewLine;
+
+        _hint = "Language:"          + indent + Language.FullName + para
+              + "DynamicExtensions:" + indent + string.Join(indent, DynamicExtensions.Select(g => g.FullName)) + para
+              + "Libraries:"         + indent + string.Join(indent, assemblyRelativePaths.Keys);
+      }
+      catch
+      {
+        | ex is FileNotFoundException =>
+            TestState = TestState.Ignored;
+            
+            mutable additionMsg =
+              if (ex.FileName.EndsWith("config.xml", StringComparison.OrdinalIgnoreCase))
+                @"The configuration file (config.xml) does not exist in the test suite folder.";
+              else if (ex.FileName.EndsWith("Nitra.Runtime.dll", StringComparison.OrdinalIgnoreCase))
+                @"Try to recompile the parser."
+              else null;
+            
+            unless (additionMsg == null)
+              additionMsg = Environment.NewLine + Environment.NewLine + additionMsg;
+            
+            _hint = "Failed to load test suite:" + Environment.NewLine + ex.Message + additionMsg;
+        | ex is Exception =>
+           TestState = TestState.Ignored;
+            _hint = "Failed to load test suite:" + Environment.NewLine + ex.GetType().Name + ":" + ex.Message;
+      }
+
+      Name = Path.GetFileName(testSuitePath);
+
+      def tests = ObservableCollection.[ITest]();
+
+      if (Directory.Exists(testSuitePath))
+      {
+        def paths = Directory.GetFiles(testSuitePath, "*.test").Concat(Directory.GetDirectories(testSuitePath));
+        foreach (path in paths.OrderBy(f => f))
+          if (Directory.Exists(path))
+            tests.Add(TestFolderVm(path, this));
+          else
+            tests.Add(TestVm(path, this))
+      }
+      else when (TestState != TestState.Ignored)
+      {
+        _hint = "The test suite folder '" + Path.GetDirectoryName(testSuitePath) + "'does not exist.";
+        TestState = TestState.Ignored
+      }
+
+      Tests = tests;
+      solution.TestSuites.Add(this)
+    }
+
+    public TestStateChanged(): void
+    {
+      unless (this.TestState == TestState.Ignored)
+      {
+        this.TestState =
+          if (Tests.Any(x => x.TestState == TestState.Failure)) 
+            TestState.Failure
+          else if (Tests.Filter(x => x.TestState != TestState.Failure && x.TestState != TestState.Success).Any())
+            TestState.Skipped 
+          else TestState.Success
+      }
+    }
+
+    public Run(code: string, _gold: string = null, completionStartPos: int = -1, completionPrefix: string = null, 
+               recoveryAlgorithm: RecoveryAlgorithm = RecoveryAlgorithm.Smart): IParseResult
+    {
+      def source = SourceSnapshot(code);
+
+      if (Language.StartRule == null)
+        null
+      else
+      {
+        try
+        {
+          def parseSession = ParseSession(Language.StartRule,
+            compositeGrammar = Language.CompositeGrammar,
+            completionPrefix = completionPrefix,
+            completionStartPos = completionStartPos,
+            parseToEndOfString = true,
+            dynamicExtensions = DynamicExtensions,
+            statistics = Statistics);
+          
+          match (recoveryAlgorithm)
+          {
+            | RecoveryAlgorithm.Smart => parseSession.OnRecovery = ParseSession.SmartRecovery
+            | RecoveryAlgorithm.Panic => parseSession.OnRecovery = ParseSession.PanicRecovery
+            | RecoveryAlgorithm.FirstError => parseSession.OnRecovery = ParseSession.FirsrErrorRecovery
+          }
+          
+          def parseResult = parseSession.Parse(source);
+          this.Exception = null;
+          parseResult
+        }
+        catch
+        {
+          | ex is Exception =>
+              this.Exception = ex;
+              null
+        }
+      }
+    }
+
+    public ShowGrammar(): void
+    {
+      def xtml = Language.CompositeGrammar.ToHtml();
+      def filePath = Path.ChangeExtension(Path.GetTempFileName(), ".html");
+      xtml.Save(filePath, SaveOptions.DisableFormatting);
+      _ = Process.Start(filePath)
+    }
+
+    public override ToString(): string { Name }
+
+    public Remove(): void
+    {
+      def fullPath = TestFullPath(this.TestSuitePath);
+      _ = Solution.TestSuites.Remove(this);
+      Solution.Save();
+      when (Directory.Exists(fullPath))
+        Directory.Delete(fullPath, true);
+    }
+
+    TestFullPath(path: string): string
+    {
+      Path.GetFullPath(path)
+    }
+  }
+}
