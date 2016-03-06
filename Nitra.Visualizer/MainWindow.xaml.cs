@@ -581,7 +581,7 @@ namespace Nitra.Visualizer
 
         _currentTest.Code = _text.Text;
         _currentTest.Run(GetRecoveryAlgorithm());
-        _performanceTreeView.ItemsSource = new[] { (_currentTest.Statistics ?? _currentTestFolder.Statistics) };
+        _performanceTreeView.ItemsSource = new[] { (_currentTest.Statistics.Total ?? _currentTestFolder.Statistics.Total) };
 
         _astRoot = _currentTest.File.Ast;
         _parseResult = _currentTest.File.ParseResult;
