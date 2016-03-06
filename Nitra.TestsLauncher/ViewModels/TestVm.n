@@ -15,8 +15,8 @@ namespace Nitra.ViewModels
   public abstract class TestVm : FullPathVm, ITest
   {
     public static TypingMsg: Guid = Guid.NewGuid(); 
+    
     public TestPath: string { get; private set }
-    public File: FsFile[IAst] { get { _file }}
     public TestSuite: TestSuiteVm { get; private set }
     public Name: string { get { Path.GetFileNameWithoutExtension(TestPath) }}
     public PrettyPrintResult: string { get; private set }
@@ -25,151 +25,30 @@ namespace Nitra.ViewModels
     public Statistics: Statistics { get; private set }
     public FileStatistics: FileStatistics { get; private set }
     public IsSingleFileTest: bool { get { Parent is TestSuiteVm }}
-    _file: TestFile;
     _testFolder: TestFolderVm;
 
-    class TestFile : FullPathVm
-    {
-      public mutable _completionStartPos: int = -1;
-      public mutable _completionPrefix: string = null;
-      _test: TestVm;
-
-      public this(test: TestVm, language: Language, project: FsProject[IAst], statistics: FileStatistics)
-      {
-        base(test.TestPath, language, project, statistics);
-        _test = test;
-      }
-
-      protected override GetParseSession(): ParseSession
-      {
-        def session = base.GetParseSession();
-        session.CompletionStartPos = _completionStartPos;
-        session.CompletionPrefix   = _completionPrefix;
-        session.DynamicExtensions  = _test.TestSuite.DynamicExtensions;
-        match (_test.TestSuite.RecoveryAlgorithm)
-        {
-          | RecoveryAlgorithm.Smart => session.OnRecovery = ParseSession.SmartRecovery
-          | RecoveryAlgorithm.Panic => session.OnRecovery = ParseSession.PanicRecovery
-          | RecoveryAlgorithm.FirstError => session.OnRecovery = ParseSession.FirsrErrorRecovery
-        }
-        session
-      }
-
-      public override GetSource(): SourceSnapshot
-      {
-        SourceSnapshot(_test.Code, this)
-      }
-
-      public override Length: int
-      {
-        get { _test.Code.Length }
-      }
-    }
-
-    public this(testPath: string, parent: ITestTreeNode)
+    public this(testPath : string, parent : TestSuiteVm)
     {
       base(parent, testPath);
-      when (parent is TestFolderVm as suit)
-        _testFolder = suit;
       TestPath = testPath;
-      TestSuite = if (_testFolder == null) parent :> TestSuiteVm else _testFolder.TestSuite;
+      TestSuite = parent;
       
-      if (_testFolder != null)
-      {
-        Statistics = null;
-        FileStatistics = FileStatistics(
-          _testFolder.Statistics.Parsing.ReplaceSingleSubtask(Name),
-          _testFolder.Statistics.Total.ReplaceContainerSubtask("ParseTree").ReplaceSingleSubtask(Name),
-          _testFolder.Statistics.Ast.ReplaceSingleSubtask(Name),
-          _testFolder.Statistics.DependProps);
-        _file = TestFile(this, TestSuite.Language, _testFolder.Project, FileStatistics);
-      }
-      else
-      {
-        Statistics = Statistics();
-        FileStatistics = FileStatistics(
-          Statistics.Total.ReplaceSingleSubtask("Parsing"),
-          Statistics.Total.ReplaceSingleSubtask("ParseTree"),
-          Statistics.Total.ReplaceSingleSubtask("Ast", "AST Creation"),
-          Statistics.Total.ReplaceContainerSubtask("DependProps", "Dependent properties"));
-        def solution = FsSolution.[IAst]();
-        def project = FsProject(solution, Path.GetDirectoryName(testPath), TestSuite.Libs);
-        _file = TestFile(this, TestSuite.Language, project, FileStatistics);
-      }
-
       when (TestSuite.TestState == TestState.Ignored)
         TestState = TestState.Ignored;
     }
 
-    public override Hint: string { get { Code } }
-    mutable _code: string;
-
-    public Code: string
+    public SetRecoveryAlgorithm(_recoveryAlgorithm: RecoveryAlgorithm = RecoveryAlgorithm.Smart) : void
     {
-      get 
-      { 
-        when (_code == null)
-          _code = IOFile.ReadAllText(TestPath);
-        _code
-      }
-      set
-      {
-        _code = value; 
-        this.File.ResetCache();
-        def f = Action(() => { lock (this) IOFile.WriteAllText(TestPath, value); });
-        _ = f.BeginInvoke(null, null)
-      }
+      throw NotImplementedException()
     }
-
-    public Gold: string
+    
+    public Run() : bool
     {
-      get
-      {
-        def path = GolgPath;
-        if (IOFile.Exists(path))
-          IOFile.ReadAllText(path)
-        else ""
-      }
-      set { IOFile.WriteAllText(Path.ChangeExtension(TestPath, ".gold"), value); }
-    }
-
-    public GolgPath: string
-    {
-      get { Path.ChangeExtension(TestPath, ".gold") }
-    }
-
-    public Run(
-      _recoveryAlgorithm: RecoveryAlgorithm = RecoveryAlgorithm.Smart, 
-      completionStartPos: int = -1, 
-      completionPrefix: string = null) : bool
-    {
-      def project = _file.Project;
-      _file._completionStartPos = completionStartPos;
-      _file._completionPrefix   = completionPrefix;
-      _file.ResetCache();
-
-      if (_file.Ast == null) false
-      else
-      {
-        def tests = if (_testFolder == null) array[this] : Seq.[TestVm] else _testFolder.Tests;
-        def files = tests.Select(t => t.File).ToArray();
-        foreach (file in files)
-          file.DeepResetProperties();
-        
-        def projectSupport = _file.Ast :> IProjectSupport;
-        
-        if (projectSupport != null)
-          projectSupport.RefreshProject(project);
-        else if (_testFolder != null)
-          throw InvalidOperationException($"The '$(_file.Ast.GetType().Name)' type must implement IProjectSupport, to be used in a multi-file test.");
-        else
-        {
-          def context  = DependentPropertyEvalContext();
-          def evalHost = ProjectEvalPropertiesHost(files);
-          evalHost.EvalProperties(context)
-        }
-        true;
-      }
+      // TODO: Send massages to server: Close(old_prj), Open(new_prj), Open(file)*, Reference()*, ProjectRedy().
+      // get result...
+      // compare result with gold...
+      // show ststistics.
+      true
     }
 
     public CheckGold(_recoveryAlgorithm: RecoveryAlgorithm): void
@@ -177,10 +56,13 @@ namespace Nitra.ViewModels
       unless (TestSuite.TestState == TestState.Ignored)
       {
         def gold = Gold;
-        def parseTree = _file.GetParseTree() : ParseTree;
-        def prettyPrintResult = parseTree.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
-        PrettyPrintResult = prettyPrintResult;
-        TestState = if (gold == prettyPrintResult) TestState.Success else TestState.Failure
+        // TODO: Foe each twst file send massages to server: RetrivePrettyprint()
+        // Check pretty print with gold.
+        
+        //def parseTree = _file.GetParseTree() : ParseTree;
+        //def prettyPrintResult = parseTree.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
+        //PrettyPrintResult = prettyPrintResult;
+        //TestState = if (gold == prettyPrintResult) TestState.Success else TestState.Failure
       }
     }
 
