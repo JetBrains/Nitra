@@ -360,9 +360,9 @@ namespace Nitra.Visualizer
 
     private void SelectText(File file, NSpan span)
     {
-      if (_currentTestFolder != null)
+      if (_currentTestProject != null)
       {
-        foreach (var test in _currentTestFolder.Tests)
+        foreach (var test in _currentTestProject.Tests)
         {
           if (test.File == file)
           {

@@ -68,15 +68,15 @@ namespace Nitra.Visualizer
     bool _needUpdateTextPrettyPrint;
     ParseTree _parseTree;
     readonly Settings _settings;
-    private SolutionVm _solution;
-    private TestSuiteVm _currentTestSuite;
-    private TestFolderVm _currentTestFolder;
-    private TestVm _currentTest;
-    private readonly PependentPropertyGrid _propertyGrid;
-    private readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
-    private readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
-    private List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
-    private const string ErrorMarkerTag = "Error";
+    WorkspaceVm _workspace;
+    SuiteVm _currentTestSuite;
+    ProjectVm _currentTestProject;
+    TestVm _currentTest;
+    readonly PependentPropertyGrid _propertyGrid;
+    readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
+    readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
+    List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
+    const string ErrorMarkerTag = "Error";
 
     public MainWindow()
     {
@@ -119,7 +119,7 @@ namespace Nitra.Visualizer
       _windowsFormsHost.Child = _propertyGrid;
 
       if (string.IsNullOrWhiteSpace(_settings.CurrentSolution))
-        _solution = null;
+        _workspace = null;
       else
         LoadTests();
     }
@@ -130,7 +130,7 @@ namespace Nitra.Visualizer
 
       if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) != 0)
         return;
-      if (_solution != null)
+      if (_workspace != null)
         SelectTest(_settings.SelectedTestSuite, _settings.SelectedTest, _settings.SelectedTestFolder);
     }
 
@@ -170,15 +170,15 @@ namespace Nitra.Visualizer
     {
       if (_currentTestSuite != null)
       {
-        _settings.SelectedTestSuite = _currentTestSuite.TestSuitePath;
+        _settings.SelectedTestSuite = _currentTestSuite.FullPath;
         var test = _testsTreeView.SelectedItem as TestVm;
         _settings.SelectedTest = test == null ? null : test.Name;
         var testFolder = test == null ? null : test.Parent as TestFolderVm;
         _settings.SelectedTestFolder = testFolder == null ? null : testFolder.Name;
       }
 
-      if (_solution != null && _solution.IsDirty)
-        _solution.Save();
+      if (_workspace != null && _workspace.IsDirty)
+        _workspace.Save();
     }
 
     private void LoadTests()
@@ -192,9 +192,9 @@ namespace Nitra.Visualizer
         return;
       }
 
-      _solution = new SolutionVm(_settings.CurrentSolution, selectedPath, _settings.Config);
-      this.Title = _solution.Name + " - " + Constants.AppName;
-      _testsTreeView.ItemsSource = _solution.TestSuites;
+      _workspace = new SolutionVm(_settings.CurrentSolution, selectedPath, _settings.Config);
+      this.Title = _workspace.Name + " - " + Constants.AppName;
+      _testsTreeView.ItemsSource = _workspace.TestSuites;
     }
 
     private void textBox1_GotFocus(object sender, RoutedEventArgs e)
@@ -388,8 +388,8 @@ namespace Nitra.Visualizer
         var errorNodes = _errorsTreeView.Items;
         var currFile = _currentTest.File;
 
-        if (_currentTestFolder != null)
-          foreach (var test in _currentTestFolder.Tests)
+        if (_currentTestProject != null)
+          foreach (var test in _currentTestProject.Tests)
             cmpilerMessages.AddRange(test.File.GetCompilerMessages());
         else
           cmpilerMessages.AddRange(_currentTest.File.GetCompilerMessages());
@@ -581,7 +581,7 @@ namespace Nitra.Visualizer
 
         _currentTest.Code = _text.Text;
         _currentTest.Run(GetRecoveryAlgorithm());
-        _performanceTreeView.ItemsSource = new[] { (_currentTest.Statistics.Total ?? _currentTestFolder.Statistics.Total) };
+        _performanceTreeView.ItemsSource = new[] { (_currentTest.Statistics.Total ?? _currentTestProject.Statistics.Total) };
 
         _astRoot = _currentTest.File.Ast;
         _parseResult = _currentTest.File.ParseResult;
@@ -799,7 +799,7 @@ namespace Nitra.Visualizer
       if (_needUpdateTextPrettyPrint)
         UpdateTextPrettyPrint();
       var testSuitePath = _currentTestSuite.TestSuitePath;
-      var selectedTestFolder = _currentTestFolder == null ? null : _currentTestFolder.Name;
+      var selectedTestFolder = _currentTestProject == null ? null : _currentTestProject.Name;
       var dialog = new AddTest(TestFullPath(testSuitePath), _text.Text, _prettyPrintTextBox.Text) { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
@@ -1007,17 +1007,17 @@ namespace Nitra.Visualizer
 
     private void EditTestSuite(bool create)
     {
-      if (_solution == null)
+      if (_workspace == null)
         return;
       var currentTestSuite = _currentTestSuite;
       var dialog = new TestSuiteDialog(create, currentTestSuite, _settings) { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
         if (currentTestSuite != null)
-          _solution.TestSuites.Remove(currentTestSuite);
-        var testSuite = new TestSuiteVm(_solution, dialog.TestSuiteName, _settings.Config);
+          _workspace.TestSuites.Remove(currentTestSuite);
+        var testSuite = new TestSuiteVm(_workspace, dialog.TestSuiteName, _settings.Config);
         testSuite.IsSelected = true;
-        _solution.Save();
+        _workspace.Save();
       }
     }
 
@@ -1088,7 +1088,7 @@ namespace Nitra.Visualizer
           _highlightingStyles.Add(spanClass.FullName, MakeHighlightingColor(spanClass));
       }
       _currentTestSuite = newTestSuite;
-      _currentTestFolder = newTestFolder;
+      _currentTestProject = newTestFolder;
       _currentTest = newTest;
       _text.Text = code;
     }
@@ -1103,7 +1103,7 @@ namespace Nitra.Visualizer
 
     private void OnRemoveTestSuite(object sender, ExecutedRoutedEventArgs e)
     {
-      if (_solution == null || _currentTestSuite == null)
+      if (_workspace == null || _currentTestSuite == null)
         return;
 
       if (MessageBox.Show(this, "Do you want to delete the '" + _currentTestSuite.Name + "' test suite?\r\nAll test will be deleted!", "Visualizer!", MessageBoxButton.YesNo,
@@ -1400,8 +1400,8 @@ namespace Nitra.Visualizer
     private void OpenSolution(string solutionFilePath)
     {
       _settings.CurrentSolution = solutionFilePath;
-      _solution = new SolutionVm(solutionFilePath, null, _settings.Config);
-      _testsTreeView.ItemsSource = _solution.TestSuites;
+      _workspace = new SolutionVm(solutionFilePath, null, _settings.Config);
+      _testsTreeView.ItemsSource = _workspace.TestSuites;
       RecentFileList.InsertFile(solutionFilePath);
     }
 
@@ -1426,7 +1426,7 @@ namespace Nitra.Visualizer
 
     private void OnAddExistsTestSuite(object sender, ExecutedRoutedEventArgs e)
     {
-      var unattachedTestSuites = _solution.GetUnattachedTestSuites();
+      var unattachedTestSuites = _workspace.GetUnattachedTestSuites();
       var menu = new ContextMenu();
       foreach (var name in unattachedTestSuites)
       {
@@ -1450,14 +1450,14 @@ namespace Nitra.Visualizer
     void item_Click(object sender, RoutedEventArgs e)
     {
       var name = (string)((MenuItem)e.Source).Header;
-      var testSuite = new TestSuiteVm(_solution, name, _settings.Config);
+      var testSuite = new TestSuiteVm(_workspace, name, _settings.Config);
       testSuite.IsSelected = true;
-      _solution.Save();
+      _workspace.Save();
     }
 
     private void CommandBinding_CanOnAddTestSuite(object sender, CanExecuteRoutedEventArgs e)
     {
-      e.CanExecute = _solution != null;
+      e.CanExecute = _workspace != null;
       e.Handled = true;
     }
 
@@ -1490,7 +1490,7 @@ namespace Nitra.Visualizer
         tvi.IsSelected = true;
     }
 
-    private static string MakeTestFileName(TestFolderVm testFolder)
+    private static string MakeTestFileName(FolderVm testFolder)
     {
       var names = new bool['Z' - 'A'];
       foreach (var t in testFolder.Tests)
@@ -1541,14 +1541,14 @@ namespace Nitra.Visualizer
         return;
       }
 
-      testFolder = _testsTreeView.SelectedItem as TestFolderVm;
+      testFolder = _testsTreeView.SelectedItem as FolderVm;
       if (testFolder != null)
       {
         AddNewFileToMultitest(testFolder).IsSelected = true;
       }
     }
 
-    private static TestVm AddNewFileToMultitest(TestFolderVm testFolder)
+    private static TestVm AddNewFileToMultitest(FolderVm testFolder)
     {
       var name = MakeTestFileName(testFolder);
       var path = Path.Combine(testFolder.TestPath, name + ".test");

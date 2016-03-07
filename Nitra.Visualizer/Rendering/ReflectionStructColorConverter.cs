@@ -1,12 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using Nitra.ClientServer.Messages;
+using System;
 using System.Globalization;
-using System.Linq;
-using System.Text;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Media;
-using Nitra.Runtime.Reflection;
 
 namespace Nitra.Visualizer
 {

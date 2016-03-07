@@ -4,18 +4,13 @@ using Microsoft.Win32;
 using Nitra.Visualizer.Properties;
 using Nitra.ViewModels;
 
-
 using System;
 using System.IO;
-using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media;
 using System.Windows.Threading;
-
 
 namespace Nitra.Visualizer
 {
@@ -26,12 +21,11 @@ namespace Nitra.Visualizer
     private readonly TestSuiteCreateOrEditModel _model;
     private readonly DispatcherTimer _assembliesChangedTimer;
     private readonly DispatcherTimer _libsChangedTimer;
-    private readonly TestSuiteVm _baseTestSuite;
+    private readonly SuiteVm _baseSuite;
 
-    public TestSuiteDialog(bool isCreate, TestSuiteVm baseTestSuite, Settings settings)
+    public TestSuiteDialog(bool isCreate, SuiteVm baseSuite, Settings settings)
     {
-      _baseTestSuite = baseTestSuite;
-
+      _baseSuite = baseSuite;
       _assembliesChangedTimer          = new DispatcherTimer();
       _assembliesChangedTimer.Interval = TimeSpan.FromSeconds(1.3);
       _assembliesChangedTimer.Tick    += _assembliesEdit_timer_Tick;
@@ -44,15 +38,15 @@ namespace Nitra.Visualizer
 
       InitializeComponent();
 
-      if (baseTestSuite != null)
+      if (baseSuite != null)
       {
-        _model.RootFolder           = baseTestSuite.Solution.RootFolder;
-        _model.SuiteName            = baseTestSuite.Name;
-        _model.NormalizedAssemblies = baseTestSuite.Assemblies;
-        _model.NormalizedLibs       = baseTestSuite.Libs;
+        _model.RootFolder           = baseSuite.Solution.RootFolder;
+        _model.SuiteName            = baseSuite.Name;
+        _model.NormalizedAssemblies = baseSuite.Assemblies;
+        _model.NormalizedLibs       = baseSuite.Libs;
 
-        if (baseTestSuite.Language != Nitra.Language.Instance)
-          _model.SelectedLanguage = baseTestSuite.Language;
+        //if (baseSuite.Language != Nitra.Language.Instance)
+        //  _model.SelectedLanguage = baseSuite.Language;
       }
 
       _assemblies.Text = _model.NormalizedAssembliesText;
@@ -165,10 +159,10 @@ namespace Nitra.Visualizer
       try
       {
         Directory.CreateDirectory(path);
-        if (_baseTestSuite != null && _baseTestSuite.Name != testSuiteName && Directory.Exists(_baseTestSuite.FullPath))
+        if (_baseSuite != null && _baseSuite.Name != testSuiteName && Directory.Exists(_baseSuite.FullPath))
         {
-          FileSystem.CopyDirectory(_baseTestSuite.FullPath, path, UIOption.AllDialogs);
-          Directory.Delete(_baseTestSuite.FullPath, recursive: true);
+          FileSystem.CopyDirectory(_baseSuite.FullPath, path, UIOption.AllDialogs);
+          Directory.Delete(_baseSuite.FullPath, recursive: true);
         }
 
         var dynamicExtensions = _model.DynamicExtensions.Where(x => x.IsEnabled && x.IsChecked).Select(x => x.Descriptor);
