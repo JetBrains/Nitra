@@ -43,14 +43,14 @@ using ToolTip = System.Windows.Controls.ToolTip;
 
 namespace Nitra.Visualizer
 {
-  using System.Windows.Documents;
-  using Interop;
-  using System.Windows.Interop;
-
-  /// <summary>
-  /// Interaction logic for MainWindow.xaml
-  /// </summary>
-  public partial class MainWindow
+    using System.Windows.Documents;
+    using Interop;
+    using System.Windows.Interop;
+    using ClientServer.Messages;
+    /// <summary>
+    /// Interaction logic for MainWindow.xaml
+    /// </summary>
+    public partial class MainWindow
   {
     bool _loading = true;
     IParseResult _parseResult;
@@ -69,8 +69,8 @@ namespace Nitra.Visualizer
     ParseTree _parseTree;
     readonly Settings _settings;
     WorkspaceVm _workspace;
-    SuiteVm _currentTestSuite;
-    ProjectVm _currentTestProject;
+    SuiteVm _currentSuite;
+    ProjectVm _currentProject;
     TestVm _currentTest;
     readonly PependentPropertyGrid _propertyGrid;
     readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
@@ -168,9 +168,9 @@ namespace Nitra.Visualizer
 
     private void SaveSelectedTestAndTestSuite()
     {
-      if (_currentTestSuite != null)
+      if (_currentSuite != null)
       {
-        _settings.SelectedTestSuite = _currentTestSuite.FullPath;
+        _settings.SelectedTestSuite = _currentSuite.FullPath;
         var test = _testsTreeView.SelectedItem as TestVm;
         _settings.SelectedTest = test == null ? null : test.Name;
         var testFolder = test == null ? null : test.Parent as TestFolderVm;
@@ -363,14 +363,14 @@ namespace Nitra.Visualizer
     private void TryReportError()
     {
       if (_parseResult == null)
-        if (_currentTestSuite.Exception != null)
+        if (_currentSuite.Exception != null)
         {
-          var msg = "Exception: " + _currentTestSuite.Exception.Message;
+          var msg = "Exception: " + _currentSuite.Exception.Message;
           _status.Text = msg;
 
           var errorNode = new TreeViewItem();
           errorNode.Header = "(1,1): " + msg;
-          errorNode.Tag = _currentTestSuite.Exception;
+          errorNode.Tag = _currentSuite.Exception;
           errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
           _errorsTreeView.Items.Add(errorNode);
 
@@ -388,8 +388,8 @@ namespace Nitra.Visualizer
         var errorNodes = _errorsTreeView.Items;
         var currFile = _currentTest.File;
 
-        if (_currentTestProject != null)
-          foreach (var test in _currentTestProject.Tests)
+        if (_currentProject != null)
+          foreach (var test in _currentProject.Tests)
             cmpilerMessages.AddRange(test.File.GetCompilerMessages());
         else
           cmpilerMessages.AddRange(_currentTest.File.GetCompilerMessages());
@@ -572,7 +572,7 @@ namespace Nitra.Visualizer
       _astRoot = null;
       _parseResult = null;
 
-      if (_currentTestSuite == null || _currentTest == null)
+      if (_currentSuite == null || _currentTest == null)
         return;
 
       try
@@ -581,7 +581,7 @@ namespace Nitra.Visualizer
 
         _currentTest.Code = _text.Text;
         _currentTest.Run(GetRecoveryAlgorithm());
-        _performanceTreeView.ItemsSource = new[] { (_currentTest.Statistics.Total ?? _currentTestProject.Statistics.Total) };
+        _performanceTreeView.ItemsSource = new[] { (_currentTest.Statistics.Total ?? _currentProject.Statistics.Total) };
 
         _astRoot = _currentTest.File.Ast;
         _parseResult = _currentTest.File.ParseResult;
@@ -618,59 +618,6 @@ namespace Nitra.Visualizer
       _textMarkerService.RemoveAll(marker => marker.Tag == (object)ErrorMarkerTag);
     }
 
-    private class CollectSymbolsAstVisitor : IAstVisitor
-    {
-      private readonly NSpan _span;
-      public List<SpanInfo> SpanInfos { get; private set; }
-
-      public CollectSymbolsAstVisitor(NSpan span) { _span = span; SpanInfos = new List<SpanInfo>(); }
-
-      public void Visit(IAst parseTree)
-      {
-        if (parseTree.Span.IntersectsWith(_span))
-          parseTree.Accept(this);
-      }
-
-      public void Visit(Name name)
-      {
-        var span = name.Span;
-
-        if (!span.IntersectsWith(_span) || !name.IsSymbolEvaluated)
-          return;
-
-        var sym = name.Symbol;
-        var spanClass = sym.SpanClass;
-
-        if (spanClass == Nitra.Language.DefaultSpanClass)
-          return;
-
-        SpanInfos.Add(new SpanInfo(span, spanClass));
-      }
-
-      public void Visit(Reference reference)
-      {
-        var span = reference.Span;
-
-        if (!span.IntersectsWith(_span) || !reference.IsRefEvaluated)
-          return;
-
-        IRef r = reference.Ref;
-        while (r.IsResolvedToEvaluated)
-          r = r.ResolvedTo;
-
-        var spanClass = r.SpanClass;
-
-        if (spanClass == Nitra.Language.DefaultSpanClass)
-          return;
-
-        SpanInfos.Add(new SpanInfo(span, spanClass));
-      }
-
-      public void Visit(IRef r)
-      {
-      }
-    }
-
     private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)
     {
       if (_parseResult == null)
@@ -681,14 +628,14 @@ namespace Nitra.Visualizer
         var line = e.Line;
         var spans = new HashSet<SpanInfo>();
         _parseResult.GetSpans(line.Offset, line.EndOffset, spans);
-        var astRoot = _astRoot;
-        if (astRoot != null)
-        {
-          var visitor = new CollectSymbolsAstVisitor(new NSpan(line.Offset, line.EndOffset));
-          astRoot.Accept(visitor);
-          foreach (var spanInfo in visitor.SpanInfos)
-            spans.Add(spanInfo);
-        }
+        //var astRoot = _astRoot;
+        //if (astRoot != null)
+        //{
+        //  var visitor = new CollectSymbolsAstVisitor(new NSpan(line.Offset, line.EndOffset));
+        //  astRoot.Accept(visitor);
+        //  foreach (var spanInfo in visitor.SpanInfos)
+        //    spans.Add(spanInfo);
+        //}
 
         foreach (var span in spans)
         {
@@ -733,19 +680,19 @@ namespace Nitra.Visualizer
       _textBox1Tooltip.IsOpen = false;
     }
 
-    private void _tabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    void _tabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
       UpdateInfo();
       ShowNodeForCaret();
     }
 
-    private void _copyButton_Click(object sender, RoutedEventArgs e)
+    void _copyButton_Click(object sender, RoutedEventArgs e)
     {
       var sb = new StringBuilder();
-      var stats = ((StatisticsTask.Container[])_performanceTreeView.ItemsSource);
+      //var stats = ((StatisticsTask.Container[])_performanceTreeView.ItemsSource);
 
-      foreach (var stat in stats)
-        sb.AppendLine(stat.ToString());
+      //foreach (var stat in stats)
+       // sb.AppendLine(stat.ToString());
       
       var result = sb.ToString();
 
@@ -753,7 +700,7 @@ namespace Nitra.Visualizer
       Clipboard.SetData(DataFormats.UnicodeText, result);
     }
 
-    private void CopyReflectionNodeText(object sender, ExecutedRoutedEventArgs e)
+    void CopyReflectionNodeText(object sender, ExecutedRoutedEventArgs e)
     {
       var value = _reflectionTreeView.SelectedItem as ReflectionStruct;
 
@@ -773,7 +720,7 @@ namespace Nitra.Visualizer
       return false;
     }
 
-    private void OnAddTest(object sender, ExecutedRoutedEventArgs e)
+    void OnAddTest(object sender, ExecutedRoutedEventArgs e)
     {
       if (CheckTestFolder())
         AddTest();
@@ -782,15 +729,15 @@ namespace Nitra.Visualizer
     }
 
 
-    private void CommandBinding_CanAddTest(object sender, CanExecuteRoutedEventArgs e)
+    void CommandBinding_CanAddTest(object sender, CanExecuteRoutedEventArgs e)
     {
-      e.CanExecute = _currentTestSuite != null;
+      e.CanExecute = _currentSuite != null;
       e.Handled = true;
     }
 
-    private void AddTest()
+    void AddTest()
     {
-      if (_currentTestSuite == null)
+      if (_currentSuite == null)
       {
         MessageBox.Show(this, "Select a test suite first.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
         return;
@@ -798,18 +745,20 @@ namespace Nitra.Visualizer
 
       if (_needUpdateTextPrettyPrint)
         UpdateTextPrettyPrint();
-      var testSuitePath = _currentTestSuite.TestSuitePath;
-      var selectedTestFolder = _currentTestProject == null ? null : _currentTestProject.Name;
+
+      var testSuitePath = _currentSuite.FullPath;
+      var selectedProject = _currentProject == null ? null : _currentProject.Name;
       var dialog = new AddTest(TestFullPath(testSuitePath), _text.Text, _prettyPrintTextBox.Text) { Owner = this };
+
       if (dialog.ShowDialog() ?? false)
       {
         var testName = dialog.TestName;
         LoadTests();
-        SelectTest(testSuitePath, testName, selectedTestFolder);
+        SelectTest(testSuitePath, testName, selectedProject);
       }
     }
 
-    private void SelectTest(string testSuitePath, string testName, string selectedTestFolder)
+    void SelectTest(string suitePath, string testName, string selectedProjectName)
     {
       if (!CheckTestFolder())
       {
@@ -817,28 +766,27 @@ namespace Nitra.Visualizer
         return;
       }
 
-      var testSuites = (ObservableCollection<TestSuiteVm>) _testsTreeView.ItemsSource;
+      var suites = (ObservableCollection<SuiteVm>) _testsTreeView.ItemsSource;
 
-      if (testSuites == null)
+      if (suites == null)
         return;
 
-      var result = (ITestTreeContainerNode)testSuites.FirstOrDefault(ts => ts.FullPath == testSuitePath);
-      if (result == null)
-        return;
-      if (selectedTestFolder != null)
+      var suite = suites.FirstOrDefault(ts => ts.FullPath == suitePath);
+      if (suite == null) return;
+
+      if (selectedProjectName != null)
       {
-        var testFolder = result.Children.FirstOrDefault(t => t.Name == selectedTestFolder);
-        if (testFolder != null)
-          result = (ITestTreeContainerNode)testFolder;
-      }
-      var test = result.Children.FirstOrDefault(t => t.Name == testName);
-      if (test != null)
-      {
-        test.IsSelected = true;
-      }
-      else
-      {
-        result.IsSelected = true;
+        var project = suite.Children.FirstOrDefault(x => x.Name == selectedProjectName);
+
+        if (project != null)
+        {
+          var test = project.Children.FirstOrDefault(x => x.Name == testName);
+
+          if (test != null)
+            test.IsSelected = true;
+          else
+            project.IsSelected = true;
+        }
       }
     }
 
@@ -855,47 +803,29 @@ namespace Nitra.Visualizer
         MessageBox.Show(this, "Can't run tests.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
-    private void RunTests()
+    void RunTests()
     {
       if (_testsTreeView.ItemsSource == null)
         return;
 
-      var testSuites = (ObservableCollection<TestSuiteVm>)_testsTreeView.ItemsSource;
+      var suites = (ObservableCollection<SuiteVm>)_testsTreeView.ItemsSource;
 
-      foreach (var testSuite in testSuites)
+      foreach (var suite in suites)
       {
-        foreach (var test in testSuite.Tests)
+        foreach (var test in suite.GetAllTests())
           RunTest(test);
 
-        testSuite.TestStateChanged();
+        suite.TestStateChanged();
       }
     }
 
-    private void RunTest(ITest test)
+    void RunTest(TestVm test)
     {
-      var testFile = test as TestVm;
-      if (testFile != null)
-        RunTest(testFile);
-
-      var testFolder = test as TestFolderVm;
-      if (testFolder != null)
-        RunTest(testFolder);
-    }
-
-    private void RunTest(TestFolderVm testFolder)
-    {
-      foreach (var testFile in testFolder.Tests)
-        RunTest(testFile);
-    }
-
-    private void RunTest(TestVm test)
-    {
-      test.Run(GetRecoveryAlgorithm());
-
+      test.Run(); // GetRecoveryAlgorithm());
       ShowDiff(test);
     }
 
-    private void ShowDiff(TestVm test)
+    void ShowDiff(TestVm test)
     {
       _para.Inlines.Clear();
 
@@ -1009,7 +939,7 @@ namespace Nitra.Visualizer
     {
       if (_workspace == null)
         return;
-      var currentTestSuite = _currentTestSuite;
+      var currentTestSuite = _currentSuite;
       var dialog = new TestSuiteDialog(create, currentTestSuite, _settings) { Owner = this };
       if (dialog.ShowDialog() ?? false)
       {
@@ -1081,14 +1011,14 @@ namespace Nitra.Visualizer
 
     private void ChangeCurrentTest(TestSuiteVm newTestSuite, TestFolderVm newTestFolder, TestVm newTest, string code)
     {
-      if (newTestSuite != _currentTestSuite && newTestSuite != null)
+      if (newTestSuite != _currentSuite && newTestSuite != null)
       {
         _highlightingStyles.Clear();
         foreach (var spanClass in newTestSuite.Language.GetSpanClasses())
           _highlightingStyles.Add(spanClass.FullName, MakeHighlightingColor(spanClass));
       }
-      _currentTestSuite = newTestSuite;
-      _currentTestProject = newTestFolder;
+      _currentSuite = newTestSuite;
+      _currentProject = newTestFolder;
       _currentTest = newTest;
       _text.Text = code;
     }
@@ -1103,19 +1033,19 @@ namespace Nitra.Visualizer
 
     private void OnRemoveTestSuite(object sender, ExecutedRoutedEventArgs e)
     {
-      if (_workspace == null || _currentTestSuite == null)
+      if (_workspace == null || _currentSuite == null)
         return;
 
-      if (MessageBox.Show(this, "Do you want to delete the '" + _currentTestSuite.Name + "' test suite?\r\nAll test will be deleted!", "Visualizer!", MessageBoxButton.YesNo,
+      if (MessageBox.Show(this, "Do you want to delete the '" + _currentSuite.Name + "' test suite?\r\nAll test will be deleted!", "Visualizer!", MessageBoxButton.YesNo,
         MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
         return;
 
-      _currentTestSuite.Remove();
+      _currentSuite.Remove();
     }
 
     private void CommandBinding_CanRemoveTestSuite(object sender, CanExecuteRoutedEventArgs e)
     {
-      e.CanExecute = _currentTestSuite != null;
+      e.CanExecute = _currentSuite != null;
       e.Handled = true;
     }
 
@@ -1240,15 +1170,15 @@ namespace Nitra.Visualizer
 
     private void OnShowGrammar(object sender, ExecutedRoutedEventArgs e)
     {
-      if (_currentTestSuite == null)
+      if (_currentSuite == null)
         return;
 
-      _currentTestSuite.ShowGrammar();
+      _currentSuite.ShowGrammar();
     }
 
     private void CommandBinding_CanShowGrammar(object sender, CanExecuteRoutedEventArgs e)
     {
-      e.CanExecute = _currentTestSuite != null;
+      e.CanExecute = _currentSuite != null;
       e.Handled = true;
     }
 
@@ -1469,7 +1399,7 @@ namespace Nitra.Visualizer
     private void CommandBinding_CanOnEditTestSuite(object sender, CanExecuteRoutedEventArgs e)
     {
       e.Handled = true;
-      e.CanExecute = _currentTestSuite != null;
+      e.CanExecute = _currentSuite != null;
     }
 
     private void RecentFileList_OnMenuClick(object sender, RecentFileList.MenuClickEventArgs e)

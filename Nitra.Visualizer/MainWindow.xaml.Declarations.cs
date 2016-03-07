@@ -1,6 +1,4 @@
-﻿using Nitra.Declarations;
-
-using System.Reflection;
+﻿using System.Reflection;
 using System.Windows.Input;
 
 using System;
@@ -11,15 +9,11 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Markup;
 using System.Windows.Media;
-using Nitra.Internal;
-using Nitra.ProjectSystem;
 
 namespace Nitra.Visualizer
 {
   public partial class MainWindow
   {
-    private IAst _astRoot;
-
     private TreeViewItem ObjectToItem(PropertyInfo prop, object obj)
     {
       string name = prop == null ? "" : prop.Name;
@@ -360,9 +354,9 @@ namespace Nitra.Visualizer
 
     private void SelectText(File file, NSpan span)
     {
-      if (_currentTestProject != null)
+      if (_currentProject != null)
       {
-        foreach (var test in _currentTestProject.Tests)
+        foreach (var test in _currentProject.Tests)
         {
           if (test.File == file)
           {
