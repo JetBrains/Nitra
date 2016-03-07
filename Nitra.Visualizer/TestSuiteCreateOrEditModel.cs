@@ -6,10 +6,10 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Windows;
-using Nitra.ProjectSystem;
 using Nitra.ViewModels;
 using Nitra.Visualizer.Properties;
 using File = System.IO.File;
+using Nitra.ClientServer.Messages;
 
 namespace Nitra.Visualizer
 {
@@ -112,11 +112,11 @@ namespace Nitra.Visualizer
         if (File.Exists(fullAssemblyPath))
         {
           var relativePath = Utils.MakeRelativePath(suitPath, true, fullAssemblyPath, false);
-          normalized.Add(new FileLibReference(relativePath));
+          //normalized.Add(new FileLibReference(relativePath));
         }
-        else
+        else;
           // treat as assembly full name
-          normalized.Add(new FullNameLibReference(libPath));
+          //normalized.Add(new FullNameLibReference(libPath));
       }
       model.NormalizedLibs = normalized.ToArray();
     }
@@ -155,7 +155,7 @@ namespace Nitra.Visualizer
     }
 
     public static readonly DependencyProperty NormalizedAssembliesProperty =
-        DependencyProperty.Register("NormalizedAssemblies", typeof(Assembly[]), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata(TestSuiteVm.NoAssembiles, OnNormalizedAssembliesChanged));
+        DependencyProperty.Register("NormalizedAssemblies", typeof(Assembly[]), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata(SuiteVm.NoAssembiles, OnNormalizedAssembliesChanged));
 
     private static void OnNormalizedAssembliesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
@@ -164,17 +164,17 @@ namespace Nitra.Visualizer
       var oldDynamicExtensions = model.DynamicExtensions.ToDictionary(x => x.Descriptor);
       foreach (var assembly in (Assembly[])e.NewValue)
       {
-        foreach (var language in Language.GetLanguages(assembly))
-        {
-          if (!oldLanguages.Remove(language))
-            model.Languages.Add(language);
-        }
+        //foreach (var language in new Language[] { })//Language.GetLanguages(assembly))
+        //{
+        //  if (!oldLanguages.Remove(language))
+        //    model.Languages.Add(language);
+        //}
 
-        foreach (var descriptor in GrammarDescriptor.GetDescriptors(assembly))
-        {
-          if (!oldDynamicExtensions.Remove(descriptor))
-            model.DynamicExtensions.Add(new DynamicExtensionModel(descriptor));
-        }
+        //foreach (var descriptor in GrammarDescriptor.GetDescriptors(assembly))
+        //{
+        //  if (!oldDynamicExtensions.Remove(descriptor))
+        //    model.DynamicExtensions.Add(new DynamicExtensionModel(descriptor));
+        //}
       }
       foreach (var language in oldLanguages)
         model.Languages.Remove(language);
@@ -200,11 +200,11 @@ namespace Nitra.Visualizer
 
       var oldLanguage = (Language)e.OldValue;
       var suiteName = model.SuiteName;
-      if (string.IsNullOrEmpty(suiteName) || (oldLanguage != null && suiteName == oldLanguage.Name))
-        model.SuiteName = newLanguage.Name;
+      if (string.IsNullOrEmpty(suiteName) || (oldLanguage != null && suiteName == oldLanguage.FullName))
+        model.SuiteName = newLanguage.FullName;
 
-      foreach (var dynamicExtension in model.DynamicExtensions)
-        dynamicExtension.IsEnabled = !newLanguage.CompositeGrammar.Grammars.Contains(dynamicExtension.Descriptor);
+      //foreach (var dynamicExtension in model.DynamicExtensions)
+        //dynamicExtension.IsEnabled = !newLanguage.CompositeGrammar.Grammars.Contains(dynamicExtension.Descriptor);
     }
 
     public ObservableCollection<Language> Languages
