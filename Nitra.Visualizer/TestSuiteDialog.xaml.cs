@@ -5,12 +5,14 @@ using Nitra.Visualizer.Properties;
 using Nitra.ViewModels;
 
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
+using Nitra.Visualizer.Serialization;
 
 namespace Nitra.Visualizer
 {
@@ -42,8 +44,10 @@ namespace Nitra.Visualizer
       {
         _model.RootFolder           = baseSuite.Workspace.RootFolder;
         _model.SuiteName            = baseSuite.Name;
-        _model.NormalizedAssemblies = baseSuite.Assemblies;
-        _model.NormalizedLibs       = baseSuite.Libs;
+        Trace.Assert(false, "Not implemented");
+        // TODO: Make convertion
+        //_model.NormalizedAssemblies = baseSuite.Language.DynamicExtensions;
+        //_model.NormalizedLibs       = baseSuite.Language.Libs;
 
         //if (baseSuite.Language != Nitra.Language.Instance)
         //  _model.SelectedLanguage = baseSuite.Language;
@@ -165,10 +169,12 @@ namespace Nitra.Visualizer
           Directory.Delete(_baseSuite.FullPath, recursive: true);
         }
 
-        var dynamicExtensions = _model.DynamicExtensions.Where(x => x.IsEnabled && x.IsChecked).Select(x => x.Descriptor);
-        var xml               = Utils.MakeXml(root, selectedLanguage, dynamicExtensions, _model.NormalizedLibs);
-        var configPath        = Path.Combine(path, SuiteVm.ConfigFileName);
-        File.WriteAllText(configPath, xml);
+        //var dynamicExtensions = _model.DynamicExtensions.Where(x => x.IsEnabled && x.IsChecked).Select(x => x.Descriptor);
+        //var lang = new Language();
+        //lang.Name = selectedLanguage;
+        //var xml               = Utils.MakeXml(root, selectedLanguage, dynamicExtensions, _model.NormalizedLibs);
+        //var configPath        = Path.Combine(path, SuiteVm.ConfigFileName);
+        //File.WriteAllText(configPath, xml);
       }
       catch (Exception ex)
       {
