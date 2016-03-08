@@ -13,19 +13,19 @@ namespace Nitra.Visualizer
     {
       var node = (ReflectionStruct)value;
 
-      if (node.Info.IsMarker)
-        return Brushes.DarkGray;
+      //if (node.Info.IsMarker)
+        //return Brushes.DarkGray;
 
       if (node.Kind == ReflectionKind.Deleted)
         return Brushes.Red;
 
-      if (node.Span.IsEmpty)
-      {
-        if (node.Info.CanParseEmptyString)
-          return Brushes.Teal;
+      //if (node.Span.IsEmpty)
+      //{
+        //if (node.Info.CanParseEmptyString)
+          //return Brushes.Teal;
 
-        return Brushes.Red;
-      }
+        //return Brushes.Red;
+      //}
 
       if (node.Kind == ReflectionKind.Ambiguous)
         return Brushes.DarkOrange;

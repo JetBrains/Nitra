@@ -40,7 +40,7 @@ namespace Nitra.Visualizer
 
       if (baseSuite != null)
       {
-        _model.RootFolder           = baseSuite.Solution.RootFolder;
+        _model.RootFolder           = baseSuite.Workspace.RootFolder;
         _model.SuiteName            = baseSuite.Name;
         _model.NormalizedAssemblies = baseSuite.Assemblies;
         _model.NormalizedLibs       = baseSuite.Libs;
@@ -167,7 +167,7 @@ namespace Nitra.Visualizer
 
         var dynamicExtensions = _model.DynamicExtensions.Where(x => x.IsEnabled && x.IsChecked).Select(x => x.Descriptor);
         var xml               = Utils.MakeXml(root, selectedLanguage, dynamicExtensions, _model.NormalizedLibs);
-        var configPath        = Path.Combine(path, TestSuiteVm.ConfigFileName);
+        var configPath        = Path.Combine(path, SuiteVm.ConfigFileName);
         File.WriteAllText(configPath, xml);
       }
       catch (Exception ex)
