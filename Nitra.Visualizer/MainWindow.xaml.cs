@@ -318,41 +318,41 @@ namespace Nitra.Visualizer
 
     private void ShowParseTreeNodeForCaret()
     {
-      if (_reflectionTreeView.ItemsSource == null)
-        return;
-
-      if (_reflectionTreeView.IsKeyboardFocusWithin)
-        return;
-
-
-      var node = FindNode((ReflectionStruct[])_reflectionTreeView.ItemsSource, _text.CaretOffset);
-
-      if (node != null)
-      {
-        var selected = _reflectionTreeView.SelectedItem as ReflectionStruct;
-
-        if (node == selected)
-          return;
-
-        _reflectionTreeView.SelectedItem = node;
-        _reflectionTreeView.BringIntoView(node);
-      }
+      //if (_reflectionTreeView.ItemsSource == null)
+      //  return;
+      //
+      //if (_reflectionTreeView.IsKeyboardFocusWithin)
+      //  return;
+      //
+      //
+      //var node = FindNode((ReflectionStruct[])_reflectionTreeView.ItemsSource, _text.CaretOffset);
+      //
+      //if (node != null)
+      //{
+      //  var selected = _reflectionTreeView.SelectedItem as ReflectionStruct;
+      //
+      //  if (node == selected)
+      //    return;
+      //
+      //  _reflectionTreeView.SelectedItem = node;
+      //  _reflectionTreeView.BringIntoView(node);
+      //}
     }
 
     private ReflectionStruct FindNode(IEnumerable<ReflectionStruct> items, int p)
     {
-      foreach (ReflectionStruct node in items)
-      {
-        if (node.Span.StartPos <= p && p < node.Span.EndPos) // IntersectsWith(p) includes EndPos
-        {
-          if (node.Children.Length == 0)
-            return node;
-
-          _reflectionTreeView.Expand(node);
-
-          return FindNode(node.Children, p);
-        }
-      }
+      //foreach (ReflectionStruct node in items)
+      //{
+      //  if (node.Span.StartPos <= p && p < node.Span.EndPos) // IntersectsWith(p) includes EndPos
+      //  {
+      //    if (node.Children.Length == 0)
+      //      return node;
+      //
+      //    _reflectionTreeView.Expand(node);
+      //
+      //    return FindNode(node.Children, p);
+      //  }
+      //}
 
       return null;
     }
@@ -607,7 +607,7 @@ namespace Nitra.Visualizer
       _matchedBracketsMarkers.Clear();
       _recoveryTreeView.Items.Clear();
       _errorsTreeView.Items.Clear();
-      _reflectionTreeView.ItemsSource = null;
+      //_reflectionTreeView.ItemsSource = null;
     }
 
     void ClearMarkers()
@@ -699,14 +699,14 @@ namespace Nitra.Visualizer
 
     void CopyReflectionNodeText(object sender, ExecutedRoutedEventArgs e)
     {
-      var value = _reflectionTreeView.SelectedItem as ReflectionStruct;
-
-      if (value != null)
-      {
-        var result = value.Description;
-        Clipboard.SetData(DataFormats.Text, result);
-        Clipboard.SetData(DataFormats.UnicodeText, result);
-      }
+      //var value = _reflectionTreeView.SelectedItem as ReflectionStruct;
+      //
+      //if (value != null)
+      //{
+      //  var result = value.Description;
+      //  Clipboard.SetData(DataFormats.Text, result);
+      //  Clipboard.SetData(DataFormats.UnicodeText, result);
+      //}
     }
 
     bool CheckTestFolder()
@@ -1484,9 +1484,9 @@ namespace Nitra.Visualizer
 
     private void CopyReflectionText(object sender, RoutedEventArgs e)
     {
-      var reflectionStruct = _reflectionTreeView.SelectedItem as ReflectionStruct;
-      if (reflectionStruct != null)
-        CopyTreeNodeToClipboard(reflectionStruct.Description);
+      //var reflectionStruct = _reflectionTreeView.SelectedItem as ReflectionStruct;
+      //if (reflectionStruct != null)
+      //  CopyTreeNodeToClipboard(reflectionStruct.Description);
     }
 
     private void DeleteFile_MenuItem_OnClick(object sender, RoutedEventArgs e)
