@@ -68,6 +68,7 @@ namespace Nitra.Visualizer
     WorkspaceVm _workspace;
     SuiteVm _currentSuite;
     ProjectVm _currentProject;
+      private SolutionVm _currentSolution;
     TestVm _currentTest;
     readonly PependentPropertyGrid _propertyGrid;
     //readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
@@ -602,7 +603,6 @@ namespace Nitra.Visualizer
     void ClearAll()
     {
       ClearMarkers();
-      //_parseResult = null;
       _declarationsTreeView.Items.Clear();
       _matchedBracketsMarkers.Clear();
       _recoveryTreeView.Items.Clear();
@@ -974,28 +974,7 @@ namespace Nitra.Visualizer
       _loading = true;
       try
       {
-        var test = e.NewValue as TestVm;
-        if (test != null)
-        {
-          //_parseResult = null;
-          ChangeCurrentTest(test.Suite, test.Project, test, "");//test.Code);
-          ShowDiff(test);
-        }
-
-        var project = e.NewValue as ProjectVm;
-        if (project != null)
-        {
-          ClearAll();
-          ChangeCurrentTest(project.Suite, project, null, "");
-        }
-
-        var suite = e.NewValue as SuiteVm;
-        if (suite != null)
-        {
-          ClearAll();
-          ChangeCurrentTest(suite, null, null, "");
-          _para.Inlines.Clear();
-        }
+        ProcessSelectTestTreeNode(e);
       }
       finally
       {
@@ -1006,7 +985,40 @@ namespace Nitra.Visualizer
       Reparse();
     }
 
-    private void ChangeCurrentTest(SuiteVm newTestSuite, ProjectVm newProject, TestVm newTest, string code)
+      private void ProcessSelectTestTreeNode(RoutedPropertyChangedEventArgs<object> e)
+      {
+        var suite = e.NewValue as SuiteVm;
+        if (suite != null)
+        {
+          ChangeCurrentTest(suite, null, null, null);
+          _para.Inlines.Clear();
+          return;
+        }
+
+        var solution = e.NewValue as SolutionVm;
+        if (solution != null)
+        {
+          ChangeCurrentTest(solution.Suite, solution, null, null);
+          return;
+        }
+
+        var project = e.NewValue as ProjectVm;
+        if (project != null)
+        {
+          ChangeCurrentTest(project.Suite, project.Solution, project, null);
+          return;
+        }
+
+        var test = e.NewValue as TestVm;
+        if (test != null)
+        {
+          ChangeCurrentTest(test.Suite, test.Project.Solution, test.Project, test);
+          ShowDiff(test);
+          return;
+        }
+      }
+
+    private void ChangeCurrentTest(SuiteVm newTestSuite, SolutionVm newSolution, ProjectVm newProject, TestVm newTest)
     {
       if (newTestSuite != _currentSuite && newTestSuite != null)
       {
@@ -1014,10 +1026,26 @@ namespace Nitra.Visualizer
         //foreach (var spanClass in newTestSuite.Language.GetSpanClasses())
           //_highlightingStyles.Add(spanClass.FullName, MakeHighlightingColor(spanClass));
       }
-      _currentSuite = newTestSuite;
-      _currentProject = newProject;
-      _currentTest = newTest;
-      _text.Text = code;
+      ClearAll();
+
+      if (newSolution != null && newSolution.IsSingleFileTest && newProject == null)
+        newProject = newSolution.Children[0];
+
+      if (newProject != null && newProject.IsSingleFileTest && newTest == null)
+        newTest = newProject.Children[0];
+
+      _currentSuite    = newTestSuite;
+      _currentSolution = newSolution;
+      _currentProject  = newProject;
+      _currentTest     = newTest;
+
+      var isTestAvalable = newTest != null;
+
+      var code = isTestAvalable? newTest.Code : "";
+
+      _text.Text       = code;
+      _text.IsReadOnly = !isTestAvalable;
+      _text.Background = isTestAvalable ? SystemColors.WindowBrush : SystemColors.ControlBrush;
     }
 
     private HighlightingColor MakeHighlightingColor(SpanClass spanClass)
