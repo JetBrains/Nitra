@@ -127,11 +127,17 @@ namespace Nitra.Visualizer
 
     private void DocumentOnUpdateFinished(object sender, EventArgs eventArgs)
     {
+      if (_currentTest == null)
+        return;
+
       _currentTest.StartBatchCodeUpdate();
     }
 
     private void DocumentOnUpdateStarted(object sender, EventArgs eventArgs)
     {
+      if (_currentTest == null)
+        return;
+
       _currentTest.FinishBatchCodeUpdate();
     }
 
