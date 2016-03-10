@@ -50,7 +50,6 @@ namespace Nitra.Visualizer
     public partial class MainWindow
   {
     bool _loading = true;
-    //IParseResult _parseResult;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
     readonly Timer _parseTimer;
@@ -120,6 +119,20 @@ namespace Nitra.Visualizer
         _workspace = null;
       else
         LoadTests();
+
+      _text.Document.Changed += Document_Changed;
+      _text.Document.UpdateStarted += DocumentOnUpdateStarted;
+      _text.Document.UpdateFinished += DocumentOnUpdateFinished;
+    }
+
+    private void DocumentOnUpdateFinished(object sender, EventArgs eventArgs)
+    {
+      _currentTest.StartBatchCodeUpdate();
+    }
+
+    private void DocumentOnUpdateStarted(object sender, EventArgs eventArgs)
+    {
+      _currentTest.FinishBatchCodeUpdate();
     }
 
       private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -212,9 +225,6 @@ namespace Nitra.Visualizer
 
     private void TryHighlightBraces(int caretPos)
     {
-      //if (_parseResult == null)
-      //  return;
-
       //if (_matchedBracketsMarkers.Count > 0)
       //{
       //  foreach (var marker in _matchedBracketsMarkers)
@@ -1034,18 +1044,45 @@ namespace Nitra.Visualizer
       if (newProject != null && newProject.IsSingleFileTest && newTest == null)
         newTest = newProject.Children[0];
 
+      var isTestAvalable = newTest != null;
+
+      var code = isTestAvalable? newTest.Code : "";
+      _loading         = true;
+      _text.Text       = code;
+      _loading         = false;
+      _text.IsReadOnly = !isTestAvalable;
+      _text.Background = isTestAvalable ? SystemColors.WindowBrush : SystemColors.ControlBrush;
+
+      UpdateVm(_currentSuite,    newTestSuite);
+      UpdateVm(_currentSolution, newSolution);
+      UpdateVm(_currentProject,  newProject);
+      UpdateVm(_currentTest,     newTest);
+
       _currentSuite    = newTestSuite;
       _currentSolution = newSolution;
       _currentProject  = newProject;
       _currentTest     = newTest;
+    }
 
-      var isTestAvalable = newTest != null;
+      private void Document_Changed(object sender, DocumentChangeEventArgs e)
+      {
+        if (_loading)
+          return;
 
-      var code = isTestAvalable? newTest.Code : "";
+        Debug.Assert(e.OffsetChangeMap != null);
+        _currentTest.OnTextChanged(e.InsertedText, e.InsertionLength, e.Offset, e.RemovedText, e.RemovalLength);
+      }
 
-      _text.Text       = code;
-      _text.IsReadOnly = !isTestAvalable;
-      _text.Background = isTestAvalable ? SystemColors.WindowBrush : SystemColors.ControlBrush;
+      private void UpdateVm(BaseVm oldVm, BaseVm newVm)
+    {
+      if (oldVm != newVm)
+      {
+        if (oldVm != null)
+          oldVm.Deactivate();
+
+        if (newVm != null)
+          newVm.Activate();
+      }
     }
 
     private HighlightingColor MakeHighlightingColor(SpanClass spanClass)
