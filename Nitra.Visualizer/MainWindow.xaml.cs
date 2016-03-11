@@ -761,7 +761,7 @@ namespace Nitra.Visualizer
 
       var testSuitePath = _currentSuite.FullPath;
       var selectedProject = _currentProject == null ? null : _currentProject.Name;
-      var dialog = new AddTest(TestFullPath(testSuitePath), _text.Text, _prettyPrintTextBox.Text) { Owner = this };
+      var dialog = new AddTest(_currentNode, _text.Text, _prettyPrintTextBox.Text) { Owner = this };
 
       if (dialog.ShowDialog() ?? false)
       {
@@ -803,12 +803,7 @@ namespace Nitra.Visualizer
       }
     }
 
-    private static string TestFullPath(string path)
-    {
-      return Path.GetFullPath(path);
-    }
-
-    private void OnRunTests(object sender, ExecutedRoutedEventArgs e)
+    void OnRunTests(object sender, ExecutedRoutedEventArgs e)
     {
       if (CheckTestFolder())
         RunTests();
@@ -1003,6 +998,8 @@ namespace Nitra.Visualizer
 
       private void ProcessSelectTestTreeNode(RoutedPropertyChangedEventArgs<object> e)
       {
+        _currentNode = e.NewValue as BaseVm;
+
         var suite = e.NewValue as SuiteVm;
         if (suite != null)
         {
@@ -1079,7 +1076,7 @@ namespace Nitra.Visualizer
         _currentTest.OnTextChanged(e.InsertedText, e.InsertionLength, e.Offset, e.RemovedText, e.RemovalLength);
       }
 
-      private void UpdateVm(BaseVm oldVm, BaseVm newVm)
+    void UpdateVm(BaseVm oldVm, BaseVm newVm)
     {
       if (oldVm != newVm)
       {
@@ -1091,7 +1088,7 @@ namespace Nitra.Visualizer
       }
     }
 
-    private HighlightingColor MakeHighlightingColor(SpanClass spanClass)
+    HighlightingColor MakeHighlightingColor(SpanClass spanClass)
     {
       return new HighlightingColor
       {
@@ -1099,7 +1096,7 @@ namespace Nitra.Visualizer
       };
     }
 
-    private void OnRemoveTestSuite(object sender, ExecutedRoutedEventArgs e)
+    void OnRemoveTestSuite(object sender, ExecutedRoutedEventArgs e)
     {
       if (_workspace == null || _currentSuite == null)
         return;
@@ -1111,18 +1108,18 @@ namespace Nitra.Visualizer
       _currentSuite.Remove();
     }
 
-    private void CommandBinding_CanRemoveTestSuite(object sender, CanExecuteRoutedEventArgs e)
+    void CommandBinding_CanRemoveTestSuite(object sender, CanExecuteRoutedEventArgs e)
     {
       e.CanExecute = _currentSuite != null;
       e.Handled = true;
     }
 
-    private void OnRunTest(object sender, ExecutedRoutedEventArgs e)
+    void OnRunTest(object sender, ExecutedRoutedEventArgs e)
     {
       RunTest();
     }
 
-    private void RunTest()
+    void RunTest()
     {
       {
         var test = _testsTreeView.SelectedItem as TestVm;
@@ -1144,7 +1141,7 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void CommandBinding_CanRunTest(object sender, CanExecuteRoutedEventArgs e)
+    void CommandBinding_CanRunTest(object sender, CanExecuteRoutedEventArgs e)
     {
       if (_testsTreeView == null)
         return;
@@ -1161,13 +1158,13 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void _testsTreeView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    void _testsTreeView_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
       RunTest();
       e.Handled = true;
     }
 
-    private void _configComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    void _configComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
       if (_loading)
         return;
@@ -1177,7 +1174,7 @@ namespace Nitra.Visualizer
       LoadTests();
     }
 
-    private void OnUpdateTest(object sender, ExecutedRoutedEventArgs e)
+    void OnUpdateTest(object sender, ExecutedRoutedEventArgs e)
     {
       var test = _testsTreeView.SelectedItem as TestVm;
       if (test != null)
@@ -1196,12 +1193,12 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void OnReparse(object sender, ExecutedRoutedEventArgs e)
+    void OnReparse(object sender, ExecutedRoutedEventArgs e)
     {
       Reparse();
     }
 
-    private void Reparse()
+    void Reparse()
     {
       if (Dispatcher.CheckAccess())
         DoParse();
@@ -1422,7 +1419,8 @@ namespace Nitra.Visualizer
       }
     }
 
-    private ContextMenu _defaultContextMenu;
+    ContextMenu _defaultContextMenu;
+    BaseVm _currentNode;
 
     private void OnAddExistsTestSuite(object sender, ExecutedRoutedEventArgs e)
     {
