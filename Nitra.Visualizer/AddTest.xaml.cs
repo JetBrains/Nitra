@@ -36,8 +36,7 @@ namespace Nitra.Visualizer
       var maxNumber =
           getFileSystemObjects(parent)
             .Select(Path.GetFileName)
-            .OrderBy(x => x)
-            .Reverse()
+            .OrderByDescending(x => x)
             .Select(dir =>
             {
               var m = rx.Match(dir);
