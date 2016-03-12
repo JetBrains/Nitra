@@ -1064,8 +1064,8 @@ namespace Nitra.Visualizer
 
       UpdateVm(_currentSuite,    newTestSuite);
       UpdateVm(_currentSolution, newSolution, newTestSuite.Client);
-      UpdateVm(_currentProject,  newProject, newTestSuite.Client);
-      UpdateVm(_currentTest,     newTest, newTestSuite.Client);
+      UpdateVm(_currentProject,  newProject,  newTestSuite.Client);
+      UpdateVm(_currentTest,     newTest,     newTestSuite.Client);
 
       _currentSuite    = newTestSuite;
       _currentSolution = newSolution;
@@ -1094,7 +1094,7 @@ namespace Nitra.Visualizer
       }
     }
 
-    void UpdateVm(IClientHost oldVm, IClientHost newVm, Lazy<NitraClient> client)
+    void UpdateVm(IClientHost oldVm, IClientHost newVm, NitraClient client)
     {
       if (oldVm != newVm)
       {
@@ -1102,7 +1102,7 @@ namespace Nitra.Visualizer
           oldVm.Deactivate();
 
         if (newVm != null)
-          newVm.Activate(client.Value);
+          newVm.Activate(client);
       }
     }
 
