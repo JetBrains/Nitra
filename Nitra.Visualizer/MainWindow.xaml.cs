@@ -26,6 +26,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Nitra.Visualizer.Controls;
 using Microsoft.VisualBasic.FileIO;
+using Nitra.ClientServer.Client;
 using Clipboard = System.Windows.Clipboard;
 using ContextMenu = System.Windows.Controls.ContextMenu;
 using Control = System.Windows.Controls.Control;
@@ -1033,7 +1034,9 @@ namespace Nitra.Visualizer
 
     private void ChangeCurrentTest(SuiteVm newTestSuite, SolutionVm newSolution, ProjectVm newProject, TestVm newTest)
     {
-      if (newTestSuite != _currentSuite && newTestSuite != null)
+      Trace.Assert(newTestSuite != null);
+
+      if (newTestSuite != _currentSuite)
       {
         _highlightingStyles.Clear();
         //foreach (var spanClass in newTestSuite.Language.GetSpanClasses())
@@ -1056,10 +1059,12 @@ namespace Nitra.Visualizer
       _text.IsReadOnly = !isTestAvalable;
       _text.Background = isTestAvalable ? SystemColors.WindowBrush : SystemColors.ControlBrush;
 
+      NitraClient client = newTestSuite.Client;
+
       UpdateVm(_currentSuite,    newTestSuite);
-      UpdateVm(_currentSolution, newSolution);
-      UpdateVm(_currentProject,  newProject);
-      UpdateVm(_currentTest,     newTest);
+      UpdateVm(_currentSolution, newSolution, client);
+      UpdateVm(_currentProject,  newProject,  client);
+      UpdateVm(_currentTest,     newTest,     client);
 
       _currentSuite    = newTestSuite;
       _currentSolution = newSolution;
@@ -1076,7 +1081,19 @@ namespace Nitra.Visualizer
         _currentTest.OnTextChanged(e.InsertedText, e.InsertionLength, e.Offset, e.RemovedText, e.RemovalLength);
       }
 
-    void UpdateVm(BaseVm oldVm, BaseVm newVm)
+      void UpdateVm(SuiteVm oldVm, SuiteVm newVm)
+      {
+        if (oldVm != newVm)
+        {
+          if (oldVm != null)
+            oldVm.Deactivate();
+
+          if (newVm != null)
+            newVm.Activate();
+        }
+      }
+
+    void UpdateVm(IClientHost oldVm, IClientHost newVm, NitraClient client)
     {
       if (oldVm != newVm)
       {
@@ -1084,7 +1101,7 @@ namespace Nitra.Visualizer
           oldVm.Deactivate();
 
         if (newVm != null)
-          newVm.Activate();
+          newVm.Activate(client);
       }
     }
 
