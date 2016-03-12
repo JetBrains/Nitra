@@ -168,6 +168,9 @@ namespace Nitra.Visualizer
 
       SaveSelectedTestAndTestSuite();
       _settings.Save();
+
+      if (_currentSuite != null)
+        _currentSuite.Dispose();
     }
 
     void SetPlacement(string placementXml)
@@ -1059,12 +1062,10 @@ namespace Nitra.Visualizer
       _text.IsReadOnly = !isTestAvalable;
       _text.Background = isTestAvalable ? SystemColors.WindowBrush : SystemColors.ControlBrush;
 
-      NitraClient client = newTestSuite.Client;
-
       UpdateVm(_currentSuite,    newTestSuite);
-      UpdateVm(_currentSolution, newSolution, client);
-      UpdateVm(_currentProject,  newProject,  client);
-      UpdateVm(_currentTest,     newTest,     client);
+      UpdateVm(_currentSolution, newSolution, newTestSuite.Client);
+      UpdateVm(_currentProject,  newProject, newTestSuite.Client);
+      UpdateVm(_currentTest,     newTest, newTestSuite.Client);
 
       _currentSuite    = newTestSuite;
       _currentSolution = newSolution;
@@ -1072,28 +1073,16 @@ namespace Nitra.Visualizer
       _currentTest     = newTest;
     }
 
-      private void Document_Changed(object sender, DocumentChangeEventArgs e)
-      {
-        if (_loading)
-          return;
+    void Document_Changed(object sender, DocumentChangeEventArgs e)
+    {
+      if (_loading)
+        return;
 
-        Debug.Assert(e.OffsetChangeMap != null);
-        _currentTest.OnTextChanged(e.InsertedText, e.InsertionLength, e.Offset, e.RemovedText, e.RemovalLength);
-      }
+      Debug.Assert(e.OffsetChangeMap != null);
+      _currentTest.OnTextChanged(e.InsertedText, e.InsertionLength, e.Offset, e.RemovedText, e.RemovalLength);
+    }
 
-      void UpdateVm(SuiteVm oldVm, SuiteVm newVm)
-      {
-        if (oldVm != newVm)
-        {
-          if (oldVm != null)
-            oldVm.Deactivate();
-
-          if (newVm != null)
-            newVm.Activate();
-        }
-      }
-
-    void UpdateVm(IClientHost oldVm, IClientHost newVm, NitraClient client)
+    void UpdateVm(SuiteVm oldVm, SuiteVm newVm)
     {
       if (oldVm != newVm)
       {
@@ -1101,7 +1090,19 @@ namespace Nitra.Visualizer
           oldVm.Deactivate();
 
         if (newVm != null)
-          newVm.Activate(client);
+          newVm.Activate();
+      }
+    }
+
+    void UpdateVm(IClientHost oldVm, IClientHost newVm, Lazy<NitraClient> client)
+    {
+      if (oldVm != newVm)
+      {
+        if (oldVm != null)
+          oldVm.Deactivate();
+
+        if (newVm != null)
+          newVm.Activate(client.Value);
       }
     }
 

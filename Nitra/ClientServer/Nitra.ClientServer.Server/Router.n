@@ -16,17 +16,20 @@ namespace Nitra.ClientServer.Server
   class Router
   {
     _mainQueue: BlockingCollection[RouterMessage] = BlockingCollection();
-    _mainThread: Thread;
     _parseQueue: BlockingCollection[ParserMessage] = BlockingCollection();
+    _mainThread: Thread;
     _parseWorkers: list[ParseWorker];
+    _cts = CancellationTokenSource();
+    mutable _stopped: bool;
 
     public this()
     {
       def mainThread()
       {
-        foreach(msg in _mainQueue.GetConsumingEnumerable())
+        foreach(msg in _mainQueue.GetConsumingEnumerable(_cts.Token))
         {
           | serverMsg is ServerMessage =>
+            Log("Got \"" + serverMsg.GetType().Name + "\"");
             match (serverMsg)
             {
               | ServerMessage.CheckVersion(assemblyVersionGuid) =>
@@ -54,20 +57,43 @@ namespace Nitra.ClientServer.Server
               | ChangeFileDelete  (id, span) => ()
               | ChangeFileReplace (id, span, text) => ()
               | ChangeFileBatch   (id, changes) => ()
+              | Shutdown => _cts.Cancel()
               | _ => assert2(false)
             }
-            
           | _ => assert2(false)
         }
       }
-      _mainThread = Thread(mainThread);
+      
+      _mainThread = Thread(() => 
+      {
+        try mainThread()
+        catch
+        {
+          | OperationCanceledException => ()
+          | e => Error("Error: " + e)
+        }
+      });
       _mainThread.Start();
-      _parseWorkers = $[1..Environment.ProcessorCount].Map(_ => ParseWorker(_parseQueue))
+      _parseWorkers = $[1..Environment.ProcessorCount].Map(_ => ParseWorker(_parseQueue));
+    }
+    
+    public Wait() : void
+    {
+      unless (_stopped)
+      {
+        _stopped = true;
+        _mainThread.Join();
+        _cts.Dispose();
+        foreach(worker in _parseWorkers)
+          worker.Dispose();
+        _parseQueue.Dispose();
+      }
     }
     
     public AddMessage(msg : RouterMessage): void
     {
-      _mainQueue.Add(msg)
+      unless (_stopped)
+        _mainQueue.Add(msg)
     }
     
     Error(msg : string) : void
@@ -76,6 +102,7 @@ namespace Nitra.ClientServer.Server
       Console.WriteLine(msg);
       Console.ResetColor();
     }
+    
     Log(msg : string) : void { Console.WriteLine(msg) }
   }
 }
