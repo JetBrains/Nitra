@@ -1548,7 +1548,7 @@ namespace Nitra.Visualizer
         if (File.Exists(test.Gold))
           File.Move(test.Gold, Path.ChangeExtension(firstFilePath, ".gold"));
 
-        test.Project.Children.Add(new TestVm(test.Suite, test.Project, firstFilePath));
+        test.Project.Children.Add(new TestVm(test.Suite, test.Project, firstFilePath, test.Project.Solution.GetNextTestId()));
         AddNewFileToMultitest(test.Project).IsSelected = true;
         return;
       }
@@ -1564,7 +1564,7 @@ namespace Nitra.Visualizer
       var name = MakeTestFileName(project);
       var path = Path.Combine(project.FullPath, name + ".test");
       File.WriteAllText(path, Environment.NewLine, Encoding.UTF8);
-      var newTest = new TestVm(project.Suite, project, path);
+      var newTest = new TestVm(project.Suite, project, path, project.Solution.GetNextTestId());
       project.Children.Add(newTest);
       return newTest;
     }
