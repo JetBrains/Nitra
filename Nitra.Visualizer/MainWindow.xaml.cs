@@ -169,8 +169,8 @@ namespace Nitra.Visualizer
       SaveSelectedTestAndTestSuite();
       _settings.Save();
 
-      if (_currentSuite != null)
-        _currentSuite.Dispose();
+      foreach (var testSuite in _workspace.TestSuites)
+        testSuite.Dispose();
     }
 
     void SetPlacement(string placementXml)
