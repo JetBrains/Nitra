@@ -1538,7 +1538,8 @@ namespace Nitra.Visualizer
         if (!Directory.Exists(dirPath))
           Directory.CreateDirectory(dirPath);
 
-        var firstFilePath = Path.Combine(dirPath, MakeTestFileName(test.Project) + ".test");
+        var prj = test.Project;
+        var firstFilePath = Path.Combine(dirPath, MakeTestFileName(prj) + ".test");
 
         if (File.Exists(test.FullPath))
           File.Move(test.FullPath, firstFilePath);
@@ -1547,9 +1548,9 @@ namespace Nitra.Visualizer
 
         if (File.Exists(test.Gold))
           File.Move(test.Gold, Path.ChangeExtension(firstFilePath, ".gold"));
-
-        test.Project.Children.Add(new TestVm(test.Suite, test.Project, firstFilePath, test.Project.Solution.GetNextTestId()));
-        AddNewFileToMultitest(test.Project).IsSelected = true;
+        var stringManager = prj.Suite.Workspace.StringManager;
+        prj.Children.Add(new TestVm(test.Suite, prj, firstFilePath, stringManager[firstFilePath]));
+        AddNewFileToMultitest(prj).IsSelected = true;
         return;
       }
 
@@ -1564,7 +1565,8 @@ namespace Nitra.Visualizer
       var name = MakeTestFileName(project);
       var path = Path.Combine(project.FullPath, name + ".test");
       File.WriteAllText(path, Environment.NewLine, Encoding.UTF8);
-      var newTest = new TestVm(project.Suite, project, path, project.Solution.GetNextTestId());
+      var stringManager = project.Suite.Workspace.StringManager;
+      var newTest = new TestVm(project.Suite, project, path, stringManager[path]);
       project.Children.Add(newTest);
       return newTest;
     }
