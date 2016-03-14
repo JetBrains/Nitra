@@ -50,7 +50,7 @@ namespace Nitra.Visualizer
     /// </summary>
     public partial class MainWindow
   {
-    bool _loading = true;
+    bool _initializing = true;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
     readonly Timer _parseTimer;
@@ -142,9 +142,9 @@ namespace Nitra.Visualizer
       _currentTest.FinishBatchCodeUpdate();
     }
 
-      private void Window_Loaded(object sender, RoutedEventArgs e)
+    private void Window_Loaded(object sender, RoutedEventArgs e)
     {
-      _loading = false;
+      _initializing = false;
 
       if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) != 0)
         return;
@@ -160,6 +160,8 @@ namespace Nitra.Visualizer
 
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
     {
+      _initializing = true;
+
       _settings.MainWindowPlacement = this.GetPlacement();
       _settings.Config = (string)_configComboBox.SelectedValue;
       _settings.TabControlHeight = _mainRow.Height.Value;
@@ -168,6 +170,11 @@ namespace Nitra.Visualizer
 
       SaveSelectedTestAndTestSuite();
       _settings.Save();
+      
+      _currentSuite    = null;
+      _currentSolution = null;
+      _currentProject  = null;
+      _currentTest     = null;
 
       foreach (var testSuite in _workspace.TestSuites)
         testSuite.Dispose();
@@ -542,7 +549,7 @@ namespace Nitra.Visualizer
 
     private void textBox1_TextChanged(object sender, EventArgs e)
     {
-      if (_loading)
+      if (_initializing)
         return;
 
       //_parseResult = null; // prevent calculations on outdated ParseResult
@@ -986,18 +993,12 @@ namespace Nitra.Visualizer
 
     private void _testsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
-      _loading = true;
-      try
-      {
-        ProcessSelectTestTreeNode(e);
-      }
-      finally
-      {
-        _loading = false;
-      }
+      if (_initializing)
+        return;
+
+      ProcessSelectTestTreeNode(e);
       SaveSelectedTestAndTestSuite();
       _settings.Save();
-      Reparse();
     }
 
       private void ProcessSelectTestTreeNode(RoutedPropertyChangedEventArgs<object> e)
@@ -1056,9 +1057,15 @@ namespace Nitra.Visualizer
       var isTestAvalable = newTest != null;
 
       var code = isTestAvalable? newTest.Code : "";
-      _loading         = true;
-      _text.Text       = code;
-      _loading         = false;
+      _initializing         = true;
+      try
+      {
+        _text.Text       = code;
+      }
+      finally
+      {
+        _initializing         = false;
+      }
       _text.IsReadOnly = !isTestAvalable;
       _text.Background = isTestAvalable ? SystemColors.WindowBrush : SystemColors.ControlBrush;
 
@@ -1075,7 +1082,7 @@ namespace Nitra.Visualizer
 
     void Document_Changed(object sender, DocumentChangeEventArgs e)
     {
-      if (_loading)
+      if (_initializing)
         return;
 
       Debug.Assert(e.OffsetChangeMap != null);
@@ -1184,7 +1191,7 @@ namespace Nitra.Visualizer
 
     void _configComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-      if (_loading)
+      if (_initializing)
         return;
 
       var config = (string)_configComboBox.SelectedItem;
