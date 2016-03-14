@@ -33,7 +33,7 @@ namespace Nitra.Visualizer
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
-      var dir = _settings.CurrentSolution ?? "";
+      var dir = _settings.CurrentWorkspace ?? "";
       if (Directory.Exists(dir))
         _testsLocationRootTextBox.Text = dir;
       else

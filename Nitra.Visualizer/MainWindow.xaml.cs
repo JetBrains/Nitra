@@ -116,7 +116,7 @@ namespace Nitra.Visualizer
       _propertyGrid = new PependentPropertyGrid();
       _windowsFormsHost.Child = _propertyGrid;
 
-      if (string.IsNullOrWhiteSpace(_settings.CurrentSolution))
+      if (string.IsNullOrWhiteSpace(_settings.CurrentWorkspace))
         _workspace = null;
       else
         LoadTests();
@@ -149,7 +149,7 @@ namespace Nitra.Visualizer
       if ((Keyboard.Modifiers & (ModifierKeys.Shift | ModifierKeys.Control)) != 0)
         return;
       if (_workspace != null)
-        SelectTest(_settings.SelectedTestSuite, _settings.SelectedTest, _settings.SelectedTestFolder);
+        SelectTest(_settings.SelectedTestNode);
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -167,8 +167,6 @@ namespace Nitra.Visualizer
       _settings.TabControlHeight = _mainRow.Height.Value;
       _settings.LastTextInput = _text.Text;
       _settings.ActiveTabIndex = _tabControl.SelectedIndex;
-
-      SaveSelectedTestAndTestSuite();
       _settings.Save();
       
       _currentSuite    = null;
@@ -196,14 +194,16 @@ namespace Nitra.Visualizer
 
     private void SaveSelectedTestAndTestSuite()
     {
-      if (_currentSuite != null)
-      {
-        _settings.SelectedTestSuite = _currentSuite.FullPath;
-        var test = _testsTreeView.SelectedItem as TestVm;
-        _settings.SelectedTest = test == null ? null : test.Name;
-        var project = test == null ? null : test.Project;
-        _settings.SelectedTestFolder = project == null ? null : project.Name;
-      }
+      if (_currentTest != null)
+        _settings.SelectedTestNode = _currentTest.FullPath;
+      else if (_currentProject != null)
+        _settings.SelectedTestNode = _currentProject.FullPath;
+      else if (_currentSolution != null)
+        _settings.SelectedTestNode = _currentSolution.FullPath;
+      else if (_currentSuite != null)
+        _settings.SelectedTestNode = _currentSuite.FullPath;
+
+      _settings.Save();
 
       if (_workspace != null && _workspace.IsDirty)
         _workspace.Save();
@@ -214,13 +214,13 @@ namespace Nitra.Visualizer
       var selected = _testsTreeView.SelectedItem as BaseVm;
       var selectedPath = selected == null ? null : selected.FullPath;
 
-      if (!File.Exists(_settings.CurrentSolution ?? ""))
+      if (!File.Exists(_settings.CurrentWorkspace ?? ""))
       {
-        MessageBox.Show(this, "Solution '" + _settings.CurrentSolution + "' not exists!");
+        MessageBox.Show(this, "Workspace '" + _settings.CurrentWorkspace + "' not exists!");
         return;
       }
 
-      _workspace = new WorkspaceVm(_settings.CurrentSolution, selectedPath, _settings.Config);
+      _workspace = new WorkspaceVm(_settings.CurrentWorkspace, selectedPath, _settings.Config);
       this.Title = _workspace.Name + " - " + Constants.AppName;
       _testsTreeView.ItemsSource = _workspace.TestSuites;
     }
@@ -738,7 +738,7 @@ namespace Nitra.Visualizer
 
     bool CheckTestFolder()
     {
-      if (File.Exists(_settings.CurrentSolution ?? ""))
+      if (File.Exists(_settings.CurrentWorkspace ?? ""))
         return true;
 
       return false;
@@ -776,60 +776,66 @@ namespace Nitra.Visualizer
 
       if (dialog.ShowDialog() ?? false)
       {
-        var testName = dialog.TestName;
         LoadTests();
-        SelectTest(testSuitePath, testName, selectedProject);
+        SelectTest(testSuitePath);
       }
     }
 
-    void SelectTest(string suitePath, string testName, string selectedProjectName)
+    void SelectTest(string fullPath)
     {
-      if (!CheckTestFolder())
-      {
-        MessageBox.Show(this, "The test folder does not exist.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-        return;
-      }
-
-      var suites = (ObservableCollection<SuiteVm>) _testsTreeView.ItemsSource;
-
-      if (suites == null)
+      if (_workspace == null)
         return;
 
-      var suite = suites.FirstOrDefault(ts => ts.FullPath == suitePath);
-      if (suite == null) return;
-
-      if (selectedProjectName != null)
+      foreach (var suite in _workspace.TestSuites)
       {
-        var project = suite.Children.FirstOrDefault(x => x.Name == selectedProjectName);
-
-        if (project != null)
+        if (suite.FullPath == fullPath)
         {
-          var test = project.Children.FirstOrDefault(x => x.Name == testName);
+          suite.IsSelected = true;
+          break;
+        }
 
-          if (test != null)
-            test.IsSelected = true;
-          else
-            project.IsSelected = true;
+        foreach (var solution in suite.Children)
+        {
+          if (solution.FullPath == fullPath)
+          {
+            solution.IsSelected = true;
+            break;
+          }
+
+          foreach (var project in solution.Children)
+          {
+            if (project.FullPath == fullPath)
+            {
+              project.IsSelected = true;
+              break;
+            }
+            foreach (var test in project.Children)
+            {
+              if (test.FullPath == fullPath)
+              {
+                test.IsSelected = true;
+                break;
+              }
+            }
+          }
         }
       }
     }
 
     void OnRunTests(object sender, ExecutedRoutedEventArgs e)
     {
-      if (CheckTestFolder())
+      if (_workspace != null)
         RunTests();
       else
-        MessageBox.Show(this, "Can't run tests.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
+        MessageBox.Show(this, "Can't run tests. No test worcspace open.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
     void RunTests()
     {
-      if (_testsTreeView.ItemsSource == null)
+      if (_workspace == null)
         return;
 
-      var suites = (ObservableCollection<SuiteVm>)_testsTreeView.ItemsSource;
-
-      foreach (var suite in suites)
+      foreach (var suite in _workspace.TestSuites)
       {
         foreach (var test in suite.GetAllTests())
           RunTest(test);
@@ -998,7 +1004,6 @@ namespace Nitra.Visualizer
 
       ProcessSelectTestTreeNode(e);
       SaveSelectedTestAndTestSuite();
-      _settings.Save();
     }
 
       private void ProcessSelectTestTreeNode(RoutedPropertyChangedEventArgs<object> e)
@@ -1155,15 +1160,21 @@ namespace Nitra.Visualizer
 
           if (test.TestState == TestState.Failure)
             _testResultDiffTabItem.IsSelected = true;
+
+          return;
         }
       }
-      var suite = _testsTreeView.SelectedItem as SuiteVm;
-      if (suite != null)
+      var testsContainer = _testsTreeView.SelectedItem as BaseVm;
+      if (testsContainer != null)
       {
-        foreach (var test in suite.GetAllTests())
+        foreach (var test in testsContainer.GetAllTests())
           RunTest(test);
-        suite.TestStateChanged();
+        return;
       }
+
+      if (_workspace != null)
+        foreach (var test in _workspace.GetAllTests())
+          RunTest(test);
     }
 
     void CommandBinding_CanRunTest(object sender, CanExecuteRoutedEventArgs e)
@@ -1414,20 +1425,20 @@ namespace Nitra.Visualizer
             return;
           }
 
-          OpenSolution(solutionFilePath);
+          OpenWorkspace(solutionFilePath);
         }
       }
     }
 
-    private void OpenSolution(string solutionFilePath)
+    private void OpenWorkspace(string workspaceFilePath)
     {
-      _settings.CurrentSolution = solutionFilePath;
-      _workspace = new WorkspaceVm(solutionFilePath, null, _settings.Config);
+      _settings.CurrentWorkspace = workspaceFilePath;
+      _workspace = new WorkspaceVm(workspaceFilePath, null, _settings.Config);
       _testsTreeView.ItemsSource = _workspace.TestSuites;
-      RecentFileList.InsertFile(solutionFilePath);
+      RecentFileList.InsertFile(workspaceFilePath);
     }
 
-    private void OnSolutionOpen(object sender, ExecutedRoutedEventArgs e)
+    private void OnWorkspaceOpen(object sender, ExecutedRoutedEventArgs e)
     {
       var dialog = new System.Windows.Forms.OpenFileDialog();
       using (dialog)
@@ -1439,7 +1450,7 @@ namespace Nitra.Visualizer
         //dialog.InitialDirectory = GetDefaultDirectory();
         if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
         {
-          OpenSolution(dialog.FileName);
+          OpenWorkspace(dialog.FileName);
         }
       }
     }
@@ -1497,7 +1508,7 @@ namespace Nitra.Visualizer
 
     private void RecentFileList_OnMenuClick(object sender, RecentFileList.MenuClickEventArgs e)
     {
-      OpenSolution(e.Filepath);
+      OpenWorkspace(e.Filepath);
     }
 
     private void OnUsePanicRecovery(object sender, ExecutedRoutedEventArgs e)

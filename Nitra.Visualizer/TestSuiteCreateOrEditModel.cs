@@ -23,7 +23,7 @@ namespace Nitra.Visualizer
 
       IsCreate = isCreate;
       Title = isCreate ? "New test suite" : "Edit test suite";
-      RootFolder = Path.GetDirectoryName(_settings.CurrentSolution);
+      RootFolder = Path.GetDirectoryName(_settings.CurrentWorkspace);
       Languages = new ObservableCollection<string>();
       DynamicExtensions = new ObservableCollection<DynamicExtensionModel>();
     }
