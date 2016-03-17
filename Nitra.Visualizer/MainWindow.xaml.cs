@@ -1075,7 +1075,9 @@ namespace Nitra.Visualizer
       _text.Background = isTestAvalable ? SystemColors.WindowBrush : SystemColors.ControlBrush;
 
       UpdateVm(_currentSuite,    newTestSuite);
+      var timer = Stopwatch.StartNew();
       UpdateVm(_currentSolution, newSolution, newTestSuite.Client);
+      this.Title = timer.Elapsed.ToString();
       UpdateVm(_currentProject,  newProject,  newTestSuite.Client);
       UpdateVm(_currentTest,     newTest,     newTestSuite.Client);
 

@@ -114,7 +114,7 @@ namespace Nitra.Visualizer
           var relativePath = Utils.MakeRelativePath(suitPath, true, fullAssemblyPath, false);
           normalized.Add(relativePath);
         }
-        else;
+        else
           // treat as assembly full name
           normalized.Add(libPath);
       }
