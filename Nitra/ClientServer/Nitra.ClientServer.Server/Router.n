@@ -1,5 +1,6 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -7,32 +8,33 @@ using Nitra.ClientServer.Messages;
 using Nitra.ClientServer.Server.ProjectSystem;
 
 using System;
-using System.IO;
 using System.Threading;
 using System.Globalization;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Linq;
 
+using IO = System.IO;
+
 namespace Nitra.ClientServer.Server
 {
   class Router
   {
-    public Logger : TextWriter;
-    _mainQueue: BlockingCollection[RouterMessage] = BlockingCollection();
-    _parseQueue: BlockingCollection[ParserMessage] = BlockingCollection();
-    _mainThread: Thread;
-    _parseWorkers: list[ParseWorker];
-    _cts = CancellationTokenSource();
-    mutable _stopped: bool;
-    mutable _solution : Solution;
+    public  Logger        : IO.TextWriter;
+            _mainQueue    : BlockingCollection[RouterMessage] = BlockingCollection();
+            _parseQueue   : BlockingCollection[ParserMessage] = BlockingCollection();
+            _mainThread   : Thread;
+            _parseWorkers : list[ParseWorker];
+            _cts          : CancellationTokenSource = CancellationTokenSource();
+    mutable _stopped      : bool;
+    mutable _solution     : Solution;
 
     public this()
     {
       Logger = Console.Out;
       _mainThread = Thread(RouterThreadMain);
       _mainThread.Start();
-      _parseWorkers = $[1..Environment.ProcessorCount].Map(_ => ParseWorker(_parseQueue));
+      _parseWorkers = $[1..Environment.ProcessorCount].Map(_ => ParseWorker(_parseQueue, _mainQueue));
     }
 
     RouterThreadMain() : void
@@ -54,7 +56,6 @@ namespace Nitra.ClientServer.Server
       foreach(msg in _mainQueue.GetConsumingEnumerable(_cts.Token))
       {
         | serverMsg is ServerMessage =>
-          //Log("Got \"" + serverMsg.GetType().Name + "\"");
           match (serverMsg)
           {
             | ServerMessage.CheckVersion(assemblyVersionGuid)        =>
@@ -75,8 +76,8 @@ namespace Nitra.ClientServer.Server
             | ProjectRaname      (oldId, newId, newPath)      => Log("Not supported yet.");
             | ReferenceLoaded    (projectId, fullPath)        => _solution[projectId].AddLib(fullPath);
             | ReferenceUnloaded  (projectId, fullPath)        => _solution[projectId].RemoveLib(fullPath);
-            | FileLoaded         (projectId, fullPath, id)    => _ = File(id, fullPath, _solution[projectId]);
-            | FileInMemoryLoaded (projectId, id, name, text)  => _ = File(id, name, _solution[projectId], text);
+            | FileLoaded         (projectId, fullPath, id)    => _parseQueue.Add(File(id, fullPath, _solution[projectId]).GetReParseMessage());
+            | FileInMemoryLoaded (projectId, id, name, text)  => _parseQueue.Add(File(id, name, _solution[projectId], text).GetReParseMessage());
             | FileUnloaded       (id)                         => _solution.GetFile(id).Parent.RemoveFile(id);
             | FileRanamed        (oldId, newId, newPath)      => Log("Not supported yet.");
             | FileChanged        (id, change)                 => _solution.GetFile(id).Change(change)
@@ -84,6 +85,27 @@ namespace Nitra.ClientServer.Server
             | Shutdown                                        => _cts.Cancel()
             | _                                               => assert2(false)
           }
+
+        | serverMsg is RouterAnsverMessage =>
+          match (serverMsg)
+          {
+            | RouterAnsverMessage.FileParsed(fileId, parseResult) => 
+              when (parseResult.ParseSession.CancellationToken.IsCancellationRequested)
+                continue;
+
+              def file = _solution.GetFile(fileId);
+              _parseQueue.Add(file.CreateAstMessage(parseResult));
+              
+            | AstCreated(fileId, cancellationToken, ast, parseTree) =>
+              when (cancellationToken.IsCancellationRequested)
+                continue;
+
+              def file = _solution.GetFile(fileId);
+              // TODO: send CollectOutlining and CollectTokebHighlighting mesages
+              file.AstCreated(ast, parseTree);
+              // TODO: send EvalProperties if ast != null
+          }
+
         | _ => assert2(false)
       }
     }

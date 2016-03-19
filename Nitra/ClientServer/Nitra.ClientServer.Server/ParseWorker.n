@@ -1,9 +1,12 @@
 ﻿using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
 using Nitra.ClientServer.Messages;
+using Nitra.Declarations;
+using Nitra.ProjectSystem;
 
 using System;
 using System.Collections.Concurrent;
@@ -19,11 +22,13 @@ namespace Nitra.ClientServer.Server
     _thread      : Thread;
     _cts         : CancellationTokenSource = CancellationTokenSource();
     _incomeQueue : BlockingCollection[ParserMessage];
+    _mainQueue   : BlockingCollection[RouterMessage];
     
-    public this(incomeQueue : BlockingCollection[ParserMessage])
+    public this(incomeQueue : BlockingCollection[ParserMessage], mainQueue : BlockingCollection[RouterMessage])
     {
+      _mainQueue   = mainQueue;
       _incomeQueue = incomeQueue;
-      _thread = Thread(ParseWorkerMain);
+      _thread      = Thread(ParseWorkerMain);
       _thread.Start()
     }
 
@@ -36,8 +41,7 @@ namespace Nitra.ClientServer.Server
       try
       {
         foreach(m in _incomeQueue.GetConsumingEnumerable(_cts.Token)) 
-          unless (m.CancellationToken.IsCancellationRequested)
-            ProcessMessage(m)
+          ProcessMessage(m)
       }
       catch
       {
@@ -46,9 +50,33 @@ namespace Nitra.ClientServer.Server
       }
     }      
     
-    ProcessMessage(msg: ParserMessage): void
+    ProcessMessage(msg : ParserMessage): void
     {
-      | ParseFile() => ()
+      | ParseFile(fileId, parseSession, source) =>
+        // TODO: add statistics
+        //def stat = Statistics;
+        //stat?.Parse?.Restart();
+        //
+        //_parseMessages.Clear();
+        //_astMessages.Clear();
+        //_typingMessages.Clear();
+      
+        when (parseSession.CancellationToken.IsCancellationRequested)
+          return;
+
+        def parseResult = parseSession.Parse(source);
+        _mainQueue.Add(RouterAnsverMessage.FileParsed(fileId, parseResult));
+
+        //stat?.Parse?.Stop();
+      
+      | CreateAst(fileId, parseResult) =>
+        when (parseResult.ParseSession.CancellationToken.IsCancellationRequested)
+          return;
+          
+        def parseTree = parseResult.CreateParseTree();
+        def astMessages = CompilerMessageList();
+        def ast = AstContext.GetAstUntyped(parseTree, astMessages);
+        _mainQueue.Add(RouterAnsverMessage.AstCreated(fileId, parseResult.ParseSession.CancellationToken, ast, parseTree));
     }
     
     public Dispose() : void
