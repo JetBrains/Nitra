@@ -1,4 +1,6 @@
-﻿using Nemerle;
+﻿using System.Globalization;
+using System.Threading;
+using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Collections;
 using Nemerle.Imperative;
@@ -8,6 +10,7 @@ using Nemerle.Utility;
 using Nitra.ClientServer.Messages;
 
 using System;
+using System.Console;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
@@ -23,30 +26,71 @@ namespace Nitra.ClientServer.Client
   public sealed class NitraClient : IDisposable
   {
     public StringManager : StringManager;
-    public PipeName      : string = Guid.NewGuid().ToString();
+    RequestPipeName      : string = Guid.NewGuid().ToString();
+    ResponsePipeName     : string = Guid.NewGuid().ToString();
     
-    mutable _isDisposed : bool;
+    _serverPipeClient    : IDisposable;
+    mutable _isDisposed  : bool;
     
     _serverProc : Process;
     _pipeServer : NamedPipeServerStream;
     _writer     : BinaryWriter;
     
-    public this(stringManager : StringManager)
+    public this(stringManager : StringManager, onServerMessage: ServerMessage -> void)
     {
       StringManager = stringManager;
       def executingAssemblyPath = Assembly.GetExecutingAssembly().Location;
       def assembliesPath        = Path.GetDirectoryName(executingAssemblyPath);
       def serverPath            = Path.Combine(assembliesPath, "Nitra.ClientServer.Server.exe");
-      def serverProc            = Process.Start(serverPath, PipeName);
-      assert(serverProc != null);
-      _serverProc = serverProc;
-      _pipeServer = NamedPipeServerStream(PipeName, PipeDirection.InOut);
+      def _serverProc           = Process.Start(serverPath, RequestPipeName + ";" + ResponsePipeName);
+      assert(_serverProc != null);
+      _pipeServer = NamedPipeServerStream(RequestPipeName, PipeDirection.InOut);
       _pipeServer.WaitForConnection();
       _writer = BinaryWriter(_pipeServer);
-      Send(Messages.ServerMessage.CheckVersion(Message.AssemblyVersionGuid));
+      _serverPipeClient = StartServerMessageReader(onServerMessage);
+      Send(ClientMessage.CheckVersion(Message.AssemblyVersionGuid));
     }
     
-    public Send([NotNull] msg : ServerMessage) : void
+    StartServerMessageReader(onServerMessage: ServerMessage -> void) : IDisposable
+    {
+      def pipeClient = NamedPipeClientStream(".", ResponsePipeName, PipeDirection.InOut);
+      
+      def ServerPipeReader()
+      {
+        def thread = Thread.CurrentThread;
+        thread.Name = "ServerPipeReader";
+        thread.CurrentCulture = CultureInfo.InvariantCulture;
+      
+        using (reader = BinaryReader(pipeClient))
+        {
+          def loop()
+          {
+            try
+            {
+              onServerMessage(Deserializer.Deserialize(reader));
+              loop()
+            }
+            catch
+            {
+              | _ is EndOfStreamException when !pipeClient.IsConnected =>
+                Log("Session has been terminated.")
+              | e => 
+                Log($"Message read error: $e");
+                loop()
+            }
+          }
+          
+          loop()
+        }
+      }
+      def readerThread = Thread(ServerPipeReader);
+      readerThread.IsBackground = true;
+      readerThread.Start();
+      Log("Server started.");
+      pipeClient
+    }
+    
+    public Send([NotNull] msg : ClientMessage) : void
     {
       when (!_pipeServer.IsConnected)
       {
@@ -65,9 +109,10 @@ namespace Nitra.ClientServer.Client
       when (_isDisposed)
         return;
         
-      Send(Messages.ServerMessage.Shutdown());
+      Send(Messages.ClientMessage.Shutdown());
       
       _pipeServer.Dispose();
+      _serverPipeClient.Dispose();
       _isDisposed = true;
       GC.SuppressFinalize(this);
     }
@@ -75,6 +120,11 @@ namespace Nitra.ClientServer.Client
     protected override Finalize() : void
     {
       Dispose();
+    }
+    
+    Log(msg : string, params args: array[object]) : void
+    {
+      WriteLine(msg, args);
     }
   }
 }

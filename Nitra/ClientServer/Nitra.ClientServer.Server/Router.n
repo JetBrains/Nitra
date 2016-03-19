@@ -28,10 +28,12 @@ namespace Nitra.ClientServer.Server
             _cts          : CancellationTokenSource = CancellationTokenSource();
     mutable _stopped      : bool;
     mutable _solution     : Solution;
+    _sendResponse         : ServerMessage -> void;
 
-    public this()
+    public this(sendResponse: ServerMessage -> void)
     {
       Logger = Console.Out;
+      _sendResponse = sendResponse;
       _mainThread = Thread(RouterThreadMain);
       _mainThread.Start();
       _parseWorkers = $[1..Environment.ProcessorCount].Map(_ => ParseWorker(_parseQueue, _mainQueue));
@@ -55,10 +57,10 @@ namespace Nitra.ClientServer.Server
     {
       foreach(msg in _mainQueue.GetConsumingEnumerable(_cts.Token))
       {
-        | serverMsg is ServerMessage =>
+        | serverMsg is ClientMessage =>
           match (serverMsg)
           {
-            | ServerMessage.CheckVersion(assemblyVersionGuid)        =>
+            | ClientMessage.CheckVersion(assemblyVersionGuid)        =>
               if (Message.AssemblyVersionGuid == assemblyVersionGuid)
                 Log("Client version checked.");
               else
@@ -86,14 +88,15 @@ namespace Nitra.ClientServer.Server
             | _                                               => assert2(false)
           }
 
-        | serverMsg is RouterAnsverMessage =>
+        | serverMsg is RouterAnswerMessage =>
           match (serverMsg)
           {
-            | RouterAnsverMessage.FileParsed(fileId, parseResult) => 
+            | RouterAnswerMessage.FileParsed(fileId, parseResult) => 
               when (parseResult.ParseSession.CancellationToken.IsCancellationRequested)
                 continue;
 
               def file = _solution.GetFile(fileId);
+              _parseQueue.Add(file.CreateOutliningMessage());
               _parseQueue.Add(file.CreateAstMessage(parseResult));
               
             | AstCreated(fileId, cancellationToken, ast, parseTree) =>
@@ -104,6 +107,10 @@ namespace Nitra.ClientServer.Server
               // TODO: send CollectOutlining and CollectTokebHighlighting mesages
               file.AstCreated(ast, parseTree);
               // TODO: send EvalProperties if ast != null
+              
+            | OutliningCreated(fileId, data) =>
+              _solution.GetFile(fileId).OutliningCreated(data);
+              _sendResponse(ServerMessage.OutliningCreated(fileId, data))
           }
 
         | _ => assert2(false)
