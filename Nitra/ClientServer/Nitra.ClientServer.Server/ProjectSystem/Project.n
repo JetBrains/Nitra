@@ -7,33 +7,38 @@ using Nemerle.Utility;
 using Nitra.ClientServer.Messages;
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 
 using System.Reflection;
+using System.Threading;
 using NSP = Nitra.ProjectSystem;
 
 namespace Nitra.ClientServer.Server.ProjectSystem
 {
   public class Project : NSP.Project, IDisposable
   {
-            _files             : Hashtable[int, File]   = Hashtable();
-            _libMap            : Hashtable[string, int] = Hashtable();
-            _libs              : List[NSP.LibReference] = List();
-    public  Parent             : Solution;
-    public  Id                 : int;
-    public  Path               : string                       { get; }
-    public  Name               : string                       { get; private set; }
-    public  LanguageInfos      : ImmutableArray[LanguageInfo] { get; }
-    public  Language           : Nitra.Language               { get; }
-    public  DynamicExtensions  : List[GrammarDescriptor]      { get; }
-    public  IsDisposed         : bool                         { get; private set; }
-    mutable _expectsToBuildAst : int;
+            _files                                   : Hashtable[int, File]   = Hashtable();
+            _libMap                                  : Hashtable[string, int] = Hashtable();
+            _libs                                    : List[NSP.LibReference] = List();
+    public  Parent                                   : Solution;
+    public  Id                                       : int;
+    public  Path                                     : string                       { get; }
+    public  Name                                     : string                       { get; private set; }
+    public  LanguageInfos                            : ImmutableArray[LanguageInfo] { get; }
+    public  Language                                 : Nitra.Language               { get; }
+    public  DynamicExtensions                        : List[GrammarDescriptor]      { get; }
+    public  IsDisposed                               : bool                         { get; private set; }
+            _parseQueue                              : BlockingCollection[ParserMessage];
+            _semanticAnalysisCancellationTokenSource : CancellationTokenSource { get; private set; }
+    mutable _expectsToBuildAst                       : int;
            
-    public this(parent : Solution, fullPath : string, id : int, languageInfos : ImmutableArray[LanguageInfo])
+    public this(parent : Solution, fullPath : string, id : int, languageInfos : ImmutableArray[LanguageInfo], parseQueue : BlockingCollection[ParserMessage])
     {
+      _parseQueue   = parseQueue;
       Path          = fullPath;
       Id            = id;
       Parent        = parent;
@@ -70,20 +75,28 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       }
     }
 
+    public IsAllAstCreated   : bool { get { _expectsToBuildAst == 0 } }
     public ExpectsToBuildAst : int { get { _expectsToBuildAst } }
     
     public AstDropped() : void
     {
       _expectsToBuildAst++;
+      _semanticAnalysisCancellationTokenSource?.Cancel();
+      _semanticAnalysisCancellationTokenSource?.Dispose();
+      _semanticAnalysisCancellationTokenSource = null;
     }
     
     public AstCreated() : void
     {
       _expectsToBuildAst--;
       assert2(_expectsToBuildAst >= 0);
-      when (_expectsToBuildAst == 0)
+      
+      when (IsAllAstCreated)
       {
-        // TODO: send message EvalPropertiesStart()
+        def cancellationTokenSource              = CancellationTokenSource();
+        def cancellationToken                    = _semanticAnalysisCancellationTokenSource.Token;
+        _semanticAnalysisCancellationTokenSource = cancellationTokenSource;
+        _parseQueue.Add(ParserMessage.SemanticAnalysisStart(cancellationToken, this));
       }
     }
     
@@ -116,7 +129,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     
     public AddFile(file : File): void
     {
-      ExpectsToBuildAst++;
+      _expectsToBuildAst++;
       _files.Add(file.Id, file);
       Parent._N_OnFileAdded(file);
     }
@@ -125,7 +138,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     
     public RemoveFile(id : int): void
     {
-      ExpectsToBuildAst--;
+      _expectsToBuildAst--;
       _files.Remove(id);
       Parent._N_OnFileRemoved(id);
     }
