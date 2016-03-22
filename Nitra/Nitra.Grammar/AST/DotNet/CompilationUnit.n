@@ -17,6 +17,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 
+using System.Threading;
 using NRB = Nitra.Declarations;
 
 namespace DotNet
@@ -25,12 +26,10 @@ namespace DotNet
   {
     public RefreshReferences(project : Project) : object
     {
-      //libs : Seq[LibReference], libPath : string, compilerMessages : ICompilerMessages, asts : Seq[IAst]
-      
       def oldManager = ManagerClass.Instance;
       try
       {
-        def manager : ManagerClass = Compiler(project.Libs);
+        def manager : ManagerClass = Compiler(project);
         ManagerClass.Instance = manager;
         def context       = DependentPropertyEvalContext();
         def rootNamespace = NamespaceSymbol();
@@ -39,6 +38,14 @@ namespace DotNet
         rootNamespace.DeclaredIn  = null;
         rootNamespace.FullName    = "";
 
+        def writeMetadataCallback(_)
+        {
+          SaveNitraMetadata(project, manager, rootNamespace);
+          manager.BeforeSaveAssembly -= writeMetadataCallback;
+        }
+        unless (manager.IsIntelliSenseMode)
+          manager.BeforeSaveAssembly += writeMetadataCallback;
+        
         def rootScope = CreateNemerleSymbols(manager, rootNamespace, context);
         LoadNitraMetadata(project, manager, rootNamespace);
         (context, rootNamespace, rootScope, manager)
@@ -46,7 +53,7 @@ namespace DotNet
       finally ManagerClass.Instance = oldManager;
     }
 
-    public RefreshProject(libs : ImmutableArray[LibReference], libPath : string, compilerMessages : ICompilerMessages, files : ImmutableArray[FileEvalPropertiesData], data : object) : object
+    public RefreshProject(cancellationToken : CancellationToken, compilerMessages : ICompilerMessages, files : ImmutableArray[FileEvalPropertiesData], data : object) : void
     {
       def oldManager = ManagerClass.Instance;
       def (context, rootNamespace, rootScope, manager) = data :> (DependentPropertyEvalContext * NamespaceSymbol * Scope * ManagerClass);
@@ -68,28 +75,20 @@ namespace DotNet
         evalHost.EvalProperties(context, "SymbolHierarchy", 0);
         evalHost.EvalProperties(context, "Scopes", 1);
         evalHost.EvalProperties(context, "Type bodies binding", 2);
-
-        def writeMetadataCallback(_)
-        {
-          SaveNitraMetadata(project, manager, rootNamespace);
-          manager.BeforeSaveAssembly -= writeMetadataCallback;
-        }
-        unless (manager.IsIntelliSenseMode)
-          manager.BeforeSaveAssembly += writeMetadataCallback;
       }
       finally ManagerClass.Instance = oldManager;
-      data
     }
 
     class Compiler : ManagerClass
     {
-      public this(libs : Seq[LibReference])
+      public this(project : Project)
       {
         base (CompilationOptions());
         _isIntelliSenseMode = true;
-        def localPath = IO.Path.GetFullPath(Uri(typeof(ManagerClass).Assembly.CodeBase).LocalPath);
-        def macroLibPath = localPath;
-        def compilerDir = IO.Path.GetDirectoryName(localPath);
+        def libs            = project.Libs;
+        def localPath       = IO.Path.GetFullPath(Uri(typeof(ManagerClass).Assembly.CodeBase).LocalPath);
+        def macroLibPath    = project.ProjectDir;
+        def compilerDir     = IO.Path.GetDirectoryName(localPath);
         this.Options.DoNotLoadMacros = true;
         this.Options.MacrosToLoad ::= macroLibPath;
         this.Options.LibraryPaths ::= compilerDir;
@@ -386,7 +385,7 @@ namespace DotNet
 
     public this(files : ImmutableArray[FileEvalPropertiesData], rootNamespace : NamespaceSymbol, rootScope : Scope)
     {
-      base(files, rootNamespace :: WellKnownSymbols.GetSymbolsToEvaluate());
+      base(files, (rootNamespace :: WellKnownSymbols.GetSymbolsToEvaluate()).ToImmutableArray());
       _rootNamespace = rootNamespace;
       _rootScope     = rootScope;
     }
