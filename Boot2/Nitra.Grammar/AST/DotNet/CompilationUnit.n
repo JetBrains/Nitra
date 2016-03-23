@@ -1,0 +1,463 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Compiler;
+using Nemerle.Compiler.Parsetree;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra;
+using Nitra.Ast;
+using Nitra.Declarations;
+using Nitra.Internal;
+using Nitra.ProjectSystem;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+using NRB = Nitra.Declarations;
+
+namespace DotNet
+{
+  public partial class CompilationUnit : AstBase, IProjectSupport, NamespaceBody
+  {
+    public RefreshReferences(project : Project) : void
+    {
+      def oldManager = ManagerClass.Instance;
+      try
+      {
+        def manager : ManagerClass = Compiler(project);
+        ManagerClass.Instance = manager;
+        def context       = DependentPropertyEvalContext();
+        def rootNamespace = NamespaceSymbol();
+
+        rootNamespace.MemberTable = TableScope("<root namespace>", rootNamespace);
+        rootNamespace.DeclaredIn  = null;
+        rootNamespace.FullName    = "";
+
+        def rootScope = CreateNemerleSymbols(project, manager, rootNamespace, context);
+        LoadNitraMetadata(project, manager, rootNamespace);
+        project.Data = (context, rootNamespace, rootScope, manager);
+      }
+      finally ManagerClass.Instance = oldManager;
+    }
+
+    public RefreshProject(project : Project) : void
+    {
+      when (project.Data == null)
+        RefreshReferences(project);
+
+      def oldManager = ManagerClass.Instance;
+      def (context, rootNamespace, rootScope, manager) = project.Data :> (DependentPropertyEvalContext * NamespaceSymbol * Scope * ManagerClass);
+      try
+      {
+        ManagerClass.Instance = manager;
+
+        def removeParsedSymbols(tableScope : TableScope)
+        {
+          tableScope.Undefine(_.IsParsed);
+          foreach (symbols in tableScope.Symbols)
+          foreach (symbol is NamespaceSymbol in symbols)
+            removeParsedSymbols(symbol.MemberTable);
+        }
+        removeParsedSymbols(rootNamespace.MemberTable);
+
+        def evalHost = NitraProjectEvalPropertiesHost(project, rootNamespace, rootScope);
+        evalHost.EvalProperties(context, "SymbolHierarchy", 0);
+        evalHost.EvalProperties(context, "Scopes", 1);
+        evalHost.EvalProperties(context, "Type bodies binding", 2);
+
+        def writeMetadataCallback(_)
+        {
+          SaveNitraMetadata(project, manager, rootNamespace);
+          manager.BeforeSaveAssembly -= writeMetadataCallback;
+        }
+        unless (manager.IsIntelliSenseMode)
+          manager.BeforeSaveAssembly += writeMetadataCallback;
+      }
+      finally ManagerClass.Instance = oldManager;
+    }
+
+    class Compiler : ManagerClass
+    {
+      public this(project : Project)
+      {
+        base (CompilationOptions());
+        _isIntelliSenseMode = true;
+        def localPath = IO.Path.GetFullPath(Uri(typeof(ManagerClass).Assembly.CodeBase).LocalPath);
+        def macroLibPath = localPath;
+        def compilerDir = IO.Path.GetDirectoryName(localPath);
+        this.Options.DoNotLoadMacros = true;
+        this.Options.MacrosToLoad ::= macroLibPath;
+        this.Options.LibraryPaths ::= compilerDir;
+        when (project.Libs != null)
+          foreach (lib in project.Libs)
+          {
+            | FullNameLibReference     => this.Options.ReferencedLibraries ::= lib.ToString();
+            | FileLibReference as file => this.Options.ReferencedLibraries ::= IO.Path.GetFullPath(IO.Path.Combine(project.ProjectDir, file.Path));
+            | _ => assert2(false, "Not supported LibReference");
+          }
+        InitCompiler ();
+        LoadExternalLibraries ();
+      }
+    }
+
+    private static NitraMetadataStreamName = "Nitra.Metadata2";
+
+    private static LoadNitraMetadata(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
+    {
+      def assemblyWithMetadata = Dictionary();
+      foreach (reference in manager.ReferencedAssemblies)
+      {
+        def assembly       = reference.Assembly;
+        def metadataStream = assembly.GetManifestResourceStream(NitraMetadataStreamName);
+        when (metadataStream != null)
+        {
+          def assemblyId = project.GetAssemblyId(assembly.GetName());
+          def file       = AssemblyFile(project, assembly.CodeBase);
+          assemblyWithMetadata.Add(assemblyId, (assembly, metadataStream, file));
+        }
+      }
+
+      def visitedAssemblies = HashSet();
+      def visitAssembly(assemblyId)
+      {
+        when (visitedAssemblies.Add(assemblyId))
+        {
+          mutable data;
+          when (assemblyWithMetadata.TryGetValue(assemblyId, out data))
+          {
+            def (assembly, metadataStream, file) = data;
+            foreach (dependency in assembly.GetReferencedAssemblies())
+              visitAssembly(project.GetAssemblyId(dependency));
+
+            def reader = Nitra.Serialization2.MetadataReader(project, file);
+            reader.ReadRoot(rootNamespace, metadataStream);
+          }
+        }
+      }
+
+      foreach (assemblyId in assemblyWithMetadata.Keys)
+        visitAssembly(assemblyId);
+    }
+
+    private static SaveNitraMetadata(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
+    {
+      def metadataFileName = manager.Options.OutputFileName + ".nitrametadata2";
+      def metadataWriter   = Nitra.Serialization2.MetadataWriter(project);
+      using (stream = IO.File.OpenWrite(metadataFileName))
+        metadataWriter.WriteRoot(rootNamespace, stream);
+      manager.Options.EmbeddedResources ::= metadataFileName + "," + NitraMetadataStreamName;
+    }
+
+    private static CreateNemerleSymbols(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : Scope
+    {
+      def nemerleNsRoot     = manager.NameTree.NamespaceTree;
+      def file              = SourceSnapshot.Default.File;
+      def span              = NSpan(0);
+      def nodeToSymbolMap   = Hashtable.[TypeInfo, TypeSymbol]();
+      def aliases           = List();
+
+      def createTypeParameters(tycon : TypeInfo) : array[TypeParameterSymbol]
+      {
+        def count = tycon.TyparmsCount;
+        if (count == 0)
+          AstUtils.NoTypeParameters
+        else
+        {
+          def result = array(count);
+          mutable typarms = tycon.Typarms;
+          for (mutable i = 0; i < result.Length; ++i)
+          {
+            def tp    = typarms.Head;
+            def name  = NRB.Name(file, span, tp.Name);
+            def tps   = TypeParameterDeclaration(name, tp).DefineSymbol();
+            tps.EvalProperties(context);
+            result[i] = tps;
+            typarms   = typarms.Tail;
+          }
+          result
+        }
+      }
+      def makeTypeParameters(symbol : GenericTypeSymbol, tycon : TypeInfo) : void
+      {
+        unless (symbol.IsTypeParametersCountEvaluated)
+          symbol.TypeParametersCount = tycon.TyparmsCount;
+        unless (symbol.IsTypeParametersEvaluated)
+          symbol.TypeParameters = createTypeParameters(tycon);
+      }
+      def loadNsMemebers(node : NamespaceTree.Node, declaredIn : DotNet.NamespaceSymbol) : void
+      {
+        def addTopType(node : NamespaceTree.Node, tycon : TypeInfo) : void
+        {
+          def name = NRB.Name(file, span, node.PartName);
+          def kind = tycon.GetTydecl();
+          match (kind)
+          {
+            | Interface
+            | Class =>
+              def symbol : TopGenericTypeSymbol =
+                        if (tycon.IsDelegate) ExternalTypeDeclaration.[TopDelegateSymbol](name, tycon).DefineSymbol(declaredIn.MemberTable) 
+                  else if (tycon.IsInterface) ExternalTypeDeclaration.[TopInterfaceSymbol](name, tycon).DefineSymbol(declaredIn.MemberTable)
+                  else if (tycon.IsValueType) ExternalTypeDeclaration.[TopStructSymbol](name, tycon).DefineSymbol(declaredIn.MemberTable)
+                  else                        ExternalTypeDeclaration.[TopClassSymbol](name, tycon).DefineSymbol(declaredIn.MemberTable);
+              makeTypeParameters(symbol, tycon);
+              unless (symbol.IsDeclaredInEvaluated)
+                symbol.DeclaredIn = declaredIn;
+              nodeToSymbolMap[tycon] = symbol;
+              symbol.Scope = EmptyScope.Instance; // temp
+              symbol.EvalProperties(context);
+                
+            | Alias         =>
+              def symbol = ExternalTypeDeclaration.[TypeAliasSymbol](name, tycon).DefineSymbol(declaredIn.MemberTable);
+              makeTypeParameters(symbol, tycon);
+              unless (symbol.IsDeclaredInEvaluated)
+                symbol.DeclaredIn = declaredIn;
+              aliases.Add(symbol);
+
+              nodeToSymbolMap[tycon] = symbol;
+              symbol.EvalProperties(context);
+          
+            | Variant       => ()
+            | VariantOption => ()
+            | Enum          =>
+              def symbol = ExternalTypeDeclaration.[TopEnumSymbol](name, tycon).DefineSymbol(declaredIn.MemberTable);
+              nodeToSymbolMap[tycon] = symbol;
+              unless (symbol.IsDeclaredInEvaluated)
+                symbol.DeclaredIn = declaredIn;
+              symbol.EvalProperties(context);
+          }
+        }
+        node.EnsureCached();
+   
+        match (node.Value)
+        {
+          | No                               => ()
+          | MacroCall                        => ()
+          | null                             => ()
+          | NamespaceReference               => 
+            def name   = NRB.Name(file, span, node.PartName);
+            def symbol = ExternalNamespaceDeclaration(name, node).DefineSymbol(declaredIn.MemberTable);
+            unless (symbol.IsDeclaredInEvaluated)
+              symbol.DeclaredIn = declaredIn;
+            symbol.EvalProperties(context);
+            foreach (subNode in node.Children.Values.ToArray())
+              loadNsMemebers(subNode, symbol);
+            
+          | Cached(tycon) =>  addTopType(node, tycon);
+          | CachedAmbiguous(elems)       => foreach (e in elems) addTopType(node, e);
+          | NotLoaded(_externalType)     => assert2(false)
+          | NotLoadedList(_externalType) => assert2(false)
+        }
+      }
+      
+      rootNamespace.EvalProperties(context);
+      
+      foreach (node in nemerleNsRoot.Children.Values.ToArray())
+        loadNsMemebers(node, rootNamespace);
+      
+      def nodeToSymbolMap = nodeToSymbolMap;
+
+      foreach (alias in aliases)
+      {
+        def decl     = alias.FirstDeclarationOrDefault :> IExternalTypeDeclaration;
+        def a        = decl.NemerleTypeInfo.GetTydecl() :> Typedtree.TypeDeclaration.Alias;
+        def typeInfo = a.ty.TypeInfo;
+        alias.Replacement =
+          if (typeInfo != null)
+            Ref.Some(file, span, nodeToSymbolMap[typeInfo])
+          else
+            Ref.Unresolved(file, span, a.ty.ToString(), ResolutionSource.Unknown());
+      }
+
+      def setParents(ns : NamespaceSymbol) : void
+      {
+        foreach (symbols in ns.MemberTable.Symbols)
+        {
+          foreach (symbol in symbols)
+          {
+            | x is NamespaceSymbol => setParents(x)
+            | x is GenericContainerTypeSymbol =>
+              def baseTypeSet = BaseTypeReferenceSet(context);
+              x.BaseTypeSet = baseTypeSet;
+              def decl = x.FirstDeclarationOrDefault :> IExternalTypeDeclaration;
+              def ti = decl.NemerleTypeInfo;
+              def superTypes = ti.GetDirectSuperTypes();
+              foreach (superType in superTypes)
+              {
+                //def baseType = FixedTypeToTypeRef(file, span, superType);
+                //when (baseType != null)
+                //  baseTypeSet.AddParent(baseType);
+              }
+
+            | _ => () //assert2(false);
+          }
+        }
+      }
+      
+      setParents(rootNamespace);
+      
+      def bindTuple(scope : Scope, typeParameterCoiunt : int) : Ref[GenericContainerTypeSymbol]
+      {
+        def alg(symbol : GenericContainerTypeSymbol) : ValueOption[GenericContainerTypeSymbol]
+        {
+          if (symbol.TypeParametersCount == typeParameterCoiunt)
+            ValueOption.Some(symbol)
+          else
+            ValueOption.None()
+        }
+
+        scope.Bind(Reference(file, span, "Tuple")).Resolve.[GenericContainerTypeSymbol](alg)
+      }
+      def bind(scope : Scope, name : string) : Ref[NamespaceSymbol]
+      {
+        scope.Bind(Reference(file, span, name))
+      }
+      
+      def makeTuples() : void
+      {
+        def nemerleNs = bind(rootNamespace.MemberTable, "Nemerle");
+        unless (nemerleNs.IsSymbolEvaluated)
+          return;
+
+        def builtinsNs = bind(nemerleNs.Symbol.MemberTable, "Builtins");
+        unless (builtinsNs.IsSymbolEvaluated)
+          return;
+
+        def declaredIn = rootNamespace;
+        for (mutable i = 2; i <= 20; i++)
+        {
+          def realSymbolRef = bindTuple(builtinsNs.Symbol.MemberTable, i);
+          def realSymbol    = realSymbolRef.Symbol;
+          def realDecl      = realSymbol.FirstDeclarationOrDefault :> IExternalTypeDeclaration;
+          def name          = NRB.Name(file, span, "#Tuple");
+          def symbol        = ExternalTypeDeclaration.[TypeAliasSymbol](name, realDecl.NemerleTypeInfo).DefineSymbol(declaredIn.MemberTable);
+          symbol.TypeParametersCount = i;
+          symbol.TypeParameters      = AstUtils.CreateTypeParameters(i);
+          symbol.DeclaredIn          = declaredIn;
+          symbol.EvalProperties(context);
+        }
+      }
+      
+      
+      makeTuples();
+      
+      def res1 = bind(rootNamespace.MemberTable, "Nemerle");
+      
+      when (res1.IsSymbolEvaluated)
+      {
+        def res2 = bind(res1.Symbol.MemberTable, "Core");
+        when (res2.IsSymbolEvaluated)
+          return res2.Symbol.MemberTable.HideWith(rootNamespace.MemberTable);
+      }
+
+      rootNamespace.MemberTable
+    }
+  
+    static FixedTypeToTypeRef(ti : TypeInfo, typeMap : Hashtable[TypeInfo, TypeSymbol], file : File, span : NSpan, t : Nemerle.Compiler.TypeVar, context : DependentPropertyEvalContext, pos : int = -1) : TypeSymbol
+    {
+      match (t)
+      {
+        | FixedType.Class(ti, []) => 
+          def sym = typeMap[ti];
+          sym
+          
+        //| FixedType.Class(ti, args) =>
+        //  def constructedType = AstUtils.CreateConstructedTypeSymbol(file, span);
+        //  def sym = typeMap[ti] :> GenericTypeSymbol;
+        //  constructedType.TypeInfo = sym;
+        //  def resultArgs = array(args.Length);
+        //  constructedType
+
+        | FixedType.StaticTypeVarRef(staticTypeVar) => 
+          null
+
+        | _ => null
+      }
+    }
+  }
+
+  class NitraProjectEvalPropertiesHost : ProjectEvalPropertiesHost
+  {
+    private _rootNamespace : NamespaceSymbol;
+    private _rootScope     : Scope;
+
+    public this(project : Project, rootNamespace : NamespaceSymbol, rootScope : Scope)
+    {
+      base(project, rootNamespace :: WellKnownSymbols.GetSymbolsToEvaluate());
+      _rootNamespace = rootNamespace;
+      _rootScope     = rootScope;
+    }
+
+    protected override BeforeStage(context : DependentPropertyEvalContext, _passName : string) : void
+    {
+      match (context.Stage)
+      {
+        | 0 =>
+          foreach (file in _files)
+            when (file.Ast is CompilationUnit as cu)
+              cu.RootNamespace = _rootNamespace;
+
+        | 1 =>
+          foreach (file in _files)
+            when (file.Ast is CompilationUnit as cu)
+              cu.Scope = _rootScope;
+
+        | _ => ()
+      }
+    }
+  }
+
+  [Record]
+  class TypeParameterDeclaration : ExternalDeclaration[TypeParameterSymbol]
+  {
+    public NemerleTypeParam : StaticTypeVar;
+    public override CreateSymbol() : DeclarationSymbol { TypeParameterSymbol() }
+  }
+
+  [Record]
+  class TypeParameterStubDeclaration : ExternalDeclaration[TypeParameterSymbol]
+  {
+    public override CreateSymbol() : DeclarationSymbol { TypeParameterSymbol() }
+  }
+
+  interface IExternalTypeDeclaration
+  {
+    NemerleTypeInfo : TypeInfo { get; }
+  }
+
+  [Record]
+  class ExternalTypeDeclaration[TSymbol] : ExternalDeclaration[TSymbol], IExternalTypeDeclaration
+    where TSymbol : DeclarationSymbol
+  {
+    public NemerleTypeInfo : TypeInfo { get; private set; }
+  }
+
+  [Record]
+  class ExternalNamespaceDeclaration : ExternalDeclaration[NamespaceSymbol]
+  {
+    public NemerleNode : NamespaceTree.Node { get; private set; }
+    public override CreateSymbol() : DeclarationSymbol { NamespaceSymbol() }
+  }
+
+  internal sealed class AssemblyFile : ConcreteFile
+  {
+    public this(project : Project, fullName : string)
+    {
+      base(null);
+      Project  = project;
+      FullName = fullName;
+    }
+
+    private         _fullName : string;
+    private mutable _source   : SourceSnapshot;
+
+    public override Project     : Project        { get; }
+    public override Length      : int            { get { 0 } }
+    public override FullName    : string         { get; }
+    public override Language    : Nitra.Language { get { Nitra.Language.Instance } }
+    public override GetSource() : SourceSnapshot { when(_source == null) _source = SingleLineSourceSnapshot("", this); _source }
+    public override IsFake      : bool           { get { true } }
+  }
+}
