@@ -6,6 +6,7 @@ using Nemerle.Utility;
 
 using Nitra.ClientServer.Messages;
 
+using Nitra.Declarations;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -32,6 +33,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     public  Language                                 : Nitra.Language               { get; }
     public  DynamicExtensions                        : List[GrammarDescriptor]      { get; }
     public  IsDisposed                               : bool                         { get; private set; }
+    public  IsSemanticAvailable                      : bool                         { get; private set; }
             _parseQueue                              : BlockingCollection[ParserMessage];
             _semanticAnalysisCancellationTokenSource : CancellationTokenSource { get; private set; }
     mutable _expectsToBuildAst                       : int;
@@ -74,32 +76,6 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         }
       }
     }
-
-    public IsAllAstCreated   : bool { get { _expectsToBuildAst == 0 } }
-    public ExpectsToBuildAst : int { get { _expectsToBuildAst } }
-    
-    public AstDropped() : void
-    {
-      _expectsToBuildAst++;
-      _semanticAnalysisCancellationTokenSource?.Cancel();
-      _semanticAnalysisCancellationTokenSource?.Dispose();
-      _semanticAnalysisCancellationTokenSource = null;
-    }
-    
-    public AstCreated() : void
-    {
-      _expectsToBuildAst--;
-      assert2(_expectsToBuildAst >= 0);
-      
-      when (IsAllAstCreated && this._files.Count > 0)
-      {
-        def cancellationTokenSource              = CancellationTokenSource();
-        def cancellationToken                    = _semanticAnalysisCancellationTokenSource.Token;
-        _semanticAnalysisCancellationTokenSource = cancellationTokenSource;
-        this._files.First;
-        _parseQueue.Add(ParserMessage.SemanticAnalysisStart(cancellationToken, this));
-      }
-    }
     
     LoadAssembly(path : string) : Assembly
     {
@@ -112,8 +88,53 @@ namespace Nitra.ClientServer.Server.ProjectSystem
           Assembly.LoadFrom(path);
       assembly
     }
+
+    public IsAllAstCreated   : bool { get { _expectsToBuildAst == 0 } }
+    public ExpectsToBuildAst : int { get { _expectsToBuildAst } }
     
-    //public override Libs : Seq[string] { get { _libs } }
+    public AstDropped() : void
+    {
+      _expectsToBuildAst++;
+      _semanticAnalysisCancellationTokenSource?.Cancel();
+      _semanticAnalysisCancellationTokenSource?.Dispose();
+      _semanticAnalysisCancellationTokenSource = null;
+      IsSemanticAvailable                      = false;
+    }
+    
+    public AstCreated() : void
+    {
+      _expectsToBuildAst--;
+      assert2(_expectsToBuildAst >= 0);
+      
+      when (IsAllAstCreated && this._files.Count > 0)
+      {
+        def cancellationTokenSource              = CancellationTokenSource();
+        def cancellationToken                    = _semanticAnalysisCancellationTokenSource.Token;
+        _semanticAnalysisCancellationTokenSource = cancellationTokenSource;
+        
+        def projectSupport = this.GetProjectSupport();
+        if (projectSupport != null)
+        {
+          when (this.Data == null)
+          {
+            this.Data = projectSupport.RefreshReferences(this);
+            Log("Project support: RefreshReferences");
+          }
+
+          Log("Project support: prepare to Semantic Analysis");
+          
+          def files = this.Files.Select(f => FileEvalPropertiesData(f.FullName, f.Name, f.Ast, f.Statistics.Typing)).ToImmutableArray();
+          _parseQueue.Add(ParserMessage.SemanticAnalysisStart(Id, cancellationToken, projectSupport, files, this.Data));
+        }
+        else
+          Log("Project support not available!");
+      }
+    }
+    
+    public SemanticAnalysisFinished(compilerMessages : NSP.CompilerMessageList) : void
+    {
+      IsSemanticAvailable = true;
+    }
     
     public IsOpened : bool { get; private set }
     
