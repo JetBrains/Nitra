@@ -1061,7 +1061,7 @@ namespace Nitra.Visualizer
 
       var isTestAvalable = newTest != null;
 
-      var code = isTestAvalable? newTest.Code : "";
+      var code = isTestAvalable ? newTest.Code : "";
       _initializing         = true;
       try
       {
@@ -1077,9 +1077,9 @@ namespace Nitra.Visualizer
       UpdateVm(_currentSuite,    newTestSuite);
       var timer = Stopwatch.StartNew();
       UpdateVm(_currentSolution, newSolution, newTestSuite.Client);
-      this.Title = timer.Elapsed.ToString();
       UpdateVm(_currentProject,  newProject,  newTestSuite.Client);
       UpdateVm(_currentTest,     newTest,     newTestSuite.Client);
+      this.Title = timer.Elapsed.ToString();
 
       _currentSuite    = newTestSuite;
       _currentSolution = newSolution;

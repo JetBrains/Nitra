@@ -1,6 +1,4 @@
-﻿using System.Globalization;
-using System.Threading;
-using Nemerle;
+﻿using Nemerle;
 using Nemerle.Assertions;
 using Nemerle.Collections;
 using Nemerle.Imperative;
@@ -14,10 +12,12 @@ using System.Console;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 
 namespace Nitra.ClientServer.Client
 {
@@ -25,80 +25,42 @@ namespace Nitra.ClientServer.Client
   
   public sealed class NitraClient : IDisposable
   {
-    public StringManager : StringManager;
-    RequestPipeName      : string = Guid.NewGuid().ToString();
-    ResponsePipeName     : string = Guid.NewGuid().ToString();
+    public  StringManager    : StringManager;
+            MaintPipeName    : string = Guid.NewGuid().ToString();
+            _mainPipeClient  : NamedPipeClientStream;
+            _serverProc      : Process;
+            _mainPipeWriter  : BinaryWriter;
+    mutable _isDisposed      : bool;
     
-    _serverPipeClient    : IDisposable;
-    mutable _isDisposed  : bool;
-    
-    _serverProc : Process;
-    _pipeServer : NamedPipeServerStream;
-    _writer     : BinaryWriter;
-    
-    public this(stringManager : StringManager, onServerMessage: ServerMessage -> void)
+    public this(stringManager : StringManager)
     {
-      StringManager = stringManager;
+      StringManager             = stringManager;
       def executingAssemblyPath = Assembly.GetExecutingAssembly().Location;
       def assembliesPath        = Path.GetDirectoryName(executingAssemblyPath);
       def serverPath            = Path.Combine(assembliesPath, "Nitra.ClientServer.Server.exe");
-      def _serverProc           = Process.Start(serverPath, RequestPipeName + " " + ResponsePipeName);
+      _serverProc               = Process.Start(serverPath, MaintPipeName);
       assert2(_serverProc != null);
-      _pipeServer = NamedPipeServerStream(RequestPipeName, PipeDirection.InOut);
-      _pipeServer.WaitForConnection();
-      _writer = BinaryWriter(_pipeServer);
-      _serverPipeClient = StartServerMessageReader(onServerMessage);
-      Send(ClientMessage.CheckVersion(Message.AssemblyVersionGuid));
-    }
-    
-    StartServerMessageReader(onServerMessage: ServerMessage -> void) : IDisposable
-    {
-      def pipeClient = NamedPipeClientStream(".", ResponsePipeName, PipeDirection.InOut);
-      
-      def ServerPipeReader()
-      {
-        def thread = Thread.CurrentThread;
-        thread.Name = "Client Pipe Reader";
-        thread.CurrentCulture = CultureInfo.InvariantCulture;
-        //pipeClient.Connect();
-      
-        using (reader = BinaryReader(pipeClient))
-        {
-          def loop()
-          {
-            try
-            {
-              onServerMessage(Deserializer.Deserialize(reader));
-            }
-            catch
-            {
-              | _ is EndOfStreamException when !pipeClient.IsConnected => Log("Session has been terminated.")
-              | e => Log($"Message read error: $e"); //TODO: FIXME: постоянно вылетает это сообщение!
-            }
-          }
-          
-          loop()
-        }
-      }
-      def readerThread = Thread(ServerPipeReader);
-      readerThread.IsBackground = true;
-      readerThread.Start();
       Log("Server started.");
-      pipeClient
+      _mainPipeClient           = NamedPipeClientStream(".", MaintPipeName, PipeDirection.InOut); 
+      _mainPipeWriter           = BinaryWriter(_mainPipeClient);
+      _mainPipeClient.Connect();
+      Log("Connected to server started.");
     }
     
+    // TODO: add synchronous reading of server replies
+
     public Send([NotNull] msg : ClientMessage) : void
     {
-      when (!_pipeServer.IsConnected)
+      when (!_mainPipeClient.IsConnected)
       {
         assert2(true);
       }
-      msg.Serialize(_writer);
+      msg.Serialize(_mainPipeWriter);
     }
     
     public Flush() : void
     {
-      _writer.Flush();
+      _mainPipeWriter.Flush();
     }
     
     public Dispose() : void
@@ -108,8 +70,8 @@ namespace Nitra.ClientServer.Client
         
       Send(Messages.ClientMessage.Shutdown());
       
-      _pipeServer.Dispose();
-      _serverPipeClient.Dispose();
+      //_pipeServer.Dispose();
+      _mainPipeClient.Dispose();
       _isDisposed = true;
       GC.SuppressFinalize(this);
     }

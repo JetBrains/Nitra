@@ -1,0 +1,79 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Extensions;
+
+using Nitra.ClientServer.Messages;
+
+using System;
+using System.Console;
+using System.Diagnostics;
+using System.Globalization;
+using System.Threading;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Pipes;
+using System.Linq;
+
+namespace Nitra.ClientServer.Client
+{
+  public class ActiveFileResponse : IDisposable
+  {
+    mutable _responsePipe : NamedPipeServerStream;
+    public  PipeName      : string { get; private set }
+            _onMessage    : ServerMessage -> void;
+    
+    public this(onMessage : ServerMessage -> void, priority : ThreadPriority = ThreadPriority.Normal)
+    {
+      _onMessage       = onMessage;
+      PipeName         = Guid.NewGuid().ToString();
+      def readerThread = Thread(ActiveFileResponseThreadMain) <- { IsBackground = true; Priority = priority };
+      readerThread.Start();
+    }
+
+    ActiveFileResponseThreadMain() : void
+    {
+      def thread = Thread.CurrentThread;
+      thread.Name = "Active Source Pipe - " + PipeName;
+      thread.CurrentCulture = CultureInfo.InvariantCulture;
+        
+      _responsePipe    = NamedPipeServerStream(PipeName, PipeDirection.In);
+      _responsePipe.WaitForConnection();
+      Log($"Pipe server started (pipe name = $PipeName).");
+      
+      using (reader = BinaryReader(_responsePipe))
+      {
+        def loop()
+        {
+          try
+          {
+            // TODO: добавить обработку сообщений закрытия.
+            // TODO: Убрать прямую передачу управления в метод WPF-ного окна. Заменить на синхронизированный вызов.
+            _onMessage(Deserializer.Deserialize(reader));
+          }
+          catch
+          {
+            | _ is EndOfStreamException when !_responsePipe.IsConnected => Log("Session has been terminated."); return;
+            | e => Log($"Message read error: $e");
+          }
+        }
+          
+        loop()
+      }
+    }
+    
+    
+    public Dispose() : void 
+    {
+      _responsePipe?.Dispose();
+      _responsePipe = null
+    }
+    
+    Log(msg : string) : void
+    {
+      Trace.WriteLine(msg);
+    }
+  }
+}
