@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
+using System.IO.Pipes;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -34,7 +35,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     mutable _parseResult            : IParseResult;
     mutable _ast                    : IAst;
     mutable _parseTree              : ParseTree;
-    mutable _outlining              : object;
+    volatile mutable _activeBufferWriter : BinaryWriter;
     
     public this(id : int, fullPath : string, parent : Project)
     {
@@ -65,15 +66,9 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     public Log(msg : string) : void { ServerUtils.Log(msg) }
     
     public override Ast : IAst { get { _ast } }
-    
     public override Language : Language { get { Parent.Language } }
-    
     public override Name : string { get { _name } }
-    
-    public override FullName : string 
-    { 
-      get { _fileInfo.FullName } 
-    }
+    public override FullName : string { get { _fileInfo.FullName } }
     
     public override GetSource() : SourceSnapshot
     { 
@@ -114,6 +109,9 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       _fileInfo = null;
       _text     = null;
       _snapshot = null;
+      
+      _activeBufferWriter?.Dispose();
+      _activeBufferWriter = null
       
       def cts = CancellationTokenSource;
       when (cts != null)
@@ -205,33 +203,35 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     
     public AstCreated(ast : IAst, parseTree : ParseTree) : void
     {
-      _parseTree   = parseTree; 
-      _ast         = ast;
+      _parseTree = parseTree; 
+      _ast = ast;
       Parent.AstCreated();
     }
     
     public CreateOutliningMessage() : ParserMessage.GetOutlining
     {
-      ParserMessage.GetOutlining(Id)
+      ParserMessage.GetOutlining(Id, _parseResult, Send)
     }
     
-    public OutliningCreated(data : object) : void 
+    public Activate(pipeName: string) : void
     {
-      _outlining = data
+      Deactivate();
+      def pipeClient = NamedPipeClientStream(".", pipeName, PipeDirection.Out);
+      pipeClient.Connect();
+      _activeBufferWriter = BinaryWriter(pipeClient);
     }
     
-    public override DeepResetProperties() : void{ throw System.NotImplementedException() }
-  
-    public override GetParseTree() : Nitra.ParseTree{ throw System.NotImplementedException() }
-  
-    public override HasAst : bool
+    public Deactivate() : void
     {
-      get{ throw System.NotImplementedException() }
+      _activeBufferWriter?.Dispose();
+      _activeBufferWriter = null
     }
   
-    public override ParseResult : Nitra.IParseResult
+    public Send(message : ServerMessage) : void
     {
-      get{ throw System.NotImplementedException() }
+      // buffer may be deactivated by the time we are sending the response
+      unless (_activeBufferWriter == null)
+        message.Serialize(_activeBufferWriter)
     }
   
     public override ToString() : string { $"$Name($(Parent.Name) project)" }
