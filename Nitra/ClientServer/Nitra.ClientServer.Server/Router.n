@@ -20,7 +20,6 @@ namespace Nitra.ClientServer.Server
 {
   class Router
   {
-    public  Logger        : IO.TextWriter;
             _mainQueue    : BlockingCollection[RouterMessage] = BlockingCollection();
             _parseQueue   : BlockingCollection[ParserMessage] = BlockingCollection();
             _mainThread   : Thread;
@@ -30,34 +29,36 @@ namespace Nitra.ClientServer.Server
     mutable _solution     : Solution;
     _sendResponse         : ServerMessage -> void;
 
-    public this(sendResponse: ServerMessage -> void)
+    public this(sendResponse : ServerMessage -> void)
     {
-      Logger = Console.Out;
       _sendResponse = sendResponse;
       _mainThread = Thread(RouterThreadMain);
       _mainThread.Start();
-      _parseWorkers = $[1..Environment.ProcessorCount].Map(_ => ParseWorker(_parseQueue, _mainQueue));
+      def cores = ServerUtils.GetCoreCount(); // Environment.ProcessorCount
+      Log("Cores: " + cores);
+      _parseWorkers = $[1..cores].Map(_ => ParseWorker(_parseQueue, _mainQueue));
     }
 
     RouterThreadMain() : void
     {
       def thread = Thread.CurrentThread;
-      thread.Name = "ServerPipeReader";
+      thread.Name = "Router";
       thread.CurrentCulture = CultureInfo.InvariantCulture;
 
-      try Router()
+      try RouteMessages()
       catch
       {
-        | OperationCanceledException => ()
-        | e => Error("Error: " + e)
+        | e is OperationCanceledException => ServerUtils.LogCanceled(e)
+        | e                               => ServerUtils.LogException(e)
       }
     }
     
-    Router() : void
+    RouteMessages() : void
     {
       foreach(msg in _mainQueue.GetConsumingEnumerable(_cts.Token))
       {
         | serverMsg is ClientMessage =>
+          //Log(serverMsg.ToString());
           match (serverMsg)
           {
             | ClientMessage.CheckVersion(assemblyVersionGuid)        =>
@@ -69,10 +70,10 @@ namespace Nitra.ClientServer.Server
                 Error($"Incorrect version of messaging assembly: '$(asm.Assembly.Location)'.");
                 Environment.Exit(42);
               }
-            | SolutionStartLoading(fullPath)                  => assert2(_solution == null); _solution = Solution(fullPath, Logger)
-            | SolutionLoaded                                  => _solution.Open()
-            | SolutionUnloaded                                => assert2(_solution != null); _solution = null
-            | ProjectStartLoading(id, fullPath, lans)         => _ = Project(_solution, fullPath, id, lans)
+            | SolutionStartLoading(fullPath)                  => assert2(_solution == null); _solution = Solution(fullPath);
+            | SolutionLoaded                                  => _solution.Open();
+            | SolutionUnloaded                                => _solution.Dispose(); _solution = null;
+            | ProjectStartLoading(id, fullPath, lans)         => _ = Project(_solution, fullPath, id, lans, _parseQueue);
             | ProjectLoaded      (id)                         => _solution[id].Open()
             | ProjectUnloaded    (id)                         => _solution.RemoveProject(id)
             | ProjectRaname      (oldId, newId, newPath)      => Log("Not supported yet.")
@@ -86,7 +87,11 @@ namespace Nitra.ClientServer.Server
             | FileRanamed        (oldId, newId, newPath)      => Log("Not supported yet.")
             | FileChanged        (id, change)                 => _solution.GetFile(id).Change(change)
             | FileChangedBatch   (id, changes)                => _solution.GetFile(id).Change(changes)
-            | Shutdown                                        => _cts.Cancel()
+            | Shutdown                                        =>
+              Log("Shutdown");
+              _solution?.Dispose();
+              _cts.Cancel();
+              return;
             | _                                               => assert2(false)
           }
 
@@ -97,8 +102,10 @@ namespace Nitra.ClientServer.Server
               when (parseResult.ParseSession.CancellationToken.IsCancellationRequested)
                 continue;
 
+              assert2(parseResult != null);
+
               def file = _solution.GetFile(fileId);
-              _parseQueue.Add(file.CreateOutliningMessage());
+              _parseQueue.Add(file.CreateOutliningMessage(parseResult));
               _parseQueue.Add(file.CreateAstMessage(parseResult));
               
             | AstCreated(fileId, cancellationToken, ast, parseTree) =>
@@ -109,6 +116,12 @@ namespace Nitra.ClientServer.Server
               // TODO: send CollectOutlining and CollectTokebHighlighting mesages
               file.AstCreated(ast, parseTree);
               // TODO: send EvalProperties if ast != null
+            | SemanticAnalysisFinished(projectId, cancellationToken, compilerMessages) =>
+              when (cancellationToken.IsCancellationRequested)
+                continue;
+              def project = _solution[projectId];
+              project.SemanticAnalysisFinished(compilerMessages);
+            
           }
 
         | _ => assert2(false)

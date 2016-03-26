@@ -26,7 +26,8 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     public  Parent                  : Project;
     public  Id                      : int { get; }
     public  CancellationTokenSource : CancellationTokenSource { get; private set; }
-    public  DynamicExtensions       : Seq[GrammarDescriptor] { get; }
+    public  DynamicExtensions       : Seq[GrammarDescriptor]  { get; }
+    public  IsDisposed              : bool                    { get; private set; }
     mutable _fileInfo               : FileInfo;
     mutable _text                   : StringBuilder;
     mutable _snapshot               : SourceSnapshot;
@@ -43,6 +44,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       _fileInfo         = FileInfo(fullPath);
       Parent            = parent;
       _name             = IO.Path.GetFileNameWithoutExtension(FullName);
+      // TODO: Add statistics support.
       
       parent.AddFile(this);
       Log("FileLoaded " + id + ": " + fullPath + " (" + parent.Name + " project)");
@@ -61,7 +63,9 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       parent.AddFile(this);
     }
     
-    public Log(msg : string) : void { Parent.Parent.Logger?.WriteLine(msg) }
+    public Log(msg : string) : void { ServerUtils.Log(msg) }
+    
+    public override Ast : IAst { get { _ast } }
     public override Language : Language { get { Parent.Language } }
     public override Name : string { get { _name } }
     public override FullName : string { get { _fileInfo.FullName } }
@@ -99,11 +103,23 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     
     public Dispose() : void
     {
-      _fileInfo = null;
-      _text     = null;
-      _snapshot = null;      
+      when (IsDisposed)
+        return;
+
       _activeBufferWriter?.Dispose();
-      _activeBufferWriter = null
+      _activeBufferWriter = null;
+      
+      def cts = CancellationTokenSource;
+      when (cts != null)
+      {
+        CancellationTokenSource = null;
+      
+        unless (cts.IsCancellationRequested)
+          cts.Cancel();
+        cts.Dispose();
+      }
+      
+      IsDisposed = true;
     }
  
     Insert(pos: int, text: string) : void
@@ -169,6 +185,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
                                         language.CompositeGrammar,
                                         cancellationToken = cancellationToken,
                                         dynamicExtensions = Parent.DynamicExtensions);
+      CancellationTokenSource = cancellationTokenSource;
 
       ParserMessage.ParseFile(this.Id, parseSession, source)
     }
@@ -182,21 +199,18 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     
     public AstCreated(ast : IAst, parseTree : ParseTree) : void
     {
-      Parent.AstCreated();
       _parseTree = parseTree; 
       _ast = ast;
+      Parent.AstCreated();
     }
     
-    public CreateOutliningMessage() : ParserMessage.GetOutlining
+    public CreateOutliningMessage(parseResult : IParseResult) : ParserMessage.GetOutlining
     {
-      ParserMessage.GetOutlining(Id, _parseResult, Send)
+      assert2(parseResult != null);
+      // VladD2: зачем создавать замыкания на объект который должен жить только в синхронизированном контексте?
+      // лучше передавать саму очередь.
+      ParserMessage.GetOutlining(Id, parseResult, Send)
     }
-    
-    public override Ast : Nitra.Declarations.IAst { get{ _ast } }
-    public override DeepResetProperties() : void { throw System.NotImplementedException() }
-    public override GetParseTree() : Nitra.ParseTree { _parseTree }
-    public override HasAst : bool { get { _ast != null } }
-    public override ParseResult : Nitra.IParseResult { get { _parseResult } }
     
     public Activate(pipeName: string) : void
     {
@@ -211,7 +225,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       _activeBufferWriter?.Dispose();
       _activeBufferWriter = null
     }
-    
+  
     public Send(message : ServerMessage) : void
     {
       // buffer may be deactivated by the time we are sending the response
@@ -220,5 +234,11 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     }
   
     public override ToString() : string { $"$Name($(Parent.Name) project)" }
+  
+    public override HasAst                : bool               { get { _ast != null } }
+    public override ParseResult           : Nitra.IParseResult { get { _parseResult }   }
+    public override GetParseTree()        : Nitra.ParseTree    { _parseTree }
+    
+    public override DeepResetProperties() : void               { throw System.NotImplementedException() }
  }
 }

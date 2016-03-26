@@ -1,5 +1,5 @@
-﻿using System.Threading;
-using Nemerle.Collections;
+﻿using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
@@ -8,87 +8,67 @@ using Nitra.ClientServer.Server;
 
 using System;
 using System.Console;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
-using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 
 module Program
 {
   Main(args : array[string]) : void
   {
-    when (args.Length != 2)
+     assert2(false, "Srart debugger");
+    
+    when (args.Length != 1)
     {
-      Log("Invalid parameters number, expected: <request pipe name> <response pipe name>");
+      assert2(false, "Invalid number of parameters!");
+      ServerUtils.Log("Invalid number of parameters, expected: <request pipe name> <response pipe name>");
       Environment.Exit(42);
     }
     
-    assert2(false, "Srart debugger");
     def requestPipeName = args[0];
-    def responsePipeName = args[1];
-    
-    using (pipeServer = NamedPipeServerStream(responsePipeName, PipeDirection.Out))
+      
+    using (mainPipe = NamedPipeServerStream(requestPipeName, PipeDirection.InOut))
     {
-      def writer = BinaryWriter(pipeServer);
-      
-      def sendResponse(msg : ServerMessage) : void
-      {
-        when (!pipeServer.IsConnected) assert2(true);
-        msg.Serialize(writer);
-      }
-      
-      using (pipeClient = NamedPipeClientStream(".", requestPipeName, PipeDirection.InOut))
-      {
-        def router = Router(sendResponse);
+      def router = Router(null/*sendResponse*/);
         
-        // Connect to the pipe or wait until the pipe is available.
-        Write("Attempting to connect to pipe...");
-        pipeClient.Connect();
+      // Connect to the pipe or wait until the pipe is available.
+      Write("Attempting to connect to pipe...");
+      mainPipe.WaitForConnection();
     
-        Log("Connected to pipe.");
-        Log("There are currently {0} pipe server instances open.", pipeClient.NumberOfServerInstances);
-        //def writer = BinaryWriter(pipeClient);
-        def ServerPipeReader()
-        {
-          def thread = Thread.CurrentThread;
-          thread.Name = "ServerPipeReader";
-          thread.CurrentCulture = CultureInfo.InvariantCulture;
+      ServerUtils.Log("Connected to pipe.");
+      ServerUtils.Log("There are currently $(mainPipe.NumberOfServerInstances) pipe server instances open.");
+      //def writer = BinaryWriter(mainPipe);
+      def MainPipeReaderThreadMain()
+      {
+        def thread = Thread.CurrentThread;
+        thread.Name = "Server Pipe Reader";
+        thread.CurrentCulture = CultureInfo.InvariantCulture;
           
-          using (reader = BinaryReader(pipeClient))
+        using (reader = BinaryReader(mainPipe))
+        {
+          while (mainPipe.IsConnected)
           {
-            def loop()
+            try
             {
-              try
-              {
-                router.AddMessage(Deserializer.Deserialize(reader));
-                loop()
-              }
-              catch
-              {
-                | _ is EndOfStreamException when !pipeClient.IsConnected =>
-                  Log("Session has been terminated.")
-                | e => 
-                  Log(string.Format("Message read error: {0}", e));
-                  loop()
-              }
+              router.AddMessage(Deserializer.Deserialize(reader));
             }
-              
-            loop()
+            catch
+            {
+              | _ is EndOfStreamException when !mainPipe.IsConnected => ServerUtils.Log("Session has been terminated."); return;
+              | e                                                    => ServerUtils.LogException(e);
+            }
           }
         }
-        def readerThread = Thread(ServerPipeReader);
-        readerThread.IsBackground = true;
-        readerThread.Start();
-        Log("Server started.");
-        router.Wait();
-        Log("Server stopped.")
       }
+      def readerThread = Thread(MainPipeReaderThreadMain);
+      readerThread.IsBackground = true;
+      readerThread.Start();
+      ServerUtils.Log("Server started.");
+      router.Wait();
+      ServerUtils.Log("Server stopped.")
     }
-  }
-  
-  Log(msg : string, params args: array[object]) : void
-  {
-    WriteLine(msg, args);
   }
 }

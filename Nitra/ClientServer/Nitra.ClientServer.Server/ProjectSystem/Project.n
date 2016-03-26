@@ -6,35 +6,44 @@ using Nemerle.Utility;
 
 using Nitra.ClientServer.Messages;
 
+using Nitra.Declarations;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 
 using System.Reflection;
+using System.Threading;
 using NSP = Nitra.ProjectSystem;
 
 namespace Nitra.ClientServer.Server.ProjectSystem
 {
   public class Project : NSP.Project, IDisposable
   {
-            _files             : Hashtable[int, File]   = Hashtable();
-            _libMap            : Hashtable[string, int] = Hashtable();
-            _libs              : List[NSP.LibReference] = List();
-    public  Parent             : Solution;
-    public  Id                 : int;
-    public  Path               : string                       { get; }
-    public  Name               : string                       { get; private set; }
-    public  LanguageInfos      : ImmutableArray[LanguageInfo] { get; }
-    public  Language           : Nitra.Language               { get; }
-    public  DynamicExtensions  : List[GrammarDescriptor]      { get; }
-    public  IsDisposed         : bool                         { get; private set; }
-    mutable _expectsToBuildAst : int;
+            _files                                   : Hashtable[int, File]   = Hashtable();
+            _libMap                                  : Hashtable[string, int] = Hashtable();
+            _libs                                    : List[NSP.LibReference] = List();
+    public  Parent                                   : Solution;
+    public  Id                                       : int;
+    public  Path                                     : string                       { get; }
+    public  Name                                     : string                       { get; private set; }
+    public  LanguageInfos                            : ImmutableArray[LanguageInfo] { get; }
+    public  Language                                 : Nitra.Language               { get; }
+    public  DynamicExtensions                        : List[GrammarDescriptor]      { get; }
+    public  IsDisposed                               : bool                         { get; private set; }
+    public  IsSemanticAvailable                      : bool                         { get; private set; }
+            _parseQueue                              : BlockingCollection[ParserMessage];
+            _semanticAnalysisCancellationTokenSource : CancellationTokenSource { get; private set; }
+    mutable _expectsToBuildAst                       : int;
            
-    public this(parent : Solution, fullPath : string, id : int, languageInfos : ImmutableArray[LanguageInfo])
+    public this(parent : Solution, fullPath : string, id : int, languageInfos : ImmutableArray[LanguageInfo], parseQueue : BlockingCollection[ParserMessage])
     {
+      _parseQueue   = parseQueue;
       Path          = fullPath;
+      ProjectDir    = fullPath;
       Id            = id;
       Parent        = parent;
       Name          = Path.GetFileNameWithoutExtension(fullPath);
@@ -69,23 +78,6 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         }
       }
     }
-
-    public ExpectsToBuildAst : int { get { _expectsToBuildAst } }
-    
-    public AstDropped() : void
-    {
-      _expectsToBuildAst++;
-    }
-    
-    public AstCreated() : void
-    {
-      _expectsToBuildAst--;
-      assert2(_expectsToBuildAst >= 0);
-      when (_expectsToBuildAst == 0)
-      {
-        // TODO: send message EvalPropertiesStart()
-      }
-    }
     
     LoadAssembly(path : string) : Assembly
     {
@@ -98,14 +90,62 @@ namespace Nitra.ClientServer.Server.ProjectSystem
           Assembly.LoadFrom(path);
       assembly
     }
+
+    public IsAllAstCreated   : bool { get { _expectsToBuildAst == 0 } }
+    public ExpectsToBuildAst : int { get { _expectsToBuildAst } }
     
-    //public override Libs : Seq[string] { get { _libs } }
+    public AstDropped() : void
+    {
+      _expectsToBuildAst++;
+      _semanticAnalysisCancellationTokenSource?.Cancel();
+      _semanticAnalysisCancellationTokenSource?.Dispose();
+      _semanticAnalysisCancellationTokenSource = null;
+      IsSemanticAvailable                      = false;
+    }
+    
+    public AstCreated() : void
+    {
+      _expectsToBuildAst--;
+      assert2(_expectsToBuildAst >= 0);
+      
+      when (IsAllAstCreated && this._files.Count > 0)
+      {
+        assert2(_semanticAnalysisCancellationTokenSource == null);
+        def cancellationTokenSource              = CancellationTokenSource();
+        def cancellationToken                    = cancellationTokenSource.Token;
+        _semanticAnalysisCancellationTokenSource = cancellationTokenSource;
+        
+        def projectSupport = this.GetProjectSupport();
+        if (projectSupport != null)
+        {
+          when (this.Data == null)
+          {
+            Log("Project support: RefreshReferences");
+            def timer = Stopwatch.StartNew();
+            this.Data = projectSupport.RefreshReferences(this);
+            LogMsgHandled("RefreshReferences", timer, 1000);
+          }
+
+          Log("Prepare to Semantic Analysis");
+          
+          def files = this.Files.Select(f => FileEvalPropertiesData(f.FullName, f.Name, f.Ast, f?.Statistics?.Typing)).ToImmutableArray();
+          _parseQueue.Add(ParserMessage.SemanticAnalysisStart(Id, cancellationToken, projectSupport, files, this.Data));
+        }
+        else
+          Log("Project support not available!");
+      }
+    }
+    
+    public SemanticAnalysisFinished(compilerMessages : NSP.CompilerMessageList) : void
+    {
+      IsSemanticAvailable = true;
+      _semanticAnalysisCancellationTokenSource.Dispose();
+      _semanticAnalysisCancellationTokenSource = null;
+    }
     
     public IsOpened : bool { get; private set }
     
     public Open() : void { IsOpened = true }
-    
-    public Log(msg : string) : void { Parent.Logger?.WriteLine(msg) }
     
     public Item[fileId : int] : File { get { GetFile(fileId) } }
     
@@ -143,12 +183,22 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         Log("Reference '" + name + "' allredy added: " + _libs[index]);
       else
       {
+        def separatorPos = name.IndexOf(':');
+        assert2(separatorPos > 0);
+        def value = name.Substring(separatorPos + 1, name.Length - separatorPos - 1);
         _libMap[name] = _libs.Count;
         def r : NSP.LibReference =
-          if (name.Contains(", Version="))
-            NSP.FullNameLibReference(name)
+          if (name.StartsWith("FullName:", StringComparison.InvariantCulture))
+            NSP.FullNameLibReference(value)
+          else if (name.StartsWith("File:", StringComparison.InvariantCulture))
+            NSP.FileLibReference(value);
+          else if (name.StartsWith("Project:", StringComparison.InvariantCulture))
+            NSP.ProjectReference(value);
           else
-            NSP.FileLibReference(name);
+          {
+            assert(false, "Unsupported LibReference kind: " + name.Substring(0, separatorPos));
+          };
+            
         _libs.Add(r);
         Log("  Lib: " + r);
       }
@@ -159,6 +209,11 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       IgnoreParams();
       throw NotImplementedException()
     }
+    
+    // implementation
+    
+    Log(msg : string) : void { ServerUtils.Log(msg) }
+    LogMsgHandled(msg : string, timer : Stopwatch, millisecondToTimeout : int) : void { ServerUtils.LogMsgHandled(msg, timer, millisecondToTimeout); }
     
     // overrides
     
@@ -176,7 +231,19 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         v.Dispose();
       _files.Clear();
       
+      def cts = _semanticAnalysisCancellationTokenSource;
+      when (cts != null)
+      {
+        _semanticAnalysisCancellationTokenSource = null;
+        unless (cts.IsCancellationRequested)
+          cts.Cancel();
+        cts.Dispose();
+      }
+      
       IsDisposed = true;
     }
+
+    public override UpdateProperties(cancellationToken : CancellationToken) : void { IgnoreParams(); throw System.NotImplementedException() }
+    public override EvalProperties(context : DependentPropertyEvalContext, passName : string, stage : int) : void { IgnoreParams(); throw System.NotImplementedException() }
   }
 }
