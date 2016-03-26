@@ -174,8 +174,11 @@ namespace Nitra.Visualizer
       _currentProject  = null;
       _currentTest     = null;
 
-      foreach (var testSuite in _workspace.TestSuites)
-        testSuite.Dispose();
+      if (_workspace != null)
+      {
+        foreach (var testSuite in _workspace.TestSuites)
+          testSuite.Dispose();
+      }
     }
 
     void SetPlacement(string placementXml)
