@@ -1074,11 +1074,16 @@ namespace Nitra.Visualizer
       _text.IsReadOnly = !isTestAvalable;
       _text.Background = isTestAvalable ? SystemColors.WindowBrush : SystemColors.ControlBrush;
 
+      var client = newTestSuite.Client;
       UpdateVm(_currentSuite,    newTestSuite);
       var timer = Stopwatch.StartNew();
-      UpdateVm(_currentSolution, newSolution, newTestSuite.Client);
-      UpdateVm(_currentProject,  newProject,  newTestSuite.Client);
-      UpdateVm(_currentTest,     newTest,     newTestSuite.Client);
+      DeactivateVm(_currentTest,     newTest,     client);
+      DeactivateVm(_currentProject,  newProject,  client);
+      DeactivateVm(_currentSolution, newSolution, client);
+
+      ActivateVm  (_currentSolution, newSolution, client);
+      ActivateVm  (_currentProject,  newProject,  client);
+      ActivateVm  (_currentTest,     newTest,     client);
       this.Title = timer.Elapsed.ToString();
 
       _currentSuite    = newTestSuite;
@@ -1108,13 +1113,19 @@ namespace Nitra.Visualizer
       }
     }
 
-    void UpdateVm(IClientHost oldVm, IClientHost newVm, NitraClient client)
+    void DeactivateVm(IClientHost oldVm, IClientHost newVm, NitraClient client)
     {
       if (oldVm != newVm)
       {
         if (oldVm != null)
           oldVm.Deactivate();
+      }
+    }
 
+    void ActivateVm(IClientHost oldVm, IClientHost newVm, NitraClient client)
+    {
+      if (oldVm != newVm)
+      {
         if (newVm != null)
           newVm.Activate(client);
       }

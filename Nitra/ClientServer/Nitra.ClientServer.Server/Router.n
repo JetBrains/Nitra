@@ -20,23 +20,29 @@ namespace Nitra.ClientServer.Server
 {
   class Router
   {
-            _mainQueue    : BlockingCollection[RouterMessage] = BlockingCollection();
-            _parseQueue   : BlockingCollection[ParserMessage] = BlockingCollection();
-            _mainThread   : Thread;
-            _parseWorkers : list[ParseWorker];
-            _cts          : CancellationTokenSource = CancellationTokenSource();
-    mutable _stopped      : bool;
-    mutable _solution     : Solution;
-    _sendResponse         : ServerMessage -> void;
+            _mainQueue      : BlockingCollection[RouterMessage] = BlockingCollection();
+            _parseQueue     : BlockingCollection[ParserMessage] = BlockingCollection();
+            _mainThread     : Thread;
+            _parseWorkers   : list[ParseWorker];
+            _cts            : CancellationTokenSource = CancellationTokenSource();
+            _responceWriter : IO.BinaryWriter;
+    mutable _stopped        : bool;
+    mutable _solution       : Solution;
 
-    public this(sendResponse : ServerMessage -> void)
+    public this(responceWriter : IO.BinaryWriter)
     {
-      _sendResponse = sendResponse;
-      _mainThread = Thread(RouterThreadMain);
+      _responceWriter = responceWriter;
+      _mainThread     = Thread(RouterThreadMain);
       _mainThread.Start();
-      def cores = ServerUtils.GetCoreCount(); // Environment.ProcessorCount
+      def cores       = ServerUtils.GetCoreCount(); // Environment.ProcessorCount
       Log("Cores: " + cores);
-      _parseWorkers = $[1..cores].Map(_ => ParseWorker(_parseQueue, _mainQueue));
+      _parseWorkers = $[1..cores].Map(_ => ParseWorker(_parseQueue, _mainQueue, responceWriter));
+    }
+    
+    SendResponse(msg : ServerMessage) : void
+    {
+      lock (_responceWriter)
+        msg.Serialize(_responceWriter);
     }
 
     RouterThreadMain() : void
@@ -74,19 +80,19 @@ namespace Nitra.ClientServer.Server
             | SolutionLoaded                                  => _solution.Open();
             | SolutionUnloaded                                => _solution.Dispose(); _solution = null;
             | ProjectStartLoading(id, fullPath, lans)         => _ = Project(_solution, fullPath, id, lans, _parseQueue);
-            | ProjectLoaded      (id)                         => _solution[id].Open()
-            | ProjectUnloaded    (id)                         => _solution.RemoveProject(id)
-            | ProjectRaname      (oldId, newId, newPath)      => Log("Not supported yet.")
-            | ReferenceLoaded    (projectId, fullPath)        => _solution[projectId].AddLib(fullPath)
-            | ReferenceUnloaded  (projectId, fullPath)        => _solution[projectId].RemoveLib(fullPath)
-            | FileLoaded         (projectId, fullPath, id)    => _parseQueue.Add(File(id, fullPath, _solution[projectId]).GetReParseMessage())
-            | FileInMemoryLoaded (projectId, id, name, text)  => _parseQueue.Add(File(id, name, _solution[projectId], text).GetReParseMessage())
-            | FileActivated      (id, pipeName)               => _solution.GetFile(id).Activate(pipeName)
-            | FileDeactivated    (id)                         => _solution.GetFile(id).Deactivate()
-            | FileUnloaded       (id)                         => _solution.GetFile(id).Parent.RemoveFile(id)
-            | FileRanamed        (oldId, newId, newPath)      => Log("Not supported yet.")
-            | FileChanged        (id, change)                 => _solution.GetFile(id).Change(change)
-            | FileChangedBatch   (id, changes)                => _solution.GetFile(id).Change(changes)
+            | ProjectLoaded      (id)                         => _solution[id].Open();
+            | ProjectUnloaded    (id)                         => _solution.RemoveProject(id);
+            | ProjectRaname      (oldId, newId, newPath)      => Log("Not supported yet.");
+            | ReferenceLoaded    (projectId, fullPath)        => _solution[projectId].AddLib(fullPath);
+            | ReferenceUnloaded  (projectId, fullPath)        => _solution[projectId].RemoveLib(fullPath);
+            | FileLoaded         (projectId, fullPath, id)    => _parseQueue.Add(File(id, fullPath, _solution[projectId]).GetReParseMessage());
+            | FileInMemoryLoaded (projectId, id, name, text)  => _parseQueue.Add(File(id, name, _solution[projectId], text).GetReParseMessage());
+            | FileActivated      (id)                         => _solution.GetFile(id).Activate(_parseQueue);
+            | FileDeactivated    (id)                         => _solution.GetFile(id).Deactivate();
+            | FileUnloaded       (id)                         => _solution.GetFile(id).Parent.RemoveFile(id);
+            | FileRanamed        (oldId, newId, newPath)      => Log("Not supported yet.");
+            | FileChanged        (id, change)                 => _solution.GetFile(id).Change(change);
+            | FileChangedBatch   (id, changes)                => _solution.GetFile(id).Change(changes);
             | Shutdown                                        =>
               Log("Shutdown");
               _solution?.Dispose();
@@ -105,7 +111,10 @@ namespace Nitra.ClientServer.Server
               assert2(parseResult != null);
 
               def file = _solution.GetFile(fileId);
-              _parseQueue.Add(file.CreateOutliningMessage(parseResult));
+              
+              when (file.IsActive)
+                _parseQueue.Add(file.CreateOutliningMessage(parseResult));
+              
               _parseQueue.Add(file.CreateAstMessage(parseResult));
               
             | AstCreated(fileId, cancellationToken, ast, parseTree) =>

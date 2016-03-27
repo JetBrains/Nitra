@@ -6,6 +6,7 @@ using Nemerle.Utility;
 
 using Nitra.Declarations;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
@@ -28,6 +29,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     public  CancellationTokenSource : CancellationTokenSource { get; private set; }
     public  DynamicExtensions       : Seq[GrammarDescriptor]  { get; }
     public  IsDisposed              : bool                    { get; private set; }
+    public  IsActive                : bool                    { get; private set; }
     mutable _fileInfo               : FileInfo;
     mutable _text                   : StringBuilder;
     mutable _snapshot               : SourceSnapshot;
@@ -35,7 +37,6 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     mutable _parseResult            : IParseResult;
     mutable _ast                    : IAst;
     mutable _parseTree              : ParseTree;
-    volatile mutable _activeBufferWriter : BinaryWriter;
     
     public this(id : int, fullPath : string, parent : Project)
     {
@@ -106,9 +107,6 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       when (IsDisposed)
         return;
 
-      _activeBufferWriter?.Dispose();
-      _activeBufferWriter = null;
-      
       def cts = CancellationTokenSource;
       when (cts != null)
       {
@@ -209,28 +207,23 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       assert2(parseResult != null);
       // VladD2: зачем создавать замыкания на объект который должен жить только в синхронизированном контексте?
       // лучше передавать саму очередь.
-      ParserMessage.GetOutlining(Id, parseResult, Send)
+      ParserMessage.GetOutlining(Id, parseResult)
     }
     
-    public Activate(pipeName: string) : void
+    public Activate(parseQueue : BlockingCollection[ParserMessage]) : void
     {
-      Deactivate();
-      def pipeClient = NamedPipeClientStream(".", pipeName, PipeDirection.Out);
-      pipeClient.Connect();
-      _activeBufferWriter = BinaryWriter(pipeClient);
+      Log("Activate "+ Id);
+      IsActive = true;
+      def parseResult = _parseResult;
+      
+      when (parseResult != null)
+        parseQueue.Add(this.CreateOutliningMessage(parseResult));
     }
     
     public Deactivate() : void
     {
-      _activeBufferWriter?.Dispose();
-      _activeBufferWriter = null
-    }
-  
-    public Send(message : ServerMessage) : void
-    {
-      // buffer may be deactivated by the time we are sending the response
-      unless (_activeBufferWriter == null)
-        message.Serialize(_activeBufferWriter)
+      Log("Deactivate "+ Id);
+      IsActive = false;
     }
   
     public override ToString() : string { $"$Name($(Parent.Name) project)" }
