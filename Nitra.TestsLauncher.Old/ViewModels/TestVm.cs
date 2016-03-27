@@ -4,6 +4,7 @@ using Nitra.Visualizer.Annotations;
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -157,16 +158,18 @@ namespace Nitra.ViewModels
         file.DeepResetProperties();
 
       var projectSupport = _file.Ast as IProjectSupport;
-
+      var compilerMessages = new CompilerMessageList();
+      var cancellationToken = new CancellationToken();
+      var filesData = files.Select(f => new FileEvalPropertiesData(f.FullName, f.Name, f.Ast, f?.Statistics?.Typing)).ToImmutableArray();
       if (projectSupport != null)
-        projectSupport.RefreshProject(project);
+        projectSupport.RefreshProject(cancellationToken, compilerMessages, filesData, projectSupport.RefreshReferences(project));
       else if (_testFolder != null)
         throw new InvalidOperationException("The '" + _file.Ast.GetType().Name +
                                             "' type must implement IProjectSupport, to be used in a multi-file test.");
       else
       {
         var context  = new DependentPropertyEvalContext();
-        var evalHost = new ProjectEvalPropertiesHost(files);
+        var evalHost = new ProjectEvalPropertiesHost(filesData);
         evalHost.EvalProperties(context);
       }
 
