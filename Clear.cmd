@@ -45,6 +45,10 @@ set RemoveCmd=rmdir /S /Q
 %RemoveCmd% Ide\Nitra.MSBuild.Tasks\obj
 %RemoveCmd% packages\
 %RemoveCmd% VisualStudioExtensions\NitraVsPackage\packages\
+%RemoveCmd% Nitra\ClientServer\Nitra.ClientServer.Client\obj
+%RemoveCmd% Nitra\ClientServer\Nitra.ClientServer.Macros\obj
+%RemoveCmd% Nitra\ClientServer\Nitra.ClientServer.Messages\obj
+%RemoveCmd% Nitra\ClientServer\Nitra.ClientServer.Server\obj
 
 MKDIR bin\Debug\NuGetSource
 MKDIR bin\Release\NuGetSource
