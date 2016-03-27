@@ -1,0 +1,408 @@
+﻿using DotNet;
+
+using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.Ast;
+using Nitra.Declarations;
+using Nitra.ProjectSystem;
+using Nitra.Internal;
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Nitra
+{
+  module AstUtils
+  {
+    public static GetAstId : int = StringIndex.GetId("GetAst");
+
+    public Wait[V, R](value : V, result : R) : R
+    {
+      _ = value;
+      result
+    }
+
+    public UpdateLiterals(inMap : Map[string, string], literals : StringLiteral.IAstList, name : string) : Map[string, string]
+    {
+      when (string.IsNullOrEmpty(name))
+        return inMap;
+
+      def xs = literals.Select(x => x.Value.ValueOrDefault).Where(x => !string.IsNullOrEmpty(x)).Select(x => (x, name));
+      inMap.ReplaceRange(xs)
+    }
+
+    public MakePlural(parsedValue : ParsedValue[string * bool]) : ParsedValue[string * bool]
+    {
+      if (parsedValue.HasValue)
+        ParsedValue(parsedValue.Span, (JetBrains.Util.NounUtil.GetPlural(parsedValue.Value[0]), parsedValue.Value[1]))
+      else
+        parsedValue
+    }
+
+    public NMakeLiteralName(parsedValue : ParsedValue[string], literals : Map[string, string]) : ParsedValue[string * bool]
+    {
+      unless (parsedValue.HasValue)
+        return ParsedValue(parsedValue.Span.StartPos);
+        
+      def value = parsedValue.ValueOrDefault;
+      
+      if (literals.Find(value) is Some(name))
+        ParsedValue(parsedValue.Span, (name, true))
+      else if (Utils.IsIdentifier(value))
+        ParsedValue(parsedValue.Span, (Utils.ToPascalCase(value, "Kw"), false))
+      else
+        ParsedValue(parsedValue.Span, ("Literal", false))
+    }
+
+    public MakeCallFieldName(parsedValue : ParsedValue[int]) : ParsedValue[string * bool]
+    {
+      if (parsedValue.HasValue)
+        ParsedValue(parsedValue.Span, (StringIndex.GetText(parsedValue.ValueOrDefault), false))
+      else
+        ParsedValue(parsedValue.Span.StartPos)
+    }
+
+    public TryGetLiterals(reference : Ref[DeclarationSymbol], literals : Map[string, string]) : Map[string, string]
+    {
+      when (reference.IsSymbolEvaluated)
+      when (reference.Symbol is SyntaxModuleSymbol as m)
+        return literals.ReplaceRange(m.Literals);
+        
+      literals
+    }
+    
+    public static Init[T](this context : DependentPropertyEvalContext, symbol : T) : T
+      where T: DeclarationSymbol
+    {
+      symbol.EvalProperties(context);
+      symbol
+    }
+
+    public CanBeTupleElem(x : RuleTypeSymbol) : bool
+    {
+      !(x is RuleVoidTypeSymbol)
+    }
+
+    public InitTuple(context : DependentPropertyEvalContext, arg1 : RuleTypeSymbol, restArgs : array[RuleTypeSymbol]) : RuleTypeSymbol
+    {
+      when (restArgs.Length == 0)
+      {
+        if (CanBeTupleElem(arg1))
+          return arg1;
+        else
+          return WellKnownSymbols.VoidRuleType;
+      }
+        
+      def args = List();
+      
+      when (CanBeTupleElem(arg1))
+        args.Add(arg1);
+        
+      foreach (arg when CanBeTupleElem(arg) in restArgs)
+        args.Add(arg);
+
+      match (args.Count)
+      {
+        | 0 => WellKnownSymbols.VoidRuleType
+        | 1 => args[0]
+        | _ => CreateTupleRuleType(args, context)
+      }
+    }
+
+    public InitTuple(context : DependentPropertyEvalContext, arg1 : RuleTypeSymbol, arg2 : RuleTypeSymbol) : RuleTypeSymbol
+    {
+      match (CanBeTupleElem(arg1), CanBeTupleElem(arg2))
+      {
+        | (false,  true) => arg2
+        | (true,  false) => arg1
+        | (false, false) => WellKnownSymbols.VoidRuleType
+        | (true,   true) => CreateTupleRuleType(array[arg1, arg2], context)
+      }
+    }
+
+    public CreateTupleRuleType(args : IList[RuleTypeSymbol], context : DependentPropertyEvalContext) : RuleTypeSymbol
+    {
+      def symbol = RuleTupleTypeSymbol();
+      symbol.ElemTypes = args;
+      symbol.EvalProperties(context);
+      symbol
+    }
+
+    public InitList(context : DependentPropertyEvalContext, elemType : RuleTypeSymbol) : RuleTypeSymbol
+    {
+      unless (CanBeTupleElem(elemType))
+        return WellKnownSymbols.VoidRuleType;
+
+      def symbol = RuleListTypeSymbol();
+      symbol.ElemType = elemType;
+      context.Init(symbol)
+    }
+
+    public InitOption(context : DependentPropertyEvalContext, valueType : RuleTypeSymbol) : RuleTypeSymbol
+    {
+      unless (CanBeTupleElem(valueType))
+        return WellKnownSymbols.VoidRuleType;
+
+      def symbol = RuleOptionTypeSymbol();
+      symbol.ValueType = valueType;
+      context.Init(symbol)
+    }
+
+    public CreateRuleTypeVar(context : DependentPropertyEvalContext) : RuleTypeVarSymbol
+    {
+      def symbol = RuleTypeVarSymbol();
+      symbol.EvalProperties(context);
+      symbol
+    }
+
+    public CreateAstTypeVar(context : DependentPropertyEvalContext) : AstTypeVarSymbol
+    {
+      def symbol = AstTypeVarSymbol();
+      symbol.EvalProperties(context);
+      symbol
+    }
+
+    public CreateListAstType(loc : ILocated, item : Ref[DeclarationSymbol], context : DependentPropertyEvalContext) : Ref[DeclarationSymbol]
+    {
+      // TODO: handle unresolved Ref
+      item.Resolve(fun (_)
+      {
+        | symbol is AstSymbol => VSome(CreateListAstType(loc, symbol, context))
+        | _ => VNone()
+      })
+    }
+
+    public CreateListAstType(loc : ILocated, elemType : AstTypeSymbol, context : DependentPropertyEvalContext) : ListAstTypeSymbol
+    {
+      def name       = Name(loc.File, loc.Span, "#List");
+      def decl       = ListAstType(loc.File, loc.Span, name);
+      def listSymbol = ListAstTypeSymbol();
+      listSymbol.AddDeclaration(decl);
+      name.Symbol    = listSymbol;
+      listSymbol.ElemType = elemType;
+      listSymbol.EvalProperties(context);
+      listSymbol
+    }
+
+    public CreateOptionAstType(loc : ILocated, item : Ref[DeclarationSymbol], context : DependentPropertyEvalContext) : Ref[DeclarationSymbol]
+    {
+      // TODO: handle unresolved Ref
+      item.Resolve(fun (_)
+      {
+        | symbol is AstSymbol => VSome(CreateOptionAstType(loc, symbol, context))
+        | _ => VNone()
+      })
+    }
+
+    public CreateOptionAstType(loc : ILocated, valueType : AstTypeSymbol, context : DependentPropertyEvalContext) : OptionAstTypeSymbol
+    {
+      def name         = Name(loc.File, loc.Span, "#Option");
+      def decl         = OptionAstType(loc.File, loc.Span, name);
+      def optionSymbol = OptionAstTypeSymbol();
+      optionSymbol.AddDeclaration(decl);
+      name.Symbol      = optionSymbol;
+      optionSymbol.ValueType = valueType;
+      optionSymbol.EvalProperties(context);
+      optionSymbol
+    }
+
+    public CreateFunctionType(loc : ILocated, thisType : TypeSymbol, parameters : IList[TypeSymbol], returnType : TypeSymbol, context : DependentPropertyEvalContext) : FunctionTypeSymbol
+    {
+      def parametersWithThis = List();
+      parametersWithThis.Add(thisType);
+      parametersWithThis.AddRange(parameters);
+      CreateFunctionType(loc, parametersWithThis, returnType, context)
+    }
+
+    public CreateFunctionType(loc : ILocated, parameters : IList[TypeSymbol], returnType : TypeSymbol, context : DependentPropertyEvalContext) : FunctionTypeSymbol
+    {
+      def name = Name(loc.File, loc.Span, "#Func");
+      def decl = FunctionType(loc.File, loc.Span, name);
+      def funcSymbol = FunctionTypeSymbol();
+      funcSymbol.AddDeclaration(decl);
+      name.Symbol = funcSymbol;
+      funcSymbol.Parameters = parameters;
+      funcSymbol.ReturnType = returnType;
+      funcSymbol.EvalProperties(context);
+      funcSymbol
+    }
+
+    public BindAstExtension(name : Reference, scope : Scope, defaultReturnType : AstTypeSymbol) : Ref[AstTypeSymbol]
+    {
+      mutable candidates = LightList();
+      scope.BindMany(name, ref candidates);
+      match (candidates.Count)
+      {
+        | 0 => Ref.Some(name.File, name.Span, defaultReturnType)
+        | 1 => Ref.Some(name.File, name.Span, candidates.FirstItem)
+        | _ => Ref.Ambiguous(name.File, name.Span, candidates.ToNList(), ResolutionSource.Bind(scope))
+      }
+    }
+
+    public CreateRuleField(parseTree : NitraSyntaxParseTree.RuleExpression) : RuleField
+    {
+      def name = Name(parseTree.File, parseTree.Span.FromStart(), "<none>");
+      def expr = parseTree.GetAst();
+      RuleField(parseTree.File, parseTree.Span, name, expr)
+    }
+
+    public CreateRuleFieldList(parseTree : NitraSyntaxParseTree.RuleExpression) : RuleField.IAstList
+    {
+      RuleField.AstList(parseTree.File, parseTree.Span, AstUtils.CreateRuleField(parseTree));
+    }
+
+    public CreateName(file : File, desiredName : ParsedValue[string * bool]) : Name
+    {
+      Name(file, desiredName.Span, desiredName.ValueOrDefault[0] ?? "")
+    }
+
+    public IsLooksLikeVariableName(text : string) : bool
+    {
+      text.Length > 0 && (text[0] == '_' || char.IsLower(text[0]))
+    }
+
+    public CreateThisDeclaration(parseTree : ParseTree) : ThisDeclaration
+    {
+      def file = parseTree.File;
+      def span = NSpan(parseTree.Span.StartPos);
+      ThisDeclaration(file, span, Name(file, span, "this"))
+    }
+
+    public CreateMapSyntaxName(parseTree : ParseTree) : Name
+    {
+      Name(parseTree.File, parseTree.Span.FromStart(), GetAstId)
+    }
+
+    public CreateMapSyntaxRef(file : File, span : NSpan, scope : Scope, argumentTypes : array[TypeSymbol]) : Ref[MapSyntaxSymbol]
+    {
+      def r = scope.Bind(Reference(file, span, GetAstId));
+      r.ResolveMany(ResolveGetAstOverloads(argumentTypes))
+    }
+
+    public ResolveGetAstOverloads(argumentTypes : array[TypeSymbol]) : ResolveManyAlgorithm[DeclarationSymbol, MapSyntaxSymbol]
+    {
+      fun (candidates : LightList[DeclarationSymbol]) : LightList[MapSyntaxSymbol]
+      {
+        mutable filteredByParametersCount : LightList[MapSyntaxSymbol];
+
+        def e = candidates.GetEnumerator();
+        while (e.MoveNext())
+        {
+          when (e.Current is MapSyntaxSymbol as symbol)
+          when (symbol.Parameters.Count == argumentTypes.Length)
+            filteredByParametersCount.Add(symbol);
+        }
+
+        mutable filteredByParameterTypes : LightList[MapSyntaxSymbol];
+
+        def e = filteredByParametersCount.GetEnumerator();
+        while (e.MoveNext())
+        {
+          def parms = e.Current.Parameters;
+          for (mutable i = 0; i < argumentTypes.Length; ++i)
+          {
+            def p = parms[i];
+            def t = argumentTypes[i];
+            unless (p.IsTypeEvaluated)
+              break;
+            unless (AstTypeUnifier.Instance.TryRequire(t, p.Type))
+              break;
+            filteredByParameterTypes.Add(e.Current);
+          }
+        }
+
+        filteredByParameterTypes
+      }
+    }
+
+    public TypeParseTreePatternTuple(loc : IAst, expectedType : TypeSymbol, members : Nitra.Ast.ParseTreePattern.IAstList, context : DependentPropertyEvalContext) : TypeSymbol
+    {
+      if (expectedType is SyntaxRuleSymbol(IsFieldsEvaluated = true, Fields = fields) as returnType)
+      {
+        def nonVoidTypes = List();
+        foreach (field when field.IsTypeEvaluated in fields)
+        {
+          when (field.Type is RuleTypeSymbol as t)
+          unless (t is RuleVoidTypeSymbol)
+            nonVoidTypes.Add(t);
+        }
+        TypeParseTreePatternCtor(loc, members, nonVoidTypes, returnType)
+      }
+      else
+      {
+        def args = array(members.Count);
+        foreach (m in members with index)
+        {
+          def typeVar = CreateRuleTypeVar(context);
+          args[index] = typeVar;
+          m.ExpectedType = typeVar;
+        }
+        CreateTupleRuleType(args, context)
+      }
+    }
+
+    public TypeParseTreePatternCtor(loc : IAst, members : Nitra.Ast.ParseTreePattern.IAstList, expectedMemberTypes : IList[TypeSymbol], returnType : TypeSymbol) : TypeSymbol
+    {
+      if (members.Count == expectedMemberTypes.Count)
+      {
+        foreach (type in expectedMemberTypes with index)
+          members[index].ExpectedType = type;
+      }
+      else
+        loc.Error($"Expected pattern of $(expectedMemberTypes.Count), got pattern of $(members.Count).");
+
+      returnType
+    }
+
+    public IsSubtypeOf(this symbol1 : TypeSymbol, symbol2 : TypeSymbol) : bool
+    {
+      AstTypeUnifier.Instance.Require(symbol1, symbol2)
+    }
+
+    public TypeOptionExpression(loc : ILocated, expectedType : TypeSymbol, context : DependentPropertyEvalContext) : TypeSymbol
+    {
+      def t = CreateOptionAstType(loc, CreateAstTypeVar(context), context);
+      _ = AstTypeUnifier.Instance.Unify(t, expectedType);
+      t
+    }
+
+    public UnifyAndReturn[T](t1 : TypeSymbol, t2 : TypeSymbol, r : T) : T
+    {
+      _ = AstTypeUnifier.Instance.Unify(t1, t2);
+      r
+    }
+
+    public CreateImplicitRuleTypeCast(loc : ILocated, thisType : TypeSymbol, expectedType : TypeSymbol, context : DependentPropertyEvalContext) : Ref[FunctionTypeSymbol]
+    {
+      mutable validCasts = LightList();
+
+      when (expectedType : object != WellKnownSymbols.AnyType)
+      {
+        def castTemplate = CreateFunctionType(loc, array[thisType], AstTypeUnifier.Instance.CreateTypeVar(expectedType, null), context);
+        def canBeImplicitCast(mapSyntax : MapSyntaxSymbol) : bool
+        {
+          mapSyntax.IsTypeEvaluated && AstTypeUnifier.Instance.TryUnify(mapSyntax.Type, castTemplate);
+        }
+        def scope = if (thisType.IsScopeEvaluated) thisType.Scope else EmptyScope.Instance;
+        scope.FindMany.[MapSyntaxSymbol](canBeImplicitCast, ref validCasts);
+      }
+
+      match (validCasts.Count)
+      {
+        | 0 => Ref.Some(loc.File, loc.Span, CreateFunctionType(loc, array[thisType], thisType, context)) // return identity function
+        | 1 => Ref.Some(loc.File, loc.Span, validCasts.FirstItem.Type :> FunctionTypeSymbol)             // return type cast function
+        | _ =>
+          mutable functionTypes = [];
+          def e = validCasts.GetEnumerator();
+          while(e.MoveNext())
+            functionTypes ::= e.Current.Type :> FunctionTypeSymbol;
+          Ref.Ambiguous(loc.File, loc.Span, functionTypes, ResolutionSource.Unknown())
+      }
+    }
+  } // module
+} // namespace

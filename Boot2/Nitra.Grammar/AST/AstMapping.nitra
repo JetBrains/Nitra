@@ -1,0 +1,728 @@
+﻿using DotNet;
+
+using Nitra.Declarations;
+using Nemerle.Collections;
+using SCG = System.Collections.Generic;
+
+namespace Nitra.Ast
+{
+  using R = Nitra.Ast.RuleExpressions;
+  using RX = Nitra.Ast.RegexExpressions;
+  using AM = Nitra.Ast.AstMembers;
+
+  map syntax NitraSyntax.Start -> CompilationUnit
+  {
+    NamespaceMembers -> Members;
+  }
+
+  map syntax NitraSyntax.NamespaceMember -> NamespaceMember
+  {
+    | Namespace -> ExplicitNamespace
+      {
+        NamespaceName.Name          -> Name;
+        NamespaceName.Path(ImplicitNamespaceTag{}) -> Path;
+        //ExternAliasDirectives       -> ExternAlias;
+        //UsingDirectives             -> UsingDirectives;
+        NamespaceBody.NamespaceMembers -> Members;
+      }
+
+    | Ast -> Nitra.Ast.TopAst          // Header Name AstInheritanceOpt Body
+      {
+        Name -> Name;
+        match(AstInheritanceOpt) { Some(value) -> value | None() -> [] } -> TypeBase;
+        Body.Members -> Members;
+      }
+
+    | MapSyntax -> TopMapSyntax // "map" "syntax" RuleName=QualifiedReference ParametersOpt=MapSyntaxParameters? "->" AstName=NitraType /*AstType*/ MapSyntaxBody
+      {
+        Name = AstUtils.CreateMapSyntaxName(this);
+        RuleName -> RuleName;
+        AstName  -> AstName;
+        match (ParametersOpt) { Some(p) -> p | None() -> [] } -> Parameters;
+        MapSyntaxBody -> Body;
+      }
+
+    | SyntaxModule -> SyntaxModule // SyntaxModuleAttributes Name LanguageOpt SyntaxModuleMembers 
+      {
+        Name -> Name;
+        Usings.Usings -> Usings;
+        SyntaxModuleMembers -> Members;
+      }
+
+    | Language -> Nitra.Ast.Language   // Name ParentOpt Members
+      {
+        Name -> Name;
+        Members -> Members;
+      }
+
+    //| Type -> TypeDeclaration
+
+    | UsingAlias -> UsingAliasDirective
+      {
+        Name          -> Name;
+        NamespaceOrType -> NamespaceOrTypeName;
+      }
+
+    | UsingOpen -> UsingOpenDirective
+      {
+        NamespaceOrType -> NamespaceOrTypeName;
+      }
+  }
+
+  map syntax NitraSyntax.AstInheritance -> QualifiedReference*
+  {
+    BaseAsts.Item1
+  }
+
+  map syntax NitraSyntax.Using -> SyntaxModuleUsingDirective
+  {
+    | UsingAlias -> SyntaxModuleUsingAliasDirective
+      {
+        Name -> Name;
+        NamespaceOrType -> NamespaceOrTypeName;
+      }
+
+    | UsingOpen -> SyntaxModuleUsingOpenDirective
+      {
+        NamespaceOrType -> NamespaceOrTypeName;
+      }
+  }
+
+  ast ImplicitNamespaceTag { }
+
+  map syntax NitraSyntax.Name(_tag : ImplicitNamespaceTag) -> ImplicitNamespace
+  {
+    this -> Name;
+  }
+
+  map syntax NitraSyntax.QualifiedReference -> NitraQualifiedReference
+  {
+    match (this)
+    {
+      | ((first :: other, _)) -> fold (item in other; acc = Simple { first() -> Name; }; acc = Qualified { item() -> Name; Qualifier = acc;  })
+      | (([],             _)) -> Simple { Name = Reference.AmbiguousOrMissing(File, Span); }
+    }
+  }
+
+  map syntax NitraSyntax.StyleProperty -> StyleProperty
+  {
+    | ForegroundColor { Color = ParsedValue(Color.Span, Color.Value(Nitra.Declarations.AstContext.CompilerMessages)); }
+  }
+
+  map syntax NitraSyntax.LanguageMember -> LanguageMember
+  {
+    | Style -> Style // "style" sm Name sm StyleBody
+      {
+        Name -> Name;
+        StyleBody.Properties -> Properties;
+      }
+
+    | SpanClass -> StyleReference(Name) // "span" sm "class" sm Name sm MatchTokensOpt=("regex" sm RegexExpression sm)? StyleReference
+    | SyntaxModule ->
+      match (this)
+      {
+        // "syntax" sm "module" sm Module=QualifiedReference RuleOpt=(sm "start" sm "rule" sm QualifiedReference)? ";"
+        | (_, _, m, Some((_, _, r)), _) -> StartSyntaxModuleReference
+          {
+            m -> Module;
+            r -> Rule;
+          }
+
+        // "syntax" sm "module" sm Module=QualifiedReference RuleOpt=(sm "start" sm "rule" sm QualifiedReference)? ";"
+        | (_, _, m, None, _) -> AdditionSyntaxModuleReference
+          {
+            m -> Module;
+          }
+      }
+
+    | FileExtension -> FileExtension { Extension = ParsedValue(Ext, GetText(Ext)); }
+    | Company       -> Company       { Name = ParsedValue(Name, GetText(Name)); }
+    | Description   -> Description   { Text = ParsedValue(Text, GetText(Text)); }
+    | Authors       -> Authors       { Text = ParsedValue(Text, GetText(Text)); }
+    | Copyright     -> Copyright     { Text = ParsedValue(Text, GetText(Text)); }
+    | LicenseUrl    -> LicenseUrl    { Text = ParsedValue(Text, GetText(Text)); }
+    | RequireLicenseAcceptance -> RequireLicenseAcceptance { }
+  }
+
+  map syntax NitraSyntax.LanguageMember.SpanClass.StyleReference(name : Name) -> SpanClass
+  {
+    | Reference -> StyledSpanClass { name -> Name; QualifiedReference -> StyleReference; } //= "=" sm QualifiedReference ";"
+    | StyleBody -> InlineSpanClass { name -> Name; StyleBody.Properties -> Properties; } 
+  }
+
+  map syntax NitraSyntax.SyntaxModuleMember -> Nitra.Ast.SyntaxModuleMember
+  {
+    | RegexRule      -> this.RegexRule
+    | SimpleRule     -> this.SimpleRule
+    | ExtensibleRule -> this.ExtensibleRule
+    | Marker         -> Marker { Name -> Name; [] -> Members; }
+    | RuleAlias      -> this.RuleAlias
+    | ExtendRule     -> TopExtendRule
+      {
+        Name =
+          if (NameOpt.HasValue)
+            NameOpt.Value.Item1.GetAst()
+          else
+          {
+            def name = BaseName.LastReference();
+            Name(File, name.Span, name.GetText());
+          };
+        BaseName -> BaseName;
+        RuleBody -> Members;
+      }
+    | TokenLiteral   -> TokenLiteral  //    = "literal"             sm Name  sm "="  sm (StringLiteral; ","sm)+               ";"nl
+      {
+        Name = ParsedValue(Name.Span, Name.GetText());
+        StringLiterals.Item1 -> Literals;
+      }
+
+    | KeywordRegex -> KeywordRegex {} //    = "keyword" sm "regex"  sm MatchTokens=RegexExpression sm "rule" sm QualifiedReference ";"nl
+  }
+
+  map syntax NitraLiterals.StringLiteral -> StringLiteral
+  {
+    Value = ParsedValue(this.Span, this.Value());
+  }
+
+  map syntax NitraLiterals.CharLiteral -> CharLiteral
+  {
+    Value = ParsedValue(this.Span, this.Value());
+  }
+
+  ast NestedTag {}
+
+  map syntax NitraSyntax.RuleAlias -> TopRuleAlias
+  {
+  }
+
+  map syntax NitraSyntax.RuleAlias(_ : NestedTag) -> NestedRuleAlias
+  {
+  }
+
+  map syntax NitraSyntax.RegexRule -> TopRegexRule
+  {
+    Name -> Name;
+    RegexExpression -> Expression;
+    RuleBody -> Members;
+  }
+
+  map syntax NitraSyntax.RegexRule(_ : NestedTag) -> NestedRegexRule
+  {
+    Name -> Name;
+    RegexExpression -> Expression;
+    RuleBody -> Members;
+  }
+
+  map syntax NitraSyntax.SimpleRule -> SyntaxModuleMember
+  {
+    Header(Name, Expression(RuleFieldTag{}), RuleBody)
+  }
+
+  map syntax NitraSyntax.SimpleRule.Header(name : Name, fields : RuleField*, members : RuleBodyMember*) -> SyntaxModuleMember
+  {
+    | Syntax -> TopSimpleRule { name -> Name; fields -> Fields; members -> Members; }
+    | Token  -> TopTokenRule  { name -> Name; fields -> Fields; members -> Members; }
+    | Void   -> TopVoidRule   { name -> Name; fields -> Fields; members -> Members; }
+  }
+
+  map syntax NitraSyntax.SimpleRule.Header(_ : NestedTag, name : Name, fields : RuleField*, members : RuleBodyMember*) -> RuleBodyMemberDeclaration
+  {
+    | Syntax -> NestedSimpleRule { name -> Name; fields -> Fields; members -> Members; }
+    | Token  -> NestedTokenRule  { name -> Name; fields -> Fields; members -> Members; }
+    | Void   -> NestedVoidRule   { name -> Name; fields -> Fields; members -> Members; }
+  }
+
+  map syntax NitraSyntax.SimpleRule(tag : NestedTag) -> RuleBodyMemberDeclaration
+  {
+    Header(tag, Name, Expression(RuleFieldTag{}), RuleBody)
+  }
+
+  map syntax NitraSyntax.ExtensibleRule -> TopExtensibleRule
+  {
+    Name -> Name;
+    RuleBody -> Members;
+  }
+
+  map syntax NitraSyntax.ExtensibleRule(_ : NestedTag) -> NestedExtensibleRule
+  {
+    Name -> Name;
+    RuleBody -> Members;
+  }
+
+  map syntax NitraSyntax.RuleBody -> RuleBodyMember*
+  {
+    | Empty -> []
+    | Block -> RuleBodyMembers
+  }
+
+  map syntax NitraSyntax.RuleBodyMember -> RuleBodyMember
+  {
+    | RuleAlias      -> this.RuleAlias(NestedTag {})
+    | RegexRule      -> this.RegexRule(NestedTag {})
+    | SimpleRule     -> this.SimpleRule(NestedTag {})
+    | ExtensibleRule -> this.ExtensibleRule(NestedTag {})
+    | ExtensionRule ->
+      match (this)
+      {
+        | (_, _, Some((name, _)), ruleExpression, rightAssociativeOpt, ruleBodyOpt) -> ExtensionRuleWithExplicitName
+          {
+            name -> Name;
+            ruleExpression(RuleFieldTag{}) -> Fields;
+            match (ruleBodyOpt)
+            {
+              | Some(ruleBody) -> ruleBody
+              | None()         -> []
+            } -> Members;
+          }
+
+        | (_, _, None, ruleExpression, rightAssociativeOpt, ruleBodyOpt) -> ExtensionRuleWithInferredName
+          {
+            Name = Name(File, Span.FromStart(), "");
+            ruleExpression(RuleFieldTag{}) -> Fields;
+            match (ruleBodyOpt)
+            {
+              | Some(ruleBody) -> ruleBody
+              | None()         -> []
+            } -> Members;
+            
+          }
+      }
+
+    | Precedence         -> Precedence { PrecedenceName -> Name; }  // "precedence" sm PrecedenceName Order=(sm "order" sm (Reference; sm "<" sm){2,})? ":"
+    | MapSyntax          -> InlineMapSyntax // "map" ParametersOpt=MapSyntaxParameters? sm AstName=NitraType /*AstType*/ MapSyntaxBody
+      {
+        Name = AstUtils.CreateMapSyntaxName(this);
+        AstName  -> AstName;
+        match (ParametersOpt) { Some(p) -> p | None() -> [] } -> Parameters;
+        MapSyntaxBody -> Body;
+      }
+    | RuleMethod         -> RuleMethod          { Name -> Name; }            // RuleMethodAttributes RuleMethodPrivate? Name sm "(" (RuleMethodParam; "," sm)* ")" sm ":" sm Type=NitraType /*Type*/ RuleMethodBody
+    | RuleMethodOverride -> RuleMethodOverride  { Name -> Name; } // RuleMethodAttributes "override"     sm  Name RuleMethodBody
+    | RuleMethodMissing  -> RuleMethodMissing   { Name -> Name; } // RuleMethodAttributes "missing"        sm  Name RuleMethodBody
+  }
+
+  map syntax NitraSyntax.PrecedenceName -> Name
+  {
+    | Zero = Name(File, Span, "0");
+    | Identifier -> Name
+  }
+
+  ast RuleFieldTag {}
+
+  map syntax NitraSyntax.RuleExpression(_tag : RuleFieldTag) -> RuleField*
+  {
+    | Rounds              -> RuleExpression(_tag)
+    | Sequence =
+      {
+        def buffer = SCG.List();
+        buffer.Add(AstUtils.CreateRuleField(this.LeftRule));
+        // TODO: rewrite without foreach!
+        foreach (item in RightRules)
+          buffer.Add(AstUtils.CreateRuleField(item));
+        RuleField.AstList(this.File, this.Span, buffer.ToArray())
+      };
+
+    | FieldName2           = AstUtils.CreateRuleFieldList(this);
+    | FieldName1           = AstUtils.CreateRuleFieldList(this);
+    | Not                  = AstUtils.CreateRuleFieldList(this);
+    | And                  = AstUtils.CreateRuleFieldList(this);
+    | Optional             = AstUtils.CreateRuleFieldList(this);
+    | Repeat               = AstUtils.CreateRuleFieldList(this);
+    | RepeatWithSeparator  = AstUtils.CreateRuleFieldList(this);
+    | Char                 = AstUtils.CreateRuleFieldList(this);
+    | String               = AstUtils.CreateRuleFieldList(this);
+    | Call                 = AstUtils.CreateRuleFieldList(this);
+  }
+
+  map syntax NitraSyntax.RuleExpression -> R.Expression
+  {
+    | Sequence -> R.Sequence // LeftRule=RuleExpression ^ Sequence RightRules=(sm RuleExpression ^ Sequence)+
+      {
+        LeftRule   -> Expression;
+        RightRules -> Expressions;
+      }
+
+    | FieldName2 -> R.FieldName // Name sm "=" sm RuleExpression ^ FieldName2
+      {
+        Name = ParsedValue(Name.Span, Name.GetText());
+        RuleExpression -> Expression;
+      }
+
+    | FieldName1 -> R.FieldName // RuleExpression ^ FieldName1 sm "as" sm Name
+      {
+        Name = ParsedValue(Name.Span, Name.GetText());
+        RuleExpression -> Expression;
+      }
+
+    | Not -> R.Not                // "!" RuleExpression ^ Predicate
+      {
+        RuleExpression -> Expression;
+      }
+
+    | And -> R.And                 // "&" RuleExpression ^ Predicate
+      {
+        RuleExpression -> Expression;
+      }
+
+    | Optional -> R.Optional            // RuleExpression "?"
+      {
+        RuleExpression -> Expression;
+      }
+
+    | Repeat -> R.Repeat              // RuleExpression RepeatQuantifier
+      {
+        RuleExpression -> Expression;
+      }
+
+    | RepeatWithSeparator -> R.RepeatWithSeparator // "(" RuleExpression ";"sm Separator HangingOpt=(";"sm "?")? ")" RepeatQuantifier
+      {
+        RuleExpression -> Expression;
+        Separator      -> Separator;
+      }
+
+    | Char   -> R.String { Str = ParsedValue(CharLiteral.Span, CharLiteral.Value().ToString()); }  // CharLiteral
+    | String -> R.String { Str = ParsedValue(StringLiteral.Span, StringLiteral.Value()); }  // StringLiteral
+    | Rounds -> RuleExpression             // "(" RuleExpression ")"
+    | Call   -> R.Call  // QualifiedReference BindingPower=(sm "^" sm "+"? PrecedenceReference2)?
+      {
+        QualifiedReference -> RuleReference;
+      }
+  }
+
+  map syntax NitraSyntax.RegexExpression -> RX.Expression
+  {
+    | Choice -> RX.Sequence
+      {
+        LeftRule   -> Expression;
+        RightRules -> Expressions;
+      }
+
+    | Sequence -> RX.Sequence
+      {
+        LeftRule   -> Expression;
+        RightRules -> Expressions;
+      }
+
+    | Optional -> RX.Optional            // RuleExpression "?"
+      {
+        RegexExpression -> Expression;
+      }
+
+    | Repeat -> RX.Repeat
+      {
+        RegexExpression -> Expression;
+      }
+
+    | Invert -> RX.Invert
+      {
+        RegexExpression -> Expression;
+      }
+
+    | Range -> RX.Range
+      {
+      }
+
+    | InvertedRange -> RX.InvertedRange
+      {
+      }
+
+    | Subtract -> RX.Subtract
+      {
+        Rule1 -> Expression1;
+        Rule2 -> Expression2;
+      }
+
+    | RepeatWithSeparator -> RX.RepeatWithSeparator
+      {
+        RegexExpression -> Expression;
+        Separator       -> Separator;
+      }
+
+    | Char   -> RX.Char   { CharLiteral   -> Literal; }
+    | String -> RX.String { StringLiteral -> Literal; }
+    | Rounds -> RegexExpression
+    | Call   -> RX.Call
+      {
+        QualifiedReference -> RuleReference;
+      }
+  }
+
+  map syntax NitraSyntax.AstMember -> AM.AstMember
+  {
+    | StructuralProperty       -> AM.StructuralProperty { Name -> Name; NitraType /*AstType*/ -> TypeName; }
+    | DependentProperty        -> this.DependentProperty
+    | DependentAssignStatement -> this.DependentAssignStatement
+    | DependentCallStatement   -> this.DependentCallStatement
+    | DependentAddStatement    -> this.DependentAddStatement
+    | Decompose                -> AM.Decompose {}
+    | StageScope               -> this.StageScope
+    | ChildAst                 -> AM.NestedAst
+      {
+        Name -> Name;
+        match(AstInheritanceOpt) { Some(value) -> value | None() -> [] } -> TypeBase;
+        match(Body) { Some(value) -> value.Members | None() -> [] } -> Members;
+      }
+  }
+
+  map syntax NitraSyntax.DependentProperty -> AM.AstDependentProperty
+  {
+    Name -> Name;
+    NitraType /*Type or AstType ???*/ -> Type;
+  }
+
+  map syntax NitraSyntax.DependentAssignStatement -> AM.DependentAssignStatement
+  {
+    Path -> Path;
+  }
+
+  map syntax NitraSyntax.DependentCallStatement -> AM.DependentCallStatement
+  {
+    //Path -> Path;
+    Name -> Name;
+  }
+
+  map syntax NitraSyntax.DependentAddStatement -> AM.DependentAddStatement
+  {
+    Path -> Path;
+  }
+
+  map syntax NitraSyntax.StageScope -> AM.StageScope
+  {
+    Stage = ParsedValue(Number.Span, Number.Value());
+  }
+
+  map syntax NitraSyntax.NitraType -> QualifiedReference
+  {
+    | PredefinedType -> QualifiedReference.Simple
+      {
+        Name = Reference(File, PredefinedType, GetText(PredefinedType));
+      }
+
+    | QualifiedType ->
+      match (this)
+      {
+        | ((first :: tail, _)) -> fold (item in tail; acc = first(); acc = item(acc))
+        | (([], _)) = AstUtils.CreateMissingQualifiedReference(File, Span);
+      }
+
+    | Braces -> NitraType
+    | Tuple = AstUtils.CreateTupleQualifiedReference(File, Span, NitraType2.GetAst(QualifiedReference.AstList(File, Span, NitraType1.GetAst())));
+    | Func  = AstUtils.CreateFuncQualifiedReference(File, Span, NitraType1.GetAst(), NitraType2.GetAst()); 
+    | OptionList -> ListAstReference   { NitraType -> Elem; }
+    | List       -> ListAstReference   { NitraType -> Elem; }
+    | Option     -> OptionAstReference { NitraType -> Value; }
+  }
+
+  map syntax NitraSyntax.NitraType(tupleArgs : QualifiedReference*) -> QualifiedReference*
+  {
+    | PredefinedType = tupleArgs.Append(GetAst());
+    | QualifiedType  = tupleArgs.Append(GetAst());
+    | Braces         = tupleArgs.Append(GetAst());
+    | Func           = tupleArgs.Append(GetAst());
+    | Tuple          = NitraType2.GetAst(tupleArgs.Append(NitraType1.GetAst()));
+    | OptionList     = tupleArgs.Append(GetAst());
+    | List           = tupleArgs.Append(GetAst());
+    | Option         = tupleArgs.Append(GetAst());
+  }
+
+  map syntax NitraSyntax.NitraTypeName -> QualifiedReference
+  {
+    match (this)
+    {
+      | (r, None) -> Simple { r -> Name; }
+      | (r, Some(args)) -> Generic
+        {
+          Simple { r -> Name; } -> QualifiedName;
+          args -> Arguments;
+        }
+    }
+  }
+
+  map syntax NitraSyntax.NitraTypeName(qualifier : QualifiedReference) -> QualifiedReference
+  {
+    match (this)
+    {
+      | (r, None) -> Qualified { r -> Name; qualifier -> Qualifier; }
+      | (r, Some(args)) -> Generic
+        {
+          Qualified { r -> Name; qualifier -> Qualifier; } -> QualifiedName;
+          args -> Arguments;
+        }
+    }
+  }
+
+  map syntax NitraSyntax.NitraTypeArguments -> QualifiedReference*
+  {
+    | Corners -> NitraTypes.Item1
+    | Braces  -> NitraTypes.Item1
+  }
+
+  map syntax NitraSyntax.MapSyntaxParameters -> MapSyntaxParameter*
+  {
+    RuleMethodParams.Item1
+  }
+
+  map syntax NitraSyntax.RuleMethodParam -> MapSyntaxParameter
+  {
+    Name -> Name;
+    Type -> AstName;
+  }
+
+  map syntax NitraSyntax.MapSyntaxBody -> MapSyntaxBody
+  {
+    | Empty                     { This = AstUtils.CreateThisDeclaration(this); }
+    | Inline                    { This = AstUtils.CreateThisDeclaration(this); Code = ParsedValue(Code.Span, Code.GetText()); }
+    | Expression1 -> Expression { This = AstUtils.CreateThisDeclaration(this); this.Expr -> Expression; }
+    | Expression2 -> Expression { This = AstUtils.CreateThisDeclaration(this); this.Expr -> Expression; }
+    | PerMember                 { This = AstUtils.CreateThisDeclaration(this); Members -> Members; }
+    | Extensions                { This = AstUtils.CreateThisDeclaration(this); Extensions -> Members; }
+  }
+
+  map syntax NitraSyntax.MapSyntaxBody.Extensions.MapExtension -> ExtensionMapSyntax
+  {
+    Name = AstUtils.CreateMapSyntaxName(this);
+    Reference -> RuleName;
+    Body      -> Body;
+  }
+
+  map syntax NitraSyntax.MapSyntaxExpression -> MapSyntaxExpression
+  {
+    | Braces -> this.Expr
+    | This -> Identifier
+      {
+        Reference = Reference(File, KwThis, "this");
+      }
+
+    | Identifier
+      {
+        Reference -> Reference;
+      }
+
+    | Ast
+      {
+        QualifiedReference -> Ast;
+        Members -> Members;
+      }
+
+    | List
+      {
+        ItemExprs.Item1 -> Items;
+      }
+
+    | OptionSome
+      {
+        ValueExpr -> Value;
+      }
+
+    | OptionNone {}
+    | Match
+      {
+        Expr             -> Expression;
+        MatchCases.Item1 -> Cases;
+      }
+
+    | Fold
+      {
+        MapSyntaxVariable { ItemName -> Name; } -> Item;
+        ItemExpr -> ItemExpression;
+        MapSyntaxVariable { AccumulatorName1 -> Name; } -> Accumulator;
+        InitExpr -> InitExpression;
+        AccumulatorName2 -> AccumulatorRef;
+        EachExpr -> EachExpression;
+      }
+
+    | DefineVariable
+      {
+        MapSyntaxVariable { Name -> Name; } -> Variable;
+        NitraType -> VariableType;
+        Expr      -> Expression;
+        Body      -> Body;
+      }
+
+    | TypeHint
+      {
+        Expr      -> Expression;
+        NitraType -> TypeName;
+      }
+
+    | Call
+      {
+        Expr                -> Expression;
+        ArgumentExprs.Item1 -> Arguments;
+      }
+
+    | MemberAccess
+      {
+        Expr      -> Expression;
+        Reference -> Reference;
+      }
+  }
+
+  map syntax NitraSyntax.MapSyntaxExpressionAstMember -> MapSyntaxExpressionAstMember
+  {
+    | ParseTreeFieldExpressionMapping ->
+      Expression
+      {
+        AstPropertyName -> AstProperty;
+        Expr            -> Expression;
+      }
+
+    | ParseTreeFieldCodeMapping ->
+      Inline
+      {
+        FieldName -> AstProperty;
+        Code = ParsedValue(Code.Span, Code.GetText());
+      }
+  }
+
+  map syntax NitraSyntax.Pattern -> ParseTreePattern
+  {
+    | Identifier =
+      {
+        def text = this.Reference.GetText();
+        if (text == "_")
+          ParseTreePattern.Wildcard(File, Span)
+        else if (AstUtils.IsLooksLikeVariableName(text))
+          ParseTreePatternVariable(File, Span, Name(this.Reference.File, this.Reference.Span, text));
+        else
+          ParseTreePattern.Ctor(File, Span, Reference(this.Reference.File, this.Reference.Span, text), ParseTreePattern.AstList(File, this.Reference.Span.FromEnd()));
+      };
+
+    | Ctor
+      {
+        Identifier     -> Reference;
+        Patterns.Item1 -> Arguments;
+      }
+
+    | Tuple
+      {
+        Patterns.Item1 -> Members;
+      }
+
+    | List1
+      {
+        Pattern1 -> Head;
+        Pattern2 -> Tail;
+      }
+
+    | List2
+      {
+        Patterns.Item1 -> Items;
+      }
+  }
+
+  map syntax NitraSyntax.MapSyntaxExpression.Match.MatchCase -> MapSyntaxMatchCase
+  {
+    | Inline
+      {
+        Pattern -> Pattern;
+        Code = ParsedValue(Code.Span, Code.GetText());
+      }
+
+    | Expression
+      {
+        Pattern -> Pattern;
+        Expr -> Expression;
+      }
+  }
+}

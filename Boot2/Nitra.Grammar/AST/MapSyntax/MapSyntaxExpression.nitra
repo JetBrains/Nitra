@@ -1,0 +1,239 @@
+﻿using DotNet;
+
+using Nitra.Declarations;
+using Nitra.Ast.AstMembers;
+
+namespace Nitra.Ast
+{
+  abstract ast MapSyntaxExpression : BindableAst
+  {
+  stage 1:
+    in  AstScope     : Scope;
+
+  stage 2:
+    in  ExpectedType : TypeSymbol;
+    out Type         : TypeSymbol;
+
+    unless (Type.IsSubtypeOf(ExpectedType))
+      Error($"Expression type '$(self.Type)' is not subtype of expected type '$(self.ExpectedType)'.");
+
+    | Identifier
+      {
+      stage 1:
+        out VariableRef : Ref[TypedDeclarationSymbol] = Reference.Ref.Resolve();
+
+      stage 2:
+        out ImplicitCastRef : Ref[FunctionTypeSymbol] = AstUtils.CreateImplicitRuleTypeCast(this, VariableRef.Symbol.Type, ExpectedType, context);
+
+        Reference.Scope = Scope;
+        Type            = ImplicitCastRef.Symbol.ReturnType;
+
+        Reference : Reference;
+      }
+
+    | Ast
+      {
+      stage 1:
+        out AstTypeRef : Ref[AstTypeSymbol] = Ast.Ref.Resolve();
+
+        Ast.Scope        = AstScope;
+        Members.Scope    = Scope;
+        Members.AstType  = AstTypeRef.Symbol;
+        Members.AstScope = AstScope;
+        Type             = AstTypeRef.Symbol;
+
+        Ast     : QualifiedReference;
+        Members : MapSyntaxExpressionAstMember*;
+      }
+
+    | List
+      {
+        out ItemTypeVar : AstTypeSymbol = AstUtils.CreateAstTypeVar(context);
+
+        Type               = AstUtils.CreateListAstType(this, ItemTypeVar, context);
+        Items.AstScope     = AstScope;
+        Items.Scope        = Scope;
+        Items.ExpectedType = AstUtils.UnifyAndReturn(Type, ExpectedType, ItemTypeVar);
+
+        Items : MapSyntaxExpression*;
+      }
+
+    | OptionSome
+      {
+        out ValueTypeVar : AstTypeSymbol = AstUtils.CreateAstTypeVar(context);
+
+        Type               = AstUtils.CreateOptionAstType(this, ValueTypeVar, context);
+        Value.AstScope     = AstScope;
+        Value.Scope        = Scope;
+        Value.ExpectedType = AstUtils.UnifyAndReturn(Type, ExpectedType, ValueTypeVar);
+
+        Value : MapSyntaxExpression;
+      }
+
+    | OptionNone
+      {
+        Type = AstUtils.TypeOptionExpression(this, ExpectedType, context);
+      }
+
+    | Match
+      {
+        Type                    = ExpectedType;
+        Expression.ExpectedType = WellKnownSymbols.AnyType;
+        Expression.AstScope     = AstScope;
+        Expression.Scope        = Scope;
+        Cases.AstScope          = AstScope;
+        Cases.Scope             = Scope;
+        Cases.ExpectedType      = ExpectedType;
+        Cases.PatternType       = Expression.Type;
+
+        when (ExpectedType : object == WellKnownSymbols.AnyType)
+          Error("Type inference is not supported, please specify type with ':' operator.");
+
+        unless (Expression.Type is RuleTypeSymbol)
+          Expression.Error($"Expression type '$(this.Expression.Type)' is not a parse tree type.");
+
+        Expression : MapSyntaxExpression;
+        Cases      : MapSyntaxMatchCase*;
+      }
+
+    | Fold
+      {
+        out ItemTypeVar  : RuleTypeSymbol = AstUtils.CreateRuleTypeVar(context);
+
+        Item.ContainingTable        = TableScope("variables", null);
+        Item.Symbol.Type            = ItemTypeVar;
+        ItemExpression.ExpectedType = AstUtils.InitList(context, ItemTypeVar);
+        ItemExpression.AstScope     = AstScope;
+        ItemExpression.Scope        = Scope;
+        InitExpression.ExpectedType = AstUtils.Wait(ItemExpression.Type, ExpectedType);
+        InitExpression.AstScope     = AstScope;
+        InitExpression.Scope        = Scope.HideWith(Item.ContainingTable);
+        Accumulator.ContainingTable = TableScope("variables", null);
+        Accumulator.Symbol.Type     = ExpectedType;
+        AccumulatorRef.Scope        = Accumulator.ContainingTable;
+        EachExpression.ExpectedType = ExpectedType;
+        EachExpression.AstScope     = AstScope;
+        EachExpression.Scope        = InitExpression.Scope.HideWith(Accumulator.ContainingTable);
+        Type                        = ExpectedType;
+
+        Item           : MapSyntaxVariable;
+        ItemExpression : MapSyntaxExpression;
+
+        Accumulator    : MapSyntaxVariable;
+        InitExpression : MapSyntaxExpression;
+
+        AccumulatorRef : Reference;
+        EachExpression : MapSyntaxExpression;
+      }
+
+    | TypeHint
+      {
+      stage 1:
+        out ExpectedTypeRef : Ref[TypeSymbol] = TypeName.Ref.Resolve();
+
+        Expression.AstScope     = AstScope;
+        Expression.Scope        = Scope;
+        Expression.ExpectedType = ExpectedTypeRef.Symbol;
+        TypeName.Scope          = AstScope;
+        Type                    = ExpectedTypeRef.Symbol;
+
+        Expression : MapSyntaxExpression;
+        TypeName   : QualifiedReference;
+      }
+
+    | Call
+      {
+      stage 2:
+        out MapSyntaxRef : Ref[MapSyntaxSymbol] = AstUtils.CreateMapSyntaxRef(Arguments.File, Arguments.Span.FromStart(), Expression.Type.Scope, Arguments.Type);
+
+        Type                    = MapSyntaxRef.Symbol.ReturnType;
+        Expression.ExpectedType = WellKnownSymbols.AnyType;
+        Expression.AstScope     = AstScope;
+        Expression.Scope        = Scope;
+        Arguments.ExpectedType  = WellKnownSymbols.AnyType;
+        Arguments.AstScope      = AstScope;
+        Arguments.Scope         = Scope;
+
+        // TODO: move error handling to IRef
+        when (MapSyntaxRef.IsUnresolved)
+          Error($"Syntax mapping not found for type '$(this.Expression.Type)'.");
+        when (MapSyntaxRef.IsAmbiguous)
+          Error("Syntax mapping for type '$(this.Expression.Type)' is ambiguous, try specify type of arguments explicitly.");
+
+        Expression : MapSyntaxExpression;
+        Arguments  : MapSyntaxExpression*;
+      }
+
+    | MemberAccess
+      {
+      stage 1:
+        out VariableRef : Ref[TypedDeclarationSymbol] = Reference.Ref.Resolve();
+
+      stage 2:
+        out ImplicitCastRef : Ref[FunctionTypeSymbol] = AstUtils.CreateImplicitRuleTypeCast(this, VariableRef.Symbol.Type, ExpectedType, context);
+
+        Expression.ExpectedType = WellKnownSymbols.AnyType;
+        Expression.AstScope     = AstScope;
+        Expression.Scope        = Scope;
+        Reference.Scope         = Expression.Type.Scope;
+        Type                    = ImplicitCastRef.Symbol.ReturnType;
+
+        Expression : MapSyntaxExpression;
+        Reference  : Reference;
+      }
+
+    | DefineVariable
+      {
+      stage 1:
+        out TypeRef : Ref[TypeSymbol] = VariableType.Ref.Resolve();
+
+        Variable.ContainingTable = TableScope("variables", null);
+        Variable.Symbol.Type     = TypeRef.Symbol;
+        VariableType.Scope       = Scope;
+        Expression.AstScope      = AstScope;
+        Expression.Scope         = Scope;
+        Body.AstScope            = AstScope;
+        Body.Scope               = Scope.HideWith(Variable.ContainingTable);
+        Type                     = Body.Type;
+
+        Variable     : MapSyntaxVariable;
+        VariableType : QualifiedReference;
+        Expression   : MapSyntaxExpression;
+        Body         : MapSyntaxExpression;
+      }
+  }
+
+  declaration MapSyntaxVariable : TypedDeclaration
+  {
+    symbol
+    {
+      Kind = "variable";
+    }
+  }
+
+  abstract ast MapSyntaxExpressionAstMember : BindableAst
+  {
+  stage 1:
+    in  AstScope    : Scope;
+    in  AstType     : AstTypeSymbol;
+    out PropertyRef : Ref[StructuralPropertySymbol] = AstProperty.Ref.Resolve();
+
+    AstProperty.Scope  = AstType.Scope;
+
+    AstProperty : Reference;
+
+    | Inline
+      {
+        Code : string;
+      }
+
+    | Expression
+      {
+        Expression.AstScope     = AstScope;
+        Expression.Scope        = Scope;
+        Expression.ExpectedType = PropertyRef.Symbol.Type;
+
+        Expression  : MapSyntaxExpression;
+      }
+  }
+}
