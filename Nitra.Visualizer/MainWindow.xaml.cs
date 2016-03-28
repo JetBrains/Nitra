@@ -74,6 +74,7 @@ namespace Nitra.Visualizer
     //readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
     readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
     readonly Action<ServerMessage> _responseDispatcher;
+    int _textVersion;
     //List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
     const string ErrorMarkerTag = "Error";
 
@@ -1068,14 +1069,15 @@ namespace Nitra.Visualizer
       var isTestAvalable = newTest != null;
 
       var code = isTestAvalable ? newTest.Code : "";
-      _initializing         = true;
+      _initializing = true;
       try
       {
-        _text.Text       = code;
+        _text.Text = code;
       }
       finally
       {
-        _initializing         = false;
+        _initializing = false;
+        _textVersion  = 0;
       }
       _text.IsReadOnly = !isTestAvalable;
       _text.Background = isTestAvalable ? SystemColors.WindowBrush : SystemColors.ControlBrush;
@@ -1111,6 +1113,9 @@ namespace Nitra.Visualizer
       ServerMessage.OutliningCreated outlining;
       if ((outlining = msg as ServerMessage.OutliningCreated) != null)
       {
+        if (outlining.Version != _textVersion)
+          return;
+
         _foldingStrategy.Outlining = outlining.outlining;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
       }
@@ -1121,8 +1126,10 @@ namespace Nitra.Visualizer
       if (_initializing)
         return;
 
+      _textVersion++;
+
       Debug.Assert(e.OffsetChangeMap != null);
-      _currentTest.OnTextChanged(e.InsertedText, e.InsertionLength, e.Offset, e.RemovedText, e.RemovalLength);
+      _currentTest.OnTextChanged(_textVersion, e.InsertedText, e.InsertionLength, e.Offset, e.RemovalLength);
     }
 
     void UpdateVm(SuiteVm oldVm, SuiteVm newVm)

@@ -30,6 +30,8 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     public  DynamicExtensions       : Seq[GrammarDescriptor]  { get; }
     public  IsDisposed              : bool                    { get; private set; }
     public  IsActive                : bool                    { get; private set; }
+    public  Version                 : int                     { get; private set; }
+            _parseQueue             : BlockingCollection[ParserMessage];
     mutable _fileInfo               : FileInfo;
     mutable _text                   : StringBuilder;
     mutable _snapshot               : SourceSnapshot;
@@ -45,6 +47,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       _fileInfo         = FileInfo(fullPath);
       Parent            = parent;
       _name             = IO.Path.GetFileNameWithoutExtension(FullName);
+      _parseQueue       = parent.ParseQueue;
       // TODO: Add statistics support.
       
       parent.AddFile(this);
@@ -57,7 +60,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       base();
       Id        = id;
       Parent    = parent;
-      _snapshot = SourceSnapshot(text, this);
+      _snapshot = SourceSnapshot(text, this, 0);
       _text     = StringBuilder(text);
       _name     = name;
       
@@ -78,7 +81,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         assert2(_fileInfo != null);
         assert(_fileInfo != null);
         def text  = File.ReadAllText(_fileInfo.FullName, Encoding.UTF8); // TODO: add detect BOM and load UTF-8 if no BOM avalable
-        _snapshot = SourceSnapshot(text, this);
+        _snapshot = SourceSnapshot(text, this, 0);
         _text     = StringBuilder(text);
       }
       
@@ -136,26 +139,30 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       Insert(span.StartPos, text)
     }
     
-    ApplyChange(change: FileChange) : void
+    ApplyChange(change : FileChange) : void
     {
-      | FileChange.Insert(pos, text) => Insert(pos, text)
-      | FileChange.Delete(span) => Delete(span)
+      | FileChange.Insert(pos, text)   => Insert(pos, text)
+      | FileChange.Delete(span)        => Delete(span)
       | FileChange.Replace(span, text) => Replace(span, text)
     }
     
-    public Change(change: FileChange) : void
+    public Change(version : int, change : FileChange) : void
     {
       _ = GetSource();
+      Version = version;
       ApplyChange(change);
-      _snapshot = SourceSnapshot(_text.ToString())
+      _snapshot = SourceSnapshot(_text.ToString(), this, version);
+      _parseQueue.Add(GetReParseMessage());
     }
     
-    public Change(changes: ImmutableArray[FileChange]) : void
+    public Change(version : int, changes : ImmutableArray[FileChange]) : void
     {
       _ = GetSource();
+      Version = version;
       foreach(change in changes)
         ApplyChange(change);
-      _snapshot = SourceSnapshot(_text.ToString())
+      _snapshot = SourceSnapshot(_text.ToString(), this, version);
+      _parseQueue.Add(GetReParseMessage());
     }
     
     // overrides
@@ -210,14 +217,14 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       ParserMessage.GetOutlining(Id, parseResult)
     }
     
-    public Activate(parseQueue : BlockingCollection[ParserMessage]) : void
+    public Activate() : void
     {
       Log("Activate "+ Id);
       IsActive = true;
       def parseResult = _parseResult;
       
       when (parseResult != null)
-        parseQueue.Add(this.CreateOutliningMessage(parseResult));
+        _parseQueue.Add(this.CreateOutliningMessage(parseResult));
     }
     
     public Deactivate() : void
