@@ -5,37 +5,30 @@ using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Document;
 using System.Diagnostics;
 using Nitra.ClientServer.Messages;
+using System.Collections.Immutable;
 
 namespace Nitra.Visualizer
 {
   public sealed class NitraFoldingStrategy : AbstractFoldingStrategy
   {
     public TimeSpan TimeSpan { get; private set; }
+    public ImmutableArray<OutliningInfo> Outlining { get; set; }
 
     public override IEnumerable<NewFolding> CreateNewFoldings(TextDocument document, out int firstErrorOffset)
     {
-      //var parseResult = ParseResult;
-      //if (parseResult == null)
-      //{
-      //  firstErrorOffset = 0;
-      //  return Enumerable.Empty<NewFolding>();
-      //}
-
       try
-      {//parseResult.SourceSnapshot
+      {
         var timer = Stopwatch.StartNew();
-        var outlining = new List<OutliningInfo>();
-        //parseResult.GetOutlining(outlining);
         TimeSpan = timer.Elapsed;
 
         var result = new List<NewFolding>();
-        foreach (var o in outlining)
+        foreach (var o in Outlining)
         {
           var newFolding = new NewFolding
           {
             DefaultClosed = o.IsDefaultCollapsed,
-            StartOffset = o.Span.StartPos,
-            EndOffset = o.Span.EndPos
+            StartOffset   = o.Span.StartPos,
+            EndOffset     = o.Span.EndPos
           };
           result.Add(newFolding);
         }
@@ -51,7 +44,5 @@ namespace Nitra.Visualizer
         return Enumerable.Empty<NewFolding>();
       }
     }
-
-    //public IParseResult ParseResult { get; set; }
   }
 }

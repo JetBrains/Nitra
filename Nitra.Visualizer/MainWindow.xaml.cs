@@ -41,14 +41,14 @@ using ToolTip = System.Windows.Controls.ToolTip;
 
 namespace Nitra.Visualizer
 {
-    using System.Windows.Documents;
-    using Interop;
-    using System.Windows.Interop;
-    using ClientServer.Messages;
-    /// <summary>
-    /// Interaction logic for MainWindow.xaml
-    /// </summary>
-    public partial class MainWindow
+  using System.Windows.Documents;
+  using Interop;
+  using System.Windows.Interop;
+  using ClientServer.Messages;
+  /// <summary>
+  /// Interaction logic for MainWindow.xaml
+  /// </summary>
+  public partial class MainWindow
   {
     bool _initializing = true;
     bool _doTreeOperation;
@@ -68,11 +68,12 @@ namespace Nitra.Visualizer
     WorkspaceVm _workspace;
     SuiteVm _currentSuite;
     ProjectVm _currentProject;
-      private SolutionVm _currentSolution;
+    private SolutionVm _currentSolution;
     TestVm _currentTest;
     readonly PependentPropertyGrid _propertyGrid;
     //readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
     readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
+    readonly Action<ServerMessage> _responseDispatcher;
     //List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
     const string ErrorMarkerTag = "Error";
 
@@ -86,6 +87,8 @@ namespace Nitra.Visualizer
         new FrameworkPropertyMetadata(Int32.MaxValue));
 
       InitializeComponent();
+
+      _responseDispatcher = msg => _text.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action<ServerMessage>(Response), msg);
 
       _mainRow.Height  = new GridLength(_settings.TabControlHeight);
 
@@ -1089,10 +1092,28 @@ namespace Nitra.Visualizer
       ActivateVm  (_currentTest,     newTest,     client);
       this.Title = timer.Elapsed.ToString();
 
+      if (_currentTest != newTest)
+      {
+        var responseMap = client.ResponseMap;
+        responseMap.Clear();
+        if (newTest != null)
+          responseMap[newTest.Id] = _responseDispatcher;
+      }
+
       _currentSuite    = newTestSuite;
       _currentSolution = newSolution;
       _currentProject  = newProject;
       _currentTest     = newTest;
+    }
+
+    void Response(ServerMessage msg)
+    {
+      ServerMessage.OutliningCreated outlining;
+      if ((outlining = msg as ServerMessage.OutliningCreated) != null)
+      {
+        _foldingStrategy.Outlining = outlining.outlining;
+        _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
+      }
     }
 
     void Document_Changed(object sender, DocumentChangeEventArgs e)
