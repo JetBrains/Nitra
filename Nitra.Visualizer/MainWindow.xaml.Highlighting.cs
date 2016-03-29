@@ -46,8 +46,6 @@ namespace Nitra.Visualizer
     
     private void UpdateSpanInfos(ServerMessage.KeywordHighlightingCreated keywordHighlighting)
     {
-      if (keywordHighlighting.Version != _textVersion)
-        return;
       _spanInfos = keywordHighlighting.spanInfos;
       _text.TextArea.TextView.Redraw();
     }
