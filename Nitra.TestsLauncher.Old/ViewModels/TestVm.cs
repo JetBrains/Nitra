@@ -160,7 +160,7 @@ namespace Nitra.ViewModels
       var projectSupport = _file.Ast as IProjectSupport;
       var compilerMessages = new CompilerMessageList();
       var cancellationToken = new CancellationToken();
-      var filesData = files.Select(f => new FileEvalPropertiesData(f.FullName, f.Name, f.Ast, f?.Statistics?.Typing)).ToImmutableArray();
+      var filesData = NitraFile.GetEvalPropertiesData(files);
       if (projectSupport != null)
         projectSupport.RefreshProject(cancellationToken, compilerMessages, filesData, projectSupport.RefreshReferences(project));
       else if (_testFolder != null)
