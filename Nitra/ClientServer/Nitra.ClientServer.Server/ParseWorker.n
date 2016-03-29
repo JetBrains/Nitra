@@ -27,7 +27,7 @@ namespace Nitra.ClientServer.Server
     _incomeQueue        : BlockingCollection[ParserMessage];
     _mainQueue          : BlockingCollection[RouterMessage];
     _responseWriter     : BinaryWriter;
-    _spanClassesManager : SpanClassesManager = SpanClassesManager();
+    _spanClassesManager : SpanClassesManager;
     
     
     public this(incomeQueue : BlockingCollection[ParserMessage], mainQueue : BlockingCollection[RouterMessage], responseWriter : BinaryWriter, spanClassesManager : SpanClassesManager)
@@ -59,22 +59,22 @@ namespace Nitra.ClientServer.Server
             ProcessMessage(m)
           catch
           {
-            | e is OperationCanceledException => LogCanceled(e);
-            | e => LogException(e);
+            | e is OperationCanceledException => ServerUtils.LogCanceled(e);
+            | e => ServerUtils.LogException(e);
           }
         }
       }
       catch
       {
         | _ is OperationCanceledException => ()
-        | e => LogException(e);
+        | e => ServerUtils.LogException(e);
       }
     }      
     
     ProcessMessage(msg : ParserMessage) : void
     {
       | ParseFile(fileId, parseSession, source) =>
-        Log("ParseFile " + fileId);
+        ServerUtils.Log("ParseFile " + fileId);
         def timer = Stopwatch.StartNew();
         // TODO: add statistics
         //def stat = Statistics;
@@ -91,10 +91,10 @@ namespace Nitra.ClientServer.Server
         _mainQueue.Add(RouterAnswerMessage.FileParsed(fileId, parseResult));
 
         //stat?.Parse?.Stop();
-        LogMsgHandled("ParseFile " + fileId, timer, 200);
+        ServerUtils.LogMsgHandled("ParseFile " + fileId, timer, 200);
       
       | CreateAst(fileId, parseResult) =>
-        Log("CreateAst " + fileId);
+        ServerUtils.Log("CreateAst " + fileId);
         def timer = Stopwatch.StartNew();
         when (parseResult.ParseSession.CancellationToken.IsCancellationRequested)
           return;
@@ -103,18 +103,18 @@ namespace Nitra.ClientServer.Server
         def astMessages = CompilerMessageList();
         def ast = AstContext.GetAstUntyped(parseTree, astMessages);
         _mainQueue.Add(RouterAnswerMessage.AstCreated(fileId, parseResult.ParseSession.CancellationToken, ast, parseTree));
-        LogMsgHandled("CreateAst " + fileId, timer, 100);
+        ServerUtils.LogMsgHandled("CreateAst " + fileId, timer, 100);
         
       | SemanticAnalysisStart(projectId, cancellationToken, projectSupport, files, data) =>
-        Log($"SemanticAnalysisStart: ..$(files.Select(_.Title))");
+        ServerUtils.Log($"SemanticAnalysisStart: ..$(files.Select(_.Title))");
         def timer = Stopwatch.StartNew();
         def compilerMessages = CompilerMessageList();
         projectSupport.RefreshProject(cancellationToken, compilerMessages, files, data);
         _mainQueue.Add(RouterAnswerMessage.SemanticAnalysisFinished(projectId, cancellationToken, compilerMessages));
-        LogMsgHandled("SemanticAnalysisStart", timer, 100);
+        ServerUtils.LogMsgHandled("SemanticAnalysisStart", timer, 100);
         
       | CreateOutlining(fileId, parseResult) =>
-        Log("CreateOutlining " + fileId);
+        ServerUtils.Log("CreateOutlining " + fileId);
         def timer     = Stopwatch.StartNew();
         def outlining = List();
         parseResult.GetOutlining(outlining);
@@ -135,10 +135,10 @@ namespace Nitra.ClientServer.Server
           return;
         
         SendResponse(ServerMessage.OutliningCreated(fileId, version, infos.MoveToImmutable()));
-        LogMsgHandled("CreateOutlining", timer, 50);
+        ServerUtils.LogMsgHandled("CreateOutlining", timer, 50);
 
-      | CreateKeywordHighlighting(fileId, parseResult) =>
-        Log("CreateKeywordHighlighting " + fileId);
+      | CreateKeywordsHighlighting(fileId, parseResult) =>
+        ServerUtils.Log("CreateKeywordsHighlighting " + fileId);
         def timer     = Stopwatch.StartNew();
         def start     = 0;
         def end       = parseResult.SourceSnapshot.Text.Length;
@@ -162,14 +162,16 @@ namespace Nitra.ClientServer.Server
         when (cancellationToken.IsCancellationRequested)
           return;
         
-        SendResponse(ServerMessage.KeywordHighlightingCreated(fileId, version, infos.MoveToImmutable()));
-        _responseWriter.Flush();
-        LogMsgHandled("CreateKeywordHighlighting", timer, 50);
+        SendResponse(ServerMessage.KeywordsHighlightingCreated(fileId, version, infos.MoveToImmutable()));
+        ServerUtils.LogMsgHandled("CreateKeywordsHighlighting", timer, 50);
         
-        //  var visitor = new CollectSymbolsAstVisitor(new NSpan(line.Offset, line.EndOffset));
-        //  astRoot.Accept(visitor);
-        //  foreach (var spanInfo in visitor.SpanInfos)
-        //    spans.Add(spanInfo);
+      | CreateSymbolsHighlighting(fileId, version, ast) =>
+        ServerUtils.Log("CreateSymbolsHighlighting " + fileId);
+        def timer   = Stopwatch.StartNew();
+        def visitor = CollectSymbolsAstVisitor(_spanClassesManager);
+        ast.Accept(visitor);
+        SendResponse(ServerMessage.SymbolsHighlightingCreated(fileId, version, visitor.GetSpanInfos()));
+        ServerUtils.LogMsgHandled("CreateSymbolsHighlighting", timer, 50);
     }
     
     public Dispose() : void
@@ -177,26 +179,6 @@ namespace Nitra.ClientServer.Server
       _cts.Cancel();
       _cts.Dispose();
       _thread.Join()
-    }
-
-    LogMsgHandled(msg : string, timer : Stopwatch, millisecondToTimeout : int) : void
-    {
-      ServerUtils.LogMsgHandled(msg, timer, millisecondToTimeout);
-    }
-
-    LogCanceled(e : OperationCanceledException) : void
-    {
-      ServerUtils.LogCanceled(e);
-    }
-    
-    LogException(e : Exception) : void
-    {
-      ServerUtils.LogException(e);
-    }
-
-    Log(msg : string) : void
-    {
-      ServerUtils.Log(msg);
     }
   }
 }

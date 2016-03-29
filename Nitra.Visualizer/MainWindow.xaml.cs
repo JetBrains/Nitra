@@ -1068,20 +1068,25 @@ namespace Nitra.Visualizer
     void Response(ServerMessage msg)
     {
       ServerMessage.OutliningCreated outlining;
-      ServerMessage.KeywordHighlightingCreated keywordHighlighting;
+      ServerMessage.KeywordsHighlightingCreated keywordHighlighting;
       ServerMessage.LanguageLoaded languageInfo;
+      ServerMessage.SymbolsHighlightingCreated symbolsHighlighting;
+
+      if (_currentTest == null || msg.FileId >= 0 && msg.FileId != _currentTest.Id || msg.Version >= 0 && msg.Version != _textVersion)
+        return;
 
       if ((outlining = msg as ServerMessage.OutliningCreated) != null)
       {
-        if (outlining.Version != _textVersion)
-          return;
-
         _foldingStrategy.Outlining = outlining.outlining;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
       }
-      else if ((keywordHighlighting = msg as ServerMessage.KeywordHighlightingCreated) != null)
+      else if ((keywordHighlighting = msg as ServerMessage.KeywordsHighlightingCreated) != null)
       {
-        UpdateSpanInfos(keywordHighlighting);
+        UpdateKeywordSpanInfos(keywordHighlighting);
+      }
+      else if ((symbolsHighlighting = msg as ServerMessage.SymbolsHighlightingCreated) != null)
+      {
+        UpdateSymbolsSpanInfos(symbolsHighlighting);
       }
       else if ((languageInfo = msg as ServerMessage.LanguageLoaded) != null)
       {

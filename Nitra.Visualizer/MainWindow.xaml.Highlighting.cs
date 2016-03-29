@@ -12,43 +12,53 @@ namespace Nitra.Visualizer
   public partial class MainWindow
   {
     readonly Dictionary<int, HighlightingColor> _highlightingStyles = new Dictionary<int, HighlightingColor>();
-    ImmutableArray<SpanInfo> _spanInfos = ImmutableArray<SpanInfo>.Empty;
+    ImmutableArray<SpanInfo> _keywordsSpanInfos = ImmutableArray<SpanInfo>.Empty;
+    ImmutableArray<SpanInfo> _symbolsSpanInfos  = ImmutableArray<SpanInfo>.Empty;
 
     private void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)
     {
       try
       {
-        var line = e.Line;
-        var spans = _spanInfos;
-
-        foreach (var span in spans)
-        {
-          var start = line.Offset;
-          var end   = line.Offset + line.Length;
-          if (start > span.Span.EndPos || end < span.Span.StartPos)
-            continue;
-          
-          var spanClassId = span.SpanClassId;
-          var color = _highlightingStyles[spanClassId];
-          var startOffset = Math.Max(line.Offset, span.Span.StartPos);
-          var endOffset = Math.Min(line.EndOffset, span.Span.EndPos);
-          var section = new HighlightedSection
-          {
-            Offset = startOffset,
-            Length = endOffset - startOffset,
-            Color = color
-          };
-          e.Sections.Add(section);
-        }
+        HighlightLine(e, _keywordsSpanInfos);
+        HighlightLine(e, _symbolsSpanInfos);
       }
       catch (Exception ex) { Debug.WriteLine(ex.GetType().Name + ":" + ex.Message); }
     }
-    
-    private void UpdateSpanInfos(ServerMessage.KeywordHighlightingCreated keywordHighlighting)
+
+    private void HighlightLine(HighlightLineEventArgs e, ImmutableArray<SpanInfo> spans)
     {
-      if (keywordHighlighting.Version != _textVersion)
-        return;
-      _spanInfos = keywordHighlighting.spanInfos;
+      var line = e.Line;
+
+      foreach (var span in spans)
+      {
+        var start = line.Offset;
+        var end = line.Offset + line.Length;
+        if (start > span.Span.EndPos || end < span.Span.StartPos)
+          continue;
+
+        var spanClassId = span.SpanClassId;
+        var color = _highlightingStyles[spanClassId];
+        var startOffset = Math.Max(line.Offset, span.Span.StartPos);
+        var endOffset = Math.Min(line.EndOffset, span.Span.EndPos);
+        var section = new HighlightedSection
+        {
+          Offset = startOffset,
+          Length = endOffset - startOffset,
+          Color = color
+        };
+        e.Sections.Add(section);
+      }
+    }
+
+    private void UpdateKeywordSpanInfos(ServerMessage.KeywordsHighlightingCreated keywordHighlighting)
+    {
+      _keywordsSpanInfos = keywordHighlighting.spanInfos;
+      _text.TextArea.TextView.Redraw();
+    }
+    
+    private void UpdateSymbolsSpanInfos(ServerMessage.SymbolsHighlightingCreated symbolsHighlighting)
+    {
+      _symbolsSpanInfos = symbolsHighlighting.spanInfos;
       _text.TextArea.TextView.Redraw();
     }
 
