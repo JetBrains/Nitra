@@ -22,19 +22,22 @@ namespace Nitra.ClientServer.Server
 {
   class ParseWorker : IDisposable
   {
-    _thread         : Thread;
-    _cts            : CancellationTokenSource = CancellationTokenSource();
-    _incomeQueue    : BlockingCollection[ParserMessage];
-    _mainQueue      : BlockingCollection[RouterMessage];
-    _responseWriter : BinaryWriter;
+    _thread             : Thread;
+    _cts                : CancellationTokenSource = CancellationTokenSource();
+    _incomeQueue        : BlockingCollection[ParserMessage];
+    _mainQueue          : BlockingCollection[RouterMessage];
+    _responseWriter     : BinaryWriter;
+    _spanClassesManager : SpanClassesManager = SpanClassesManager();
     
-    public this(incomeQueue : BlockingCollection[ParserMessage], mainQueue : BlockingCollection[RouterMessage], responseWriter : BinaryWriter)
+    
+    public this(incomeQueue : BlockingCollection[ParserMessage], mainQueue : BlockingCollection[RouterMessage], responseWriter : BinaryWriter, spanClassesManager : SpanClassesManager)
     {
-      _mainQueue      = mainQueue;
-      _incomeQueue    = incomeQueue;
-      _responseWriter = responseWriter;
-      _thread         = Thread(ParseWorkerMain);
-      _thread.Start()
+      _mainQueue          = mainQueue;
+      _incomeQueue        = incomeQueue;
+      _responseWriter     = responseWriter;
+      _spanClassesManager = spanClassesManager;
+      _thread             = Thread(ParseWorkerMain);
+      _thread.Start();
     }
 
     SendResponse(msg : ServerMessage) : void
@@ -141,20 +144,32 @@ namespace Nitra.ClientServer.Server
         def end       = parseResult.SourceSnapshot.Text.Length;
         def spanInfos = HashSet();
         parseResult.GetSpans(start, end, spanInfos);
+
+        def infos             = ImmutableArray.CreateBuilder(spanInfos.Count);
         def cancellationToken = parseResult.ParseSession.CancellationToken;
+        def version           = parseResult.SourceSnapshot.Version;
         
         foreach (info in spanInfos with i)
         {
           when (i % 30 == 0 && cancellationToken.IsCancellationRequested)
             return;
           
+          def span = info.Span;
+          def id = _spanClassesManager[info.SpanClass];
+          infos.Add(SpanInfo(NSpan(span.StartPos, span.EndPos), id));
         }
      
         when (cancellationToken.IsCancellationRequested)
           return;
         
-        //SendResponse(ServerMessage.OutliningCreated(fileId, version, infos.MoveToImmutable()));
+        SendResponse(ServerMessage.KeywordHighlightingCreated(fileId, version, infos.MoveToImmutable()));
+        _responseWriter.Flush();
         LogMsgHandled("CreateKeywordHighlighting", timer, 50);
+        
+        //  var visitor = new CollectSymbolsAstVisitor(new NSpan(line.Offset, line.EndOffset));
+        //  astRoot.Accept(visitor);
+        //  foreach (var spanInfo in visitor.SpanInfos)
+        //    spans.Add(spanInfo);
     }
     
     public Dispose() : void

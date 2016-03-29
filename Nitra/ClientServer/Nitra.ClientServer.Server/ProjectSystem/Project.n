@@ -21,7 +21,7 @@ using NSP = Nitra.ProjectSystem;
 
 namespace Nitra.ClientServer.Server.ProjectSystem
 {
-  public class Project : NSP.Project, IDisposable
+  internal class Project : NSP.Project, IDisposable
   {
             _files                                   : Hashtable[int, File]   = Hashtable();
             _libMap                                  : Hashtable[string, int] = Hashtable();
@@ -36,18 +36,20 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     public  IsSemanticAvailable                      : bool                         { get; private set; }
     public  ParseQueue                               : BlockingCollection[ParserMessage];
             _semanticAnalysisCancellationTokenSource : CancellationTokenSource { get; private set; }
+            _router                                  : Router;
     mutable _expectsToBuildAst                       : int;
            
-    public this(parent : Solution, fullPath : string, id : int, languageInfos : ImmutableArray[LanguageInfo], parseQueue : BlockingCollection[ParserMessage])
+    internal this(parent : Solution, fullPath : string, id : int, languageInfos : ImmutableArray[LanguageInfo], parseQueue : BlockingCollection[ParserMessage], router : Router)
     {
-      ParseQueue    = parseQueue;
-      Path          = fullPath;
-      ProjectDir    = fullPath;
-      Id            = id;
-      Parent        = parent;
-      Name          = Path.GetFileNameWithoutExtension(fullPath);
-      LanguageInfos = languageInfos;
-      Libs          = _libs;
+      ParseQueue      = parseQueue;
+      Path            = fullPath;
+      ProjectDir      = fullPath;
+      Id              = id;
+      Parent          = parent;
+      Name            = Path.GetFileNameWithoutExtension(fullPath);
+      LanguageInfos   = languageInfos;
+      Libs            = _libs;
+      _router         = router;
 
       parent.AddProject(this);
       LoadLangs(languageInfos);
@@ -76,13 +78,27 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     {
       foreach (languageInfo in languageInfos with i)
       {
-        def path     = languageInfo.Path;
-        def name     = languageInfo.Name;
-        
-        def assembly = LoadAssembly(path);
-        def language = Nitra.Language.GetLanguages(assembly).FirstOrDefault(lang => String.Equals(lang.FullName, name, StringComparison.Ordinal));
-        
-        def fullName = language.FullName;
+        def path        = languageInfo.Path;
+        def name        = languageInfo.Name;
+        def assembly    = LoadAssembly(path);
+        def language    = Nitra.Language.GetLanguages(assembly).FirstOrDefault(lang => String.Equals(lang.FullName, name, StringComparison.Ordinal));
+        def fullName    = language.FullName;
+        def readSpanClassInfos(language : Nitra.Language, spanClassInfosBilder, spanClassesManager : SpanClassesManager) : void
+        {
+          when (language.Parent != null)
+            readSpanClassInfos(language.Parent, spanClassInfosBilder, spanClassesManager);
+
+          def spanClasses = language.GetDeclaredSpanClasses();
+          foreach (spanClass in spanClasses)
+          {
+            def id = spanClassesManager.Add(spanClass);
+            spanClassInfosBilder.Add(SpanClassInfo(spanClass.FullName, id, spanClass.Style.ForegroundColor));
+          }
+        }
+        def spanClassInfosBilder = ImmutableArray.CreateBuilder();
+        readSpanClassInfos(language, spanClassInfosBilder, _router.SpanClassesManager);
+        def spanClassInfos = spanClassInfosBilder.ToImmutable();
+        _router.SendResponse(ServerMessage.LanguageLoaded(-1, -1, spanClassInfos));
         
         assert2(language.StartRule != null);
         Log("  Language " + i + ": "+ fullName + " - '" + path + "' " + language.Authors);

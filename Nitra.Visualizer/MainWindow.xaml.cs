@@ -45,6 +45,7 @@ namespace Nitra.Visualizer
   using Interop;
   using System.Windows.Interop;
   using ClientServer.Messages;
+  using System.Collections.Immutable;
   /// <summary>
   /// Interaction logic for MainWindow.xaml
   /// </summary>
@@ -55,7 +56,7 @@ namespace Nitra.Visualizer
     bool _doChangeCaretPos;
     readonly Timer _parseTimer;
     readonly Timer _nodeForCaretTimer;
-    readonly Dictionary<string, HighlightingColor> _highlightingStyles;
+    readonly Dictionary<int, HighlightingColor> _highlightingStyles;
     readonly TextMarkerService _textMarkerService;
     readonly NitraFoldingStrategy _foldingStrategy;
     readonly FoldingManager _foldingManager;
@@ -75,13 +76,14 @@ namespace Nitra.Visualizer
     readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
     readonly Action<ServerMessage> _responseDispatcher;
     int _textVersion;
+    ImmutableArray<SpanInfo> _spanInfos = ImmutableArray<SpanInfo>.Empty;
     //List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
     const string ErrorMarkerTag = "Error";
 
     public MainWindow()
     {
       _settings = Settings.Default;
-      _highlightingStyles = new Dictionary<string, HighlightingColor>(StringComparer.OrdinalIgnoreCase);
+      _highlightingStyles = new Dictionary<int, HighlightingColor>();
 
       ToolTipService.ShowDurationProperty.OverrideMetadata(
         typeof(DependencyObject),
@@ -657,25 +659,17 @@ namespace Nitra.Visualizer
       try
       {
         var line = e.Line;
-        var spans = new HashSet<SpanInfo>();
-        //_parseResult.GetSpans(line.Offset, line.EndOffset, spans);
-        //var astRoot = _astRoot;
-        //if (astRoot != null)
-        //{
-        //  var visitor = new CollectSymbolsAstVisitor(new NSpan(line.Offset, line.EndOffset));
-        //  astRoot.Accept(visitor);
-        //  foreach (var spanInfo in visitor.SpanInfos)
-        //    spans.Add(spanInfo);
-        //}
+        var spans = _spanInfos;
 
         foreach (var span in spans)
         {
-          HighlightingColor color;
-          if (!_highlightingStyles.TryGetValue(span.SpanClass.FullName, out color))
-          {
-            color = MakeHighlightingColor(span.SpanClass);
-            _highlightingStyles.Add(span.SpanClass.FullName, color);
-          }
+          var start = line.Offset;
+          var end   = line.Offset + line.Length;
+          if (start > span.Span.EndPos || end < span.Span.StartPos)
+            continue;
+          
+          var spanClassId = span.SpanClassId;
+          var color = _highlightingStyles[spanClassId];
           var startOffset = Math.Max(line.Offset, span.Span.StartPos);
           var endOffset = Math.Min(line.EndOffset, span.Span.EndPos);
           var section = new HighlightedSection
@@ -1099,7 +1093,10 @@ namespace Nitra.Visualizer
         var responseMap = client.ResponseMap;
         responseMap.Clear();
         if (newTest != null)
+        {
           responseMap[newTest.Id] = _responseDispatcher;
+          responseMap[-1]         = _responseDispatcher;
+        }
       }
 
       _currentSuite    = newTestSuite;
@@ -1111,6 +1108,9 @@ namespace Nitra.Visualizer
     void Response(ServerMessage msg)
     {
       ServerMessage.OutliningCreated outlining;
+      ServerMessage.KeywordHighlightingCreated keywordHighlighting;
+      ServerMessage.LanguageLoaded languageInfo;
+
       if ((outlining = msg as ServerMessage.OutliningCreated) != null)
       {
         if (outlining.Version != _textVersion)
@@ -1118,6 +1118,22 @@ namespace Nitra.Visualizer
 
         _foldingStrategy.Outlining = outlining.outlining;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
+      }
+      else if ((keywordHighlighting = msg as ServerMessage.KeywordHighlightingCreated) != null)
+      {
+        if (keywordHighlighting.Version != _textVersion)
+          return;
+        _spanInfos = keywordHighlighting.spanInfos;
+        _text.TextArea.TextView.Redraw();
+      }
+      else if ((languageInfo = msg as ServerMessage.LanguageLoaded) != null)
+      {
+        foreach (var spanClassInfo in languageInfo.spanClassInfos)
+          _highlightingStyles[spanClassInfo.Id] = 
+            new HighlightingColor
+              {
+                Foreground = new SimpleHighlightingBrush(ColorFromArgb(spanClassInfo.ForegroundColor))
+              };
       }
     }
 
@@ -1160,14 +1176,6 @@ namespace Nitra.Visualizer
         if (newVm != null)
           newVm.Activate(client);
       }
-    }
-
-    HighlightingColor MakeHighlightingColor(SpanClass spanClass)
-    {
-      return new HighlightingColor
-      {
-        Foreground = new SimpleHighlightingBrush(ColorFromArgb(spanClass.Style.ForegroundColor))
-      };
     }
 
     void OnRemoveTestSuite(object sender, ExecutedRoutedEventArgs e)
