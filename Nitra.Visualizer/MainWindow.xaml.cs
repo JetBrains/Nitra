@@ -1,18 +1,22 @@
 ﻿using Common;
+
 using ICSharpCode.AvalonEdit.AddIn;
 using ICSharpCode.AvalonEdit.CodeCompletion;
 using ICSharpCode.AvalonEdit.Document;
 using ICSharpCode.AvalonEdit.Folding;
-using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.SharpDevelop.Editor;
+
+using Microsoft.VisualBasic.FileIO;
+
 using Nemerle.Diff;
+
+using Nitra.ClientServer.Client;
 using Nitra.ViewModels;
-using Nitra.ClientServer.Messages;
+using Nitra.Visualizer.Controls;
 using Nitra.Visualizer.Properties;
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -24,9 +28,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using Nitra.Visualizer.Controls;
-using Microsoft.VisualBasic.FileIO;
-using Nitra.ClientServer.Client;
+
 using Clipboard = System.Windows.Clipboard;
 using ContextMenu = System.Windows.Controls.ContextMenu;
 using Control = System.Windows.Controls.Control;
@@ -41,14 +43,11 @@ using ToolTip = System.Windows.Controls.ToolTip;
 
 namespace Nitra.Visualizer
 {
-  using System.Windows.Documents;
-  using Interop;
-  using System.Windows.Interop;
   using ClientServer.Messages;
-  using System.Collections.Immutable;
-  /// <summary>
-  /// Interaction logic for MainWindow.xaml
-  /// </summary>
+  using Interop;
+  using System.Windows.Documents;
+  using System.Windows.Interop;
+
   public partial class MainWindow
   {
     bool _initializing = true;
@@ -56,7 +55,6 @@ namespace Nitra.Visualizer
     bool _doChangeCaretPos;
     readonly Timer _parseTimer;
     readonly Timer _nodeForCaretTimer;
-    readonly Dictionary<int, HighlightingColor> _highlightingStyles;
     readonly TextMarkerService _textMarkerService;
     readonly NitraFoldingStrategy _foldingStrategy;
     readonly FoldingManager _foldingManager;
@@ -76,14 +74,12 @@ namespace Nitra.Visualizer
     readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
     readonly Action<ServerMessage> _responseDispatcher;
     int _textVersion;
-    ImmutableArray<SpanInfo> _spanInfos = ImmutableArray<SpanInfo>.Empty;
     //List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
     const string ErrorMarkerTag = "Error";
 
     public MainWindow()
     {
       _settings = Settings.Default;
-      _highlightingStyles = new Dictionary<int, HighlightingColor>();
 
       ToolTipService.ShowDurationProperty.OverrideMetadata(
         typeof(DependencyObject),
@@ -651,39 +647,6 @@ namespace Nitra.Visualizer
       _textMarkerService.RemoveAll(marker => marker.Tag == (object)ErrorMarkerTag);
     }
 
-    void textBox1_HighlightLine(object sender, HighlightLineEventArgs e)
-    {
-    //  if (_parseResult == null)
-      //  return;
-
-      try
-      {
-        var line = e.Line;
-        var spans = _spanInfos;
-
-        foreach (var span in spans)
-        {
-          var start = line.Offset;
-          var end   = line.Offset + line.Length;
-          if (start > span.Span.EndPos || end < span.Span.StartPos)
-            continue;
-          
-          var spanClassId = span.SpanClassId;
-          var color = _highlightingStyles[spanClassId];
-          var startOffset = Math.Max(line.Offset, span.Span.StartPos);
-          var endOffset = Math.Min(line.EndOffset, span.Span.EndPos);
-          var section = new HighlightedSection
-          {
-            Offset = startOffset,
-            Length = endOffset - startOffset,
-            Color = color
-          };
-          e.Sections.Add(section);
-        }
-      }
-      catch (Exception ex) { Debug.WriteLine(ex.GetType().Name + ":" + ex.Message); }
-    }
-
     private void textBox1_MouseHover(object sender, MouseEventArgs e)
     {
       var pos = _text.TextArea.TextView.GetPositionFloor(e.GetPosition(_text.TextArea.TextView) + _text.TextArea.TextView.ScrollOffset);
@@ -1047,11 +1010,8 @@ namespace Nitra.Visualizer
       Trace.Assert(newTestSuite != null);
 
       if (newTestSuite != _currentSuite)
-      {
-        _highlightingStyles.Clear();
-        //foreach (var spanClass in newTestSuite.Language.GetSpanClasses())
-          //_highlightingStyles.Add(spanClass.FullName, MakeHighlightingColor(spanClass));
-      }
+        ResetHighlightingStyles();
+
       ClearAll();
 
       if (newSolution != null && newSolution.IsSingleFileTest && newProject == null)
@@ -1121,19 +1081,11 @@ namespace Nitra.Visualizer
       }
       else if ((keywordHighlighting = msg as ServerMessage.KeywordHighlightingCreated) != null)
       {
-        if (keywordHighlighting.Version != _textVersion)
-          return;
-        _spanInfos = keywordHighlighting.spanInfos;
-        _text.TextArea.TextView.Redraw();
+        UpdateSpanInfos(keywordHighlighting);
       }
       else if ((languageInfo = msg as ServerMessage.LanguageLoaded) != null)
       {
-        foreach (var spanClassInfo in languageInfo.spanClassInfos)
-          _highlightingStyles[spanClassInfo.Id] = 
-            new HighlightingColor
-              {
-                Foreground = new SimpleHighlightingBrush(ColorFromArgb(spanClassInfo.ForegroundColor))
-              };
+        UpdateHighlightingStyles(languageInfo);
       }
     }
 
