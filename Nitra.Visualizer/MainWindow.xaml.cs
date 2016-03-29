@@ -1071,11 +1071,11 @@ namespace Nitra.Visualizer
       ServerMessage.KeywordHighlightingCreated keywordHighlighting;
       ServerMessage.LanguageLoaded languageInfo;
 
+      if (_currentTest == null || msg.FileId >= 0 && msg.FileId != _currentTest.Id || msg.Version >= 0 && msg.Version != _textVersion)
+        return;
+
       if ((outlining = msg as ServerMessage.OutliningCreated) != null)
       {
-        if (outlining.Version != _textVersion)
-          return;
-
         _foldingStrategy.Outlining = outlining.outlining;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
       }
