@@ -53,7 +53,6 @@ namespace Nitra.Visualizer
     bool _initializing = true;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
-    readonly Timer _parseTimer;
     readonly Timer _nodeForCaretTimer;
     readonly TextMarkerService _textMarkerService;
     readonly NitraFoldingStrategy _foldingStrategy;
@@ -99,8 +98,6 @@ namespace Nitra.Visualizer
       _tabControl.SelectedIndex = _settings.ActiveTabIndex;
       _foldingStrategy          = new NitraFoldingStrategy();
       _textBox1Tooltip          = new ToolTip { PlacementTarget = _text };
-      _parseTimer               = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
-      _parseTimer.Elapsed       += _parseTimer_Elapsed;
       _nodeForCaretTimer        = new Timer {AutoReset = false, Enabled = false, Interval = 500};
       _nodeForCaretTimer.Elapsed += _nodeForCaretTimer_Elapsed;
 
@@ -558,9 +555,7 @@ namespace Nitra.Visualizer
         return;
 
       //_parseResult = null; // prevent calculations on outdated ParseResult
-      _parseTimer.Stop();
       _textBox1Tooltip.IsOpen = false;
-      _parseTimer.Start();
     }
 
     private void textBox1_LostFocus(object sender, RoutedEventArgs e)
@@ -571,11 +566,6 @@ namespace Nitra.Visualizer
     private void MenuItem_Click(object sender, RoutedEventArgs e)
     {
       this.Close();
-    }
-
-    void _parseTimer_Elapsed(object sender, ElapsedEventArgs e)
-    {
-      Reparse();
     }
 
     private void _nodeForCaretTimer_Elapsed(object sender, ElapsedEventArgs e)
@@ -592,44 +582,6 @@ namespace Nitra.Visualizer
       if (_recoveryAlgorithmFirstError.IsChecked == true)
         return RecoveryAlgorithm.FirstError;
       return RecoveryAlgorithm.Smart;
-    }
-
-    private void DoParse()
-    {
-      if (_doTreeOperation)
-        return;
-
-      //_astRoot = null;
-      //_parseResult = null;
-
-      //if (_currentSuite == null || _currentTest == null)
-      //  return;
-
-      //try
-      //{
-      //  ClearAll();
-
-      //  _currentTest.Code = _text.Text;
-      //  _currentTest.Run(GetRecoveryAlgorithm());
-      //  _performanceTreeView.ItemsSource = new[] { (_currentTest.Statistics.Total ?? _currentProject.Statistics.Total) };
-
-      //  _astRoot = _currentTest.File.Ast;
-      //  _parseResult = _currentTest.File.ParseResult;
-      //  _foldingStrategy.ParseResult = _parseResult;
-      //  _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
-
-      //  TryHighlightBraces(_text.CaretOffset);
-      //  TryReportError();
-      //  ShowInfo();
-
-      //  _text.TextArea.TextView.Redraw(DispatcherPriority.Input);
-      //}
-      //catch (Exception ex)
-      //{
-      //  ClearMarkers();
-      //  MessageBox.Show(this, ex.GetType().Name + ":" + ex.Message);
-      //  Debug.WriteLine(ex.ToString());
-      //}
     }
 
     void ClearAll()
@@ -1245,11 +1197,12 @@ namespace Nitra.Visualizer
 
     void Reparse()
     {
-      if (Dispatcher.CheckAccess())
-        DoParse();
-      else
-        Dispatcher.Invoke(new Action(DoParse));
+      if (_currentSuite == null || _currentTest == null)
+        return;
+
+      _currentSuite.Client.Send(new ClientMessage.FileReparse(_currentTest.Id));
     }
+
 
     private void _reflectionTreeView_SelectedItemChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
