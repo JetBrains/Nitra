@@ -14,16 +14,31 @@ using System.Linq;
 
 namespace Nitra.ClientServer.Macros
 {
+  [MacroUsage(MacroPhase.BeforeInheritance, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
+  public macro NitraMessage(tb : TypeBuilder)
+  {
+    tb.UserData["Nitra.ClientServer.Macros.NitraMessage"] = true;
+  }
+  
   [MacroUsage(MacroPhase.BeforeTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
   public macro NitraMessage(tb: TypeBuilder)
   {
-    tb.AddMacroAttribute(<[ Nemerle.Core.Record ]>)
+    tb.AddMacroAttribute(<[ Nemerle.Core.Record ]>);
+    NitraMessageImpl(Macros.ImplicitCTX(), tb).TransformBeforeTypedMembers(tb);
   }
 
   [MacroUsage(MacroPhase.WithTypedMembers, MacroTargets.Class, Inherited = false, AllowMultiple = false)]
   public macro NitraMessage(tb: TypeBuilder)
   {
-    NitraMessageImpl(Macros.ImplicitCTX(), tb).Transform(tb)
+    NitraMessageImpl(Macros.ImplicitCTX(), tb).Transform(tb);
+  }
+
+  variant SupportedType
+  {
+    | Struct
+    | AbstractClass
+    | BaseClass
+    | DerivedClass
   }
 
   class NitraMessageImpl 
@@ -89,91 +104,60 @@ namespace Nitra.ClientServer.Macros
     
     public Transform(tb: TypeBuilder): void
     {
+      _typer.Manager.MacroColors.InGlobalColor(
+      fun()
+      {
+        TransformImpl(tb);
+      });
+    }
+
+    TransformImpl(tb: TypeBuilder): void
+    {
       match (GetSupportedType(tb))
       {
         | Some(ty) =>
           def type = tb.GetMemType();
-          def getId() { MessageRegistry.Register(_typer.Manager, type) }
           def fields = GetRecordFields(tb);
           def serializeExprs = fields.Filter(_.Declared).Map(Serialize);
-          def define(x) { _ = tb.DefineWithSource(x) }
           
-          match (ty)
+          match (tb.LookupMember("Serialize"))
           {
-            | SupportedType.Struct => define(<[decl: public MsgId: short { get { $(getId()) }} ]>)
-            | SupportedType.AbstractClass
-            | SupportedType.Variant => define(<[decl: public abstract MsgId: short { get; } ]>)
-            | SupportedType.BaseClass => 
-              if (tb.IsSealed || tb.IsValueType)
-                define(<[decl: public MsgId: short { get { $(getId()) }} ]>);
-              else
-                define(<[decl: public virtual MsgId: short { get { $(getId()) }} ]>);
-
-            | SupportedType.DerivedClass
-            | SupportedType.VariantOption => define(<[decl: public override MsgId: short { get { $(getId()) }} ]>)
-          }
+            | [serialize is MethodBuilder] =>
+              match (ty) 
+              {
+                | SupportedType.Struct       => serialize.Body = <[ writer.Write(this.MsgId); ..$(serializeExprs) ]>;
+                | SupportedType.DerivedClass => serialize.Body = <[ base.Serialize(writer); ..$(serializeExprs) ]>;
+                | SupportedType.AbstractClass
+                | SupportedType.BaseClass => 
+                  serialize.Body =
+                    if (tb.IsSealed || tb.IsValueType)
+                      <[ writer.Write(this.MsgId); ..$(serializeExprs) ]>
+                    else 
+                      <[ writer.Write(this.MsgId); ..$(serializeExprs) ]>;
+              }
           
-          match (ty) 
-          {
-            | SupportedType.Struct => 
-              define(
-              <[decl: 
-                public Serialize(writer : System.IO.BinaryWriter) : void 
-                {
-                  writer.Write(this.MsgId);
-                  ..$(serializeExprs)
-                }
-              ]>)
-            | SupportedType.DerivedClass
-            | SupportedType.VariantOption =>
-                define(<[decl: 
-                  public override Serialize(writer : System.IO.BinaryWriter) : void 
-                  {
-                    base.Serialize(writer);
-                    ..$(serializeExprs)
-                  }
-                ]>);
-            | SupportedType.AbstractClass
-            | SupportedType.BaseClass
-            | SupportedType.Variant =>
-              if (tb.IsSealed || tb.IsValueType)
-                define(<[decl: 
-                public Serialize(writer : System.IO.BinaryWriter) : void 
-                {
-                  writer.Write(this.MsgId);
-                  ..$(serializeExprs)
-                }
-              ]>);
-              else 
-                define(<[decl: 
-                public virtual Serialize(writer : System.IO.BinaryWriter) : void 
-                {
-                  writer.Write(this.MsgId);
-                  ..$(serializeExprs)
-                }
-              ]>);
-          }
-          
-          when (ty is SupportedType.Variant)
-            tb.GetVariantOptions().Iter(Transform);
-          
-          match (ty)
-          {
-            | SupportedType.Struct
-            | SupportedType.BaseClass
-            | SupportedType.DerivedClass
-            | SupportedType.VariantOption =>
-                define(
-                  <[decl: 
-                    public static Deserialize(reader : System.IO.BinaryReader) : $(type : typed)
-                    {
-                      IgnoreParams();
-                      $(type : typed)(..$(fields.Map(Deserialize)))
-                    }
-                  ]>)
             | _ => ()
           }
-          Deserializer.GenerateModule(_typer.Manager);
+
+          match (tb.LookupMember("Deserialize"))
+          {
+            | [deserialize is MethodBuilder] =>
+              match (ty)
+              {
+                | SupportedType.Struct
+                | SupportedType.BaseClass
+                | SupportedType.DerivedClass when !tb.IsAbstract =>
+                  deserialize.Body = <[ IgnoreParams(); $(type : typed)(..$(fields.Map(Deserialize))) ]>;
+
+                | _ => ()
+              }            
+              
+            | _ => ()
+          }
+          
+          foreach (v in tb.GetVariantOptions())
+            Transform(v);
+          
         | _ => ()
       }
     }
@@ -198,34 +182,6 @@ namespace Nitra.ClientServer.Macros
             }
           })
         | None => Message.FatalError(tb.Location, "Record constructor was not found")
-      }
-    }
-
-    variant SupportedType
-    {
-      | Struct
-      | AbstractClass
-      | BaseClass
-      | DerivedClass
-      | Variant
-      | VariantOption
-    }
-    
-    GetSupportedType(tb: TypeBuilder): option[SupportedType]
-    {
-      match (tb)
-      {
-        | _ when tb.IsDelegate with n = "delegates"
-        | _ when tb.IsInterface with n = "interfaces"
-        | _ when tb.IsModule with n = "modules" => 
-            Message.Error(tb.Location, $"$n are not supported.");
-            None()
-        | _ when !tb.GetVariantOptions().IsEmpty => Some(SupportedType.Variant())
-        | _ when tb.IsVariantOption => Some(SupportedType.VariantOption())
-        | _ when tb.IsValueType => Some(SupportedType.Struct())
-        | _ when tb.GetSuperTypes().Map(GetSerializeMethod).Exists(_.IsSome) => Some(SupportedType.DerivedClass())
-        | _ when tb.IsAbstract => Some(SupportedType.AbstractClass())
-        | _ => Some(SupportedType.BaseClass())
       }
     }
 
@@ -417,6 +373,121 @@ namespace Nitra.ClientServer.Macros
       def readExpr = getReadMethodNameExpr(ti);
 
       <[ reader.$readExpr() ]>
+    }
+
+    public GetSupportedType(tb: TypeBuilder): option[SupportedType]
+    {
+      def hasNitraMessageAttribute(t : FixedType) : bool
+      {
+        | FixedType.Class(tb is TypeBuilder, _) => 
+          match (tb.UserData["Nitra.ClientServer.Macros.NitraMessage"])
+          {
+            | x is bool => x
+            | _ => false
+          }
+          
+        | _ => false
+      }
+      match (tb)
+      {
+        | _ when tb.IsDelegate with n = "delegates"
+        | _ when tb.IsInterface with n = "interfaces"
+        | _ when tb.IsModule with n = "modules" => 
+            Message.Error(tb.Location, $"$n are not supported.");
+            None()
+
+        | _ when tb.IsValueType                                      => Some(SupportedType.Struct())
+        | _ when tb.GetSuperTypes().Exists(hasNitraMessageAttribute) => Some(SupportedType.DerivedClass())
+        | _ when tb.IsAbstract                                       => Some(SupportedType.AbstractClass())
+        | _                                                          => Some(SupportedType.BaseClass())
+      }
+    }
+    
+    public TransformBeforeTypedMembers([NotNull] tb : TypeBuilder) : void
+    {
+      _typer.Manager.MacroColors.InGlobalColor(
+        fun()
+        {
+          TransformBeforeTypedMembersImpl(tb);
+        });
+    }
+
+    TransformBeforeTypedMembersImpl(tb : TypeBuilder) : void
+    {
+      match (GetSupportedType(tb))
+      {
+        | Some(ty) =>
+          def type = tb.GetMemType();
+          def getId() { MessageRegistry.Register(_typer.Manager, type) }
+          def define(x) { _ = tb.DefineWithSource(x) }
+          
+          match (ty)
+          {
+            | SupportedType.Struct        => define(<[decl: public MsgId: short { get { $(getId()) }} ]>)
+            | SupportedType.AbstractClass => define(<[decl: public abstract MsgId: short { get; } ]>)
+            | SupportedType.BaseClass => 
+              if (tb.IsSealed || tb.IsValueType)
+                define(<[decl: public MsgId: short { get { $(getId()) }} ]>);
+              else
+                define(<[decl: public virtual MsgId: short { get { $(getId()) }} ]>);
+
+            | SupportedType.DerivedClass =>
+              unless (tb.IsAbstract)
+                define(<[decl: public override MsgId: short { get { $(getId()) }} ]>)
+          }
+          
+          match (ty)
+          {
+            | SupportedType.Struct => 
+              define(
+              <[decl: 
+                public Serialize(writer : System.IO.BinaryWriter) : void 
+                {
+                }
+              ]>)
+            | SupportedType.DerivedClass =>
+                define(<[decl: 
+                  public override Serialize(writer : System.IO.BinaryWriter) : void 
+                  {
+                  }
+                ]>);
+            | SupportedType.AbstractClass
+            | SupportedType.BaseClass =>
+              if (tb.IsSealed || tb.IsValueType)
+                define(<[decl: 
+                  public Serialize(writer : System.IO.BinaryWriter) : void 
+                  {
+                  }
+              ]>);
+              else 
+                define(<[decl: 
+                  public virtual Serialize(writer : System.IO.BinaryWriter) : void 
+                  {
+                  }
+              ]>);
+          }
+
+          foreach (v in tb.GetVariantOptions())
+            TransformBeforeTypedMembersImpl(v);
+          
+          match (ty)
+          {
+            | SupportedType.Struct
+            | SupportedType.BaseClass
+            | SupportedType.DerivedClass =>
+              when (!tb.IsAbstract)
+                define(
+                  <[decl: 
+                    public static new Deserialize(reader : System.IO.BinaryReader) : $(type : typed)
+                    {
+                    }
+                  ]>);
+
+            | _ => ()
+          }
+          Deserializer.GenerateModule(_typer.Manager);
+        | _ => ()
+      }
     }
   }
 }
