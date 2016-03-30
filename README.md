@@ -1,5 +1,7 @@
 # Nitra
 
+[![Build status](https://ci.appveyor.com/api/projects/status/e6i7xqiuyc3lhrln?svg=true)](https://ci.appveyor.com/project/th3ragex/nitra)
+
 Nitra is a [language workbench](http://martinfowler.com/bliki/LanguageWorkbench.html). You can use Nitra for the creation or extend a general-purpose programming language or a domain-specific language (DSL).
 At present Nitra allows you to create dynamically expanding parsers. In the future, Nitra will allow to create full support for programming languages: compilers, IDE support.
 
