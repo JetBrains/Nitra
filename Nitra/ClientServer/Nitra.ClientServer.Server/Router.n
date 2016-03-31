@@ -24,11 +24,12 @@ namespace Nitra.ClientServer.Server
             _parseQueue         : BlockingCollection[ParserMessage] = BlockingCollection();
             _mainThread         : Thread;
             _parseWorkers       : list[ParseWorker];
-            _cts                : CancellationTokenSource = CancellationTokenSource();
+    mutable _cts                : CancellationTokenSource = CancellationTokenSource();
             _responseWriter     : IO.BinaryWriter;
     public  SpanClassesManager  : SpanClassesManager = SpanClassesManager();
     mutable _stopped            : bool;
     mutable _solution           : Solution;
+    mutable _projectLoadingCts  : CancellationTokenSource;
 
     public this(responseWriter : IO.BinaryWriter)
     {
@@ -38,6 +39,33 @@ namespace Nitra.ClientServer.Server
       def cores       = ServerUtils.GetCoreCount(); // Environment.ProcessorCount
       Log("Cores: " + cores);
       _parseWorkers = $[1..cores].Map(_ => ParseWorker(_parseQueue, _mainQueue, responseWriter, SpanClassesManager));
+    }
+    
+    public ProjectLoadCancellationToken : CancellationToken
+    {
+      get
+      {
+        when (_projectLoadingCts == null)
+          _projectLoadingCts = CancellationTokenSource();
+        _projectLoadingCts.Token
+      }
+    }
+
+    public ProjectLoadFinish() : void
+    {
+      _projectLoadingCts = null;
+    }
+    
+    public ProjectLoadCancel() : void
+    {
+      def cts = _projectLoadingCts;
+      when (cts != null)
+      {
+        _projectLoadingCts = null;
+        //def cts = Interlocked.Exchange(ref _cts, CancellationTokenSource());
+        cts.Cancel();
+        cts.Dispose();
+      }
     }
     
     public SendResponse(msg : ServerMessage) : void
@@ -52,22 +80,28 @@ namespace Nitra.ClientServer.Server
       thread.Name = "Router";
       thread.CurrentCulture = CultureInfo.InvariantCulture;
 
-      try RouteMessages()
-      catch
-      {
-        | e is OperationCanceledException => ServerUtils.LogCanceled(e)
-        | e                               => ServerUtils.LogException(e)
-      }
+      RouteMessages();
     }
     
     RouteMessages() : void
     {
-      foreach(msg in _mainQueue.GetConsumingEnumerable(_cts.Token))
+      while (!_mainQueue.IsCompleted)
       {
-        | serverMsg is ClientMessage.Shutdown => OnClientMessage(serverMsg); return;
-        | serverMsg is ClientMessage          => OnClientMessage(serverMsg);
-        | serverMsg is RouterAnswerMessage    => OnRouterAnswerMessage(serverMsg);
-        | _ => assert2(false)
+        try
+        {
+          foreach(msg in _mainQueue.GetConsumingEnumerable(_cts.Token))
+          {
+            | serverMsg is ClientMessage.Shutdown => OnClientMessage(serverMsg); return;
+            | serverMsg is ClientMessage          => OnClientMessage(serverMsg);
+            | serverMsg is RouterAnswerMessage    => OnRouterAnswerMessage(serverMsg);
+            | _ => assert2(false)
+          }
+        }
+        catch
+        {
+          | e is OperationCanceledException => ServerUtils.LogCanceled(e);
+          | e                               => ServerUtils.LogException(e)
+        }
       }
     }
     

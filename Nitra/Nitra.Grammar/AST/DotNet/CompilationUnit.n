@@ -24,7 +24,7 @@ namespace DotNet
 {
   public partial class CompilationUnit : AstBase, IProjectSupport, NamespaceBody
   {
-    public RefreshReferences(project : Project) : object
+    public RefreshReferences(cancellationToken : CancellationToken, project : Project) : object
     {
       def oldManager = ManagerClass.Instance;
       try
@@ -32,6 +32,7 @@ namespace DotNet
         def manager : ManagerClass = if (project is NitraProject(Manager = manager)) manager else Compiler(project);
         ManagerClass.Instance = manager;
         def context       = DependentPropertyEvalContext();
+        context.CancellationToken = cancellationToken;
         def rootNamespace = NamespaceSymbol();
 
         rootNamespace.MemberTable = TableScope("<root namespace>", rootNamespace);
@@ -46,8 +47,8 @@ namespace DotNet
         unless (manager.IsIntelliSenseMode)
           manager.BeforeSaveAssembly += writeMetadataCallback;
         
-        def rootScope = CreateNemerleSymbols(manager, rootNamespace, context);
-        LoadNitraMetadata(project, manager, rootNamespace);
+        def rootScope = CreateNemerleSymbols(cancellationToken, manager, rootNamespace, context);
+        LoadNitraMetadata(cancellationToken, project, manager, rootNamespace);
         (context, rootNamespace, rootScope, manager)
       }
       finally ManagerClass.Instance = oldManager;
@@ -57,6 +58,8 @@ namespace DotNet
     {
       def oldManager = ManagerClass.Instance;
       def (context, rootNamespace, rootScope, manager) = data :> (DependentPropertyEvalContext * NamespaceSymbol * Scope * ManagerClass);
+
+      context.CancellationToken = cancellationToken;
       
       try
       {
@@ -105,11 +108,14 @@ namespace DotNet
 
     private static NitraMetadataStreamName = "Nitra.Metadata2";
 
-    private static LoadNitraMetadata(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
+    private static LoadNitraMetadata(cancellationToken : CancellationToken, project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
     {
       def assemblyWithMetadata = Dictionary();
       foreach (reference in manager.ReferencedAssemblies)
       {
+        when (cancellationToken.IsCancellationRequested)
+          return;
+
         def assembly       = reference.Assembly;
         def metadataStream = assembly.GetManifestResourceStream(NitraMetadataStreamName);
         when (metadataStream != null)
@@ -139,7 +145,12 @@ namespace DotNet
       }
 
       foreach (assemblyId in assemblyWithMetadata.Keys)
+      {
+        when (cancellationToken.IsCancellationRequested)
+          return;
+
         visitAssembly(assemblyId);
+      }
     }
 
     private static SaveNitraMetadata(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
@@ -151,7 +162,7 @@ namespace DotNet
       manager.Options.EmbeddedResources ::= metadataFileName + "," + NitraMetadataStreamName;
     }
 
-    private static CreateNemerleSymbols(manager : ManagerClass, rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : Scope
+    private static CreateNemerleSymbols(cancellationToken : CancellationToken, manager : ManagerClass, rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : Scope
     {
       def nemerleNsRoot     = manager.NameTree.NamespaceTree;
       def file              = SourceSnapshot.Default.File;
@@ -237,6 +248,8 @@ namespace DotNet
           | MacroCall                        => ()
           | null                             => ()
           | NamespaceReference               => 
+            when (cancellationToken.IsCancellationRequested)
+              return;
             def name   = NRB.Name(file, span, node.PartName);
             def symbol = ExternalNamespaceDeclaration(name, node).DefineSymbol(declaredIn.MemberTable);
             unless (symbol.IsDeclaredInEvaluated)
