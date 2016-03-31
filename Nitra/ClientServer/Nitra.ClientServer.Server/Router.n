@@ -18,7 +18,7 @@ using IO = System.IO;
 
 namespace Nitra.ClientServer.Server
 {
-  internal class Router
+  internal partial class Router
   {
             _mainQueue          : BlockingCollection[RouterMessage] = BlockingCollection();
             _parseQueue         : BlockingCollection[ParserMessage] = BlockingCollection();
@@ -64,77 +64,9 @@ namespace Nitra.ClientServer.Server
     {
       foreach(msg in _mainQueue.GetConsumingEnumerable(_cts.Token))
       {
-        | serverMsg is ClientMessage =>
-          //Log(serverMsg.ToString());
-          match (serverMsg)
-          {
-            | ClientMessage.CheckVersion(assemblyVersionGuid)        =>
-              if (Constants.AssemblyVersionGuid == assemblyVersionGuid)
-                Log("Client version checked.");
-              else
-              {
-                def asm = typeof(Message);
-                Error($"Incorrect version of messaging assembly: '$(asm.Assembly.Location)'.");
-                Environment.Exit(42);
-              }
-            | SolutionStartLoading(fullPath)                  => assert2(_solution == null); _solution = Solution(fullPath);
-            | SolutionLoaded                                  => _solution.Open();
-            | SolutionUnloaded                                => _solution.Dispose(); _solution = null;
-            | ProjectStartLoading(id, fullPath, lans)         => _ = Project(_solution, fullPath, id, lans, _parseQueue, this);
-            | ProjectLoaded      (id)                         => _solution[id].Open();
-            | ProjectUnloaded    (id)                         => _solution.RemoveProject(id);
-            | ProjectRename      (oldId, newId, newPath)      => Log("Not supported yet.");
-            | ReferenceLoaded    (projectId, fullPath)        => _solution[projectId].AddLib(fullPath);
-            | ReferenceUnloaded  (projectId, fullPath)        => _solution[projectId].RemoveLib(fullPath);
-            | FileLoaded         (projectId, fullPath, id)    => _parseQueue.Add(File(id, fullPath, _solution[projectId]).GetReParseMessage());
-            | FileReparse        (id)                         => _parseQueue.Add(_solution.GetFile(id).GetReParseMessage());
-            | FileInMemoryLoaded (projectId, id, name, text)  => _parseQueue.Add(File(id, name, _solution[projectId], text).GetReParseMessage());
-            | FileActivated      (id)                         => _solution.GetFile(id).Activate();
-            | FileDeactivated    (id)                         => _solution.GetFile(id).Deactivate();
-            | FileUnloaded       (id)                         => _solution.GetFile(id).Parent.RemoveFile(id);
-            | FileRenamed        (oldId, newId, newPath)      => Log("Not supported yet.");
-            | FileChanged        (id, version, change)        => _solution.GetFile(id).Change(version, change);
-            | FileChangedBatch   (id, version, changes)       => _solution.GetFile(id).Change(version, changes);
-            | Shutdown                                        =>
-              Log("Shutdown");
-              _solution?.Dispose();
-              _cts.Cancel();
-              return;
-            | _                                               => assert2(false)
-          }
-
-        | serverMsg is RouterAnswerMessage =>
-          match (serverMsg)
-          {
-            | FileParsed(fileId, parseResult) => 
-              when (parseResult.ParseSession.CancellationToken.IsCancellationRequested)
-                continue;
-
-              assert2(parseResult != null);
-
-              def file = _solution.GetFile(fileId);
-              
-              when (file.IsActive)
-                file.CreateVisualInfo(parseResult);
-              
-              _parseQueue.Add(file.CreateAstMessage(parseResult));
-              
-            | AstCreated(fileId, cancellationToken, ast, parseTree) =>
-              when (cancellationToken.IsCancellationRequested)
-                continue;
-
-              def file = _solution.GetFile(fileId);
-              // TODO: send CollectOutlining and CollectTokebHighlighting mesages
-              file.AstCreated(ast, parseTree);
-              // TODO: send EvalProperties if ast != null
-            | SemanticAnalysisFinished(projectId, cancellationToken, compilerMessages) =>
-              when (cancellationToken.IsCancellationRequested)
-                continue;
-              def project = _solution[projectId];
-              project.SemanticAnalysisFinished(compilerMessages);
-            
-          }
-
+        | serverMsg is ClientMessage.Shutdown => OnClientMessage(serverMsg); return;
+        | serverMsg is ClientMessage          => OnClientMessage(serverMsg);
+        | serverMsg is RouterAnswerMessage    => OnRouterAnswerMessage(serverMsg);
         | _ => assert2(false)
       }
     }
