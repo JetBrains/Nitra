@@ -13,6 +13,6 @@ License — [BSD 3-Clause License](http://opensource.org/licenses/BSD-3-Clause)
 
 [Roadmap](http://confluence.jetbrains.com/display/Nitra/Roadmap)
 
-[[Languages powered by Nitra]]
+[Languages powered by Nitra](https://github.com/rsdn/nitra/wiki/Languages-powered-by-Nitra)
 
 [More information](http://confluence.jetbrains.com/display/Nitra)
