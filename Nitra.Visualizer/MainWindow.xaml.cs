@@ -591,6 +591,7 @@ namespace Nitra.Visualizer
       _matchedBracketsMarkers.Clear();
       _recoveryTreeView.Items.Clear();
       _errorsTreeView.Items.Clear();
+      ClearHighlighting();
       //_reflectionTreeView.ItemsSource = null;
     }
 

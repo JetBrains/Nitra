@@ -50,6 +50,12 @@ namespace Nitra.Visualizer
       }
     }
 
+    private void ClearHighlighting()
+    {
+      _keywordsSpanInfos = ImmutableArray<SpanInfo>.Empty;
+      _symbolsSpanInfos  = ImmutableArray<SpanInfo>.Empty;
+    }
+
     private void UpdateKeywordSpanInfos(ServerMessage.KeywordsHighlightingCreated keywordHighlighting)
     {
       _keywordsSpanInfos = keywordHighlighting.spanInfos;
