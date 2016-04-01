@@ -45,6 +45,7 @@ namespace Nitra.Visualizer
 {
   using ClientServer.Messages;
   using Interop;
+  using System.Collections.Immutable;
   using System.Windows.Documents;
   using System.Windows.Interop;
 
@@ -127,7 +128,7 @@ namespace Nitra.Visualizer
 
     private void DocumentOnUpdateFinished(object sender, EventArgs eventArgs)
     {
-      if (_currentTest == null)
+      if (_currentTest == null || _initializing)
         return;
 
       _currentTest.StartBatchCodeUpdate();
@@ -135,7 +136,7 @@ namespace Nitra.Visualizer
 
     private void DocumentOnUpdateStarted(object sender, EventArgs eventArgs)
     {
-      if (_currentTest == null)
+      if (_currentTest == null || _initializing)
         return;
 
       _currentTest.FinishBatchCodeUpdate();
@@ -388,6 +389,56 @@ namespace Nitra.Visualizer
     }
 
     private void TryReportError()
+    {
+      if (_currentTest == null)
+        return;
+
+      var cmpilerMessages = _parsingMessages.Sort();
+      var errorNodes      = _errorsTreeView.Items;
+      var currentFileId   = _currentTest.Id;
+      var fullName        = _currentTest.FullPath;
+      var doc             = _text.Document;
+      
+      errorNodes.Clear();
+
+      foreach (var message in cmpilerMessages)
+      {
+        var text     = message.Text;
+        var location = message.Location;
+        var file     = location.File;
+        var span     = location.Span;
+        if (currentFileId == file.FileId)
+        {
+          var marker = _textMarkerService.Create(span.StartPos, span.Length);
+          marker.Tag         = ErrorMarkerTag;
+          marker.MarkerType  = TextMarkerType.SquigglyUnderline;
+          marker.MarkerColor = Colors.Red;
+          marker.ToolTip     = text;
+        }
+
+        var errorNode = new TreeViewItem();
+        var pos = doc.GetLocation(span.StartPos);
+        errorNode.Header = Path.GetFileNameWithoutExtension(fullName) + "(" + pos.Line + "," + pos.Column  + "): " + text;
+        errorNode.Tag = message;
+        errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
+
+        foreach (var nestedMessage in message.NestedMessages)
+        {
+          var nestedPos = doc.GetLocation(span.StartPos);
+          var nestadErrorNode = new TreeViewItem();
+          nestadErrorNode.Header = Path.GetFileNameWithoutExtension(fullName) + "(" + nestedPos.Line + "," + nestedPos.Column + "): " + nestedMessage.Text;
+          nestadErrorNode.Tag = nestedMessage;
+          nestadErrorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
+          errorNode.Items.Add(nestadErrorNode);
+        }
+
+        errorNodes.Add(errorNode);
+      }
+
+      _status.Text = cmpilerMessages.Length == 0 ? "OK" : cmpilerMessages.Length + " error[s]";
+    }
+
+    private void TryReportError2()
     {
       //if (_parseResult == null)
       //  if (_currentSuite.Exception != null)
@@ -1020,10 +1071,11 @@ namespace Nitra.Visualizer
 
     void Response(ServerMessage msg)
     {
-      ServerMessage.OutliningCreated outlining;
+      ServerMessage.OutliningCreated            outlining;
       ServerMessage.KeywordsHighlightingCreated keywordHighlighting;
-      ServerMessage.LanguageLoaded languageInfo;
-      ServerMessage.SymbolsHighlightingCreated symbolsHighlighting;
+      ServerMessage.LanguageLoaded              languageInfo;
+      ServerMessage.SymbolsHighlightingCreated  symbolsHighlighting;
+      ServerMessage.ParsingMessages             parsingMessages;
 
       if (_currentTest == null || msg.FileId >= 0 && msg.FileId != _currentTest.Id || msg.Version >= 0 && msg.Version != _textVersion)
         return;
@@ -1044,6 +1096,11 @@ namespace Nitra.Visualizer
       else if ((languageInfo = msg as ServerMessage.LanguageLoaded) != null)
       {
         UpdateHighlightingStyles(languageInfo);
+      }
+      else if ((parsingMessages = msg as ServerMessage.ParsingMessages) != null)
+      {
+        _parsingMessages = parsingMessages.messages;
+        TryReportError();
       }
     }
 
