@@ -1,0 +1,182 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.ClientServer.Messages;
+
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.IO;
+using System.Linq;
+
+using System.Reflection;
+using NSP = Nitra.ProjectSystem;
+
+namespace Nitra.ClientServer.Server.ProjectSystem
+{
+  public class Project : NSP.Project, IDisposable
+  {
+            _files             : Hashtable[int, File]   = Hashtable();
+            _libMap            : Hashtable[string, int] = Hashtable();
+            _libs              : List[NSP.LibReference] = List();
+    public  Parent             : Solution;
+    public  Id                 : int;
+    public  Path               : string                       { get; }
+    public  Name               : string                       { get; private set; }
+    public  LanguageInfos      : ImmutableArray[LanguageInfo] { get; }
+    public  Language           : Nitra.Language               { get; }
+    public  DynamicExtensions  : List[GrammarDescriptor]      { get; }
+    public  IsDisposed         : bool                         { get; private set; }
+    mutable _expectsToBuildAst : int;
+           
+    public this(parent : Solution, fullPath : string, id : int, languageInfos : ImmutableArray[LanguageInfo])
+    {
+      Path          = fullPath;
+      Id            = id;
+      Parent        = parent;
+      Name          = Path.GetFileNameWithoutExtension(fullPath);
+      LanguageInfos = languageInfos;
+      Libs          = _libs;
+
+      parent.AddProject(this);
+      
+      Log("ProjectStartLoading " + id + ": "+ fullPath);
+      foreach (languageInfo in languageInfos with i)
+      {
+        def path = languageInfo.Path;
+        def name = languageInfo.Name;
+        def assembly = LoadAssembly(path);
+        def language = Nitra.Language.GetLanguages(assembly).FirstOrDefault(l => String.Equals(l.FullName, name, StringComparison.Ordinal));
+        Language = language;
+        assert2(language.StartRule != null);
+        Log("  Language " + i + ": "+ language.FullName + " - '" + path + "' " + language.Authors);
+        
+        def dynamicExtensions = List();
+        foreach (dynamicExtension in languageInfo.DynamicExtensions)
+        {
+          def extensionAssembly = LoadAssembly(dynamicExtension.Path);
+          def descriptor = GrammarDescriptor.GetDescriptors(extensionAssembly).FirstOrDefault(g => String.Equals(g.FullName, dynamicExtension.Name, StringComparison.Ordinal));
+          if (descriptor == null)
+            Log("Syntax module '$(dynamicExtension.Name)' not found in assembly '$(extensionAssembly.Location)'.");
+          else
+          {
+            dynamicExtensions.Add(descriptor);
+            Log("    Dynamic extension " + descriptor.FullName + " - '" + dynamicExtension.Path + "'");
+          }
+        }
+      }
+    }
+
+    public ExpectsToBuildAst : int { get { _expectsToBuildAst } }
+    
+    public AstDropped() : void
+    {
+      _expectsToBuildAst++;
+    }
+    
+    public AstCreated() : void
+    {
+      _expectsToBuildAst--;
+      assert2(_expectsToBuildAst >= 0);
+      when (_expectsToBuildAst == 0)
+      {
+        // TODO: send message EvalPropertiesStart()
+      }
+    }
+    
+    LoadAssembly(path : string) : Assembly
+    {
+      // TODO: add chech GetReferencedAssemblies()
+      // TODO: use shadow copying
+      def assembly = 
+        if (path.Contains(", Version="))
+          Assembly.Load(path)
+        else
+          Assembly.LoadFrom(path);
+      assembly
+    }
+    
+    //public override Libs : Seq[string] { get { _libs } }
+    
+    public IsOpened : bool { get; private set }
+    
+    public Open() : void { IsOpened = true }
+    
+    public Log(msg : string) : void { Parent.Logger?.WriteLine(msg) }
+    
+    public Item[fileId : int] : File { get { GetFile(fileId) } }
+    
+    public GetFile(id : int) : File
+    {
+      _files[id]
+    }
+    
+    public AddFile(file : File): void
+    {
+      _expectsToBuildAst++;
+      _files.Add(file.Id, file);
+      Parent._N_OnFileAdded(file);
+    }
+
+    public RemoveFile(file : File): void { RemoveFile(file.Id); }
+    
+    public RemoveFile(id : int): void
+    {
+      _expectsToBuildAst--;
+      _files.Remove(id);
+      Parent._N_OnFileRemoved(id);
+    }
+    
+    public AddProjectReference(projectId : int, referencedProjectId : int) : void
+    {
+      IgnoreParams();
+      throw NotImplementedException()
+    }
+    
+    public AddLib(name : string) : void
+    {
+      mutable index;
+      if (_libMap.TryGetValue(name, out index))
+        Log("Reference '" + name + "' allredy added: " + _libs[index]);
+      else
+      {
+        _libMap[name] = _libs.Count;
+        def r : NSP.LibReference =
+          if (name.Contains(", Version="))
+            NSP.FullNameLibReference(name)
+          else
+            NSP.FileLibReference(name);
+        _libs.Add(r);
+        Log("  Lib: " + r);
+      }
+    }
+    
+    public RemoveLib(fullPath : string) : void
+    {
+      IgnoreParams();
+      throw NotImplementedException()
+    }
+    
+    // overrides
+    
+    public override Files : Seq[NSP.File] 
+    { 
+      get { _files.Values }
+    }
+    
+    public Dispose() : void
+    {
+      when (IsDisposed)
+        return;
+        
+      foreach (v in _files.Values)
+        v.Dispose();
+      _files.Clear();
+      
+      IsDisposed = true;
+    }
+  }
+}

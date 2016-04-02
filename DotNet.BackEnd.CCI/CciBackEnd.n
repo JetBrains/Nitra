@@ -8,6 +8,7 @@ using Nemerle.Utility;
 
 using Nitra;
 using Nitra.Declarations;
+using Nitra.Internal;
 using Nitra.ProjectSystem;
 
 using Microsoft.Cci;
@@ -44,6 +45,11 @@ namespace Nitra.BackEnd.Cci
     
     public LoadExternalSymbols(project : Project, context : DependentPropertyEvalContext) : NamespaceSymbol
     {
+      LoadExternalSymbols(project.Libs, project.ProjectDir, (loc, err) => project.CompilerMessages.Error(loc, err), context);
+    }
+    
+    public LoadExternalSymbols(libs : IEnumerable[LibReference], libPath : string, addError : Action[Location, string], context : DependentPropertyEvalContext) : NamespaceSymbol
+    {
       Debug.WriteLine("LoadExternalSymbols started");
       
       def timer = Stopwatch.StartNew();
@@ -58,7 +64,6 @@ namespace Nitra.BackEnd.Cci
       rootNamespace.DeclaredIn  = null;
       rootNamespace.FullName    = "";
       rootNamespace.EvalProperties(context);
-      def libs = project.Libs;
       def makeTypeParameters(symbol : GenericEntitySymbol, cciType : ITypeDefinition) : void
       {
         unless (symbol.IsTypeParametersCountEvaluated)
@@ -73,11 +78,11 @@ namespace Nitra.BackEnd.Cci
       {
         | name is FullNameLibReference with filePath = name.Path
         | file is FileLibReference     with filePath = file.Path =>
-          def fullPath = Path.GetFullPath(IO.Path.Combine(project.ProjectDir, filePath));
+          def fullPath = Path.GetFullPath(IO.Path.Combine(libPath, filePath));
             
           when (!File.Exists(fullPath))
           {
-            project.CompilerMessages.Error(NoLocation, "The referenced file '" + fullPath + "' is not found.");
+            addError(NoLocation, "The referenced file '" + fullPath + "' is not found.");
             continue;
           }
             
@@ -85,7 +90,7 @@ namespace Nitra.BackEnd.Cci
           
           when (unit == null || unit.Equals(Dummy.Module) || unit.Equals(Dummy.Assembly))
           {
-            project.CompilerMessages.Error(NoLocation, "The referenced file '" + fullPath + "' is not .Net assembly.");
+            addError(NoLocation, "The referenced file '" + fullPath + "' is not .Net assembly.");
             continue;
           }
 
@@ -123,6 +128,9 @@ namespace Nitra.BackEnd.Cci
             flags.Add(modifiers);
             modifierHost.Flags = flags;
 
+            when ((typeSymbol : DeclarationSymbol)  is CustomAttributeHostDeclarationSymbol as attrHost)
+              attrHost.CustomAttributes = LazyAttributeList(type, this);
+            
             typeSymbol.EvalProperties(context);
                 
             when ((typeSymbol : DeclarationSymbol) is ContainerSymbol as containerSymbol)
@@ -211,7 +219,70 @@ namespace Nitra.BackEnd.Cci
 
       rootNamespace
     }
-    
+
+    public LoadCustomAttribute(cciCustomAttribute : ICustomAttribute, context : DependentPropertyEvalContext) : CustomAttributeSymbol
+    {
+      def customAttributeSymbol = CustomAttributeSymbol();
+      def attrType = CciTypeToTypeSymbol(cciCustomAttribute.Type, context);
+      customAttributeSymbol.Type = attrType;
+      customAttributeSymbol.FullName = attrType.FullName;
+      def cciCtorKey = cciCustomAttribute.Constructor.InternedKey;
+      def filter(sym : Member.ConstructorSymbol) : bool
+      {
+        def decl = sym.GetDeclarationsOfType.[ExternalConstructorDeclaration]().FirstOrDefault();
+        when (decl == null)
+          return false;
+        
+        decl.Method.InternedKey == cciCtorKey
+      }
+      mutable result = LightList.[Member.ConstructorSymbol]();
+      attrType.Scope.FindMany(filter, ref result);
+      when (result.Count > 0)
+        customAttributeSymbol.Constructor = result.FirstItem;
+      
+      def cciArgToCustomAttributeExpression(cciExpr : IMetadataExpression) : CustomAttributeExpression
+      {
+        | c is IMetadataConstant =>
+          match (c.Value)
+          {
+            | v is bool   => CustomAttributeExpression.Bool  (v)
+            | v is byte   => CustomAttributeExpression.Byte  (v)
+            | v is char   => CustomAttributeExpression.Char  (v)
+            | v is double => CustomAttributeExpression.Double(v)
+            | v is float  => CustomAttributeExpression.Float (v)
+            | v is int    => CustomAttributeExpression.Int   (v)
+            | v is long   => CustomAttributeExpression.Long  (v)
+            | v is sbyte  => CustomAttributeExpression.Sbyte (v)
+            | v is short  => CustomAttributeExpression.Short (v)
+            | v is string => CustomAttributeExpression.String(v)
+            | v is uint   => CustomAttributeExpression.Uint  (v)
+            | v is ulong  => CustomAttributeExpression.Ulong (v)
+            | v is ushort => CustomAttributeExpression.Ushort(v)
+            | _ => assert(false);
+          }
+
+        | a is IMetadataCreateArray =>
+          def elemType = CciTypeToTypeSymbol(a.ElementType, context);
+          def elems = a.Initializers.MapToArray(cciArgToCustomAttributeExpression);
+          CustomAttributeExpression.Array(elemType, elems)
+
+        | t is IMetadataTypeOf => CustomAttributeExpression.Type(CciTypeToTypeSymbol(t.Type, context))
+      }
+      customAttributeSymbol.Arguments = cciCustomAttribute.Arguments.MapToArray(cciArgToCustomAttributeExpression);
+      def cciNamedArgToCustomAttributeExpression(a : IMetadataNamedArgument) : CustomAttributeNamedArgument
+      {
+        def expr = cciArgToCustomAttributeExpression(a.ArgumentValue);
+        def nameId = StringIndex.GetId(a.ArgumentName.Value); // TODO: ns.Name.UniqueKey
+        CustomAttributeNamedArgument(nameId, expr)
+      }
+      customAttributeSymbol.NamedArguments = cciCustomAttribute.NamedArguments.MapToArray(cciNamedArgToCustomAttributeExpression);
+
+      def name   = NRB.Name(NoFile, NoSpan, customAttributeSymbol.Name); // TODO: ns.Name.UniqueKey
+      customAttributeSymbol.AddDeclaration(ExternalCustomAttributeDeclaration(name, cciCustomAttribute));
+      customAttributeSymbol.EvalProperties(context);
+      customAttributeSymbol
+    }
+
     public Dispose() : void
     {
       when ((CciHost : object) is IDisposable as d)
@@ -232,12 +303,33 @@ namespace Nitra.BackEnd.Cci
       modifiers
     }
     
-    internal LoadTypeMembers(member : ITypeDefinitionMember, declaredIn : ContainerSymbol, context : DependentPropertyEvalContext) : void
+    internal LoadParameters(paremeters : Seq[IParameterDefinition], containingScope : TableScope, context : DependentPropertyEvalContext) : void
+    {
+      foreach (p in paremeters)
+      {
+        //FormalParameter
+        def parameterName = Name(NoFile, NoSpan, p.Name.Value); // TODO: type.Name.UniqueKey
+        def parameter = ExternalParameterDeclaration(parameterName, p).DefineSymbol(containingScope);
+        parameter.Type = CciTypeToTypeSymbol(p.Type, context);
+        mutable parameterModifier;
+        when (p.IsOut)
+          parameterModifier |= ParameterModifier.Out;
+        when (p.IsByReference)
+          parameterModifier |= ParameterModifier.Ref;
+        when (p.IsParameterArray)
+          parameterModifier |= ParameterModifier.Params;
+        parameter.Modifier = parameterModifier;
+        parameter.Index = p.Index;
+        parameter.EvalProperties(context);
+      }
+    }
+    
+    internal LoadTypeMembers(member : ITypeDefinitionMember, declaredIn : ContainerSymbol, context : DependentPropertyEvalContext) : DeclarationSymbol
     {
       def visibility = member.Visibility;
             
-      when (visibility != TypeMemberVisibility.Public && visibility != TypeMemberVisibility.Family && visibility != TypeMemberVisibility.FamilyOrAssembly)
-        return;
+      //when (visibility != TypeMemberVisibility.Public && visibility != TypeMemberVisibility.Family && visibility != TypeMemberVisibility.FamilyOrAssembly)
+      //  return;
               
       def makeStaticIf(isStatic : bool, flags : ModifierSet) : void { when (isStatic) flags.Add(Modifiers.Static) }
       def name = Name(NoFile, NoSpan, member.Name.Value); // TODO: type.Name.UniqueKey
@@ -256,9 +348,19 @@ namespace Nitra.BackEnd.Cci
             prop.Type = CciTypeToTypeSymbol(m.Type, context); 
             prop
                   
+          | m is IMethodDefinition when m.IsConstructor =>
+            def method = ExternalConstructorDeclaration(name, m).DefineSymbol(declaredIn.MemberTable);
+            makeStaticIf(m.IsStatic, flags);
+            method.Flags = flags;
+            unless (method.IsDeclaredInEvaluated)
+              method.DeclaredIn = declaredIn :> GenericContainerTypeSymbol;
+            method.EvalProperties(context);
+            LoadParameters(m.Parameters, method.ParameterScope, context);
+            method
+
           | m is IMethodDefinition   =>
             makeStaticIf(m.IsStatic, flags);
-            def method = ExternalMethodDeclaration  (name, m).DefineSymbol(declaredIn.MemberTable);
+            def method = ExternalMethodDeclaration(name, m).DefineSymbol(declaredIn.MemberTable);
             method.Flags = flags;
 
             unless (method.IsDeclaredInEvaluated)
@@ -271,23 +373,7 @@ namespace Nitra.BackEnd.Cci
             method.ReturnType = CciTypeToTypeSymbol(m.Type, context); 
             method.EvalProperties(context);
             
-            foreach (p in m.Parameters)
-            {
-              //FormalParameter
-              def parameterName = Name(NoFile, NoSpan, p.Name.Value); // TODO: type.Name.UniqueKey
-              def parameter = ExternalParameterDeclaration(parameterName, p).DefineSymbol(method.ParameterScope);
-              parameter.Type = CciTypeToTypeSymbol(p.Type, context);
-              mutable parameterModifier;
-              when (p.IsOut)
-                parameterModifier |= ParameterModifier.Out;
-              when (p.IsByReference)
-                parameterModifier |= ParameterModifier.Ref;
-              when (p.IsParameterArray)
-                parameterModifier |= ParameterModifier.Params;
-              parameter.Modifier = parameterModifier;
-              parameter.Index = p.Index;
-              parameter.EvalProperties(context);
-            }
+            LoadParameters(m.Parameters, method.ParameterScope, context);
             method
                   
           | m is IFieldDefinition    =>
@@ -319,8 +405,12 @@ namespace Nitra.BackEnd.Cci
                   
           | _ => assert(false)
         };
+        
+        when (symbol is CustomAttributeHostDeclarationSymbol as attrHost)
+          attrHost.CustomAttributes = LazyAttributeList(member, this);
               
         symbol.EvalProperties(context);
+        symbol
     }
 
     CciTypeToTypeSymbol(cciTypeReference : ITypeReference, context : DependentPropertyEvalContext) : TypeSymbol
@@ -507,6 +597,13 @@ namespace Nitra.BackEnd.Cci
   }
 
   [Record]
+  public class ExternalConstructorDeclaration : ExternalDeclaration[Member.ConstructorSymbol]
+  {
+    public Method : IMethodDefinition;
+    public override CreateSymbol() : DeclarationSymbol { Member.ConstructorSymbol() }
+  }
+
+  [Record]
   public class ExternalFieldDeclaration : ExternalDeclaration[Member.FieldSymbol]
   {
     public Field : IFieldDefinition;
@@ -532,5 +629,12 @@ namespace Nitra.BackEnd.Cci
   {
     public Parameter : IParameterDefinition;
     public override CreateSymbol() : DeclarationSymbol { FormalParameterSymbol() }
+  }
+
+  [Record]
+  public class ExternalCustomAttributeDeclaration : ExternalDeclaration[CustomAttributeSymbol]
+  {
+    public Attribute : ICustomAttribute;
+    public override CreateSymbol() : DeclarationSymbol { CustomAttributeSymbol() }
   }
 }

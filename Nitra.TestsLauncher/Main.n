@@ -1,0 +1,250 @@
+﻿using Nemerle;
+using Nemerle.Diff;
+using Nemerle.Utility;
+using Nemerle.Extensions;
+using System;
+using System.Linq;
+using System.Console;
+using System.Collections.Generic;
+using System.Threading;
+using Nitra.ViewModels;
+using File = System.IO.File;
+
+namespace Nitra.TestsLauncher
+{
+  module Program
+  {
+    IndentString = "    ";
+    mutable _currentIndent = "";
+    
+    Main(args: array[string]) : void
+    {
+      if (args.Length != 2)
+        WriteLine("Usage: Nitra.TestsLauncher.exe tests-location-root-path (Debug|Releath)")
+      else
+      {
+        def solutionFilePath = args[0];
+        def config = args[1];
+        
+        if (!File.Exists(solutionFilePath ?? ""))
+        {
+          ForegroundColor = ConsoleColor.Red;
+          WriteLine("The solution '" + solutionFilePath + "' does not exist.");
+          ResetColor();
+        }
+        else
+        {
+          def stackSize = 20 * 1024 * (if (IntPtr.Size == 8) { 8 } else 1) * 1024;
+          def thread = Thread(() => Start(solutionFilePath, config), stackSize);
+          thread.Name = "Main test thread";
+          thread.Start();        
+          thread.Join()
+        }
+      }
+    }
+
+    Indent(): void
+    {
+      _currentIndent += IndentString;
+    }
+
+    Unindent(): void
+    {
+      _currentIndent = _currentIndent.Substring(0, _currentIndent.Length - IndentString.Length);
+    }
+
+    PrintLine(text: string, color: ConsoleColor): void
+    {
+      ForegroundColor = color;
+      PrintLine(text);
+      ResetColor();
+    }
+
+    Print(text: string, color: ConsoleColor): void
+    {
+      ForegroundColor = color;
+      Print(text);
+      ResetColor();
+    }
+
+    ContinuePrint(text: string, color: ConsoleColor): void
+    {
+      ForegroundColor = color;
+      ContinuePrint(text);
+      ResetColor();
+    }
+
+    PrintLine(text: string): void
+    {
+      when (!string.IsNullOrWhiteSpace(text))
+        WriteLine(_currentIndent + text.Replace("\n", "\n" + _currentIndent));
+    }
+
+    Print(text: string): void
+    {
+      when (!string.IsNullOrWhiteSpace(text))
+        Write(_currentIndent + text.Replace("\n", "\n" + _currentIndent));
+    }
+
+    ContinuePrint(text: string): void
+    {
+      when (!string.IsNullOrWhiteSpace(text))
+        WriteLine(text.Replace("\n", "\n" + _currentIndent));
+    }
+
+    Start(workspaceFilePath: string, config: string): void
+    {
+      using (workspace = WorkspaceVm(workspaceFilePath, null, config))
+      {
+        def testSuites = workspace.TestSuites;
+        
+        def maxNameLen = CalcMaxNameLen(testSuites);
+        mutable someTestsFailed = false;
+        mutable someTestSuitesFailedToLoad = false;
+        
+        foreach (suite in testSuites)
+        {
+          PrintLine("Test suite: " + suite.Name);
+          Indent();
+        
+          if (suite.TestState == TestState.Ignored)
+          {
+            PrintLine(suite.Hint, ConsoleColor.Red);
+            someTestSuitesFailedToLoad = true;
+            Unindent();
+          }
+          else
+          {
+            foreach (solution in suite.Children)
+              foreach (project in solution.Children)
+                foreach (test in project.Children)
+                {
+                  def dots = maxNameLen - test.Name.Length;
+                  Print($"$(test.Name) $(string('.', dots)) ");
+                  Out.Flush();
+                  someTestsFailed |= RunTestFile(test);
+                }
+          
+            Unindent();
+          }
+        }
+        
+        when (someTestSuitesFailedToLoad)
+          PrintLine("Some test suits is failed to load!", ConsoleColor.Red);
+          
+        when (someTestsFailed)
+          PrintLine("Some tests is failed!", ConsoleColor.Red);
+        
+        WriteLine("done...");
+        
+        when (someTestsFailed || someTestSuitesFailedToLoad)
+          Environment.Exit(-1);
+      }
+    }
+
+    RunTestFile(test: TestVm): bool
+    {
+      _ = test.Run(); //RecoveryAlgorithm.Smart);
+
+      match (test.TestState)
+      {
+        | TestState.Skipped =>
+            ContinuePrint("skipped.", ConsoleColor.Yellow);
+            false
+        | TestState.Failure =>
+            ContinuePrint("failed!", ConsoleColor.Red);
+            Indent();
+            Diff(test);
+            Unindent();
+            true
+        | TestState.Ignored =>
+            ContinuePrint("ignored.", ConsoleColor.Yellow);
+          false
+        | TestState.Inconclusive =>
+            ContinuePrint("inconclusive.", ConsoleColor.Yellow);
+            false
+        | TestState.Success =>
+            ContinuePrint("passed.", ConsoleColor.Green);
+            false
+      }
+    }
+
+    Diff(test: TestVm): void
+    {
+      def textA = Split(test.Gold);
+      def textB = Split(test.PrettyPrintResult);
+      def rangeToShow = 3;
+      mutable indexA = 0;
+
+      foreach (diffItem in textA.Diff(textB))
+      {
+        //в начале итерации indexA содержит индекс строки идущей сразу за предыдущим блоком
+
+        // определяем нужно ли выводить разделитель
+        if (diffItem.Index - indexA > rangeToShow * 2)
+        {
+          //показываем строки идущие после предыдущего блока
+          for (mutable i = 0; i < rangeToShow; ++i)
+          {
+            PrintLine("  " + textA[indexA]);
+            ++indexA;
+          }
+
+          PrintLine("  " + "...", ConsoleColor.Gray);
+
+          //показываем строки идущие перед текущим блоком
+          indexA = diffItem.Index - rangeToShow;
+          for (mutable i = 0; i < rangeToShow; ++i)
+          {
+            PrintLine("  " + textA[indexA]);
+            ++indexA;
+          }
+        }
+        else
+        {
+          //показываем строки между блоками
+          while (indexA < diffItem.Index)
+          {
+            PrintLine("  " + textA[indexA]);
+            ++indexA;
+          }
+        }
+
+        // показываем удаленные строки
+        for (mutable i = 0; i < diffItem.Deleted; ++i)
+        {
+          PrintLine("- " + textA[indexA], ConsoleColor.Red);
+          ++indexA;
+        }
+
+        // показываем добавленные строки
+        foreach (insertedItem in diffItem.Inserted)
+          PrintLine("+ " + insertedItem, ConsoleColor.Green);
+      }
+
+      // показываем не более rangeToShow последующих строк
+      def tailLinesToShow = Math.Min(rangeToShow, textA.Length - indexA);
+
+      for (mutable i = 0; i < tailLinesToShow; ++i)
+      {
+        PrintLine("  " + textA[indexA]);
+        ++indexA;
+      }
+
+      when (indexA < textA.Length)
+        PrintLine("  " + "...", ConsoleColor.Gray);
+
+      PrintLine("END-DIFF", ConsoleColor.Gray);
+    }
+
+    Split(gold: string): array[string]
+    {
+      gold.Split(array["\r\n", "\n", "\r"], StringSplitOptions.None)
+    }
+
+    CalcMaxNameLen(suites: IEnumerable[SuiteVm]): int
+    {
+      suites.SelectMany(x => x.GetAllTests()).Select(x => x.Name.Length).Max() + 3
+    }
+  }
+}

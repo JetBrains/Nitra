@@ -1,0 +1,146 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.ClientServer.Messages;
+using Nitra.ClientServer.Server.ProjectSystem;
+
+using System;
+using System.Threading;
+using System.Globalization;
+using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Linq;
+
+using IO = System.IO;
+
+namespace Nitra.ClientServer.Server
+{
+  class Router
+  {
+    public  Logger        : IO.TextWriter;
+            _mainQueue    : BlockingCollection[RouterMessage] = BlockingCollection();
+            _parseQueue   : BlockingCollection[ParserMessage] = BlockingCollection();
+            _mainThread   : Thread;
+            _parseWorkers : list[ParseWorker];
+            _cts          : CancellationTokenSource = CancellationTokenSource();
+    mutable _stopped      : bool;
+    mutable _solution     : Solution;
+    _sendResponse         : ServerMessage -> void;
+
+    public this(sendResponse: ServerMessage -> void)
+    {
+      Logger = Console.Out;
+      _sendResponse = sendResponse;
+      _mainThread = Thread(RouterThreadMain);
+      _mainThread.Start();
+      _parseWorkers = $[1..Environment.ProcessorCount].Map(_ => ParseWorker(_parseQueue, _mainQueue));
+    }
+
+    RouterThreadMain() : void
+    {
+      def thread = Thread.CurrentThread;
+      thread.Name = "ServerPipeReader";
+      thread.CurrentCulture = CultureInfo.InvariantCulture;
+
+      try Router()
+      catch
+      {
+        | OperationCanceledException => ()
+        | e => Error("Error: " + e)
+      }
+    }
+    
+    Router() : void
+    {
+      foreach(msg in _mainQueue.GetConsumingEnumerable(_cts.Token))
+      {
+        | serverMsg is ClientMessage =>
+          match (serverMsg)
+          {
+            | ClientMessage.CheckVersion(assemblyVersionGuid)        =>
+              if (Message.AssemblyVersionGuid == assemblyVersionGuid)
+                Log("Client version checked.");
+              else
+              {
+                def asm = typeof(Message);
+                Error($"Incorrect version of messaging assembly: '$(asm.Assembly.Location)'.");
+                Environment.Exit(42);
+              }
+            | SolutionStartLoading(fullPath)                  => assert2(_solution == null); _solution = Solution(fullPath, Logger)
+            | SolutionLoaded                                  => _solution.Open()
+            | SolutionUnloaded                                => assert2(_solution != null); _solution = null
+            | ProjectStartLoading(id, fullPath, lans)         => _ = Project(_solution, fullPath, id, lans)
+            | ProjectLoaded      (id)                         => _solution[id].Open()
+            | ProjectUnloaded    (id)                         => _solution.RemoveProject(id)
+            | ProjectRaname      (oldId, newId, newPath)      => Log("Not supported yet.")
+            | ReferenceLoaded    (projectId, fullPath)        => _solution[projectId].AddLib(fullPath)
+            | ReferenceUnloaded  (projectId, fullPath)        => _solution[projectId].RemoveLib(fullPath)
+            | FileLoaded         (projectId, fullPath, id)    => _parseQueue.Add(File(id, fullPath, _solution[projectId]).GetReParseMessage())
+            | FileInMemoryLoaded (projectId, id, name, text)  => _parseQueue.Add(File(id, name, _solution[projectId], text).GetReParseMessage())
+            | FileActivated      (id, pipeName)               => _solution.GetFile(id).Activate(pipeName)
+            | FileDeactivated    (id)                         => _solution.GetFile(id).Deactivate()
+            | FileUnloaded       (id)                         => _solution.GetFile(id).Parent.RemoveFile(id)
+            | FileRanamed        (oldId, newId, newPath)      => Log("Not supported yet.")
+            | FileChanged        (id, change)                 => _solution.GetFile(id).Change(change)
+            | FileChangedBatch   (id, changes)                => _solution.GetFile(id).Change(changes)
+            | Shutdown                                        => _cts.Cancel()
+            | _                                               => assert2(false)
+          }
+
+        | serverMsg is RouterAnswerMessage =>
+          match (serverMsg)
+          {
+            | FileParsed(fileId, parseResult) => 
+              when (parseResult.ParseSession.CancellationToken.IsCancellationRequested)
+                continue;
+
+              def file = _solution.GetFile(fileId);
+              _parseQueue.Add(file.CreateOutliningMessage());
+              _parseQueue.Add(file.CreateAstMessage(parseResult));
+              
+            | AstCreated(fileId, cancellationToken, ast, parseTree) =>
+              when (cancellationToken.IsCancellationRequested)
+                continue;
+
+              def file = _solution.GetFile(fileId);
+              // TODO: send CollectOutlining and CollectTokebHighlighting mesages
+              file.AstCreated(ast, parseTree);
+              // TODO: send EvalProperties if ast != null
+          }
+
+        | _ => assert2(false)
+      }
+    }
+    
+    public Wait() : void
+    {
+      unless (_stopped)
+      {
+        _mainThread.Join();
+        _cts.Dispose();
+        foreach(worker in _parseWorkers)
+          worker.Dispose();
+        _parseQueue.Dispose();
+        _stopped = true;
+      }
+    }
+    
+    public AddMessage(msg : RouterMessage): void
+    {
+      unless (_stopped)
+        _mainQueue.Add(msg)
+    }
+    
+    Error(msg : string) : void
+    {
+      Console.ForegroundColor = ConsoleColor.Red;
+      Console.WriteLine(msg);
+      Console.ResetColor();
+    }
+    
+    Log(msg : string) : void { Console.WriteLine(msg) }
+  }
+}

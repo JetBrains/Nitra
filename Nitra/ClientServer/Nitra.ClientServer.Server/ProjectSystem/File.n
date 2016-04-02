@@ -1,0 +1,224 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.Declarations;
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.IO;
+using System.IO.Pipes;
+using System.Linq;
+using System.Text;
+using System.Threading;
+
+using NSP = Nitra.ProjectSystem;
+using Nitra.ClientServer.Messages;
+using Span = Nitra.ClientServer.Messages.NSpan;
+
+namespace Nitra.ClientServer.Server.ProjectSystem
+{
+  public class File : NSP.File, IDisposable
+  {
+    // TODO: override ParseResult, Ast, GetParseTree and so on and implement parsing/typing in work threads
+    public  Parent                  : Project;
+    public  Id                      : int { get; }
+    public  CancellationTokenSource : CancellationTokenSource { get; private set; }
+    public  DynamicExtensions       : Seq[GrammarDescriptor] { get; }
+    mutable _fileInfo               : FileInfo;
+    mutable _text                   : StringBuilder;
+    mutable _snapshot               : SourceSnapshot;
+    mutable _name                   : string;
+    mutable _parseResult            : IParseResult;
+    mutable _ast                    : IAst;
+    mutable _parseTree              : ParseTree;
+    volatile mutable _activeBufferWriter : BinaryWriter;
+    
+    public this(id : int, fullPath : string, parent : Project)
+    {
+      base(null);
+      Id                = id;
+      _fileInfo         = FileInfo(fullPath);
+      Parent            = parent;
+      _name             = IO.Path.GetFileNameWithoutExtension(FullName);
+      
+      parent.AddFile(this);
+      Log("FileLoaded " + id + ": " + fullPath + " (" + parent.Name + " project)");
+    }
+
+    /// Used for in memory text editing (with no file available)
+    public this(id : int, name : string, parent : Project, text : string)
+    {
+      base();
+      Id        = id;
+      Parent    = parent;
+      _snapshot = SourceSnapshot(text, this);
+      _text     = StringBuilder(text);
+      _name     = name;
+      
+      parent.AddFile(this);
+    }
+    
+    public Log(msg : string) : void { Parent.Parent.Logger?.WriteLine(msg) }
+    public override Language : Language { get { Parent.Language } }
+    public override Name : string { get { _name } }
+    public override FullName : string { get { _fileInfo.FullName } }
+    
+    public override GetSource() : SourceSnapshot
+    { 
+      when (_snapshot == null)
+      {
+        assert2(_fileInfo != null);
+        assert(_fileInfo != null);
+        def text  = File.ReadAllText(_fileInfo.FullName, Encoding.UTF8); // TODO: add detect BOM and load UTF-8 if no BOM avalable
+        _snapshot = SourceSnapshot(text, this);
+        _text     = StringBuilder(text);
+      }
+      
+      _snapshot
+    }
+    
+    public override Length : int
+    {
+      get
+      {
+        if (_text == null)
+        {
+          assert2(_fileInfo != null);
+          assert(_fileInfo != null);
+          _fileInfo.Length :> int
+        }
+        else
+          _text.Length
+      }
+    }
+    
+    public override Project : NSP.Project { get { Parent } }
+    
+    public Dispose() : void
+    {
+      _fileInfo = null;
+      _text     = null;
+      _snapshot = null;      
+      _activeBufferWriter?.Dispose();
+      _activeBufferWriter = null
+    }
+ 
+    Insert(pos: int, text: string) : void
+    {
+      _ = _text.Insert(pos, text)
+    }
+    
+    Delete(span: Span) : void
+    {
+      _ = _text.Remove(span.StartPos, span.Length)
+    }
+    
+    Replace(span: Span, text: string) : void
+    {
+      Delete(span);
+      Insert(span.StartPos, text)
+    }
+    
+    ApplyChange(change: FileChange) : void
+    {
+      | FileChange.Insert(pos, text) => Insert(pos, text)
+      | FileChange.Delete(span) => Delete(span)
+      | FileChange.Replace(span, text) => Replace(span, text)
+    }
+    
+    public Change(change: FileChange) : void
+    {
+      _ = GetSource();
+      ApplyChange(change);
+      _snapshot = SourceSnapshot(_text.ToString())
+    }
+    
+    public Change(changes: ImmutableArray[FileChange]) : void
+    {
+      _ = GetSource();
+      foreach(change in changes)
+        ApplyChange(change);
+      _snapshot = SourceSnapshot(_text.ToString())
+    }
+    
+    // overrides
+    
+    public GetReParseMessage() : ParserMessage.ParseFile
+    {
+      def language = Language;
+      assert2(language.StartRule != null);
+ 
+      CancellationTokenSource?.Cancel();
+      CancellationTokenSource?.Dispose();
+      
+      when (_ast != null)
+      {
+        Parent.AstDropped();
+        _parseResult = null;
+        _ast         = null;
+        _parseTree   = null;
+      }
+      
+      def cancellationTokenSource = CancellationTokenSource();
+      def cancellationToken       = cancellationTokenSource.Token;
+      def source                  = GetSource();
+      def parseSession            = ParseSession(language.StartRule, 
+                                        language.CompositeGrammar,
+                                        cancellationToken = cancellationToken,
+                                        dynamicExtensions = Parent.DynamicExtensions);
+
+      ParserMessage.ParseFile(this.Id, parseSession, source)
+    }
+    
+    public CreateAstMessage(parseResult : IParseResult) : ParserMessage.CreateAst
+    {
+      _parseResult = parseResult;
+      _parseTree   = parseResult.CreateParseTree(); 
+      ParserMessage.CreateAst(this.Id, parseResult)
+    }
+    
+    public AstCreated(ast : IAst, parseTree : ParseTree) : void
+    {
+      Parent.AstCreated();
+      _parseTree = parseTree; 
+      _ast = ast;
+    }
+    
+    public CreateOutliningMessage() : ParserMessage.GetOutlining
+    {
+      ParserMessage.GetOutlining(Id, _parseResult, Send)
+    }
+    
+    public override Ast : Nitra.Declarations.IAst { get{ _ast } }
+    public override DeepResetProperties() : void { throw System.NotImplementedException() }
+    public override GetParseTree() : Nitra.ParseTree { _parseTree }
+    public override HasAst : bool { get { _ast != null } }
+    public override ParseResult : Nitra.IParseResult { get { _parseResult } }
+    
+    public Activate(pipeName: string) : void
+    {
+      Deactivate();
+      def pipeClient = NamedPipeClientStream(".", pipeName, PipeDirection.Out);
+      pipeClient.Connect();
+      _activeBufferWriter = BinaryWriter(pipeClient);
+    }
+    
+    public Deactivate() : void
+    {
+      _activeBufferWriter?.Dispose();
+      _activeBufferWriter = null
+    }
+    
+    public Send(message : ServerMessage) : void
+    {
+      // buffer may be deactivated by the time we are sending the response
+      unless (_activeBufferWriter == null)
+        message.Serialize(_activeBufferWriter)
+    }
+  
+    public override ToString() : string { $"$Name($(Parent.Name) project)" }
+ }
+}

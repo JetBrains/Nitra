@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Windows;
 using Nitra.Visualizer.Properties;
+using Nitra.ViewModels;
 
 namespace Nitra.Visualizer
 {
@@ -13,63 +14,86 @@ namespace Nitra.Visualizer
   /// </summary>
   public partial class AddTest
   {
-    readonly string _testSuitePath;
+    readonly BaseVm _selectedNode;
     readonly string _code;
     readonly string _gold;
+    string _testPath;
 
-    public AddTest(string testSuitePath, string code, string gold)
+    public AddTest(BaseVm parent, string code, string gold)
     {
-      _testSuitePath = testSuitePath;
+      _selectedNode = parent;
       _code = code;
       _gold = gold;
 
       InitializeComponent();
-      _testName.Text = MakeDefaultName();
+      _testPath = MakeDefaultTestPath();
+      _testName.Text = Path.GetFileNameWithoutExtension(_testPath);
     }
 
-    private string MakeDefaultName()
+    static string GetName(string parent, Func<string, IEnumerable<string>> getFileSystemObjects)
     {
-      var path = _testSuitePath;
-
-      if (!Directory.Exists(path))
-        Directory.CreateDirectory(path);
-
-      return MakeTestName(path);
+      var rx = new Regex(@"^test-(\d+)");
+      var maxNumber =
+          getFileSystemObjects(parent)
+            .Select(Path.GetFileName)
+            .OrderByDescending(x => x)
+            .Select(dir =>
+            {
+              var m = rx.Match(dir);
+              if (m.Success)
+                return (int?)int.Parse(m.Groups[1].Value);
+              else
+                return null;
+            })
+            .FirstOrDefault(x => x.HasValue);
+      var nextNumber = maxNumber.HasValue ? maxNumber.Value + 1 : 0;
+      return "test-" + nextNumber.ToString("0000");
     }
 
-    private static string MakeTestName(string path)
+    string MakeDefaultTestPath()
     {
-      var rx = new Regex(@"test-(\d+)");
-      var tests = new List<string>();
-      tests.AddRange(Directory.GetDirectories(path).Select(Path.GetFileNameWithoutExtension));
-      tests.AddRange(Directory.GetFiles(path, "*.test").Select(Path.GetFileNameWithoutExtension));
-      tests.Sort();
-      int num = 0;
-      for (int i = tests.Count - 1; i >= 0; i--)
+      string dir = null;
+      string fileName = null;
+
+      // We are on a test node, add a test next to it
+      if (_selectedNode is TestVm)
       {
-        var testName = tests[i];
-        var m = rx.Match(testName);
-        if (m.Success)
+        dir = Path.GetDirectoryName(_selectedNode.FullPath);
+        fileName = GetName(dir, Directory.GetFiles);
+      }
+      // We are on a project node, add a child test
+      else if (_selectedNode is ProjectVm)
+      {
+        dir = _selectedNode.FullPath;
+        fileName = GetName(dir, Directory.GetFiles);
+      }
+      else
+      {
+        var dirName = GetName(_selectedNode.FullPath, Directory.GetDirectories);
+        // We are on a sulution node, add a project with a single test
+        if (_selectedNode is SolutionVm)
         {
-          num = int.Parse(m.Groups[1].Value) + 1;
-          break;
+          dir = Path.Combine(_selectedNode.FullPath, dirName);
+          fileName = dirName;
+        }
+        // We are on a suite node, add a solution with a project with a test
+        else if (_selectedNode is SuiteVm)
+        {
+          dir = Path.Combine(_selectedNode.FullPath, dirName, dirName);
+          fileName = dirName;
         }
       }
 
-      for (;; num++)
-      {
-        var fileName = "test-" + num.ToString("0000");
-        if (!File.Exists(Path.Combine(path, fileName + ".test")))
-          return fileName;
-      }
+      return Path.Combine(dir, fileName + ".test");
     }
 
     public string TestName { get; private set; }
 
     private void _okButton_Click(object sender, RoutedEventArgs e)
     {
-      var path = _testSuitePath;
-      var filePath = Path.Combine(path, _testName.Text) + ".test";
+      var dir = Path.GetDirectoryName(_testPath);
+      Directory.CreateDirectory(dir);
+      var filePath = Path.Combine(dir, _testName.Text) + ".test";
 
       try
 	    {
@@ -83,9 +107,7 @@ namespace Nitra.Visualizer
 	    }
 
       var goldFilePath = Path.ChangeExtension(filePath, ".gold");
-
       File.WriteAllText(goldFilePath, _gold);
-
       TestName = _testName.Text;
       this.DialogResult = true;
       Close();

@@ -1,0 +1,91 @@
+﻿using Nemerle;
+using Nemerle.Assertions;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.ClientServer.Client;
+using Nitra.ClientServer.Messages;
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Collections.ObjectModel;
+using System.IO;
+using System.Linq;
+
+namespace Nitra.ViewModels
+{
+  public class SolutionVm : FolderVm[ProjectVm], IClientHost, IDisposable
+  {
+    mutable         _client        : NitraClient;
+    mutable         _nextProjectId : int;
+    mutable         _nextTestId    : int;
+    public override Hint           : string { get { "Solution" }}
+
+    public this(suite: SuiteVm, folder: string)
+    {
+      base(suite, folder);
+      LoadProjects();
+      when (IsSingleFileTest)
+        IsExpanded = false;
+    }
+    
+    public IsSingleFileTest : bool { get { Children.Count == 1 && Children[0].Children.Count == 1 } }
+    
+    public override Name : string { get { Path.GetFileName(FullPath) + "  (Solution)" }}
+    
+    LoadProjects() : void
+    {
+      def stringManager = Suite.Workspace.StringManager;
+      foreach (dir in Directory.GetDirectories(FullPath).OrderBy(x => x))
+        Children.Add(ProjectVm(Suite, this, dir, stringManager[dir]));
+    }
+    
+    // IClientHost
+    public Activate(client : NitraClient) : void
+    {
+      _client = client;
+      def languageInfo = ImmutableArray.Create(this.Suite.Language.ToLanguageInfo(this.Suite.FullPath));
+      def libs = this.Suite.Language.Libs;
+      client.Send(ClientMessage.SolutionStartLoading(FullPath));
+      foreach(project in Children)
+      {
+        def projectId = project.Id;
+        client.Send(ClientMessage.ProjectStartLoading(projectId, project.FullPath, languageInfo));
+        
+        when (libs != null)
+          foreach (lib in libs)
+            client.Send(ClientMessage.ReferenceLoaded(projectId, lib));
+        
+        foreach(test in project.Children)
+          client.Send(ClientMessage.FileLoaded(project.Id, test.FullPath, test.Id));
+        
+        client.Send(ClientMessage.ProjectLoaded(project.Id));
+      }
+      client.Send(ClientMessage.SolutionLoaded(FullPath));
+      client.Flush();
+    }
+
+    // IClientHost
+    public Deactivate() : void
+    {
+      Suite.Client.Send(ClientMessage.SolutionUnloaded());
+      _client = null;
+    }
+    
+    public override GetAllTests() : Seq[TestVm]
+    {
+      foreach (p in Children)
+        foreach (t in p.Children)
+          yield t;
+    }
+    
+   public Dispose() : void
+    {
+      foreach (project in Children)
+        project.Dispose();
+      Children.Clear();
+      _client = null
+    }
+  }
+}

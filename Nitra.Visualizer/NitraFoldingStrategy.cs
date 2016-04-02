@@ -1,11 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using ICSharpCode.AvalonEdit.Folding;
 using ICSharpCode.AvalonEdit.Document;
-using Nitra.Internal;
 using System.Diagnostics;
+using Nitra.ClientServer.Messages;
 
 namespace Nitra.Visualizer
 {
@@ -15,18 +14,18 @@ namespace Nitra.Visualizer
 
     public override IEnumerable<NewFolding> CreateNewFoldings(TextDocument document, out int firstErrorOffset)
     {
-      var parseResult = ParseResult;
-      if (parseResult == null)
-      {
-        firstErrorOffset = 0;
-        return Enumerable.Empty<NewFolding>();
-      }
+      //var parseResult = ParseResult;
+      //if (parseResult == null)
+      //{
+      //  firstErrorOffset = 0;
+      //  return Enumerable.Empty<NewFolding>();
+      //}
 
       try
       {//parseResult.SourceSnapshot
         var timer = Stopwatch.StartNew();
         var outlining = new List<OutliningInfo>();
-        parseResult.GetOutlining(outlining);
+        //parseResult.GetOutlining(outlining);
         TimeSpan = timer.Elapsed;
 
         var result = new List<NewFolding>();
@@ -53,6 +52,6 @@ namespace Nitra.Visualizer
       }
     }
 
-    public IParseResult ParseResult { get; set; }
+    //public IParseResult ParseResult { get; set; }
   }
 }

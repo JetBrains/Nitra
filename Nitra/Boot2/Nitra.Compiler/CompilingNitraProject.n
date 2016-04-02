@@ -14,14 +14,17 @@ using SCG = System.Collections.Generic;
 
 namespace Nitra.Compiler
 {
-  public sealed class CompilingNitraProject : NitraProject
+  public sealed partial class CompilingNitraProject : NitraProject
   {
-    public this()
+    private this(manager : ManagerClass)
     {
-      base(NemerleCompilerMessages())
+      base(NemerleCompilerMessages());
+      Manager = manager;
     }
 
     public ErrorCount : int { get { (CompilerMessages :> NemerleCompilerMessages).ErrorCount } }
+
+    public Manager : ManagerClass { get; }
 
     private mutable _environment : EmitterEnvironment;
 
@@ -30,18 +33,30 @@ namespace Nitra.Compiler
       get
       {
         when (_environment : object == null)
-          _environment = EmitterEnvironment(ManagerClass.Instance, this);
+          _environment = EmitterEnvironment(Manager, this);
         _environment
       }
     }
 
-    public override Files : Seq[File] { get { _files.Values } }
+    public override Files : Seq[File] { get { _sourceFiles } }
 
     public override Init(referencedAssemblies : Seq[AssemblyName]) : void
     {
       base.Init(referencedAssemblies);
+      _beforeInheritance = false;
+      _beforeTypedMembers = false;
+      _withTypedMembers = false;
       _environment = null;
-      _files.Clear();
+      _allFiles.Clear();
+      _sourceFiles.Clear();
+      exportableSymbolData.Clear();
+      chemicalSymbolData.Clear();
+      languageEmitters.Clear();
+      syntaxModuleEmitters.Clear();
+      astEmitters.Clear();
+      symbolEmitters.Clear();
+      externalSymbolEmitters.Clear();
+      chemicalSymbolEmitters.Clear();
     }
 
     public override GetNemerleType(symbol : Symbol) : FixedType
@@ -52,15 +67,16 @@ namespace Nitra.Compiler
       | _ => assert(false, $"Cannot get Nemerle type for symbol '$symbol'")
     }
 
-    private _files : SCG.Dictionary[int, NemerleFile] = SCG.Dictionary();
+    private _allFiles    : SCG.Dictionary[int, NemerleFile] = SCG.Dictionary();
+    private _sourceFiles : SCG.List[NemerleFile]            = SCG.List();
 
     public override MakeFakeNitraLocation(location : Nemerle.Compiler.Location) : Nitra.Location
     {
       mutable file;
-      unless (_files.TryGetValue(location.FileIndex, out file))
+      unless (_allFiles.TryGetValue(location.FileIndex, out file))
       {
         file = FakeNemerleFile(this, location.FileIndex);
-        _files.Add(location.FileIndex, file);
+        _allFiles.Add(location.FileIndex, file);
       }
       Nitra.Location(file, 0)
     }
@@ -68,7 +84,7 @@ namespace Nitra.Compiler
     public override MakeNitraLocation(location : Nemerle.Compiler.Location) : Nitra.Location
     {
       mutable file;
-      if (_files.TryGetValue(location.FileIndex, out file))
+      if (_allFiles.TryGetValue(location.FileIndex, out file))
       {
         def source   = file.GetSource();
         def startPos = source.LineColumnToPosition(LineColumn(location.Line,    location.Column));
@@ -82,7 +98,25 @@ namespace Nitra.Compiler
     public override CreateNemerleFile(source : ISource) : NemerleFile
     {
       def file = InMemoryNemerleFile(this, source);
-      _files[file.Index] = file;
+      _allFiles[file.Index] = file;
+      _sourceFiles.Add(file);
+
+      mutable processingCount = 0;
+      Manager.SubscribeSourceChanged(source.FileIndex, source =>
+      {
+        processingCount += 1;
+
+        try
+          file.SourceChanged(source);
+        catch
+        {
+          | e => Message.Error(Nemerle.Compiler.Location(file.Index, 1, 1), e.ToString());
+        }
+
+        when (processingCount > 1 && Manager.IsIntelliSenseMode)
+          Manager.RequestOnBuildTypesTree();
+      }, true);
+
       file
     }
   }

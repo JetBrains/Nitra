@@ -1,0 +1,108 @@
+﻿using Nemerle;
+using Nemerle.Collections;
+using Nemerle.Imperative;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using Nitra.ClientServer.Messages;
+using Nitra.Declarations;
+using Nitra.ProjectSystem;
+
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Threading;
+
+namespace Nitra.ClientServer.Server
+{
+  class ParseWorker : IDisposable
+  {
+    _thread      : Thread;
+    _cts         : CancellationTokenSource = CancellationTokenSource();
+    _incomeQueue : BlockingCollection[ParserMessage];
+    _mainQueue   : BlockingCollection[RouterMessage];
+    
+    public this(incomeQueue : BlockingCollection[ParserMessage], mainQueue : BlockingCollection[RouterMessage])
+    {
+      _mainQueue   = mainQueue;
+      _incomeQueue = incomeQueue;
+      _thread      = Thread(ParseWorkerMain);
+      _thread.Start()
+    }
+
+    ParseWorkerMain() : void
+    {
+      def thread = Thread.CurrentThread;
+      thread.Name = "ParseWorkerMain";
+      thread.CurrentCulture = CultureInfo.InvariantCulture;
+      
+      try
+      {
+        foreach(m in _incomeQueue.GetConsumingEnumerable(_cts.Token)) 
+          ProcessMessage(m)
+      }
+      catch
+      {
+        | OperationCanceledException => ()
+        | e => Log("Error: " + e)
+      }
+    }      
+    
+    ProcessMessage(msg : ParserMessage): void
+    {
+      | ParseFile(fileId, parseSession, source) =>
+        // TODO: add statistics
+        //def stat = Statistics;
+        //stat?.Parse?.Restart();
+        //
+        //_parseMessages.Clear();
+        //_astMessages.Clear();
+        //_typingMessages.Clear();
+      
+        when (parseSession.CancellationToken.IsCancellationRequested)
+          return;
+
+        def parseResult = parseSession.Parse(source);
+        _mainQueue.Add(RouterAnswerMessage.FileParsed(fileId, parseResult));
+
+        //stat?.Parse?.Stop();
+      
+      | CreateAst(fileId, parseResult) =>
+        when (parseResult.ParseSession.CancellationToken.IsCancellationRequested)
+          return;
+          
+        def parseTree = parseResult.CreateParseTree();
+        def astMessages = CompilerMessageList();
+        def ast = AstContext.GetAstUntyped(parseTree, astMessages);
+        _mainQueue.Add(RouterAnswerMessage.AstCreated(fileId, parseResult.ParseSession.CancellationToken, ast, parseTree));
+        
+      | GetOutlining(fileId, parseResult, sendResult) =>
+        def outlining = List();
+        parseResult.GetOutlining(outlining);
+        def infos = ImmutableArray.CreateBuilder.[Messages.OutliningInfo](outlining.Count);
+        
+        foreach(info in outlining)
+        {
+          def span = Messages.NSpan(info.Span.StartPos, info.Span.EndPos);
+          infos.Add(Messages.OutliningInfo(span, info.IsDefaultCollapsed, info.IsImplementation));
+        }
+     
+        sendResult(ServerMessage.OutliningCreated(fileId, infos.MoveToImmutable()))
+    }
+    
+    public Dispose() : void
+    {
+      _cts.Cancel();
+      _cts.Dispose();
+      _thread.Join()
+    }
+    
+    Log(msg: string) : void
+    {
+      Console.WriteLine(msg)
+    }
+  }
+}

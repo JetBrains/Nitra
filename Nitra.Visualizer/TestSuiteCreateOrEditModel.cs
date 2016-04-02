@@ -6,10 +6,10 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Windows;
-using Nitra.ProjectSystem;
 using Nitra.ViewModels;
 using Nitra.Visualizer.Properties;
 using File = System.IO.File;
+//using Nitra.ClientServer.Messages;
 
 namespace Nitra.Visualizer
 {
@@ -23,8 +23,8 @@ namespace Nitra.Visualizer
 
       IsCreate = isCreate;
       Title = isCreate ? "New test suite" : "Edit test suite";
-      RootFolder = Path.GetDirectoryName(_settings.CurrentSolution);
-      Languages = new ObservableCollection<Language>();
+      RootFolder = Path.GetDirectoryName(_settings.CurrentWorkspace);
+      Languages = new ObservableCollection<string>();
       DynamicExtensions = new ObservableCollection<DynamicExtensionModel>();
     }
 
@@ -102,7 +102,7 @@ namespace Nitra.Visualizer
     private static void OnLibsChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
       var model = (TestSuiteCreateOrEditModel)d;
-      var normalized = new HashSet<LibReference>();
+      var normalized = new HashSet<string>();
       var suitPath = model.SuitPath;
 
       foreach (var libPath in Utils.GetAssemblyPaths((string)e.NewValue))
@@ -112,29 +112,29 @@ namespace Nitra.Visualizer
         if (File.Exists(fullAssemblyPath))
         {
           var relativePath = Utils.MakeRelativePath(suitPath, true, fullAssemblyPath, false);
-          normalized.Add(new FileLibReference(relativePath));
+          normalized.Add(relativePath);
         }
         else
           // treat as assembly full name
-          normalized.Add(new FullNameLibReference(libPath));
+          normalized.Add(libPath);
       }
       model.NormalizedLibs = normalized.ToArray();
     }
 
     public string NormalizedLibsText
     {
-      get { return string.Join<LibReference>(Environment.NewLine, NormalizedLibs); }
+      get { return string.Join(Environment.NewLine, NormalizedLibs); }
     }
 
-    public LibReference[] NormalizedLibs
+    public string[] NormalizedLibs
     {
-      get { return (LibReference[])GetValue(NormalizedLibsProperty); }
+      get { return (string[])GetValue(NormalizedLibsProperty); }
       set { SetValue(NormalizedLibsProperty, value); }
     }
 
     // Using a DependencyProperty as the backing store for NormalizedLibReferences.  This enables animation, styling, binding, etc...
     public static readonly DependencyProperty NormalizedLibsProperty =
-        DependencyProperty.Register("NormalizedLibs", typeof(LibReference[]), typeof(TestSuiteCreateOrEditModel), new PropertyMetadata(new LibReference[0]));
+        DependencyProperty.Register("NormalizedLibs", typeof(string[]), typeof(TestSuiteCreateOrEditModel), new PropertyMetadata(new string[0]));
 
     public string NormalizedAssembliesText
     {
@@ -155,59 +155,59 @@ namespace Nitra.Visualizer
     }
 
     public static readonly DependencyProperty NormalizedAssembliesProperty =
-        DependencyProperty.Register("NormalizedAssemblies", typeof(Assembly[]), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata(TestSuiteVm.NoAssembiles, OnNormalizedAssembliesChanged));
+        DependencyProperty.Register("NormalizedAssemblies", typeof(Assembly[]), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata(SuiteVm.NoAssembiles, OnNormalizedAssembliesChanged));
 
     private static void OnNormalizedAssembliesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-      var model                = (TestSuiteCreateOrEditModel)d;
-      var oldLanguages         = model.Languages.ToHashSet();
-      var oldDynamicExtensions = model.DynamicExtensions.ToDictionary(x => x.Descriptor);
-      foreach (var assembly in (Assembly[])e.NewValue)
-      {
-        foreach (var language in Language.GetLanguages(assembly))
-        {
-          if (!oldLanguages.Remove(language))
-            model.Languages.Add(language);
-        }
-
-        foreach (var descriptor in GrammarDescriptor.GetDescriptors(assembly))
-        {
-          if (!oldDynamicExtensions.Remove(descriptor))
-            model.DynamicExtensions.Add(new DynamicExtensionModel(descriptor));
-        }
-      }
-      foreach (var language in oldLanguages)
-        model.Languages.Remove(language);
-      foreach (var pair in oldDynamicExtensions)
-        model.DynamicExtensions.Remove(pair.Value);
+      //var model                = (TestSuiteCreateOrEditModel)d;
+      //var oldLanguages         = model.Languages.ToHashSet();
+      //var oldDynamicExtensions = model.DynamicExtensions.ToDictionary(x => x.Descriptor);
+      //foreach (var assembly in (Assembly[])e.NewValue)
+      //{
+      //  //foreach (var language in new Language[] { })//Language.GetLanguages(assembly))
+      //  //{
+      //  //  if (!oldLanguages.Remove(language))
+      //  //    model.Languages.Add(language);
+      //  //}
+      //
+      //  //foreach (var descriptor in GrammarDescriptor.GetDescriptors(assembly))
+      //  //{
+      //  //  if (!oldDynamicExtensions.Remove(descriptor))
+      //  //    model.DynamicExtensions.Add(new DynamicExtensionModel(descriptor));
+      //  //}
+      //}
+      //foreach (var language in oldLanguages)
+      //  model.Languages.Remove(language);
+      //foreach (var pair in oldDynamicExtensions)
+      //  model.DynamicExtensions.Remove(pair.Value);
     }
 
-    public Language SelectedLanguage
+    public string SelectedLanguage
     {
-      get { return (Language)GetValue(SelectedLanguageProperty); }
+      get { return (string)GetValue(SelectedLanguageProperty); }
       set { SetValue(SelectedLanguageProperty, value); }
     }
 
     public static readonly DependencyProperty SelectedLanguageProperty =
-        DependencyProperty.Register("SelectedLanguage", typeof(Language), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata(null, OnSelectedLanguageChanged));
+        DependencyProperty.Register("SelectedLanguage", typeof(string), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata(null, OnSelectedLanguageChanged));
 
     private static void OnSelectedLanguageChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
       var model = (TestSuiteCreateOrEditModel)d;
-      var newLanguage = (Language)e.NewValue;
+      var newLanguage = (string)e.NewValue;
       if (newLanguage == null)
         return;
 
-      var oldLanguage = (Language)e.OldValue;
+      var oldLanguage = (string)e.OldValue;
       var suiteName = model.SuiteName;
-      if (string.IsNullOrEmpty(suiteName) || (oldLanguage != null && suiteName == oldLanguage.Name))
-        model.SuiteName = newLanguage.Name;
+      if (string.IsNullOrEmpty(suiteName) || (oldLanguage != null && suiteName == oldLanguage))
+        model.SuiteName = newLanguage;
 
-      foreach (var dynamicExtension in model.DynamicExtensions)
-        dynamicExtension.IsEnabled = !newLanguage.CompositeGrammar.Grammars.Contains(dynamicExtension.Descriptor);
+      //foreach (var dynamicExtension in model.DynamicExtensions)
+        //dynamicExtension.IsEnabled = !newLanguage.CompositeGrammar.Grammars.Contains(dynamicExtension.Descriptor);
     }
 
-    public ObservableCollection<Language> Languages
+    public ObservableCollection<string> Languages
     {
       get;
       private set;
@@ -222,46 +222,46 @@ namespace Nitra.Visualizer
 
   internal sealed class DynamicExtensionModel : DependencyObject
   {
-    private readonly GrammarDescriptor _descriptor;
-
-    public DynamicExtensionModel(GrammarDescriptor descriptor)
-    {
-      _descriptor = descriptor;
-    }
-
-    public GrammarDescriptor Descriptor
-    {
-      get { return _descriptor; }
-    }
-
-    public string Name
-    {
-      get { return _descriptor.FullName; }
-    }
-
-    public bool IsChecked
-    {
-      get { return (bool)GetValue(IsCheckedProperty); }
-      set { SetValue(IsCheckedProperty, value); }
-    }
-
-    public static readonly DependencyProperty IsCheckedProperty =
-        DependencyProperty.Register("IsChecked", typeof(bool), typeof(DynamicExtensionModel), new FrameworkPropertyMetadata(false));
-
-    public bool IsEnabled
-    {
-      get { return (bool)GetValue(IsEnabledProperty); }
-      set { SetValue(IsEnabledProperty, value); }
-    }
-
-    public static readonly DependencyProperty IsEnabledProperty =
-        DependencyProperty.Register("IsEnabled", typeof(bool), typeof(DynamicExtensionModel), new FrameworkPropertyMetadata(true, OnIsEnabledChanged));
-
-    private static void OnIsEnabledChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
-    {
-      var model = (DynamicExtensionModel)d;
-      if (!(bool)e.NewValue)
-        model.IsChecked = false;
-    }
+  //  //private readonly GrammarDescriptor _descriptor;
+  //
+  //  public DynamicExtensionModel(GrammarDescriptor descriptor)
+  //  {
+  //    _descriptor = descriptor;
+  //  }
+  //
+  //  public GrammarDescriptor Descriptor
+  //  {
+  //    get { return _descriptor; }
+  //  }
+  //
+  //  public string Name
+  //  {
+  //    get { return _descriptor.FullName; }
+  //  }
+  //
+  //  public bool IsChecked
+  //  {
+  //    get { return (bool)GetValue(IsCheckedProperty); }
+  //    set { SetValue(IsCheckedProperty, value); }
+  //  }
+  //
+  //  public static readonly DependencyProperty IsCheckedProperty =
+  //      DependencyProperty.Register("IsChecked", typeof(bool), typeof(DynamicExtensionModel), new FrameworkPropertyMetadata(false));
+  //
+  //  public bool IsEnabled
+  //  {
+  //    get { return (bool)GetValue(IsEnabledProperty); }
+  //    set { SetValue(IsEnabledProperty, value); }
+  //  }
+  //
+  //  public static readonly DependencyProperty IsEnabledProperty =
+  //      DependencyProperty.Register("IsEnabled", typeof(bool), typeof(DynamicExtensionModel), new FrameworkPropertyMetadata(true, OnIsEnabledChanged));
+  //
+  //  private static void OnIsEnabledChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+  //  {
+  //    var model = (DynamicExtensionModel)d;
+  //    if (!(bool)e.NewValue)
+  //      model.IsChecked = false;
+  //  }
   }
 }

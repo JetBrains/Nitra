@@ -28,8 +28,8 @@ namespace XXNamespaceXX
 
     public void VsTextViewCreated(IVsTextView textViewAdapter)
     {
-      var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
-      new KeyBindingCommandFilter(textViewAdapter, _serviceProvider, _completionBroker, _adaptersFactory, nitraSolutionService);
+      //var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
+      new KeyBindingCommandFilter(textViewAdapter, _serviceProvider, _completionBroker, _adaptersFactory, null);
     }
   }
 }
