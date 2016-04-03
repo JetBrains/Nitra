@@ -393,7 +393,7 @@ namespace Nitra.Visualizer
       if (_currentTest == null)
         return;
 
-      var cmpilerMessages = _parsingMessages.Sort();
+      var cmpilerMessages = _currentTest.ParsingMessages.Sort();
       var errorNodes      = _errorsTreeView.Items;
       var currentFileId   = _currentTest.Id;
       var fullName        = _currentTest.FullPath;
@@ -1052,8 +1052,13 @@ namespace Nitra.Visualizer
       ActivateVm  (_currentTest,     newTest,     client);
       this.Title = timer.Elapsed.ToString();
 
+      _currentSuite    = newTestSuite;
+      _currentSolution = newSolution;
+      _currentProject  = newProject;
+
       if (_currentTest != newTest)
       {
+        _currentTest     = newTest;
         var responseMap = client.ResponseMap;
         responseMap.Clear();
         if (newTest != null)
@@ -1061,12 +1066,8 @@ namespace Nitra.Visualizer
           responseMap[newTest.Id] = _responseDispatcher;
           responseMap[-1]         = _responseDispatcher;
         }
+        TryReportError();
       }
-
-      _currentSuite    = newTestSuite;
-      _currentSolution = newSolution;
-      _currentProject  = newProject;
-      _currentTest     = newTest;
     }
 
     void Response(ServerMessage msg)
@@ -1076,6 +1077,12 @@ namespace Nitra.Visualizer
       ServerMessage.LanguageLoaded              languageInfo;
       ServerMessage.SymbolsHighlightingCreated  symbolsHighlighting;
       ServerMessage.ParsingMessages             parsingMessages;
+
+      if ((parsingMessages = msg as ServerMessage.ParsingMessages) != null)
+      {
+        TestVm file = _currentSolution.GetFile(msg.FileId);
+        file.ParsingMessages = parsingMessages.messages;
+      }
 
       if (_currentTest == null || msg.FileId >= 0 && msg.FileId != _currentTest.Id || msg.Version >= 0 && msg.Version != _textVersion)
         return;
@@ -1097,9 +1104,8 @@ namespace Nitra.Visualizer
       {
         UpdateHighlightingStyles(languageInfo);
       }
-      else if ((parsingMessages = msg as ServerMessage.ParsingMessages) != null)
+      else if (parsingMessages != null)
       {
-        _parsingMessages = parsingMessages.messages;
         TryReportError();
       }
     }
