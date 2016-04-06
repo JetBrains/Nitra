@@ -393,12 +393,16 @@ namespace Nitra.Visualizer
       if (_currentTest == null)
         return;
 
-      var cmpilerMessages = _currentTest.ParsingMessages.Sort();
+      var cmpilerMessages = new List<CompilerMessage>();
+      cmpilerMessages.AddRange(_currentTest.ParsingMessages);
+      cmpilerMessages.AddRange(_currentTest.SemanticAnalysisMessages);
+      cmpilerMessages.Sort();
+
       var errorNodes      = _errorsTreeView.Items;
       var currentFileId   = _currentTest.Id;
       var fullName        = _currentTest.FullPath;
       var doc             = _text.Document;
-      
+
       errorNodes.Clear();
 
       foreach (var message in cmpilerMessages)
@@ -435,7 +439,7 @@ namespace Nitra.Visualizer
         errorNodes.Add(errorNode);
       }
 
-      _status.Text = cmpilerMessages.Length == 0 ? "OK" : cmpilerMessages.Length + " error[s]";
+      _status.Text = cmpilerMessages.Count == 0 ? "OK" : cmpilerMessages.Count + " error[s]";
     }
 
     private void TryReportError2()
@@ -1076,12 +1080,18 @@ namespace Nitra.Visualizer
       ServerMessage.KeywordsHighlightingCreated keywordHighlighting;
       ServerMessage.LanguageLoaded              languageInfo;
       ServerMessage.SymbolsHighlightingCreated  symbolsHighlighting;
-      ServerMessage.ParsingMessages             parsingMessages;
+      ServerMessage.ParsingMessages             parsingMessages = null;
+      ServerMessage.SemanticAnalysisMessages    typingMessages  = null;
 
       if ((parsingMessages = msg as ServerMessage.ParsingMessages) != null)
       {
         TestVm file = _currentSolution.GetFile(msg.FileId);
         file.ParsingMessages = parsingMessages.messages;
+      }
+      else if ((typingMessages = msg as ServerMessage.SemanticAnalysisMessages) != null)
+      {
+        TestVm file = _currentSolution.GetFile(msg.FileId);
+        file.SemanticAnalysisMessages = typingMessages.messages;
       }
 
       if (_currentTest == null || msg.FileId >= 0 && msg.FileId != _currentTest.Id || msg.Version >= 0 && msg.Version != _textVersion)
@@ -1104,7 +1114,7 @@ namespace Nitra.Visualizer
       {
         UpdateHighlightingStyles(languageInfo);
       }
-      else if (parsingMessages != null)
+      else if (parsingMessages != null || typingMessages != null)
       {
         TryReportError();
       }
