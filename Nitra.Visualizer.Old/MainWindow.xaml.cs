@@ -402,7 +402,12 @@ namespace Nitra.Visualizer
             var marker = _textMarkerService.Create(location.StartPos, location.Length);
             marker.Tag = ErrorMarkerTag;
             marker.MarkerType = TextMarkerType.SquigglyUnderline;
-            marker.MarkerColor = Colors.Red;
+
+            Color color = Colors.Red;
+            if (message.Type == CompilerMessageType.Warning) color = Colors.Orange;
+            else if (message.Type == CompilerMessageType.Hint) color = Colors.ForestGreen;
+
+            marker.MarkerColor = color;
             marker.ToolTip = text;
           }
 
