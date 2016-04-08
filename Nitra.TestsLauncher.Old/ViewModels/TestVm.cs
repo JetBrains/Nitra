@@ -162,7 +162,7 @@ namespace Nitra.ViewModels
       var cancellationToken = new CancellationToken();
       var filesData = NitraFile.GetEvalPropertiesData(files);
       if (projectSupport != null)
-        projectSupport.RefreshProject(cancellationToken, compilerMessages, filesData, projectSupport.RefreshReferences(cancellationToken, project));
+        projectSupport.RefreshProject(cancellationToken, filesData, projectSupport.RefreshReferences(cancellationToken, project));
       else if (_testFolder != null)
         throw new InvalidOperationException("The '" + _file.Ast.GetType().Name +
                                             "' type must implement IProjectSupport, to be used in a multi-file test.");
