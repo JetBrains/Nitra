@@ -25,24 +25,65 @@ namespace Nitra
 {
   public partial class ParseResult : IParseResult, IPrettyPrintSource, ISourceSnapshotProvider
   {
-    public static RawTreeParsedState = ~int.MaxValue;
-
-    public static ResultOffset = 0;
+    public static RawTreeParsedState = ~int.MaxValue;//TODO:Move to Nitre.Internal.Constants
 
     public          Text             : string          { get; }
-    public          ParseEnd         : int             { get { rawTree[ResultOffset] } }
+    public         ParseEnd         : int             { get; private set; }
     public mutable  rawTree          : array[int];
     public mutable  memoize          : array[int];
     public mutable  allocated        : int;
     public          ParserHost       : ParserHost      { get; }
     public          SourceSnapshot   : SourceSnapshot  { get; }
     public          StartPos         : int             { get; }
-    public          RuleParser       : StartRuleParser { get; }//Rename to StartRuleParser
+    public          RuleParser       : StartRuleParser { get; }// TODO: Rename to StartRuleParser
     public mutable  LastParseStart   : int;
     public mutable  LastParseEnd     : int;
     public          ParseSession     : ParseSession    { get; }
     public          MainParserFail   : bool { get; private set; }
     private mutable _maxFailPos      : int;
+
+    internal this([NotNull] parseSession : ParseSession, [NotNull] sourceSnapshot : SourceSnapshot, oldParseResult : ParseResult, head : int, tail : int)
+    {
+      def text              = sourceSnapshot.Text;
+
+      this.ParseSession     = parseSession;
+      this.Text             = text;
+      this.SourceSnapshot   = sourceSnapshot;
+      this.StartPos         = 0;
+      this.TokenEnumerator1 = TokenEnumerator(this);
+      this.TokenEnumerator2 = TokenEnumerator(this);
+      this.rawTree          = oldParseResult.rawTree;
+      this.memoize          = array(text.Length + 1);
+      this.allocated        = oldParseResult.allocated;
+      this.ParserHost       = parseSession.CompositeGrammar.ParserHost;
+      this.MaxFailPos       = 0;
+      this.RuleParser       = parseSession.CompositeGrammar.GetStartRuleParser(parseSession.StartRuleDescriptor);
+
+      //Array.Copy(oldParseResult.memoize, 0, memoize, 0, head);
+      Array.Copy(oldParseResult.memoize, oldParseResult.memoize.Length - (tail + 1), memoize, memoize.Length - (tail + 1), tail + 1);
+
+      //for (mutable pos = 0; pos < head; ++pos)
+      //{
+      //  when (memoize[pos] == 0)
+      //    continue;
+      //  memoize[pos] = CleanupMemoize(memoize[pos], pos, head);
+      //}
+    }
+
+    //private CleanupMemoize(ptr : int, pos : int, head : int) : int
+    //{
+    //  def nextPtr = rawTree[ptr + ExtensibleRuleParser.RawTreeOfs.Next];
+    //  match (GetRuleParser(ptr))
+    //  {
+    //    | SimpleRuleParser as parser when GetRawTreeSize(ptr, parser.SequenceInfo) + pos < head =>
+    //    | _ =>
+    //      if (nextPtr > 0)
+    //        CleanupMemoize(nextPtr, pos, head)
+    //      else
+    //        0
+    //  }
+      
+    //}
 
     public this([NotNull] parseSession : ParseSession, [NotNull] sourceSnapshot : SourceSnapshot)
     {
@@ -56,10 +97,8 @@ namespace Nitra
       this.TokenEnumerator2 = TokenEnumerator(this);
       this.rawTree          = array((text.Length + 1) * 10);
       this.memoize          = array(text.Length + 1);
-      this.allocated        = 0;
+      this.allocated        = 1;//null element
       this.ParserHost       = parseSession.CompositeGrammar.ParserHost;
-      this.LastParseStart   = -1;
-      this.LastParseEnd     = -1;
       this.MaxFailPos       = 0;
       this.RuleParser       = parseSession.CompositeGrammar.GetStartRuleParser(parseSession.StartRuleDescriptor);
     }
@@ -67,21 +106,20 @@ namespace Nitra
     internal Parse() : void
     {
       def statistics = this.ParseSession.Statistics;
-      mutable patseStatistics;
+      mutable parseStatistics;
       mutable recoveryStatistics;
       when (statistics != null)
       {
         def overalleParseStatistics = statistics.ReplaceContainerSubtask("Parse");
-        patseStatistics    = overalleParseStatistics.ReplaceSingleSubtask("ParseMain");
+        parseStatistics    = overalleParseStatistics.ReplaceSingleSubtask("ParseMain");
         recoveryStatistics = overalleParseStatistics.ReplaceSingleSubtask("Recovery");
-        patseStatistics.Start();
+        parseStatistics.Start();
       }
 
-      _ = Allocate(2);
       mutable res = RuleParser.Parse(StartPos, Text, this);
 
       when (statistics != null)
-        patseStatistics.Stop();
+        parseStatistics.Stop();
       
       def parsedToEnd = res == Text.Length;
       
@@ -103,7 +141,7 @@ namespace Nitra
           this.ParseSession.OnRecovery(this);
 
           res = Text.Length;
-          rawTree[ResultOffset] = res;
+          ParseEnd = res;
 
           def errorCollector = ErrorCollectorWalker();
           errorCollector.Walk(this);
@@ -132,7 +170,7 @@ namespace Nitra
       assert2(res >= 0);
       assert(res >= 0);
 
-      rawTree[ResultOffset] = res;
+      ParseEnd = res;
     }
 
     private GetParsingFailureError(maxFailPos : int) : ParseError
@@ -253,39 +291,6 @@ namespace Nitra
       }
     }
 
-    public ParseResult : string
-    {
-      get
-      {
-        if (LastParseEnd >= 0)
-          Text.Substring(LastParseStart, LastParseEnd - LastParseStart)
-        else
-          "<fail>"
-      }
-    }
-
-    public RestText : string
-    {
-      get { Text.Substring(if (LastParseEnd >= 0) LastParseEnd else LastParseStart) }
-    }
-
-    public mutable PreviousTextSize : int;
-
-    public PreviousText : string
-    {
-      get
-      {
-        when (PreviousTextSize <= 0)
-          PreviousTextSize = 20;
-
-        def pos = if (LastParseEnd >= 0) LastParseEnd else LastParseStart;
-        if (pos >= PreviousTextSize)
-          Text.Substring(pos - PreviousTextSize, PreviousTextSize)
-        else
-          Text.Substring(0, pos)
-      }
-    }
-
     public Allocate(size : int) : int
     {
       def rawTreePtr = allocated;
@@ -393,8 +398,6 @@ namespace Nitra
       size;
     }
 
-    private mutable _trivia : array[SCG.KeyValuePair[NSpan, int]];
-
     public Ambiguous : option[AmbiguousException]
     {
       get
@@ -411,6 +414,7 @@ namespace Nitra
     
     public Trivia : array[SCG.KeyValuePair[NSpan, int]]
     {
+      mutable volatile _trivia : array[SCG.KeyValuePair[NSpan, int]] = null;
       get
       {
         when (_trivia == null)
@@ -460,7 +464,8 @@ namespace Nitra
       def walker = ReflectionWalker();
       _ = walker.Walk(this, nodes);
       // FIXME: этот код должен быть в волкере
-      ReflectionStruct(Root(), RuleParser.Descriptor.Name, ReflectionKind.Normal, NSpan(StartPos, rawTree[ParseResult.ResultOffset]), ReadOnlyCollection(nodes.ToArray()))
+      def kind = if (this.RecoveredSequences.Count > 0) ReflectionKind.Recovered else ReflectionKind.Normal;
+      ReflectionStruct(Root(), RuleParser.Descriptor.Name, kind, NSpan(StartPos, ParseEnd), ReadOnlyCollection(nodes.ToArray()))
     }
 
     public GetRuleParser(rawTreePtr : int) : IParserInfo

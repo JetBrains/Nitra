@@ -33,6 +33,9 @@ namespace Nitra.Visualizer
       if (node.Kind == ReflectionKind.Ambiguous)
         return Brushes.DarkOrange;
 
+      if (node.Kind == ReflectionKind.Recovered)
+        return Brushes.MediumVioletRed;
+
       return SystemColors.ControlTextBrush;
     }
 
