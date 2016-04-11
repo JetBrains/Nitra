@@ -428,7 +428,27 @@ namespace Nitra.Visualizer
           errorNodes.Add(errorNode);
         }
 
-        _status.Text = cmpilerMessages.Count == 0 ? "OK" : cmpilerMessages.Count + " error[s]";
+        if (cmpilerMessages.Count == 0)
+        {
+          if (_parseResult != null && _parseResult.MainParserFail)
+          {
+            var msg = "Grammar is ambiguous! Main parser is fail! This leads to reduction performance. The caret set to fail position (" + _parseResult.MaxFailPos + ").";
+            var errorNode = new TreeViewItem();
+            var doc = _text.Document;
+            var pos = doc.GetLocation(_parseResult.MaxFailPos);
+            errorNode.Header = Path.GetFileNameWithoutExtension(currFile.FullName) + "(" + pos.Line + "," + pos.Column + "): " + msg;
+            errorNode.Foreground = Brushes.DarkCyan;
+            errorNode.Tag = new CompilerMessage(CompilerMessageType.Hint, Guid.Empty, new Location(_parseResult.SourceSnapshot, _parseResult.MaxFailPos), msg, -1, null);
+            errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
+            errorNodes.Add(errorNode);
+            _status.Text = msg;
+            _text.TextArea.Caret.Offset = _parseResult.MaxFailPos;
+          }
+          else
+            _status.Text = "Grammar is ambiguous! Main parser is fail! This leads to reduction performance.";
+        }
+        else
+          _status.Text = cmpilerMessages.Count + " error[s]";
       }
     }
 
