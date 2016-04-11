@@ -73,7 +73,6 @@ namespace Nitra.Visualizer
     //readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
     readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
     readonly Action<ServerMessage> _responseDispatcher;
-    int _textVersion;
     //List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
     const string ErrorMarkerTag = "Error";
 
@@ -1039,7 +1038,6 @@ namespace Nitra.Visualizer
       finally
       {
         _initializing = false;
-        _textVersion  = 0;
       }
       _text.IsReadOnly = !isTestAvalable;
       _text.Background = isTestAvalable ? SystemColors.WindowBrush : SystemColors.ControlBrush;
@@ -1094,7 +1092,7 @@ namespace Nitra.Visualizer
         file.SemanticAnalysisMessages = typingMessages.messages;
       }
 
-      if (_currentTest == null || msg.FileId >= 0 && msg.FileId != _currentTest.Id || msg.Version >= 0 && msg.Version != _textVersion)
+      if (_currentTest == null || msg.FileId >= 0 && msg.FileId != _currentTest.Id || msg.Version >= 0 && msg.Version != _currentTest.Version)
         return;
 
       if ((outlining = msg as ServerMessage.OutliningCreated) != null)
@@ -1125,10 +1123,11 @@ namespace Nitra.Visualizer
       if (_initializing)
         return;
 
-      _textVersion++;
+      var version = _currentTest.Version;
+      version++;
 
       Debug.Assert(e.OffsetChangeMap != null);
-      _currentTest.OnTextChanged(_textVersion, e.InsertedText, e.InsertionLength, e.Offset, e.RemovalLength);
+      _currentTest.OnTextChanged(version, e.InsertedText, e.InsertionLength, e.Offset, e.RemovalLength, _text.Text);
     }
 
     void UpdateVm(SuiteVm oldVm, SuiteVm newVm)
