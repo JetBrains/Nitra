@@ -353,7 +353,7 @@ namespace Nitra.Visualizer
 
     private void SelectText(ILocated loc)
     {
-      SelectText(loc.File, loc.Span);
+      SelectText(loc.Location);
     }
 
     private void SelectText(Location loc)

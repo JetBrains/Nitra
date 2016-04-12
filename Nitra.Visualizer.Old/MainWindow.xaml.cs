@@ -1293,7 +1293,7 @@ namespace Nitra.Visualizer
     private List<CompletionData> CompleteWord(int pos, IAst astRoot)
     {
       NSpan replacementSpan;
-      var parseResult = astRoot.File.ParseResult;
+      var parseResult = astRoot.Location.Source.File.ParseResult;
       var result = NitraUtils.CompleteWord(pos, parseResult, astRoot, out replacementSpan);
       var completionList = new List<CompletionData>();
 
