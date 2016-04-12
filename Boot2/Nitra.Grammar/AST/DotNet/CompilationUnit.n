@@ -14,42 +14,53 @@ using Nitra.ProjectSystem;
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 
+using System.Threading;
 using NRB = Nitra.Declarations;
 
 namespace DotNet
 {
   public partial class CompilationUnit : AstBase, IProjectSupport, NamespaceBody
   {
-    public RefreshReferences(project : Project) : void
+    public RefreshReferences(cancellationToken : CancellationToken, project : Project) : object
     {
       def oldManager = ManagerClass.Instance;
       try
       {
-        def manager : ManagerClass = Compiler(project);
+        def manager : ManagerClass = if (project is NitraProject(Manager = manager)) manager else Compiler(project);
         ManagerClass.Instance = manager;
         def context       = DependentPropertyEvalContext();
+        context.CancellationToken = cancellationToken;
         def rootNamespace = NamespaceSymbol();
 
         rootNamespace.MemberTable = TableScope("<root namespace>", rootNamespace);
         rootNamespace.DeclaredIn  = null;
         rootNamespace.FullName    = "";
 
-        def rootScope = CreateNemerleSymbols(project, manager, rootNamespace, context);
-        LoadNitraMetadata(project, manager, rootNamespace);
-        project.Data = (context, rootNamespace, rootScope, manager);
+        def writeMetadataCallback(_)
+        {
+          SaveNitraMetadata(project, manager, rootNamespace);
+          manager.BeforeSaveAssembly -= writeMetadataCallback;
+        }
+        unless (manager.IsIntelliSenseMode)
+          manager.BeforeSaveAssembly += writeMetadataCallback;
+        
+        def rootScope = CreateNemerleSymbols(cancellationToken, manager, rootNamespace, context);
+        LoadNitraMetadata(cancellationToken, project, manager, rootNamespace);
+        (context, rootNamespace, rootScope, manager)
       }
       finally ManagerClass.Instance = oldManager;
     }
 
-    public RefreshProject(project : Project) : void
+    public RefreshProject(cancellationToken : CancellationToken, files : ImmutableArray[FileEvalPropertiesData], data : object) : void
     {
-      when (project.Data == null)
-        RefreshReferences(project);
-
       def oldManager = ManagerClass.Instance;
-      def (context, rootNamespace, rootScope, manager) = project.Data :> (DependentPropertyEvalContext * NamespaceSymbol * Scope * ManagerClass);
+      def (context, rootNamespace, rootScope, manager) = data :> (DependentPropertyEvalContext * NamespaceSymbol * Scope * ManagerClass);
+
+      context.CancellationToken = cancellationToken;
+      
       try
       {
         ManagerClass.Instance = manager;
@@ -62,19 +73,11 @@ namespace DotNet
             removeParsedSymbols(symbol.MemberTable);
         }
         removeParsedSymbols(rootNamespace.MemberTable);
-
-        def evalHost = NitraProjectEvalPropertiesHost(project, rootNamespace, rootScope);
+        
+        def evalHost = NitraProjectEvalPropertiesHost(files, rootNamespace, rootScope);
         evalHost.EvalProperties(context, "SymbolHierarchy", 0);
         evalHost.EvalProperties(context, "Scopes", 1);
         evalHost.EvalProperties(context, "Type bodies binding", 2);
-
-        def writeMetadataCallback(_)
-        {
-          SaveNitraMetadata(project, manager, rootNamespace);
-          manager.BeforeSaveAssembly -= writeMetadataCallback;
-        }
-        unless (manager.IsIntelliSenseMode)
-          manager.BeforeSaveAssembly += writeMetadataCallback;
       }
       finally ManagerClass.Instance = oldManager;
     }
@@ -85,19 +88,19 @@ namespace DotNet
       {
         base (CompilationOptions());
         _isIntelliSenseMode = true;
-        def localPath = IO.Path.GetFullPath(Uri(typeof(ManagerClass).Assembly.CodeBase).LocalPath);
-        def macroLibPath = localPath;
-        def compilerDir = IO.Path.GetDirectoryName(localPath);
+        def libs            = project.Libs;
+        def localPath       = IO.Path.GetFullPath(Uri(typeof(ManagerClass).Assembly.CodeBase).LocalPath);
+        def macroLibPath    = project.ProjectDir;
+        def compilerDir     = IO.Path.GetDirectoryName(localPath);
         this.Options.DoNotLoadMacros = true;
         this.Options.MacrosToLoad ::= macroLibPath;
         this.Options.LibraryPaths ::= compilerDir;
-        when (project.Libs != null)
-          foreach (lib in project.Libs)
-          {
-            | FullNameLibReference     => this.Options.ReferencedLibraries ::= lib.ToString();
-            | FileLibReference as file => this.Options.ReferencedLibraries ::= IO.Path.GetFullPath(IO.Path.Combine(project.ProjectDir, file.Path));
-            | _ => assert2(false, "Not supported LibReference");
-          }
+        foreach (lib in libs)
+        {
+          | FullNameLibReference     => this.Options.ReferencedLibraries ::= lib.ToString();
+          | FileLibReference as file => this.Options.ReferencedLibraries ::= IO.Path.GetFullPath(IO.Path.Combine(project.ProjectDir, file.Path));
+          | _ => assert2(false, "Not supported LibReference");
+        }
         InitCompiler ();
         LoadExternalLibraries ();
       }
@@ -105,11 +108,14 @@ namespace DotNet
 
     private static NitraMetadataStreamName = "Nitra.Metadata2";
 
-    private static LoadNitraMetadata(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
+    private static LoadNitraMetadata(cancellationToken : CancellationToken, project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
     {
       def assemblyWithMetadata = Dictionary();
       foreach (reference in manager.ReferencedAssemblies)
       {
+        when (cancellationToken.IsCancellationRequested)
+          return;
+
         def assembly       = reference.Assembly;
         def metadataStream = assembly.GetManifestResourceStream(NitraMetadataStreamName);
         when (metadataStream != null)
@@ -139,7 +145,12 @@ namespace DotNet
       }
 
       foreach (assemblyId in assemblyWithMetadata.Keys)
+      {
+        when (cancellationToken.IsCancellationRequested)
+          return;
+
         visitAssembly(assemblyId);
+      }
     }
 
     private static SaveNitraMetadata(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol) : void
@@ -151,7 +162,7 @@ namespace DotNet
       manager.Options.EmbeddedResources ::= metadataFileName + "," + NitraMetadataStreamName;
     }
 
-    private static CreateNemerleSymbols(project : Project, manager : ManagerClass, rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : Scope
+    private static CreateNemerleSymbols(cancellationToken : CancellationToken, manager : ManagerClass, rootNamespace : NamespaceSymbol, context : DependentPropertyEvalContext) : Scope
     {
       def nemerleNsRoot     = manager.NameTree.NamespaceTree;
       def file              = SourceSnapshot.Default.File;
@@ -237,6 +248,8 @@ namespace DotNet
           | MacroCall                        => ()
           | null                             => ()
           | NamespaceReference               => 
+            when (cancellationToken.IsCancellationRequested)
+              return;
             def name   = NRB.Name(file, span, node.PartName);
             def symbol = ExternalNamespaceDeclaration(name, node).DefineSymbol(declaredIn.MemberTable);
             unless (symbol.IsDeclaredInEvaluated)
@@ -383,9 +396,9 @@ namespace DotNet
     private _rootNamespace : NamespaceSymbol;
     private _rootScope     : Scope;
 
-    public this(project : Project, rootNamespace : NamespaceSymbol, rootScope : Scope)
+    public this(files : ImmutableArray[FileEvalPropertiesData], rootNamespace : NamespaceSymbol, rootScope : Scope)
     {
-      base(project, rootNamespace :: WellKnownSymbols.GetSymbolsToEvaluate());
+      base(files, (rootNamespace :: WellKnownSymbols.GetSymbolsToEvaluate()).ToImmutableArray());
       _rootNamespace = rootNamespace;
       _rootScope     = rootScope;
     }
