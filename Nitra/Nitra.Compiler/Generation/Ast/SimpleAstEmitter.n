@@ -67,17 +67,16 @@ namespace Nitra.Compiler
       def acceptBody = SCG.List();
 
       def initParameters = SCG.List();
-      initParameters.Add(<[ parameter: File : $(Environment.FileTypeVar : typed) ]>);
-      initParameters.Add(<[ parameter: Span : $(Environment.NSpanTypeVar : typed) ]>);
+      initParameters.Add(<[ parameter: location : Nitra.Location ]>);
 
       def initStatements = SCG.List();
-      initStatements.Add(<[ this.File = File ]>);
+      initStatements.Add(<[ this.Source = location.Source ]>);
       initStatements.Add(<[ mutable isSpanSet ]>);
-      initStatements.Add(<[ unless (TryEvalSpan) { this.Span = Span; isSpanSet = true } ]>);
+      initStatements.Add(<[ unless (TryEvalSpan) { this.Span = location.Span; isSpanSet = true } ]>);
 
       def missingBody = SCG.List();
-      missingBody.Add(<[ this.File = file ]>);
-      missingBody.Add(<[ this.Span = span ]>);
+      missingBody.Add(<[ this.Source = location.Source ]>);
+      missingBody.Add(<[ this.Span   = location.Span ]>);
 
       def defineStructuralProperty(propertySymbol : StructuralPropertySymbol) : void
       {
@@ -94,21 +93,21 @@ namespace Nitra.Compiler
         match (propertyType)
         {
           | Ast         =>
-            initStatements.Add(<[ when ($(name : usesite).File : object == File) UpdateSpan(ref isSpanSet, $(name : usesite).Span) ]>);
+            initStatements.Add(<[ when ($(name : usesite).Source : object == Source) UpdateSpan(ref isSpanSet, $(name : usesite).Span) ]>);
             acceptBody.Add(<[ visitor.Visit(this.$(name : usesite)); ]>);
 
             if (propertyType.Type.Equals(thisType))
               missingBody.Add(<[ this.$(name : usesite) = this ]>);
             else unless (propertySymbol.AstType.IsVoid)
-              missingBody.Add(<[ this.$(name : usesite) = $(GetMissingAstCtor(Environment, propertySymbol.AstType))(file, span) ]>);
+              missingBody.Add(<[ this.$(name : usesite) = $(GetMissingAstCtor(Environment, propertySymbol.AstType))(location) ]>);
 
           | ParsedValue =>
             initStatements.Add(<[ UpdateSpan(ref isSpanSet, $(name : usesite).Span) ]>);
-            missingBody.Add(<[ this.$(name : usesite) = Nitra.ParsedValue(span.StartPos) ]>);
+            missingBody.Add(<[ this.$(name : usesite) = Nitra.ParsedValue(location.StartPos) ]>);
 
           | Span        =>
             initStatements.Add(<[ UpdateSpan(ref isSpanSet, $(name : usesite)) ]>);
-            missingBody.Add(<[ this.$(name : usesite) = span ]>);
+            missingBody.Add(<[ this.$(name : usesite) = location.Span ]>);
         }
       }
 
@@ -138,7 +137,7 @@ namespace Nitra.Compiler
         if (propertyType.Equals(thisType))
           missingBody.Add(<[ this.$(name : usesite) = this ]>);
         else when (propertySymbol.ProjectionType is Some(projectionType))
-          missingBody.Add(<[ this.$(name : usesite) = $(GetMissingAstCtor(Environment, projectionType))(file, span) ]>);
+          missingBody.Add(<[ this.$(name : usesite) = $(GetMissingAstCtor(Environment, projectionType))(location) ]>);
       }
 
       foreach (propertySymbol in _symbol.AllProperties)
@@ -150,7 +149,7 @@ namespace Nitra.Compiler
       }
 
       initParameters.Add(<[ parameter: TryEvalSpan : bool = false ]>);
-      initStatements.Add(<[ unless (isSpanSet) this.Span = Span.FromStart() ]>);
+      initStatements.Add(<[ unless (isSpanSet) this.Span = location.Span.FromStart() ]>);
 
       CompileProjection(projectedProps, initStatements);
 
@@ -159,7 +158,7 @@ namespace Nitra.Compiler
       ]>);
 
       _ambiguousTb.Define(<[ decl:
-        public this(file : $(Environment.FileTypeVar : typed), span : $(Environment.NSpanTypeVar : typed)) { ..$missingBody }
+        public this(location : Nitra.Location) { ..$missingBody }
       ]>);
 
       _listEmitter.DefineMembers(dependentProps);
@@ -280,15 +279,6 @@ namespace Nitra.Compiler
 
     private CompileProjection(properties : SCG.List[ProjectedPropertySymbol], result : SCG.List[PExpr]) : void
     {
-      def locFromExpr(astExpr : PExpr) : PExpr
-      {
-        <[
-          def ast = $astExpr;
-          Nitra.Location(ast.File, ast.Span)
-        ]>
-      }
-      def locFromName(name : string) : PExpr { locFromExpr(<[ $(name : usesite) ]>) }
-
       foreach (g in properties.Where(p => p.ProjectionType.IsSome).GroupBy(p => p.ProjectionType.Value.ProjectionSource))
       {
         def projectionSource = g.Key;
@@ -312,12 +302,12 @@ namespace Nitra.Compiler
                   | _ => ()
                 }
               ]>);
-              end.Add(<[ this.$(property.Name : usesite) = $(concreteType : typed).AstList(this.$(projectionSource.Name : usesite).File, this.$(projectionSource.Name : usesite).Span, $(bufferName : usesite).ToArray()); ]>);
+              end.Add(<[ this.$(property.Name : usesite) = $(concreteType : typed).AstList(this.$(projectionSource.Name : usesite).Location, $(bufferName : usesite).ToArray()); ]>);
               unless (canBeEmpty)
               {
                 end.Add(<[
                   when ($(bufferName : usesite).Count == 0)
-                    Nitra.Declarations.AstContext.CompilerMessages.Error($(locFromExpr(<[ this.$(projectionSource.Name : usesite) ]>)), $$"Missing definition of '$targetName'.")
+                    Nitra.Declarations.AstContext.CompilerMessages.Error(this.$(projectionSource.Name : usesite), $$"Missing definition of '$targetName'.")
                 ]>);
               }
 
@@ -333,9 +323,9 @@ namespace Nitra.Compiler
                     if ($(bufferName : usesite) : object == null)
                       $(bufferName : usesite) = concreteItem
                     else
-                      using (root = Nitra.Declarations.AstContext.CompilerMessages.RootError($(locFromName("concreteItem")), $$"Duplicate definition of '$targetName'."))
+                      using (root = Nitra.Declarations.AstContext.CompilerMessages.RootError(concreteItem, $$"Duplicate definition of '$targetName'."))
                       {
-                        root.Hint($(locFromName(bufferName)), "Previous definition.")
+                        root.Hint($(bufferName : usesite), "Previous definition.")
                       }
 
                   | _ => ()
@@ -344,9 +334,9 @@ namespace Nitra.Compiler
               end.Add(<[
                 this.$(property.Name : usesite) =
                   if ($(bufferName : usesite) : object != null)
-                    $(concreteType : typed).AstOption(this.$(projectionSource.Name : usesite).File, this.$(projectionSource.Name : usesite).Span, $(bufferName : usesite))
+                    $(concreteType : typed).AstOption(this.$(projectionSource.Name : usesite).Location, $(bufferName : usesite))
                   else
-                    $(concreteType : typed).AstOption(this.$(projectionSource.Name : usesite).File, this.$(projectionSource.Name : usesite).Span)
+                    $(concreteType : typed).AstOption(this.$(projectionSource.Name : usesite).Location)
               ]>);
 
             | Single as projectionType =>
@@ -361,9 +351,9 @@ namespace Nitra.Compiler
                     if ($(bufferName : usesite) : object == null)
                       $(bufferName : usesite) = concreteItem
                     else
-                      using (root = Nitra.Declarations.AstContext.CompilerMessages.RootError($(locFromName("concreteItem")), $$"Duplicate definition of '$targetName'."))
+                      using (root = Nitra.Declarations.AstContext.CompilerMessages.RootError(concreteItem, $$"Duplicate definition of '$targetName'."))
                       {
-                        root.Hint($(locFromName(bufferName)), "Previous definition.")
+                        root.Hint($(bufferName : usesite), "Previous definition.")
                       }
 
                   | _ => ()
@@ -373,7 +363,7 @@ namespace Nitra.Compiler
                 if ($(bufferName : usesite) : object != null)
                   this.$(property.Name : usesite) = $(bufferName : usesite)
                 else
-                  Nitra.Declarations.AstContext.CompilerMessages.Error($(locFromExpr(<[ this.$(projectionSource.Name : usesite) ]>)), $$"Missing definition of '$targetName'.")
+                  Nitra.Declarations.AstContext.CompilerMessages.Error(this.$(projectionSource.Name : usesite), $$"Missing definition of '$targetName'.")
               ]>);
           }
         }
