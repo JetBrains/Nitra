@@ -397,6 +397,8 @@ namespace Nitra.Visualizer
       cmpilerMessages.AddRange(_currentTest.SemanticAnalysisMessages);
       cmpilerMessages.Sort();
 
+      ClearMarkers();
+
       var errorNodes      = _errorsTreeView.Items;
       var currentFileId   = _currentTest.Id;
       var fullName        = _currentTest.FullPath;
