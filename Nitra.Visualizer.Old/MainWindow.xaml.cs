@@ -1550,7 +1550,7 @@ namespace Nitra.Visualizer
         if (File.Exists(test.GolgPath))
           File.Move(test.GolgPath, Path.ChangeExtension(firstFilePath, ".gold"));
 
-        testFolder.Tests.Add(new TestVm(firstFilePath, testFolder));
+        testFolder.Tests.Add(new TestVm(firstFilePath, testFolder.Tests.Count, testFolder));
 
         AddNewFileToMultitest(testFolder).IsSelected = true;
         return;
@@ -1568,7 +1568,7 @@ namespace Nitra.Visualizer
       var name = MakeTestFileName(testFolder);
       var path = Path.Combine(testFolder.TestPath, name + ".test");
       File.WriteAllText(path, Environment.NewLine, Encoding.UTF8);
-      var newTest = new TestVm(path, testFolder);
+      var newTest = new TestVm(path, testFolder.Tests.Count, testFolder);
       testFolder.Tests.Add(newTest);
       return newTest;
     }

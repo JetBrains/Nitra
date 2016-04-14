@@ -113,11 +113,15 @@ namespace Nitra.ViewModels
       if (Directory.Exists(testSuitePath))
       {
         var paths = Directory.GetFiles(testSuitePath, "*.test").Concat(Directory.GetDirectories(testSuitePath));
+        var id = 0;
         foreach (var path in paths.OrderBy(f => f))
+        {
           if (Directory.Exists(path))
             tests.Add(new TestFolderVm(path, this));
           else
-            tests.Add(new TestVm(path, this));
+            tests.Add(new TestVm(path, id, this));
+          id++;
+        }
       }
       else if (TestState != TestState.Ignored)
       {
