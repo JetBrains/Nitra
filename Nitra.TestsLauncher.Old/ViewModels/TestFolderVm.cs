@@ -47,8 +47,12 @@ namespace Nitra.ViewModels
       var tests = new ObservableCollection<TestVm>();
 
       var paths = Directory.GetFiles(testSuitePath, "*.test");
+      var id = 0;
       foreach (var path in paths.OrderBy(f => f))
-        tests.Add(new TestVm(path, this));
+      {
+        tests.Add(new TestVm(path, id, this));
+        id++;
+      }
 
       Tests = tests;
     }

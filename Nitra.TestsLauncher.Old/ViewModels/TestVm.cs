@@ -40,10 +40,13 @@ namespace Nitra.ViewModels
       private readonly TestVm _test;
       public int _completionStartPos = -1;
       public string _completionPrefix = null;
+      private int _id;
+      public override int Id { get { return _id; } }
 
-      public TestFile([NotNull] TestVm test, Language language, FsProject<IAst> project, FileStatistics statistics)
+      public TestFile([NotNull] TestVm test, Language language, int id, FsProject<IAst> project, FileStatistics statistics)
         : base(test.TestPath, language, project, statistics)
       {
+        _id = id;
         if (test == null) throw new ArgumentNullException("test");
         _test = test;
       }
@@ -74,7 +77,7 @@ namespace Nitra.ViewModels
       }
     }
 
-    public TestVm(string testPath, ITestTreeNode parent)
+    public TestVm(string testPath, int id, ITestTreeNode parent)
       : base(parent, testPath)
     {
       _testFolder = parent as TestFolderVm;
@@ -89,7 +92,7 @@ namespace Nitra.ViewModels
           _testFolder.ParseTreeStatistics.ReplaceSingleSubtask(Name),
           _testFolder.AstStatistics.ReplaceSingleSubtask(Name),
           _testFolder.DependPropsStatistics);
-        _file = new TestFile(this, TestSuite.Language, _testFolder.Project, FileStatistics);
+        _file = new TestFile(this, TestSuite.Language, id, _testFolder.Project, FileStatistics);
       }
       else
       {
@@ -101,7 +104,7 @@ namespace Nitra.ViewModels
           Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties"));
         var solution = new FsSolution<IAst>();
         var project = new FsProject<IAst>(solution, Path.GetDirectoryName(testPath), TestSuite.Libs);
-        _file = new TestFile(this, TestSuite.Language, project, FileStatistics);
+        _file = new TestFile(this, TestSuite.Language, id, project, FileStatistics);
       }
 
       if (TestSuite.TestState == TestState.Ignored)
@@ -171,6 +174,12 @@ namespace Nitra.ViewModels
         var context  = new DependentPropertyEvalContext();
         var evalHost = new ProjectEvalPropertiesHost(filesData);
         evalHost.EvalProperties(context);
+      }
+
+      foreach (var fileData in filesData)
+      {
+        if (fileData.HasCompilerMessage)
+          fileData.GetCompilerMessage().TranslateTo(fileData.Ast.Location.Source.File.AstMessages);
       }
 
       return true;
