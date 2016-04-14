@@ -1045,6 +1045,10 @@ namespace Nitra.Visualizer
       _text.Background = isTestAvalable ? SystemColors.WindowBrush : SystemColors.ControlBrush;
 
       var client = newTestSuite.Client;
+      var responseMap = client.ResponseMap;
+      responseMap.Clear();
+      responseMap[-1] = _responseDispatcher;
+
       UpdateVm(_currentSuite,    newTestSuite);
       var timer = Stopwatch.StartNew();
       DeactivateVm(_currentTest,     newTest,     client);
@@ -1063,12 +1067,9 @@ namespace Nitra.Visualizer
       if (_currentTest != newTest)
       {
         _currentTest     = newTest;
-        var responseMap = client.ResponseMap;
-        responseMap.Clear();
         if (newTest != null)
         {
           responseMap[newTest.Id] = _responseDispatcher;
-          responseMap[-1]         = _responseDispatcher;
         }
         TryReportError();
       }
@@ -1093,6 +1094,10 @@ namespace Nitra.Visualizer
         TestVm file = _currentSolution.GetFile(msg.FileId);
         file.SemanticAnalysisMessages = typingMessages.messages;
       }
+      else if ((languageInfo = msg as ServerMessage.LanguageLoaded) != null)
+      {
+        UpdateHighlightingStyles(languageInfo);
+      }
 
       if (_currentTest == null || msg.FileId >= 0 && msg.FileId != _currentTest.Id || msg.Version >= 0 && msg.Version != _currentTest.Version)
         return;
@@ -1109,10 +1114,6 @@ namespace Nitra.Visualizer
       else if ((symbolsHighlighting = msg as ServerMessage.SymbolsHighlightingCreated) != null)
       {
         UpdateSymbolsSpanInfos(symbolsHighlighting);
-      }
-      else if ((languageInfo = msg as ServerMessage.LanguageLoaded) != null)
-      {
-        UpdateHighlightingStyles(languageInfo);
       }
       else if (parsingMessages != null || typingMessages != null)
       {
