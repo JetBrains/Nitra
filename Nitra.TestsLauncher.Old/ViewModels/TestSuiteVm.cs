@@ -51,7 +51,11 @@ namespace Nitra.ViewModels
       Language = Language.Instance;
       DynamicExtensions = new ObservableCollection<GrammarDescriptor>();
       Assemblies = NoAssembiles;
-      Libs = new LibReference[0];
+
+      var libs = new List<LibReference>
+      {
+        new FullNameLibReference(Nitra.Visualizer.Utils.NitraRuntimePath)
+      };
 
       var configPath = Path.GetFullPath(Path.Combine(testSuitePath, ConfigFileName));
 
@@ -75,7 +79,7 @@ namespace Nitra.ViewModels
 
         Assemblies = assemblyRelativePaths.Values.ToArray();
 
-        Libs = languageAndExtensions.Item3;
+        libs.AddRange(languageAndExtensions.Item3);
 
         var indent = Environment.NewLine + "  ";
         var para = Environment.NewLine + Environment.NewLine;
@@ -105,6 +109,8 @@ namespace Nitra.ViewModels
         TestState = TestState.Ignored;
         _hint = "Failed to load test suite:" + Environment.NewLine + ex.GetType().Name + ":" + ex.Message;
       }
+
+      Libs = libs.ToArray();
 
       Name = Path.GetFileName(testSuitePath);
 

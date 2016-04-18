@@ -133,5 +133,10 @@ namespace Nitra.Visualizer
 
       return content;
     }
+
+    public static string NitraRuntimePath
+    {
+        get { return new Uri(typeof(Nitra.Location).Assembly.CodeBase).LocalPath; }
+    }
   }
 }
