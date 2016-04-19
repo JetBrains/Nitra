@@ -72,7 +72,7 @@ namespace Nitra.Visualizer
     readonly PependentPropertyGrid _propertyGrid;
     //readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
     readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
-    readonly Action<ServerMessage> _responseDispatcher;
+    readonly Action<AsyncServerMessage> _responseDispatcher;
     //List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
     const string ErrorMarkerTag = "Error";
 
@@ -86,7 +86,7 @@ namespace Nitra.Visualizer
 
       InitializeComponent();
 
-      _responseDispatcher = msg => _text.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action<ServerMessage>(Response), msg);
+      _responseDispatcher = msg => _text.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action<AsyncServerMessage>(Response), msg);
 
       _mainRow.Height  = new GridLength(_settings.TabControlHeight);
 
@@ -1075,26 +1075,26 @@ namespace Nitra.Visualizer
       }
     }
 
-    void Response(ServerMessage msg)
+    void Response(AsyncServerMessage msg)
     {
-      ServerMessage.OutliningCreated            outlining;
-      ServerMessage.KeywordsHighlightingCreated keywordHighlighting;
-      ServerMessage.LanguageLoaded              languageInfo;
-      ServerMessage.SymbolsHighlightingCreated  symbolsHighlighting;
-      ServerMessage.ParsingMessages             parsingMessages = null;
-      ServerMessage.SemanticAnalysisMessages    typingMessages  = null;
+      AsyncServerMessage.OutliningCreated outlining;
+      AsyncServerMessage.KeywordsHighlightingCreated keywordHighlighting;
+      AsyncServerMessage.LanguageLoaded languageInfo;
+      AsyncServerMessage.SymbolsHighlightingCreated symbolsHighlighting;
+      AsyncServerMessage.ParsingMessages parsingMessages = null;
+      AsyncServerMessage.SemanticAnalysisMessages typingMessages = null;
 
-      if ((parsingMessages = msg as ServerMessage.ParsingMessages) != null)
+      if ((parsingMessages = msg as AsyncServerMessage.ParsingMessages) != null)
       {
         TestVm file = _currentSolution.GetFile(msg.FileId);
         file.ParsingMessages = parsingMessages.messages;
       }
-      else if ((typingMessages = msg as ServerMessage.SemanticAnalysisMessages) != null)
+      else if ((typingMessages = msg as AsyncServerMessage.SemanticAnalysisMessages) != null)
       {
         TestVm file = _currentSolution.GetFile(msg.FileId);
         file.SemanticAnalysisMessages = typingMessages.messages;
       }
-      else if ((languageInfo = msg as ServerMessage.LanguageLoaded) != null)
+      else if ((languageInfo = msg as AsyncServerMessage.LanguageLoaded) != null)
       {
         UpdateHighlightingStyles(languageInfo);
       }
@@ -1102,16 +1102,16 @@ namespace Nitra.Visualizer
       if (_currentTest == null || msg.FileId >= 0 && msg.FileId != _currentTest.Id || msg.Version >= 0 && msg.Version != _currentTest.Version)
         return;
 
-      if ((outlining = msg as ServerMessage.OutliningCreated) != null)
+      if ((outlining = msg as AsyncServerMessage.OutliningCreated) != null)
       {
         _foldingStrategy.Outlining = outlining.outlining;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
       }
-      else if ((keywordHighlighting = msg as ServerMessage.KeywordsHighlightingCreated) != null)
+      else if ((keywordHighlighting = msg as AsyncServerMessage.KeywordsHighlightingCreated) != null)
       {
         UpdateKeywordSpanInfos(keywordHighlighting);
       }
-      else if ((symbolsHighlighting = msg as ServerMessage.SymbolsHighlightingCreated) != null)
+      else if ((symbolsHighlighting = msg as AsyncServerMessage.SymbolsHighlightingCreated) != null)
       {
         UpdateSymbolsSpanInfos(symbolsHighlighting);
       }
