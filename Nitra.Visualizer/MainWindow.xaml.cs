@@ -427,14 +427,17 @@ namespace Nitra.Visualizer
         errorNode.Tag = message;
         errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
 
-        foreach (var nestedMessage in message.NestedMessages)
+        if (message.NestedMessages != null)
         {
-          var nestedPos = doc.GetLocation(span.StartPos);
-          var nestadErrorNode = new TreeViewItem();
-          nestadErrorNode.Header = Path.GetFileNameWithoutExtension(fullName) + "(" + nestedPos.Line + "," + nestedPos.Column + "): " + nestedMessage.Text;
-          nestadErrorNode.Tag = nestedMessage;
-          nestadErrorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
-          errorNode.Items.Add(nestadErrorNode);
+          foreach (var nestedMessage in message.NestedMessages)
+          {
+            var nestedPos = doc.GetLocation(span.StartPos);
+            var nestadErrorNode = new TreeViewItem();
+            nestadErrorNode.Header = Path.GetFileNameWithoutExtension(fullName) + "(" + nestedPos.Line + "," + nestedPos.Column + "): " + nestedMessage.Text;
+            nestadErrorNode.Tag = nestedMessage;
+            nestadErrorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
+            errorNode.Items.Add(nestadErrorNode);
+          }
         }
 
         errorNodes.Add(errorNode);
