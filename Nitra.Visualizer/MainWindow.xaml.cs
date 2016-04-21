@@ -542,10 +542,6 @@ namespace Nitra.Visualizer
       {
         if (_needUpdateReflection           && ReferenceEquals(_tabControl.SelectedItem, _reflectionTabItem))
           UpdateReflection();
-        else if (_needUpdateHtmlPrettyPrint && ReferenceEquals(_tabControl.SelectedItem, _htmlPrettyPrintTabItem))
-          UpdateHtmlPrettyPrint();
-        else if (_needUpdateTextPrettyPrint && ReferenceEquals(_tabControl.SelectedItem, _textPrettyPrintTabItem))
-          UpdateTextPrettyPrint();
         
         UpdateDeclarations();
       }
@@ -553,6 +549,16 @@ namespace Nitra.Visualizer
       {
         Debug.Write(e);
       }
+    }
+
+    private bool IsHtmlPrettyPrintTabActive()
+    {
+      return ReferenceEquals(_tabControl.SelectedItem, _htmlPrettyPrintTabItem);
+    }
+
+    private bool IsPrettyPrintTabActive()
+    {
+      return ReferenceEquals(_tabControl.SelectedItem, _textPrettyPrintTabItem);
     }
 
     private void UpdateReflection()
@@ -564,45 +570,6 @@ namespace Nitra.Visualizer
 
       //var root = _parseResult.Reflect();
       //_reflectionTreeView.ItemsSource = new[] { root };
-    }
-
-    private void UpdateHtmlPrettyPrint()
-    {
-      //_needUpdateHtmlPrettyPrint = false;
-
-      //if (_parseResult == null)
-      //  return;
-
-      //if (_parseTree == null)
-      //  _parseTree = _parseResult.CreateParseTree();
-
-      //var htmlWriter = new HtmlPrettyPrintWriter(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes, "missing", "debug", "garbage");
-      //_parseTree.PrettyPrint(htmlWriter, 0, null);
-
-      //var spanStyles = new StringBuilder();
-      //foreach (var style in _highlightingStyles)
-      //{
-      //  var brush = style.Value.Foreground as SimpleHighlightingBrush;
-      //  if (brush == null)
-      //    continue;
-      //  var color = brush.Brush.Color;
-      //  spanStyles.Append('.').Append(style.Key.Replace('.', '-')).Append("{color:rgb(").Append(color.R).Append(',').Append(color.G).Append(',').Append(color.B).AppendLine(");}");
-      //}
-      //var html = Properties.Resources.PrettyPrintDoughnut.Replace("{spanclasses}", spanStyles.ToString()).Replace("{prettyprint}", htmlWriter.ToString());
-      //prettyPrintViewer.NavigateToString(html);
-    }
-
-    private void UpdateTextPrettyPrint()
-    {
-      //_needUpdateTextPrettyPrint = false;
-
-      //if (_parseResult == null)
-      //  return;
-
-      //if (_parseTree == null)
-      //  _parseTree = _parseResult.CreateParseTree();
-
-      //_prettyPrintTextBox.Text = _parseTree.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
     }
 
     private void textBox1_TextChanged(object sender, EventArgs e)
@@ -679,6 +646,18 @@ namespace Nitra.Visualizer
 
     void _tabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+      if (_currentSuite == null)
+        return;
+
+      var client = _currentSuite.Client;
+
+      if (IsPrettyPrintTabActive())
+        client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Text));
+      else if (IsHtmlPrettyPrintTabActive())
+        client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Html));
+      else
+        client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Disabled));
+        
       UpdateInfo();
       ShowNodeForCaret();
     }
@@ -739,9 +718,6 @@ namespace Nitra.Visualizer
         MessageBox.Show(this, "Select a test suite first.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
         return;
       }
-
-      if (_needUpdateTextPrettyPrint)
-        UpdateTextPrettyPrint();
 
       var testSuitePath = _currentSuite.FullPath;
       var selectedProject = _currentProject == null ? null : _currentProject.Name;
