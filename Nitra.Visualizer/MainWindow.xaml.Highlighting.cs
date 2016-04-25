@@ -56,19 +56,19 @@ namespace Nitra.Visualizer
       _symbolsSpanInfos  = ImmutableArray<SpanInfo>.Empty;
     }
 
-    private void UpdateKeywordSpanInfos(ServerMessage.KeywordsHighlightingCreated keywordHighlighting)
+    private void UpdateKeywordSpanInfos(AsyncServerMessage.KeywordsHighlightingCreated keywordHighlighting)
     {
       _keywordsSpanInfos = keywordHighlighting.spanInfos;
       _text.TextArea.TextView.Redraw();
     }
-    
-    private void UpdateSymbolsSpanInfos(ServerMessage.SymbolsHighlightingCreated symbolsHighlighting)
+
+    private void UpdateSymbolsSpanInfos(AsyncServerMessage.SymbolsHighlightingCreated symbolsHighlighting)
     {
       _symbolsSpanInfos = symbolsHighlighting.spanInfos;
       _text.TextArea.TextView.Redraw();
     }
 
-    private void UpdateHighlightingStyles(ServerMessage.LanguageLoaded languageInfo)
+    private void UpdateHighlightingStyles(AsyncServerMessage.LanguageLoaded languageInfo)
     {
       foreach (var spanClassInfo in languageInfo.spanClassInfos)
         _highlightingStyles[spanClassInfo.Id] = 

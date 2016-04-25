@@ -72,7 +72,7 @@ namespace Nitra.Visualizer
     readonly PependentPropertyGrid _propertyGrid;
     //readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
     readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
-    readonly Action<ServerMessage> _responseDispatcher;
+    readonly Action<AsyncServerMessage> _responseDispatcher;
     //List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
     const string ErrorMarkerTag = "Error";
 
@@ -86,7 +86,7 @@ namespace Nitra.Visualizer
 
       InitializeComponent();
 
-      _responseDispatcher = msg => _text.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action<ServerMessage>(Response), msg);
+      _responseDispatcher = msg => _text.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action<AsyncServerMessage>(Response), msg);
 
       _mainRow.Height  = new GridLength(_settings.TabControlHeight);
 
@@ -427,14 +427,17 @@ namespace Nitra.Visualizer
         errorNode.Tag = message;
         errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
 
-        foreach (var nestedMessage in message.NestedMessages)
+        if (message.NestedMessages != null)
         {
-          var nestedPos = doc.GetLocation(span.StartPos);
-          var nestadErrorNode = new TreeViewItem();
-          nestadErrorNode.Header = Path.GetFileNameWithoutExtension(fullName) + "(" + nestedPos.Line + "," + nestedPos.Column + "): " + nestedMessage.Text;
-          nestadErrorNode.Tag = nestedMessage;
-          nestadErrorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
-          errorNode.Items.Add(nestadErrorNode);
+          foreach (var nestedMessage in message.NestedMessages)
+          {
+            var nestedPos = doc.GetLocation(span.StartPos);
+            var nestadErrorNode = new TreeViewItem();
+            nestadErrorNode.Header = Path.GetFileNameWithoutExtension(fullName) + "(" + nestedPos.Line + "," + nestedPos.Column + "): " + nestedMessage.Text;
+            nestadErrorNode.Tag = nestedMessage;
+            nestadErrorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
+            errorNode.Items.Add(nestadErrorNode);
+          }
         }
 
         errorNodes.Add(errorNode);
@@ -542,10 +545,6 @@ namespace Nitra.Visualizer
       {
         if (_needUpdateReflection           && ReferenceEquals(_tabControl.SelectedItem, _reflectionTabItem))
           UpdateReflection();
-        else if (_needUpdateHtmlPrettyPrint && ReferenceEquals(_tabControl.SelectedItem, _htmlPrettyPrintTabItem))
-          UpdateHtmlPrettyPrint();
-        else if (_needUpdateTextPrettyPrint && ReferenceEquals(_tabControl.SelectedItem, _textPrettyPrintTabItem))
-          UpdateTextPrettyPrint();
         
         UpdateDeclarations();
       }
@@ -553,6 +552,16 @@ namespace Nitra.Visualizer
       {
         Debug.Write(e);
       }
+    }
+
+    private bool IsHtmlPrettyPrintTabActive()
+    {
+      return ReferenceEquals(_tabControl.SelectedItem, _htmlPrettyPrintTabItem);
+    }
+
+    private bool IsPrettyPrintTabActive()
+    {
+      return ReferenceEquals(_tabControl.SelectedItem, _textPrettyPrintTabItem);
     }
 
     private void UpdateReflection()
@@ -564,45 +573,6 @@ namespace Nitra.Visualizer
 
       //var root = _parseResult.Reflect();
       //_reflectionTreeView.ItemsSource = new[] { root };
-    }
-
-    private void UpdateHtmlPrettyPrint()
-    {
-      //_needUpdateHtmlPrettyPrint = false;
-
-      //if (_parseResult == null)
-      //  return;
-
-      //if (_parseTree == null)
-      //  _parseTree = _parseResult.CreateParseTree();
-
-      //var htmlWriter = new HtmlPrettyPrintWriter(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes, "missing", "debug", "garbage");
-      //_parseTree.PrettyPrint(htmlWriter, 0, null);
-
-      //var spanStyles = new StringBuilder();
-      //foreach (var style in _highlightingStyles)
-      //{
-      //  var brush = style.Value.Foreground as SimpleHighlightingBrush;
-      //  if (brush == null)
-      //    continue;
-      //  var color = brush.Brush.Color;
-      //  spanStyles.Append('.').Append(style.Key.Replace('.', '-')).Append("{color:rgb(").Append(color.R).Append(',').Append(color.G).Append(',').Append(color.B).AppendLine(");}");
-      //}
-      //var html = Properties.Resources.PrettyPrintDoughnut.Replace("{spanclasses}", spanStyles.ToString()).Replace("{prettyprint}", htmlWriter.ToString());
-      //prettyPrintViewer.NavigateToString(html);
-    }
-
-    private void UpdateTextPrettyPrint()
-    {
-      //_needUpdateTextPrettyPrint = false;
-
-      //if (_parseResult == null)
-      //  return;
-
-      //if (_parseTree == null)
-      //  _parseTree = _parseResult.CreateParseTree();
-
-      //_prettyPrintTextBox.Text = _parseTree.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
     }
 
     private void textBox1_TextChanged(object sender, EventArgs e)
@@ -679,6 +649,18 @@ namespace Nitra.Visualizer
 
     void _tabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+      if (_currentSuite == null)
+        return;
+
+      var client = _currentSuite.Client;
+
+      if (IsPrettyPrintTabActive())
+        client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Text));
+      else if (IsHtmlPrettyPrintTabActive())
+        client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Html));
+      else
+        client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Disabled));
+        
       UpdateInfo();
       ShowNodeForCaret();
     }
@@ -739,9 +721,6 @@ namespace Nitra.Visualizer
         MessageBox.Show(this, "Select a test suite first.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
         return;
       }
-
-      if (_needUpdateTextPrettyPrint)
-        UpdateTextPrettyPrint();
 
       var testSuitePath = _currentSuite.FullPath;
       var selectedProject = _currentProject == null ? null : _currentProject.Name;
@@ -1075,26 +1054,26 @@ namespace Nitra.Visualizer
       }
     }
 
-    void Response(ServerMessage msg)
+    void Response(AsyncServerMessage msg)
     {
-      ServerMessage.OutliningCreated            outlining;
-      ServerMessage.KeywordsHighlightingCreated keywordHighlighting;
-      ServerMessage.LanguageLoaded              languageInfo;
-      ServerMessage.SymbolsHighlightingCreated  symbolsHighlighting;
-      ServerMessage.ParsingMessages             parsingMessages = null;
-      ServerMessage.SemanticAnalysisMessages    typingMessages  = null;
+      AsyncServerMessage.OutliningCreated outlining;
+      AsyncServerMessage.KeywordsHighlightingCreated keywordHighlighting;
+      AsyncServerMessage.LanguageLoaded languageInfo;
+      AsyncServerMessage.SymbolsHighlightingCreated symbolsHighlighting;
+      AsyncServerMessage.ParsingMessages parsingMessages = null;
+      AsyncServerMessage.SemanticAnalysisMessages typingMessages = null;
 
-      if ((parsingMessages = msg as ServerMessage.ParsingMessages) != null)
+      if ((parsingMessages = msg as AsyncServerMessage.ParsingMessages) != null)
       {
         TestVm file = _currentSolution.GetFile(msg.FileId);
         file.ParsingMessages = parsingMessages.messages;
       }
-      else if ((typingMessages = msg as ServerMessage.SemanticAnalysisMessages) != null)
+      else if ((typingMessages = msg as AsyncServerMessage.SemanticAnalysisMessages) != null)
       {
         TestVm file = _currentSolution.GetFile(msg.FileId);
         file.SemanticAnalysisMessages = typingMessages.messages;
       }
-      else if ((languageInfo = msg as ServerMessage.LanguageLoaded) != null)
+      else if ((languageInfo = msg as AsyncServerMessage.LanguageLoaded) != null)
       {
         UpdateHighlightingStyles(languageInfo);
       }
@@ -1102,16 +1081,16 @@ namespace Nitra.Visualizer
       if (_currentTest == null || msg.FileId >= 0 && msg.FileId != _currentTest.Id || msg.Version >= 0 && msg.Version != _currentTest.Version)
         return;
 
-      if ((outlining = msg as ServerMessage.OutliningCreated) != null)
+      if ((outlining = msg as AsyncServerMessage.OutliningCreated) != null)
       {
         _foldingStrategy.Outlining = outlining.outlining;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
       }
-      else if ((keywordHighlighting = msg as ServerMessage.KeywordsHighlightingCreated) != null)
+      else if ((keywordHighlighting = msg as AsyncServerMessage.KeywordsHighlightingCreated) != null)
       {
         UpdateKeywordSpanInfos(keywordHighlighting);
       }
-      else if ((symbolsHighlighting = msg as ServerMessage.SymbolsHighlightingCreated) != null)
+      else if ((symbolsHighlighting = msg as AsyncServerMessage.SymbolsHighlightingCreated) != null)
       {
         UpdateSymbolsSpanInfos(symbolsHighlighting);
       }

@@ -32,6 +32,7 @@ namespace Nitra.ViewModels
     public StatisticsTask.Container Statistics            { get; private set; }
     public FileStatistics           FileStatistics        { get; private set; }
     public bool                     IsSingleFileTest       { get { return Parent is TestSuiteVm; } }
+    public object                   _data;
 
     private TestFolderVm _testFolder;
 
@@ -165,13 +166,17 @@ namespace Nitra.ViewModels
       var cancellationToken = new CancellationToken();
       var filesData = NitraFile.GetEvalPropertiesData(files);
       if (projectSupport != null)
-        projectSupport.RefreshProject(cancellationToken, filesData, projectSupport.RefreshReferences(cancellationToken, project));
+      {
+        if (_data == null)
+          _data = projectSupport.RefreshReferences(cancellationToken, project);
+        projectSupport.RefreshProject(cancellationToken, filesData, _data);
+      }
       else if (_testFolder != null)
         throw new InvalidOperationException("The '" + _file.Ast.GetType().Name +
                                             "' type must implement IProjectSupport, to be used in a multi-file test.");
       else
       {
-        var context  = new DependentPropertyEvalContext();
+        var context = new DependentPropertyEvalContext();
         var evalHost = new ProjectEvalPropertiesHost(filesData);
         evalHost.EvalProperties(context);
       }

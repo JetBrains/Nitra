@@ -5,7 +5,10 @@ using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
+using Nitra.ClientServer.Messages;
 using Nitra.Declarations;
+using Nitra.PrettyPrint;
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -17,7 +20,6 @@ using System.Text;
 using System.Threading;
 
 using NSP = Nitra.ProjectSystem;
-using Nitra.ClientServer.Messages;
 using Span = Nitra.ClientServer.Messages.NSpan;
 
 namespace Nitra.ClientServer.Server.ProjectSystem
@@ -41,7 +43,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     mutable _ast                    : IAst;
     mutable _parseTree              : ParseTree;
     
-    public this(id : int, fullPath : string, parent : Project)
+    public this(id : int, fullPath : string, version : int, parent : Project)
     {
       base(null);
       Id                = id;
@@ -49,6 +51,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       Parent            = parent;
       _name             = IO.Path.GetFileNameWithoutExtension(FullName);
       _parseQueue       = parent.ParseQueue;
+      Version           = version;
       (Language, DynamicExtensions) = parent.GetLanguage(Path.GetExtension(fullPath));
       // TODO: Add statistics support.
       
@@ -84,7 +87,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         assert2(_fileInfo != null);
         assert(_fileInfo != null);
         def text  = File.ReadAllText(_fileInfo.FullName, Encoding.UTF8); // TODO: add detect BOM and load UTF-8 if no BOM avalable
-        _snapshot = SourceSnapshot(text, this, 0);
+        _snapshot = SourceSnapshot(text, this, Version);
         _text     = StringBuilder(text);
       }
       
@@ -244,6 +247,29 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     {
       Log("Deactivate "+ Id);
       IsActive = false;
+    }
+    
+    public PrettyPrint(router : Router) : void
+    {
+      when (_parseTree == null)
+        return;
+        
+      def state = Parent.Parent.PrettyPrintState;
+      
+      match (state)
+      {
+        | PrettyPrintState.Disabled => ()
+        | PrettyPrintState.Html =>
+          def spanClasses = Parent.Router.SpanClassesManager.GetSpanClasses();
+          def htmlWriter = HtmlPrettyPrintWriter(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes, spanClasses, "missing", "debug", "garbage");
+          _parseTree.PrettyPrint(htmlWriter, 0, null);
+          def text = htmlWriter.ToString();
+          router.SendAsyncResponse(AsyncServerMessage.PrettyPrintCreated(Id, Version, state, text));
+          
+        | PrettyPrintState.Text =>
+          def text = _parseTree.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
+          router.SendAsyncResponse(AsyncServerMessage.PrettyPrintCreated(Id, Version, state, text));
+      }
     }
   
     public override ToString() : string { $"$Name($(Parent.Name) project)" }

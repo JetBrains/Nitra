@@ -1328,7 +1328,8 @@ namespace Nitra.Visualizer
           //var amb = symbol as IAmbiguousSymbol;
           //if (amb != null)
           //  description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
-          completionList.Add(new CompletionData(replacementSpan, symbol.Name, content, description, priority: 1.0));
+          if (symbol.Name.All(IsIdenrChar))
+            completionList.Add(new CompletionData(replacementSpan, symbol.Name, content, description, priority: 1.0));
         }
 
         var literal = elem as string;
@@ -1341,6 +1342,11 @@ namespace Nitra.Visualizer
       }
 
       return completionList;
+    }
+
+    private static bool IsIdenrChar(char c)
+    {
+      return char.IsLetterOrDigit(c) || c == '_';
     }
 
     private void TryMatchBraces()
