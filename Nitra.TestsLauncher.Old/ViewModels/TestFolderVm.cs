@@ -31,6 +31,7 @@ namespace Nitra.ViewModels
 
           return new FileLibReference(Path.Combine(@"..", file.Path));
         }));
+      this.Project.OnSymbolAssemblyResolve += Visualizer.Utils.OnSymbolAssemblyResolve;
 
       Statistics            = new StatisticsTask.Container("Total");
       ParsingStatistics     = Statistics.ReplaceContainerSubtask("Parsing");
