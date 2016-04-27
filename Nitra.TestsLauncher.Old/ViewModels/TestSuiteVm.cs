@@ -54,7 +54,7 @@ namespace Nitra.ViewModels
 
       var libs = new List<LibReference>
       {
-        new FullNameLibReference(Nitra.Visualizer.Utils.NitraRuntimePath)
+        new FileLibReference(Nitra.Visualizer.Utils.NitraRuntimePath)
       };
 
       var configPath = Path.GetFullPath(Path.Combine(testSuitePath, ConfigFileName));
