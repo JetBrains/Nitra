@@ -42,6 +42,16 @@ namespace Nitra.Visualizer
       return assembly;
     }
 
+    public static Assembly OnSymbolAssemblyResolve(Project project, AssemblyName fullName)
+    {
+        switch (fullName.Name)
+        {
+            case "Boot.DotNetLang":     return typeof(DotNet.ClassSymbol).Assembly;
+            case "Boot.Nitra.Runtime":  return typeof(Nitra.Location).Assembly;
+            default:                    return null;
+        }
+    }
+
     public static string UpdatePathForConfig(string assemblyFilePath, string config)
     {
       return _configRx.Replace(assemblyFilePath, @"\" + config + @"\");
@@ -132,6 +142,11 @@ namespace Nitra.Visualizer
 </Span>";
 
       return content;
+    }
+
+    public static string NitraRuntimePath
+    {
+        get { return new Uri(typeof(Nitra.Location).Assembly.CodeBase).LocalPath; }
     }
   }
 }

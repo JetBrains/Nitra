@@ -77,7 +77,7 @@ namespace Nitra.Serialization2
         for (mutable assemblyIndex = 0; assemblyIndex < assemblyCount; ++assemblyIndex)
         {
           def fullName = reader.ReadString();
-          def assembly = LoadAssembly(fullName);
+          def assembly = Project.ResolveSymbolAssembly(fullName);
           def typeCount = reader.ReadInt32();
           for (mutable typeIndex = 0; typeIndex < typeCount; ++typeIndex)
           {
@@ -125,14 +125,6 @@ namespace Nitra.Serialization2
         _deserializationHandlers.Clear();
         _objects.Clear();
       }
-    }
-
-    private LoadAssembly(fullName : string) : Assembly
-    {
-      foreach (assembly in AppDomain.CurrentDomain.GetAssemblies())
-        when(assembly.FullName == fullName)
-          return assembly;
-      Assembly.Load(fullName)
     }
 
     private LoadType(assembly : Assembly, typeName : string) : System.Type
@@ -187,42 +179,70 @@ namespace Nitra.Serialization2
           match (owner)
           {
             | null                        => null
-            | scope  is Scope             => scope
-            | symbol is DeclarationSymbol => symbol.Scope
+            | scope  is TableScope        => scope
+            | symbol is DeclarationSymbol => FindMemberTable(symbol)
             | _ => assert(false)
           };
 
-        def isParsed = reader.ReadBoolean();
+        def symbolKind = reader.ReadByte() :> SymbolKind;
         obj =
-          if (isParsed)
+          match (symbolKind)
           {
-            def name        = Name(Location(Source, NSpan()), nameText);
-            def declaration = ExternalDeclaration.[TSymbol](name);
-            declaration.DefineSymbol(containingScope :> TableScope)
-          }
-          else
-          {
-            assert(containingScope : object != null, "External symbol has no owner scope.");
+            | WithoutDeclarations => TSymbol()
+            | Parsed =>
+              def name        = Name(Location(Source, NSpan()), nameText);
+              def declaration = ExternalDeclaration.[TSymbol](name);
+              declaration.DefineSymbol(containingScope)
 
-            def reference      = Reference(Location(Source, NSpan()), nameText);
-            mutable candidates = LightList();
-            containingScope.BindMany(reference, ref candidates);
-            match (candidates.Count)
-            {
-              | 0 => assert(false, $"Failed to lookup reference to external symbol '$reference'");
-              | 1 => candidates.FirstItem
-              | _ => assert(false, $"Ambiguous symbol reference '$reference'");
-            }
+            | External =>
+              assert3(containingScope : object != null, $"External symbol '$nameText' has no owner scope.");
+
+              def reference      = Reference(Location(Source, NSpan()), nameText);
+              mutable candidates = LightList();
+              containingScope.BindMany(reference, ref candidates);
+              match (candidates.Count)
+              {
+                | 0 => assert(false, $"Failed to lookup reference to external symbol '$reference'");
+                | 1 => candidates.FirstItem
+                | _ => assert(false, $"Ambiguous symbol reference '$reference'");
+              }
+
+            | x => assert(false, $"Unknown symbol kind '$x'.")
           };
 
         _objects.Add(~id, obj);
-        isParsed
+        symbolKind != SymbolKind.External
       }
       else
       {
         obj = _objects[id] :> TSymbol;
         false
       }
+    }
+
+    private FindMemberTable(symbol : DeclarationSymbol) : TableScope
+    {
+      def find(scope : Scope) : TableScope
+      {
+        | TableScope(Owner = owner) as s when symbol : object == owner => s
+        | FilteringScope(Scope = scope) => find(scope)
+        | HidingScope(Hidden = hidden, Scope = scope) => find(scope) ?? find(hidden)
+        | UnionScope(Scopes = scopes) =>
+          mutable result;
+          foreach (s in scopes)
+          {
+            result = find(s);
+            when (result : object != null)
+              break;
+          }
+          result
+
+        | _ => null
+      }
+
+      def tableScope = find(symbol.Scope);
+      assert(tableScope != null, $"Failed to lookup MemberTable in symbol '$symbol'.");
+      tableScope
     }
   }
 }
