@@ -7,6 +7,7 @@ using Nemerle.Utility;
 using Nitra.ClientServer.Messages;
 using Nitra.ClientServer.Server.ServerUtils;
 using Nitra.Declarations;
+using Nitra.PrettyPrint;
 using Nitra.ProjectSystem;
 
 using System;
@@ -31,10 +32,12 @@ namespace Nitra.ClientServer.Server
     _mainQueue           : BlockingCollection[RouterMessage];
     _asyncResponseWriter : BinaryWriter;
     _spanClassesManager  : SpanClassesManager;
+    _router              : Router;
     
     
-    public this(incomeQueue : BlockingCollection[ParserMessage], mainQueue : BlockingCollection[RouterMessage], responseWriter : BinaryWriter, spanClassesManager : SpanClassesManager)
+    public this(router : Router, incomeQueue : BlockingCollection[ParserMessage], mainQueue : BlockingCollection[RouterMessage], responseWriter : BinaryWriter, spanClassesManager : SpanClassesManager)
     {
+      _router              = router;
       _mainQueue           = mainQueue;
       _incomeQueue         = incomeQueue;
       _asyncResponseWriter = responseWriter;
@@ -120,6 +123,32 @@ namespace Nitra.ClientServer.Server
         SendAsyncResponse(AsyncServerMessage.MappingMessages(fileId, version, cm));
         
         ServerUtils.LogMsgHandled("CreateAst " + fileId, timer, 100);
+        
+        def prettyPrintState = _router.PrettyPrintState;
+        when (prettyPrintState != PrettyPrintState.Disabled)
+          ProcessMessage(ParserMessage.CreatePrettyPrint(fileId, version, prettyPrintState, parseTree));
+          
+      | CreatePrettyPrint(fileId, version, prettyPrintState, parseTree) =>
+        match (prettyPrintState)
+        {
+          | PrettyPrintState.Disabled => ()
+          | PrettyPrintState.Html =>
+            ServerUtils.Log("HtmlPrettyPrint " + fileId);
+            def timer = Stopwatch.StartNew();
+            def spanClasses = _spanClassesManager.GetSpanClasses();
+            def htmlWriter = HtmlPrettyPrintWriter(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes, spanClasses, "missing", "debug", "garbage");
+            parseTree.PrettyPrint(htmlWriter, 0, null);
+            def text = htmlWriter.ToString();
+            _router.SendAsyncResponse(AsyncServerMessage.PrettyPrintCreated(fileId, version, PrettyPrintState.Html, text));
+            ServerUtils.LogMsgHandled("HtmlPrettyPrint " + fileId, timer, 100);
+          
+          | PrettyPrintState.Text =>
+            ServerUtils.Log("TextPrettyPrint " + fileId);
+            def timer = Stopwatch.StartNew();
+            def text = parseTree.ToString(PrettyPrintOptions.DebugIndent | PrettyPrintOptions.MissingNodes);
+            _router.SendAsyncResponse(AsyncServerMessage.PrettyPrintCreated(fileId, version, PrettyPrintState.Text, text));
+            ServerUtils.LogMsgHandled("TextPrettyPrint " + fileId, timer, 100);
+        }
         
       | SemanticAnalysisStart(projectId, cancellationToken, projectSupport, files, data) =>
         ServerUtils.Log($"SemanticAnalysisStart: ..$(files.Select(_.Title))");

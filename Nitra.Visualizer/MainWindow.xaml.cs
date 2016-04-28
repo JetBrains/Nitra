@@ -651,18 +651,21 @@ namespace Nitra.Visualizer
     {
       if (_currentSuite == null)
         return;
+      UpdatePrettyPrintStatus(_currentSuite.Client);
+      Reparse();
 
-      var client = _currentSuite.Client;
+      UpdateInfo();
+      ShowNodeForCaret();
+    }
 
+    void UpdatePrettyPrintStatus(NitraClient client)
+    {
       if (IsPrettyPrintTabActive())
         client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Text));
       else if (IsHtmlPrettyPrintTabActive())
         client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Html));
       else
         client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Disabled));
-        
-      UpdateInfo();
-      ShowNodeForCaret();
     }
 
     void _copyButton_Click(object sender, RoutedEventArgs e)
@@ -1028,6 +1031,10 @@ namespace Nitra.Visualizer
       responseMap.Clear();
       responseMap[-1] = _responseDispatcher;
 
+      if (_currentSuite == null)
+        UpdatePrettyPrintStatus(client); // first time
+
+
       UpdateVm(_currentSuite,    newTestSuite);
       var timer = Stopwatch.StartNew();
       DeactivateVm(_currentTest,     newTest,     client);
@@ -1062,6 +1069,7 @@ namespace Nitra.Visualizer
       AsyncServerMessage.SymbolsHighlightingCreated symbolsHighlighting;
       AsyncServerMessage.ParsingMessages parsingMessages = null;
       AsyncServerMessage.SemanticAnalysisMessages typingMessages = null;
+      AsyncServerMessage.PrettyPrintCreated prettyPrintCreated;
 
       if ((parsingMessages = msg as AsyncServerMessage.ParsingMessages) != null)
       {
@@ -1093,6 +1101,18 @@ namespace Nitra.Visualizer
       else if ((symbolsHighlighting = msg as AsyncServerMessage.SymbolsHighlightingCreated) != null)
       {
         UpdateSymbolsSpanInfos(symbolsHighlighting);
+      }
+      else if ((prettyPrintCreated = msg as AsyncServerMessage.PrettyPrintCreated) != null)
+      {
+        switch (prettyPrintCreated.type)
+        {
+          case PrettyPrintState.Text:
+            _prettyPrintTextBox.Text = prettyPrintCreated.text;
+            break;
+          case PrettyPrintState.Html:
+            prettyPrintViewer.NavigateToString(prettyPrintCreated.text);
+            break;
+        }
       }
       else if (parsingMessages != null || typingMessages != null)
       {
