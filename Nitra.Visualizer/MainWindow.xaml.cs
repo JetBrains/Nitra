@@ -446,87 +446,37 @@ namespace Nitra.Visualizer
       _status.Text = cmpilerMessages.Count == 0 ? "OK" : cmpilerMessages.Count + " error[s]";
     }
 
-    private void TryReportError2()
-    {
-      //if (_parseResult == null)
-      //  if (_currentSuite.Exception != null)
-      //  {
-      //    var msg = "Exception: " + _currentSuite.Exception.Message;
-      //    _status.Text = msg;
-
-      //    var errorNode = new TreeViewItem();
-      //    errorNode.Header = "(1,1): " + msg;
-      //    errorNode.Tag = _currentSuite.Exception;
-      //    errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
-      //    _errorsTreeView.Items.Add(errorNode);
-
-      //    var marker = _textMarkerService.Create(0, _text.Text.Length);
-      //    marker.Tag = ErrorMarkerTag;
-      //    marker.MarkerType = TextMarkerType.SquigglyUnderline;
-      //    marker.MarkerColor = Colors.Purple;
-      //    marker.ToolTip = msg;
-      //  }
-      //  else
-      //    _status.Text = "Not parsed!";
-      //else
-      //{
-      //  var cmpilerMessages = new List<CompilerMessage>();
-      //  var errorNodes = _errorsTreeView.Items;
-      //  var currFile = _currentTest.File;
-
-      //  if (_currentProject != null)
-      //    foreach (var test in _currentProject.Tests)
-      //      cmpilerMessages.AddRange(test.File.GetCompilerMessages());
-      //  else
-      //    cmpilerMessages.AddRange(_currentTest.File.GetCompilerMessages());
-         
-      //  cmpilerMessages.Sort();
-
-
-      //  foreach (var message in cmpilerMessages)
-      //  {
-      //    var text = message.Text;
-      //    var location = message.Location;
-      //    var file = location.Source.File;
-      //    if (currFile == file)
-      //    {
-      //      var marker = _textMarkerService.Create(location.StartPos, location.Length);
-      //      marker.Tag = ErrorMarkerTag;
-      //      marker.MarkerType = TextMarkerType.SquigglyUnderline;
-      //      marker.MarkerColor = Colors.Red;
-      //      marker.ToolTip = text;
-      //    }
-
-      //    var errorNode = new TreeViewItem();
-      //    errorNode.Header = Path.GetFileNameWithoutExtension(file.FullName) + "(" + message.Location.StartLineColumn + "): " + text;
-      //    errorNode.Tag = message;
-      //    errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
-
-      //    foreach (var nestedMessage in message.NestedMessages)
-      //    {
-      //      var nestadErrorNode = new TreeViewItem();
-      //      nestadErrorNode.Header = Path.GetFileNameWithoutExtension(file.FullName) + "(" + nestedMessage.Location.StartLineColumn + "): " + nestedMessage.Text;
-      //      nestadErrorNode.Tag = nestedMessage;
-      //      nestadErrorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
-      //      errorNode.Items.Add(nestadErrorNode);
-      //    }
-
-      //    errorNodes.Add(errorNode);
-      //  }
-
-      //  _status.Text = cmpilerMessages.Count == 0 ? "OK" : cmpilerMessages.Count + " error[s]";
-      //}
-    }
-
     void errorNode_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
       var node = (TreeViewItem)sender;
       if (!node.IsSelected)
         return;
-      //var error = (CompilerMessage)node.Tag;
-      //SelectText(error.Location);
+      var error = (CompilerMessage)node.Tag;
+      SelectText(error.Location);
       e.Handled = true;
       _text.Focus();
+    }
+
+    private void SelectText(Location location)
+    {
+      if (_currentSolution == null)
+        return;
+
+      var fileIdent = location.File;
+      var span      = location.Span;
+      var file = _currentSolution.GetFile(fileIdent.FileId);
+
+      if (file == null)
+        return;
+
+      if (file.Version != fileIdent.FileVersion)
+        return;
+
+      file.IsSelected = true;
+
+      _text.CaretOffset = span.StartPos;
+      _text.Select(span.StartPos, span.Length);
+      _text.ScrollTo(_text.TextArea.Caret.Line, _text.TextArea.Caret.Column);
     }
 
     void ShowInfo()
