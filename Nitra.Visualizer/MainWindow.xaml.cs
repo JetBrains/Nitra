@@ -1297,54 +1297,35 @@ namespace Nitra.Visualizer
 
     private void ShowCompletionWindow(int pos)
     {
-      //if(_parseResult == null || _astRoot == null)
-      //  return;
+      if (_currentSuite == null || _currentTest == null)
+        return;
 
-      //var completionList = CompleteWord(pos, _astRoot);
+      var client = _currentSuite.Client;
 
-      //_completionWindow = new CompletionWindow(_text.TextArea);
-      //IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
+      client.Send(new ClientMessage.CompleteWord(_currentTest.Id, _currentTest.Version, pos));
+      var result = client.Receive<ServerMessage.CompleteWord>();
+      var replacementSpan = result.replacementSpan;
 
-      //foreach (var completionData in completionList)
-      //  if (!string.IsNullOrEmpty(completionData.Text) && char.IsLetter(completionData.Text[0]))
-      //    data.Add(completionData);
+      _completionWindow = new CompletionWindow(_text.TextArea);
+      IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
 
-      //_completionWindow.Show();
-      //_completionWindow.Closed += delegate { _completionWindow = null; };
-    }
+      CompletionElem.Literal lit;
+      CompletionElem.Symbol  s;
 
-    private List<CompletionData> CompleteWord(int pos)
-    {
-      return null;
-      //NSpan replacementSpan;
-      //var parseResult = astRoot.File.ParseResult;
-      //var result = NitraUtils.CompleteWord(pos, parseResult, astRoot, out replacementSpan);
-      //var completionList = new List<CompletionData>();
+      foreach (var completionData in result.completionList)
+      {
+        if ((lit = completionData as CompletionElem.Literal) != null)
+        {
+          var escaped = Utils.Escape(lit.text);
+          var xaml = "<Span Foreground='blue'>" + escaped + "</Span>";
+          data.Add(new CompletionData(replacementSpan, lit.text, xaml, "keyword " + xaml, priority: 1.0));
+        }
+        else if ((s = completionData as CompletionElem.Symbol) != null)
+          data.Add(new CompletionData(replacementSpan, s.name, s.content, s.description, priority: 1.0));
+      }
 
-      //foreach (var elem in result)
-      //{
-      //  var symbol = elem as DeclarationSymbol;
-      //  if (symbol != null && symbol.IsNameValid)
-      //  {
-      //    var content = symbol.ToXaml();
-      //    var description = content;
-      //    // TODO: починить отображение неоднозначностей
-      //    //var amb = symbol as IAmbiguousSymbol;
-      //    //if (amb != null)
-      //    //  description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
-      //    completionList.Add(new CompletionData(replacementSpan, symbol.Name, content, description, priority: 1.0));
-      //  }
-
-      //  var literal = elem as string;
-      //  if (literal != null)
-      //  {
-      //    var escaped = Utils.Escape(literal);
-      //    var xaml = "<Span Foreground='blue'>" + escaped + "</Span>";
-      //    completionList.Add(new CompletionData(replacementSpan, literal, xaml, "keyword " + xaml, priority: 2.0));
-      //  }
-      //}
-
-      //return completionList;
+      _completionWindow.Show();
+      _completionWindow.Closed += delegate { _completionWindow = null; };
     }
 
     private void TryMatchBraces()
