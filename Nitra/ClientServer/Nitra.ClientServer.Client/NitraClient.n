@@ -29,6 +29,7 @@ namespace Nitra.ClientServer.Client
     public  StringManager    : StringManager;
             MaintPipeName    : string = Guid.NewGuid().ToString();
             _mainPipeClient  : NamedPipeClientStream;
+            _responsePipe    : NamedPipeClientStream;
             _serverProc      : Process;
             _mainPipeWriter  : BinaryWriter;
     mutable _isDisposed      : bool;
@@ -44,24 +45,27 @@ namespace Nitra.ClientServer.Client
       _serverProc               = Process.Start(serverPath, MaintPipeName);
       assert2(_serverProc != null);
       Log("Server started.");
-      _mainPipeClient           = NamedPipeClientStream(".", MaintPipeName, PipeDirection.InOut); 
+      _mainPipeClient           = NamedPipeClientStream(".", MaintPipeName + Constants.RequestPipeSuffix, PipeDirection.Out); 
       _mainPipeWriter           = BinaryWriter(_mainPipeClient);
-      _mainPipeReader           = BinaryReader(_mainPipeClient);
+      _responsePipe             = NamedPipeClientStream(".", MaintPipeName + Constants.ResponsePipeSuffix, PipeDirection.In);
+      _mainPipeReader           = BinaryReader(_responsePipe);
       _mainPipeClient.Connect();
+      _responsePipe.Connect();
       Log("Connected to server started.");
 
       def readerThread          = Thread(AsyncResponseReaderThreadMain);
+      readerThread.Name         = "AsyncResponseReader";
       readerThread.IsBackground = true;
       readerThread.Start();
     }
     
     AsyncResponseReaderThreadMain() : void
     {
-      def responsePipet  = NamedPipeClientStream(".", MaintPipeName + Constants.AsyncResponsePipeSuffix, PipeDirection.In); 
-      def asyncResponseReader = BinaryReader(responsePipet);
-      responsePipet.Connect();
+      def asyncResponsePipet  = NamedPipeClientStream(".", MaintPipeName + Constants.AsyncResponsePipeSuffix, PipeDirection.In);
+      def asyncResponseReader = BinaryReader(asyncResponsePipet);
+      asyncResponsePipet.Connect();
       
-      while (!_isDisposed && responsePipet.IsConnected)
+      while (!_isDisposed && asyncResponsePipet.IsConnected)
       {
         try
         {
@@ -105,8 +109,12 @@ namespace Nitra.ClientServer.Client
     public Receive[T]() : T
       where T: ServerMessage
     {
-      def msg = Deserializer.Deserialize.[T](_mainPipeReader);
-      msg
+      ReceiveServerMessage() :> T
+    }
+
+    ReceiveServerMessage() : ServerMessage
+    {
+      Deserializer.Deserialize.[ServerMessage](_mainPipeReader)
     }
     
     public Flush() : void
@@ -122,6 +130,7 @@ namespace Nitra.ClientServer.Client
       Send(Messages.ClientMessage.Shutdown());
       
       _mainPipeClient.Dispose();
+      _responsePipe.Dispose();
       _isDisposed = true;
       GC.SuppressFinalize(this);
     }
