@@ -1282,6 +1282,17 @@ namespace Nitra.Visualizer
         else if (e.Key == Key.Subtract && Keyboard.Modifiers == ModifierKeys.Control)
           control.FontSize--;
 
+        if (Keyboard.IsKeyDown(Key.F12) && Keyboard.Modifiers == ModifierKeys.None)
+        {
+          FindSymbolDefinitions();
+          return;
+        }
+        else if (Keyboard.IsKeyDown(Key.F12) && Keyboard.Modifiers == ModifierKeys.Shift)
+        {
+          FindSymbolReferences();
+          return;
+        }
+
         if (Keyboard.Modifiers != ModifierKeys.Control)
           return;
 
@@ -1293,6 +1304,28 @@ namespace Nitra.Visualizer
         else if (e.Key == Key.Oem6) // Oem6 - '}'
           TryMatchBraces();
       }
+    }
+
+    private void FindSymbolReferences()
+    {
+      if (_currentSuite == null || _currentTest == null)
+        return;
+
+      var client = _currentSuite.Client;
+      var pos = _text.CaretOffset;
+      client.Send(new ClientMessage.FindSymbolReferences(_currentTest.Id, _currentTest.Version, pos));
+      var result = client.Receive<ServerMessage.CompleteWord>();
+    }
+
+    private void FindSymbolDefinitions()
+    {
+      if (_currentSuite == null || _currentTest == null)
+        return;
+
+      var client = _currentSuite.Client;
+      var pos = _text.CaretOffset;
+      client.Send(new ClientMessage.FindSymbolReferences(_currentTest.Id, _currentTest.Version, pos));
+      var result = client.Receive<ServerMessage.CompleteWord>();
     }
 
     private void ShowCompletionWindow(int pos)
