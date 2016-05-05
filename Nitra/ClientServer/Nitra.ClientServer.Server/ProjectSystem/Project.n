@@ -38,6 +38,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
             _semanticAnalysisCancellationTokenSource : CancellationTokenSource { get; private set; }
     public  Router                                   : Router { get; }
     mutable _expectsToBuildAst                       : int;
+    public  SemanticActions                          : ConcurrentQueue[Action[CancellationToken, ImmutableArray[IAst]]];
            
     internal this(parent : Solution, fullPath : string, id : int, languageInfos : ImmutableArray[LanguageInfo], parseQueue : BlockingCollection[ParserMessage], router : Router)
     {
@@ -156,7 +157,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       
       when (IsAllAstCreated && this._files.Count > 0)
       {
-        assert2(_semanticAnalysisCancellationTokenSource == null);
+        CancelSemanticAnalysisCancellation();
         def cancellationTokenSource              = CancellationTokenSource();
         def cancellationToken                    = cancellationTokenSource.Token;
         _semanticAnalysisCancellationTokenSource = cancellationTokenSource;
@@ -186,12 +187,41 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     public SemanticAnalysisFinished() : void
     {
       IsSemanticAvailable = true;
-      _semanticAnalysisCancellationTokenSource.Dispose();
-      _semanticAnalysisCancellationTokenSource = null;
-      foreach (file when file.IsActive in _files.Values)
+      def files = _files.Values.ToArray();
+      def cancellationToken = _semanticAnalysisCancellationTokenSource.Token;
+      
+      foreach (file when file.IsActive in files)
       {
         ParseQueue.Add(ParserMessage.CreateSymbolsHighlighting(file.Id, file.Version, file.Ast));
       }
+      
+      def semanticActions = SemanticActions;
+      mutable action;
+      mutable asts;
+      
+      while (semanticActions.TryDequeue(out action))
+      {
+        when (asts.IsDefault)
+          asts = GetAsts(files);
+        
+        ParseQueue.Add(ParserMessage.SemanticAction(action, cancellationToken, asts));
+      }
+    }
+
+    static GetAsts(files : Seq[File]) : ImmutableArray[IAst]
+    {
+      def builder = ImmutableArray.CreateBuilder(files.Count());
+      foreach(file in files)
+        builder.Add(file.Ast);
+      builder.MoveToImmutable();
+    }
+    
+    public AddSemanticAction(action : Action[CancellationToken, ImmutableArray[IAst]]) : void
+    {
+      if (IsSemanticAvailable)
+        ParseQueue.Add(ParserMessage.SemanticAction(action, _semanticAnalysisCancellationTokenSource.Token, GetAsts(_files.Values)));
+      else
+        SemanticActions.Enqueue(action);
     }
     
     public IsOpened : bool { get; private set }
