@@ -1324,8 +1324,68 @@ namespace Nitra.Visualizer
 
       var client = _currentSuite.Client;
       var pos = _text.CaretOffset;
-      client.Send(new ClientMessage.FindSymbolReferences(_currentTest.Id, _currentTest.Version, pos));
-      var result = client.Receive<ServerMessage.CompleteWord>();
+      client.Send(new ClientMessage.FindSymbolDefinitions(_currentTest.Id, _currentTest.Version, pos));
+      var result = client.Receive<ServerMessage.FindSymbolDefinitions>();
+      if (result.definitions.Length == 0)
+        _status.Text = "No symbol founf!";
+      else if (result.definitions.Length == 1)
+        SelectText(result.definitions[0].Location);
+      else
+      {
+        _popupList.Items.Clear();
+        foreach (var d in result.definitions)
+        {
+          var f = d.Location.File;
+          var file = _currentSolution.GetFile(f.FileId);
+          if (file.Version != f.FileVersion)
+            continue;
+
+          var item = new ListViewItem(); 
+          item.Content = file.Name + " (" + d.Location.Span + ")";
+          item.Tag = d;
+          item.PreviewMouseLeftButtonDown += item_MouseDown;
+          item.KeyDown += item_KeyDown;
+          _popupList.Items.Add(item);
+        }
+        _popupList.LostFocus += _popupList_LostFocus;
+        _popup.IsOpen = true;
+        _popupList.Focus();
+      }
+    }
+
+    void _popupList_LostFocus(object sender, RoutedEventArgs e)
+    {
+      _popup.IsOpen = false;
+      _text.TextArea.Focus();
+    }
+
+    void PopupListClic(Location loc)
+    {
+      SelectText(loc);
+    }
+
+    void PopupListItemClic(object sender)
+    {
+      var item = (ListViewItem)sender;
+      var data = (SymbolLocation)item.Tag;
+      PopupListClic(data.Location);
+      _popup.IsOpen = false;
+      _text.TextArea.Focus();
+    }
+
+    void item_KeyDown(object sender, KeyEventArgs e)
+    {
+      if (e.Key == Key.Return && Keyboard.Modifiers == ModifierKeys.None)
+      {
+        e.Handled = true;
+        PopupListItemClic(sender);
+      }
+    }
+
+    void item_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+      e.Handled = true;
+      PopupListItemClic(sender);
     }
 
     private void ShowCompletionWindow(int pos)
