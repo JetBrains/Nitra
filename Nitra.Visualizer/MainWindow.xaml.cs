@@ -44,6 +44,8 @@ using ToolTip = System.Windows.Controls.ToolTip;
 namespace Nitra.Visualizer
 {
   using ClientServer.Messages;
+  using ICSharpCode.AvalonEdit;
+  using ICSharpCode.AvalonEdit.Rendering;
   using Interop;
   using System.Collections.Immutable;
   using System.Windows.Documents;
@@ -1332,6 +1334,7 @@ namespace Nitra.Visualizer
         SelectText(result.definitions[0].Location);
       else
       {
+        var doc = _text.Document;
         _popupList.Items.Clear();
         foreach (var d in result.definitions)
         {
@@ -1347,6 +1350,10 @@ namespace Nitra.Visualizer
           item.KeyDown += item_KeyDown;
           _popupList.Items.Add(item);
         }
+        var p = _text.TextArea.Caret.Position;
+        var p2 = _text.TextArea.TextView.GetVisualPosition(p, VisualYPosition.LineBottom);
+        // вот здесь надо координаты установить, чтобы _popup был под кареткой
+        // а по уму нужно брать координаты не каретки, а координаты текста для result.referenceSpan
         _popupList.LostFocus += _popupList_LostFocus;
         _popup.IsOpen = true;
         _popupList.Focus();
