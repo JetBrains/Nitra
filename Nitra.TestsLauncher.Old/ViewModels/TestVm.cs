@@ -105,7 +105,6 @@ namespace Nitra.ViewModels
           Statistics.ReplaceContainerSubtask("DependProps", "Dependent properties"));
         var solution = new FsSolution<IAst>();
         var project = new FsProject<IAst>(solution, Path.GetDirectoryName(testPath), TestSuite.Libs);
-        project.OnSymbolAssemblyResolve += Visualizer.Utils.OnSymbolAssemblyResolve;
         _file = new TestFile(this, TestSuite.Language, id, project, FileStatistics);
       }
 
