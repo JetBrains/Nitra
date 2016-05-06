@@ -365,9 +365,9 @@ namespace Nitra.Visualizer
     //      }
     //    }
     //  }
-    //  _text.CaretOffset = span.StartPos;
-    //  _text.Select(span.StartPos, span.Length);
-    //  _text.ScrollTo(_text.TextArea.Caret.Line, _text.TextArea.Caret.Column);
+    //  _textEditor.CaretOffset = span.StartPos;
+    //  _textEditor.Select(span.StartPos, span.Length);
+    //  _textEditor.ScrollTo(_textEditor.TextArea.Caret.Line, _textEditor.TextArea.Caret.Column);
     //}
 
     private void TviOnKeyDown(object sender, KeyEventArgs e)

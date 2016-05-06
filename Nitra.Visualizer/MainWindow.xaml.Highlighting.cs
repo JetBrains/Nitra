@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using Nitra.Visualizer.Views;
 
 namespace Nitra.Visualizer
 {
@@ -59,13 +60,13 @@ namespace Nitra.Visualizer
     private void UpdateKeywordSpanInfos(AsyncServerMessage.KeywordsHighlightingCreated keywordHighlighting)
     {
       _keywordsSpanInfos = keywordHighlighting.spanInfos;
-      _text.TextArea.TextView.Redraw();
+      _textEditor.TextArea.TextView.Redraw();
     }
 
     private void UpdateSymbolsSpanInfos(AsyncServerMessage.SymbolsHighlightingCreated symbolsHighlighting)
     {
       _symbolsSpanInfos = symbolsHighlighting.spanInfos;
-      _text.TextArea.TextView.Redraw();
+      _textEditor.TextArea.TextView.Redraw();
     }
 
     private void UpdateHighlightingStyles(AsyncServerMessage.LanguageLoaded languageInfo)

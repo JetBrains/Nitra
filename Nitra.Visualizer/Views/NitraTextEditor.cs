@@ -1,24 +1,86 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using ICSharpCode.AvalonEdit;
-using ICSharpCode.AvalonEdit.Rendering;
-using ICSharpCode.AvalonEdit.Highlighting;
-using ICSharpCode.AvalonEdit.Document;
+using System.Diagnostics;
+using System.Reactive.Linq;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
-using ICSharpCode.AvalonEdit.Search;
+using ICSharpCode.AvalonEdit;
+using ICSharpCode.AvalonEdit.Document;
+using ICSharpCode.AvalonEdit.Highlighting;
+using ICSharpCode.AvalonEdit.Rendering;
+using Nitra.Visualizer.ViewModels;
+using ReactiveUI;
 
-namespace Nitra.Visualizer
+namespace Nitra.Visualizer.Views
 {
-  public class NitraTextEditor : TextEditor
+  public class NitraTextEditor : TextEditor, IViewFor<NitraTextEditorViewModel>
   {
+    private readonly Popup _popup = new Popup();
+    private readonly ListView _popupList = new ListView();
+
     public NitraTextEditor()
     {
       SyntaxHighlighting = new StubHighlightingDefinition();
       TextArea.DefaultInputHandler.NestedInputHandlers.Add(new NitraSearchInputHandler(TextArea));
-    }
 
+      TextArea.Caret.PositionChanged += (sender, args) => {
+        ViewModel.CaretOffset = CaretOffset;
+        ViewModel.CaretLine = TextArea.Caret.Line;
+        ViewModel.CaretColumn = TextArea.Caret.Column;
+
+        var p = TextArea.Caret.Position;
+        var p2 = TextArea.TextView.GetVisualPosition(p, VisualYPosition.LineBottom);
+        // вот здесь надо координаты установить, чтобы _popup был под кареткой
+        // а по уму нужно брать координаты не каретки, а координаты текста для result.referenceSpan
+        _popup.HorizontalOffset = p2.X;
+        _popup.VerticalOffset = p2.Y - (ActualHeight + TextArea.TextView.ScrollOffset.Y);
+      };
+
+      _popup.HorizontalAlignment = HorizontalAlignment.Left;
+      _popup.VerticalAlignment = VerticalAlignment.Top;
+      _popup.StaysOpen = false;
+      _popup.Child = _popupList;
+
+      AddVisualChild(_popup);
+
+      this.WhenActivated(d => {
+        this.OneWayBind(ViewModel, vm => vm.PopupList, v => v._popupList.ItemsSource);
+
+        this.Bind(ViewModel, vm => vm.PopupVisible, v => v._popup.IsOpen);
+        this.Bind(ViewModel, vm => vm.SelectedPopupItem, v => v._popupList.SelectedItem);
+
+        this.WhenAnyValue(vm => vm.ViewModel.Selection)
+            .Subscribe(span => Select(span.StartPos, span.Length));
+
+        this.WhenAnyValue(vm => vm.ViewModel.ScrollPosition)
+            .Subscribe(scrollPos => ScrollTo(scrollPos.Line, scrollPos.Column));
+
+        this.WhenAnyValue(vm => vm.ViewModel.PopupVisible)
+            .Where(visible => visible)
+            .Subscribe(visible => {
+              if (visible) {
+                _popupList.Focus();
+                Debug.WriteLine("list focused");
+              } else {
+                TextArea.TextView.Focus();
+                Debug.WriteLine("text view focused");
+              }
+            });
+
+        //var events = this.Events();
+
+        //events.PreviewMouseLeftButtonDown
+        //      .InvokeCommand(ViewModel, vm => vm.SelectItem);
+
+        //events.KeyDown
+        //      .Where(a => a.Key == Key.Return && Keyboard.Modifiers == ModifierKeys.None)
+        //      .InvokeCommand(ViewModel, vm => vm.SelectItem);
+      });
+    }
+    
     public event EventHandler<HighlightLineEventArgs> HighlightLine;
 
     private IList<HighlightedSection> OnHighlightLine(DocumentLine line)
@@ -108,6 +170,14 @@ namespace Nitra.Visualizer
         get { throw new NotImplementedException(); }
       }
     }
+
+    object IViewFor.ViewModel
+    {
+        get { return ViewModel; }
+        set { ViewModel = (NitraTextEditorViewModel) value; }
+    }
+
+    public NitraTextEditorViewModel ViewModel { get; set; }
   }
 
   public sealed class HighlightLineEventArgs : EventArgs
