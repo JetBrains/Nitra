@@ -9,7 +9,7 @@ namespace Nitra.Visualizer.ViewModels
     public SymbolLocation SymbolLocation { get; set; }
     public string Text { get; set; }
 
-    public IReactiveCommand<object> Select { get; }
+    public IReactiveCommand<object> Select { get; private set; }
 
     public PopupItemViewModel(string filename, NSpan span, SymbolLocation symbolLocation, NitraTextEditorViewModel editor)
     {

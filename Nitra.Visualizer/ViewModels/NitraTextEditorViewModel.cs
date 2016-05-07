@@ -8,9 +8,9 @@ namespace Nitra.Visualizer.ViewModels
   public class NitraTextEditorViewModel : ReactiveObject
   {
     public MainWindowViewModel Host { get; set; }
-    public IReactiveCommand<object> TryHighlightBraces { get; }
-    public ReactiveList<PopupItemViewModel> PopupList { get; }
-    public IReactiveCommand<object> SelectItem { get; }
+    public IReactiveCommand<object> TryHighlightBraces { get; private set; }
+    public ReactiveList<PopupItemViewModel> PopupList { get; private set; }
+    public IReactiveCommand<object> SelectItem { get; private set; }
 
     [Reactive] public int CaretOffset { get; set; }
     [Reactive] public int CaretLine { get; set; }

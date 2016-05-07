@@ -13,9 +13,9 @@ namespace Nitra.Visualizer.ViewModels
     public ProjectVm CurrentProject { get; set; }
     public TestVm CurrentTest { get; set; }
     public SolutionVm CurrentSolution { get; set; }
-    public Settings Settings { get; }
+    public Settings Settings { get; private set; }
 
-    public NitraTextEditorViewModel Editor { get; }
+    public NitraTextEditorViewModel Editor { get; private set; }
 
     [Reactive] public string StatusText { get; private set; }
 
