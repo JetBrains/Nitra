@@ -6,21 +6,15 @@ namespace Nitra.Visualizer.ViewModels
 {
   public class PopupItemViewModel : ReactiveObject
   {
-    public SymbolLocation SymbolLocation { get; set; }
-    public string Text { get; set; }
+    public SymbolLocation SymbolLocation { get; private set; }
+    public IntelliSensePopupViewModel Popup { get; private set; }
+    public string Text { get; private set; }
 
-    public IReactiveCommand<object> Select { get; private set; }
-
-    public PopupItemViewModel(string filename, NSpan span, SymbolLocation symbolLocation, NitraTextEditorViewModel editor)
+    public PopupItemViewModel(string filename, NSpan span, SymbolLocation symbolLocation, IntelliSensePopupViewModel popup)
     {
       SymbolLocation = symbolLocation;
+      Popup = popup;
       Text = filename + " (" + span + ")";
-
-      Select = ReactiveCommand.Create();
-      Select.Subscribe(_ => {
-        editor.SelectText(SymbolLocation.Location);
-        editor.PopupVisible = false;
-      });
     }
   }
 }

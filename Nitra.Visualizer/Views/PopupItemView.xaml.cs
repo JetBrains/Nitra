@@ -1,10 +1,7 @@
-﻿using System.Diagnostics;
-using System.Reactive.Disposables;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Windows.Controls;
-using System.Windows.Input;
-using Nitra.ClientServer.Messages;
 using Nitra.Visualizer.ViewModels;
+using Nitra.Visualizer.Infrastructure;
 using ReactiveUI;
 
 namespace Nitra.Visualizer.Views
@@ -15,13 +12,15 @@ namespace Nitra.Visualizer.Views
     {
       InitializeComponent();
 
-      this.WhenActivated(d => {
-        d(this.OneWayBind(ViewModel, vm => vm.Text, v => v.Text.Text));
-
+      this.WhenActivated(disposables => {
         var events = this.Events();
-        
-        d(events.PreviewMouseLeftButtonDown
-                .InvokeCommand(ViewModel, vm => vm.Select));
+
+        this.OneWayBind(ViewModel, vm => vm.Text, v => v.Text.Text)
+            .AddTo(disposables);
+
+        events.PreviewMouseLeftButtonDown
+              .InvokeCommand(ViewModel, vm => vm.Popup.Select)
+              .AddTo(disposables);
       });
     }
 

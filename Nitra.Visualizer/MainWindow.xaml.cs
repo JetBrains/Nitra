@@ -13,7 +13,6 @@ using Nemerle.Diff;
 using Nitra.ClientServer.Client;
 using Nitra.ViewModels;
 using Nitra.Visualizer.Controls;
-using Nitra.Visualizer.Properties;
 
 using System;
 using System.Collections.Generic;
@@ -41,13 +40,11 @@ using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using MenuItem = System.Windows.Controls.MenuItem;
 using MessageBox = System.Windows.MessageBox;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
-using Timer = System.Timers.Timer;
 using ToolTip = System.Windows.Controls.ToolTip;
 
 namespace Nitra.Visualizer
 {
   using ClientServer.Messages;
-  using ICSharpCode.AvalonEdit.Rendering;
   using Interop;
   using System.Windows.Documents;
   using System.Windows.Interop;
@@ -76,6 +73,7 @@ namespace Nitra.Visualizer
     public MainWindow()
     {
       ViewModel = new MainWindowViewModel();
+      var events = this.Events();
 
       Splat.Locator.CurrentMutable.Register(() => new PopupItemView(), typeof(IViewFor<PopupItemViewModel>));
 
@@ -106,8 +104,12 @@ namespace Nitra.Visualizer
                      .Throttle(TimeSpan.FromMilliseconds(500), RxApp.MainThreadScheduler)
                      .Subscribe(_ => ShowNodeForCaret());
 
-      this.OneWayBind(editorViewModel, vm => vm.CaretOffset, v => v._pos.Text, pos => pos.ToString(CultureInfo.InvariantCulture));
+      this.OneWayBind(ViewModel, vm => vm.Editor.CaretOffset, v => v._pos.Text, pos => pos.ToString(CultureInfo.InvariantCulture));
       this.OneWayBind(ViewModel, vm => vm.StatusText, v => v._status.Text);
+
+      events.KeyDown
+            .Where(a => a.Key == Key.F12 && Keyboard.Modifiers == ModifierKeys.None)
+            .InvokeCommand(ViewModel.FindSymbolDefinitions);
 
       _foldingManager    = FoldingManager.Install(_textEditor.TextArea);
       _textMarkerService = new TextMarkerService(_textEditor.Document);
@@ -1231,13 +1233,8 @@ namespace Nitra.Visualizer
           control.FontSize++;
         else if (e.Key == Key.Subtract && Keyboard.Modifiers == ModifierKeys.Control)
           control.FontSize--;
-
-        if (Keyboard.IsKeyDown(Key.F12) && Keyboard.Modifiers == ModifierKeys.None)
-        {
-          ViewModel.FindSymbolDefinitions();
-          return;
-        }
-        else if (Keyboard.IsKeyDown(Key.F12) && Keyboard.Modifiers == ModifierKeys.Shift)
+        
+        if (Keyboard.IsKeyDown(Key.F12) && Keyboard.Modifiers == ModifierKeys.Shift)
         {
           FindSymbolReferences();
           return;

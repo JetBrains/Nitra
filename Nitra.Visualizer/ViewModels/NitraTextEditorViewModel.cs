@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using Nitra.ClientServer.Messages;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
@@ -9,24 +10,20 @@ namespace Nitra.Visualizer.ViewModels
   {
     public MainWindowViewModel Host { get; set; }
     public IReactiveCommand<object> TryHighlightBraces { get; private set; }
-    public ReactiveList<PopupItemViewModel> PopupList { get; private set; }
-    public IReactiveCommand<object> SelectItem { get; private set; }
 
     [Reactive] public int CaretOffset { get; set; }
     [Reactive] public int CaretLine { get; set; }
     [Reactive] public int CaretColumn { get; set; }
 
-    [Reactive] public NSpan Selection { get; set; }
+    [Reactive] public NSpan? Selection { get; set; }
     [Reactive] public ScrollPosition ScrollPosition { get; set; }
-
-    [Reactive] public bool PopupVisible { get; set; }
-    [Reactive] public PopupItemViewModel SelectedPopupItem { get; set; }
+    [Reactive] public IntelliSensePopupViewModel IntelliSensePopup { get; set; }
 
     public NitraTextEditorViewModel(MainWindowViewModel host)
     {
       Host = host;
 
-      PopupList = new ReactiveList<PopupItemViewModel>();
+      IntelliSensePopup = new IntelliSensePopupViewModel(this);
       
       TryHighlightBraces = ReactiveCommand.Create();
       TryHighlightBraces.Subscribe(_ => {
@@ -77,13 +74,12 @@ namespace Nitra.Visualizer.ViewModels
 
       file.IsSelected = true;
 
-      CaretOffset = span.StartPos;
       Selection = span;
       ScrollPosition = new ScrollPosition(CaretLine, CaretColumn);
     }
   }
 
-  public struct ScrollPosition
+  public class ScrollPosition
   {
     public int Line;
     public int Column;

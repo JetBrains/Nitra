@@ -1,16 +1,14 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
+using System.Linq;
 using System.Reactive.Linq;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
-using System.Windows.Input;
 using System.Windows.Media;
 using ICSharpCode.AvalonEdit;
 using ICSharpCode.AvalonEdit.Document;
 using ICSharpCode.AvalonEdit.Highlighting;
 using ICSharpCode.AvalonEdit.Rendering;
+using Nitra.ClientServer.Messages;
+using Nitra.Visualizer.Infrastructure;
 using Nitra.Visualizer.ViewModels;
 using ReactiveUI;
 
@@ -18,69 +16,69 @@ namespace Nitra.Visualizer.Views
 {
   public class NitraTextEditor : TextEditor, IViewFor<NitraTextEditorViewModel>
   {
-    private readonly Popup _popup = new Popup();
-    private readonly ListView _popupList = new ListView();
+    private IntelliSensePopup _popup;
 
     public NitraTextEditor()
     {
       SyntaxHighlighting = new StubHighlightingDefinition();
       TextArea.DefaultInputHandler.NestedInputHandlers.Add(new NitraSearchInputHandler(TextArea));
+      
+      this.WhenActivated(disposables => {
+        _popup = new IntelliSensePopup(ViewModel.IntelliSensePopup);
 
-      TextArea.Caret.PositionChanged += (sender, args) => {
-        ViewModel.CaretOffset = CaretOffset;
-        ViewModel.CaretLine = TextArea.Caret.Line;
-        ViewModel.CaretColumn = TextArea.Caret.Column;
-
-        var p = TextArea.Caret.Position;
-        var p2 = TextArea.TextView.GetVisualPosition(p, VisualYPosition.LineBottom);
-        // вот здесь надо координаты установить, чтобы _popup был под кареткой
-        // а по уму нужно брать координаты не каретки, а координаты текста для result.referenceSpan
-        _popup.HorizontalOffset = p2.X;
-        _popup.VerticalOffset = p2.Y - (ActualHeight + TextArea.TextView.ScrollOffset.Y);
-      };
-
-      _popup.HorizontalAlignment = HorizontalAlignment.Left;
-      _popup.VerticalAlignment = VerticalAlignment.Top;
-      _popup.StaysOpen = false;
-      _popup.Child = _popupList;
-
-      AddVisualChild(_popup);
-
-      this.WhenActivated(d => {
-        this.OneWayBind(ViewModel, vm => vm.PopupList, v => v._popupList.ItemsSource);
-
-        this.Bind(ViewModel, vm => vm.PopupVisible, v => v._popup.IsOpen);
-        this.Bind(ViewModel, vm => vm.SelectedPopupItem, v => v._popupList.SelectedItem);
+        AddVisualChild(_popup);
+        
+        this.OneWayBind(ViewModel, vm => vm.IntelliSensePopup, v => v._popup.ViewModel)
+            .AddTo(disposables);
 
         this.WhenAnyValue(vm => vm.ViewModel.Selection)
-            .Subscribe(span => Select(span.StartPos, span.Length));
+            .Subscribe(span => {
+              if (span.HasValue)
+                Select(span.Value.StartPos, span.Value.Length);
+            })
+            .AddTo(disposables);
 
         this.WhenAnyValue(vm => vm.ViewModel.ScrollPosition)
-            .Subscribe(scrollPos => ScrollTo(scrollPos.Line, scrollPos.Column));
+            .Where(pos => pos != null)
+            .Subscribe(scrollPos => ScrollTo(scrollPos.Line, scrollPos.Column))
+            .AddTo(disposables);
 
-        this.WhenAnyValue(vm => vm.ViewModel.PopupVisible)
-            .Where(visible => visible)
-            .Subscribe(visible => {
-              if (visible) {
-                _popupList.Focus();
-                Debug.WriteLine("list focused");
-              } else {
-                TextArea.TextView.Focus();
-                Debug.WriteLine("text view focused");
-              }
-            });
+        ViewModel.WhenAnyValue(vm => vm.IntelliSensePopup.IsVisible)
+                 .Where(popupVisible => popupVisible)
+                 .Do(_ => UpdatePopupOffset())
+                 .Subscribe(visible => _popup.List.Focus())
+                 .AddTo(disposables);
 
-        //var events = this.Events();
+        ViewModel.WhenAnyValue(vm => vm.IntelliSensePopup.IsVisible)
+                 .Where(popupVisible => !popupVisible)
+                 .Subscribe(visible => TextArea.Focus())
+                 .AddTo(disposables);
 
-        //events.PreviewMouseLeftButtonDown
-        //      .InvokeCommand(ViewModel, vm => vm.SelectItem);
+        TextArea.SelectionChanged += (sender, args) => {
+          var selection = TextArea.Selection;
+          var span = selection.Segments.FirstOrDefault();
+          
+          if (span != null)
+            ViewModel.Selection = new NSpan(span.StartOffset, span.EndOffset);
+          else
+            ViewModel.Selection = null;
+        };
 
-        //events.KeyDown
-        //      .Where(a => a.Key == Key.Return && Keyboard.Modifiers == ModifierKeys.None)
-        //      .InvokeCommand(ViewModel, vm => vm.SelectItem);
+        TextArea.Caret.PositionChanged += (sender, args) => {
+          ViewModel.CaretOffset = CaretOffset;
+          ViewModel.CaretLine = TextArea.Caret.Line;
+          ViewModel.CaretColumn = TextArea.Caret.Column;
+        };
       });
     }
-    
+
+    private void UpdatePopupOffset()
+    {
+      var pos = TextArea.TextView.GetVisualPosition(TextArea.Caret.Position, VisualYPosition.LineBottom);
+      _popup.HorizontalOffset = pos.X;
+      _popup.VerticalOffset = pos.Y - (ActualHeight + VerticalOffset);
+    }
+
     public event EventHandler<HighlightLineEventArgs> HighlightLine;
 
     private IList<HighlightedSection> OnHighlightLine(DocumentLine line)
