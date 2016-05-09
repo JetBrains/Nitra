@@ -17,6 +17,7 @@ using System;
 using System.IO;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Linq;
 
 using System.Threading;
@@ -34,6 +35,7 @@ namespace Nitra.BackEnd.Cci
     public CciHost : IMetadataHost { get; protected set; }
     
     [RecordIgnore] mutable _cciInternedKeyToSymbolMap : Hashtable.[uint, TypeSymbol];
+    [RecordIgnore] mutable _cciInternedKeyToGenericSymbolMap : ConcurrentDictionary.[uint, TypeSymbol];
     [RecordIgnore] mutable _singleDimensionArray      : SingleDimensionArraySymbol;
     [RecordIgnore] mutable _cciObject                 : INamespaceTypeDefinition;
     [RecordIgnore] mutable _objectSymbol              : TypeSymbol;
@@ -61,6 +63,9 @@ namespace Nitra.BackEnd.Cci
       
       def cciInternedKeyToSymbolMap = Hashtable.[uint, TypeSymbol]();
       _cciInternedKeyToSymbolMap = cciInternedKeyToSymbolMap;
+      
+      _cciInternedKeyToGenericSymbolMap = ConcurrentDictionary();
+      
       def rootNamespace = NamespaceSymbol();
       rootNamespace.MemberTable = TableScope("<root namespace>", rootNamespace);
       rootNamespace.DeclaredIn  = null;
@@ -424,65 +429,70 @@ namespace Nitra.BackEnd.Cci
 
     CciTypeToTypeSymbol(cciTypeReference : ITypeReference, context : DependentPropertyEvalContext) : TypeSymbol
     {
-      | t is IGenericTypeParameter =>
-        def typeInfo = CciTypeToTypeSymbol(t.DefiningType, context) :> GenericTypeSymbol;
-        def tp = typeInfo.TypeParameters[t.Index];
-        tp
+      match (cciTypeReference) 
+      {
+        | t is IGenericTypeParameter =>
+          def typeInfo = CciTypeToTypeSymbol(t.DefiningType, context) :> GenericTypeSymbol;
+          def tp = typeInfo.TypeParameters[t.Index];
+          tp
           
-      | t is IArrayTypeReference =>
-        def args = array[CciTypeToTypeSymbol(t.ElementType, context)];
-        def typeInfo = if (t.IsVector) _singleDimensionArray : ArraySymbol
-                        else 
-                        {
-                          def a = MultiDimensionArraySymbol();
-                          a.TypeParametersCount = 0;
-                          a.Rank        = t.Rank;
-                          //a.LowerBounds = t.LowerBounds.ToArray();
-                          //a.Sizes       = t.Sizes.ToArray();
-                          a.EvalProperties(context);
-                          a
-                        };
-        def constructedType = TopConstructedTypeSymbol();
-        constructedType.TypeInfo = typeInfo;
-        constructedType.Args = args;
-        constructedType.EvalProperties(context);
-        constructedType
+        | t is IArrayTypeReference =>
+          def args = array[CciTypeToTypeSymbol(t.ElementType, context)];
+          def typeInfo = if (t.IsVector) _singleDimensionArray : ArraySymbol
+                          else 
+                          {
+                            def a = MultiDimensionArraySymbol();
+                            a.TypeParametersCount = 0;
+                            a.Rank        = t.Rank;
+                            //a.LowerBounds = t.LowerBounds.ToArray();
+                            //a.Sizes       = t.Sizes.ToArray();
+                            a.EvalProperties(context);
+                            a
+                          };
+          def constructedType = TopConstructedTypeSymbol();
+          constructedType.TypeInfo = typeInfo;
+          constructedType.Args = args;
+          constructedType.EvalProperties(context);
+          constructedType
         
-      | t is ITypeDefinition =>
-        mutable typeSymbol;
-        if (_cciInternedKeyToSymbolMap.TryGetValue(t.InternedKey, out typeSymbol))
-        {
-          typeSymbol
-        }
-        else
-        {
-          // the type definition not found
-          _objectSymbol
-        }
+        | t is ITypeDefinition =>
+          mutable typeSymbol;
+          if (_cciInternedKeyToSymbolMap.TryGetValue(t.InternedKey, out typeSymbol))
+          {
+            typeSymbol
+          }
+          else
+          {
+            // the type definition not found
+            _objectSymbol
+          }
           
-      | t is IGenericTypeInstanceReference =>
-        def typeInfo = CciTypeToTypeSymbol(t.GenericType, context) :> GenericTypeSymbol;
-        def args = t.GenericArguments.Select(CciTypeToTypeSymbol(_, context)).ToArray();
-
-        def constructedType = TopConstructedTypeSymbol();
-        constructedType.TypeInfo = typeInfo;
-        constructedType.Args = args;
-        constructedType.EvalProperties(context);
-        constructedType
-               
-      | _ =>
-        //resolvs++;
-        mutable typeSymbol;
+        | t is IGenericTypeInstanceReference =>
+          _cciInternedKeyToGenericSymbolMap.GetOrAdd(cciTypeReference.InternedKey, _key => {
+            def typeInfo = CciTypeToTypeSymbol(t.GenericType, context) :> GenericTypeSymbol;
+            def args = t.GenericArguments.Select(CciTypeToTypeSymbol(_, context)).ToArray();
+            def name = Name(NoLocation, t.GenericType.Name.Value);
+            def constructedType = ExternalDeclaration.[TopConstructedTypeSymbol] (name).DefineSymbol(null);
+            
+            constructedType.TypeInfo = typeInfo;
+            constructedType.Args = args;
+            constructedType.EvalProperties(context);
+            constructedType
+          });
+        | _ =>
+          //resolvs++;
+          mutable typeSymbol;
           
-        if (_cciInternedKeyToSymbolMap.TryGetValue(cciTypeReference.InternedKey, out typeSymbol))
-        {
-          //resolvedByKey++;
-          typeSymbol
-        }
-        else
-        {
-          _objectSymbol
-        }
+          if (_cciInternedKeyToSymbolMap.TryGetValue(cciTypeReference.InternedKey, out typeSymbol))
+          {
+            //resolvedByKey++;
+            typeSymbol
+          }
+          else
+          {
+            _objectSymbol
+          }
+      }
     }
     
     CreateGenericParameters(genericParameterCount : ushort, genericParams : Seq[IGenericParameter], context : DependentPropertyEvalContext) : array[TypeParameterSymbol]
