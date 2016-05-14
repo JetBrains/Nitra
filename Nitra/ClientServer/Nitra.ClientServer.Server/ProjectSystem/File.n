@@ -324,9 +324,60 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     {
       def ast = _ast;
       
-      when (ast == null || ast.Location.Source.Version == fileVersion)
+      when (ast == null || ast.Location.Source.Version != fileVersion)
+      {
+        // maybe better return special message?
+        assert2(false);
+        Parent.Router.SendResponse(ServerMessage.FindSymbolReferences(NSpan(), ImmutableArray.Empty));
         return;
+      }
         
+      def action(cancellationToken : CancellationToken, asts : ImmutableArray[IAst]) : void
+      { // execute when Parent.IsSemanticAvailable 
+        def router             = this.Parent.Router;
+        def pos                = pos;
+        def ast                = ast;
+        def (refSpan, symbols) = GetSymbols(cancellationToken, pos, ast);
+        def defsBiulder        = ImmutableArray.CreateBuilder();
+        def symbolsBiulder     = ImmutableArray.CreateBuilder(symbols.Length);
+        def refsBiulder        = ImmutableArray.CreateBuilder();
+        def spansBiulder       = ImmutableArray.CreateBuilder();
+
+        foreach (symbol in symbols)
+        {
+          def decls = symbol.GetDeclarationsUntyped();
+          assert2(defsBiulder.Count == 0);
+          defsBiulder.Capacity = decls.Count();
+          
+          foreach (decl in decls)
+            defsBiulder.Add(SymbolLocation(symbol.Id, ServerUtils.ConvertLocation(decl.Name.Location)));
+            
+          def visitor = CollectSymbolRefsAstVisitor(cancellationToken, symbol);
+          
+          foreach (curAst in asts)
+          {
+            visitor.FoundSymbols.Clear();
+            curAst.Accept(visitor);
+            def source       = curAst.Source;
+            def fileIdentity = FileIdentity(source.File.Id, source.Version);
+            
+            
+            assert2(spansBiulder.Count == 0);
+            spansBiulder.Capacity = visitor.FoundSymbols.Count;
+
+            foreach (r in visitor.FoundSymbols)
+              spansBiulder.Add(ServerUtils.ConvertNSpan(r.Location.Span));
+
+            refsBiulder.Add(FileEntries(fileIdentity, spansBiulder.MoveToImmutable()));
+          }
+
+          symbolsBiulder.Add(SymbolRreferences(symbol.Id, defsBiulder.MoveToImmutable(), refsBiulder.ToImmutable()));
+        }
+          
+        router.SendResponse(ServerMessage.FindSymbolReferences(refSpan, symbolsBiulder.MoveToImmutable()));
+      }
+      
+      Parent.AddSemanticAction(action);
     }
   
     static GetSymbols(cancellationToken : CancellationToken, pos : int, ast : IAst) : Span * array[DeclarationSymbol]
