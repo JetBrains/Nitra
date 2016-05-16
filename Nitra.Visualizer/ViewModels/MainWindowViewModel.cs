@@ -1,11 +1,13 @@
-﻿using System;
-using System.Reactive.Linq;
-using System.Threading.Tasks;
-using Nitra.ClientServer.Messages;
+﻿using Nitra.ClientServer.Messages;
 using Nitra.ViewModels;
 using Nitra.Visualizer.Properties;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
+using System;
+using System.Diagnostics;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
 
 namespace Nitra.Visualizer.ViewModels
 {
@@ -21,7 +23,8 @@ namespace Nitra.Visualizer.ViewModels
     
     public NitraTextEditorViewModel Editor { get; private set; }
 
-    public IReactiveCommand<ServerMessage.FindSymbolDefinitions> FindSymbolDefinitions { get; private set; }
+    public IReactiveCommand<object> FindSymbolDefinitions { get; private set; }
+    public IReactiveCommand<object> FindSymbolReferences  { get; private set; }
 
     public MainWindowViewModel()
     {
@@ -31,16 +34,35 @@ namespace Nitra.Visualizer.ViewModels
       var canFindSymbolDefinitions = this.WhenAny(v => v.CurrentSuite, v => v.CurrentTest, 
                                                   (suite, test) => suite != null && test != null);
 
-      FindSymbolDefinitions = ReactiveCommand.CreateAsyncTask(canFindSymbolDefinitions, _ => RequestSymbolDefinitions());
-      FindSymbolDefinitions.ThrownExceptions
-                           .ObserveOn(RxApp.MainThreadScheduler)
-                           .Subscribe(e => StatusText = "Error getting symbols!");
-      FindSymbolDefinitions.ObserveOn(RxApp.MainThreadScheduler)
-                           .Subscribe(HandleFindSymbolDefinitionsMessage);
+      FindSymbolDefinitions = ReactiveCommand.Create(canFindSymbolDefinitions);
+      FindSymbolDefinitions.ThrownExceptions.Subscribe(e => 
+        StatusText = "GOTO definition failed!");
+      FindSymbolDefinitions.Subscribe(OnFindSymbolDefinitions);
+
+      FindSymbolReferences = ReactiveCommand.Create(canFindSymbolDefinitions);
+      FindSymbolReferences.ThrownExceptions.Subscribe(e => 
+        StatusText = "Find all references definition failed!");
+      FindSymbolReferences.Subscribe(OnFindSymbolReferences);
     }
 
-    private void HandleFindSymbolDefinitionsMessage(ServerMessage.FindSymbolDefinitions msg)
+    private void OnFindSymbolReferences(object _)
     {
+      var client = CurrentSuite.Client;
+      var pos = Editor.CaretOffset;
+      client.Send(new ClientMessage.FindSymbolReferences(CurrentTest.Id, CurrentTest.Version, pos));
+      var msg = client.Receive<ServerMessage.FindSymbolReferences>();
+      Debug.WriteLine("OnFindSymbolReferences()");
+    }
+
+    private void OnFindSymbolDefinitions(object _)
+    {
+      var client = CurrentSuite.Client;
+      var pos = Editor.CaretOffset;
+
+      client.Send(new ClientMessage.FindSymbolDefinitions(CurrentTest.Id, CurrentTest.Version, pos));
+
+      var msg = client.Receive<ServerMessage.FindSymbolDefinitions>();
+
       if (msg.definitions.Length == 0)
         StatusText = "No symbols found!";
       else if (msg.definitions.Length == 1)
@@ -48,7 +70,7 @@ namespace Nitra.Visualizer.ViewModels
       else {
         Editor.IntelliSensePopup.Items.Clear();
 
-        foreach (var definition in msg.definitions) {
+        foreach (var definition in msg.definitions.OrderBy(d => d.Location.Span.StartPos)) {
           var f = definition.Location.File;
           var file = CurrentSolution.GetFile(f.FileId);
           if (file.Version != f.FileVersion)
@@ -59,18 +81,6 @@ namespace Nitra.Visualizer.ViewModels
 
         Editor.IntelliSensePopup.IsVisible = true;
       }
-    }
-
-    private Task<ServerMessage.FindSymbolDefinitions> RequestSymbolDefinitions()
-    {
-      return Task.Run(() => {
-        var client = CurrentSuite.Client;
-        var pos = Editor.CaretOffset;
-
-        client.Send(new ClientMessage.FindSymbolDefinitions(CurrentTest.Id, CurrentTest.Version, pos));
-
-        return client.Receive<ServerMessage.FindSymbolDefinitions>();
-      });
     }
   }
 }

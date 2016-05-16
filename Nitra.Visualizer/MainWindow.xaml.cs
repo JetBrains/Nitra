@@ -111,7 +111,11 @@ namespace Nitra.Visualizer
             .Where(a => a.Key == Key.F12 && Keyboard.Modifiers == ModifierKeys.None)
             .InvokeCommand(ViewModel.FindSymbolDefinitions);
 
-      _foldingManager    = FoldingManager.Install(_textEditor.TextArea);
+      events.KeyDown
+            .Where(a => a.Key == Key.F12 && Keyboard.Modifiers == ModifierKeys.Shift)
+            .InvokeCommand(ViewModel.FindSymbolReferences);
+
+      _foldingManager = FoldingManager.Install(_textEditor.TextArea);
       _textMarkerService = new TextMarkerService(_textEditor.Document);
 
       _textEditor.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
@@ -1234,12 +1238,6 @@ namespace Nitra.Visualizer
         else if (e.Key == Key.Subtract && Keyboard.Modifiers == ModifierKeys.Control)
           control.FontSize--;
         
-        if (Keyboard.IsKeyDown(Key.F12) && Keyboard.Modifiers == ModifierKeys.Shift)
-        {
-          FindSymbolReferences();
-          return;
-        }
-
         if (Keyboard.Modifiers != ModifierKeys.Control)
           return;
 
@@ -1251,17 +1249,6 @@ namespace Nitra.Visualizer
         else if (e.Key == Key.Oem6) // Oem6 - '}'
           TryMatchBraces();
       }
-    }
-
-    private void FindSymbolReferences()
-    {
-      if (ViewModel.CurrentSuite == null || ViewModel.CurrentTest == null)
-        return;
-
-      var client = ViewModel.CurrentSuite.Client;
-      var pos = _textEditor.CaretOffset;
-      client.Send(new ClientMessage.FindSymbolReferences(ViewModel.CurrentTest.Id, ViewModel.CurrentTest.Version, pos));
-      var result = client.Receive<ServerMessage.CompleteWord>();
     }
 
     private void ShowCompletionWindow(int pos)
