@@ -132,9 +132,17 @@ namespace Nitra.Visualizer.ViewModels
 
     private void InitGotoList(IEnumerable<PopupItemViewModel> items)
     {
-      Editor.IntelliSensePopup.Items.Clear();
-      foreach (var item in items.OrderBy(i => i.File.Name).ThenBy(i => i.Span.StartPos))
-        Editor.IntelliSensePopup.Items.Add(item);
+      // We can use CreateDerivedCollection for list to be always sorted
+      // Don't know if it is actually needed
+      var models = items.OrderBy(i => i.File.Name).ThenBy(i => i.Span.StartPos);
+      var list = Editor.IntelliSensePopup.Items;
+
+      list.Clear();
+      list.AddRange(models);
+
+      // Need to call Reset manually, since multiple item notification is not supported by WPF
+      // see this thread for answers: https://github.com/reactiveui/ReactiveUI/issues/363
+      list.Reset();
     }
   }
 }
