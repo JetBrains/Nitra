@@ -20,7 +20,7 @@ namespace Nitra.Visualizer.ViewModels
 
       Select = ReactiveCommand.Create(canSelect);
       Select.Subscribe(_ => {
-        editor.SelectText(SelectedPopupItem.SymbolLocation.Location);
+        editor.SelectText(SelectedPopupItem.File, SelectedPopupItem.Span);
 
         IsVisible = false;
         SelectedPopupItem = null;

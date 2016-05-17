@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Nitra.ClientServer.Messages;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
+using Nitra.ViewModels;
 
 namespace Nitra.Visualizer.ViewModels
 {
@@ -57,6 +58,20 @@ namespace Nitra.Visualizer.ViewModels
           .InvokeCommand(TryHighlightBraces);
     }
 
+    public void SelectText(TestVm file, NSpan span)
+    {
+      if (Host.CurrentSolution == null)
+        return;
+
+      if (file == null)
+        return;
+
+      file.IsSelected = true;
+
+      Selection = span;
+      ScrollPosition = new ScrollPosition(CaretLine, CaretColumn);
+    }
+
     public void SelectText(Location location)
     {
       if (Host.CurrentSolution == null)
@@ -66,16 +81,10 @@ namespace Nitra.Visualizer.ViewModels
       var span = location.Span;
       var file = Host.CurrentSolution.GetFile(fileIdent.FileId);
 
-      if (file == null)
-        return;
-
       if (file.Version != fileIdent.FileVersion)
         return;
 
-      file.IsSelected = true;
-
-      Selection = span;
-      ScrollPosition = new ScrollPosition(CaretLine, CaretColumn);
+      SelectText(file, span);
     }
   }
 
