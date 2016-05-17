@@ -20,7 +20,7 @@ namespace Nitra.Visualizer.ViewModels
       File         = file;
       Span         = span;
       IsDefenition = isDefenition;
-      Text         = file.Name + " (" + span + ")"; // TODO: convert to line pos and meke line preview
+      Text         = file.Name + " (" + span + ")"; // TODO: convert to line pos and make line preview
       Popup        = popup;
     }
   }

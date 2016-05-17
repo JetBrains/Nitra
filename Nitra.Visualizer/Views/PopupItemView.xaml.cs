@@ -1,4 +1,5 @@
 ﻿using System.Reactive.Linq;
+using System.Windows;
 using System.Windows.Controls;
 using Nitra.Visualizer.ViewModels;
 using Nitra.Visualizer.Infrastructure;
@@ -18,9 +19,13 @@ namespace Nitra.Visualizer.Views
         this.OneWayBind(ViewModel, vm => vm.Text, v => v.Text.Text)
             .AddTo(disposables);
 
+        this.OneWayBind(ViewModel, vm => vm.IsDefenition, v => v.Text.FontWeight,
+                        isDef => isDef ? FontWeights.Bold : FontWeights.Normal)
+            .AddTo(disposables);
+
         events.PreviewMouseLeftButtonDown
-              .InvokeCommand(ViewModel, vm => vm.Popup.Select)
-              .AddTo(disposables);
+            .InvokeCommand(ViewModel, vm => vm.Popup.Select)
+            .AddTo(disposables);
       });
     }
 
