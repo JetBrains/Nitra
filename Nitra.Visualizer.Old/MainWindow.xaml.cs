@@ -442,7 +442,7 @@ namespace Nitra.Visualizer
             errorNode.MouseDoubleClick += errorNode_MouseDoubleClick;
             errorNodes.Add(errorNode);
             _status.Text = msg;
-            _text.TextArea.Caret.Offset = _parseResult.MaxFailPos;
+            //_text.TextArea.Caret.Offset = _parseResult.MaxFailPos;
           }
           else
             _status.Text = "Grammar is ambiguous! Main parser is fail! This leads to reduction performance.";
