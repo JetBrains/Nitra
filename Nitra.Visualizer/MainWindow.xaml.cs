@@ -322,41 +322,41 @@ namespace Nitra.Visualizer
 
     private void ShowParseTreeNodeForCaret()
     {
-      //if (_reflectionTreeView.ItemsSource == null)
-      //  return;
-      //
-      //if (_reflectionTreeView.IsKeyboardFocusWithin)
-      //  return;
-      //
-      //
-      //var node = FindNode((ReflectionStruct[])_reflectionTreeView.ItemsSource, _textEditor.CaretOffset);
-      //
-      //if (node != null)
-      //{
-      //  var selected = _reflectionTreeView.SelectedItem as ReflectionStruct;
-      //
-      //  if (node == selected)
-      //    return;
-      //
-      //  _reflectionTreeView.SelectedItem = node;
-      //  _reflectionTreeView.BringIntoView(node);
-      //}
+      if (_reflectionTreeView.ItemsSource == null)
+        return;
+      
+      if (_reflectionTreeView.IsKeyboardFocusWithin)
+        return;
+      
+      
+      var node = FindNode((ReflectionStruct[])_reflectionTreeView.ItemsSource, _textEditor.CaretOffset);
+      
+      if (node != null)
+      {
+        var selected = _reflectionTreeView.SelectedItem as ReflectionStruct;
+      
+        if (node == selected)
+          return;
+      
+        _reflectionTreeView.SelectedItem = node;
+        _reflectionTreeView.BringIntoView(node);
+      }
     }
 
     private ReflectionStruct FindNode(IEnumerable<ReflectionStruct> items, int p)
     {
-      //foreach (ReflectionStruct node in items)
-      //{
-      //  if (node.Span.StartPos <= p && p < node.Span.EndPos) // IntersectsWith(p) includes EndPos
-      //  {
-      //    if (node.Children.Length == 0)
-      //      return node;
-      //
-      //    _reflectionTreeView.Expand(node);
-      //
-      //    return FindNode(node.Children, p);
-      //  }
-      //}
+      foreach (ReflectionStruct node in items)
+      {
+        if (node.Span.StartPos <= p && p < node.Span.EndPos) // IntersectsWith(p) includes EndPos
+        {
+          if (node.Children.Length == 0)
+            return node;
+      
+          _reflectionTreeView.Expand(node);
+      
+          return FindNode(node.Children, p);
+        }
+      }
 
       return null;
     }
@@ -465,6 +465,11 @@ namespace Nitra.Visualizer
       return ReferenceEquals(_tabControl.SelectedItem, _htmlPrettyPrintTabItem);
     }
 
+    private bool IsReflectionTabItemActive()
+    {
+      return ReferenceEquals(_tabControl.SelectedItem, _reflectionTabItem);
+    }
+
     private bool IsPrettyPrintTabActive()
     {
       return ReferenceEquals(_tabControl.SelectedItem, _textPrettyPrintTabItem);
@@ -524,7 +529,7 @@ namespace Nitra.Visualizer
       _recoveryTreeView.Items.Clear();
       _errorsTreeView.Items.Clear();
       ClearHighlighting();
-      //_reflectionTreeView.ItemsSource = null;
+      _reflectionTreeView.ItemsSource = null;
     }
 
     void ClearMarkers()
@@ -572,6 +577,8 @@ namespace Nitra.Visualizer
         client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Html));
       else
         client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Disabled));
+
+      client.Send(new ClientMessage.ParseTreeReflection(IsReflectionTabItemActive()));
     }
 
     void _copyButton_Click(object sender, RoutedEventArgs e)
@@ -590,14 +597,14 @@ namespace Nitra.Visualizer
 
     void CopyReflectionNodeText(object sender, ExecutedRoutedEventArgs e)
     {
-      //var value = _reflectionTreeView.SelectedItem as ReflectionStruct;
-      //
-      //if (value != null)
-      //{
-      //  var result = value.Description;
-      //  Clipboard.SetData(DataFormats.Text, result);
-      //  Clipboard.SetData(DataFormats.UnicodeText, result);
-      //}
+      var value = _reflectionTreeView.SelectedItem as ReflectionStruct;
+      
+      if (value != null)
+      {
+        var result = value.Description;
+        Clipboard.SetData(DataFormats.Text, result);
+        Clipboard.SetData(DataFormats.UnicodeText, result);
+      }
     }
 
     bool CheckTestFolder()
@@ -976,6 +983,7 @@ namespace Nitra.Visualizer
       AsyncServerMessage.ParsingMessages parsingMessages = null;
       AsyncServerMessage.SemanticAnalysisMessages typingMessages = null;
       AsyncServerMessage.PrettyPrintCreated prettyPrintCreated;
+      AsyncServerMessage.ReflectionStructCreated reflectionStructCreated;
 
       if ((parsingMessages = msg as AsyncServerMessage.ParsingMessages) != null)
       {
@@ -1019,6 +1027,10 @@ namespace Nitra.Visualizer
             prettyPrintViewer.NavigateToString(prettyPrintCreated.text);
             break;
         }
+      }
+      else if ((reflectionStructCreated = msg as AsyncServerMessage.ReflectionStructCreated) != null)
+      {
+        _reflectionTreeView.ItemsSource = new[] { reflectionStructCreated.root };
       }
       else if (parsingMessages != null || typingMessages != null)
       {
@@ -1515,9 +1527,9 @@ namespace Nitra.Visualizer
 
     private void CopyReflectionText(object sender, RoutedEventArgs e)
     {
-      //var reflectionStruct = _reflectionTreeView.SelectedItem as ReflectionStruct;
-      //if (reflectionStruct != null)
-      //  CopyTreeNodeToClipboard(reflectionStruct.Description);
+      var reflectionStruct = _reflectionTreeView.SelectedItem as ReflectionStruct;
+      if (reflectionStruct != null)
+        CopyTreeNodeToClipboard(reflectionStruct.Description);
     }
 
     private void DeleteFile_MenuItem_OnClick(object sender, RoutedEventArgs e)

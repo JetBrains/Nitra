@@ -21,6 +21,7 @@ using System.Linq;
 using System.Threading;
 
 using SCG = System.Collections.Generic;
+using R   = Nitra.Runtime.Reflection;
 
 namespace Nitra.ClientServer.Server
 {
@@ -107,7 +108,7 @@ namespace Nitra.ClientServer.Server
         //stat?.Parse?.Stop();
         ServerUtils.LogMsgHandled("ParseFile " + fileId + " Length=" + parseResult.SourceSnapshot.Text.Length, timer, 200);
       
-      | CreateAst(fileId, parseResult) =>
+      | CreateAst(fileId, parseResult, isActive) =>
         ServerUtils.Log("CreateAst " + fileId);
         def timer = Stopwatch.StartNew();
         when (parseResult.ParseSession.CancellationToken.IsCancellationRequested)
@@ -124,9 +125,14 @@ namespace Nitra.ClientServer.Server
         
         ServerUtils.LogMsgHandled("CreateAst " + fileId, timer, 100);
         
+        unless (isActive)
+          return;
+
         def prettyPrintState = _router.PrettyPrintState;
         when (prettyPrintState != PrettyPrintState.Disabled)
           ProcessMessage(ParserMessage.CreatePrettyPrint(fileId, version, prettyPrintState, parseTree));
+        when (_router.IsParseTreeReflectionEnable)
+          ProcessMessage(ParserMessage.CreateParseTreeReflection(fileId, version, parseResult));
           
       | CreatePrettyPrint(fileId, version, prettyPrintState, parseTree) =>
         match (prettyPrintState)
@@ -150,6 +156,14 @@ namespace Nitra.ClientServer.Server
             ServerUtils.LogMsgHandled("TextPrettyPrint " + fileId, timer, 100);
         }
         
+      | ParserMessage.CreateParseTreeReflection(fileId, version, parseResult) =>
+        ServerUtils.Log("ParseTreeReflection " + fileId);
+        def timer = Stopwatch.StartNew();
+        def root  = parseResult.Reflect();
+        def convertedRoot = ConvertParseTreeReflection(root, Hashtable());
+        _router.SendAsyncResponse(AsyncServerMessage.ReflectionStructCreated(fileId, version, convertedRoot));
+        ServerUtils.LogMsgHandled("ParseTreeReflection " + fileId, timer, 100);
+      
       | SemanticAnalysisStart(projectId, cancellationToken, projectSupport, files, data) =>
         ServerUtils.Log($"SemanticAnalysisStart: ..$(files.Select(_.Title))");
         def timer = Stopwatch.StartNew();
@@ -229,6 +243,30 @@ namespace Nitra.ClientServer.Server
         SendAsyncResponse(AsyncServerMessage.SymbolsHighlightingCreated(fileId, version, visitor.GetSpanInfos()));
         ServerUtils.LogMsgHandled("CreateSymbolsHighlighting", timer, 50);
       | SemanticAction(action, cancellationToken, asts) => action(cancellationToken, asts)
+    }
+    
+    ConvertParseTreeReflection(node : R.ReflectionStruct, objectMap : Hashtable[R.ReflectionStruct, ReflectionStruct]) : ReflectionStruct
+    {
+      mutable result;
+      when (objectMap.TryGetValue(node, out result))
+        return result;
+      
+      def info       = node.Info;
+      def resultInfo = ReflectionInfo(info.ShortName, info.FullName, info.IsMarker, info.CanParseEmptyString);
+      def children = ImmutableArray.CreateBuilder(node.Children.Count);
+      foreach (child in node.Children)
+        children.Add(ConvertParseTreeReflection(child, objectMap));
+      def kind =
+        match (node.Kind)
+        {
+          | Normal    => ReflectionKind.Normal;
+          | Recovered => ReflectionKind.Recovered;
+          | Ambiguous => ReflectionKind.Ambiguous;
+          | Deleted   => ReflectionKind.Deleted;
+        };
+      result = ReflectionStruct(resultInfo, node.Description, kind, ConvertNSpan(node.Span), children.MoveToImmutable());
+      objectMap.Add(node, result);
+      result
     }
 
     public Dispose() : void
