@@ -7,11 +7,11 @@ using System.Windows.Media;
 
 namespace Nitra.Visualizer
 {
-  public class ReflectionStructColorConverter : IValueConverter
+  public class ParseTreeReflectionStructColorConverter : IValueConverter
   {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
-      var node = (ReflectionStruct)value;
+      var node = (ParseTreeReflectionStruct)value;
 
       if (node.Info.IsMarker)
         return Brushes.DarkGray;

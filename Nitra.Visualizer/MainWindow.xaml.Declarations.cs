@@ -207,18 +207,6 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void UpdateDeclarations()
-    {
-      //if (_astRoot == null)
-      //  return;
-
-      //_declarationsTreeView.Items.Clear();
-
-      //var rootTreeViewItem = ObjectToItem(null, _astRoot);
-      //rootTreeViewItem.Header = "Root";
-      //_declarationsTreeView.Items.Add(rootTreeViewItem);
-    }
-
 //    private static string RenderXamlForDeclaration(string name, IAst ast)
 //    {
 //      var declatation = ast as Declaration;

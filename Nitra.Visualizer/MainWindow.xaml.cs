@@ -59,9 +59,6 @@ namespace Nitra.Visualizer
     readonly NitraFoldingStrategy _foldingStrategy;
     readonly FoldingManager _foldingManager;
     readonly ToolTip _textBox1Tooltip;
-    bool _needUpdateReflection;
-    bool _needUpdateHtmlPrettyPrint;
-    bool _needUpdateTextPrettyPrint;
     //ParseTree _parseTree;
     readonly PependentPropertyGrid _propertyGrid;
     //readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
@@ -327,13 +324,13 @@ namespace Nitra.Visualizer
       
       if (_reflectionTreeView.IsKeyboardFocusWithin)
         return;
-      
-      
-      var node = FindNode((ReflectionStruct[])_reflectionTreeView.ItemsSource, _textEditor.CaretOffset);
+
+
+      var node = FindNode((ParseTreeReflectionStruct[])_reflectionTreeView.ItemsSource, _textEditor.CaretOffset);
       
       if (node != null)
       {
-        var selected = _reflectionTreeView.SelectedItem as ReflectionStruct;
+        var selected = _reflectionTreeView.SelectedItem as ParseTreeReflectionStruct;
       
         if (node == selected)
           return;
@@ -343,9 +340,9 @@ namespace Nitra.Visualizer
       }
     }
 
-    private ReflectionStruct FindNode(IEnumerable<ReflectionStruct> items, int p)
+    private ParseTreeReflectionStruct FindNode(IEnumerable<ParseTreeReflectionStruct> items, int p)
     {
-      foreach (ReflectionStruct node in items)
+      foreach (ParseTreeReflectionStruct node in items)
       {
         if (node.Span.StartPos <= p && p < node.Span.EndPos) // IntersectsWith(p) includes EndPos
         {
@@ -433,33 +430,6 @@ namespace Nitra.Visualizer
       _textEditor.Focus();
     }
 
-    
-
-    void ShowInfo()
-    {
-      _needUpdateReflection      = true;
-      _needUpdateHtmlPrettyPrint = true;
-      _needUpdateTextPrettyPrint = true;
-      //_parseTree                 = null;
-
-      UpdateInfo();
-    }
-
-    void UpdateInfo()
-    {
-      try
-      {
-        if (_needUpdateReflection           && ReferenceEquals(_tabControl.SelectedItem, _reflectionTabItem))
-          UpdateReflection();
-        
-        UpdateDeclarations();
-      }
-      catch(Exception e)
-      {
-        Debug.Write(e);
-      }
-    }
-
     private bool IsHtmlPrettyPrintTabActive()
     {
       return ReferenceEquals(_tabControl.SelectedItem, _htmlPrettyPrintTabItem);
@@ -473,17 +443,6 @@ namespace Nitra.Visualizer
     private bool IsPrettyPrintTabActive()
     {
       return ReferenceEquals(_tabControl.SelectedItem, _textPrettyPrintTabItem);
-    }
-
-    private void UpdateReflection()
-    {
-      _needUpdateReflection = false;
-
-      //if (_parseResult == null)
-      //  return;
-
-      //var root = _parseResult.Reflect();
-      //_reflectionTreeView.ItemsSource = new[] { root };
     }
 
     private void textBox1_TextChanged(object sender, EventArgs e)
@@ -565,7 +524,6 @@ namespace Nitra.Visualizer
       UpdatePrettyPrintStatus(ViewModel.CurrentSuite.Client);
       Reparse();
 
-      UpdateInfo();
       ShowNodeForCaret();
     }
 
@@ -597,7 +555,7 @@ namespace Nitra.Visualizer
 
     void CopyReflectionNodeText(object sender, ExecutedRoutedEventArgs e)
     {
-      var value = _reflectionTreeView.SelectedItem as ReflectionStruct;
+      var value = _reflectionTreeView.SelectedItem as ParseTreeReflectionStruct;
       
       if (value != null)
       {
@@ -1202,7 +1160,7 @@ namespace Nitra.Visualizer
       if (_doChangeCaretPos)
         return;
 
-      var node = e.NewValue as ReflectionStruct;
+      var node = e.NewValue as ParseTreeReflectionStruct;
 
       if (node == null)
         return;
@@ -1527,7 +1485,7 @@ namespace Nitra.Visualizer
 
     private void CopyReflectionText(object sender, RoutedEventArgs e)
     {
-      var reflectionStruct = _reflectionTreeView.SelectedItem as ReflectionStruct;
+      var reflectionStruct = _reflectionTreeView.SelectedItem as ParseTreeReflectionStruct;
       if (reflectionStruct != null)
         CopyTreeNodeToClipboard(reflectionStruct.Description);
     }
