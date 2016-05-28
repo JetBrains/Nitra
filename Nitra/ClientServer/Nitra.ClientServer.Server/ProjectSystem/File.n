@@ -17,6 +17,7 @@ using System.Collections.Immutable;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 
@@ -76,8 +77,6 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       
       parent.AddFile(this);
     }
-    
-    public Log(msg : string) : void { ServerUtils.Log(msg) }
     
     public override Ast : IAst { get { _ast } }
     public override Language : Language { get; }
@@ -427,13 +426,40 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       def action(cancellationToken : CancellationToken, asts : ImmutableArray[IAst]) : void
       {
         def parentId = parentId;
-        def result   = ImmutableArray.CreateBuilder();
+        def result   = ImmutableArray.CreateBuilder.[ObjectDescriptor]();
+        def IsIgnoredProperty(prop : PropertyInfo) : bool
+        {
+          def name = prop.Name;
+          match (name)
+          {
+            | "HasValue" => false
+            | "Id" | "IsMissing" | "File" | "Span" | "IsAmbiguous" => true
+            | _ => name.StartsWith("Is", StringComparison.Ordinal) && name.EndsWith("Evaluated", StringComparison.Ordinal) && !name.Equals("IsAllPropertiesEvaluated", StringComparison.Ordinal)
+          }
+        }
+        def ReadValue(obj : object, t : System.Type, prop : PropertyInfo) 
+        {
+          def isEvalPropName = "Is" + prop.Name + "Evaluated";
+          def isEvalProp = t.GetProperty(isEvalPropName);
+          if (isEvalProp == null || isEvalProp.GetValue(obj, null) :> bool)
+          {
+            def value = prop.GetValue(obj, null);
+            tvi.Items.Add(ObjectToItem(prop, value));
+          }
+          else
+          {
+            var tviNotEval = ObjectToItem(prop, "<not evaluated>");
+            tviNotEval.Foreground = Brushes.Red;
+            tviNotEval.FontWeight = FontWeights.Bold;
+            tvi.Items.Add(tviNotEval);
+          }
+        }
         
-        def findParent() : object
+        def findObject() : object
         {
           def ast = ast;
           mutable obj;
-          obj = if (_astIdToObjectMap.TryGetValue(parentId, out obj))
+          obj = if (_idToObjMap.TryGetValue(parentId, out obj))
                   obj
                 else
                   ast;
@@ -443,13 +469,10 @@ namespace Nitra.ClientServer.Server.ProjectSystem
 
           obj
         }
-        def objectToObjectDescriptor(obj : object) : ObjectDescriptor
-        {
-        }
-        def ghetObjectSubItems(obj : object) : ObjectDescriptor
-        {
-        }
-        def obj = findParent();
+        //def ghetObjectSubItems(obj : object) : ObjectDescriptor
+        //{
+        //}
+        def obj = findObject();
         def getId(obj : object) : int
         {
           mutable id;
@@ -462,9 +485,24 @@ namespace Nitra.ClientServer.Server.ProjectSystem
           
           id
         }
-        def toObjectDescriptor(obj : object) : ObjectDescriptor
+        def readMembers(obj : object) : ContentDescriptor
         {
-          def count(seq : SC.IEnumerable)
+          //obj.GetType().GetProperties().MapToArray(p => )
+          null
+        }
+        def loadObjectContent(obj : object) : ContentDescriptor
+        {
+          match (obj)
+          {
+            | obj is IAstList[IAst] => ContentDescriptor.Items(obj.MapToArray(toObjectDescriptor))
+            | obj is IAst           => readMembers(obj)
+            | obj is SC.IEnumerable => ContentDescriptor.Items(obj.Cast.[object]().MapToArray(toObjectDescriptor))
+            | _ => assert(false);
+          }
+        }
+        and toObjectDescriptor(obj : object) : ObjectDescriptor
+        {
+          def count(seq : SC.IEnumerable) : int
           {
             | x is SC.ICollection => x.Count
             | _ => 
@@ -484,8 +522,8 @@ namespace Nitra.ClientServer.Server.ProjectSystem
               else
                 ObjectDescriptor.AstOptionNone(span);
                 
-            | obj is IAst             => ObjectDescriptor.Ast(ConvertNSpan(obj.Span), id, null)
-            | obj is SC.IEnumerable   => ObjectDescriptor.Seq(null, count(obj))
+            | obj is IAst           => ObjectDescriptor.Ast(ConvertNSpan(obj.Span), id, null)
+            | obj is SC.IEnumerable => ObjectDescriptor.Seq(null, count(obj))
             | obj is string         => ObjectDescriptor.String (obj)
             | obj is System.Int16   => ObjectDescriptor.Int16  (obj)
             | obj is System.Int32   => ObjectDescriptor.Int32  (obj)
@@ -499,12 +537,12 @@ namespace Nitra.ClientServer.Server.ProjectSystem
             | obj is System.Single  => ObjectDescriptor.Single (obj)
             | obj is System.Double  => ObjectDescriptor.Double (obj)
             | obj is System.Boolean => ObjectDescriptor.Boolean(obj)
-            | obj is ParsedValue    => ObjectDescriptor.Parsed(ConvertNSpan(obj.Span), toObjectDescriptor(obj))
-            | _                       => ()
+            | obj is IParsedValue   => ObjectDescriptor.Parsed(ConvertNSpan(obj.Span), toObjectDescriptor(obj.Value))
+            | _                     => ObjectDescriptor.Unknown(obj.ToString())
           }
         }
         
-        xxx(obj);
+        _ = toObjectDescriptor(obj);
         
         Parent.Router.SendResponse(ServerMessage.AstReflection(result));
       }
