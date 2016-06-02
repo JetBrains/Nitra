@@ -46,8 +46,8 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     mutable _parseResult            : IParseResult;
     mutable _ast                    : IAst;
     mutable _parseTree              : ParseTree;
-            _objToIdMap             : Hashtable[object, int];
-            _idToObjMap             : Hashtable[int, object];
+    mutable _objToIdMap             : ConcurrentDictionary[object, int];
+    mutable _idToObjMap             : ConcurrentDictionary[int, object];
     
     public this(id : int, fullPath : string, version : int, parent : Project)
     {
@@ -198,6 +198,16 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         _ast         = null;
         //_astMessages = NSP.CompilerMessageList();
         _parseTree   = null;
+        if (_objToIdMap == null)
+        {
+          _objToIdMap  = ConcurrentDictionary();
+          _idToObjMap  = ConcurrentDictionary();
+        }
+        else
+        {
+          _objToIdMap.Clear();
+          _idToObjMap.Clear();
+        }
       }
       
       def cancellationTokenSource = CancellationTokenSource();
@@ -426,7 +436,9 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       
       def action(cancellationToken : CancellationToken, _asts : ImmutableArray[IAst]) : void
       {
-        def objectId = objectId;
+        def objectId   = objectId;
+        def objToIdMap = _objToIdMap;
+        def idToObjMap = _idToObjMap;
         
         when (cancellationToken.IsCancellationRequested)
           Parent.Router.SendResponse(ServerMessage.ObjectContent(ContentDescriptor.Fail()));
@@ -446,12 +458,11 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         {
           def ast = ast;
           mutable obj;
-          obj = if (_idToObjMap.TryGetValue(objectId, out obj))
-                  obj
-                else
-                  ast;
+          obj = if (objectId == 0) ast
+                else if (idToObjMap.TryGetValue(objectId, out obj)) obj
+                else null;
                   
-          when (this.Version != fileVersion)
+          when (ast?.Location.Source.Version != fileVersion)
             obj = null;
 
           obj
@@ -470,7 +481,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
             | obj is IAstList[IAst] => ContentDescriptor.Items(obj.MapToArray(toObjectDescriptor))
             | obj is IAst           => readMembers(obj)
             | obj is SC.IEnumerable => ContentDescriptor.Items(obj.Cast.[object]().MapToArray(toObjectDescriptor))
-            | _ => assert(false);
+            | _ => ContentDescriptor.Fail()
           }
         }
         and toObjectDescriptor(obj : object) : ObjectDescriptor
@@ -489,11 +500,11 @@ namespace Nitra.ClientServer.Server.ProjectSystem
             assert2(obj != null);
             
             mutable id;
-            unless (_objToIdMap.TryGetValue(obj, out id))
+            unless (objToIdMap.TryGetValue(obj, out id))
             {
-              id = _objToIdMap.Count;
-              _objToIdMap.Add(obj, id);
-              _idToObjMap.Add(id, obj);
+              id = objToIdMap.Count;
+              objToIdMap[obj] = id;
+              idToObjMap[id]  = obj;
             }
           
             id

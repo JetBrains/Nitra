@@ -249,9 +249,9 @@ namespace Nitra.Visualizer
       _doChangeCaretPos = true;
       try
       {
-        if      (object.ReferenceEquals(_tabControl.SelectedItem, _declarationsTabItem))
+        if (IsAstReflectionTabItemActive())
           ShowAstNodeForCaret();
-        else if (object.ReferenceEquals(_tabControl.SelectedItem, _reflectionTabItem))
+        else if (IsReflectionTabItemActive())
           ShowParseTreeNodeForCaret();
       }
       finally
@@ -262,15 +262,15 @@ namespace Nitra.Visualizer
 
     private void ShowAstNodeForCaret()
     {
-      if (_declarationsTreeView.IsKeyboardFocusWithin)
+      if (_astTreeView.IsKeyboardFocusWithin)
         return;
 
-      if (_declarationsTreeView.Items.Count < 1)
+      if (_astTreeView.Items.Count < 1)
         return;
 
-      Debug.Assert(_declarationsTreeView.Items.Count == 1);
+      Debug.Assert(_astTreeView.Items.Count == 1);
 
-      var result = FindNode((TreeViewItem)_declarationsTreeView.Items[0], _textEditor.CaretOffset);
+      var result = FindNode((TreeViewItem)_astTreeView.Items[0], _textEditor.CaretOffset);
       if (result == null)
         return;
 
@@ -430,6 +430,11 @@ namespace Nitra.Visualizer
       _textEditor.Focus();
     }
 
+    private bool IsAstReflectionTabItemActive()
+    {
+      return ReferenceEquals(_tabControl.SelectedItem, _astReflectionTabItem);
+    }
+
     private bool IsHtmlPrettyPrintTabActive()
     {
       return ReferenceEquals(_tabControl.SelectedItem, _htmlPrettyPrintTabItem);
@@ -483,7 +488,7 @@ namespace Nitra.Visualizer
     void ClearAll()
     {
       ClearMarkers();
-      _declarationsTreeView.Items.Clear();
+      _astTreeView.Items.Clear();
       _matchedBracketsMarkers.Clear();
       _recoveryTreeView.Items.Clear();
       _errorsTreeView.Items.Clear();
@@ -954,8 +959,11 @@ namespace Nitra.Visualizer
         file.SemanticAnalysisMessages = typingMessages.messages;
       }
       else if ((languageInfo = msg as AsyncServerMessage.LanguageLoaded) != null)
-      {
         UpdateHighlightingStyles(languageInfo);
+      else if (msg is AsyncServerMessage.SemanticAnalysisDone)
+      {
+        if (IsAstReflectionTabItemActive())
+          FillAst();
       }
 
       if (ViewModel.CurrentTest == null || msg.FileId >= 0 && msg.FileId != ViewModel.CurrentTest.Id || msg.Version >= 0 && msg.Version != ViewModel.CurrentTest.Version)
@@ -994,6 +1002,21 @@ namespace Nitra.Visualizer
       {
         TryReportError();
       }
+    }
+
+    private void FillAst()
+    {
+      var file = ViewModel.CurrentTest;
+      if (file == null)
+        return;
+      const int Root = 0;
+      var client = ViewModel.CurrentSuite.Client;
+      client.Send(new ClientMessage.GetObjectContent(file.Id, file.Version, Root));
+      var rootContent = client.Receive<ServerMessage.ObjectContent>();
+      var members = (ContentDescriptor.Members)rootContent.content;
+      var span = new NSpan(0, _textEditor.Document.TextLength);
+      var root = new ObjectDescriptor.Ast(span, 0, members.members);
+      _astTreeView.ItemsSource = new[] { root };
     }
 
     void Document_Changed(object sender, DocumentChangeEventArgs e)

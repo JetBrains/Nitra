@@ -261,7 +261,7 @@ namespace Nitra.Visualizer
 </Span>";
     }
 
-    private void _declarationsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    private void _astTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
       if (e.NewValue != null)
       {

@@ -246,7 +246,7 @@ namespace Nitra.Visualizer
       _doChangeCaretPos = true;
       try
       {
-        if      (object.ReferenceEquals(_tabControl.SelectedItem, _declarationsTabItem))
+        if      (object.ReferenceEquals(_tabControl.SelectedItem, _astReflectionTabItem))
           ShowAstNodeForCaret();
         else if (object.ReferenceEquals(_tabControl.SelectedItem, _reflectionTabItem))
           ShowParseTreeNodeForCaret();
