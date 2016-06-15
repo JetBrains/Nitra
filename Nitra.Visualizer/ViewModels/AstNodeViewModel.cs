@@ -17,9 +17,10 @@ namespace Nitra.Visualizer.ViewModels
     readonly ObjectDescriptor _objectDescriptor;
     readonly NitraClient _client;
 
-    [Reactive]
-    public bool                           NeedLoadContent { get; private set; }
-    public ReactiveList<AstNodeViewModel> Items           { get; set; }
+    [Reactive] public bool                           NeedLoadContent { get; private set; }
+               public ReactiveList<AstNodeViewModel> Items           { get; set; }
+    [Reactive] public bool                           IsSelected      { get; set; }
+    [Reactive] public bool                           IsExpanded      { get; set; }
 
     public AstNodeViewModel(NitraClient client, ObjectDescriptor objectDescriptor)
     {
@@ -31,6 +32,14 @@ namespace Nitra.Visualizer.ViewModels
         NeedLoadContent = true;
         Items.Add(null);
       }
+
+      this.WhenAnyValue(vm => vm.IsExpanded)
+        .Where(isExpanded => isExpanded)
+        .InvokeCommand(OnLoadItems);
+    }
+
+    private void OnLoadItems(object x)
+    {
     }
   }
 }
