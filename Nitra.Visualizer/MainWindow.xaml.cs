@@ -1010,12 +1010,11 @@ namespace Nitra.Visualizer
       if (file == null)
         return;
       const int Root = 0;
-      var client = ViewModel.CurrentSuite.Client;
-      client.Send(new ClientMessage.GetObjectContent(file.Id, file.Version, Root));
-      var rootContent = client.Receive<ServerMessage.ObjectContent>();
-      var members = (ContentDescriptor.Members)rootContent.content;
-      var span = new NSpan(0, _textEditor.Document.TextLength);
-      var root = new ObjectDescriptor.Ast(span, 0, members.members);
+      var client  = ViewModel.CurrentSuite.Client;
+      var span    = new NSpan(0, _textEditor.Document.TextLength);
+      var root    = new ObjectDescriptor.Ast(span, 0, null);
+      var context = AstNodeViewModel.Context(client, file.Id, file.Version);
+      var rootVm  = new ItemAstNodeViewModel(client, root);
       _astTreeView.ItemsSource = new[] { root };
     }
 

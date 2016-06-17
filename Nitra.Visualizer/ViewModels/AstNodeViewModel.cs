@@ -14,7 +14,28 @@ using JetBrains.Util;
 
 namespace Nitra.Visualizer.ViewModels
 {
-  public class AstNodeViewModel : ReactiveObject
+  public class PropertyAstNodeViewModel : AstNodeViewModel
+  {
+    readonly PropertyDescriptor _propertyDescriptor;
+
+    public PropertyAstNodeViewModel(Context context, PropertyDescriptor propertyDescriptor)
+      : base(context, propertyDescriptor.Object)
+    {
+      _propertyDescriptor = propertyDescriptor;
+    }
+
+    public string Name
+    {
+      get { return _propertyDescriptor.ToString(); }
+    }
+  }
+
+  public class ItemAstNodeViewModel : AstNodeViewModel
+  {
+    public ItemAstNodeViewModel(Context context, ObjectDescriptor objectDescriptor) : base(context, objectDescriptor) { }
+  }
+
+  public abstract class AstNodeViewModel : ReactiveObject
   {
     public class Context
     {
@@ -30,14 +51,14 @@ namespace Nitra.Visualizer.ViewModels
       }
     }
 
-    readonly ObjectDescriptor _objectDescriptor;
-    readonly Context          _context;
+    readonly protected ObjectDescriptor _objectDescriptor;
+    readonly protected Context          _context;
 
     [Reactive] public bool                           NeedLoadContent { get; private set; }
                public ReactiveList<AstNodeViewModel> Items           { get; set; }
     [Reactive] public bool                           IsSelected      { get; set; }
     [Reactive] public bool                           IsExpanded      { get; set; }
-               public string                         Caption         { get { return _objectDescriptor.ToString(); } }
+               public string                         Value           { get { return _objectDescriptor.ToString(); } }
 
     public IReactiveCommand<IEnumerable<AstNodeViewModel>> LoadItems { get; set; }
 
@@ -58,9 +79,13 @@ namespace Nitra.Visualizer.ViewModels
         client.Send(new ClientMessage.GetObjectContent(_context.FileId, _context.FileVersion, _objectDescriptor.Id));
         var content = client.Receive<ServerMessage.ObjectContent>();
         _objectDescriptor.SetContent(content.content);
-        var span = new NSpan(0, _textEditor.Document.TextLength);
-        var root = new ObjectDescriptor.Ast(span, 0, members.members);
-        return Task.FromResult(Enumerable.Empty<AstNodeViewModel>());
+
+        if (_objectDescriptor.IsObject)
+          return Task.FromResult(ToProperties(_objectDescriptor.Properties));
+        else if (_objectDescriptor.IsSeq)
+          return Task.FromResult(ToItems(_objectDescriptor.Items));
+        else
+          return Task.FromResult(Enumerable.Empty<AstNodeViewModel>());
       });
 
       LoadItems.ObserveOn(RxApp.MainThreadScheduler)
@@ -69,6 +94,18 @@ namespace Nitra.Visualizer.ViewModels
       this.WhenAnyValue(vm => vm.IsExpanded)
           .Where(isExpanded => isExpanded)
           .InvokeCommand(LoadItems);
+    }
+
+    private IEnumerable<AstNodeViewModel> ToItems(ObjectDescriptor[] objectDescriptors)
+    {
+      foreach (var objectDescriptor in objectDescriptors)
+        yield return new ItemAstNodeViewModel(_context, objectDescriptor);
+    }
+
+    private IEnumerable<AstNodeViewModel> ToProperties(PropertyDescriptor[] propertyDescriptors)
+    {
+      foreach (var propertyDescriptor in propertyDescriptors)
+        yield return new PropertyAstNodeViewModel(_context, propertyDescriptor);
     }
   }
 }
