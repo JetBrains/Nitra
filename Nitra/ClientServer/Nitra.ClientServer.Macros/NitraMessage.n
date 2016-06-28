@@ -130,15 +130,21 @@ namespace Nitra.ClientServer.Macros
             | [serialize is MethodBuilder] =>
               match (ty) 
               {
-                | SupportedType.Struct       => serialize.Body = <[ writer.Write(this.MsgId); ..$(serializeExprs) ]>;
+                | SupportedType.Struct       => serialize.Body = <[ 
+                  Nitra.ClientServer.Messages.Deserializer.Trace("MsgId=" + this.MsgId);
+                  writer.Write(this.MsgId); ..$(serializeExprs) ]>;
                 | SupportedType.DerivedClass => serialize.Body = <[ base.Serialize(writer); ..$(serializeExprs) ]>;
                 | SupportedType.AbstractClass
                 | SupportedType.BaseClass => 
                   serialize.Body =
                     if (tb.IsSealed || tb.IsValueType)
-                      <[ writer.Write(this.MsgId); ..$(serializeExprs) ]>
+                      <[ 
+                        Nitra.ClientServer.Messages.Deserializer.Trace("MsgId=" + this.MsgId);
+                        writer.Write(this.MsgId); ..$(serializeExprs) ]>
                     else 
-                      <[ writer.Write(this.MsgId); ..$(serializeExprs) ]>;
+                      <[
+                        Nitra.ClientServer.Messages.Deserializer.Trace("MsgId=" + this.MsgId);
+                        writer.Write(this.MsgId); ..$(serializeExprs) ]>;
               }
           
             | _ => ()
@@ -206,6 +212,8 @@ namespace Nitra.ClientServer.Macros
 
     SerializeValue(type : FixedType, valueExpr : PExpr): PExpr
     {
+      def typeName = type.ToString();
+
       if (type.IsEnum)
       {
         def underlyingType = FixedType.Class(type.TypeInfo.UnderlyingType, []);
@@ -213,18 +221,26 @@ namespace Nitra.ClientServer.Macros
       }
       else if (GetSerializeMethod(type).IsSome)
         <[ 
-            Nitra.ClientServer.Messages.Deserializer.Trace("Serialize object Type=" + type);
+            Nitra.ClientServer.Messages.Deserializer.TraceIndent("Serialize object Type=" + $typeName);
             $valueExpr.Serialize(writer);
+            Nitra.ClientServer.Messages.Deserializer.TraceUnindent("Serialize object END");
         ]>
       else if (type.IsPrimitive)
-        <[ writer.Write($valueExpr); ]>
+      {
+        <[
+            Nitra.ClientServer.Messages.Deserializer.Trace("Serialize Primitive Type=" + $typeName + " Value=" + $valueExpr);
+            writer.Write($valueExpr); ]>
+      }
       else if (type.Equals(_typer.InternalType.String))
-        <[ writer.Write($valueExpr ?? ""); ]>
+        <[ 
+          Nitra.ClientServer.Messages.Deserializer.Trace("Serialize String Value='" + $valueExpr + "'");
+          writer.Write($valueExpr ?? ""); ]>
       else if (IsNemerleList(type))
       {
         def elemType = (type :> FixedType.Class).args.Head :> FixedType;
 
         <[
+          Nitra.ClientServer.Messages.Deserializer.Trace("Serialize " + $typeName);
           def lst = $valueExpr;
           if (lst == null)
           {
@@ -233,7 +249,7 @@ namespace Nitra.ClientServer.Macros
           else
           {
             def len = lst.Length;
-            writer.Write(len);
+            writer.Write(len : int);
             def loop(lst : list[_]) : void
             {
               | head :: tail => 
@@ -251,17 +267,18 @@ namespace Nitra.ClientServer.Macros
         def elemType = (type :> FixedType.Class).args.Head :> FixedType;
 
         <[
+          Nitra.ClientServer.Messages.Deserializer.Trace("Serialize " + $typeName);
           def immutableArray = $valueExpr;
           // The default value of ImmutableArray<T> has the underlying array initialized with a null reference.
           // Trying to call `Lenght` or `IsEmpty` on such arrays will raise an exception, so we must check `IsDefault`
           // property first.
           if (immutableArray.IsDefault)
           {
-            writer.Write(0 : UInt32); 
+            writer.Write(0 : int); 
           }
           else
           {
-            writer.Write(immutableArray.Length);
+            writer.Write(immutableArray.Length : int);
           
             for (mutable i = 0; i < immutableArray.Length; i++)
             {
@@ -279,16 +296,17 @@ namespace Nitra.ClientServer.Macros
           def aArray = $valueExpr;
           if (aArray != null)
           {
-            Nitra.ClientServer.Messages.Deserializer.Trace("Serialize array len=" + aArray.Length);
+            Nitra.ClientServer.Messages.Deserializer.TraceIndent("Serialize array len=" + aArray.Length);
             writer.Write(aArray.Length);
           
             foreach (elem in aArray)
               $(SerializeValue(elemType, <[ elem ]>));
+            Nitra.ClientServer.Messages.Deserializer.TraceUnindent("Serialize array END");
           }
           else
           {
-            Nitra.ClientServer.Messages.Deserializer.Trace("Serialize array null");
-            writer.Write(-1);
+            Nitra.ClientServer.Messages.Deserializer.Trace("Serialize array null (-1)");
+            writer.Write(-1 : int);
           }
         ]>
       }
@@ -305,6 +323,8 @@ namespace Nitra.ClientServer.Macros
 
     DeserializeValue(type : FixedType) : PExpr
     {
+      def typeName = type.ToString();
+      
       if (type.IsEnum)
       {
         def underlyingType = FixedType.Class(type.TypeInfo.UnderlyingType, []);
@@ -318,6 +338,7 @@ namespace Nitra.ClientServer.Macros
         def elemType = (type :> FixedType.Class).args.Head :> FixedType;
         <[
           def len = reader.ReadUInt32();
+          Nitra.ClientServer.Messages.Deserializer.Trace("Deserializer list Type=" + $(type.ToString()));
           assert(len >= 0);
           def loop(i : uint, result)
           {
@@ -337,14 +358,15 @@ namespace Nitra.ClientServer.Macros
         def elemType = (type :> FixedType.Class).args.Head :> FixedType;
 
         <[
-          def len = reader.ReadUInt32();
+          def len = reader.ReadInt32();
+          Nitra.ClientServer.Messages.Deserializer.TraceIndent("Deserializer ImmutableArray Type=" + $(type.ToString()));
           assert(len >= 0);
           if (len == 0)
             System.Collections.Immutable.ImmutableArray.Create.[$(elemType : typed)]()
           else
           {
             def builder = System.Collections.Immutable.ImmutableArray.CreateBuilder.[$(elemType : typed)]();
-            def loop(i : uint) : void
+            def loop(i : int) : void
             {
               when (i > 0)
               {
@@ -365,17 +387,19 @@ namespace Nitra.ClientServer.Macros
 
         <[
           def len = reader.ReadInt32();
-          Nitra.ClientServer.Messages.Deserializer.Trace("Deserializer array len=" + len);
           if (len >= 0)
           {
+            Nitra.ClientServer.Messages.Deserializer.TraceIndent("Deserializer array len=" + len);
             def aArray : array[$(elemType : typed)] = array(len);
             for (mutable i = 0; i < aArray.Length; i++)
               aArray[i] = $(DeserializeValue(elemType));
             
+            Nitra.ClientServer.Messages.Deserializer.TraceUnindent("Deserializer array END");
             aArray
           }
           else
           {
+            Nitra.ClientServer.Messages.Deserializer.Trace("Deserializer array null len=" + len);
             null
           }
         ]>
@@ -384,16 +408,22 @@ namespace Nitra.ClientServer.Macros
       {
         def id = MessageRegistry.Register(_typer.Manager, type);
         <[ 
-          Nitra.ClientServer.Messages.Deserializer.Trace("Deserializer ValueType Type=" + type);
+          Nitra.ClientServer.Messages.Deserializer.TraceIndent("Deserializer ValueType Type=" + $typeName);
           def id = reader.ReadInt16();
           assert2(id == $id);
-          $(type : typed).Deserialize(reader);
+          def res = 
+            $(type : typed).Deserialize(reader);
+          Nitra.ClientServer.Messages.Deserializer.TraceUnindent("Deserializer ValueType END");
+          res
         ]>
       }
       else 
         <[
-          Nitra.ClientServer.Messages.Deserializer.Trace("Deserializer object Type=" + type);
-          Nitra.ClientServer.Messages.Deserializer.Deserialize.[$(type : typed)](reader);
+          Nitra.ClientServer.Messages.Deserializer.TraceIndent("Deserializer object Type=" + $typeName);
+          def res = 
+            Nitra.ClientServer.Messages.Deserializer.Deserialize.[$(type : typed)](reader);
+          Nitra.ClientServer.Messages.Deserializer.TraceUnindent("Deserializer object END");
+          res
         ]>
     }
 
@@ -429,7 +459,11 @@ namespace Nitra.ClientServer.Macros
 
       def readExpr = getReadMethodNameExpr(ti);
 
-      <[ reader.$readExpr() ]>
+      <[
+        def res = reader.$readExpr();
+        Nitra.ClientServer.Messages.Deserializer.Trace("Deserializer Primitive Type=" + $(type.ToString()) + " Value=" + res);
+        res
+         ]>
     }
 
     public GetSupportedType(tb: TypeBuilder): option[SupportedType]
