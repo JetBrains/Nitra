@@ -1012,11 +1012,11 @@ namespace Nitra.Visualizer
       const int Root = 0;
       var client  = ViewModel.CurrentSuite.Client;
       var span    = new NSpan(0, _textEditor.Document.TextLength);
-      var root    = new ObjectDescriptor.Ast(span, 0, "<Root>", "<Root>", null);
+      var root    = new ObjectDescriptor.Ast(span, Root, "<Root>", "<Root>", null);
       var context = new AstNodeViewModel.Context(client, file.Id, file.Version);
       var rootVm  = new ItemAstNodeViewModel(context, root);
       rootVm.IsExpanded = true;
-      _astTreeView.ItemsSource = new[] { root };
+      _astTreeView.ItemsSource = new[] { rootVm };
     }
 
     void Document_Changed(object sender, DocumentChangeEventArgs e)

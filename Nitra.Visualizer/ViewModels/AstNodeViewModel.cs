@@ -26,7 +26,7 @@ namespace Nitra.Visualizer.ViewModels
 
     public string Name
     {
-      get { return _propertyDescriptor.ToString(); }
+      get { return _propertyDescriptor.Name; }
     }
   }
 
@@ -75,14 +75,15 @@ namespace Nitra.Visualizer.ViewModels
 
       LoadItems = ReactiveCommand.CreateAsyncTask(_ => {
         // load items somehow
+        NeedLoadContent = false;
         var client = _context.Client;
         client.Send(new ClientMessage.GetObjectContent(_context.FileId, _context.FileVersion, _objectDescriptor.Id));
         var content = client.Receive<ServerMessage.ObjectContent>();
         _objectDescriptor.SetContent(content.content);
 
-        if (_objectDescriptor.IsObject)
+        if (_objectDescriptor.IsObject && _objectDescriptor.Properties != null)
           return Task.FromResult(ToProperties(_objectDescriptor.Properties));
-        else if (_objectDescriptor.IsSeq)
+        else if (_objectDescriptor.IsSeq && _objectDescriptor.Items != null)
           return Task.FromResult(ToItems(_objectDescriptor.Items));
         else
           return Task.FromResult(Enumerable.Empty<AstNodeViewModel>());
@@ -92,7 +93,7 @@ namespace Nitra.Visualizer.ViewModels
                .Subscribe(items => Items.AddRange(items));
 
       this.WhenAnyValue(vm => vm.IsExpanded)
-          .Where(isExpanded => isExpanded)
+          .Where(isExpanded => isExpanded && NeedLoadContent)
           .InvokeCommand(LoadItems);
     }
 
