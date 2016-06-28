@@ -90,7 +90,8 @@ namespace Nitra.Visualizer.ViewModels
       });
 
       LoadItems.ObserveOn(RxApp.MainThreadScheduler)
-               .Subscribe(items => Items.AddRange(items));
+        .Do(_ => Items.Clear())
+        .Subscribe(items => Items.AddRange(items));
 
       this.WhenAnyValue(vm => vm.IsExpanded)
           .Where(isExpanded => isExpanded && NeedLoadContent)
