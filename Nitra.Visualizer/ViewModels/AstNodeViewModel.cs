@@ -104,7 +104,8 @@ namespace Nitra.Visualizer.ViewModels
         Items.Add(null);
       }
 
-      LoadItems = ReactiveCommand.CreateAsyncTask(_ => {
+      LoadItems = ReactiveCommand.CreateAsyncTask(_ => 
+      {
         // load items somehow
         NeedLoadContent = false;
         var client = _context.Client;
@@ -114,6 +115,8 @@ namespace Nitra.Visualizer.ViewModels
 
         if (_objectDescriptor.IsObject && _objectDescriptor.Properties != null)
           return Task.FromResult(ToProperties(_objectDescriptor.Properties));
+        else if (_objectDescriptor.IsSeq && _objectDescriptor.Items != null && _objectDescriptor.Properties != null)
+          return Task.FromResult(ToAstList(_objectDescriptor.Properties, _objectDescriptor.Items));
         else if (_objectDescriptor.IsSeq && _objectDescriptor.Items != null)
           return Task.FromResult(ToItems(_objectDescriptor.Items));
         else
@@ -131,6 +134,14 @@ namespace Nitra.Visualizer.ViewModels
 
     private IEnumerable<AstNodeViewModel> ToItems(ObjectDescriptor[] objectDescriptors)
     {
+      foreach (var objectDescriptor in objectDescriptors)
+        yield return new ItemAstNodeViewModel(_context, objectDescriptor);
+    }
+
+    private IEnumerable<AstNodeViewModel> ToAstList(PropertyDescriptor[] propertyDescriptors, ObjectDescriptor[] objectDescriptors)
+    {
+      foreach (var propertyDescriptor in propertyDescriptors)
+        yield return new PropertyAstNodeViewModel(_context, propertyDescriptor);
       foreach (var objectDescriptor in objectDescriptors)
         yield return new ItemAstNodeViewModel(_context, objectDescriptor);
     }
