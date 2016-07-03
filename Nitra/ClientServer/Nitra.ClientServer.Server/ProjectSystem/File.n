@@ -458,6 +458,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
           return;
         }
         
+        def astType = typeof(IAst);
         def isContentProperty(prop : PropertyInfo) : bool
         {
           def name = prop.Name;
@@ -486,7 +487,14 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         def readMembers(obj : object) : ContentDescriptor
         {
           def t = obj.GetType();
-          def members = t.GetProperties().MapToArrayFiltered(isContentProperty, readValue(obj, t, _));
+          def members = t.GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                         .Where(isContentProperty)
+                         .Select(readValue(obj, t, _))
+                         .Concat(
+                          t.GetFields(BindingFlags.Instance | BindingFlags.Public)
+                           .Select(readFieldValue(obj, t, _)))
+                         .OrderBy(x => x.Name)
+                         .ToArray();
           ContentDescriptor.Members(members)
         }
         and loadObjectContent(obj : object) : ContentDescriptor
@@ -536,7 +544,22 @@ namespace Nitra.ClientServer.Server.ProjectSystem
                 ObjectDescriptor.AstOptionNone(span);
                 
             | obj is IAst           => def t = obj.GetType(); ObjectDescriptor.Ast(ConvertNSpan(obj.Span), getId(obj), t.Name, t.FullName, null)
-            | obj is string         => ObjectDescriptor.String (obj)
+            | obj is string         =>
+              mutable i = 0;
+              for (mutable nlCount = 0; nlCount < 5 && i < obj.Length && i < 400; )
+              {
+                def index = obj.IndexOf('\n', i);
+                if (index >= 0)
+                {
+                  i = index + 1;
+                  nlCount++;
+                }
+                else
+                  i++;
+              }
+              
+              ObjectDescriptor.String(if (obj.Length == i) obj else (obj.Substring(0, i) + "..."))
+              
             | obj is SC.IEnumerable => ObjectDescriptor.Seq(getId(obj), null, count(obj))
             | obj is System.Int16   => ObjectDescriptor.Int16  (obj)
             | obj is System.Int32   => ObjectDescriptor.Int32  (obj)
@@ -554,9 +577,17 @@ namespace Nitra.ClientServer.Server.ProjectSystem
             | _                     => def t = obj.GetType(); ObjectDescriptor.Object(getId(obj), t.Name, t.FullName, null)
           }
         }
+        and readFieldValue(obj : object, t : System.Type, field : FieldInfo) : PropertyDescriptor
+        {
+          def name      = field.Name;
+          def objDesc   = toObjectDescriptor(field.GetValue(obj));
+
+          PropertyDescriptor(PropertyKind.Simple, name, objDesc)
+        }
         and readValue(obj : object, t : System.Type, prop : PropertyInfo) : PropertyDescriptor
         {
           def name           = prop.Name;
+          def propType       = prop.PropertyType;
           def attr           = prop.GetCustomAttributes(typeof(PropertyAttribute), false).FirstOrDefault() :> PropertyAttribute;
           //def isDependent    = attr?.IsDependent;
           def isOut          = attr?.IsOut;
@@ -569,6 +600,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
               | (true,  false) => PropertyKind.DependentIn
               | (true,   true) => PropertyKind.DependentInOut
               | (false,  true) => PropertyKind.DependentOut
+              | (false, false) when astType.IsAssignableFrom(propType) => PropertyKind.Ast
               | (false, false) => PropertyKind.Simple
             };
           def objDesc =
