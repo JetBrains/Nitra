@@ -91,9 +91,7 @@ namespace Nitra.Visualizer.ViewModels
     [Reactive] public bool                           IsExpanded      { get; set; }
                public string                         Value           { get { return _objectDescriptor.ToString(); } }
                public NSpan                          Span            { get { return _objectDescriptor.Span; } }
-
-    public IReactiveCommand<IEnumerable<AstNodeViewModel>> LoadItems { get; set; }
-
+    
     public AstNodeViewModel(Context context, ObjectDescriptor objectDescriptor)
     {
       _context          = context;
@@ -105,32 +103,28 @@ namespace Nitra.Visualizer.ViewModels
         Items.Add(null);
       }
 
-      LoadItems = ReactiveCommand.CreateAsyncTask(_ => 
-      {
-        // load items somehow
-        NeedLoadContent = false;
-        var client = _context.Client;
-        client.Send(new ClientMessage.GetObjectContent(_context.FileId, _context.FileVersion, _objectDescriptor.Id));
-        var content = client.Receive<ServerMessage.ObjectContent>();
-        _objectDescriptor.SetContent(content.content);
-
-        if (_objectDescriptor.IsObject && _objectDescriptor.Properties != null)
-          return Task.FromResult(ToProperties(_objectDescriptor.Properties));
-        else if (_objectDescriptor.IsSeq && _objectDescriptor.Items != null && _objectDescriptor.Properties != null)
-          return Task.FromResult(ToAstList(_objectDescriptor.Properties, _objectDescriptor.Items));
-        else if (_objectDescriptor.IsSeq && _objectDescriptor.Items != null)
-          return Task.FromResult(ToItems(_objectDescriptor.Items));
-        else
-          return Task.FromResult(Enumerable.Empty<AstNodeViewModel>());
-      });
-
-      LoadItems.ObserveOn(RxApp.MainThreadScheduler)
-        .Do(_ => Items.Clear())
-        .Subscribe(items => Items.AddRange(items));
-
       this.WhenAnyValue(vm => vm.IsExpanded)
           .Where(isExpanded => isExpanded && NeedLoadContent)
-          .InvokeCommand(LoadItems);
+          .Subscribe(_ => LoadItems());
+    }
+
+    public void LoadItems()
+    {
+      NeedLoadContent = false;
+
+      Items.Clear();
+
+      var client = _context.Client;
+      client.Send(new ClientMessage.GetObjectContent(_context.FileId, _context.FileVersion, _objectDescriptor.Id));
+      var content = client.Receive<ServerMessage.ObjectContent>();
+      _objectDescriptor.SetContent(content.content);
+
+      if (_objectDescriptor.IsObject && _objectDescriptor.Properties != null)
+        Items.AddRange(ToProperties(_objectDescriptor.Properties));
+      else if (_objectDescriptor.IsSeq && _objectDescriptor.Items != null && _objectDescriptor.Properties != null)
+        Items.AddRange(ToAstList(_objectDescriptor.Properties, _objectDescriptor.Items));
+      else if (_objectDescriptor.IsSeq && _objectDescriptor.Items != null)
+        Items.AddRange(ToItems(_objectDescriptor.Items));
     }
 
     private IEnumerable<AstNodeViewModel> ToItems(ObjectDescriptor[] objectDescriptors)

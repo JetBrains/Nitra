@@ -272,15 +272,14 @@ namespace Nitra.Visualizer
 
       Debug.Assert(_astTreeView.Items.Count == 1);
 
-      FindNode((AstNodeViewModel)_astTreeView.Items[0], _textEditor.CaretOffset)
-        .ToObservable()
-        .Where(ast => ast != null)
-        .ObserveOn(RxApp.MainThreadScheduler)
-        .Subscribe(ast => ast.IsSelected = true);
+      var ast = FindNode((AstNodeViewModel)_astTreeView.Items[0], _textEditor.CaretOffset);
+
+      if (ast != null)
+        ast.IsSelected = true;
       //result.BringIntoView();
     }
 
-    private async Task<AstNodeViewModel> FindNode(AstNodeViewModel ast, int pos, List<NSpan> checkedSpans = null)
+    private AstNodeViewModel FindNode(AstNodeViewModel ast, int pos, List<NSpan> checkedSpans = null)
     {
       checkedSpans = checkedSpans ?? new List<NSpan>();
 
@@ -307,14 +306,15 @@ namespace Nitra.Visualizer
 
       if (span.IntersectsWith(pos))
       {
-        var items = await ast.LoadItems.ExecuteAsync();
-
+        ast.LoadItems();
         ast.IsExpanded = true;
-        
+
+        var items = ast.Items;
+
         if (items != null)
           foreach (AstNodeViewModel subItem in items)
           {
-            var result = await FindNode(subItem, pos, checkedSpans);
+            var result = FindNode(subItem, pos, checkedSpans);
             if (result != null)
               return result;
           }
