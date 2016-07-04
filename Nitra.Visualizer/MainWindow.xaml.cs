@@ -21,7 +21,9 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Text;
+using System.Threading.Tasks;
 using System.Timers;
 using System.Windows;
 using System.Windows.Controls;
@@ -270,15 +272,15 @@ namespace Nitra.Visualizer
 
       Debug.Assert(_astTreeView.Items.Count == 1);
 
-      var result = FindNode((AstNodeViewModel)_astTreeView.Items[0], _textEditor.CaretOffset);
-      if (result == null)
-        return;
-
-      result.IsSelected = true;
+      FindNode((AstNodeViewModel)_astTreeView.Items[0], _textEditor.CaretOffset)
+        .ToObservable()
+        .Where(ast => ast != null)
+        .ObserveOn(RxApp.MainThreadScheduler)
+        .Subscribe(ast => ast.IsSelected = true);
       //result.BringIntoView();
     }
 
-    private AstNodeViewModel FindNode(AstNodeViewModel ast, int pos, List<NSpan> checkedSpans = null)
+    private async Task<AstNodeViewModel> FindNode(AstNodeViewModel ast, int pos, List<NSpan> checkedSpans = null)
     {
       checkedSpans = checkedSpans ?? new List<NSpan>();
 
@@ -305,12 +307,14 @@ namespace Nitra.Visualizer
 
       if (span.IntersectsWith(pos))
       {
+        var items = await ast.LoadItems.ExecuteAsync();
+
         ast.IsExpanded = true;
-        var items = ast. Items;
+        
         if (items != null)
           foreach (AstNodeViewModel subItem in items)
           {
-            var result = FindNode(subItem, pos, checkedSpans);
+            var result = await FindNode(subItem, pos, checkedSpans);
             if (result != null)
               return result;
           }
