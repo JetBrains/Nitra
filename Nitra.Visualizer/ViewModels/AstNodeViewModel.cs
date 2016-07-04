@@ -90,6 +90,7 @@ namespace Nitra.Visualizer.ViewModels
     [Reactive] public bool                           IsSelected      { get; set; }
     [Reactive] public bool                           IsExpanded      { get; set; }
                public string                         Value           { get { return _objectDescriptor.ToString(); } }
+               public NSpan                          Span            { get { return _objectDescriptor.Span; } }
 
     public IReactiveCommand<IEnumerable<AstNodeViewModel>> LoadItems { get; set; }
 

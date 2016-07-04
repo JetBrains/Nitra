@@ -270,49 +270,53 @@ namespace Nitra.Visualizer
 
       Debug.Assert(_astTreeView.Items.Count == 1);
 
-      var result = FindNode((TreeViewItem)_astTreeView.Items[0], _textEditor.CaretOffset);
+      var result = FindNode((AstNodeViewModel)_astTreeView.Items[0], _textEditor.CaretOffset);
       if (result == null)
         return;
 
       result.IsSelected = true;
-      result.BringIntoView();
+      //result.BringIntoView();
     }
 
-    private TreeViewItem FindNode(TreeViewItem item, int pos, List<NSpan> checkedSpans = null)
+    private AstNodeViewModel FindNode(AstNodeViewModel ast, int pos, List<NSpan> checkedSpans = null)
     {
-      //checkedSpans = checkedSpans ?? new List<NSpan>();
-      //var ast = item.Tag as IAst;
+      checkedSpans = checkedSpans ?? new List<NSpan>();
 
       //if (ast == null)
       //  return null;
 
-      //// check for circular dependency
-      //for (var i = 0; i < checkedSpans.Count; i++) { 
-      //  // if current span was previously checked
-      //  if (ast.Span == checkedSpans[i]) {
-      //    // and it's not a topmost span
-      //    for (var k = i; k < checkedSpans.Count; k++)
-      //      if (ast.Span != checkedSpans[k])
-      //        // Stop FindNode recursion
-      //        return item;
-      //    break;
-      //  }
-      //}
-      
-      //checkedSpans.Add(ast.Span);
+      var span = ast.Span;
+      // check for circular dependency
+      for (var i = 0; i < checkedSpans.Count; i++) { 
+        // if current span was previously checked
+        if (span == checkedSpans[i])
+        {
+          // and it's not a topmost span
+          for (var k = i; k < checkedSpans.Count; k++)
+            if (span != checkedSpans[k])
+              // Stop FindNode recursion
+              return ast;
+          break;
+        }
+      }
 
-      //if (ast.Span.IntersectsWith(pos))
-      //{
-      //  item.IsExpanded = true;
-      //  foreach (TreeViewItem subItem in item.Items)
-      //  {
-      //    var result = FindNode(subItem, pos, checkedSpans);
-      //    if (result != null)
-      //      return result;
-      //  }
+      if (span != default(NSpan))
+        checkedSpans.Add(span);
 
-      //  return item;
-      //}
+      if (span.IntersectsWith(pos))
+      {
+        ast.IsExpanded = true;
+        var items = ast. Items;
+        if (items != null)
+          foreach (AstNodeViewModel subItem in items)
+          {
+            var result = FindNode(subItem, pos, checkedSpans);
+            if (result != null)
+              return result;
+          }
+
+        return ast;
+      }
 
       return null;
     }
