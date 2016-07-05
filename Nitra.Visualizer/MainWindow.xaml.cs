@@ -100,7 +100,7 @@ namespace Nitra.Visualizer
       //_nodeForCaretTimer.Elapsed += _nodeForCaretTimer_Elapsed;
 
       editorViewModel.WhenAnyValue(vm => vm.CaretOffset)
-                     .Throttle(TimeSpan.FromMilliseconds(500), RxApp.MainThreadScheduler)
+                     .Throttle(TimeSpan.FromMilliseconds(200), RxApp.MainThreadScheduler)
                      .Subscribe(_ => ShowNodeForCaret());
 
       this.OneWayBind(ViewModel, vm => vm.Editor.CaretOffset, v => v._pos.Text, pos => pos.ToString(CultureInfo.InvariantCulture));
@@ -281,14 +281,16 @@ namespace Nitra.Visualizer
 
     private AstNodeViewModel FindNode(AstNodeViewModel ast, int pos, List<NSpan> checkedSpans = null)
     {
+      var span = ast.Span;
+
+      if (!span.IntersectsWith(pos))
+        return null;
+
       checkedSpans = checkedSpans ?? new List<NSpan>();
 
-      //if (ast == null)
-      //  return null;
-
-      var span = ast.Span;
       // check for circular dependency
-      for (var i = 0; i < checkedSpans.Count; i++) { 
+      for (var i = 0; i < checkedSpans.Count; i++)
+      {
         // if current span was previously checked
         if (span == checkedSpans[i])
         {
@@ -304,25 +306,22 @@ namespace Nitra.Visualizer
       if (span != default(NSpan))
         checkedSpans.Add(span);
 
-      if (span.IntersectsWith(pos))
-      {
-        ast.LoadItems();
-        ast.IsExpanded = true;
+      ast.LoadItems();
 
-        var items = ast.Items;
+      var items = ast.Items;
 
-        if (items != null)
-          foreach (AstNodeViewModel subItem in items)
+      if (items != null)
+        foreach (AstNodeViewModel subItem in items)
+        {
+          var result = FindNode(subItem, pos, checkedSpans);
+          if (result != null)
           {
-            var result = FindNode(subItem, pos, checkedSpans);
-            if (result != null)
-              return result;
+            ast.IsExpanded = true;
+            return result;
           }
+        }
 
-        return ast;
-      }
-
-      return null;
+      return ast;
     }
 
     private void ShowParseTreeNodeForCaret()
@@ -1020,9 +1019,9 @@ namespace Nitra.Visualizer
       const int Root = 0;
       var client  = ViewModel.CurrentSuite.Client;
       var span    = new NSpan(0, _textEditor.Document.TextLength);
-      var root    = new ObjectDescriptor.Ast(span, Root, "<Root>", "<Root>", null);
+      var root    = new ObjectDescriptor.Ast(span, Root, "<File>", "<File>", "<File>", null);
       var context = new AstNodeViewModel.Context(client, file.Id, file.Version);
-      var rootVm  = new ItemAstNodeViewModel(context, root);
+      var rootVm  = new ItemAstNodeViewModel(context, root, -1);
       rootVm.IsExpanded = true;
       _astTreeView.ItemsSource = new[] { rootVm };
     }

@@ -63,7 +63,23 @@ namespace Nitra.Visualizer.ViewModels
 
   public class ItemAstNodeViewModel : AstNodeViewModel
   {
-    public ItemAstNodeViewModel(Context context, ObjectDescriptor objectDescriptor) : base(context, objectDescriptor) { }
+    public int Index { get; private set; }
+
+    public string Pefix
+    {
+      get
+      {
+        if (Index >= 0)
+          return "[" + Index + "] ";
+
+        return "";
+      }
+    }
+
+    public ItemAstNodeViewModel(Context context, ObjectDescriptor objectDescriptor, int index) : base(context, objectDescriptor)
+    {
+      Index = index;
+    }
   }
 
   public abstract class AstNodeViewModel : ReactiveObject
@@ -110,6 +126,9 @@ namespace Nitra.Visualizer.ViewModels
 
     public void LoadItems()
     {
+      if (!NeedLoadContent)
+        return;
+
       NeedLoadContent = false;
 
       Items.Clear();
@@ -129,16 +148,16 @@ namespace Nitra.Visualizer.ViewModels
 
     private IEnumerable<AstNodeViewModel> ToItems(ObjectDescriptor[] objectDescriptors)
     {
-      foreach (var objectDescriptor in objectDescriptors)
-        yield return new ItemAstNodeViewModel(_context, objectDescriptor);
+      for (int i = 0; i < objectDescriptors.Length; i++)
+        yield return new ItemAstNodeViewModel(_context, objectDescriptors[i], i);
     }
 
     private IEnumerable<AstNodeViewModel> ToAstList(PropertyDescriptor[] propertyDescriptors, ObjectDescriptor[] objectDescriptors)
     {
       foreach (var propertyDescriptor in propertyDescriptors)
         yield return new PropertyAstNodeViewModel(_context, propertyDescriptor);
-      foreach (var objectDescriptor in objectDescriptors)
-        yield return new ItemAstNodeViewModel(_context, objectDescriptor);
+      for (int i = 0; i < objectDescriptors.Length; i++)
+        yield return new ItemAstNodeViewModel(_context, objectDescriptors[i], i);
     }
 
     private IEnumerable<AstNodeViewModel> ToProperties(PropertyDescriptor[] propertyDescriptors)
