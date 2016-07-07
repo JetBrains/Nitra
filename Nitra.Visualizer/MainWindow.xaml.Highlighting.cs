@@ -98,7 +98,7 @@ namespace Nitra.Visualizer
     {
       var ast = e.NewValue as AstNodeViewModel;
 
-      if (ast != null && !ast.Span.IsEmpty)
+      if (ast != null && !ast.Span.IsEmpty && !ast.IsRoot)
       {
         _interactiveSpanInfos = ImmutableArray.Create(new SpanInfo(ast.Span, CurrentAstSpanClassId));
 

@@ -53,6 +53,8 @@ namespace Nitra.Visualizer
 
   public partial class MainWindow : IViewFor<MainWindowViewModel>
   {
+    const string ErrorMarkerTag = "Error";
+
     bool _initializing = true;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
@@ -66,8 +68,8 @@ namespace Nitra.Visualizer
     //readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
     readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
     readonly Action<AsyncServerMessage> _responseDispatcher;
+    readonly Timer _fillAstTimer;
     //List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
-    const string ErrorMarkerTag = "Error";
 
     public MainWindow()
     {
@@ -79,6 +81,9 @@ namespace Nitra.Visualizer
       ToolTipService.ShowDurationProperty.OverrideMetadata(
         typeof(DependencyObject),
         new FrameworkPropertyMetadata(Int32.MaxValue));
+
+      _fillAstTimer = new Timer { AutoReset = false, Enabled = false, Interval = 300 };
+      _fillAstTimer.Elapsed += _fillAstTimer_Elapsed;
 
       InitializeComponent();
 
@@ -970,7 +975,10 @@ namespace Nitra.Visualizer
       else if (msg is AsyncServerMessage.SemanticAnalysisDone)
       {
         if (IsAstReflectionTabItemActive())
-          FillAst();
+        {
+          _fillAstTimer.Stop();
+          _fillAstTimer.Start();
+        }
       }
 
       if (ViewModel.CurrentTest == null || msg.FileId >= 0 && msg.FileId != ViewModel.CurrentTest.Id || msg.Version >= 0 && msg.Version != ViewModel.CurrentTest.Version)
@@ -1009,6 +1017,11 @@ namespace Nitra.Visualizer
       {
         TryReportError();
       }
+    }
+
+    void _fillAstTimer_Elapsed(object sender, ElapsedEventArgs e)
+    {
+      Dispatcher.Invoke(new Action(FillAst));
     }
 
     private void FillAst()

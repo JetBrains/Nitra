@@ -59,6 +59,11 @@ namespace Nitra.Visualizer.ViewModels
         }
       }
     }
+
+    public override string ToString()
+    {
+      return _propertyDescriptor.ToString();
+    }
   }
 
   public class ItemAstNodeViewModel : AstNodeViewModel
@@ -79,6 +84,13 @@ namespace Nitra.Visualizer.ViewModels
     public ItemAstNodeViewModel(Context context, ObjectDescriptor objectDescriptor, int index) : base(context, objectDescriptor)
     {
       Index = index;
+    }
+
+    public override bool IsRoot { get { return Index == -1; } }
+
+    public override string ToString()
+    {
+      return _objectDescriptor.ToString();
     }
   }
 
@@ -124,6 +136,8 @@ namespace Nitra.Visualizer.ViewModels
           .Subscribe(_ => LoadItems());
     }
 
+    public virtual bool IsRoot { get { return false; } }
+
     public void LoadItems()
     {
       if (!NeedLoadContent)
@@ -136,6 +150,10 @@ namespace Nitra.Visualizer.ViewModels
       var client = _context.Client;
       client.Send(new ClientMessage.GetObjectContent(_context.FileId, _context.FileVersion, _objectDescriptor.Id));
       var content = client.Receive<ServerMessage.ObjectContent>();
+
+      if (content.content is ContentDescriptor.Fail)
+        NeedLoadContent = true;
+
       _objectDescriptor.SetContent(content.content);
 
       if (_objectDescriptor.IsObject && _objectDescriptor.Properties != null)
