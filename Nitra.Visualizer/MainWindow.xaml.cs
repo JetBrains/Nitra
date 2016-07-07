@@ -495,7 +495,7 @@ namespace Nitra.Visualizer
     void ClearAll()
     {
       ClearMarkers();
-      _astTreeView.Items.Clear();
+      _astTreeView.ItemsSource = new AstNodeViewModel[0];
       _matchedBracketsMarkers.Clear();
       _recoveryTreeView.Items.Clear();
       _errorsTreeView.Items.Clear();
