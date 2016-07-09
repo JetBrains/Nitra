@@ -303,7 +303,7 @@ namespace Nitra.Visualizer
           for (var k = i; k < checkedSpans.Count; k++)
             if (span != checkedSpans[k])
               // Stop FindNode recursion
-              return ast;
+              return null;
           break;
         }
       }
