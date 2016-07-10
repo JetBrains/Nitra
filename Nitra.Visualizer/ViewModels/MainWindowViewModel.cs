@@ -14,13 +14,13 @@ namespace Nitra.Visualizer.ViewModels
 {
   public class MainWindowViewModel : ReactiveObject
   {
-    [Reactive] public WorkspaceVm Workspace { get; set; }
-    [Reactive] public SuiteVm CurrentSuite { get; set; }
-    [Reactive] public ProjectVm CurrentProject { get; set; }
-    [Reactive] public TestVm CurrentTest { get; set; }
-    [Reactive] public SolutionVm CurrentSolution { get; set; }
-    [Reactive] public Settings Settings { get; private set; }
-    [Reactive] public string StatusText { get; private set; }
+    [Reactive] public WorkspaceVm Workspace       { get; set; }
+    [Reactive] public SuiteVm     CurrentSuite    { get; set; }
+    [Reactive] public ProjectVm   CurrentProject  { get; set; }
+    [Reactive] public TestVm      CurrentTest     { get; set; }
+    [Reactive] public SolutionVm  CurrentSolution { get; set; }
+    [Reactive] public Settings    Settings        { get; private set; }
+    [Reactive] public string      StatusText      { get; private set; }
     
     public NitraTextEditorViewModel Editor { get; private set; }
 
@@ -44,6 +44,9 @@ namespace Nitra.Visualizer.ViewModels
       FindSymbolReferences.ThrownExceptions.Subscribe(e => 
         StatusText = "Find all references definition failed!");
       FindSymbolReferences.Subscribe(OnFindSymbolReferences);
+
+      Changing.Where(c => c.PropertyName == "Workspace")
+        .Subscribe(_ => { if (Workspace != null) Workspace.Dispose(); });
     }
 
     private void OnFindSymbolReferences(object _)

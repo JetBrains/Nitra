@@ -296,6 +296,9 @@ namespace Nitra.Visualizer
       if (!span.IntersectsWith(pos))
         return null;
 
+      if (span == default(NSpan))
+        return null;
+
       checkedSpans = checkedSpans ?? new List<NSpan>();
 
       // check for circular dependency
