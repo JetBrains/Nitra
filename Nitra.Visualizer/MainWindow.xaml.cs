@@ -1544,6 +1544,14 @@ namespace Nitra.Visualizer
       Delete();
     }
 
+    private void OnAttachDebuggerClick(object sender, RoutedEventArgs e)
+    {
+      var currentSuite = ViewModel.CurrentSuite;
+      if (currentSuite != null) {
+        currentSuite.Client.Send(ClientMessage.AttachDebugger._N_constant_object);
+      }
+    }
+
     private void Delete()
     {
       var test = _testsTreeView.SelectedItem as TestVm;
