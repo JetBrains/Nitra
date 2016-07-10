@@ -395,9 +395,15 @@ namespace Nitra.Visualizer
         var location = message.Location;
         var file     = location.File;
         var span     = location.Span;
-        if (currentFileId == file.FileId)
+        if (currentFileId == file.FileId) 
         {
-          var marker = _textMarkerService.Create(span.StartPos, span.Length);
+          if (span.StartPos >= doc.TextLength)
+            continue;
+
+          var spanLength = (span.StartPos + span.Length) <= doc.TextLength 
+                           ? span.Length
+                           : doc.TextLength - span.StartPos;
+          var marker = _textMarkerService.Create(span.StartPos, spanLength);
           marker.Tag         = ErrorMarkerTag;
           marker.MarkerType  = TextMarkerType.SquigglyUnderline;
           marker.MarkerColor = Colors.Red;
