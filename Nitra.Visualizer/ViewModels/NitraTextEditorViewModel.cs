@@ -58,7 +58,7 @@ namespace Nitra.Visualizer.ViewModels
           .InvokeCommand(TryHighlightBraces);
     }
 
-    public void SelectText(TestVm file, NSpan span)
+    public void SelectText(FileVm file, NSpan span)
     {
       if (Host.CurrentSolution == null)
         return;

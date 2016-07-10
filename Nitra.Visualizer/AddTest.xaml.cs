@@ -56,7 +56,7 @@ namespace Nitra.Visualizer
       string fileName = null;
 
       // We are on a test node, add a test next to it
-      if (_selectedNode is TestVm)
+      if (_selectedNode is FileVm)
       {
         dir = Path.GetDirectoryName(_selectedNode.FullPath);
         fileName = GetName(dir, Directory.GetFiles);

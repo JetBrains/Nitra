@@ -17,7 +17,7 @@ namespace Nitra.Visualizer.ViewModels
     [Reactive] public WorkspaceVm Workspace       { get; set; }
     [Reactive] public SuiteVm     CurrentSuite    { get; set; }
     [Reactive] public ProjectVm   CurrentProject  { get; set; }
-    [Reactive] public TestVm      CurrentTest     { get; set; }
+    [Reactive] public FileVm      CurrentFile     { get; set; }
     [Reactive] public SolutionVm  CurrentSolution { get; set; }
     [Reactive] public Settings    Settings        { get; private set; }
     [Reactive] public string      StatusText      { get; private set; }
@@ -32,7 +32,7 @@ namespace Nitra.Visualizer.ViewModels
       Editor = new NitraTextEditorViewModel(this);
       Settings = Settings.Default;
 
-      var canFindSymbolDefinitions = this.WhenAny(v => v.CurrentSuite, v => v.CurrentTest, 
+      var canFindSymbolDefinitions = this.WhenAny(v => v.CurrentSuite, v => v.CurrentFile, 
                                                   (suite, test) => suite != null && test != null);
 
       FindSymbolDefinitions = ReactiveCommand.Create(canFindSymbolDefinitions);
@@ -53,7 +53,7 @@ namespace Nitra.Visualizer.ViewModels
     {
       var client = CurrentSuite.Client;
       var pos = Editor.CaretOffset;
-      client.Send(new ClientMessage.FindSymbolReferences(CurrentTest.Id, CurrentTest.Version, pos));
+      client.Send(new ClientMessage.FindSymbolReferences(CurrentFile.Id, CurrentFile.Version, pos));
       var msg = client.Receive<ServerMessage.FindSymbolReferences>();
 
       if (msg.symbols.Length == 0)
@@ -100,7 +100,7 @@ namespace Nitra.Visualizer.ViewModels
       var client = CurrentSuite.Client;
       var pos = Editor.CaretOffset;
 
-      client.Send(new ClientMessage.FindSymbolDefinitions(CurrentTest.Id, CurrentTest.Version, pos));
+      client.Send(new ClientMessage.FindSymbolDefinitions(CurrentFile.Id, CurrentFile.Version, pos));
 
       var msg = client.Receive<ServerMessage.FindSymbolDefinitions>();
 

@@ -143,18 +143,18 @@ namespace Nitra.Visualizer
 
     private void DocumentOnUpdateFinished(object sender, EventArgs eventArgs)
     {
-      if (ViewModel.CurrentTest == null || _initializing)
+      if (ViewModel.CurrentFile == null || _initializing)
         return;
 
-      ViewModel.CurrentTest.StartBatchCodeUpdate();
+      ViewModel.CurrentFile.StartBatchCodeUpdate();
     }
 
     private void DocumentOnUpdateStarted(object sender, EventArgs eventArgs)
     {
-      if (ViewModel.CurrentTest == null || _initializing)
+      if (ViewModel.CurrentFile == null || _initializing)
         return;
 
-      ViewModel.CurrentTest.FinishBatchCodeUpdate();
+      ViewModel.CurrentFile.FinishBatchCodeUpdate();
     }
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -187,7 +187,7 @@ namespace Nitra.Visualizer
       ViewModel.CurrentSuite    = null;
       ViewModel.CurrentSolution = null;
       ViewModel.CurrentProject  = null;
-      ViewModel.CurrentTest     = null;
+      ViewModel.CurrentFile     = null;
 
       if (ViewModel.Workspace != null)
       {
@@ -212,8 +212,8 @@ namespace Nitra.Visualizer
 
     private void SaveSelectedTestAndTestSuite()
     {
-      if (ViewModel.CurrentTest != null)
-        ViewModel.Settings.SelectedTestNode = ViewModel.CurrentTest.FullPath;
+      if (ViewModel.CurrentFile != null)
+        ViewModel.Settings.SelectedTestNode = ViewModel.CurrentFile.FullPath;
       else if (ViewModel.CurrentProject != null)
         ViewModel.Settings.SelectedTestNode = ViewModel.CurrentProject.FullPath;
       else if (ViewModel.CurrentSolution != null)
@@ -278,7 +278,7 @@ namespace Nitra.Visualizer
       Debug.Assert(_astTreeView.Items.Count == 1);
 
       var root = (AstNodeViewModel)_astTreeView.Items[0];
-      var file = ViewModel.CurrentTest;
+      var file = ViewModel.CurrentFile;
       var context = root.Context;
       if (context.FileId != file.Id || context.FileVersion != file.Version)
         return;
@@ -380,19 +380,19 @@ namespace Nitra.Visualizer
 
     private void TryReportError()
     {
-      if (ViewModel.CurrentTest == null)
+      if (ViewModel.CurrentFile == null)
         return;
 
       var cmpilerMessages = new List<CompilerMessage>();
-      cmpilerMessages.AddRange(ViewModel.CurrentTest.ParsingMessages);
-      cmpilerMessages.AddRange(ViewModel.CurrentTest.SemanticAnalysisMessages);
+      cmpilerMessages.AddRange(ViewModel.CurrentFile.ParsingMessages);
+      cmpilerMessages.AddRange(ViewModel.CurrentFile.SemanticAnalysisMessages);
       cmpilerMessages.Sort();
 
       ClearMarkers();
 
       var errorNodes      = _errorsTreeView.Items;
-      var currentFileId   = ViewModel.CurrentTest.Id;
-      var fullName        = ViewModel.CurrentTest.FullPath;
+      var currentFileId   = ViewModel.CurrentFile.Id;
+      var fullName        = ViewModel.CurrentFile.FullPath;
       var doc             = _textEditor.Document;
 
       errorNodes.Clear();
@@ -710,13 +710,13 @@ namespace Nitra.Visualizer
       }
     }
 
-    void RunTest(TestVm test)
+    void RunTest(FileVm test)
     {
       test.Run(); // GetRecoveryAlgorithm());
       ShowDiff(test);
     }
 
-    void ShowDiff(TestVm test)
+    void ShowDiff(FileVm test)
     {
       _para.Inlines.Clear();
 
@@ -845,7 +845,7 @@ namespace Nitra.Visualizer
 
     private void OnRemoveTest(object sender, ExecutedRoutedEventArgs e)
     {
-      var test = _testsTreeView.SelectedItem as TestVm;
+      var test = _testsTreeView.SelectedItem as FileVm;
       if (test == null)
         return;
       if (MessageBox.Show(this, "Do you want to delete the '" + test.Name + "' test?", "Visualizer!", MessageBoxButton.YesNo,
@@ -859,7 +859,7 @@ namespace Nitra.Visualizer
     {
       if (_testsTreeView == null)
         return;
-      e.CanExecute = _testsTreeView.SelectedItem is TestVm;
+      e.CanExecute = _testsTreeView.SelectedItem is FileVm;
       e.Handled = true;
     }
 
@@ -898,7 +898,7 @@ namespace Nitra.Visualizer
           return;
         }
 
-        var test = e.NewValue as TestVm;
+        var test = e.NewValue as FileVm;
         if (test != null)
         {
           ChangeCurrentTest(test.Suite, test.Project.Solution, test.Project, test);
@@ -907,7 +907,7 @@ namespace Nitra.Visualizer
         }
       }
 
-    private void ChangeCurrentTest(SuiteVm newTestSuite, SolutionVm newSolution, ProjectVm newProject, TestVm newTest)
+    private void ChangeCurrentTest(SuiteVm newTestSuite, SolutionVm newSolution, ProjectVm newProject, FileVm newTest)
     {
       Trace.Assert(newTestSuite != null);
 
@@ -948,22 +948,22 @@ namespace Nitra.Visualizer
 
       UpdateVm(ViewModel.CurrentSuite,    newTestSuite);
       var timer = Stopwatch.StartNew();
-      DeactivateVm(ViewModel.CurrentTest,     newTest,     client);
+      DeactivateVm(ViewModel.CurrentFile,     newTest,     client);
       DeactivateVm(ViewModel.CurrentProject,  newProject,  client);
       DeactivateVm(ViewModel.CurrentSolution, newSolution, client);
 
       ActivateVm  (ViewModel.CurrentSolution, newSolution, client);
       ActivateVm  (ViewModel.CurrentProject,  newProject,  client);
-      ActivateVm  (ViewModel.CurrentTest,     newTest,     client);
+      ActivateVm  (ViewModel.CurrentFile,     newTest,     client);
       this.Title = timer.Elapsed.ToString();
 
       ViewModel.CurrentSuite    = newTestSuite;
       ViewModel.CurrentSolution = newSolution;
       ViewModel.CurrentProject  = newProject;
 
-      if (ViewModel.CurrentTest != newTest)
+      if (ViewModel.CurrentFile != newTest)
       {
-        ViewModel.CurrentTest     = newTest;
+        ViewModel.CurrentFile     = newTest;
         if (newTest != null)
         {
           responseMap[newTest.Id] = _responseDispatcher;
@@ -985,12 +985,12 @@ namespace Nitra.Visualizer
 
       if ((parsingMessages = msg as AsyncServerMessage.ParsingMessages) != null)
       {
-        TestVm file = ViewModel.CurrentSolution.GetFile(msg.FileId);
+        FileVm file = ViewModel.CurrentSolution.GetFile(msg.FileId);
         file.ParsingMessages = parsingMessages.messages;
       }
       else if ((typingMessages = msg as AsyncServerMessage.SemanticAnalysisMessages) != null)
       {
-        TestVm file = ViewModel.CurrentSolution.GetFile(msg.FileId);
+        FileVm file = ViewModel.CurrentSolution.GetFile(msg.FileId);
         file.SemanticAnalysisMessages = typingMessages.messages;
       }
       else if ((languageInfo = msg as AsyncServerMessage.LanguageLoaded) != null)
@@ -1004,7 +1004,7 @@ namespace Nitra.Visualizer
         }
       }
 
-      if (ViewModel.CurrentTest == null || msg.FileId >= 0 && msg.FileId != ViewModel.CurrentTest.Id || msg.Version >= 0 && msg.Version != ViewModel.CurrentTest.Version)
+      if (ViewModel.CurrentFile == null || msg.FileId >= 0 && msg.FileId != ViewModel.CurrentFile.Id || msg.Version >= 0 && msg.Version != ViewModel.CurrentFile.Version)
         return;
 
       if ((outlining = msg as AsyncServerMessage.OutliningCreated) != null)
@@ -1050,7 +1050,7 @@ namespace Nitra.Visualizer
 
     private void FillAst()
     {
-      var file = ViewModel.CurrentTest;
+      var file = ViewModel.CurrentFile;
       if (file == null)
         return;
       const int Root = 0;
@@ -1070,11 +1070,11 @@ namespace Nitra.Visualizer
       if (_initializing)
         return;
 
-      var version = ViewModel.CurrentTest.Version;
+      var version = ViewModel.CurrentFile.Version;
       version++;
 
       Debug.Assert(e.OffsetChangeMap != null);
-      ViewModel.CurrentTest.OnTextChanged(version, e.InsertedText, e.InsertionLength, e.Offset, e.RemovalLength, _textEditor.Text);
+      ViewModel.CurrentFile.OnTextChanged(version, e.InsertedText, e.InsertionLength, e.Offset, e.RemovalLength, _textEditor.Text);
     }
 
     void UpdateVm(SuiteVm oldVm, SuiteVm newVm)
@@ -1133,7 +1133,7 @@ namespace Nitra.Visualizer
     void RunTest()
     {
       {
-        var test = _testsTreeView.SelectedItem as TestVm;
+        var test = _testsTreeView.SelectedItem as FileVm;
         if (test != null)
         {
           RunTest(test);
@@ -1163,7 +1163,7 @@ namespace Nitra.Visualizer
       if (_testsTreeView == null)
         return;
 
-      if (_testsTreeView.SelectedItem is TestVm)
+      if (_testsTreeView.SelectedItem is FileVm)
       {
         e.CanExecute = true;
         e.Handled = true;
@@ -1193,7 +1193,7 @@ namespace Nitra.Visualizer
 
     void OnUpdateTest(object sender, ExecutedRoutedEventArgs e)
     {
-      var test = _testsTreeView.SelectedItem as TestVm;
+      var test = _testsTreeView.SelectedItem as FileVm;
       if (test != null)
       {
         try
@@ -1217,10 +1217,10 @@ namespace Nitra.Visualizer
 
     void Reparse()
     {
-      if (ViewModel.CurrentSuite == null || ViewModel.CurrentTest == null)
+      if (ViewModel.CurrentSuite == null || ViewModel.CurrentFile == null)
         return;
 
-      ViewModel.CurrentSuite.Client.Send(new ClientMessage.FileReparse(ViewModel.CurrentTest.Id));
+      ViewModel.CurrentSuite.Client.Send(new ClientMessage.FileReparse(ViewModel.CurrentFile.Id));
     }
 
 
@@ -1292,12 +1292,12 @@ namespace Nitra.Visualizer
 
     private void ShowCompletionWindow(int pos)
     {
-      if (ViewModel.CurrentSuite == null || ViewModel.CurrentTest == null)
+      if (ViewModel.CurrentSuite == null || ViewModel.CurrentFile == null)
         return;
 
       var client = ViewModel.CurrentSuite.Client;
 
-      client.Send(new ClientMessage.CompleteWord(ViewModel.CurrentTest.Id, ViewModel.CurrentTest.Version, pos));
+      client.Send(new ClientMessage.CompleteWord(ViewModel.CurrentFile.Id, ViewModel.CurrentFile.Version, pos));
       var result = client.Receive<ServerMessage.CompleteWord>();
       var replacementSpan = result.replacementSpan;
 
@@ -1510,7 +1510,7 @@ namespace Nitra.Visualizer
 
     private void AddFile_MenuItem_OnClick(object sender, RoutedEventArgs e)
     {
-      var test = _testsTreeView.SelectedItem as TestVm;
+      var test = _testsTreeView.SelectedItem as FileVm;
 
       if (test != null)
       {
@@ -1530,7 +1530,7 @@ namespace Nitra.Visualizer
         if (File.Exists(test.Gold))
           File.Move(test.Gold, Path.ChangeExtension(firstFilePath, ".gold"));
         var stringManager = prj.Suite.Workspace.StringManager;
-        prj.Children.Add(new TestVm(test.Suite, prj, firstFilePath, stringManager[firstFilePath]));
+        prj.Children.Add(new FileVm(test.Suite, prj, firstFilePath, stringManager[firstFilePath]));
         AddNewFileToMultitest(prj).IsSelected = true;
         return;
       }
@@ -1541,13 +1541,13 @@ namespace Nitra.Visualizer
         AddNewFileToMultitest(project).IsSelected = true;
     }
 
-    private static TestVm AddNewFileToMultitest(ProjectVm project)
+    private static FileVm AddNewFileToMultitest(ProjectVm project)
     {
       var name = MakeTestFileName(project);
       var path = Path.Combine(project.FullPath, name + ".test");
       File.WriteAllText(path, Environment.NewLine, Encoding.UTF8);
       var stringManager = project.Suite.Workspace.StringManager;
-      var newTest = new TestVm(project.Suite, project, path, stringManager[path]);
+      var newTest = new FileVm(project.Suite, project, path, stringManager[path]);
       project.Children.Add(newTest);
       return newTest;
     }
@@ -1574,7 +1574,7 @@ namespace Nitra.Visualizer
 
     private void Delete()
     {
-      var test = _testsTreeView.SelectedItem as TestVm;
+      var test = _testsTreeView.SelectedItem as FileVm;
 
       if (test != null)
       {
