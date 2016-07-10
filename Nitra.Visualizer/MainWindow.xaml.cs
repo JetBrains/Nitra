@@ -549,10 +549,16 @@ namespace Nitra.Visualizer
     {
       if (ViewModel.CurrentSuite == null)
         return;
-      UpdatePrettyPrintStatus(ViewModel.CurrentSuite.Client);
+      ClearAstHighlighting();
       Reparse();
+      var client = ViewModel.CurrentSuite.Client;
+      UpdateTrees(client);
+    }
 
-      ShowNodeForCaret();
+    void UpdateTrees(NitraClient client)
+    {
+      UpdatePrettyPrintStatus(client);
+      UpdateParseTreeReflection(client);
     }
 
     void UpdatePrettyPrintStatus(NitraClient client)
@@ -563,7 +569,10 @@ namespace Nitra.Visualizer
         client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Html));
       else
         client.Send(new ClientMessage.PrettyPrint(PrettyPrintState.Disabled));
+    }
 
+    void UpdateParseTreeReflection(NitraClient client)
+    {
       client.Send(new ClientMessage.ParseTreeReflection(IsReflectionTabItemActive()));
     }
 
@@ -931,7 +940,7 @@ namespace Nitra.Visualizer
       responseMap[-1] = _responseDispatcher;
 
       if (ViewModel.CurrentSuite == null)
-        UpdatePrettyPrintStatus(client); // first time
+        UpdateTrees(client); // first time
 
 
       UpdateVm(ViewModel.CurrentSuite,    newTestSuite);
@@ -1023,6 +1032,7 @@ namespace Nitra.Visualizer
       else if ((reflectionStructCreated = msg as AsyncServerMessage.ReflectionStructCreated) != null)
       {
         _reflectionTreeView.ItemsSource = new[] { reflectionStructCreated.root };
+        ShowParseTreeNodeForCaret();
       }
       else if (parsingMessages != null || typingMessages != null)
       {

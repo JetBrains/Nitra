@@ -62,6 +62,11 @@ namespace Nitra.Visualizer
     {
       _keywordsSpanInfos    = ImmutableArray<SpanInfo>.Empty;
       _symbolsSpanInfos     = ImmutableArray<SpanInfo>.Empty;
+      ClearAstHighlighting();
+    }
+
+    private void ClearAstHighlighting()
+    {
       _interactiveSpanInfos = ImmutableArray<SpanInfo>.Empty;
     }
 
