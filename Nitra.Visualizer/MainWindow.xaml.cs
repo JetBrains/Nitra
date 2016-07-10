@@ -872,40 +872,40 @@ namespace Nitra.Visualizer
       SaveSelectedTestAndTestSuite();
     }
 
-      private void ProcessSelectTestTreeNode(RoutedPropertyChangedEventArgs<object> e)
+    private void ProcessSelectTestTreeNode(RoutedPropertyChangedEventArgs<object> e)
+    {
+      _currentNode = e.NewValue as BaseVm;
+
+      var suite = e.NewValue as SuiteVm;
+      if (suite != null)
       {
-        _currentNode = e.NewValue as BaseVm;
-
-        var suite = e.NewValue as SuiteVm;
-        if (suite != null)
-        {
-          ChangeCurrentTest(suite, null, null, null);
-          _para.Inlines.Clear();
-          return;
-        }
-
-        var solution = e.NewValue as SolutionVm;
-        if (solution != null)
-        {
-          ChangeCurrentTest(solution.Suite, solution, null, null);
-          return;
-        }
-
-        var project = e.NewValue as ProjectVm;
-        if (project != null)
-        {
-          ChangeCurrentTest(project.Suite, project.Solution, project, null);
-          return;
-        }
-
-        var test = e.NewValue as FileVm;
-        if (test != null)
-        {
-          ChangeCurrentTest(test.Suite, test.Project.Solution, test.Project, test);
-          ShowDiff(test);
-          return;
-        }
+        ChangeCurrentTest(suite, null, null, null);
+        _para.Inlines.Clear();
+        return;
       }
+
+      var solution = e.NewValue as SolutionVm;
+      if (solution != null)
+      {
+        ChangeCurrentTest(solution.Suite, solution, null, null);
+        return;
+      }
+
+      var project = e.NewValue as ProjectVm;
+      if (project != null)
+      {
+        ChangeCurrentTest(project.Suite, project.Solution, project, null);
+        return;
+      }
+
+      var test = e.NewValue as FileVm;
+      if (test != null)
+      {
+        ChangeCurrentTest(test.Suite, test.Project.Solution, test.Project, test);
+        ShowDiff(test);
+        return;
+      }
+    }
 
     private void ChangeCurrentTest(SuiteVm newTestSuite, SolutionVm newSolution, ProjectVm newProject, FileVm newTest)
     {
@@ -967,9 +967,18 @@ namespace Nitra.Visualizer
         if (newTest != null)
         {
           responseMap[newTest.Id] = _responseDispatcher;
+          FillTrees(client);
         }
         TryReportError();
       }
+    }
+
+    private void FillTrees(NitraClient client)
+    {
+      if (IsAstReflectionTabItemActive())
+        FillAst();
+      else
+        UpdateTrees(client);
     }
 
     void Response(AsyncServerMessage msg)
