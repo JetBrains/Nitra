@@ -277,11 +277,16 @@ namespace Nitra.Visualizer
 
       Debug.Assert(_astTreeView.Items.Count == 1);
 
-      var ast = FindNode((AstNodeViewModel)_astTreeView.Items[0], _textEditor.CaretOffset);
+      var root = (AstNodeViewModel)_astTreeView.Items[0];
+      var file = ViewModel.CurrentTest;
+      var context = root.Context;
+      if (context.FileId != file.Id || context.FileVersion != file.Version)
+        return;
+
+      var ast = FindNode(root, _textEditor.CaretOffset);
 
       if (ast != null)
         ast.IsSelected = true;
-      //result.BringIntoView();
     }
 
     private AstNodeViewModel FindNode(AstNodeViewModel ast, int pos, List<NSpan> checkedSpans = null)
@@ -1036,13 +1041,15 @@ namespace Nitra.Visualizer
       if (file == null)
         return;
       const int Root = 0;
+      var version = file.Version;
       var client  = ViewModel.CurrentSuite.Client;
       var span    = new NSpan(0, _textEditor.Document.TextLength);
       var root    = new ObjectDescriptor.Ast(span, Root, "<File>", "<File>", "<File>", null);
-      var context = new AstNodeViewModel.Context(client, file.Id, file.Version);
+      var context = new AstNodeViewModel.AstContext(client, file.Id, version);
       var rootVm  = new ItemAstNodeViewModel(context, root, -1);
       rootVm.IsExpanded = true;
       _astTreeView.ItemsSource = new[] { rootVm };
+      ShowAstNodeForCaret();
     }
 
     void Document_Changed(object sender, DocumentChangeEventArgs e)

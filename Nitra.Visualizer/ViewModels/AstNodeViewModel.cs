@@ -19,7 +19,7 @@ namespace Nitra.Visualizer.ViewModels
   {
     readonly PropertyDescriptor _propertyDescriptor;
 
-    public PropertyAstNodeViewModel(Context context, PropertyDescriptor propertyDescriptor)
+    public PropertyAstNodeViewModel(AstContext context, PropertyDescriptor propertyDescriptor)
       : base(context, propertyDescriptor.Object)
     {
       _propertyDescriptor = propertyDescriptor;
@@ -81,7 +81,7 @@ namespace Nitra.Visualizer.ViewModels
       }
     }
 
-    public ItemAstNodeViewModel(Context context, ObjectDescriptor objectDescriptor, int index) : base(context, objectDescriptor)
+    public ItemAstNodeViewModel(AstContext context, ObjectDescriptor objectDescriptor, int index) : base(context, objectDescriptor)
     {
       Index = index;
     }
@@ -96,13 +96,13 @@ namespace Nitra.Visualizer.ViewModels
 
   public abstract class AstNodeViewModel : ReactiveObject
   {
-    public class Context
+    public class AstContext
     {
       public NitraClient Client      { get; private set; }
       public int         FileId      { get; private set; }
       public int         FileVersion { get; private set; }
 
-      public Context(NitraClient client, int fileId, int fileVersion)
+      public AstContext(NitraClient client, int fileId, int fileVersion)
       {
         Client      = client;
         FileId      = fileId;
@@ -111,7 +111,8 @@ namespace Nitra.Visualizer.ViewModels
     }
 
     readonly protected ObjectDescriptor _objectDescriptor;
-    readonly protected Context          _context;
+    public AstContext Context { get; private set; } 
+
 
     [Reactive] public bool                           NeedLoadContent { get; private set; }
                public ReactiveList<AstNodeViewModel> Items           { get; set; }
@@ -120,9 +121,9 @@ namespace Nitra.Visualizer.ViewModels
                public string                         Value           { get { return _objectDescriptor.ToString(); } }
                public NSpan                          Span            { get { return _objectDescriptor.Span; } }
     
-    public AstNodeViewModel(Context context, ObjectDescriptor objectDescriptor)
+    public AstNodeViewModel(AstContext context, ObjectDescriptor objectDescriptor)
     {
-      _context          = context;
+      Context           = context;
       _objectDescriptor = objectDescriptor;
       Items = new ReactiveList<AstNodeViewModel>();
       if (objectDescriptor.IsObject || objectDescriptor.IsSeq && objectDescriptor.Count > 0)
@@ -147,8 +148,8 @@ namespace Nitra.Visualizer.ViewModels
 
       Items.Clear();
 
-      var client = _context.Client;
-      client.Send(new ClientMessage.GetObjectContent(_context.FileId, _context.FileVersion, _objectDescriptor.Id));
+      var client = Context.Client;
+      client.Send(new ClientMessage.GetObjectContent(Context.FileId, Context.FileVersion, _objectDescriptor.Id));
       var content = client.Receive<ServerMessage.ObjectContent>();
 
       if (content.content is ContentDescriptor.Fail)
@@ -167,21 +168,21 @@ namespace Nitra.Visualizer.ViewModels
     private IEnumerable<AstNodeViewModel> ToItems(ObjectDescriptor[] objectDescriptors)
     {
       for (int i = 0; i < objectDescriptors.Length; i++)
-        yield return new ItemAstNodeViewModel(_context, objectDescriptors[i], i);
+        yield return new ItemAstNodeViewModel(Context, objectDescriptors[i], i);
     }
 
     private IEnumerable<AstNodeViewModel> ToAstList(PropertyDescriptor[] propertyDescriptors, ObjectDescriptor[] objectDescriptors)
     {
       foreach (var propertyDescriptor in propertyDescriptors)
-        yield return new PropertyAstNodeViewModel(_context, propertyDescriptor);
+        yield return new PropertyAstNodeViewModel(Context, propertyDescriptor);
       for (int i = 0; i < objectDescriptors.Length; i++)
-        yield return new ItemAstNodeViewModel(_context, objectDescriptors[i], i);
+        yield return new ItemAstNodeViewModel(Context, objectDescriptors[i], i);
     }
 
     private IEnumerable<AstNodeViewModel> ToProperties(PropertyDescriptor[] propertyDescriptors)
     {
       foreach (var propertyDescriptor in propertyDescriptors)
-        yield return new PropertyAstNodeViewModel(_context, propertyDescriptor);
+        yield return new PropertyAstNodeViewModel(Context, propertyDescriptor);
     }
   }
 }
