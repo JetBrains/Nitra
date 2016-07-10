@@ -267,7 +267,7 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void ShowAstNodeForCaret(bool enforce = true)
+    private void ShowAstNodeForCaret(bool enforce = false)
     {
       if (!enforce && _astTreeView.IsKeyboardFocusWithin)
         return;
@@ -283,13 +283,13 @@ namespace Nitra.Visualizer
       if (context.FileId != file.Id || context.FileVersion != file.Version)
         return;
 
-      var ast = FindNode(root, _textEditor.CaretOffset);
+      var ast = FindAstNode(root, _textEditor.CaretOffset);
 
       if (ast != null)
         ast.IsSelected = true;
     }
 
-    private AstNodeViewModel FindNode(AstNodeViewModel ast, int pos, List<NSpan> checkedSpans = null)
+    private AstNodeViewModel FindAstNode(AstNodeViewModel ast, int pos, List<NSpan> checkedSpans = null)
     {
       var span = ast.Span;
 
@@ -323,7 +323,7 @@ namespace Nitra.Visualizer
       if (items != null)
         foreach (AstNodeViewModel subItem in items)
         {
-          var result = FindNode(subItem, pos, checkedSpans);
+          var result = FindAstNode(subItem, pos, checkedSpans);
           if (result != null)
           {
             ast.IsExpanded = true;
@@ -343,7 +343,7 @@ namespace Nitra.Visualizer
         return;
 
 
-      var node = FindNode((ParseTreeReflectionStruct[])_reflectionTreeView.ItemsSource, _textEditor.CaretOffset);
+      var node = FindParseTreeNode((ParseTreeReflectionStruct[])_reflectionTreeView.ItemsSource, _textEditor.CaretOffset);
       
       if (node != null)
       {
@@ -357,7 +357,7 @@ namespace Nitra.Visualizer
       }
     }
 
-    private ParseTreeReflectionStruct FindNode(IEnumerable<ParseTreeReflectionStruct> items, int p)
+    private ParseTreeReflectionStruct FindParseTreeNode(IEnumerable<ParseTreeReflectionStruct> items, int p)
     {
       foreach (ParseTreeReflectionStruct node in items)
       {
@@ -368,7 +368,7 @@ namespace Nitra.Visualizer
       
           _reflectionTreeView.Expand(node);
       
-          return FindNode(node.Children, p);
+          return FindParseTreeNode(node.Children, p);
         }
       }
 
