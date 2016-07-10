@@ -267,9 +267,9 @@ namespace Nitra.Visualizer
       }
     }
 
-    private void ShowAstNodeForCaret()
+    private void ShowAstNodeForCaret(bool enforce = true)
     {
-      if (_astTreeView.IsKeyboardFocusWithin)
+      if (!enforce && _astTreeView.IsKeyboardFocusWithin)
         return;
 
       if (_astTreeView.Items.Count < 1)
@@ -334,12 +334,12 @@ namespace Nitra.Visualizer
       return ast;
     }
 
-    private void ShowParseTreeNodeForCaret()
+    private void ShowParseTreeNodeForCaret(bool enforce = false)
     {
       if (_reflectionTreeView.ItemsSource == null)
         return;
-      
-      if (_reflectionTreeView.IsKeyboardFocusWithin)
+
+      if (!enforce && _reflectionTreeView.IsKeyboardFocusWithin)
         return;
 
 
@@ -1032,7 +1032,7 @@ namespace Nitra.Visualizer
       else if ((reflectionStructCreated = msg as AsyncServerMessage.ReflectionStructCreated) != null)
       {
         _reflectionTreeView.ItemsSource = new[] { reflectionStructCreated.root };
-        ShowParseTreeNodeForCaret();
+        ShowParseTreeNodeForCaret(enforce: true);
       }
       else if (parsingMessages != null || typingMessages != null)
       {
@@ -1059,7 +1059,7 @@ namespace Nitra.Visualizer
       var rootVm  = new ItemAstNodeViewModel(context, root, -1);
       rootVm.IsExpanded = true;
       _astTreeView.ItemsSource = new[] { rootVm };
-      ShowAstNodeForCaret();
+      ShowAstNodeForCaret(enforce: true);
     }
 
     void Document_Changed(object sender, DocumentChangeEventArgs e)
