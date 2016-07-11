@@ -1316,7 +1316,17 @@ namespace Nitra.Visualizer
       CompletionElem.Literal lit;
       CompletionElem.Symbol  s;
 
-      foreach (var completionData in result.completionList)
+      Func<CompletionElem, string> completionKeySelector = el => {
+        if ((lit = el as CompletionElem.Literal) != null) return lit.text;
+        if ((s = el as CompletionElem.Symbol) != null) return s.name;
+        return "";
+      };
+
+      var completionList = result.completionList
+                                 .Distinct(completionKeySelector)
+                                 .OrderBy(completionKeySelector);
+
+      foreach (var completionData in completionList)
       {
         if ((lit = completionData as CompletionElem.Literal) != null)
         {
