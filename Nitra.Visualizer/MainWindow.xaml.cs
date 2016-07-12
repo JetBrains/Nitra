@@ -1323,6 +1323,11 @@ namespace Nitra.Visualizer
       };
 
       var completionList = result.completionList
+                                 .Where(c => {
+                                   var key = completionKeySelector(c);
+                                   return !key.StartsWith("?") &&
+                                          !key.StartsWith("<");
+                                 })
                                  .Distinct(completionKeySelector)
                                  .OrderBy(completionKeySelector);
 
