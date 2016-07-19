@@ -1328,8 +1328,7 @@ namespace Nitra.Visualizer
                                    return !key.StartsWith("?") &&
                                           !key.StartsWith("<");
                                  })
-                                 .Distinct(completionKeySelector)
-                                 .OrderBy(completionKeySelector);
+                                 .Distinct(completionKeySelector);
 
       foreach (var completionData in completionList)
       {
