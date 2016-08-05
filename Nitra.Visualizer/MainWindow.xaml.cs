@@ -280,7 +280,7 @@ namespace Nitra.Visualizer
       var root = (AstNodeViewModel)_astTreeView.Items[0];
       var file = ViewModel.CurrentFile;
       var context = root.Context;
-      if (context.FileId != file.Id || context.FileVersion != file.Version)
+      if (file == null || context.FileId != file.Id || context.FileVersion != file.Version)
         return;
 
       var ast = FindAstNode(root, _textEditor.CaretOffset);
@@ -991,6 +991,7 @@ namespace Nitra.Visualizer
       AsyncServerMessage.SemanticAnalysisMessages typingMessages = null;
       AsyncServerMessage.PrettyPrintCreated prettyPrintCreated;
       AsyncServerMessage.ReflectionStructCreated reflectionStructCreated;
+      AsyncServerMessage.RefreshReferencesFailed refreshReferencesFailed;
 
       if ((parsingMessages = msg as AsyncServerMessage.ParsingMessages) != null)
       {
@@ -1011,6 +1012,13 @@ namespace Nitra.Visualizer
           _fillAstTimer.Stop();
           _fillAstTimer.Start();
         }
+      }
+      else if ((refreshReferencesFailed = msg as AsyncServerMessage.RefreshReferencesFailed) != null)
+      {
+        ViewModel.CurrentProject = null;
+        ViewModel.CurrentFile = null;
+        MessageBox.Show(this, "Project loading is failed in call RefreshReferences().\r\nException: "
+          + refreshReferencesFailed.exception);
       }
 
       if (ViewModel.CurrentFile == null || msg.FileId >= 0 && msg.FileId != ViewModel.CurrentFile.Id || msg.Version >= 0 && msg.Version != ViewModel.CurrentFile.Version)
