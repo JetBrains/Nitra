@@ -830,8 +830,13 @@ namespace Nitra.Visualizer
     {
       if (ViewModel.Workspace == null)
         return;
+
       var currentTestSuite = ViewModel.CurrentSuite;
-      var dialog = new TestSuiteDialog(create, currentTestSuite, ViewModel.Settings) { Owner = this };
+      var dialogViewModel = new TestSuiteCreateOrEditViewModel(currentTestSuite, currentTestSuite.Client, create);
+      var dialog = new TestSuiteDialog(currentTestSuite, dialogViewModel) {
+        Owner = this
+      };
+
       if (dialog.ShowDialog() ?? false)
       {
         if (currentTestSuite != null)
