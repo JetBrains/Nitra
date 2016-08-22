@@ -19,19 +19,11 @@ namespace Nitra.Visualizer.ViewModels
     public string SuiteName { get; set; }
     public string SuitPath { get { return Path.Combine(Path.GetFullPath(RootFolder), SuiteName); } }
     public bool IsCreate { get; private set; }
-
-    [Reactive]
-    public string ParserLibsText { get; set; }
-    [Reactive]
-    public string[] ParserLibPaths { get; set; }
-
-    [Reactive]
-    public string LibsText { get; set; }
-    [Reactive]
-    public string[] Libs { get; set; }
-
-    public ReactiveList<LanguageInfo> Languages { get; private set; }
-    public ReactiveList<DynamicExtensionViewModel> DynamicExtensions { get; private set; }
+    
+    public IReactiveList<string> ParserLibs { get; set; }
+    public IReactiveList<string> Libs { get; set; }
+    public IReactiveList<LanguageInfo> Languages { get; private set; }
+    public IReactiveList<DynamicExtensionViewModel> DynamicExtensions { get; private set; }
 
     public LanguageInfo? SelectedLanguage { get; set; }
     private LanguageInfo? _oldLanguage;
@@ -41,26 +33,21 @@ namespace Nitra.Visualizer.ViewModels
       
       IsCreate = isCreate;
       Title = isCreate ? "New test suite" : "Edit test suite";
-      ParserLibsText = "";
-      LibsText = "";
       Languages = new ReactiveList<LanguageInfo>();
+      ParserLibs = new ReactiveList<string>();
+      Libs = new ReactiveList<string>();
       DynamicExtensions = new ReactiveList<DynamicExtensionViewModel>();
 
       if (baseSuite != null) {
         RootFolder = baseSuite.Workspace.RootFolder;
         SuiteName = baseSuite.Name;
-        Libs = baseSuite.Language.Libs;
+
+        Libs.AddRange(baseSuite.Language.Libs);
       }
 
-      this.WhenAnyValue(vm => vm.ParserLibsText)
-          .Select(GetParserLibPaths)
-          .Do(libs => ParserLibPaths = libs)
+      this.WhenAnyValue(vm => vm.ParserLibs)
           .Subscribe(libs => UpdateParserLibs(client, libs));
-
-      this.WhenAnyValue(vm => vm.LibsText)
-          .Select(GetLibPaths)
-          .Subscribe(libs => Libs = libs);
-      
+            
       this.WhenAnyValue(vm => vm.SelectedLanguage)
           .Subscribe(UpdateSelectedLanguage);
     }
@@ -82,7 +69,7 @@ namespace Nitra.Visualizer.ViewModels
       _oldLanguage = newLanguage;
     }
 
-    private void UpdateParserLibs(NitraClient client, string[] libs)
+    private void UpdateParserLibs(NitraClient client, IReactiveList<string> libs)
     {
       var oldLanguages = Languages.ToHashSet();
       var oldDynamicExtensions = DynamicExtensions.ToDictionary(x => x.Name);
@@ -114,31 +101,6 @@ namespace Nitra.Visualizer.ViewModels
 
       foreach (var pair in oldDynamicExtensions)
         DynamicExtensions.Remove(pair.Value);
-    }
-
-    private string[] GetParserLibPaths(string assemblies)
-    {
-      return Utils.GetAssemblyPaths(assemblies)
-                  .Select(ToFullSuitePath)
-                  .ToArray();
-    }
-
-    private string[] GetLibPaths(string libs)
-    {
-      return Utils.GetAssemblyPaths(libs)
-                  .Select(libPath => {
-                    var fullAssemblyPath = ToFullSuitePath(libPath);
-                    return File.Exists(fullAssemblyPath)
-                           ? Utils.MakeRelativePath(SuitPath, true, fullAssemblyPath, false)
-                           : libPath;
-                  })
-                  .Distinct()
-                  .ToArray();
-    }
-
-    private string ToFullSuitePath(string path)
-    {
-      return Path.IsPathRooted(path) ? path : Path.Combine(SuitPath, path);
     }
   }
 }

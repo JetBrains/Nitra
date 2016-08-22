@@ -7,9 +7,10 @@ namespace Nitra.Visualizer.ViewModels
 {
   public class DynamicExtensionViewModel : ReactiveObject
   {
-    [Reactive] public bool IsEnabled { get; set; }
-    [Reactive] public bool IsChecked { get; set; }
-    [Reactive] public string Name { get; }
+    [Reactive]
+    public bool IsEnabled { get; set; }
+    public bool IsChecked { get; set; }
+    public string Name { get; }
 
     public DynamicExtensionViewModel(string name)
     {
