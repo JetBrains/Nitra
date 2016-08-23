@@ -830,19 +830,31 @@ namespace Nitra.Visualizer
     {
       if (ViewModel.Workspace == null)
         return;
+      
+      var suite = create 
+                  ? new SuiteVm(ViewModel.Workspace, "", ViewModel.Settings.Config)
+                  : ViewModel.CurrentSuite;
 
-      var currentTestSuite = ViewModel.CurrentSuite;
-      var dialogViewModel = new TestSuiteCreateOrEditViewModel(currentTestSuite, currentTestSuite.Client, create);
-      var dialog = new TestSuiteDialog(currentTestSuite, dialogViewModel) {
+      var viewmodel = new TestSuiteCreateOrEditViewModel(suite.Client) {
+        Title = suite.Name == "" ? "New test suite" : "Edit test suite",
+        RootFolder = suite.Workspace.RootFolder,
+        SuiteName = suite.Name
+      };
+
+      viewmodel.ParserLibs.AddRange(suite.Config.Languages.Select(li => new ParserLibViewModel(li.Path)));
+      viewmodel.DynamicExtensions.AddRange(suite.Config.Languages.SelectMany(li => li.DynamicExtensions)
+                                                                 .Select(li => new DynamicExtensionViewModel(li.Name)));
+      viewmodel.References.AddRange(suite.Config.Libs);
+      viewmodel.Languages.AddRange(suite.Config.Languages);
+      
+      var dialog = new TestSuiteDialog(suite, viewmodel) {
         Owner = this
       };
 
       if (dialog.ShowDialog() ?? false)
       {
-        if (currentTestSuite != null)
-          ViewModel.Workspace.TestSuites.Remove(currentTestSuite);
-        var testSuite = new SuiteVm(ViewModel.Workspace, dialog.TestSuiteName, ViewModel.Settings.Config);
-        testSuite.IsSelected = true;
+        ViewModel.Workspace.TestSuites.Remove(suite);
+        suite.IsSelected = true;
         ViewModel.Workspace.Save();
       }
     }

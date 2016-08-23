@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -15,52 +16,32 @@ namespace Nitra.Visualizer.ViewModels
   public class TestSuiteCreateOrEditViewModel : ReactiveObject
   {
     public string Title { get; set; }
-    public string RootFolder { get; }
+    public string RootFolder { get; set; }
     public string SuiteName { get; set; }
     public string SuitPath { get { return Path.Combine(Path.GetFullPath(RootFolder), SuiteName); } }
     public bool IsCreate { get; private set; }
-
-    [Reactive]
-    public string ParserLibsText { get; set; }
-    [Reactive]
-    public string[] ParserLibPaths { get; set; }
-
-    [Reactive]
-    public string LibsText { get; set; }
-    [Reactive]
-    public string[] Libs { get; set; }
-
-    public ReactiveList<LanguageInfo> Languages { get; private set; }
-    public ReactiveList<DynamicExtensionViewModel> DynamicExtensions { get; private set; }
+    
+    public IReactiveList<ParserLibViewModel> ParserLibs { get; set; }
+    public IReactiveList<ProjectSupportViewModel> ProjectSupports { get; set; }
+    public IReactiveList<string> References { get; set; }
+    public IReactiveList<LanguageInfo> Languages { get; private set; }
+    public IReactiveList<DynamicExtensionViewModel> DynamicExtensions { get; private set; }
 
     public LanguageInfo? SelectedLanguage { get; set; }
+
     private LanguageInfo? _oldLanguage;
 
-    public TestSuiteCreateOrEditViewModel(SuiteVm baseSuite, NitraClient client, bool isCreate)
+    public TestSuiteCreateOrEditViewModel(NitraClient client)
     {
-      
-      IsCreate = isCreate;
-      Title = isCreate ? "New test suite" : "Edit test suite";
-      ParserLibsText = "";
-      LibsText = "";
       Languages = new ReactiveList<LanguageInfo>();
+      ParserLibs = new ReactiveList<ParserLibViewModel>();
+      ProjectSupports = new ReactiveList<ProjectSupportViewModel>();
+      References = new ReactiveList<string>();
       DynamicExtensions = new ReactiveList<DynamicExtensionViewModel>();
-
-      if (baseSuite != null) {
-        RootFolder = baseSuite.Workspace.RootFolder;
-        SuiteName = baseSuite.Name;
-        Libs = baseSuite.Config.Libs;
-      }
-
-      this.WhenAnyValue(vm => vm.ParserLibsText)
-          .Select(GetParserLibPaths)
-          .Do(libs => ParserLibPaths = libs)
-          .Subscribe(libs => UpdateParserLibs(client, libs));
-
-      this.WhenAnyValue(vm => vm.LibsText)
-          .Select(GetLibPaths)
-          .Subscribe(libs => Libs = libs);
       
+      ParserLibs.Changed
+                .Subscribe(_ => UpdateParserLibs(client));
+            
       this.WhenAnyValue(vm => vm.SelectedLanguage)
           .Subscribe(UpdateSelectedLanguage);
     }
@@ -82,63 +63,84 @@ namespace Nitra.Visualizer.ViewModels
       _oldLanguage = newLanguage;
     }
 
-    private void UpdateParserLibs(NitraClient client, string[] libs)
+    private void UpdateParserLibs(NitraClient client)
     {
-      var oldLanguages = Languages.ToHashSet();
-      var oldDynamicExtensions = DynamicExtensions.ToDictionary(x => x.Name);
-      var libsArray = libs.ToImmutableArray();
+      try {
+        RemoveDuplicates(ParserLibs, pl => ToFullSuitePath(pl.Path));
 
-      client.Send(new ClientMessage.GetLibsMetadata(libsArray));
-      var libsMetadata = client.Receive<ServerMessage.LibsMetadata>().metadatas;
+        var libsArray = ParserLibs.Select(vm => ToFullSuitePath(vm.Path)).ToImmutableArray();
 
-      client.Send(new ClientMessage.GetLibsSyntaxModules(libsArray));
-      var libsSyntaxModules = client.Receive<ServerMessage.LibsSyntaxModules>().modules;
+        client.Send(new ClientMessage.GetLibsMetadata(libsArray));
+        var libsMetadata = client.Receive<ServerMessage.LibsMetadata>().metadatas;
 
-      var data = libsMetadata.Zip(libsSyntaxModules, (metadata, syntax) => new {metadata, syntax});
+        client.Send(new ClientMessage.GetLibsSyntaxModules(libsArray));
+        var libsSyntaxModules = client.Receive<ServerMessage.LibsSyntaxModules>().modules;
 
-      foreach (var a in data) {
-        var languages = a.metadata.Languages;
-        var syntaxModules = a.syntax.Modules;
+        client.Send(new ClientMessage.GetLibsProjectSupports(libsArray));
+        var libsProjectSupports = client.Receive<ServerMessage.LibsProjectSupports>().libs;
+      
+        Languages.Clear();
+        DynamicExtensions.Clear();
+        ProjectSupports.Clear();
 
-        foreach (var language in languages)
-          if (!oldLanguages.Remove(language))
+        for (int i = 0; i < libsMetadata.Length; i++) {
+          var languages = libsMetadata[i].Languages;
+          var syntaxModules = libsSyntaxModules[i].Modules;
+          var projectSupports = libsProjectSupports[i].ProjectSupports;
+
+          foreach (var language in languages)
             Languages.Add(language);
 
-        foreach (var syntaxModule in syntaxModules)
-          if (!oldDynamicExtensions.Remove(syntaxModule))
+          foreach (var syntaxModule in syntaxModules)
             DynamicExtensions.Add(new DynamicExtensionViewModel(syntaxModule));
+
+          foreach (var projectSupport in projectSupports) {
+            ProjectSupports.Add(new ProjectSupportViewModel(projectSupport.Caption, projectSupport.Path, projectSupport));
+          }
+        }
+      } catch (Exception e) {
+        Debug.WriteLine("Failed to update parser lib metadata" + Environment.NewLine + e);
       }
-
-      foreach (var language in oldLanguages)
-        Languages.Remove(language);
-
-      foreach (var pair in oldDynamicExtensions)
-        DynamicExtensions.Remove(pair.Value);
     }
 
-    private string[] GetParserLibPaths(string assemblies)
+    private void RemoveDuplicates<T, TKey>(IReactiveList<T> list, Func<T, TKey> keySelector)
     {
-      return Utils.GetAssemblyPaths(assemblies)
-                  .Select(ToFullSuitePath)
-                  .ToArray();
-    }
-
-    private string[] GetLibPaths(string libs)
-    {
-      return Utils.GetAssemblyPaths(libs)
-                  .Select(libPath => {
-                    var fullAssemblyPath = ToFullSuitePath(libPath);
-                    return File.Exists(fullAssemblyPath)
-                           ? Utils.MakeRelativePath(SuitPath, true, fullAssemblyPath, false)
-                           : libPath;
-                  })
-                  .Distinct()
-                  .ToArray();
+      var distinct = list.Distinct(keySelector).ToList();
+      if (distinct.Count != list.Count) {
+        list.Clear();
+        list.AddRange(distinct);
+      }
     }
 
     private string ToFullSuitePath(string path)
     {
       return Path.IsPathRooted(path) ? path : Path.Combine(SuitPath, path);
+    }
+  }
+
+  public class ProjectSupportViewModel : ReactiveObject
+  {
+    public bool IsSelected { get; set; }
+    public string Caption { get; set; }
+    public string Path { get; set; }
+    public ProjectSupport Source { get; set; }
+
+    public ProjectSupportViewModel(string caption, string path, ProjectSupport source)
+    {
+      Caption = caption;
+      Path = path;
+      Source = source;
+    }
+  }
+
+  public class ParserLibViewModel : ReactiveObject
+  {
+    [Reactive]
+    public string Path { get; set; }
+
+    public ParserLibViewModel(string path)
+    {
+      Path = path;
     }
   }
 }

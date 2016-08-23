@@ -3,11 +3,9 @@ using Microsoft.Win32;
 using Nitra.ViewModels;
 using System;
 using System.IO;
-using System.Reactive;
-using System.Reactive.Linq;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using Nitra.Visualizer.ViewModels;
 using ReactiveUI;
 
@@ -23,41 +21,13 @@ namespace Nitra.Visualizer
 
       DataContext = ViewModel = testSuiteCreateOrEditViewModel;
 
+      this.OneWayBind(ViewModel, vm => vm.Languages, v => v.Languages.ItemsSource);
+      this.OneWayBind(ViewModel, vm => vm.ProjectSupports, v => v.ProjectSupports.ItemsSource);
+      this.OneWayBind(ViewModel, vm => vm.ParserLibs, v => v.ParserLibs.ItemsSource);
+      this.OneWayBind(ViewModel, vm => vm.DynamicExtensions, v => v._dynamicExtensions.ItemsSource);
+      this.OneWayBind(ViewModel, vm => vm.References, v => v.References.ItemsSource);
+
       InitializeComponent();
-
-      GetTextChanged(_parserLibs).Throttle(TimeSpan.FromSeconds(1.3), RxApp.MainThreadScheduler)
-                                 .Subscribe(_ => ViewModel.ParserLibsText = _parserLibs.Text);
-
-      GetTextChanged(_libs).Throttle(TimeSpan.FromSeconds(1.3), RxApp.MainThreadScheduler)
-                           .Subscribe(_ => ViewModel.LibsText = _libs.Text);
-
-      _parserLibs.LostFocus += (sender, args) => {
-        ViewModel.ParserLibsText = _parserLibs.Text;
-      };
-
-      _libs.LostFocus += (sender, args) => {
-        ViewModel.LibsText = _libs.Text;
-      };
-
-      _parserLibs.KeyUp += (sender, args) => {
-        if (args.Key == Key.F5) {
-          ViewModel.ParserLibsText = "";
-          ViewModel.ParserLibsText = _parserLibs.Text;
-        }
-      };
-
-      _libs.KeyUp += (sender, args) => {
-        if (args.Key == Key.F5) {
-          ViewModel.LibsText = "";
-          ViewModel.LibsText = _libs.Text;
-        }
-      };
-    }
-
-    private IObservable<Unit> GetTextChanged(TextBox textBox)
-    {
-      return Observable.FromEventPattern<TextChangedEventHandler, TextChangedEventArgs>(h => textBox.TextChanged += h, h => textBox.TextChanged -= h)
-                       .Select(a => Unit.Default);
     }
     
     public string TestSuiteName
@@ -92,12 +62,11 @@ namespace Nitra.Visualizer
         return;
       }
 
-      var assemblies = ViewModel.ParserLibPaths;
+      var assemblies = ViewModel.ParserLibs;
 
-      if (assemblies.Length == 0)
+      if (assemblies.Count == 0)
       {
         MessageBox.Show(this, "No one valid library in library list.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-        _parserLibs.Focus();
         return;
       }
 
@@ -106,7 +75,7 @@ namespace Nitra.Visualizer
       if (selectedLanguage == null)
       {
         MessageBox.Show(this, "Langauge is not selected.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-        _languageComboBox.Focus();
+        Languages.Focus();
         return;
       }
 
@@ -136,13 +105,12 @@ namespace Nitra.Visualizer
         DefaultExt = ".dll",
         InitialDirectory = ViewModel.SuitPath,
         Filter = "Parser library (.dll)|*.dll|Parser application (.exe)|*.exe",
-        Title = "Load parser"
+        Title = "Load parser",
+        Multiselect = true
       };
 
-      if (dialog.ShowDialog(this) ?? false)
-      {
-        _parserLibs.Text += dialog.FileName + Environment.NewLine;
-        _parserLibs.Focus();
+      if (dialog.ShowDialog(this) ?? false) {
+          ViewModel.ParserLibs.AddRange(dialog.FileNames.Select(fname => new ParserLibViewModel(fname)));
       }
     }
 
@@ -153,5 +121,14 @@ namespace Nitra.Visualizer
     }
 
     public TestSuiteCreateOrEditViewModel ViewModel { get; set; }
+
+    private void RemoveParserLib(object sender, RoutedEventArgs e)
+    {
+      var button = (Button) sender;
+      var selectedParserLib = button.DataContext as ParserLibViewModel;
+
+      if (selectedParserLib != null)
+        ViewModel.ParserLibs.Remove(selectedParserLib);
+    }
   }
 }
