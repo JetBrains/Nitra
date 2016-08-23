@@ -41,7 +41,15 @@ namespace Nitra.Visualizer.ViewModels
       
       ParserLibs.Changed
                 .Subscribe(_ => UpdateParserLibs(client));
-            
+
+      Languages.Changed.Subscribe(_ => RemoveDuplicates(Languages, li => ToFullSuitePath(li.Path)));
+
+      ProjectSupports.Changed
+                     .Subscribe(_ => {
+                       if (!ProjectSupports.Any(ps => ps.IsSelected) && ProjectSupports.Count > 0)
+                         ProjectSupports[0].IsSelected = true;
+                     });
+
       this.WhenAnyValue(vm => vm.SelectedLanguage)
           .Subscribe(UpdateSelectedLanguage);
     }
@@ -114,7 +122,7 @@ namespace Nitra.Visualizer.ViewModels
 
     private string ToFullSuitePath(string path)
     {
-      return Path.IsPathRooted(path) ? path : Path.Combine(SuitPath, path);
+      return Path.IsPathRooted(path) ? path : new Uri(Path.Combine(SuitPath, path)).LocalPath;
     }
   }
 
