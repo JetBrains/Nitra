@@ -49,7 +49,7 @@ namespace Nitra.Visualizer.ViewModels
       if (baseSuite != null) {
         RootFolder = baseSuite.Workspace.RootFolder;
         SuiteName = baseSuite.Name;
-        Libs = baseSuite.Language.Libs;
+        Libs = baseSuite.Config.Libs;
       }
 
       this.WhenAnyValue(vm => vm.ParserLibsText)

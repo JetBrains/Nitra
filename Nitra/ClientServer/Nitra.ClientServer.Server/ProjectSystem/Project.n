@@ -30,7 +30,8 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     public  Id                                       : int;
     public  Path                                     : string                       { get; }
     public  Name                                     : string                       { get; private set; }
-    public  LanguageInfos                            : ImmutableArray[LanguageInfo] { get; }
+            _config                                  : Config;
+            _projectSupport                          : IProjectSupport;
             _extToLanguages                          : Dictionary[string, Nitra.Language * List[GrammarDescriptor]] = Dictionary(StringComparer.InvariantCultureIgnoreCase);
     public  IsDisposed                               : bool                         { get; private set; }
     public  IsSemanticAvailable                      : bool                         { get; private set; }
@@ -40,7 +41,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     mutable _expectsToBuildAst                       : int;
     public  SemanticActions                          : ConcurrentQueue[Action[CancellationToken, ImmutableArray[IAst]]] = ConcurrentQueue();
            
-    internal this(parent : Solution, fullPath : string, id : int, languageInfos : ImmutableArray[LanguageInfo], parseQueue : BlockingCollection[ParserMessage], router : Router)
+    internal this(parent : Solution, fullPath : string, id : int, config : Config, parseQueue : BlockingCollection[ParserMessage], router : Router)
     {
       ParseQueue    = parseQueue;
       Path          = fullPath;
@@ -49,12 +50,20 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       Parent        = parent;
       Solution      = parent;
       Name          = Path.GetFileNameWithoutExtension(fullPath);
-      LanguageInfos = languageInfos;
+      _config       = config;
       Libs          = _libs;
       Router        = router;
+      
+      unless (config.ProjectSupport.IsNotSpecified)
+      {
+        def ps   = config.ProjectSupport;
+        def asm  = ServerUtils.LoadAssembly(ps.Path);
+        def type = asm.GetType(ps.TypeFullName);
+        _projectSupport = Activator.CreateInstance(type) :> IProjectSupport;
+      }
 
       parent.AddProject(this);
-      LoadLangs(languageInfos);
+      LoadLangs(_config.Languages);
       
       Log("ProjectStartLoading " + id + ": "+ fullPath);
     }
@@ -64,7 +73,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       _extToLanguages[ext]
     }
 
-    LoadLangs(languageInfos : ImmutableArray[LanguageInfo]) : void
+    LoadLangs(languageInfos : array[LanguageInfo]) : void
     {
       for (mutable i = 0; i < languageInfos.Length; i++)
       {
@@ -109,13 +118,11 @@ namespace Nitra.ClientServer.Server.ProjectSystem
             Log("    Dynamic extension " + descriptor.FullName + " - '" + dynamicExtension.Path + "'");
           }
         }
-        def fileExtensions = languageInfo.FileExtensions;
-        if (fileExtensions == null || fileExtensions.Length == 0)
-          foreach (ext in language.FileExtensions)
-            _extToLanguages[ext] = (language, dynamicExtensions);
-        else
-          for (mutable j = 0; j < fileExtensions.Length; j++)
-            _extToLanguages[fileExtensions[j]] = (language, dynamicExtensions);
+
+        foreach (ext in language.FileExtensions)
+          _extToLanguages[ext] = (language, dynamicExtensions);
+
+        _extToLanguages[".test"] = (language, dynamicExtensions);
       }
       
       assert2(_extToLanguages != null);
@@ -154,7 +161,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         def cancellationToken                    = cancellationTokenSource.Token;
         _semanticAnalysisCancellationTokenSource = cancellationTokenSource;
         
-        def projectSupport = this.GetProjectSupport();
+        def projectSupport = _projectSupport ?? this.GetProjectSupport();
         if (projectSupport != null)
         {
           when (this.Data == null)
@@ -193,7 +200,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
           Log("Project support not available!");
       }
     }
-    
+
     public SemanticAnalysisFinished() : void
     {
       IsSemanticAvailable = true;
