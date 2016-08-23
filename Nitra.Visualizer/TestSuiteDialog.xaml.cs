@@ -19,6 +19,11 @@ namespace Nitra.Visualizer
 
       DataContext = ViewModel = testSuiteCreateOrEditViewModel;
 
+      this.OneWayBind(ViewModel, vm => vm.Languages, v => v.Languages.ItemsSource);
+      this.OneWayBind(ViewModel, vm => vm.ParserLibs, v => v.ParserLibs.ItemsSource);
+      this.OneWayBind(ViewModel, vm => vm.DynamicExtensions, v => v._dynamicExtensions.ItemsSource);
+      this.OneWayBind(ViewModel, vm => vm.References, v => v.References.ItemsSource);
+
       InitializeComponent();
     }
     
@@ -67,7 +72,7 @@ namespace Nitra.Visualizer
       if (selectedLanguage == null)
       {
         MessageBox.Show(this, "Langauge is not selected.", "Error!", MessageBoxButton.OK, MessageBoxImage.Error);
-        _languageComboBox.Focus();
+        Languages.Focus();
         return;
       }
 

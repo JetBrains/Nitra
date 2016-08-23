@@ -15,36 +15,26 @@ namespace Nitra.Visualizer.ViewModels
   public class TestSuiteCreateOrEditViewModel : ReactiveObject
   {
     public string Title { get; set; }
-    public string RootFolder { get; }
+    public string RootFolder { get; set; }
     public string SuiteName { get; set; }
     public string SuitPath { get { return Path.Combine(Path.GetFullPath(RootFolder), SuiteName); } }
     public bool IsCreate { get; private set; }
     
     public IReactiveList<string> ParserLibs { get; set; }
-    public IReactiveList<string> Libs { get; set; }
+    public IReactiveList<string> References { get; set; }
     public IReactiveList<LanguageInfo> Languages { get; private set; }
     public IReactiveList<DynamicExtensionViewModel> DynamicExtensions { get; private set; }
 
     public LanguageInfo? SelectedLanguage { get; set; }
     private LanguageInfo? _oldLanguage;
 
-    public TestSuiteCreateOrEditViewModel(SuiteVm baseSuite, NitraClient client, bool isCreate)
+    public TestSuiteCreateOrEditViewModel(NitraClient client)
     {
-      
-      IsCreate = isCreate;
-      Title = isCreate ? "New test suite" : "Edit test suite";
       Languages = new ReactiveList<LanguageInfo>();
       ParserLibs = new ReactiveList<string>();
-      Libs = new ReactiveList<string>();
+      References = new ReactiveList<string>();
       DynamicExtensions = new ReactiveList<DynamicExtensionViewModel>();
-
-      if (baseSuite != null) {
-        RootFolder = baseSuite.Workspace.RootFolder;
-        SuiteName = baseSuite.Name;
-
-        Libs.AddRange(baseSuite.Language.Libs);
-      }
-
+      
       this.WhenAnyValue(vm => vm.ParserLibs)
           .Subscribe(libs => UpdateParserLibs(client, libs));
             
