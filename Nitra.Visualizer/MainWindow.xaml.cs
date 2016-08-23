@@ -842,10 +842,6 @@ namespace Nitra.Visualizer
       };
 
       viewmodel.ParserLibs.AddRange(suite.Config.Languages.Select(li => new ParserLibViewModel(li.Path)));
-      viewmodel.DynamicExtensions.AddRange(suite.Config.Languages.SelectMany(li => li.DynamicExtensions)
-                                                                 .Select(li => new DynamicExtensionViewModel(li.Name)));
-      viewmodel.References.AddRange(suite.Config.Libs);
-      viewmodel.Languages.AddRange(suite.Config.Languages);
       
       var dialog = new TestSuiteDialog(suite, viewmodel) {
         Owner = this
