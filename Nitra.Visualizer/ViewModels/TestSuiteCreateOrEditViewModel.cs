@@ -114,7 +114,7 @@ namespace Nitra.Visualizer.ViewModels
 
     private string ToFullSuitePath(string path)
     {
-      return Path.IsPathRooted(path) ? path : Path.Combine(SuitPath, path);
+      return Path.IsPathRooted(path) ? path : new Uri(Path.Combine(SuitPath, path)).LocalPath;
     }
   }
 
