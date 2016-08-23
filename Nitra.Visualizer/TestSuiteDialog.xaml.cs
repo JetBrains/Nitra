@@ -3,7 +3,9 @@ using Microsoft.Win32;
 using Nitra.ViewModels;
 using System;
 using System.IO;
+using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
 using Nitra.Visualizer.ViewModels;
 using ReactiveUI;
 
@@ -20,6 +22,7 @@ namespace Nitra.Visualizer
       DataContext = ViewModel = testSuiteCreateOrEditViewModel;
 
       this.OneWayBind(ViewModel, vm => vm.Languages, v => v.Languages.ItemsSource);
+      this.OneWayBind(ViewModel, vm => vm.ProjectSupports, v => v.ProjectSupports.ItemsSource);
       this.OneWayBind(ViewModel, vm => vm.ParserLibs, v => v.ParserLibs.ItemsSource);
       this.OneWayBind(ViewModel, vm => vm.DynamicExtensions, v => v._dynamicExtensions.ItemsSource);
       this.OneWayBind(ViewModel, vm => vm.References, v => v.References.ItemsSource);
@@ -107,7 +110,7 @@ namespace Nitra.Visualizer
       };
 
       if (dialog.ShowDialog(this) ?? false) {
-          ViewModel.ParserLibs.AddRange(dialog.FileNames);
+          ViewModel.ParserLibs.AddRange(dialog.FileNames.Select(fname => new ParserLibViewModel(fname)));
       }
     }
 
@@ -118,5 +121,14 @@ namespace Nitra.Visualizer
     }
 
     public TestSuiteCreateOrEditViewModel ViewModel { get; set; }
+
+    private void RemoveParserLib(object sender, RoutedEventArgs e)
+    {
+      var button = (Button) sender;
+      var selectedParserLib = button.DataContext as ParserLibViewModel;
+
+      if (selectedParserLib != null)
+        ViewModel.ParserLibs.Remove(selectedParserLib);
+    }
   }
 }
