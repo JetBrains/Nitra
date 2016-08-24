@@ -48,6 +48,7 @@ namespace Nitra.Visualizer
 {
   using ClientServer.Messages;
   using Interop;
+  using System.Collections.Immutable;
   using System.Windows.Documents;
   using System.Windows.Interop;
 
@@ -1564,6 +1565,10 @@ namespace Nitra.Visualizer
 
       if (test != null)
       {
+        var client = test.Project.Solution.Suite.Client;
+        client.Send(new ClientMessage.GetFileExtensions(test.Project.Id, ImmutableArray.Create<string>()));
+        var msg = client.Receive<ServerMessage.FileExtensions>();
+
         var dirPath = Path.GetDirectoryName(test.FullPath);
 
         if (!Directory.Exists(dirPath))
@@ -1573,12 +1578,12 @@ namespace Nitra.Visualizer
         var firstFilePath = Path.Combine(dirPath, MakeTestFileName(prj) + ".test");
 
         if (File.Exists(test.FullPath))
-          File.Move(test.FullPath, firstFilePath);
+          File.Copy(test.FullPath, firstFilePath);
         else
           File.WriteAllText(firstFilePath, Environment.NewLine, Encoding.UTF8);
 
         if (File.Exists(test.Gold))
-          File.Move(test.Gold, Path.ChangeExtension(firstFilePath, ".gold"));
+          File.Copy(test.Gold, Path.ChangeExtension(firstFilePath, ".gold"));
         var stringManager = prj.Suite.Workspace.StringManager;
         prj.Children.Add(new FileVm(test.Suite, prj, firstFilePath, stringManager[firstFilePath]));
         AddNewFileToMultitest(prj).IsSelected = true;
