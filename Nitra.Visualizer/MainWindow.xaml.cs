@@ -848,11 +848,16 @@ namespace Nitra.Visualizer
         Owner = this
       };
 
-      if (dialog.ShowDialog() ?? false)
-      {
-        ViewModel.Workspace.TestSuites.Remove(suite);
+      if (dialog.ShowDialog() ?? false) {
+        suite.Config.Languages = viewmodel.Languages.ToArray();
+        suite.Config.Libs = viewmodel.References.ToArray();
+        suite.Config.ProjectSupport = viewmodel.ProjectSupports
+                                               .Where(vm => vm.IsSelected)
+                                               .Select(vm => vm.Source)
+                                               .FirstOrDefault();
+        //ViewModel.Workspace.TestSuites.Remove(suite);
         suite.IsSelected = true;
-        ViewModel.Workspace.Save();
+        //ViewModel.Workspace.Save();
       }
     }
 
