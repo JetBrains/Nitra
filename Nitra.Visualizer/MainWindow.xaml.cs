@@ -1548,7 +1548,7 @@ namespace Nitra.Visualizer
       var names = new bool['Z' - 'A'];
       foreach (var t in project.Children)
       {
-        var name = t.Name;
+        var name = Path.GetFileNameWithoutExtension(t.Name);
         if (name.Length == 1)
         {
           var ch = name[0];
@@ -1566,50 +1566,47 @@ namespace Nitra.Visualizer
 
     private void AddFile_MenuItem_OnClick(object sender, RoutedEventArgs e)
     {
-      var test = _testsTreeView.SelectedItem as FileVm;
+      var project = ViewModel.CurrentProject;
+      if (project == null)
+        return;
 
-      if (test != null)
+      var file = ViewModel.CurrentFile;
+
+      if (file != null)
       {
-        var client = test.Project.Solution.Suite.Client;
-        client.Send(new ClientMessage.GetFileExtensions(test.Project.Id, ImmutableArray.Create<string>()));
-        var msg = client.Receive<ServerMessage.FileExtensions>();
+        var defaultContent = File.ReadAllText(file.FullPath, Encoding.UTF8);
+        var newFile        = AddNewFileToMultitest(project, defaultContent);
 
-        var dirPath = Path.GetDirectoryName(test.FullPath);
+        if (File.Exists(file.Gold))
+          File.Copy(file.GoldFullPath, newFile.GoldFullPath);
 
-        if (!Directory.Exists(dirPath))
-          Directory.CreateDirectory(dirPath);
-
-        var prj = test.Project;
-        var firstFilePath = Path.Combine(dirPath, MakeTestFileName(prj) + ".test");
-
-        if (File.Exists(test.FullPath))
-          File.Copy(test.FullPath, firstFilePath);
-        else
-          File.WriteAllText(firstFilePath, Environment.NewLine, Encoding.UTF8);
-
-        if (File.Exists(test.Gold))
-          File.Copy(test.Gold, Path.ChangeExtension(firstFilePath, ".gold"));
-        var stringManager = prj.Suite.Workspace.StringManager;
-        prj.Children.Add(new FileVm(test.Suite, prj, firstFilePath, stringManager[firstFilePath]));
-        AddNewFileToMultitest(prj).IsSelected = true;
+        newFile.IsSelected = true;
         return;
       }
 
-      var project = _testsTreeView.SelectedItem as ProjectVm;
-
-      if (project != null)
-        AddNewFileToMultitest(project).IsSelected = true;
+      AddNewFileToMultitest(project, Environment.NewLine).IsSelected = true;
     }
 
-    private static FileVm AddNewFileToMultitest(ProjectVm project)
+    private static FileVm AddNewFileToMultitest(ProjectVm project, string defaultContent)
     {
+      NitraClient client = project.Solution.Suite.Client;
+      client.Send(new ClientMessage.GetFileExtensions(project.Id, ImmutableArray.Create<string>()));
+      var msg = client.Receive<ServerMessage.FileExtensions>();
+      var exts = msg.fileExtensions;
+
       var name = MakeTestFileName(project);
-      var path = Path.Combine(project.FullPath, name + ".test");
-      File.WriteAllText(path, Environment.NewLine, Encoding.UTF8);
+      var ext = exts.FirstOrDefault() ?? ".test";
+
+      if (!Directory.Exists(project.FullPath))
+        Directory.CreateDirectory(project.FullPath);
+
+      var path = Path.Combine(project.FullPath, name + ext);
+      File.WriteAllText(path, defaultContent, Encoding.UTF8);
       var stringManager = project.Suite.Workspace.StringManager;
-      var newTest = new FileVm(project.Suite, project, path, stringManager[path]);
-      project.Children.Add(newTest);
-      return newTest;
+      var test = new FileVm(project.Suite, project, path, stringManager[path]);
+      project.Children.Add(test);
+      client.Send(new ClientMessage.FileLoaded(project.Id, test.FullPath, test.Id, test.Version));
+      return test;
     }
 
     private void CopyReflectionText(object sender, RoutedEventArgs e)
@@ -1634,32 +1631,39 @@ namespace Nitra.Visualizer
 
     private void Delete()
     {
-      var test = _testsTreeView.SelectedItem as FileVm;
+      NitraClient client = ViewModel.CurrentSuite.Client;
+      if (client == null)
+        return;
 
-      if (test != null)
+      var project = ViewModel.CurrentProject;
+      var file    = ViewModel.CurrentFile;
+
+      if (file != null)
       {
-        if (File.Exists(test.FullPath))
-           File.Delete(test.FullPath);
+        client.Send(new ClientMessage.FileUnloaded(file.Id));
 
-        var goldPath = Path.ChangeExtension(test.Gold, ".gold");
+        if (File.Exists(file.FullPath))
+           File.Delete(file.FullPath);
+
+        var goldPath = Path.ChangeExtension(file.Gold, ".gold");
 
         if (File.Exists(goldPath))
           File.Delete(goldPath);
 
-        var index = test.Project.Children.IndexOf(test);
-        test.Project.Children.Remove(test);
-        if (index < test.Project.Children.Count)
-          test.Project.Children[index].IsSelected = true;
+        var index = file.Project.Children.IndexOf(file);
+        file.Project.Children.Remove(file);
+        if (index < file.Project.Children.Count)
+          file.Project.Children[index].IsSelected = true;
         else if (index > 0)
-          test.Project.Children[index - 1].IsSelected = true;
+          file.Project.Children[index - 1].IsSelected = true;
 
         return;
       }
 
-      var project = _testsTreeView.SelectedItem as ProjectVm;
-
       if (project != null)
       {
+        client.Send(new ClientMessage.FileUnloaded(project.Id));
+
         if (Directory.Exists(project.FullPath))
           FileSystem.DeleteDirectory(project.FullPath, UIOption.OnlyErrorDialogs, RecycleOption.DeletePermanently);
 
@@ -1670,6 +1674,44 @@ namespace Nitra.Visualizer
           solution.Children[index].IsSelected = true;
         else if (index > 0)
           solution.Children[index - 1].IsSelected = true;
+      }
+    }
+
+    void _testsTreeView_TreeViewItem_KeyDown(object sender, KeyEventArgs e)
+    {
+      var elemtvi = (FrameworkElement)sender;
+      var file = elemtvi.DataContext as FileVm;
+      if (file != null)
+      {
+        if (Keyboard.Modifiers == ModifierKeys.None)
+        {
+          if (e.Key == Key.Enter || e.Key == Key.Up || e.Key == Key.Down)
+          {
+            if (file.IsEditing)
+            {
+              file.IsEditing = false;
+            }
+          }
+          if (e.Key == Key.F2)
+          {
+            if (!file.IsEditing)
+            {
+              file.IsEditing = true;
+              elemtvi.Focus();
+            }
+          }
+        }
+      }
+    }
+
+    void _testsTreeView_FileVm_TextBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+      var elem = (FrameworkElement)sender;
+      var file = elem.DataContext as FileVm;
+      if (file != null)
+      {
+        if (file.IsEditing)
+          file.IsEditing = false;
       }
     }
 
