@@ -1544,10 +1544,23 @@ namespace Nitra.Visualizer
 
     private void EventSetter_OnHandler(object sender, MouseButtonEventArgs e)
     {
-      var tvi = sender as TreeViewItem;
+      // HACK: Select TreeView Node on right click before displaying ContextMenu
+      // (c) http://stackoverflow.com/questions/592373/select-treeview-node-on-right-click-before-displaying-contextmenu
+      TreeViewItem treeViewItem = VisualUpwardSearch(e.OriginalSource as DependencyObject);
 
-      if (tvi != null && e.ChangedButton == MouseButton.Right && e.ButtonState == MouseButtonState.Pressed)
-        tvi.IsSelected = true;
+      if (treeViewItem != null)
+      {
+        treeViewItem.Focus();
+        e.Handled = true;
+      }
+    }
+
+    static TreeViewItem VisualUpwardSearch(DependencyObject source)
+    {
+      while (source != null && !(source is TreeViewItem))
+        source = VisualTreeHelper.GetParent(source);
+
+      return source as TreeViewItem;
     }
 
     private static string MakeTestFileName(ProjectVm project)
