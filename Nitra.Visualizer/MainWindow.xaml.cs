@@ -1015,7 +1015,7 @@ namespace Nitra.Visualizer
       AsyncServerMessage.Exception exception;
 
       var solution = ViewModel.CurrentSolution;
-      if (solution == null || msg.SolutionlId != solution.Id)
+      if (solution == null || msg.SolutionlId >= 0 && msg.SolutionlId != solution.Id)
         return; // no solution or message for the old solution
 
       if ((parsingMessages = msg as AsyncServerMessage.ParsingMessages) != null)
