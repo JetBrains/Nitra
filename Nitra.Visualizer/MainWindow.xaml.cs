@@ -1014,6 +1014,10 @@ namespace Nitra.Visualizer
       AsyncServerMessage.RefreshProjectFailed refreshProjectFailed;
       AsyncServerMessage.Exception exception;
 
+      var solution = ViewModel.CurrentSolution;
+      if (solution == null || msg.SolutionlId != solution.Id)
+        return; // no solution or message for the old solution
+
       if ((parsingMessages = msg as AsyncServerMessage.ParsingMessages) != null)
       {
         FileVm file = ViewModel.CurrentSolution.GetFile(msg.FileId);
@@ -1095,12 +1099,16 @@ namespace Nitra.Visualizer
       var file = ViewModel.CurrentFile;
       if (file == null)
         return;
+
+      Debug.Assert(ViewModel.CurrentSolution != null);
+      Debug.Assert(ViewModel.CurrentProject  != null);
+
       const int Root = 0;
       var version = file.Version;
       var client  = ViewModel.CurrentSuite.Client;
       var span    = new NSpan(0, _textEditor.Document.TextLength);
       var root    = new ObjectDescriptor.Ast(span, Root, "<File>", "<File>", "<File>", null);
-      var context = new AstNodeViewModel.AstContext(client, file.Id, version);
+      var context = new AstNodeViewModel.AstContext(client, ViewModel.CurrentSolution.Id, ViewModel.CurrentProject.Id, file.Id, version);
       var rootVm  = new ItemAstNodeViewModel(context, root, -1);
       rootVm.IsExpanded = true;
       _astTreeView.ItemsSource = new[] { rootVm };
@@ -1595,8 +1603,7 @@ namespace Nitra.Visualizer
 
       var path = Path.Combine(project.FullPath, name + ext);
       File.WriteAllText(path, defaultContent, Encoding.UTF8);
-      var stringManager = project.Suite.Workspace.StringManager;
-      var test = new FileVm(project.Suite, project, path, stringManager[path]);
+      var test = new FileVm(project.Suite, project, path);
       project.Children.Add(test);
       client.Send(new ClientMessage.FileLoaded(project.Id, test.FullPath, test.Id, test.Version));
       return test;
