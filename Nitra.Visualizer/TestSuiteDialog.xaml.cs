@@ -105,12 +105,29 @@ namespace Nitra.Visualizer
         DefaultExt = ".dll",
         InitialDirectory = ViewModel.SuitPath,
         Filter = "Parser library (.dll)|*.dll|Parser application (.exe)|*.exe",
-        Title = "Load parser",
+        Title = "Choose language library",
         Multiselect = true
       };
 
       if (dialog.ShowDialog(this) ?? false) {
           ViewModel.ParserLibs.AddRange(dialog.FileNames.Select(fname => new ParserLibViewModel(fname)));
+      }
+    }
+
+    private void _addReferencesButton_Click(object sender, RoutedEventArgs e)
+    {
+      var dialog = new OpenFileDialog
+      {
+        DefaultExt = ".dll",
+        InitialDirectory = ViewModel.SuitPath,
+        Filter = "Parser library (.dll)|*.dll|Parser application (.exe)|*.exe",
+        Title = "Choose a project reference library",
+        Multiselect = true
+      };
+
+      if (dialog.ShowDialog(this) ?? false)
+      {
+        ViewModel.References.AddRange(dialog.FileNames);
       }
     }
 
