@@ -15,10 +15,13 @@ namespace Nitra.Visualizer.ViewModels
 {
   public class TestSuiteCreateOrEditViewModel : ReactiveObject
   {
+    [Reactive]
     public string Title { get; set; }
+    [Reactive]
     public string RootFolder { get; set; }
     [Reactive]
     public string SuiteName { get; set; }
+    [Reactive]
     public string SuitPath { get; set; }
     public bool IsCreate { get; private set; }
     
