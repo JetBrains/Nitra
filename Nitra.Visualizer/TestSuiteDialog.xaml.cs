@@ -114,6 +114,16 @@ namespace Nitra.Visualizer
       }
     }
 
+    private void _addReferenceNameButton_Click(object sender, RoutedEventArgs e)
+    {
+      var dialog = new ChooseAssemblyName();
+      dialog.Owner = this;
+      if (dialog.ShowDialog() ?? false)
+      {
+        ViewModel.References.Add(dialog.AssemblyName.ToString());
+      }
+    }
+
     private void _addReferencesButton_Click(object sender, RoutedEventArgs e)
     {
       var dialog = new OpenFileDialog
