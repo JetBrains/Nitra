@@ -82,7 +82,7 @@ namespace Nitra.Visualizer
       try
       {
         Directory.CreateDirectory(path);
-        if (_baseSuite != null && _baseSuite.Name != testSuiteName && Directory.Exists(_baseSuite.FullPath))
+        if (_baseSuite != null && !string.IsNullOrEmpty(_baseSuite.Name) && _baseSuite.Name != testSuiteName && Directory.Exists(_baseSuite.FullPath))
         {
           FileSystem.CopyDirectory(_baseSuite.FullPath, path, UIOption.AllDialogs);
           Directory.Delete(_baseSuite.FullPath, recursive: true);
