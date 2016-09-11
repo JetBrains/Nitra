@@ -23,20 +23,11 @@ namespace XXNamespaceXX
   [PackageRegistration(UseManagedResourcesOnly = true)]
   [Description("Nitra Package for XXLanguageXX language.")]
   [ProvideAutoLoad(UIContextGuids80.NoSolution)]
-  [Guid(VsPackage.PackageGuid)]
+  [Guid(XXLanguageXXGuids.PackageGuid)]
   // This attribute is used to register the information needed to show this package in the Help/About dialog of Visual Studio.
   [InstalledProductRegistration("#110", "#112", "1.0", IconResourceID = 400)]
   public sealed class VsPackage : Package
   {
-    /// <summary>The GUID for this package.</summary>
-    public const string PackageGuid = "1559bbce-1740-4997-be28-57c0c4822d34";
-    /// <summary>The GUID for this project type.  It is unique with the project file extension and appears under the VS registry hive's Projects key.</summary>
-    public const string ProjectTypeGuid = "f0eb6b87-45f5-4c6d-9820-8e3cb09f5cc3";
-    /// <summary>The file extension of this project type.  No preceding period.</summary>
-    public const string ProjectExtension = "myproj";
-    /// <summary>The default namespace this project compiles with, so that manifest resource names can be calculated for embedded resources.</summary>
-    internal const string DefaultNamespace = "XXNamespaceXX";
-
     private RunningDocTableEvents _runningDocTableEventse;
     private Dictionary<IVsHierarchy, HierarchyListener> _listenersMap = new Dictionary<IVsHierarchy, HierarchyListener>();
     private string _loadingProjectPath;
