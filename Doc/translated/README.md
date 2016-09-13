@@ -1,0 +1,1 @@
+All files in this directory are automatically translated with [DocTranslator](http://www.onlinedoctranslator.com/) which is based on [Google Translator](https://translate.google.com/), but otherwise unaltered versions of the originals in the parent directory.
