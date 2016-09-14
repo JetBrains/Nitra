@@ -28,11 +28,35 @@ namespace XXNamespaceXX
   [InstalledProductRegistration("#110", "#112", "1.0", IconResourceID = 400)]
   public sealed class VsPackage : Package
   {
+    public static VsPackage Instance;
     private RunningDocTableEvents _runningDocTableEventse;
     private Dictionary<IVsHierarchy, HierarchyListener> _listenersMap = new Dictionary<IVsHierarchy, HierarchyListener>();
     private string _loadingProjectPath;
     private Guid _loadingProject;
 
+    protected override void Initialize()
+    {
+      base.Initialize();
+      Debug.Assert(Instance == null);
+      Instance = this;
+
+
+      SubscibeToSolutionEvents();
+      _runningDocTableEventse = new RunningDocTableEvents();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+      try
+      {
+        UnsubscibeToSolutionEvents();
+        _runningDocTableEventse.Dispose();
+      }
+      finally
+      {
+        base.Dispose(disposing);
+      }
+    }
 
     private void SolutionEvents_OnQueryUnloadProject(object sender, CancelHierarchyEventArgs e)
     {
@@ -276,26 +300,6 @@ namespace XXNamespaceXX
       SolutionEvents.OnQueryCloseProject -= SolutionEvents_OnQueryCloseProject;
       SolutionEvents.OnQueryCloseSolution -= SolutionEvents_OnQueryCloseSolution;
       SolutionEvents.OnQueryUnloadProject -= SolutionEvents_OnQueryUnloadProject;
-    }
-
-    protected override void Initialize()
-    {
-      base.Initialize();
-      SubscibeToSolutionEvents();
-      _runningDocTableEventse = new RunningDocTableEvents();
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-      try
-      {
-        UnsubscibeToSolutionEvents();
-        _runningDocTableEventse.Dispose();
-      }
-      finally
-      {
-        base.Dispose(disposing);
-      }
     }
   }
 }
