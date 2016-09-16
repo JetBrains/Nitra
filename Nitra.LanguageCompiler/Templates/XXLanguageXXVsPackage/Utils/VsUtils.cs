@@ -2,7 +2,9 @@
 using Microsoft.VisualStudio.Shell.Interop;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -10,6 +12,19 @@ namespace XXNamespaceXX
 {
   internal static class VsUtils
   {
+    public static string GetAssemblyPath(Assembly assembly)
+    {
+      var codeBase = assembly.CodeBase;
+      var uri      = new UriBuilder(codeBase);
+      var path     = Uri.UnescapeDataString(uri.Path);
+      return path;
+    }
+
+    public static string GetPlaginPath()
+    {
+      return Path.GetDirectoryName(GetAssemblyPath(Assembly.GetExecutingAssembly()));
+    }
+
     public static string GetFilePath(this IVsWindowFrame pFrame)
     {
       ThreadHelper.ThrowIfNotOnUIThread();

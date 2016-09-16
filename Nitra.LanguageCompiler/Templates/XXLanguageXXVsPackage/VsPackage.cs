@@ -6,10 +6,13 @@ namespace XXNamespaceXX
   using Microsoft.VisualStudio.Shell;
   using Microsoft.VisualStudio.Shell.Events;
   using Microsoft.VisualStudio.Shell.Interop;
+  using Nitra.ClientServer.Client;
   using System;
   using System.Collections.Generic;
   using System.ComponentModel;
   using System.Diagnostics;
+  using System.IO;
+  using System.Reflection;
   using System.Runtime.InteropServices;
 
   /// <summary>
@@ -29,6 +32,18 @@ namespace XXNamespaceXX
   public sealed class VsPackage : Package
   {
     public static VsPackage Instance;
+
+    static VsPackage()
+    {
+      //Debug.Assert(false);
+      //var path = VsUtils.GetPlaginPath();
+      //Assembly.LoadFrom(Path.Combine(path, @"Nemerle.dll"));
+      //Assembly.LoadFrom(Path.Combine(path, @"Nitra.ClientServer.Messages.dll"));
+      //Assembly.LoadFrom(Path.Combine(path, @"Nitra.ClientServer.Client.dll"));
+    }
+
+    public NitraClient Client { get; private set; }
+
     private RunningDocTableEvents _runningDocTableEventse;
     private Dictionary<IVsHierarchy, HierarchyListener> _listenersMap = new Dictionary<IVsHierarchy, HierarchyListener>();
     private string _loadingProjectPath;
@@ -39,7 +54,9 @@ namespace XXNamespaceXX
       base.Initialize();
       Debug.Assert(Instance == null);
       Instance = this;
-
+      var stringManager = new StringManager();
+      Client = new NitraClient(stringManager);
+      Debug.WriteLine("tr: NitraClient created.");
 
       SubscibeToSolutionEvents();
       _runningDocTableEventse = new RunningDocTableEvents();
@@ -50,7 +67,7 @@ namespace XXNamespaceXX
       try
       {
         UnsubscibeToSolutionEvents();
-        _runningDocTableEventse.Dispose();
+        _runningDocTableEventse?.Dispose();
       }
       finally
       {
