@@ -835,9 +835,9 @@ namespace Nitra.Visualizer
       var suite = create 
                   ? new SuiteVm(ViewModel.Workspace, "", ViewModel.Settings.Config)
                   : ViewModel.CurrentSuite;
-
+      
       var viewmodel = new TestSuiteCreateOrEditViewModel(suite.Client) {
-        Title = suite.Name == "" ? "New test suite" : "Edit test suite",
+        Title = string.IsNullOrWhiteSpace(suite.Name) ? "New test suite" : "Edit test suite",
         RootFolder = suite.Workspace.RootFolder,
         SuiteName = suite.Name
       };
