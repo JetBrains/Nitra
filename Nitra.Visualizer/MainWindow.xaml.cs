@@ -614,7 +614,7 @@ namespace Nitra.Visualizer
       return false;
     }
 
-    void OnAddTest(object sender, ExecutedRoutedEventArgs e)
+    void OnAddSolution(object sender, ExecutedRoutedEventArgs e)
     {
       if (CheckTestFolder())
         AddTest();
@@ -623,7 +623,7 @@ namespace Nitra.Visualizer
     }
 
 
-    void CommandBinding_CanAddTest(object sender, CanExecuteRoutedEventArgs e)
+    void CommandBinding_CanAddSolution(object sender, CanExecuteRoutedEventArgs e)
     {
       e.CanExecute = ViewModel.CurrentSuite != null;
       e.Handled = true;
@@ -829,20 +829,26 @@ namespace Nitra.Visualizer
 
     private void EditTestSuite(bool create)
     {
-      if (ViewModel.Workspace == null)
+      var workspace = ViewModel.Workspace;
+
+      if (workspace == null)
         return;
       
       var suite = create 
-                  ? new SuiteVm(ViewModel.Workspace, "", ViewModel.Settings.Config)
+                  ? new SuiteVm(workspace, "New suite", ViewModel.Settings.Config)
                   : ViewModel.CurrentSuite;
       
       var viewmodel = new TestSuiteCreateOrEditViewModel(suite.Client) {
-        Title = string.IsNullOrWhiteSpace(suite.Name) ? "New test suite" : "Edit test suite",
+        Title = create ? "New test suite" : "Edit test suite",
         RootFolder = suite.Workspace.RootFolder,
         SuiteName = suite.Name
       };
 
-      viewmodel.ParserLibs.AddRange(suite.Config.Languages.Select(li => new ParserLibViewModel(li.Path)));
+      viewmodel.ParserLibs
+               .AddRange(suite.Config.Languages.Select(li => new ParserLibViewModel(li.Path)));
+
+      viewmodel.References
+               .AddRange(suite.Config.References);
       
       var dialog = new TestSuiteDialog(suite, viewmodel) {
         Owner = this
@@ -850,19 +856,22 @@ namespace Nitra.Visualizer
 
       if (dialog.ShowDialog() ?? false) {
         suite.Config.Languages = viewmodel.Languages.ToArray();
-        suite.Config.Libs = viewmodel.References.ToArray();
+        suite.Config.References = viewmodel.References.ToArray();
         suite.Config.ProjectSupport = viewmodel.ProjectSupports
                                                .Where(vm => vm.IsSelected)
                                                .Select(vm => vm.Source)
                                                .FirstOrDefault();
-        //ViewModel.Workspace.TestSuites.Remove(suite);
+        suite.Save();
+
         suite.IsSelected = true;
-        //ViewModel.Workspace.Save();
+        workspace.Save();
+      } else if (create) {
+        workspace.TestSuites.Remove(suite);
       }
     }
 
 
-    private void OnRemoveTest(object sender, ExecutedRoutedEventArgs e)
+    private void OnRemoveSolution(object sender, ExecutedRoutedEventArgs e)
     {
       var test = _testsTreeView.SelectedItem as FileVm;
       if (test == null)
@@ -874,7 +883,7 @@ namespace Nitra.Visualizer
       Delete();
     }
 
-    private void CommandBinding_CanRemoveTest(object sender, CanExecuteRoutedEventArgs e)
+    private void CommandBinding_CanRemoveSolution(object sender, CanExecuteRoutedEventArgs e)
     {
       if (_testsTreeView == null)
         return;
@@ -1241,7 +1250,7 @@ namespace Nitra.Visualizer
       LoadTests();
     }
 
-    void OnUpdateTest(object sender, ExecutedRoutedEventArgs e)
+    void OnUpdateSolution(object sender, ExecutedRoutedEventArgs e)
     {
       var test = _testsTreeView.SelectedItem as FileVm;
       if (test != null)

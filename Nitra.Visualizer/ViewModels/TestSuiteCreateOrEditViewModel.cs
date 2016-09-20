@@ -108,6 +108,9 @@ namespace Nitra.Visualizer.ViewModels
           foreach (var language in languages)
             Languages.Add(language);
 
+          if (!Languages.IsEmpty)
+            SelectedLanguage = Languages[0];
+
           foreach (var syntaxModule in syntaxModules)
             DynamicExtensions.Add(new DynamicExtensionViewModel(syntaxModule));
 
