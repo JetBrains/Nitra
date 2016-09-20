@@ -445,7 +445,7 @@ namespace Nitra.Visualizer
             //_text.TextArea.Caret.Offset = _parseResult.MaxFailPos;
           }
           else
-            _status.Text = "Grammar is ambiguous! Main parser is fail! This leads to reduction performance.";
+            _status.Text = "OK";
         }
         else
           _status.Text = cmpilerMessages.Count + " error[s]";
