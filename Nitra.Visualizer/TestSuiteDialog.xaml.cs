@@ -120,7 +120,7 @@ namespace Nitra.Visualizer
       dialog.Owner = this;
       if (dialog.ShowDialog() ?? false)
       {
-        ViewModel.References.Add(dialog.AssemblyName.ToString());
+        ViewModel.References.Add("FullName:" + dialog.AssemblyName.ToString());
       }
     }
 
@@ -146,13 +146,13 @@ namespace Nitra.Visualizer
         var dialog = new OpenFileDialog {
             DefaultExt = ".dll",
             InitialDirectory = ViewModel.SuitPath,
-            Filter = "Parser library (.dll)|*.dll|Parser application (.exe)|*.exe",
+            Filter = "Assembly (.dll)|*.dll|Application (.exe)|*.exe",
             Title = "Load parser",
             Multiselect = true
         };
 
         if ((bool)dialog.ShowDialog(this)) {
-            ViewModel.References.AddRange(dialog.FileNames.Select(fname => fname));
+            ViewModel.References.AddRange(dialog.FileNames.Select(fname => "File:" + fname));
         }
     }
 
