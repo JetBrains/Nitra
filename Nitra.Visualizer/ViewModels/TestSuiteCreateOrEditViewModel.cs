@@ -15,10 +15,14 @@ namespace Nitra.Visualizer.ViewModels
 {
   public class TestSuiteCreateOrEditViewModel : ReactiveObject
   {
+    [Reactive]
     public string Title { get; set; }
+    [Reactive]
     public string RootFolder { get; set; }
+    [Reactive]
     public string SuiteName { get; set; }
-    public string SuitPath { get { return Path.Combine(Path.GetFullPath(RootFolder), SuiteName); } }
+    [Reactive]
+    public string SuitPath { get; set; }
     public bool IsCreate { get; private set; }
     
     public IReactiveList<ParserLibViewModel> ParserLibs { get; set; }
@@ -52,6 +56,11 @@ namespace Nitra.Visualizer.ViewModels
 
       this.WhenAnyValue(vm => vm.SelectedLanguage)
           .Subscribe(UpdateSelectedLanguage);
+
+      this.WhenAnyValue(vm => vm.RootFolder, vm => vm.SuiteName)
+        .Where(t => t.Item1 != null && t.Item2 != null)
+        .Select(t => Path.Combine(Path.GetFullPath(t.Item1), t.Item2))
+        .Subscribe(path => SuitPath = path);
     }
 
     private void UpdateSelectedLanguage(LanguageInfo? newLanguage)

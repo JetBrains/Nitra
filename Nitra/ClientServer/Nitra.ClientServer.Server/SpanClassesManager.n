@@ -1,32 +1,42 @@
-﻿using System.Threading;
+﻿using Nitra.ClientServer.Messages;
+using System.Threading;
 using Nemerle;
 using Nemerle.Collections;
+using Nemerle.Imperative;
 using Nemerle.Text;
 using Nemerle.Utility;
 
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 
 namespace Nitra.ClientServer.Server
 {
-  public class SpanClassesManager
+  class SpanClassesManager
   {
-     mutable _counter     : int = 0;
-            _spanClassMap : ConcurrentDictionary[SpanClass, int] = ConcurrentDictionary();
+             _router       : Router;
+     mutable _counter      : int = 0;
+     mutable _spanClassMap : ImmutableDictionary[SpanClass, int] = ImmutableDictionary.Create();
+     mutable _languages    : HashSet[Nitra.Language]             = HashSet();
+     _sync : object = object();
             
-    // TODO: add support of extensions SpanClass 
-            
-    public Add(spanClass : SpanClass) : int
+    public this(router : Router)
     {
-      def id = Interlocked.Increment(ref _counter);
-      if (_spanClassMap.TryAdd(spanClass, id))
-        id
-      else
-        _spanClassMap[spanClass]
+      _router = router;
     }
     
+    public Clear() : void
+    {
+      lock (_sync)
+      {
+        _counter = 0;
+        _spanClassMap = ImmutableDictionary.Create();
+        _languages.Clear();
+      }
+    }
+            
     public Item[spanClass : SpanClass] : int
     {
       get
@@ -35,13 +45,75 @@ namespace Nitra.ClientServer.Server
         if (_spanClassMap.TryGetValue(spanClass, out id))
           id
         else
-          Add(spanClass)
+        {
+          lock (_sync)
+          {
+            if (_spanClassMap.TryGetValue(spanClass, out id)) // double check
+              id
+            else
+            {
+              LosdLanguage(spanClass.Language);
+              this[spanClass]
+            }
+          }
+        }
       }
     }
     
     public GetSpanClasses() : Seq[SpanClass]
     {
       _spanClassMap.Keys.ToArray()
+    }
+    
+    public LosdLanguages(languages : List[Nitra.Language]) : void
+    {
+      lock (_sync)
+        LosdLanguagesImpl(languages);
+    }
+
+    LosdLanguagesImpl(languages : List[Nitra.Language]) : void
+    {
+      LosdSpanClasses(fun(spanClassMapBilder, spanClassInfosBilder)
+      {
+        foreach (language in languages)
+          LosdLanguageImpl(language, spanClassMapBilder, spanClassInfosBilder, _languages);
+      });
+    }
+    
+    LosdLanguage(language : Nitra.Language) : void
+    {
+      LosdSpanClasses((spanClassMapBilder, spanClassInfosBilder) => LosdLanguageImpl(language, spanClassMapBilder, spanClassInfosBilder, _languages));
+    }
+
+    LosdSpanClasses(load : ImmutableDictionary[SpanClass, int].Builder * ImmutableArray[SpanClassInfo].Builder -> void) : void
+    {
+      def spanClassMapBilder   = _spanClassMap.ToBuilder();
+      def spanClassInfosBilder = ImmutableArray.CreateBuilder();
+      load(spanClassMapBilder, spanClassInfosBilder);
+      _spanClassMap = spanClassMapBilder.ToImmutable();
+      Send(spanClassInfosBilder);
+    }
+
+    LosdLanguageImpl(language : Nitra.Language, spanClassMapBilder : ImmutableDictionary[SpanClass, int].Builder, spanClassInfosBilder : ImmutableArray[SpanClassInfo].Builder, langs : HashSet[Nitra.Language]) : void
+    {
+      unless (langs.Add(language))
+        return;
+      
+      def spanClasses = language.GetDeclaredSpanClasses();
+      foreach (spanClass in spanClasses)
+      {
+        def id = spanClassMapBilder.Count;
+        spanClassMapBilder.Add(spanClass, spanClassMapBilder.Count);
+        spanClassInfosBilder.Add(SpanClassInfo(spanClass.FullName, id, spanClass.Style.ForegroundColor));
+      }
+      
+      when (language.Parent != null)
+        LosdLanguageImpl(language.Parent, spanClassMapBilder, spanClassInfosBilder, langs);
+    }
+
+    Send(spanClassInfosBilder : ImmutableArray[SpanClassInfo].Builder) : void
+    {
+      _router.SendAsyncResponse(AsyncServerMessage.LanguageLoaded(-1, -1, -1, spanClassInfosBilder.ToImmutable()));
     }
   }
 }

@@ -1,8 +1,5 @@
-﻿using Microsoft.VisualStudio.Text.Classification;
-using Microsoft.VisualStudio.Utilities;
-
+﻿using Microsoft.VisualStudio.Utilities;
 using System.ComponentModel.Composition;
-using System.Windows.Media;
 
 namespace XXNamespaceXX
 {

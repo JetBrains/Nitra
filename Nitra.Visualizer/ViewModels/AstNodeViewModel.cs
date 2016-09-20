@@ -99,12 +99,16 @@ namespace Nitra.Visualizer.ViewModels
     public class AstContext
     {
       public NitraClient Client      { get; private set; }
+      public int         SolutionId  { get; private set; }
+      public int         ProjectId   { get; private set; }
       public int         FileId      { get; private set; }
       public int         FileVersion { get; private set; }
 
-      public AstContext(NitraClient client, int fileId, int fileVersion)
+      public AstContext(NitraClient client, int solutionId, int projectId, int fileId, int fileVersion)
       {
         Client      = client;
+        SolutionId  = solutionId;
+        ProjectId   = projectId;
         FileId      = fileId;
         FileVersion = fileVersion;
       }
@@ -149,7 +153,7 @@ namespace Nitra.Visualizer.ViewModels
       Items.Clear();
 
       var client = Context.Client;
-      client.Send(new ClientMessage.GetObjectContent(Context.FileId, Context.FileVersion, _objectDescriptor.Id));
+      client.Send(new ClientMessage.GetObjectContent(Context.SolutionId, Context.FileId, Context.FileVersion, _objectDescriptor.Id));
       var content = client.Receive<ServerMessage.ObjectContent>();
 
       if (content.content is ContentDescriptor.Fail)

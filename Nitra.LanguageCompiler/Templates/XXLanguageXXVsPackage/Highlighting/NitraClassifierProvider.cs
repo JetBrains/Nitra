@@ -1,11 +1,10 @@
-﻿using Nitra.VisualStudio;
-using Microsoft.VisualStudio.Data.Core;
+﻿using Microsoft.VisualStudio.Data.Core;
 using Microsoft.VisualStudio.Text.Adornments;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Utilities;
 
-using Nitra.VisualStudio.Coloring;
+//using Nitra.VisualStudio.Coloring;
 
 using System;
 using System.Collections.Generic;
@@ -26,15 +25,16 @@ namespace XXNamespaceXX
 
     public IClassifier GetClassifier(ITextBuffer buffer)
     {
-      NitraClassifier classifier;
-
-      if (buffer.Properties.TryGetProperty(TextBufferProperties.NitraClassifier, out classifier))
-        return classifier;
-
-      //var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
-      classifier = new NitraClassifier(buffer, _classificationTypeRegistry, null);
-      buffer.Properties.AddProperty(TextBufferProperties.NitraClassifier, classifier);
-      return classifier;
+      //NitraClassifier classifier;
+      //
+      //if (buffer.Properties.TryGetProperty(TextBufferProperties.NitraClassifier, out classifier))
+      //  return classifier;
+      //
+      ////var nitraSolutionService = XXNamespaceXX.ReSharperSolution.XXLanguageXXSolution;
+      //classifier = new NitraClassifier(buffer, _classificationTypeRegistry, null);
+      //buffer.Properties.AddProperty(TextBufferProperties.NitraClassifier, classifier);
+      //return classifier;
+      return null;
     }
   }
 }

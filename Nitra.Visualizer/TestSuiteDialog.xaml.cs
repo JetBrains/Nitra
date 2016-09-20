@@ -82,7 +82,7 @@ namespace Nitra.Visualizer
       try
       {
         Directory.CreateDirectory(path);
-        if (_baseSuite != null && _baseSuite.Name != testSuiteName && Directory.Exists(_baseSuite.FullPath))
+        if (_baseSuite != null && !string.IsNullOrEmpty(_baseSuite.Name) && _baseSuite.Name != testSuiteName && Directory.Exists(_baseSuite.FullPath))
         {
           FileSystem.CopyDirectory(_baseSuite.FullPath, path, UIOption.AllDialogs);
           Directory.Delete(_baseSuite.FullPath, recursive: true);
@@ -105,12 +105,39 @@ namespace Nitra.Visualizer
         DefaultExt = ".dll",
         InitialDirectory = ViewModel.SuitPath,
         Filter = "Parser library (.dll)|*.dll|Parser application (.exe)|*.exe",
-        Title = "Load parser",
+        Title = "Choose language library",
         Multiselect = true
       };
 
       if ((bool) dialog.ShowDialog(this)) {
           ViewModel.ParserLibs.AddRange(dialog.FileNames.Select(fname => new ParserLibViewModel(fname)));
+      }
+    }
+
+    private void _addReferenceNameButton_Click(object sender, RoutedEventArgs e)
+    {
+      var dialog = new ChooseAssemblyName();
+      dialog.Owner = this;
+      if (dialog.ShowDialog() ?? false)
+      {
+        ViewModel.References.Add(dialog.AssemblyName.ToString());
+      }
+    }
+
+    private void _addReferencesButton_Click(object sender, RoutedEventArgs e)
+    {
+      var dialog = new OpenFileDialog
+      {
+        DefaultExt = ".dll",
+        InitialDirectory = ViewModel.SuitPath,
+        Filter = "Parser library (.dll)|*.dll|Parser application (.exe)|*.exe",
+        Title = "Choose a project reference library",
+        Multiselect = true
+      };
+
+      if (dialog.ShowDialog(this) ?? false)
+      {
+        ViewModel.References.AddRange(dialog.FileNames);
       }
     }
 

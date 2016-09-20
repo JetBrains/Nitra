@@ -40,7 +40,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
             _semanticAnalysisCancellationTokenSource : CancellationTokenSource { get; private set; }
     public  Router                                   : Router { get; }
     mutable _expectsToBuildAst                       : int;
-    public  SemanticActions                          : ConcurrentQueue[Action[CancellationToken, ImmutableArray[IAst]]] = ConcurrentQueue();
+    public  SemanticActions                          : ConcurrentQueue[Action[CancellationToken, int, ImmutableArray[IAst]]] = ConcurrentQueue();
            
     internal this(parent : Solution, fullPath : string, id : int, config : Config, parseQueue : BlockingCollection[ParserMessage], router : Router)
     {
@@ -79,6 +79,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
 
     LoadLangs(languageInfos : array[LanguageInfo]) : void
     {
+      def languages = List();
       for (mutable i = 0; i < languageInfos.Length; i++)
       {
         def languageInfo = languageInfos[i];
@@ -87,22 +88,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         def assembly     = ServerUtils.LoadAssembly(path);
         def language     = Nitra.Language.GetLanguages(assembly).FirstOrDefault(lang => String.Equals(lang.FullName, name, StringComparison.Ordinal));
         def fullName     = language.FullName;
-        def readSpanClassInfos(language : Nitra.Language, spanClassInfosBilder, spanClassesManager : SpanClassesManager) : void
-        {
-          when (language.Parent != null)
-            readSpanClassInfos(language.Parent, spanClassInfosBilder, spanClassesManager);
-
-          def spanClasses = language.GetDeclaredSpanClasses();
-          foreach (spanClass in spanClasses)
-          {
-            def id = spanClassesManager.Add(spanClass);
-            spanClassInfosBilder.Add(SpanClassInfo(spanClass.FullName, id, spanClass.Style.ForegroundColor));
-          }
-        }
-        def spanClassInfosBilder = ImmutableArray.CreateBuilder();
-        readSpanClassInfos(language, spanClassInfosBilder, Router.SpanClassesManager);
-        def spanClassInfos = spanClassInfosBilder.ToImmutable();
-        Router.SendAsyncResponse(AsyncServerMessage.LanguageLoaded(-1, -1, spanClassInfos));
+        languages.Add(language);
         
         assert2(language.StartRule != null);
         Log("  Language " + i + ": "+ fullName + " - '" + path + "' " + language.Authors);
@@ -134,6 +120,8 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         _extToLanguages[".test"] = (language, dynamicExtensions);
       }
       
+      Router.SpanClassesManager.LosdLanguages(languages);
+      
       assert2(_extToLanguages != null);
     }
     
@@ -157,9 +145,11 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     public AstDropped(file : File) : void
     {
       when (file.IsSupported)
+      {
         _expectsToBuildAst++;
+        IsSemanticAvailable = false;
+      }
       CancelSemanticAnalysisCancellation();
-      IsSemanticAvailable                      = false;
     }
     
     public CancelSemanticAnalysisCancellation() : void
@@ -179,6 +169,11 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         _expectsToBuildAst--;
       assert2(_expectsToBuildAst >= 0);
       
+      TryStartSemanticAnalysis();
+    }
+    
+    TryStartSemanticAnalysis() : void
+    {
       when (IsAllAstCreated && this._files.Count > 0)
       {
         CancelSemanticAnalysisCancellation();
@@ -200,7 +195,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
                 | e is OperationCanceledException => ServerUtils.LogCanceled(e); null
                 | e => 
                 ServerUtils.LogException(e);
-                Router.SendAsyncResponse(AsyncServerMessage.RefreshReferencesFailed(-1, -1, e.ToString()));
+                Router.SendAsyncResponse(AsyncServerMessage.RefreshReferencesFailed(-1, -1, Parent.Id, e.ToString()));
                 null
               };
             
@@ -219,12 +214,13 @@ namespace Nitra.ClientServer.Server.ProjectSystem
           foreach (file in files)
             file.Ast.DeepResetProperties();
             
-          ParseQueue.Add(ParserMessage.SemanticAnalysisStart(Id, cancellationToken, projectSupport, files, this.Data));
+          ParseQueue.Add(ParserMessage.SemanticAnalysisStart(Parent.Id, Id, cancellationToken, projectSupport, files, this.Data));
         }
         else
           Log("Project support not available!");
       }
     }
+    
 
     public SemanticAnalysisFinished() : void
     {
@@ -234,7 +230,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       
       foreach (file when file.IsActive && file.IsSupported in files)
       {
-        ParseQueue.Add(ParserMessage.CreateSymbolsHighlighting(file.Id, file.Version, file.Ast));
+        ParseQueue.Add(ParserMessage.CreateSymbolsHighlighting(Parent.Id, file.Id, file.Version, file.Ast));
       }
       
       def semanticActions = SemanticActions;
@@ -246,13 +242,13 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         when (asts.IsDefault)
           asts = GetAsts(files);
         
-        ParseQueue.Add(ParserMessage.SemanticAction(action, cancellationToken, asts));
+        ParseQueue.Add(ParserMessage.SemanticAction(Parent.Id, action, cancellationToken, asts));
       }
       
       when (cancellationToken.IsCancellationRequested)
         return;
         
-      Router.SendAsyncResponse(AsyncServerMessage.SemanticAnalysisDone(-1, -1));
+      Router.SendAsyncResponse(AsyncServerMessage.SemanticAnalysisDone(-1, -1, Parent.Id));
     }
 
     static GetAsts(files : Seq[File]) : ImmutableArray[IAst]
@@ -263,10 +259,10 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       builder.MoveToImmutable();
     }
     
-    public AddSemanticAction(action : Action[CancellationToken, ImmutableArray[IAst]]) : void
+    public AddSemanticAction(action : Action[CancellationToken, int, ImmutableArray[IAst]]) : void
     {
       if (IsSemanticAvailable)
-        ParseQueue.Add(ParserMessage.SemanticAction(action, _semanticAnalysisCancellationTokenSource.Token, GetAsts(_files.Values)));
+        ParseQueue.Add(ParserMessage.SemanticAction(Parent.Id, action, _semanticAnalysisCancellationTokenSource.Token, GetAsts(_files.Values)));
       else
         SemanticActions.Enqueue(action);
     }
@@ -284,20 +280,23 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     
     public AddFile(file : File): void
     {
-      when (file.IsSupported)
-        _expectsToBuildAst++;
       _files.Add(file.Id, file);
       Parent._N_OnFileAdded(file);
+      AstDropped(file);
     }
 
     public RemoveFile(file : File): void { RemoveFile(file.Id); }
     
     public RemoveFile(id : int): void
     {
-      when (_files[id].IsSupported)
+      def file = _files[id];
+
+      when (file.IsSupported && file.Ast == null)
         _expectsToBuildAst--;
+      IsSemanticAvailable = false;
       _files.Remove(id);
       Parent._N_OnFileRemoved(id);
+      TryStartSemanticAnalysis();
     }
     
     public AddProjectReference(projectId : int, referencedProjectId : int) : void
