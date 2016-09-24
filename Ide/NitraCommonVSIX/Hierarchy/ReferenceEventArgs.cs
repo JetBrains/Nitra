@@ -3,7 +3,7 @@ using System.Diagnostics;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TextManager.Interop;
 
-namespace XXNamespaceXX
+namespace Nitra.VisualStudio
 {
   [DebuggerStepThrough]
   internal class ReferenceEventArgs : EventArgs

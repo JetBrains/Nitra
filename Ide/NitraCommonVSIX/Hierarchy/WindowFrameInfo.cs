@@ -8,7 +8,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace XXNamespaceXX
+namespace Nitra.VisualStudio
 {
   internal partial class RunningDocTableEvents
   {

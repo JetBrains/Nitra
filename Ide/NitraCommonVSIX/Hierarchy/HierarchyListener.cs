@@ -8,7 +8,7 @@ using System.ComponentModel;
 
 #pragma warning disable VSSDK002 // Visual Studio service should be used on main thread explicitly.
 
-namespace XXNamespaceXX
+namespace Nitra.VisualStudio
 {
   internal static class HierarchyListenerExtentions
   {

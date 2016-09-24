@@ -1,5 +1,4 @@
 ﻿using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Editor;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using System;
@@ -9,7 +8,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace XXNamespaceXX
+namespace Nitra.VisualStudio
 {
   internal partial class RunningDocTableEvents : IVsRunningDocTableEvents, IVsRunningDocTableEvents2, IVsRunningDocTableEvents3, IVsRunningDocTableEvents4, IDisposable
   {
