@@ -9,8 +9,8 @@ using System.Threading.Tasks;
 
 namespace XXNamespaceXX
 {
-  [Export(typeof(INitraProjectSupportProvider))]
-  class NitraProjectSupportProvider : INitraProjectSupportProvider
+  [Export(typeof(IProjectSupportProvider))]
+  class NitraProjectSupportProvider : IProjectSupportProvider
   {
     public string Caption      => "Nitra C#";
     public string TypeFullName => "CSharp.CompilationUnit";
@@ -18,7 +18,7 @@ namespace XXNamespaceXX
     {
       get
       {
-        var plaginPath = GetPlaginPath();
+        var plaginPath = VsUtils.GetPlaginPath();
         var path       = System.IO.Path.Combine(plaginPath, "CSharp.Grammar.dll");
         return path;
       }

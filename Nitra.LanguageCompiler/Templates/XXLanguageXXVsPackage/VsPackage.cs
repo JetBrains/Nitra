@@ -36,6 +36,10 @@ namespace XXNamespaceXX
 
     static VsPackage()
     {
+    }
+
+    VsPackage()
+    {
       Instance = this;
     }
 
