@@ -6,7 +6,7 @@ namespace XXNamespaceXX
   using Microsoft.VisualStudio.Shell;
   using Microsoft.VisualStudio.Shell.Events;
   using Microsoft.VisualStudio.Shell.Interop;
-  using Nitra.ClientServer.Client;
+
   using System;
   using System.Collections.Generic;
   using System.ComponentModel;
@@ -29,7 +29,7 @@ namespace XXNamespaceXX
   [Guid(XXLanguageXXGuids.PackageGuid)]
   // This attribute is used to register the information needed to show this package in the Help/About dialog of Visual Studio.
   [InstalledProductRegistration("#110", "#112", "1.0", IconResourceID = 400)]
-  [ProvideBindingPath(SubPath="ClientServerEngine")]
+  [ProvideBindingPath(SubPath= "Languages")]
   public sealed class VsPackage : Package
   {
     public static VsPackage Instance;
