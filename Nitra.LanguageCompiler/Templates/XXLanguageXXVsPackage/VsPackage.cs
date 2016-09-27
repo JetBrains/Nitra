@@ -38,7 +38,7 @@ namespace XXNamespaceXX
     {
     }
 
-    VsPackage()
+    public VsPackage()
     {
       Instance = this;
     }
