@@ -7,6 +7,8 @@ namespace XXNamespaceXX
   using Microsoft.VisualStudio.Shell.Events;
   using Microsoft.VisualStudio.Shell.Interop;
 
+  using NitraCommonIde;
+
   using System;
   using System.Collections.Generic;
   using System.ComponentModel;
@@ -46,6 +48,14 @@ namespace XXNamespaceXX
     protected override void Initialize()
     {
       base.Initialize();
+      var projectSupport = new ProjectSupport("Nitra C#", "NitraCSharp", @"Languages\CSharp.Grammar.dll");
+      var languages = new []
+        {
+          new LanguageInfo("NitraCSharp", @"Languages\CSharp.Grammar.dll")
+        };
+
+      var config = new Config(projectSupport, languages);
+      NitraCommonPackage.AddProjectType(config);
     }
 
     protected override void Dispose(bool disposing)

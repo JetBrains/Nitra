@@ -106,6 +106,10 @@ namespace Nitra.VisualStudio
 
     #endregion
 
+    public void SetConfig(string projectSupport)
+    {
+    }
+
     private void SolutionEvents_OnQueryUnloadProject(object sender, CancelHierarchyEventArgs e)
     {
       var hierarchy = e.Hierarchy;
