@@ -20,6 +20,7 @@ using Nitra.ClientServer.Client;
 using Nitra.VisualStudio;
 using System.Collections.Generic;
 using Microsoft.VisualStudio.Shell.Events;
+using NitraCommonIde;
 
 namespace Nitra.VisualStudio
 {
@@ -44,26 +45,28 @@ namespace Nitra.VisualStudio
   [Description("Nitra Package.")]
   [PackageRegistration(UseManagedResourcesOnly = true)]
   [InstalledProductRegistration("#110", "#112", "1.0", IconResourceID = 400)] // Info on this package for Help/About
-  [Guid(VSPackage.PackageGuidString)]
+  [Guid(NitraCommonVsPackage.PackageGuidString)]
   [SuppressMessage("StyleCop.CSharp.DocumentationRules", "SA1650:ElementDocumentationMustBeSpelledCorrectly", Justification = "pkgdef, VS and vsixmanifest are valid VS terms")]
-  public sealed class VSPackage : Package
+  public sealed class NitraCommonVsPackage : Package
   {
     /// <summary>VSPackage GUID string.</summary>
     public const string PackageGuidString = "66c3f4cd-1547-458b-a321-83f0c448b4d3";
 
-    public static VSPackage Instance;
-
-    public NitraClient Client { get; private set; }
+    public static NitraCommonVsPackage Instance;
 
     private RunningDocTableEvents                       _runningDocTableEventse;
     private Dictionary<IVsHierarchy, HierarchyListener> _listenersMap = new Dictionary<IVsHierarchy, HierarchyListener>();
     private string                                      _loadingProjectPath;
-    private Guid                                        _loadingProject;
+    private Guid                                        _loadingProjectGuid;
+    private List<Server>                                _servers = new List<Server>();
+    private StringManager                               _stringManager = new StringManager();
+    private string                                      _currentSolutionPath;
+    private int                                         _currentSolutionId;
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="VSPackage"/> class.
+    /// Initializes a new instance of the <see cref="NitraCommonVsPackage"/> class.
     /// </summary>
-    public VSPackage()
+    public NitraCommonVsPackage()
     {
       // Inside this method you can place any initialization code that does not require
       // any Visual Studio service because at this point the package object is created but
@@ -82,9 +85,14 @@ namespace Nitra.VisualStudio
       base.Initialize();
       Debug.Assert(Instance == null);
       Instance = this;
-      var stringManager = new StringManager();
-      Client = new NitraClient(stringManager);
-      Debug.WriteLine("tr: NitraClient created.");
+
+      var stringManager = _stringManager;
+
+      foreach (var config in NitraCommonPackage.Configs)
+      {
+        var server = new Server(stringManager, config);
+        _servers.Add(server);
+      }
 
       SubscibeToSolutionEvents();
       _runningDocTableEventse = new RunningDocTableEvents();
@@ -94,7 +102,9 @@ namespace Nitra.VisualStudio
     {
       try
       {
-        Client?.Dispose();
+        foreach (var server in _servers)
+          server.Dispose();
+
         UnsubscibeToSolutionEvents();
         _runningDocTableEventse?.Dispose();
       }
@@ -105,10 +115,6 @@ namespace Nitra.VisualStudio
     }
 
     #endregion
-
-    public void SetConfig(string projectSupport)
-    {
-    }
 
     private void SolutionEvents_OnQueryUnloadProject(object sender, CancelHierarchyEventArgs e)
     {
@@ -146,14 +152,29 @@ namespace Nitra.VisualStudio
 
     private void SolutionEvents_OnBeforeOpenSolution(object sender, BeforeOpenSolutionEventArgs e)
     {
-      Debug.WriteLine($"tr: BeforeOpenSolution(SolutionFilename='{e.SolutionFilename}')");
+      var solutionPath = e.SolutionFilename;
+      var id           = _stringManager.GetId(solutionPath);
+
+      _currentSolutionPath = solutionPath;
+      _currentSolutionId = id;
+
+      foreach (var server in _servers)
+        server.BeforeOpenSolution(id, solutionPath);
+
+      Debug.WriteLine($"tr: BeforeOpenSolution(SolutionFilename='{solutionPath}')");
     }
 
     private void SolutionEvents_OnBeforeOpenProject(object sender, BeforeOpenProjectEventArgs e)
     {
-      _loadingProjectPath = e.Filename;
-      _loadingProject = e.Project;
+      var projectPath = e.Filename;
+      var projectGuid = e.Project;
+      var projectTypeGuid = e.ProjectType;
+      _loadingProjectPath = projectPath;
+      _loadingProjectGuid = projectGuid;
+
       Debug.WriteLine($"tr: BeforeOpenProject(Filename='{e.Filename}', Project='{e.Project}'  ProjectType='{e.ProjectType}')");
+      foreach (var server in _servers)
+        server.OpenProject(projectPath, projectGuid, projectTypeGuid);
     }
 
     private void SolutionEvents_OnBeforeOpeningChildren(object sender, HierarchyEventArgs e)
@@ -190,7 +211,10 @@ namespace Nitra.VisualStudio
 
     private void SolutionEvents_OnAfterOpenSolution(object sender, OpenSolutionEventArgs e)
     {
-      Debug.WriteLine($"tr: AfterOpenSolution(IsNewSolution='{e.IsNewSolution}')");
+      foreach (var server in _servers)
+        server.AfterOpenSolution(_currentSolutionId);
+
+      Debug.WriteLine($"tr: AfterOpenSolution(IsNewSolution='{e.IsNewSolution}', Id='{_currentSolutionId}')");
     }
 
     private void SolutionEvents_OnAfterOpenProject(object sender, OpenProjectEventArgs e)
@@ -213,17 +237,30 @@ namespace Nitra.VisualStudio
       if (e.IsAdded)
       {
       }
+
+      var id = _stringManager.GetId(project.FullName);
+
+      foreach (var server in _servers)
+        server.AfterOpenProject(id);
     }
 
     private void Listener_ReferenceAdded(object sender, ReferenceEventArgs e)
     {
+      var path = e.Reference.Path;
+      var id   = _stringManager.GetId(path);
+
+      foreach (var server in _servers)
+        server.ReferenceAdded(id, path);
+
       Debug.WriteLine($"tr: ReferenceAdded(FileName='{e.Reference.Path}')");
     }
 
     private void SolutionEvents_OnBeforeCloseProject(object sender, CloseProjectEventArgs e)
     {
       var hierarchy = e.Hierarchy;
-      var project = hierarchy.GetProp<EnvDTE.Project>(VSConstants.VSITEMID_ROOT, __VSHPROPID.VSHPROPID_ExtObject);
+      var project   = hierarchy.GetProp<EnvDTE.Project>(VSConstants.VSITEMID_ROOT, __VSHPROPID.VSHPROPID_ExtObject);
+      var path      = project.FullName;
+      var id        = _stringManager.GetId(path);
 
       Debug.WriteLine($"tr: BeforeCloseProject(IsRemoved='{e.IsRemoved}', FullName='{project.FullName}')");
 
@@ -231,20 +268,39 @@ namespace Nitra.VisualStudio
       listener.StopListening();
       listener.Dispose();
       _listenersMap.Remove(hierarchy);
+
+      foreach (var server in _servers)
+        server.BeforeCloseProject(id);
     }
 
     private void FileAdded(object sender, HierarchyItemEventArgs e)
     {
-      var fileName = e.FileName;
+      var path      = e.FileName;
+      var id        = _stringManager.GetId(path);
+      var projectId = 42;
 
       string action = e.Hierarchy.GetProp<string>(e.ItemId, __VSHPROPID4.VSHPROPID_BuildAction);
 
-      Debug.WriteLine($"tr: FileAdded(BuildAction='{action}', FileName='{fileName}')");
+      if (action == "Build")
+        foreach (var server in _servers)
+          server.FileDeleted(projectId, path, id, 0);
+
+      Debug.WriteLine($"tr: FileAdded(BuildAction='{action}', FileName='{path}')");
     }
 
     private void FileDeleted(object sender, HierarchyItemEventArgs e)
     {
-      Debug.WriteLine($"tr: FileAdded(FileName='{e.FileName}')");
+      var path      = e.FileName;
+      var id        = _stringManager.GetId(path);
+      var projectId = 42;
+
+      string action = e.Hierarchy.GetProp<string>(e.ItemId, __VSHPROPID4.VSHPROPID_BuildAction);
+
+      if (action == "Build")
+        foreach (var server in _servers)
+          server.FileDeleted(projectId, path, id, 0);
+
+      Debug.WriteLine($"tr: FileAdded(FileName='{path}')");
     }
 
     private void SolutionEvents_OnAfterOpeningChildren(object sender, Microsoft.VisualStudio.Shell.Events.HierarchyEventArgs e)
