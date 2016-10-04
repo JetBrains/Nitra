@@ -86,14 +86,6 @@ namespace Nitra.VisualStudio
       Debug.Assert(Instance == null);
       Instance = this;
 
-      var stringManager = _stringManager;
-
-      foreach (var config in NitraCommonPackage.Configs)
-      {
-        var server = new Server(stringManager, config);
-        _servers.Add(server);
-      }
-
       SubscibeToSolutionEvents();
       _runningDocTableEventse = new RunningDocTableEvents();
     }
@@ -152,8 +144,16 @@ namespace Nitra.VisualStudio
 
     private void SolutionEvents_OnBeforeOpenSolution(object sender, BeforeOpenSolutionEventArgs e)
     {
+      var stringManager = _stringManager;
+
+      foreach (var config in NitraCommonPackage.Configs)
+      {
+        var server = new Server(stringManager, config);
+        _servers.Add(server);
+      }
+
       var solutionPath = e.SolutionFilename;
-      var id           = _stringManager.GetId(solutionPath);
+      var id           = stringManager.GetId(solutionPath);
 
       _currentSolutionPath = solutionPath;
       _currentSolutionId = id;
@@ -194,6 +194,11 @@ namespace Nitra.VisualStudio
 
     private void SolutionEvents_OnBeforeCloseSolution(object sender, EventArgs e)
     {
+      foreach (var server in _servers)
+        server.Dispose();
+
+      _servers.Clear();
+
       Debug.WriteLine($"tr: BeforeCloseSolution()");
     }
 
@@ -222,6 +227,11 @@ namespace Nitra.VisualStudio
       var hierarchy = e.Hierarchy;
       var project = hierarchy.GetProp<EnvDTE.Project>(VSConstants.VSITEMID_ROOT, __VSHPROPID.VSHPROPID_ExtObject);
 
+      var id = _stringManager.GetId(project.FullName);
+
+      foreach (var server in _servers)
+        server.AfterOpenProject(id);
+
       Debug.WriteLine($"tr: AfterOpenProject(IsAdded='{e.IsAdded}', FullName='{project.FullName}')");
 
       var listener = new HierarchyListener(hierarchy);
@@ -237,11 +247,6 @@ namespace Nitra.VisualStudio
       if (e.IsAdded)
       {
       }
-
-      var id = _stringManager.GetId(project.FullName);
-
-      foreach (var server in _servers)
-        server.AfterOpenProject(id);
     }
 
     private void Listener_ReferenceAdded(object sender, ReferenceEventArgs e)
