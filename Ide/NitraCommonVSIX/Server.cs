@@ -22,20 +22,8 @@ namespace Nitra.VisualStudio
     public Server(StringManager stringManager, Ide.Config config)
     {
       Client = new NitraClient(stringManager);
+      Client.Send(new ClientMessage.CheckVersion(Constants.AssemblyVersionGuid));
       _config = config;
-    }
-
-    public void Dispose()
-    {
-      Client?.Dispose();
-    }
-
-    internal void OpenProject(string projectPath, Guid projectGuid, Guid projectTypeGuid)
-    {
-      var stringManager = Client.StringManager;
-      var id = stringManager.GetId(projectPath);
-      var config = ConvertConfig(_config);
-      Client.Send(new ClientMessage.ProjectStartLoading(id, projectPath, config));
     }
 
     private static M.Config ConvertConfig(Ide.Config config)
@@ -47,24 +35,35 @@ namespace Nitra.VisualStudio
       return msgConfig;
     }
 
-    internal void BeforeOpenSolution(int id, string solutionPath)
+    public void Dispose()
+    {
+      Client?.Dispose();
+    }
+
+    internal void SolutionStartLoading(int id, string solutionPath)
     {
       Client.Send(new ClientMessage.SolutionStartLoading(id, solutionPath));
     }
 
-    internal void AfterOpenSolution(int currentSolutionId)
+    internal void SolutionLoaded(int solutionId)
     {
-      Client.Send(new ClientMessage.SolutionLoaded(currentSolutionId));
+      Client.Send(new ClientMessage.SolutionLoaded(solutionId));
     }
 
-    internal void AfterOpenProject(int id)
+    internal void ProjectStartLoading(int id, string projectPath)
+    {
+      var config = ConvertConfig(_config);
+      Client.Send(new ClientMessage.ProjectStartLoading(id, projectPath, config));
+    }
+
+    internal void ProjectLoaded(int id)
     {
       Client.Send(new ClientMessage.ProjectLoaded(id));
     }
 
-    internal void ReferenceAdded(int id, string path)
+    internal void ReferenceAdded(int projectId, string referencePath)
     {
-      Client.Send(new ClientMessage.ReferenceLoaded(id, path));
+      Client.Send(new ClientMessage.ReferenceLoaded(projectId, "File:" + referencePath));
     }
 
     internal void BeforeCloseProject(int id)
@@ -72,9 +71,14 @@ namespace Nitra.VisualStudio
       Client.Send(new ClientMessage.ProjectUnloaded(id));
     }
 
-    internal void FileDeleted(int projectId, string path, int id, int version)
+    internal void FileAdded(int projectId, string path, int id, int version)
     {
       Client.Send(new ClientMessage.FileLoaded(projectId, path, id, version));
+    }
+
+    internal void FileUnloaded(int id)
+    {
+      Client.Send(new ClientMessage.FileUnloaded(id));
     }
   }
 }

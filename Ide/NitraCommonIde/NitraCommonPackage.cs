@@ -10,20 +10,20 @@ namespace NitraCommonIde
   {
     public ProjectSupport(string caption, string typeFullName, string path)
     {
-      caption      = Caption;
-      typeFullName = TypeFullName;
-      path         = Path;
+      Caption      = caption;
+      TypeFullName = typeFullName;
+      Path         = path;
     }
 
-    public string Caption { get; }
+    public string Caption      { get; }
     public string TypeFullName { get; }
-    public string Path { get; }
+    public string Path         { get; }
   }
 
   public sealed class Config
   {
     public ProjectSupport ProjectSupport { get; }
-    public LanguageInfo[] Languages { get; }
+    public LanguageInfo[] Languages      { get; }
 
     /// <summary>Record Constructor</summary>
     /// <param name="projectSupport"><see cref="ProjectSupport"/></param>
@@ -31,7 +31,7 @@ namespace NitraCommonIde
     public Config(ProjectSupport projectSupport, LanguageInfo[] languages)
     {
       ProjectSupport = projectSupport;
-      Languages = languages;
+      Languages      = languages;
     }
   }
 

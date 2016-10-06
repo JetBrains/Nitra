@@ -62,6 +62,7 @@ namespace Nitra.VisualStudio
     private StringManager                               _stringManager = new StringManager();
     private string                                      _currentSolutionPath;
     private int                                         _currentSolutionId;
+    private int _loadingProjectId;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="NitraCommonVsPackage"/> class.
@@ -159,22 +160,14 @@ namespace Nitra.VisualStudio
       _currentSolutionId = id;
 
       foreach (var server in _servers)
-        server.BeforeOpenSolution(id, solutionPath);
+        server.SolutionStartLoading(id, solutionPath);
 
-      Debug.WriteLine($"tr: BeforeOpenSolution(SolutionFilename='{solutionPath}')");
+      Debug.WriteLine($"tr: BeforeOpenSolution(SolutionFilename='{solutionPath}' id={id})");
     }
 
     private void SolutionEvents_OnBeforeOpenProject(object sender, BeforeOpenProjectEventArgs e)
     {
-      var projectPath = e.Filename;
-      var projectGuid = e.Project;
-      var projectTypeGuid = e.ProjectType;
-      _loadingProjectPath = projectPath;
-      _loadingProjectGuid = projectGuid;
-
       Debug.WriteLine($"tr: BeforeOpenProject(Filename='{e.Filename}', Project='{e.Project}'  ProjectType='{e.ProjectType}')");
-      foreach (var server in _servers)
-        server.OpenProject(projectPath, projectGuid, projectTypeGuid);
     }
 
     private void SolutionEvents_OnBeforeOpeningChildren(object sender, HierarchyEventArgs e)
@@ -217,7 +210,7 @@ namespace Nitra.VisualStudio
     private void SolutionEvents_OnAfterOpenSolution(object sender, OpenSolutionEventArgs e)
     {
       foreach (var server in _servers)
-        server.AfterOpenSolution(_currentSolutionId);
+        server.SolutionLoaded(_currentSolutionId);
 
       Debug.WriteLine($"tr: AfterOpenSolution(IsNewSolution='{e.IsNewSolution}', Id='{_currentSolutionId}')");
     }
@@ -227,17 +220,21 @@ namespace Nitra.VisualStudio
       var hierarchy = e.Hierarchy;
       var project = hierarchy.GetProp<EnvDTE.Project>(VSConstants.VSITEMID_ROOT, __VSHPROPID.VSHPROPID_ExtObject);
 
-      var id = _stringManager.GetId(project.FullName);
+      var projectId   = _stringManager.GetId(project.FullName);
+      var projectPath = project.FullName;
+
+      _loadingProjectPath = projectPath;
+      _loadingProjectId   = projectId;
 
       foreach (var server in _servers)
-        server.AfterOpenProject(id);
+        server.ProjectStartLoading(projectId, projectPath);
 
-      Debug.WriteLine($"tr: AfterOpenProject(IsAdded='{e.IsAdded}', FullName='{project.FullName}')");
+      Debug.WriteLine($"tr: AfterOpenProject(IsAdded='{e.IsAdded}', FullName='{projectPath}' id={projectId})");
 
       var listener = new HierarchyListener(hierarchy);
 
-      listener.ItemAdded += FileAdded;
-      listener.ItemDeleted += FileDeleted;
+      listener.ItemAdded      += FileAdded;
+      listener.ItemDeleted    += FileDeleted;
       listener.ReferenceAdded += Listener_ReferenceAdded;
       listener.StartListening(true);
 
@@ -251,13 +248,15 @@ namespace Nitra.VisualStudio
 
     private void Listener_ReferenceAdded(object sender, ReferenceEventArgs e)
     {
-      var path = e.Reference.Path;
-      var id   = _stringManager.GetId(path);
+      var r           = e.Reference;
+      var path        = r.Path;
+      var projectPath = r.ContainingProject.FileName;
+      var projectId   = _stringManager.GetId(projectPath);
 
       foreach (var server in _servers)
-        server.ReferenceAdded(id, path);
+        server.ReferenceAdded(projectId, path);
 
-      Debug.WriteLine($"tr: ReferenceAdded(FileName='{e.Reference.Path}')");
+      Debug.WriteLine($"tr: ReferenceAdded(FileName='{e.Reference.Path}' projectId={projectId})");
     }
 
     private void SolutionEvents_OnBeforeCloseProject(object sender, CloseProjectEventArgs e)
@@ -267,7 +266,7 @@ namespace Nitra.VisualStudio
       var path      = project.FullName;
       var id        = _stringManager.GetId(path);
 
-      Debug.WriteLine($"tr: BeforeCloseProject(IsRemoved='{e.IsRemoved}', FullName='{project.FullName}')");
+      Debug.WriteLine($"tr: BeforeCloseProject(IsRemoved='{e.IsRemoved}', FullName='{project.FullName}' id={id})");
 
       var listener = _listenersMap[hierarchy];
       listener.StopListening();
@@ -282,13 +281,27 @@ namespace Nitra.VisualStudio
     {
       var path      = e.FileName;
       var id        = _stringManager.GetId(path);
-      var projectId = 42;
 
       string action = e.Hierarchy.GetProp<string>(e.ItemId, __VSHPROPID4.VSHPROPID_BuildAction);
 
-      if (action == "Build")
-        foreach (var server in _servers)
-          server.FileDeleted(projectId, path, id, 0);
+      if (action == "Compile")
+      {
+        object obj;
+        var hr2 = e.Hierarchy.GetProperty(e.ItemId, (int)__VSHPROPID.VSHPROPID_ExtObject, out obj);
+
+        var projectItem = obj as EnvDTE.ProjectItem;
+        if (ErrorHelper.Succeeded(hr2) && projectItem != null)
+        {
+          var projectPath = projectItem.ContainingProject.FileName;
+          var projectId = _stringManager.GetId(projectPath);
+
+          foreach (var server in _servers)
+            server.FileAdded(projectId, path, id, 0);
+
+          Debug.WriteLine($"tr: FileAdded(BuildAction='{action}', FileName='{path}' projectId={projectId})");
+          return;
+        }
+      }
 
       Debug.WriteLine($"tr: FileAdded(BuildAction='{action}', FileName='{path}')");
     }
@@ -297,15 +310,14 @@ namespace Nitra.VisualStudio
     {
       var path      = e.FileName;
       var id        = _stringManager.GetId(path);
-      var projectId = 42;
 
       string action = e.Hierarchy.GetProp<string>(e.ItemId, __VSHPROPID4.VSHPROPID_BuildAction);
 
-      if (action == "Build")
+      if (action == "Compile")
         foreach (var server in _servers)
-          server.FileDeleted(projectId, path, id, 0);
+          server.FileUnloaded(id);
 
-      Debug.WriteLine($"tr: FileAdded(FileName='{path}')");
+      Debug.WriteLine($"tr: FileAdded(FileName='{path}' id={id})");
     }
 
     private void SolutionEvents_OnAfterOpeningChildren(object sender, Microsoft.VisualStudio.Shell.Events.HierarchyEventArgs e)
@@ -320,7 +332,7 @@ namespace Nitra.VisualStudio
 
     private void SolutionEvents_OnAfterLoadProjectBatch(object sender, LoadProjectBatchEventArgs e)
     {
-      Debug.WriteLine($"tr: AfterLoadProjectBatch(IsBackgroundIdleBatch='{e.IsBackgroundIdleBatch}')");
+      Debug.WriteLine($"tr: AfterLoadProjectBatch(IsBackgroundIdleBatch='{e.IsBackgroundIdleBatch}' _loadingProjectId={_loadingProjectId})");
     }
 
     private void SolutionEvents_OnAfterLoadProject(object sender, LoadProjectEventArgs e)
@@ -345,12 +357,15 @@ namespace Nitra.VisualStudio
 
     private void SolutionEvents_OnAfterBackgroundSolutionLoadComplete(object sender, EventArgs e)
     {
-      Debug.WriteLine("tr: AfterBackgroundSolutionLoadComplete()");
+      foreach (var server in _servers)
+        server.SolutionLoaded(_currentSolutionId);
+
+      Debug.WriteLine($"tr: AfterBackgroundSolutionLoadComplete(_currentSolutionId={_currentSolutionId})");
     }
 
     private void SolutionEvents_OnAfterAsynchOpenProject(object sender, OpenProjectEventArgs e)
     {
-      Debug.WriteLine($"tr: AfterChangeProjectParent(Hierarchy='{e.Hierarchy}', IsAdded='{e.IsAdded}')");
+      Debug.WriteLine($"tr: AfterChangeProjectParent(Hierarchy='{e.Hierarchy}', IsAdded='{e.IsAdded}' _currentSolutionId={_currentSolutionId})");
     }
 
 

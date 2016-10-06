@@ -48,10 +48,10 @@ namespace XXNamespaceXX
     protected override void Initialize()
     {
       base.Initialize();
-      var projectSupport = new ProjectSupport("Nitra C#", "NitraCSharp", @"Languages\CSharp.Grammar.dll");
+      var projectSupport = new ProjectSupport("Nitra C#", "CSharp.CompilationUnit", Path.Combine(VsUtils.GetPlaginPath(), @"Languages\CSharp.Grammar.dll"));
       var languages = new []
         {
-          new LanguageInfo("NitraCSharp", @"Languages\CSharp.Grammar.dll")
+          new LanguageInfo("NitraCSharp", Path.Combine(VsUtils.GetPlaginPath(), @"Languages\CSharp.Grammar.dll"))
         };
 
       var config = new Config(projectSupport, languages);

@@ -142,8 +142,8 @@ namespace Nitra.VisualStudio
       Hierarchy.GetCanonicalName(itemidSiblingPrev, out siblingName);
 
       Debug.WriteLine(string.Format("tr: \tOnItemsAdded '{0}' to '{1}' next to '{2}'", Path.GetFileName(itemName),
-        Path.GetFileName(parentName),
-        Path.GetFileName(siblingName)));
+      Path.GetFileName(parentName),
+      Path.GetFileName(siblingName)));
 #endif
 
       string name;
