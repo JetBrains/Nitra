@@ -37,8 +37,11 @@ namespace Nitra.VisualStudio
     {
       object obj;
       ThreadHelper.ThrowIfNotOnUIThread();
-      ErrorHelper.ThrowOnFailure(hierarchy.GetProperty(currentItem, prop, out obj));
-      return (T)obj;
+
+      if (ErrorHelper.Succeeded(hierarchy.GetProperty(currentItem, prop, out obj)))
+        return (T)obj;
+
+      return default(T);
     }
 
     public static T GetProp<T>(this IVsHierarchy hierarchy, uint currentItem, __VSHPROPID prop)

@@ -220,6 +220,9 @@ namespace Nitra.VisualStudio
       var hierarchy = e.Hierarchy;
       var project = hierarchy.GetProp<EnvDTE.Project>(VSConstants.VSITEMID_ROOT, __VSHPROPID.VSHPROPID_ExtObject);
 
+      if (project == null)
+        return; // not supported prfoject type
+
       var projectId   = _stringManager.GetId(project.FullName);
       var projectPath = project.FullName;
 
