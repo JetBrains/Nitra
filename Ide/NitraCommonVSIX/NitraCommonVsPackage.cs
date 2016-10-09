@@ -244,14 +244,18 @@ namespace Nitra.VisualStudio
       if (e.IsAdded)
       {
       }
+
+      foreach (var server in _servers)
+        server.ProjectLoaded(projectId);
     }
 
     private void Listener_ReferenceAdded(object sender, ReferenceEventArgs e)
     {
-      var r           = e.Reference;
-      var path        = r.Path;
-      var projectPath = r.ContainingProject.FileName;
-      var projectId   = _stringManager.GetId(projectPath);
+      var r             = e.Reference;
+      var sourceProject = r.SourceProject; // TODO: Add support of project reference
+      var path          = r.Path;
+      var projectPath   = r.ContainingProject.FileName;
+      var projectId     = _stringManager.GetId(projectPath);
 
       foreach (var server in _servers)
         server.ReferenceAdded(projectId, path);

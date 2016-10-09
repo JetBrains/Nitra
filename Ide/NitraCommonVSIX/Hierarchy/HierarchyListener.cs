@@ -146,6 +146,9 @@ namespace Nitra.VisualStudio
       Path.GetFileName(siblingName)));
 #endif
 
+      if (TryFierOnAddReference(itemidAdded))
+        return VSConstants.S_OK;
+
       string name;
 
       if (!IsFile(itemidAdded, out name))
@@ -160,6 +163,25 @@ namespace Nitra.VisualStudio
       }
 
       return VSConstants.S_OK;
+    }
+
+    private bool TryFierOnAddReference(uint currentItem)
+    {
+      if (ReferenceAdded == null)
+        return false;
+
+      int hr2;
+      object obj;
+      hr2 = Hierarchy.GetProperty(currentItem, (int)__VSHPROPID.VSHPROPID_ExtObject, out obj);
+
+      var reference = obj as VSLangProj.Reference;
+      if (ErrorHelper.Succeeded(hr2) && reference != null)
+      {
+        ReferenceAdded(this, new ReferenceEventArgs(Hierarchy, currentItem, reference));
+        return true;
+      }
+
+      return false;
     }
 
     public int OnItemDeleted(uint itemid)
@@ -255,17 +277,8 @@ namespace Nitra.VisualStudio
 
         if (ItemAdded != null && IsFile(currentItem, out itemName))
           ItemAdded(this, new HierarchyItemEventArgs(Hierarchy, currentItem, itemName));
-        else if (ReferenceAdded != null)
-        {
-          int hr2;
-
-          object obj;
-          hr2 = Hierarchy.GetProperty(currentItem, (int)__VSHPROPID.VSHPROPID_ExtObject, out obj);
-
-          var reference = obj as VSLangProj.Reference;
-          if (ErrorHelper.Succeeded(hr2) && reference != null)
-            ReferenceAdded(this, new ReferenceEventArgs(Hierarchy, currentItem, reference));
-        }
+        else
+          TryFierOnAddReference(currentItem);
 
         // NOTE: At the moment we skip the nested hierarchies, so here  we 
         // look for the  children of this node. Before looking at the children
