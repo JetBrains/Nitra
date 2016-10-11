@@ -19,6 +19,8 @@ namespace Nitra.VisualStudio
 
     public RunningDocumentTable RunningDocumentTable { get { return _runningDocumentTable; } }
 
+    public event EventHandler<DocumentWindowOnScreenChangedEventArgs> DocumentWindowOnScreenChanged;
+
     public RunningDocTableEvents()
     {
       _runningDocumentTable = new RunningDocumentTable();
@@ -39,8 +41,11 @@ namespace Nitra.VisualStudio
       else
         _activeFrames.Remove(info);
 
+
       foreach (var activeFrame in _activeFrames)
         Debug.WriteLine($"tr:   OnScreen='{activeFrame.OnScreen}', path='{activeFrame.FullPath}')");
+
+      DocumentWindowOnScreenChanged?.Invoke(null, new DocumentWindowOnScreenChangedEventArgs(info, onScreen));
     }
 
     public int OnBeforeDocumentWindowShow(uint docCookie, int fFirstShow, IVsWindowFrame frame)

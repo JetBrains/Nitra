@@ -80,5 +80,15 @@ namespace Nitra.VisualStudio
     {
       Client.Send(new ClientMessage.FileUnloaded(id));
     }
+
+    internal void FileActivated(int id)
+    {
+      Client.Send(new ClientMessage.FileActivated(id));
+    }
+
+    internal void FileDeactivated(int id)
+    {
+      Client.Send(new ClientMessage.FileDeactivated(id));
+    }
   }
 }

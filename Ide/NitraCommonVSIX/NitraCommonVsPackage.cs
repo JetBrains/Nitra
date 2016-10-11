@@ -87,8 +87,8 @@ namespace Nitra.VisualStudio
       Debug.Assert(Instance == null);
       Instance = this;
 
-      SubscibeToSolutionEvents();
       _runningDocTableEventse = new RunningDocTableEvents();
+      SubscibeToSolutionEvents();
     }
 
     protected override void Dispose(bool disposing)
@@ -125,7 +125,7 @@ namespace Nitra.VisualStudio
     {
       var hierarchy = e.Hierarchy;
       var project = hierarchy.GetProp<EnvDTE.Project>(VSConstants.VSITEMID_ROOT, __VSHPROPID.VSHPROPID_ExtObject);
-      Debug.WriteLine($"tr: QueryCloseProject(IsRemoving='{e.IsRemoving}', Cancel='{e.Cancel}', FullName='{project.FullName}')");
+      Debug.WriteLine($"tr: QueryCloseProject(IsRemoving='{e.IsRemoving}', Cancel='{e.Cancel}', FullName='{project?.FullName}')");
     }
 
     private void SolutionEvents_OnQueryChangeProjectParent(object sender, QueryChangeProjectParentEventArgs e)
@@ -375,7 +375,17 @@ namespace Nitra.VisualStudio
       Debug.WriteLine($"tr: AfterChangeProjectParent(Hierarchy='{e.Hierarchy}', IsAdded='{e.IsAdded}' _currentSolutionId={_currentSolutionId})");
     }
 
-
+    private void OnDocumentWindowOnScreenChanged(object sender, DocumentWindowOnScreenChangedEventArgs e)
+    {
+      var id = _stringManager.GetId(e.Info.FullPath);
+      
+      if (e.OnScreen)
+        foreach (var server in _servers)
+          server.FileActivated(id);
+      else
+        foreach (var server in _servers)
+          server.FileDeactivated(id);
+    }
 
     private void SubscibeToSolutionEvents()
     {
@@ -405,6 +415,8 @@ namespace Nitra.VisualStudio
       SolutionEvents.OnQueryCloseProject += SolutionEvents_OnQueryCloseProject;
       SolutionEvents.OnQueryCloseSolution += SolutionEvents_OnQueryCloseSolution;
       SolutionEvents.OnQueryUnloadProject += SolutionEvents_OnQueryUnloadProject;
+
+      _runningDocTableEventse.DocumentWindowOnScreenChanged += OnDocumentWindowOnScreenChanged;
     }
 
     private void UnsubscibeToSolutionEvents()
