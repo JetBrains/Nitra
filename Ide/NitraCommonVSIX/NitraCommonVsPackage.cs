@@ -378,10 +378,14 @@ namespace Nitra.VisualStudio
     private void OnDocumentWindowOnScreenChanged(object sender, DocumentWindowOnScreenChangedEventArgs e)
     {
       var id = _stringManager.GetId(e.Info.FullPath);
-      
+
+      var vsTextView  = VsShellUtilities.GetTextView(e.Info.WindowFrame);
+      var wpfTextView = vsTextView.ToIWpfTextView();
+      var dispatcher  = wpfTextView.VisualElement.Dispatcher;
+
       if (e.OnScreen)
         foreach (var server in _servers)
-          server.FileActivated(id);
+          server.FileActivated(wpfTextView, id);
       else
         foreach (var server in _servers)
           server.FileDeactivated(id);

@@ -10,6 +10,9 @@ using Nitra.ClientServer.Messages;
 
 using Ide = NitraCommonIde;
 using M = Nitra.ClientServer.Messages;
+using Microsoft.VisualStudio.Text.Editor;
+using System.Windows.Threading;
+using Microsoft.VisualStudio.Text;
 
 namespace Nitra.VisualStudio
 {
@@ -21,9 +24,12 @@ namespace Nitra.VisualStudio
 
     public Server(StringManager stringManager, Ide.Config config)
     {
-      Client = new NitraClient(stringManager);
+      var client = new NitraClient(stringManager);
       Client.Send(new ClientMessage.CheckVersion(Constants.AssemblyVersionGuid));
+      var responseMap = client.ResponseMap;
+      responseMap[-1] = Response;
       _config = config;
+      Client = client;
     }
 
     private static M.Config ConvertConfig(Ide.Config config)
@@ -81,14 +87,26 @@ namespace Nitra.VisualStudio
       Client.Send(new ClientMessage.FileUnloaded(id));
     }
 
-    internal void FileActivated(int id)
+    internal void FileActivated(IWpfTextView wpfTextView, int id)
     {
+      Client.ResponseMap[id] = msg => wpfTextView.VisualElement.Dispatcher.BeginInvoke(DispatcherPriority.Normal, 
+        new Action<AsyncServerMessage>(msg2 => Response(wpfTextView.TextBuffer, msg2)), msg);
       Client.Send(new ClientMessage.FileActivated(id));
     }
 
     internal void FileDeactivated(int id)
     {
+      Action<AsyncServerMessage> value;
+      Client.ResponseMap.TryRemove(id, out value);
       Client.Send(new ClientMessage.FileDeactivated(id));
+    }
+
+    void Response(AsyncServerMessage msg)
+    {
+    }
+
+    void Response(ITextBuffer textBuffer, AsyncServerMessage msg)
+    {
     }
   }
 }
