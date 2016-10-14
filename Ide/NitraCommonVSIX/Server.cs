@@ -25,7 +25,7 @@ namespace Nitra.VisualStudio
     public Server(StringManager stringManager, Ide.Config config)
     {
       var client = new NitraClient(stringManager);
-      Client.Send(new ClientMessage.CheckVersion(Constants.AssemblyVersionGuid));
+      client.Send(new ClientMessage.CheckVersion(Constants.AssemblyVersionGuid));
       var responseMap = client.ResponseMap;
       responseMap[-1] = Response;
       _config = config;
@@ -107,6 +107,13 @@ namespace Nitra.VisualStudio
 
     void Response(ITextBuffer textBuffer, AsyncServerMessage msg)
     {
+      AsyncServerMessage.OutliningCreated outlining;
+
+      if ((outlining = msg as AsyncServerMessage.OutliningCreated) != null)
+      {
+        var tegget = (OutliningTagger)textBuffer.Properties.GetProperty(Constants.OutliningTaggerKey);
+        tegget.Update(outlining);
+      }
     }
   }
 }

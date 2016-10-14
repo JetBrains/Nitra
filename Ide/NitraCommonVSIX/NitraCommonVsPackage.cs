@@ -146,6 +146,9 @@ namespace Nitra.VisualStudio
     private void SolutionEvents_OnBeforeOpenSolution(object sender, BeforeOpenSolutionEventArgs e)
     {
       var stringManager = _stringManager;
+      if (NitraCommonPackage.Configs.Count == 0)
+      {
+      }
 
       foreach (var config in NitraCommonPackage.Configs)
       {

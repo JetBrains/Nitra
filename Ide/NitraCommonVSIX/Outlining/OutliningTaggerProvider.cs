@@ -37,6 +37,6 @@ namespace Nitra.VisualStudio
       //
       //create a single tagger for each buffer.
       Func<ITagger<T>> sc = delegate() { return (ITagger<T>)new OutliningTagger(buffer); };
-      return buffer.Properties.GetOrCreateSingletonProperty<ITagger<T>>(sc);    }
+      return buffer.Properties.GetOrCreateSingletonProperty<ITagger<T>>(Constants.OutliningTaggerKey, sc);    }
   }
 }
