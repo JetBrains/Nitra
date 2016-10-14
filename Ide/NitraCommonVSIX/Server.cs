@@ -25,7 +25,7 @@ namespace Nitra.VisualStudio
     public Server(StringManager stringManager, Ide.Config config)
     {
       var client = new NitraClient(stringManager);
-      client.Send(new ClientMessage.CheckVersion(Constants.AssemblyVersionGuid));
+      client.Send(new ClientMessage.CheckVersion(M.Constants.AssemblyVersionGuid));
       var responseMap = client.ResponseMap;
       responseMap[-1] = Response;
       _config = config;
