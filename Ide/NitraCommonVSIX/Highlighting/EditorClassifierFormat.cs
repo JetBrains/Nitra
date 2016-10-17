@@ -30,7 +30,6 @@ namespace Nitra.VisualStudio.Highlighting
       this.DisplayName = "EditorClassifier"; // Human readable version of the name
       //this.BackgroundColor = Colors.BlueViolet;
       this.ForegroundColor = Colors.Cyan;
-      this.TextDecorations = System.Windows.TextDecorations.Underline;
     }
   }
 }

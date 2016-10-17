@@ -13,6 +13,10 @@ using M = Nitra.ClientServer.Messages;
 using Microsoft.VisualStudio.Text.Editor;
 using System.Windows.Threading;
 using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Text.Classification;
+using System.Collections.Immutable;
+using Nitra.VisualStudio.Highlighting;
 
 namespace Nitra.VisualStudio
 {
@@ -31,6 +35,10 @@ namespace Nitra.VisualStudio
       _config = config;
       Client = client;
     }
+
+    private ImmutableArray<SpanClassInfo> _spanClassInfos = ImmutableArray<SpanClassInfo>.Empty;
+    public  ImmutableArray<SpanClassInfo> SpanClassInfos { get { return _spanClassInfos; } }
+
 
     private static M.Config ConvertConfig(Ide.Config config)
     {
@@ -89,8 +97,13 @@ namespace Nitra.VisualStudio
 
     internal void FileActivated(IWpfTextView wpfTextView, int id)
     {
+      var textBuffer = wpfTextView.TextBuffer;
+
+      textBuffer.Properties.AddProperty(Constants.ServerKey, this);
+
       Client.ResponseMap[id] = msg => wpfTextView.VisualElement.Dispatcher.BeginInvoke(DispatcherPriority.Normal, 
-        new Action<AsyncServerMessage>(msg2 => Response(wpfTextView.TextBuffer, msg2)), msg);
+        new Action<AsyncServerMessage>(msg2 => Response(textBuffer, msg2)), msg);
+
       Client.Send(new ClientMessage.FileActivated(id));
     }
 
@@ -103,17 +116,44 @@ namespace Nitra.VisualStudio
 
     void Response(AsyncServerMessage msg)
     {
+      AsyncServerMessage.LanguageLoaded languageInfo;
+
+      if ((languageInfo = msg as AsyncServerMessage.LanguageLoaded) != null)
+      {
+        var spanClassInfos = languageInfo.spanClassInfos;
+        if (_spanClassInfos.IsDefaultOrEmpty)
+          _spanClassInfos = spanClassInfos;
+        else if (!spanClassInfos.IsDefaultOrEmpty)
+        {
+          var bilder = ImmutableArray.CreateBuilder<SpanClassInfo>(_spanClassInfos.Length + spanClassInfos.Length);
+          bilder.AddRange(_spanClassInfos);
+          bilder.AddRange(spanClassInfos);
+          _spanClassInfos = bilder.MoveToImmutable();
+        }
+      }
     }
 
     void Response(ITextBuffer textBuffer, AsyncServerMessage msg)
     {
       AsyncServerMessage.OutliningCreated outlining;
+      AsyncServerMessage.KeywordsHighlightingCreated keywordHighlighting;
+      AsyncServerMessage.SymbolsHighlightingCreated symbolsHighlighting;
 
       if ((outlining = msg as AsyncServerMessage.OutliningCreated) != null)
       {
         var tegget = (OutliningTagger)textBuffer.Properties.GetProperty(Constants.OutliningTaggerKey);
         tegget.Update(outlining);
       }
+      else if ((keywordHighlighting = msg as AsyncServerMessage.KeywordsHighlightingCreated) != null)
+        UpdateSpanInfos(textBuffer, HighlightingType.Keyword, keywordHighlighting.spanInfos, keywordHighlighting.Version);
+      else if ((symbolsHighlighting = msg as AsyncServerMessage.SymbolsHighlightingCreated) != null)
+        UpdateSpanInfos(textBuffer, HighlightingType.Symbol, symbolsHighlighting.spanInfos, symbolsHighlighting.Version);
+    }
+
+    void UpdateSpanInfos(ITextBuffer textBuffer, HighlightingType highlightingType, ImmutableArray<SpanInfo> spanInfos, int version)
+    {
+      var tegget = (NitraEditorClassifier)textBuffer.Properties.GetProperty(Constants.NitraEditorClassifierKey);
+      tegget.Update(highlightingType, spanInfos, version);
     }
   }
 }
