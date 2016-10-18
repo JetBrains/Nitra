@@ -11,6 +11,7 @@ using Microsoft.VisualStudio.Text.Classification;
 using System.Diagnostics;
 using Nitra.ClientServer.Messages;
 using System.Collections.Immutable;
+using System.Windows.Media;
 
 namespace Nitra.VisualStudio.Highlighting
 {
@@ -19,28 +20,22 @@ namespace Nitra.VisualStudio.Highlighting
   /// </summary>
   internal class NitraEditorClassifier : IClassifier
   {
-    /// <summary>
-    /// Classification type.
-    /// </summary>
     private readonly IClassificationType                  _classificationType;
     private readonly ITextBuffer                          _buffer;
     private readonly IClassificationTypeRegistryService   _registry;
     private readonly Dictionary<int, IClassificationType> _classificationMap = new Dictionary<int, IClassificationType>();
+    private readonly ImmutableArray<SpanInfo>[]           _spanInfos = new ImmutableArray<SpanInfo>[(int)HighlightingType.Count];
+    private readonly ITextSnapshot[]                      _snapshots = new ITextSnapshot[(int)HighlightingType.Count];
+    private readonly IClassificationFormatMapService      _classificationFormatMapService;
+    private          Server                               _server;
 
-    private Server                     _server;
-    private ImmutableArray<SpanInfo>[] _spanInfos = new ImmutableArray<SpanInfo>[(int)HighlightingType.Count];
-    private ITextSnapshot[]            _snapshots = new ITextSnapshot[(int)HighlightingType.Count];
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="NitraEditorClassifier"/> class.
-    /// </summary>
-    /// <param name="registry">Classification registry.</param>
-    internal NitraEditorClassifier(IClassificationTypeRegistryService registry, ITextBuffer buffer)
+    public NitraEditorClassifier(IClassificationTypeRegistryService registry, IClassificationFormatMapService formatMapService, ITextBuffer buffer)
     {
-      var currentSnapshot = buffer.CurrentSnapshot;
-      _buffer             = buffer;
-      _registry           = registry;
-      _classificationType = registry.GetClassificationType("EditorClassifier");
+      var currentSnapshot             = buffer.CurrentSnapshot;
+      _registry                       = registry;
+      _classificationFormatMapService = formatMapService;
+      _buffer                         = buffer;
+      _classificationType             = registry.GetClassificationType("EditorClassifier");
 
       for (int i = 0; i < _spanInfos.Length; i++)
       {
@@ -67,19 +62,33 @@ namespace Nitra.VisualStudio.Highlighting
         if (_classificationMap.Count == 0 && _classificationMap.Count < Server.SpanClassInfos.Length)
         {
           _classificationMap.Clear();
+          IClassificationFormatMap classificationFormatMap = null;
 
           foreach (var info in Server.SpanClassInfos)
           {
-            var name = info.FullName.Replace(".", "_");
-            var ct = _registry.GetClassificationType(name);
+            var name = info.FullName.Replace(".", "_"); // TODO: use "." in a ClassificationType name
+            var classificationType   = _registry.GetClassificationType(name);
 
-            if (ct == null)
+            if (classificationType == null)
             {
+              // create temporary ClassificationType and define it format
               Debug.WriteLine($"No ClassificationType for '{info.FullName}' SpanClassInfo.");
-              ct = _registry.CreateTransientClassificationType(new[] { _classificationType });
+              classificationType = _registry.CreateClassificationType(name, new[] { _classificationType });
+
+              if (classificationFormatMap == null)
+                classificationFormatMap = _classificationFormatMapService.GetClassificationFormatMap("text");
+
+              var identifierProperties = classificationFormatMap.GetExplicitTextProperties(classificationType);
+
+              // modify the properties
+              var bytes         = BitConverter.GetBytes(info.ForegroundColor);
+              var color         = Color.FromArgb(bytes[3], bytes[2], bytes[1], bytes[0]);
+              var newProperties = identifierProperties.SetForeground(color);
+
+              classificationFormatMap.AddExplicitTextProperties(classificationType, newProperties);
             }
 
-            _classificationMap.Add(info.Id, ct);
+            _classificationMap.Add(info.Id, classificationType);
           }
 
         }

@@ -25,8 +25,8 @@ namespace Nitra.VisualStudio.Highlighting
     /// Classification registry to be used for getting a reference
     /// to the custom classification type later.
     /// </summary>
-    [Import]
-    private IClassificationTypeRegistryService _classificationRegistry;
+    [Import] IClassificationTypeRegistryService _classificationRegistry;
+    [Import] IClassificationFormatMapService    _classificationFormatMapService;
 
 #pragma warning restore 649
 
@@ -39,7 +39,7 @@ namespace Nitra.VisualStudio.Highlighting
     /// <returns>A classifier for the text buffer, or null if the provider cannot do so in its current state.</returns>
     public IClassifier GetClassifier(ITextBuffer buffer)
     {
-      return buffer.Properties.GetOrCreateSingletonProperty(Constants.NitraEditorClassifierKey, () => new NitraEditorClassifier(_classificationRegistry, buffer));
+      return buffer.Properties.GetOrCreateSingletonProperty(Constants.NitraEditorClassifierKey, () => new NitraEditorClassifier(_classificationRegistry, _classificationFormatMapService, buffer));
     }
 
     #endregion
