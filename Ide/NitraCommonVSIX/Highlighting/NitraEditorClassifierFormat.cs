@@ -20,12 +20,12 @@ namespace Nitra.VisualStudio.Highlighting
   [Name("EditorClassifier")]
   [UserVisible(true)] // This should be visible to the end user
   [Order(Before = Priority.Default)] // Set the priority to be after the default classifiers
-  internal sealed class EditorClassifierFormat : ClassificationFormatDefinition
+  internal sealed class NitraEditorClassifierFormat : ClassificationFormatDefinition
   {
     /// <summary>
-    /// Initializes a new instance of the <see cref="EditorClassifierFormat"/> class.
+    /// Initializes a new instance of the <see cref="NitraEditorClassifierFormat"/> class.
     /// </summary>
-    public EditorClassifierFormat()
+    public NitraEditorClassifierFormat()
     {
       this.DisplayName = "EditorClassifier"; // Human readable version of the name
       //this.BackgroundColor = Colors.BlueViolet;
