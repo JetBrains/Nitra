@@ -48,10 +48,16 @@ namespace XXNamespaceXX
     protected override void Initialize()
     {
       base.Initialize();
-      var projectSupport = new ProjectSupport("XXProjectSupportXX", "XXProjectSupportClassXX", Path.Combine(VsUtils.GetPlaginPath(), @"Languages\XXProjectSupportAssemblyXX"));
+      var assembly         = "XXProjectSupportAssemblyXX";
+
+      if (string.IsNullOrEmpty(assembly))
+        return;
+
+      var assemblyFullPath = Path.Combine(VsUtils.GetPlaginPath(), @"Languages\XXProjectSupportAssemblyXX");
+      var projectSupport   = new ProjectSupport("XXProjectSupportXX", "XXProjectSupportClassXX", Path.Combine(VsUtils.GetPlaginPath(), assemblyFullPath));
       var languages = new []
         {
-          new LanguageInfo("XXLanguageXX", Path.Combine(VsUtils.GetPlaginPath(), @"Languages\CSharp.Grammar.dll"))
+          new LanguageInfo("XXLanguageXX", Path.Combine(VsUtils.GetPlaginPath(), @"Languages\XXProjectSupportAssemblyXX"))
         };
 
       var config = new Config(projectSupport, languages);
