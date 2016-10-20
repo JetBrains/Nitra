@@ -31,6 +31,7 @@ namespace Nitra.VisualStudio
 
     public IEnumerable<ITagSpan<IOutliningRegionTag>> GetTags(NormalizedSnapshotSpanCollection spans)
     {
+      Debug.WriteLine($"GetTags({spans}) begin");
       var oldSnapshot = _oldSnapshot;
       var outlining   = _outlining;
 
@@ -41,24 +42,28 @@ namespace Nitra.VisualStudio
         var nSpan = new NSpan(translatedSpan.Start, translatedSpan.End);
         var info = new OutliningInfo(nSpan, false, false);
         // The outlining array is sorted. Use BinarySearch() to find first a span which intersects with the processing span.
-        var index = outlining.BinarySearch(info, OutliningInfo.Comparer);
-        if (index < 0)
-          index = ~index; // no exact match
-        OutliningInfo currentInfo;
-        for (int i = index; i < outlining.Length && nSpan.IntersectsWith((currentInfo = outlining[i]).Span); i++)
+        //var index = outlining.BinarySearch(info, OutliningInfo.Comparer);
+        //if (index < 0)
+        //  index = ~index; // no exact match
+        foreach (var currentInfo in outlining)
         {
           var currentSpan = currentInfo.Span;
+          if (!nSpan.IntersectsWith(currentSpan))
+            continue;
           var tagSpan = new TagSpan<IOutliningRegionTag>(
             new SnapshotSpan(oldSnapshot, new Span(currentSpan.StartPos, currentSpan.Length))
               .TranslateTo(span.Snapshot, SpanTrackingMode.EdgeExclusive),
             new OutliningRegionTag(currentInfo.IsDefaultCollapsed, currentInfo.IsImplementation, "...", "colapsed code..."));
+          Debug.WriteLine($"  tagSpan={{Start={tagSpan.Span.Start.Position}, Len={tagSpan.Span.Length}}}");
           yield return tagSpan;
         }
+        Debug.WriteLine($"GetTags({spans}) end");
       }
     }
 
     internal void Update(AsyncServerMessage.OutliningCreated outlining)
     {
+      Debug.WriteLine($"Update(Length={outlining.outlining.Length}) begin");
       var snapshot = _buffer.CurrentSnapshot;
 
       if (snapshot.Version.VersionNumber != outlining.Version + 1)
@@ -71,6 +76,7 @@ namespace Nitra.VisualStudio
 
       var span = new SnapshotSpan(snapshot, Span.FromBounds(0, snapshot.Length));
       FierTagsChanged(span);
+      Debug.WriteLine($"Update(Length={outlining.outlining.Length}) end");
     }
 
     void FierTagsChanged(SnapshotSpan span)
