@@ -22,9 +22,12 @@ namespace Nitra.VisualStudio
 {
   class Server : IDisposable
   {
-    private Ide.Config _config;
+    Ide.Config _config;
+    Dictionary<int, ITextBuffer> _bufferMap = new Dictionary<int, ITextBuffer>();
 
     public NitraClient Client { get; private set; }
+
+
 
     public Server(StringManager stringManager, Ide.Config config)
     {
@@ -37,7 +40,7 @@ namespace Nitra.VisualStudio
     }
 
     private ImmutableArray<SpanClassInfo> _spanClassInfos = ImmutableArray<SpanClassInfo>.Empty;
-    public  ImmutableArray<SpanClassInfo> SpanClassInfos { get { return _spanClassInfos; } }
+    public ImmutableArray<SpanClassInfo> SpanClassInfos { get { return _spanClassInfos; } }
 
 
     private static M.Config ConvertConfig(Ide.Config config)
@@ -99,19 +102,66 @@ namespace Nitra.VisualStudio
     {
       var textBuffer = wpfTextView.TextBuffer;
 
-      textBuffer.Properties.AddProperty(Constants.ServerKey, this);
+      _bufferMap[id] = textBuffer;
 
-      Client.ResponseMap[id] = msg => wpfTextView.VisualElement.Dispatcher.BeginInvoke(DispatcherPriority.Normal, 
+      var props = textBuffer.Properties;
+      props.RemoveProperty(Constants.ServerKey);
+      props.AddProperty(Constants.ServerKey, this);
+      props.RemoveProperty(Constants.FileIdKey);
+      props.AddProperty(Constants.FileIdKey, id);
+
+      Client.ResponseMap[id] = msg => wpfTextView.VisualElement.Dispatcher.BeginInvoke(DispatcherPriority.Normal,
         new Action<AsyncServerMessage>(msg2 => Response(textBuffer, msg2)), msg);
+
+      textBuffer.Changed += TextBuffer_Changed;
 
       Client.Send(new ClientMessage.FileActivated(id));
     }
 
+    void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
+    {
+      var textBuffer = (ITextBuffer)sender;
+      var newVersion = e.AfterVersion.VersionNumber - 1;
+      var id         = textBuffer.Properties.GetProperty<int>(Constants.FileIdKey);
+      var changes    = e.Changes;
+
+      if (changes.Count == 1)
+        Client.Send(new ClientMessage.FileChanged(id, newVersion, Convert(changes[0])));
+      else
+      {
+        var builder = ImmutableArray.CreateBuilder<FileChange>(changes.Count);
+
+        foreach (var change in changes)
+          builder.Add(Convert(change));
+
+        Client.Send(new ClientMessage.FileChangedBatch(id, newVersion, builder.MoveToImmutable()));
+      }
+    }
+
+    static FileChange Convert(ITextChange change)
+    {
+      var newLength = change.NewLength;
+      var oldLength = change.OldLength;
+
+      if (oldLength == 0 && newLength > 0)
+        return new FileChange.Insert(change.OldPosition, change.NewText);
+      if (oldLength > 0 && newLength == 0)
+        return new FileChange.Delete(VsUtils.Convert(change.OldSpan));
+
+      return new FileChange.Replace(VsUtils.Convert(change.OldSpan), change.NewText);
+    }
+
     internal void FileDeactivated(int id)
     {
+      var textBuffer =  _bufferMap[id];
+      _bufferMap.Remove(id);
+      textBuffer.Changed -= TextBuffer_Changed;
+
       Action<AsyncServerMessage> value;
       Client.ResponseMap.TryRemove(id, out value);
       Client.Send(new ClientMessage.FileDeactivated(id));
+
+      textBuffer.Properties.RemoveProperty(Constants.FileIdKey);
     }
 
     void Response(AsyncServerMessage msg)

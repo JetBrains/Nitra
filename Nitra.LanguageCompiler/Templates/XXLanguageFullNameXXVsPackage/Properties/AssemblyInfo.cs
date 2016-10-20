@@ -4,16 +4,16 @@ using System.Resources;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-[assembly: Microsoft.VisualStudio.Shell.ProvideCodeBase(CodeBase = @"$PackageFolder$\XXLanguageXXVsPackage.dll")]
+[assembly: Microsoft.VisualStudio.Shell.ProvideCodeBase(CodeBase = @"$PackageFolder$\XXLanguageFullNameXXVsPackage.dll")]
 
 // General Information about an assembly is controlled through the following 
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("XXLanguageXXVsPackage")]
+[assembly: AssemblyTitle("XXLanguageFullNameXXVsPackage")]
 [assembly: AssemblyDescription("XXDescriptionXX")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("XXCompanyXX")]
-[assembly: AssemblyProduct("XXLanguageXXVsPackage")]
+[assembly: AssemblyProduct("XXLanguageFullNameXXVsPackage")]
 [assembly: AssemblyCopyright("Copyright ©  2016")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]

@@ -66,8 +66,8 @@ namespace Nitra.VisualStudio.Highlighting
 
           foreach (var info in Server.SpanClassInfos)
           {
-            var name = info.FullName.Replace(".", "_"); // TODO: use "." in a ClassificationType name
-            var classificationType   = _registry.GetClassificationType(name);
+            var name               = info.FullName;
+            var classificationType = _registry.GetClassificationType(name);
 
             if (classificationType == null)
             {

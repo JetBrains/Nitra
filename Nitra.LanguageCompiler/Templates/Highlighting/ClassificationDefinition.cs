@@ -13,11 +13,11 @@ namespace XXNamespaceXX
   [UserVisible(true)]
   internal class XXSpanClassNameXXClassificationDefinition : ClassificationFormatDefinition
   {
-    public const string Name = "XXSpanClassNameXX";
+    public const string Name = "XXSpanClassFullNameXX";
 
     public XXSpanClassNameXXClassificationDefinition()
     {
-      DisplayName = "XXDisplay nameXX";
+      DisplayName = "XXSpanClassFullNameXX nameXX";
       ForegroundColor = Colors.Red;
     }
 

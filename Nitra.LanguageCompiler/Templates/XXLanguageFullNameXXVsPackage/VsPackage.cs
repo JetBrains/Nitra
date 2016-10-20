@@ -26,7 +26,7 @@ namespace XXNamespaceXX
   /// Creating project extensions or project types does not actually require a VSPackage.
   /// </remarks>
   [PackageRegistration(UseManagedResourcesOnly = true)]
-  [Description("Nitra Package for XXLanguageXX language.")]
+  [Description("Nitra Package for XXLanguageFullNameXX language.")]
   [ProvideAutoLoad(UIContextGuids80.NoSolution)]
   [Guid(XXLanguageXXGuids.PackageGuid)]
   // This attribute is used to register the information needed to show this package in the Help/About dialog of Visual Studio.
@@ -57,7 +57,7 @@ namespace XXNamespaceXX
       var projectSupport   = new ProjectSupport("XXProjectSupportXX", "XXProjectSupportClassXX", Path.Combine(VsUtils.GetPlaginPath(), assemblyFullPath));
       var languages = new []
         {
-          new LanguageInfo("XXLanguageXX", Path.Combine(VsUtils.GetPlaginPath(), @"Languages\XXProjectSupportAssemblyXX"))
+          new LanguageInfo("XXLanguageFullNameXX", Path.Combine(VsUtils.GetPlaginPath(), @"Languages\XXProjectSupportAssemblyXX"))
         };
 
       var config = new Config(projectSupport, languages);

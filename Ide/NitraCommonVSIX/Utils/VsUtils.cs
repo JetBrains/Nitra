@@ -3,6 +3,7 @@ using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
+using Nitra.ClientServer.Messages;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -157,6 +158,11 @@ namespace Nitra.VisualStudio
     public static string GetFilePath(this IVsTextLines vsTextLines)
     {
       return GetFilePath((IPersistFileFormat)vsTextLines);
+    }
+
+    public static NSpan Convert(Span span)
+    {
+      return new NSpan(span.Start, span.End);
     }
   }
 }
