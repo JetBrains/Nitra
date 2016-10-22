@@ -57,7 +57,6 @@ namespace Nitra.VisualStudio
     private RunningDocTableEvents                       _runningDocTableEventse;
     private Dictionary<IVsHierarchy, HierarchyListener> _listenersMap = new Dictionary<IVsHierarchy, HierarchyListener>();
     private string                                      _loadingProjectPath;
-    private Guid                                        _loadingProjectGuid;
     private List<Server>                                _servers = new List<Server>();
     private StringManager                               _stringManager = new StringManager();
     private string                                      _currentSolutionPath;

@@ -15,7 +15,7 @@ namespace Nitra.VisualStudio.Highlighting
   /// Classifier provider. It adds the classifier to the set of classifiers.
   /// </summary>
   [Export(typeof(IClassifierProvider))]
-  [ContentType("text")] // This classifier applies to all text files.
+  [ContentType("code")] // This classifier applies to all text files.
   internal class NitraEditorClassifierProvider : IClassifierProvider
   {
     // Disable "Field is never assigned to..." compiler's warning. Justification: the field is assigned by MEF.

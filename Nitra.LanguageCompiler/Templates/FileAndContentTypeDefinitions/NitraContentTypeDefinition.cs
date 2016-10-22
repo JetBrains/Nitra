@@ -10,7 +10,7 @@ namespace XXNamespaceXX
   {
     [Export]
     [Name("XXLanguageXX")]
-    [BaseDefinition("text")]
+    [BaseDefinition("code")]
     public static ContentTypeDefinition XXLanguageXXContentTypeDefinition = null;
 
     internal static string[] FileExtensions = { "XXFileExtensionsXX" };

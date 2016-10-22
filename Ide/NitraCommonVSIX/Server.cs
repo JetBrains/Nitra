@@ -17,6 +17,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Text.Classification;
 using System.Collections.Immutable;
 using Nitra.VisualStudio.Highlighting;
+using Nitra.VisualStudio.BraceMatching;
 
 namespace Nitra.VisualStudio
 {
@@ -60,6 +61,11 @@ namespace Nitra.VisualStudio
     internal void SolutionStartLoading(int id, string solutionPath)
     {
       Client.Send(new ClientMessage.SolutionStartLoading(id, solutionPath));
+    }
+
+    internal void CaretPositionChanged(int id, int pos, int version)
+    {
+      Client.Send(new ClientMessage.SetCaretPos(id, version, pos));
     }
 
     internal void SolutionLoaded(int solutionId)
@@ -188,6 +194,7 @@ namespace Nitra.VisualStudio
       AsyncServerMessage.OutliningCreated outlining;
       AsyncServerMessage.KeywordsHighlightingCreated keywordHighlighting;
       AsyncServerMessage.SymbolsHighlightingCreated symbolsHighlighting;
+      AsyncServerMessage.MatchedBrackets matchedBrackets;
 
       if ((outlining = msg as AsyncServerMessage.OutliningCreated) != null)
       {
@@ -198,10 +205,19 @@ namespace Nitra.VisualStudio
         UpdateSpanInfos(textBuffer, HighlightingType.Keyword, keywordHighlighting.spanInfos, keywordHighlighting.Version);
       else if ((symbolsHighlighting = msg as AsyncServerMessage.SymbolsHighlightingCreated) != null)
         UpdateSpanInfos(textBuffer, HighlightingType.Symbol, symbolsHighlighting.spanInfos, symbolsHighlighting.Version);
+      else if ((matchedBrackets = msg as AsyncServerMessage.MatchedBrackets) != null)
+      {
+        var tegget = (NitraBraceMatchingTagger)textBuffer.Properties.GetProperty(Constants.BraceMatchingTaggerKey);
+        tegget.Update(matchedBrackets);
+      }
+
     }
 
     void UpdateSpanInfos(ITextBuffer textBuffer, HighlightingType highlightingType, ImmutableArray<SpanInfo> spanInfos, int version)
     {
+      if (!textBuffer.Properties.ContainsProperty(Constants.NitraEditorClassifierKey))
+        return;
+
       var tegget = (NitraEditorClassifier)textBuffer.Properties.GetProperty(Constants.NitraEditorClassifierKey);
       tegget.Update(highlightingType, spanInfos, version);
     }

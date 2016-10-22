@@ -164,5 +164,10 @@ namespace Nitra.VisualStudio
     {
       return new NSpan(span.Start, span.End);
     }
+
+    public static Span Convert(NSpan span)
+    {
+      return new Span(span.StartPos, span.Length);
+    }
   }
 }

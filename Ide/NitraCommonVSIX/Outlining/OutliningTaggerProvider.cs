@@ -15,7 +15,7 @@ namespace Nitra.VisualStudio
 {
   [Export(typeof(ITaggerProvider))]
   [TagType(typeof(IOutliningRegionTag))]
-  [ContentType("text")]
+  [ContentType("code")]
   public class OutliningTaggerProvider : ITaggerProvider
   {
     [Import] ITextDocumentFactoryService _textDocumentFactoryService;

@@ -12,5 +12,6 @@ namespace Nitra.VisualStudio
     public const string ServerKey                = "Nitra-Server";
     public const string FileIdKey                = "Nitra-FileId";
     public const string NitraEditorClassifierKey = "Nitra-EditorClassifier";
+    public const string BraceMatchingTaggerKey   = "Nitra-BraceMatchingTagger";
   }
 }

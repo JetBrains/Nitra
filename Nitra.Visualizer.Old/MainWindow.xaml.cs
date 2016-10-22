@@ -225,7 +225,7 @@ namespace Nitra.Visualizer
 
       if (context.Brackets != null)
       {
-        foreach (var bracket in context.Brackets)
+        foreach (MatchBracketsWalker.MatchBrackets bracket in context.Brackets)
         {
           var marker1 = _textMarkerService.Create(bracket.OpenBracket.StartPos, bracket.OpenBracket.Length);
           marker1.BackgroundColor = Colors.LightGray;

@@ -20,14 +20,14 @@ namespace Nitra.VisualStudio.Highlighting
   /// </summary>
   internal class NitraEditorClassifier : IClassifier
   {
-    private readonly IClassificationType                  _classificationType;
-    private readonly ITextBuffer                          _buffer;
-    private readonly IClassificationTypeRegistryService   _registry;
-    private readonly Dictionary<int, IClassificationType> _classificationMap = new Dictionary<int, IClassificationType>();
-    private readonly ImmutableArray<SpanInfo>[]           _spanInfos = new ImmutableArray<SpanInfo>[(int)HighlightingType.Count];
-    private readonly ITextSnapshot[]                      _snapshots = new ITextSnapshot[(int)HighlightingType.Count];
-    private readonly IClassificationFormatMapService      _classificationFormatMapService;
-    private          Server                               _server;
+    readonly IClassificationType                  _classificationType;
+    readonly ITextBuffer                          _buffer;
+    readonly IClassificationTypeRegistryService   _registry;
+    readonly Dictionary<int, IClassificationType> _classificationMap = new Dictionary<int, IClassificationType>();
+    readonly ImmutableArray<SpanInfo>[]           _spanInfos = new ImmutableArray<SpanInfo>[(int)HighlightingType.Count];
+    readonly ITextSnapshot[]                      _snapshots = new ITextSnapshot[(int)HighlightingType.Count];
+    readonly IClassificationFormatMapService      _classificationFormatMapService;
+             Server                               _textBuffer;
 
     public NitraEditorClassifier(IClassificationTypeRegistryService registry, IClassificationFormatMapService formatMapService, ITextBuffer buffer)
     {
@@ -48,10 +48,10 @@ namespace Nitra.VisualStudio.Highlighting
     {
       get
       {
-        if (_server == null)
-          _server = (Server)_buffer.Properties.GetProperty(Constants.ServerKey);
+        if (_textBuffer == null)
+          _textBuffer = (Server)_buffer.Properties.GetProperty(Constants.ServerKey);
 
-        return _server;
+        return _textBuffer;
       }
     }
 

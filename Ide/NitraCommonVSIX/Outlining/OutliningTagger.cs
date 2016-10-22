@@ -39,17 +39,16 @@ namespace Nitra.VisualStudio
       {
         var translatedSnapshotSpan = span.TranslateTo(oldSnapshot, SpanTrackingMode.EdgeExclusive);
         var translatedSpan         = translatedSnapshotSpan.Span;
-        var nSpan = new NSpan(translatedSpan.Start, translatedSpan.End);
-        var info = new OutliningInfo(nSpan, false, false);
-        // The outlining array is sorted. Use BinarySearch() to find first a span which intersects with the processing span.
-        //var index = outlining.BinarySearch(info, OutliningInfo.Comparer);
-        //if (index < 0)
-        //  index = ~index; // no exact match
+        var nSpan                  = new NSpan(translatedSpan.Start, translatedSpan.End);
+        var info                   = new OutliningInfo(nSpan, false, false);
+
         foreach (var currentInfo in outlining)
         {
           var currentSpan = currentInfo.Span;
+
           if (!nSpan.IntersectsWith(currentSpan))
             continue;
+
           var tagSpan = new TagSpan<IOutliningRegionTag>(
             new SnapshotSpan(oldSnapshot, new Span(currentSpan.StartPos, currentSpan.Length))
               .TranslateTo(span.Snapshot, SpanTrackingMode.EdgeExclusive),
