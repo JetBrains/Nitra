@@ -13,5 +13,7 @@ namespace Nitra.VisualStudio
     public const string FileIdKey                = "Nitra-FileId";
     public const string NitraEditorClassifierKey = "Nitra-EditorClassifier";
     public const string BraceMatchingTaggerKey   = "Nitra-BraceMatchingTagger";
+    public const string BraceMatchingSecond      = "NitraBraceMatchingSecond";
+
   }
 }

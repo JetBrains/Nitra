@@ -75,21 +75,23 @@ namespace Nitra.VisualStudio.BraceMatching
       var lastSnapshot    = caretPos.Snapshot;
       var currentSnapshot = _textBuffer.CurrentSnapshot;
 
-      if (lastSnapshot.Version.VersionNumber == matchedBrackets.Version + 1)
+      if (lastSnapshot.Version.VersionNumber != matchedBrackets.Version + 1)
         yield break;
 
+      var tagName = "blue";
       foreach (MatchBrackets pair in matchedBrackets.results)
       {
-        yield return MakeTagSpan(lastSnapshot, currentSnapshot, pair.Open);
-        yield return MakeTagSpan(lastSnapshot, currentSnapshot, pair.Close);
+        yield return MakeTagSpan(lastSnapshot, currentSnapshot, pair.Open,  tagName);
+        yield return MakeTagSpan(lastSnapshot, currentSnapshot, pair.Close, tagName);
+        tagName = Constants.BraceMatchingSecond;
       }
     }
 
-    public static TagSpan<TextMarkerTag> MakeTagSpan(ITextSnapshot lastSnapshot, ITextSnapshot currentSnapshot, NSpan nSpan)
+    public static TagSpan<TextMarkerTag> MakeTagSpan(ITextSnapshot lastSnapshot, ITextSnapshot currentSnapshot, NSpan nSpan, string tagType)
     {
       var span           = new SnapshotSpan(lastSnapshot, VsUtils.Convert(nSpan));
       var translatedSpan = span.TranslateTo(currentSnapshot, SpanTrackingMode.EdgeExclusive);
-      return new TagSpan<TextMarkerTag>(span, new TextMarkerTag("blue"));
+      return new TagSpan<TextMarkerTag>(span, new TextMarkerTag(tagType));
     }
 
     internal void Update(AsyncServerMessage.MatchedBrackets matchedBrackets)

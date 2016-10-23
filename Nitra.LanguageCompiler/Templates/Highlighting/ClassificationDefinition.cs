@@ -17,7 +17,7 @@ namespace XXNamespaceXX
 
     public XXSpanClassNameXXClassificationDefinition()
     {
-      DisplayName = "XXSpanClassFullNameXX nameXX";
+      DisplayName = "XXSpanClassFullNameXX";
       ForegroundColor = Colors.Red;
     }
 
