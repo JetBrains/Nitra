@@ -122,6 +122,13 @@ namespace Nitra.VisualStudio
       textBuffer.Changed += TextBuffer_Changed;
 
       Client.Send(new ClientMessage.FileActivated(id));
+
+      var pointOpt = wpfTextView.Caret.Position.Point.GetPoint(textBuffer, wpfTextView.Caret.Position.Affinity);
+      if (pointOpt.HasValue)
+      {
+        var point = pointOpt.Value;
+        CaretPositionChanged(id, point.Position, point.Snapshot.Version.VersionNumber - 1);
+      }
     }
 
     void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
@@ -207,6 +214,8 @@ namespace Nitra.VisualStudio
         UpdateSpanInfos(textBuffer, HighlightingType.Symbol, symbolsHighlighting.spanInfos, symbolsHighlighting.Version);
       else if ((matchedBrackets = msg as AsyncServerMessage.MatchedBrackets) != null)
       {
+        if (!textBuffer.Properties.ContainsProperty(Constants.BraceMatchingTaggerKey))
+          return;
         var tegget = (NitraBraceMatchingTagger)textBuffer.Properties.GetProperty(Constants.BraceMatchingTaggerKey);
         tegget.Update(matchedBrackets);
       }
