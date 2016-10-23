@@ -76,7 +76,7 @@ namespace Nitra.VisualStudio.Highlighting
               classificationType = _registry.CreateClassificationType(name, new[] { _classificationType });
 
               if (classificationFormatMap == null)
-                classificationFormatMap = _classificationFormatMapService.GetClassificationFormatMap("text");
+                classificationFormatMap = _classificationFormatMapService.GetClassificationFormatMap("code");
 
               var identifierProperties = classificationFormatMap.GetExplicitTextProperties(classificationType);
 
