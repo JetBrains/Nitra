@@ -18,10 +18,6 @@ namespace Nitra.VisualStudio.BraceMatching
              ITextView       _textView;
              ITextBuffer     _textBuffer;
              SnapshotPoint?  _caretPosOpt;
-    readonly Server          _server;
-             int             _id;
-             MatchedBrackets _matchedBrackets;
-
 
     public event EventHandler<SnapshotSpanEventArgs>  TagsChanged;
 

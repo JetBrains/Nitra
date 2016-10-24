@@ -169,5 +169,18 @@ namespace Nitra.VisualStudio
     {
       return new Span(span.StartPos, span.Length);
     }
+
+    public static FileChange Convert(ITextChange change)
+    {
+      var newLength = change.NewLength;
+      var oldLength = change.OldLength;
+
+      if (oldLength == 0 && newLength > 0)
+        return new FileChange.Insert(change.OldPosition, change.NewText);
+      if (oldLength > 0 && newLength == 0)
+        return new FileChange.Delete(Convert(change.OldSpan));
+
+      return new FileChange.Replace(Convert(change.OldSpan), change.NewText);
+    }
   }
 }

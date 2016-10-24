@@ -18,13 +18,13 @@ using Microsoft.VisualStudio.Text.Classification;
 using System.Collections.Immutable;
 using Nitra.VisualStudio.Highlighting;
 using Nitra.VisualStudio.BraceMatching;
+using Nitra.VisualStudio.Models;
 
 namespace Nitra.VisualStudio
 {
   class Server : IDisposable
   {
     Ide.Config _config;
-    Dictionary<int, ITextBuffer> _bufferMap = new Dictionary<int, ITextBuffer>();
 
     public NitraClient Client { get; private set; }
 
@@ -107,21 +107,15 @@ namespace Nitra.VisualStudio
     internal void FileActivated(IWpfTextView wpfTextView, int id)
     {
       var textBuffer = wpfTextView.TextBuffer;
-
-      _bufferMap[id] = textBuffer;
-
       var props = textBuffer.Properties;
-      props.RemoveProperty(Constants.ServerKey);
-      props.AddProperty(Constants.ServerKey, this);
-      props.RemoveProperty(Constants.FileIdKey);
-      props.AddProperty(Constants.FileIdKey, id);
 
-      Client.ResponseMap[id] = msg => wpfTextView.VisualElement.Dispatcher.BeginInvoke(DispatcherPriority.Normal,
-        new Action<AsyncServerMessage>(msg2 => Response(textBuffer, msg2)), msg);
+      FileModel fileModel;
+      if (!props.TryGetProperty<FileModel>(Constants.FileModelKey, out fileModel))
+        props.AddProperty(Constants.FileModelKey, fileModel = new FileModel(id, textBuffer, this, wpfTextView.VisualElement.Dispatcher));
 
-      textBuffer.Changed += TextBuffer_Changed;
-
-      Client.Send(new ClientMessage.FileActivated(id));
+      TextViewModel textViewModel;
+      if (!wpfTextView.Properties.TryGetProperty<TextViewModel>(Constants.TextViewModelKey, out textViewModel))
+        wpfTextView.Properties.AddProperty(Constants.TextViewModelKey, textViewModel = fileModel.GetOrAdd(wpfTextView));
 
       var pointOpt = wpfTextView.Caret.Position.Point.GetPoint(textBuffer, wpfTextView.Caret.Position.Affinity);
       if (pointOpt.HasValue)
@@ -131,50 +125,10 @@ namespace Nitra.VisualStudio
       }
     }
 
-    void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
+    internal void FileDeactivated(IWpfTextView wpfTextView, int id)
     {
-      var textBuffer = (ITextBuffer)sender;
-      var newVersion = e.AfterVersion.VersionNumber - 1;
-      var id         = textBuffer.Properties.GetProperty<int>(Constants.FileIdKey);
-      var changes    = e.Changes;
-
-      if (changes.Count == 1)
-        Client.Send(new ClientMessage.FileChanged(id, newVersion, Convert(changes[0])));
-      else
-      {
-        var builder = ImmutableArray.CreateBuilder<FileChange>(changes.Count);
-
-        foreach (var change in changes)
-          builder.Add(Convert(change));
-
-        Client.Send(new ClientMessage.FileChangedBatch(id, newVersion, builder.MoveToImmutable()));
-      }
-    }
-
-    static FileChange Convert(ITextChange change)
-    {
-      var newLength = change.NewLength;
-      var oldLength = change.OldLength;
-
-      if (oldLength == 0 && newLength > 0)
-        return new FileChange.Insert(change.OldPosition, change.NewText);
-      if (oldLength > 0 && newLength == 0)
-        return new FileChange.Delete(VsUtils.Convert(change.OldSpan));
-
-      return new FileChange.Replace(VsUtils.Convert(change.OldSpan), change.NewText);
-    }
-
-    internal void FileDeactivated(int id)
-    {
-      var textBuffer =  _bufferMap[id];
-      _bufferMap.Remove(id);
-      textBuffer.Changed -= TextBuffer_Changed;
-
-      Action<AsyncServerMessage> value;
-      Client.ResponseMap.TryRemove(id, out value);
-      Client.Send(new ClientMessage.FileDeactivated(id));
-
-      textBuffer.Properties.RemoveProperty(Constants.FileIdKey);
+      var fileModel = wpfTextView.TextBuffer.Properties.GetProperty<FileModel>(Constants.FileModelKey);
+      fileModel.Remove(wpfTextView);
     }
 
     void Response(AsyncServerMessage msg)
@@ -194,41 +148,6 @@ namespace Nitra.VisualStudio
           _spanClassInfos = bilder.MoveToImmutable();
         }
       }
-    }
-
-    void Response(ITextBuffer textBuffer, AsyncServerMessage msg)
-    {
-      AsyncServerMessage.OutliningCreated outlining;
-      AsyncServerMessage.KeywordsHighlightingCreated keywordHighlighting;
-      AsyncServerMessage.SymbolsHighlightingCreated symbolsHighlighting;
-      AsyncServerMessage.MatchedBrackets matchedBrackets;
-
-      if ((outlining = msg as AsyncServerMessage.OutliningCreated) != null)
-      {
-        var tegget = (OutliningTagger)textBuffer.Properties.GetProperty(Constants.OutliningTaggerKey);
-        tegget.Update(outlining);
-      }
-      else if ((keywordHighlighting = msg as AsyncServerMessage.KeywordsHighlightingCreated) != null)
-        UpdateSpanInfos(textBuffer, HighlightingType.Keyword, keywordHighlighting.spanInfos, keywordHighlighting.Version);
-      else if ((symbolsHighlighting = msg as AsyncServerMessage.SymbolsHighlightingCreated) != null)
-        UpdateSpanInfos(textBuffer, HighlightingType.Symbol, symbolsHighlighting.spanInfos, symbolsHighlighting.Version);
-      else if ((matchedBrackets = msg as AsyncServerMessage.MatchedBrackets) != null)
-      {
-        if (!textBuffer.Properties.ContainsProperty(Constants.BraceMatchingTaggerKey))
-          return;
-        var tegget = (NitraBraceMatchingTagger)textBuffer.Properties.GetProperty(Constants.BraceMatchingTaggerKey);
-        tegget.Update(matchedBrackets);
-      }
-
-    }
-
-    void UpdateSpanInfos(ITextBuffer textBuffer, HighlightingType highlightingType, ImmutableArray<SpanInfo> spanInfos, int version)
-    {
-      if (!textBuffer.Properties.ContainsProperty(Constants.NitraEditorClassifierKey))
-        return;
-
-      var tegget = (NitraEditorClassifier)textBuffer.Properties.GetProperty(Constants.NitraEditorClassifierKey);
-      tegget.Update(highlightingType, spanInfos, version);
     }
   }
 }

@@ -390,7 +390,7 @@ namespace Nitra.VisualStudio
           server.FileActivated(wpfTextView, id);
       else
         foreach (var server in _servers)
-          server.FileDeactivated(id);
+          server.FileDeactivated(wpfTextView, id);
     }
 
     private void SubscibeToSolutionEvents()
