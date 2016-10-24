@@ -27,7 +27,7 @@ namespace Nitra.VisualStudio.Highlighting
     readonly ImmutableArray<SpanInfo>[]           _spanInfos = new ImmutableArray<SpanInfo>[(int)HighlightingType.Count];
     readonly ITextSnapshot[]                      _snapshots = new ITextSnapshot[(int)HighlightingType.Count];
     readonly IClassificationFormatMapService      _classificationFormatMapService;
-             Server                               _textBuffer;
+             Server                               _server;
 
     public NitraEditorClassifier(IClassificationTypeRegistryService registry, IClassificationFormatMapService formatMapService, ITextBuffer buffer)
     {
@@ -48,10 +48,10 @@ namespace Nitra.VisualStudio.Highlighting
     {
       get
       {
-        if (_textBuffer == null)
-          _textBuffer = (Server)_buffer.Properties.GetProperty(Constants.ServerKey);
+        if (_server == null)
+          _server = (Server)_buffer.Properties.GetProperty(Constants.ServerKey);
 
-        return _textBuffer;
+        return _server;
       }
     }
 
@@ -112,15 +112,6 @@ namespace Nitra.VisualStudio.Highlighting
 
 #pragma warning restore 67
 
-    /// <summary>
-    /// Gets all the <see cref="ClassificationSpan"/> objects that intersect with the given range of text.
-    /// </summary>
-    /// <remarks>
-    /// This method scans the given SnapshotSpan for potential matches for this classification.
-    /// In this instance, it classifies everything and returns each span as a new ClassificationSpan.
-    /// </remarks>
-    /// <param name="processedSpan">The span currently being classified.</param>
-    /// <returns>A list of ClassificationSpans that represent spans identified to be of this classification.</returns>
     public IList<ClassificationSpan> GetClassificationSpans(SnapshotSpan processedSpan)
     {
       var currentSnapshot = processedSpan.Snapshot;

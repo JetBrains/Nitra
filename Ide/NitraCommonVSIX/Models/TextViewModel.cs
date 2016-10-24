@@ -4,20 +4,23 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Text.Editor;
+using Nitra.ClientServer.Messages;
 using static Nitra.ClientServer.Messages.AsyncServerMessage;
+using Nitra.VisualStudio.BraceMatching;
 
 namespace Nitra.VisualStudio.Models
 {
   class TextViewModel : IEquatable<TextViewModel>, IDisposable
   {
-    readonly FileModel              _fileModel;
-    readonly IWpfTextView           _wpfTextView;
-             MatchedBrackets        _matchedBrackets;
+    public   FileModel                FileModel { get; }
+    readonly IWpfTextView             _wpfTextView;
+             NitraBraceMatchingTagger _braceMatchingTaggerOpt;
+    public   MatchedBrackets          MatchedBrackets { get; private set; }
 
     public TextViewModel(IWpfTextView wpfTextView, FileModel file)
     {
       _wpfTextView = wpfTextView;
-      _fileModel   = file;
+      FileModel   = file;
     }
 
     public bool Equals(TextViewModel other)
@@ -48,6 +51,17 @@ namespace Nitra.VisualStudio.Models
     public void Dispose()
     {
       _wpfTextView.Properties.RemoveProperty(Constants.TextViewModelKey);
+    }
+
+    internal void Reset()
+    {
+      Update(default(MatchedBrackets));
+    }
+
+    internal void Update(MatchedBrackets matchedBrackets)
+    {
+      MatchedBrackets = matchedBrackets;
+      _braceMatchingTaggerOpt?.Update();
     }
   }
 }

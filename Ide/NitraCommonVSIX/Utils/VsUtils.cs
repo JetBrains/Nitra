@@ -4,6 +4,7 @@ using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Nitra.ClientServer.Messages;
+using Nitra.VisualStudio.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -181,6 +182,24 @@ namespace Nitra.VisualStudio
         return new FileChange.Delete(Convert(change.OldSpan));
 
       return new FileChange.Replace(Convert(change.OldSpan), change.NewText);
+    }
+
+    public static FileModel GetOrCreateFileModel(IWpfTextView wpfTextView, int id, Server server)
+    {
+      var textBuffer = wpfTextView.TextBuffer;
+      var props      = textBuffer.Properties;
+      FileModel fileModel;
+      if (!props.TryGetProperty<FileModel>(Constants.FileModelKey, out fileModel))
+        props.AddProperty(Constants.FileModelKey, fileModel = new FileModel(id, textBuffer, server, wpfTextView.VisualElement.Dispatcher));
+      return fileModel;
+    }
+
+    public static TextViewModel GetOrCreateTextViewModel(IWpfTextView wpfTextView, FileModel fileModel)
+    {
+      TextViewModel textViewModel;
+      if (!wpfTextView.Properties.TryGetProperty<TextViewModel>(Constants.TextViewModelKey, out textViewModel))
+        wpfTextView.Properties.AddProperty(Constants.TextViewModelKey, textViewModel = fileModel.GetOrAdd(wpfTextView));
+      return textViewModel;
     }
   }
 }

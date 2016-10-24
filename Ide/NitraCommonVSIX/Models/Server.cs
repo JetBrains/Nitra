@@ -28,8 +28,6 @@ namespace Nitra.VisualStudio
 
     public NitraClient Client { get; private set; }
 
-
-
     public Server(StringManager stringManager, Ide.Config config)
     {
       var client = new NitraClient(stringManager);
@@ -104,18 +102,14 @@ namespace Nitra.VisualStudio
       Client.Send(new ClientMessage.FileUnloaded(id));
     }
 
-    internal void FileActivated(IWpfTextView wpfTextView, int id)
+    internal void ViewActivated(IWpfTextView wpfTextView, int id)
     {
       var textBuffer = wpfTextView.TextBuffer;
-      var props = textBuffer.Properties;
 
-      FileModel fileModel;
-      if (!props.TryGetProperty<FileModel>(Constants.FileModelKey, out fileModel))
-        props.AddProperty(Constants.FileModelKey, fileModel = new FileModel(id, textBuffer, this, wpfTextView.VisualElement.Dispatcher));
+      FileModel     fileModel     = VsUtils.GetOrCreateFileModel(wpfTextView, id, this);
+      TextViewModel textViewModel = VsUtils.GetOrCreateTextViewModel(wpfTextView, fileModel);
 
-      TextViewModel textViewModel;
-      if (!wpfTextView.Properties.TryGetProperty<TextViewModel>(Constants.TextViewModelKey, out textViewModel))
-        wpfTextView.Properties.AddProperty(Constants.TextViewModelKey, textViewModel = fileModel.GetOrAdd(wpfTextView));
+      fileModel.ViewActivated(textViewModel);
 
       var pointOpt = wpfTextView.Caret.Position.Point.GetPoint(textBuffer, wpfTextView.Caret.Position.Affinity);
       if (pointOpt.HasValue)
@@ -125,7 +119,7 @@ namespace Nitra.VisualStudio
       }
     }
 
-    internal void FileDeactivated(IWpfTextView wpfTextView, int id)
+    internal void ViewDeactivated(IWpfTextView wpfTextView, int id)
     {
       var fileModel = wpfTextView.TextBuffer.Properties.GetProperty<FileModel>(Constants.FileModelKey);
       fileModel.Remove(wpfTextView);

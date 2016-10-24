@@ -10,14 +10,26 @@ using System.ComponentModel.Composition;
 using Nitra.ClientServer.Messages;
 using System.Collections.Immutable;
 using static Nitra.ClientServer.Messages.AsyncServerMessage;
+using Nitra.VisualStudio.Models;
 
 namespace Nitra.VisualStudio.BraceMatching
 {
   public class NitraBraceMatchingTagger : ITagger<TextMarkerTag>
   {
-             ITextView       _textView;
-             ITextBuffer     _textBuffer;
-             SnapshotPoint?  _caretPosOpt;
+             TextViewModel  _textViewModelOpt;
+    readonly ITextView      _textView;
+    readonly ITextBuffer    _textBuffer;
+             SnapshotPoint? _caretPosOpt;
+
+    internal TextViewModel TextViewModel
+    {
+      get
+      {
+        if (_textViewModelOpt == null)
+          _textViewModelOpt = (TextViewModel)_textView.Properties.GetProperty(Constants.TextViewModelKey);
+        return _textViewModelOpt;
+      }
+    }
 
     public event EventHandler<SnapshotSpanEventArgs>  TagsChanged;
 
@@ -26,13 +38,9 @@ namespace Nitra.VisualStudio.BraceMatching
       _textView    = textView;
       _textBuffer  = textBuffer;
       _caretPosOpt = null;
-      _id          = textBuffer.Properties.GetProperty<int>(Constants.FileIdKey);
-      _server      = (Server)_textBuffer.Properties.GetProperty(Constants.ServerKey);
 
       _textView.Caret.PositionChanged += CaretPositionChanged;
       _textView.LayoutChanged         += ViewLayoutChanged;
-
-      //var path = sourceBuffer.GetFilePath();
     }
 
 
@@ -53,16 +61,17 @@ namespace Nitra.VisualStudio.BraceMatching
 
       if (_caretPosOpt.HasValue)
       {
+        var fileModel = TextViewModel.FileModel;
         var pos = _caretPosOpt.Value;
-        _server.CaretPositionChanged(_id, pos.Position, pos.Snapshot.Version.VersionNumber - 1);
+        fileModel.Server.CaretPositionChanged(fileModel.Id, pos.Position, pos.Snapshot.Version.VersionNumber - 1);
       }
       else
-        _matchedBrackets = null;
+        TextViewModel.Reset();
     }
 
     public IEnumerable<ITagSpan<TextMarkerTag>> GetTags(NormalizedSnapshotSpanCollection spans)
     {
-      var matchedBrackets = _matchedBrackets;
+      var matchedBrackets = TextViewModel.MatchedBrackets;
 
       if (!_caretPosOpt.HasValue || matchedBrackets == null)
         yield break;
@@ -90,9 +99,8 @@ namespace Nitra.VisualStudio.BraceMatching
       return new TagSpan<TextMarkerTag>(span, new TextMarkerTag(tagType));
     }
 
-    internal void Update(AsyncServerMessage.MatchedBrackets matchedBrackets)
+    internal void Update()
     {
-      _matchedBrackets = matchedBrackets;
       TagsChanged?.Invoke(this, new SnapshotSpanEventArgs(new SnapshotSpan(_textBuffer.CurrentSnapshot, 0, _textBuffer.CurrentSnapshot.Length)));
     }
   }

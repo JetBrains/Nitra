@@ -9,22 +9,24 @@ using Microsoft.VisualStudio.Text;
 using System.Windows.Threading;
 using Nitra.ClientServer.Messages;
 using System.Collections.Immutable;
+using Nitra.VisualStudio.Highlighting;
 
 namespace Nitra.VisualStudio.Models
 {
   class FileModel : IDisposable
   {
-    readonly ITextBuffer            _textBuffer;
-    readonly Server                 _server;
-    readonly int                    _id;
+    readonly ITextBuffer                             _textBuffer;
+    public   Server                                  Server { get; }
+    public   int                                     Id     { get; }
     readonly Dictionary<IWpfTextView, TextViewModel> _textViewModelsMap = new Dictionary<IWpfTextView, TextViewModel>();
-    private Dispatcher dispatcher;
+             TextViewModel                           _activeTextViewModelOpt;
+             Dispatcher                              _dispatcher;
 
     public FileModel(int id, ITextBuffer textBuffer, Server server, Dispatcher dispatcher)
     {
-      _id         = id;
+      Id          = id;
+      Server      = server;
       _textBuffer = textBuffer;
-      _server     = server;
 
       server.Client.ResponseMap[id] = msg => dispatcher.BeginInvoke(DispatcherPriority.Normal,
         new Action<AsyncServerMessage>(msg2 => Response(msg2)), msg);
@@ -58,13 +60,18 @@ namespace Nitra.VisualStudio.Models
       return;
     }
 
+    internal void ViewActivated(TextViewModel textViewModel)
+    {
+      _activeTextViewModelOpt = textViewModel;
+    }
+
     public void Dispose()
     {
       _textBuffer.Changed -= TextBuffer_Changed;
-      var client = _server.Client;
+      var client = Server.Client;
       Action<AsyncServerMessage> value;
-      client.ResponseMap.TryRemove(_id, out value);
-      client.Send(new ClientMessage.FileDeactivated(_id));
+      client.ResponseMap.TryRemove(Id, out value);
+      client.Send(new ClientMessage.FileDeactivated(Id));
       _textBuffer.Properties.RemoveProperty(Constants.FileModelKey);
     }
 
@@ -76,7 +83,7 @@ namespace Nitra.VisualStudio.Models
       var changes = e.Changes;
 
       if (changes.Count == 1)
-        _server.Client.Send(new ClientMessage.FileChanged(id, newVersion, VsUtils.Convert(changes[0])));
+        Server.Client.Send(new ClientMessage.FileChanged(id, newVersion, VsUtils.Convert(changes[0])));
       else
       {
         var builder = ImmutableArray.CreateBuilder<FileChange>(changes.Count);
@@ -84,7 +91,7 @@ namespace Nitra.VisualStudio.Models
         foreach (var change in changes)
           builder.Add(VsUtils.Convert(change));
 
-        _server.Client.Send(new ClientMessage.FileChangedBatch(id, newVersion, builder.MoveToImmutable()));
+        Server.Client.Send(new ClientMessage.FileChangedBatch(id, newVersion, builder.MoveToImmutable()));
       }
     }
 
@@ -107,10 +114,10 @@ namespace Nitra.VisualStudio.Models
         UpdateSpanInfos(textBuffer, HighlightingType.Symbol, symbolsHighlighting.spanInfos, symbolsHighlighting.Version);
       else if ((matchedBrackets = msg as MatchedBrackets) != null)
       {
-        if (!textBuffer.Properties.ContainsProperty(Constants.BraceMatchingTaggerKey))
+        if (_activeTextViewModelOpt == null)
           return;
-        var tegget = (NitraBraceMatchingTagger)textBuffer.Properties.GetProperty(Constants.BraceMatchingTaggerKey);
-        tegget.Update(matchedBrackets);
+
+        _activeTextViewModelOpt.Update(matchedBrackets);
       }
     }
 

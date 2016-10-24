@@ -387,10 +387,10 @@ namespace Nitra.VisualStudio
 
       if (e.OnScreen)
         foreach (var server in _servers)
-          server.FileActivated(wpfTextView, id);
+          server.ViewActivated(wpfTextView, id);
       else
         foreach (var server in _servers)
-          server.FileDeactivated(wpfTextView, id);
+          server.ViewDeactivated(wpfTextView, id);
     }
 
     private void SubscibeToSolutionEvents()
