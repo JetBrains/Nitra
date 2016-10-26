@@ -17,6 +17,23 @@ namespace Nitra.VisualStudio.Models
              NitraBraceMatchingTagger _braceMatchingTaggerOpt;
     public   MatchedBrackets          MatchedBrackets { get; private set; }
 
+    public NitraBraceMatchingTagger BraceMatchingTaggerOpt
+    {
+      get
+      {
+        if (_braceMatchingTaggerOpt == null)
+        {
+          var props = _wpfTextView.TextBuffer.Properties;
+          if (!props.ContainsProperty(Constants.BraceMatchingTaggerKey))
+            return null;
+
+          _braceMatchingTaggerOpt = props.GetProperty<NitraBraceMatchingTagger>(Constants.BraceMatchingTaggerKey);
+        }
+
+        return _braceMatchingTaggerOpt;
+      }
+    }
+
     public TextViewModel(IWpfTextView wpfTextView, FileModel file)
     {
       _wpfTextView = wpfTextView;
@@ -61,7 +78,7 @@ namespace Nitra.VisualStudio.Models
     internal void Update(MatchedBrackets matchedBrackets)
     {
       MatchedBrackets = matchedBrackets;
-      _braceMatchingTaggerOpt?.Update();
+      BraceMatchingTaggerOpt?.Update();
     }
   }
 }

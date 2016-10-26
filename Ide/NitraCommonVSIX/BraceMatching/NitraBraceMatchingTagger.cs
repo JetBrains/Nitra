@@ -21,16 +21,6 @@ namespace Nitra.VisualStudio.BraceMatching
     readonly ITextBuffer    _textBuffer;
              SnapshotPoint? _caretPosOpt;
 
-    internal TextViewModel TextViewModel
-    {
-      get
-      {
-        if (_textViewModelOpt == null)
-          _textViewModelOpt = (TextViewModel)_textView.Properties.GetProperty(Constants.TextViewModelKey);
-        return _textViewModelOpt;
-      }
-    }
-
     public event EventHandler<SnapshotSpanEventArgs>  TagsChanged;
 
     public NitraBraceMatchingTagger(ITextView textView, ITextBuffer textBuffer)
@@ -41,8 +31,19 @@ namespace Nitra.VisualStudio.BraceMatching
 
       _textView.Caret.PositionChanged += CaretPositionChanged;
       _textView.LayoutChanged         += ViewLayoutChanged;
+
+      UpdateAtCaretPosition(_textView.Caret.Position);
     }
 
+    internal TextViewModel TextViewModel
+    {
+      get
+      {
+        if (_textViewModelOpt == null)
+          _textViewModelOpt = (TextViewModel)_textView.Properties.GetProperty(Constants.TextViewModelKey);
+        return _textViewModelOpt;
+      }
+    }
 
     void ViewLayoutChanged(object source, TextViewLayoutChangedEventArgs e)
     {

@@ -106,17 +106,13 @@ namespace Nitra.VisualStudio
     {
       var textBuffer = wpfTextView.TextBuffer;
 
+      if (!textBuffer.Properties.ContainsProperty(Constants.ServerKey))
+        textBuffer.Properties.AddProperty(Constants.ServerKey, this);
+
       FileModel     fileModel     = VsUtils.GetOrCreateFileModel(wpfTextView, id, this);
       TextViewModel textViewModel = VsUtils.GetOrCreateTextViewModel(wpfTextView, fileModel);
 
       fileModel.ViewActivated(textViewModel);
-
-      var pointOpt = wpfTextView.Caret.Position.Point.GetPoint(textBuffer, wpfTextView.Caret.Position.Affinity);
-      if (pointOpt.HasValue)
-      {
-        var point = pointOpt.Value;
-        CaretPositionChanged(id, point.Position, point.Snapshot.Version.VersionNumber - 1);
-      }
     }
 
     internal void ViewDeactivated(IWpfTextView wpfTextView, int id)

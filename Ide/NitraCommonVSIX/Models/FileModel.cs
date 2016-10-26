@@ -79,7 +79,8 @@ namespace Nitra.VisualStudio.Models
     {
       var textBuffer = (ITextBuffer)sender;
       var newVersion = e.AfterVersion.VersionNumber - 1;
-      var id = textBuffer.Properties.GetProperty<int>(Constants.FileIdKey);
+      var fileModel = textBuffer.Properties.GetProperty<FileModel>(Constants.FileModelKey);
+      var id = fileModel.Id;
       var changes = e.Changes;
 
       if (changes.Count == 1)
