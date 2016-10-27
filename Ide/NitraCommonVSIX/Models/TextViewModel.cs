@@ -7,6 +7,7 @@ using Microsoft.VisualStudio.Text.Editor;
 using Nitra.ClientServer.Messages;
 using static Nitra.ClientServer.Messages.AsyncServerMessage;
 using Nitra.VisualStudio.BraceMatching;
+using Nitra.VisualStudio.KeyBinding;
 
 namespace Nitra.VisualStudio.Models
 {
@@ -16,6 +17,15 @@ namespace Nitra.VisualStudio.Models
     readonly IWpfTextView             _wpfTextView;
              NitraBraceMatchingTagger _braceMatchingTaggerOpt;
     public   MatchedBrackets          MatchedBrackets { get; private set; }
+    readonly KeyBindingCommandFilter  _keyBindingCommandFilter;
+
+    public TextViewModel(IWpfTextView wpfTextView, FileModel file)
+    {
+      _wpfTextView = wpfTextView;
+      FileModel    = file;
+
+      _keyBindingCommandFilter = new KeyBindingCommandFilter(wpfTextView, file.Server.ServiceProvider, this);
+    }
 
     public NitraBraceMatchingTagger BraceMatchingTaggerOpt
     {
@@ -32,12 +42,6 @@ namespace Nitra.VisualStudio.Models
 
         return _braceMatchingTaggerOpt;
       }
-    }
-
-    public TextViewModel(IWpfTextView wpfTextView, FileModel file)
-    {
-      _wpfTextView = wpfTextView;
-      FileModel   = file;
     }
 
     public bool Equals(TextViewModel other)
@@ -67,6 +71,7 @@ namespace Nitra.VisualStudio.Models
 
     public void Dispose()
     {
+      _keyBindingCommandFilter.Dispose();
       _wpfTextView.Properties.RemoveProperty(Constants.TextViewModelKey);
     }
 

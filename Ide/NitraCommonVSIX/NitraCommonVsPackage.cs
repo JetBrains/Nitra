@@ -151,7 +151,7 @@ namespace Nitra.VisualStudio
 
       foreach (var config in NitraCommonPackage.Configs)
       {
-        var server = new Server(stringManager, config);
+        var server = new Server(stringManager, config, this);
         _servers.Add(server);
       }
 

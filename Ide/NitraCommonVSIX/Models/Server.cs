@@ -19,17 +19,23 @@ using System.Collections.Immutable;
 using Nitra.VisualStudio.Highlighting;
 using Nitra.VisualStudio.BraceMatching;
 using Nitra.VisualStudio.Models;
+using System.Diagnostics.Contracts;
 
 namespace Nitra.VisualStudio
 {
   class Server : IDisposable
   {
     Ide.Config _config;
+    public IServiceProvider ServiceProvider { get; }
 
     public NitraClient Client { get; private set; }
 
-    public Server(StringManager stringManager, Ide.Config config)
+    public Server(StringManager stringManager, Ide.Config config, IServiceProvider serviceProvider)
     {
+      Contract.Requires(ServiceProvider != null);
+
+      ServiceProvider = serviceProvider;
+
       var client = new NitraClient(stringManager);
       client.Send(new ClientMessage.CheckVersion(M.Constants.AssemblyVersionGuid));
       var responseMap = client.ResponseMap;
