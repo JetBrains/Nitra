@@ -19,18 +19,19 @@ namespace Nitra.ViewModels
   {
     public static string ConfigFileName = "config.xml";
 
-    public SolutionVm                              Solution          { get; private set; }
-    public string                                  Name              { get; private set; }
-    public Language                                Language          { get; private set; }
-    public ObservableCollection<GrammarDescriptor> DynamicExtensions { get; private set; }
-    public ObservableCollection<ITest>             Tests             { get; private set; }
-    public IEnumerable<ITest>                      Children          { get { return Tests; } }
-    public string                                  TestSuitePath     { get; set; }
-    public Exception                               Exception         { get; private set; }
-    public TimeSpan                                TestTime          { get; private set; }
-    public StatisticsTask.Container                Statistics        { get; private set; }
-    public Assembly[]                              Assemblies        { get; private set; }
-    public LibReference[]                          Libs              { get; private set; }
+    public SolutionVm                              Solution                { get; private set; }
+    public string                                  Name                    { get; private set; }
+    public Language                                Language                { get; private set; }
+    public ObservableCollection<GrammarDescriptor> DynamicExtensions       { get; private set; }
+    public ObservableCollection<ITest>             Tests                   { get; private set; }
+    public IEnumerable<ITest>                      Children                { get { return Tests; } }
+    public string                                  TestSuitePath           { get; set; }
+    public Exception                               Exception               { get; private set; }
+    public TimeSpan                                TestTime                { get; private set; }
+    public StatisticsTask.Container                Statistics              { get; private set; }
+    public Assembly[]                              Assemblies              { get; private set; }
+    public LibReference[]                          Libs                    { get; private set; }
+    public bool                                    DisableSemanticAnalysis { get; }
 
     public string _hint;
     public override string Hint { get { return _hint; } }
@@ -80,6 +81,7 @@ namespace Nitra.ViewModels
         Assemblies = assemblyRelativePaths.Values.ToArray();
 
         libs.AddRange(languageAndExtensions.Item3);
+        DisableSemanticAnalysis = languageAndExtensions.Item4;
 
         var indent = Environment.NewLine + "  ";
         var para = Environment.NewLine + Environment.NewLine;
@@ -139,7 +141,7 @@ namespace Nitra.ViewModels
       solution.TestSuites.Add(this);
     }
 
-    public string Xml { get { return Utils.MakeXml(_rootPath, Language, DynamicExtensions, Libs); } }
+    public string Xml { get { return Utils.MakeXml(_rootPath, Language, DynamicExtensions, Libs, DisableSemanticAnalysis); } }
 
     public RecoveryAlgorithm RecoveryAlgorithm { get; set; }
 

@@ -86,9 +86,9 @@ namespace Nitra.Visualizer
       return testSuiteName.Any(invalidChars.Contains);
     }
 
-    public static string MakeXml([NotNull] string root, [NotNull] Language language, [NotNull] IEnumerable<GrammarDescriptor> dynamicExtensions, LibReference[] libs)
+    public static string MakeXml([NotNull] string root, [NotNull] Language language, [NotNull] IEnumerable<GrammarDescriptor> dynamicExtensions, LibReference[] libs, bool disableSemanticAnalysis = true)
     {
-      return SerializationHelper.Serialize(language, dynamicExtensions, libs, path => MakeRelativePath(@from: root, isFromDir: true, to: path, isToDir: false));
+      return SerializationHelper.Serialize(language, dynamicExtensions, libs, path => MakeRelativePath(@from: root, isFromDir: true, to: path, isToDir: false), disableSemanticAnalysis);
     }
 
     public static bool IsEmpty(this IEnumerable seq)

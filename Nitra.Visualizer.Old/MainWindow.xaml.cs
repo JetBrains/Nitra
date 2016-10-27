@@ -598,7 +598,10 @@ namespace Nitra.Visualizer
         _currentTest.Run(GetRecoveryAlgorithm());
         _performanceTreeView.ItemsSource = new[] { (_currentTest.Statistics ?? _currentTestFolder.Statistics) };
 
-        _astRoot = _currentTest.File.Ast;
+        if (_currentTest.File.HasAst)
+        {
+          _astRoot = _currentTest.File.Ast;
+        }
         _parseResult = _currentTest.File.ParseResult;
         _foldingStrategy.ParseResult = _parseResult;
         _foldingStrategy.UpdateFoldings(_foldingManager, _text.Document);
