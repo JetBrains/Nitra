@@ -201,5 +201,14 @@ namespace Nitra.VisualStudio
         wpfTextView.Properties.AddProperty(Constants.TextViewModelKey, textViewModel = fileModel.GetOrAdd(wpfTextView));
       return textViewModel;
     }
+
+    public static FileModel TryGetFileModel(ITextBuffer textBuffer)
+    {
+      var props = textBuffer.Properties;
+      FileModel fileModel;
+      if (props.TryGetProperty<FileModel>(Constants.FileModelKey, out fileModel))
+        return fileModel;
+      return null;
+    }
   }
 }

@@ -40,7 +40,12 @@ namespace Nitra.VisualStudio.BraceMatching
       get
       {
         if (_textViewModelOpt == null)
+        {
+          if (!_textView.Properties.ContainsProperty(Constants.TextViewModelKey))
+            return null;
+
           _textViewModelOpt = (TextViewModel)_textView.Properties.GetProperty(Constants.TextViewModelKey);
+        }
         return _textViewModelOpt;
       }
     }
@@ -58,6 +63,9 @@ namespace Nitra.VisualStudio.BraceMatching
 
     void UpdateAtCaretPosition(CaretPosition caretPosition)
     {
+      if (TextViewModel == null)
+        return;
+
       _caretPosOpt = caretPosition.Point.GetPoint(_textBuffer, caretPosition.Affinity);
 
       if (_caretPosOpt.HasValue)

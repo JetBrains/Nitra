@@ -1,23 +1,16 @@
-﻿//------------------------------------------------------------------------------
-// <copyright file="EditorClassifier.cs" company="Company">
-//     Copyright (c) Company.  All rights reserved.
-// </copyright>
-//------------------------------------------------------------------------------
+﻿using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Classification;
+
+using Nitra.ClientServer.Messages;
 
 using System;
 using System.Collections.Generic;
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Classification;
-using System.Diagnostics;
-using Nitra.ClientServer.Messages;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Windows.Media;
 
 namespace Nitra.VisualStudio.Highlighting
 {
-  /// <summary>
-  /// Classifier that classifies all text as an instance of the "EditorClassifier" classification type.
-  /// </summary>
   internal class NitraEditorClassifier : IClassifier
   {
     readonly IClassificationType                  _classificationType;
@@ -76,7 +69,7 @@ namespace Nitra.VisualStudio.Highlighting
               classificationType = _registry.CreateClassificationType(name, new[] { _classificationType });
 
               if (classificationFormatMap == null)
-                classificationFormatMap = _classificationFormatMapService.GetClassificationFormatMap("code");
+                classificationFormatMap = _classificationFormatMapService.GetClassificationFormatMap("nitra");
 
               var identifierProperties = classificationFormatMap.GetExplicitTextProperties(classificationType);
 

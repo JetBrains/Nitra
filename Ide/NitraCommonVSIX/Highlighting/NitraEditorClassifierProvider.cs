@@ -1,22 +1,14 @@
-﻿//------------------------------------------------------------------------------
-// <copyright file="EditorClassifierProvider.cs" company="Company">
-//     Copyright (c) Company.  All rights reserved.
-// </copyright>
-//------------------------------------------------------------------------------
+﻿using System.ComponentModel.Composition;
 
-using System.ComponentModel.Composition;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Utilities;
 
 namespace Nitra.VisualStudio.Highlighting
 {
-  /// <summary>
-  /// Classifier provider. It adds the classifier to the set of classifiers.
-  /// </summary>
   [Export(typeof(IClassifierProvider))]
-  [ContentType("code")] // This classifier applies to all text files.
-  internal class NitraEditorClassifierProvider : IClassifierProvider
+  [ContentType("nitra")] // This classifier applies to all text files.
+  class NitraEditorClassifierProvider : IClassifierProvider
   {
     // Disable "Field is never assigned to..." compiler's warning. Justification: the field is assigned by MEF.
 #pragma warning disable 649

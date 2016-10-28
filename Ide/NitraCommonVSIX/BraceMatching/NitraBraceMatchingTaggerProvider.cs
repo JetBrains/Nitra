@@ -11,7 +11,7 @@ using System.ComponentModel.Composition;
 namespace Nitra.VisualStudio.BraceMatching
 {
   [Export(typeof(IViewTaggerProvider) )]
-  [ContentType("code")]
+  [ContentType("nitra")]
   [TagType(typeof(TextMarkerTag))]
   internal sealed class NitraBraceMatchingTaggerProvider : IViewTaggerProvider
   {
