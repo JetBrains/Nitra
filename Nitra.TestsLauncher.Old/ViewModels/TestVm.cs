@@ -153,7 +153,7 @@ namespace Nitra.ViewModels
       _file._completionPrefix   = completionPrefix;
       _file.ResetCache();
 
-      if (_file.Ast == null)
+      if (TestSuite.DisableSemanticAnalysis || _file.Ast == null)
         return false;
       
       var tests = _testFolder == null ? (IEnumerable<TestVm>)new[] {this} : _testFolder.Tests;

@@ -13,7 +13,7 @@ namespace Nitra.Visualizer.Serialization
   {
     private static XmlSerializer _serializer = new XmlSerializer(typeof(Language));
 
-    public static string Serialize(Nitra.Language language, IEnumerable<GrammarDescriptor> dynamicExtensions, LibReference[] libs, Func<string, string> pathConverter)
+    public static string Serialize(Nitra.Language language, IEnumerable<GrammarDescriptor> dynamicExtensions, LibReference[] libs, Func<string, string> pathConverter, bool disableSemanticAnalysis = false)
     {
       var writer = new StringWriter();
       var data = new Language
@@ -21,13 +21,14 @@ namespace Nitra.Visualizer.Serialization
         Name = language.FullName,
         Path = pathConverter(language.GetType().Assembly.Location),
         DynamicExtensions = dynamicExtensions.Select(g => new DynamicExtension { Name = g.FullName, Path = pathConverter(g.GetType().Assembly.Location) }).ToArray(),
-        Libs = libs.Select(x =>  x.Serialize()).ToArray()
+        Libs = libs.Select(x =>  x.Serialize()).ToArray(),
+        DisableSemanticAnalysis = disableSemanticAnalysis
       };
       _serializer.Serialize(writer, data);
       return writer.ToString();
     }
 
-    public static Tuple<Nitra.Language, GrammarDescriptor[], LibReference[]> Deserialize(string text, Func<string, Assembly> assemblyResolver)
+    public static Tuple<Nitra.Language, GrammarDescriptor[], LibReference[], bool> Deserialize(string text, Func<string, Assembly> assemblyResolver)
     {
       var reader = new StringReader(text);
       var languageInfo = (Language)_serializer.Deserialize(reader);
@@ -51,7 +52,9 @@ namespace Nitra.Visualizer.Serialization
         ? new LibReference[0]
         : languageInfo.Libs.Select(LibReference.Deserialize).ToArray();
 
-      return Tuple.Create(language, dynamicExtensions.ToArray(), libs);
+      var disableSemanticAnalysis = languageInfo.DisableSemanticAnalysis;
+
+      return Tuple.Create(language, dynamicExtensions.ToArray(), libs, disableSemanticAnalysis);
     }
   }
 
@@ -66,6 +69,9 @@ namespace Nitra.Visualizer.Serialization
     public DynamicExtension[] DynamicExtensions { get; set; }
 
     public string[] Libs { get; set; }
+
+    [XmlAttribute]
+    public bool DisableSemanticAnalysis { get; set; }
   }
 
   public sealed class DynamicExtension
