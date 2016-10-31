@@ -57,11 +57,11 @@ namespace Nitra.VisualStudio.CompilerMessages
 
     static TagSpan<ErrorTag> TagSpanFromMessage(CompilerMessage msg, SnapshotSpan snapshotSpan)
     {
-      var errorTag = new ErrorTag(TranslateErrorType(msg.Type), msg.Text);
+      var errorTag = new ErrorTag(ConvertMessageType(msg.Type), msg.Text);
       return new TagSpan<ErrorTag>(snapshotSpan, errorTag);
     }
 
-    static string TranslateErrorType(CompilerMessageType type)
+    static string ConvertMessageType(CompilerMessageType type)
     {
       switch (type)
       {

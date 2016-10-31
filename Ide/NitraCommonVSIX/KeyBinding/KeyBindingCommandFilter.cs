@@ -137,6 +137,7 @@ namespace Nitra.VisualStudio.KeyBinding
       _wpfTextView = null;
       _nextTarget = null;
       _serviceProvider = null;
+      GC.SuppressFinalize(this);
     }
   }
 }

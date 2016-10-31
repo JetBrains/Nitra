@@ -8,6 +8,7 @@ using Nitra.ClientServer.Messages;
 using static Nitra.ClientServer.Messages.AsyncServerMessage;
 using Nitra.VisualStudio.BraceMatching;
 using Nitra.VisualStudio.KeyBinding;
+using Microsoft.VisualStudio.Text;
 
 namespace Nitra.VisualStudio.Models
 {
@@ -84,6 +85,31 @@ namespace Nitra.VisualStudio.Models
     {
       MatchedBrackets = matchedBrackets;
       BraceMatchingTaggerOpt?.Update();
+    }
+
+    internal void NavigateTo(ITextSnapshot snapshot, int pos)
+    {
+      _wpfTextView.Caret.MoveTo(new SnapshotPoint(snapshot, pos));
+      _wpfTextView.ViewScroller.EnsureSpanVisible(new SnapshotSpan(snapshot, pos, 0));
+    }
+
+    internal void NavigateTo(SnapshotPoint snapshotPoint)
+    {
+      _wpfTextView.Caret.MoveTo(snapshotPoint);
+      _wpfTextView.ViewScroller.EnsureSpanVisible(new SnapshotSpan(snapshotPoint, snapshotPoint));
+    }
+
+    internal void Navigate(int line, int column)
+    {
+      Navigate(_wpfTextView.TextBuffer.CurrentSnapshot, line, column);
+    }
+
+    internal void Navigate(ITextSnapshot snapshot, int line, int column)
+    {
+      var snapshotLine  = snapshot.GetLineFromLineNumber(line);
+      var snapshotPoint = snapshotLine.Start + column;
+      NavigateTo(snapshotPoint);
+      _wpfTextView.ToVsTextView().SendExplicitFocus();
     }
   }
 }

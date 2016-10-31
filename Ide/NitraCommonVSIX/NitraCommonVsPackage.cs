@@ -293,7 +293,7 @@ namespace Nitra.VisualStudio
 
       string action = e.Hierarchy.GetProp<string>(e.ItemId, __VSHPROPID4.VSHPROPID_BuildAction);
 
-      if (action == "Compile")
+      if (action == "Compile" || action == "Nitra")
       {
         object obj;
         var hr2 = e.Hierarchy.GetProperty(e.ItemId, (int)__VSHPROPID.VSHPROPID_ExtObject, out obj);
@@ -322,7 +322,7 @@ namespace Nitra.VisualStudio
 
       string action = e.Hierarchy.GetProp<string>(e.ItemId, __VSHPROPID4.VSHPROPID_BuildAction);
 
-      if (action == "Compile")
+      if (action == "Compile" || action == "Nitra")
         foreach (var server in _servers)
           server.FileUnloaded(id);
 
@@ -379,15 +379,17 @@ namespace Nitra.VisualStudio
 
     private void OnDocumentWindowOnScreenChanged(object sender, DocumentWindowOnScreenChangedEventArgs e)
     {
-      var id = _stringManager.GetId(e.Info.FullPath);
-
-      var vsTextView  = VsShellUtilities.GetTextView(e.Info.WindowFrame);
+      var fullPath    = e.Info.FullPath;
+      var id          = _stringManager.GetId(fullPath);
+      var windowFrame = e.Info.WindowFrame;
+      var vsTextView  = VsShellUtilities.GetTextView(windowFrame);
       var wpfTextView = vsTextView.ToIWpfTextView();
       var dispatcher  = wpfTextView.VisualElement.Dispatcher;
+      var hierarchy   = windowFrame.GetHierarchyFromVsWindowFrame();
 
       if (e.OnScreen)
         foreach (var server in _servers)
-          server.ViewActivated(wpfTextView, id);
+          server.ViewActivated(wpfTextView, id, hierarchy, fullPath);
       else
         foreach (var server in _servers)
           server.ViewDeactivated(wpfTextView, id);

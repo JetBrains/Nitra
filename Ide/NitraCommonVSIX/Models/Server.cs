@@ -20,6 +20,7 @@ using Nitra.VisualStudio.Highlighting;
 using Nitra.VisualStudio.BraceMatching;
 using Nitra.VisualStudio.Models;
 using System.Diagnostics.Contracts;
+using Microsoft.VisualStudio.Shell.Interop;
 
 namespace Nitra.VisualStudio
 {
@@ -108,14 +109,14 @@ namespace Nitra.VisualStudio
       Client.Send(new ClientMessage.FileUnloaded(id));
     }
 
-    internal void ViewActivated(IWpfTextView wpfTextView, int id)
+    internal void ViewActivated(IWpfTextView wpfTextView, int id, IVsHierarchy hierarchy, string fullPath)
     {
       var textBuffer = wpfTextView.TextBuffer;
 
       if (!textBuffer.Properties.ContainsProperty(Constants.ServerKey))
         textBuffer.Properties.AddProperty(Constants.ServerKey, this);
 
-      FileModel     fileModel     = VsUtils.GetOrCreateFileModel(wpfTextView, id, this);
+      FileModel fileModel = VsUtils.GetOrCreateFileModel(wpfTextView, id, this, hierarchy, fullPath);
       TextViewModel textViewModel = VsUtils.GetOrCreateTextViewModel(wpfTextView, fileModel);
 
       fileModel.ViewActivated(textViewModel);

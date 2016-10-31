@@ -184,13 +184,14 @@ namespace Nitra.VisualStudio
       return new FileChange.Replace(Convert(change.OldSpan), change.NewText);
     }
 
-    public static FileModel GetOrCreateFileModel(IWpfTextView wpfTextView, int id, Server server)
+    public static FileModel GetOrCreateFileModel(IWpfTextView wpfTextView, int id, Server server, IVsHierarchy hierarchy, string fullPath)
     {
       var textBuffer = wpfTextView.TextBuffer;
       var props      = textBuffer.Properties;
       FileModel fileModel;
       if (!props.TryGetProperty<FileModel>(Constants.FileModelKey, out fileModel))
-        props.AddProperty(Constants.FileModelKey, fileModel = new FileModel(id, textBuffer, server, wpfTextView.VisualElement.Dispatcher));
+        props.AddProperty(Constants.FileModelKey, 
+          fileModel = new FileModel(id, textBuffer, server, wpfTextView.VisualElement.Dispatcher, hierarchy, fullPath));
       return fileModel;
     }
 
@@ -209,6 +210,31 @@ namespace Nitra.VisualStudio
       if (props.TryGetProperty<FileModel>(Constants.FileModelKey, out fileModel))
         return fileModel;
       return null;
+    }
+
+    public static IVsHierarchy GetHierarchyFromVsWindowFrame(this IVsWindowFrame frame)
+    {
+      object objHier;
+      if (ErrorHelper.Succeeded(frame.GetProperty((int)__VSFPROPID.VSFPROPID_Hierarchy, out objHier)))
+      {
+        var vsHierarchy = (IVsHierarchy)objHier;
+        return vsHierarchy;
+      }
+
+      return null;
+    }
+
+    public static IVsHierarchy GetHierarchyFromCookie(this IVsRunningDocumentTable rdt, uint docCookie)
+    {
+      uint flags, readlocks, editlocks;
+      string name;
+      IVsHierarchy hier;
+      uint itemid;
+      IntPtr docData;
+
+      rdt.GetDocumentInfo(docCookie, out flags, out readlocks, out editlocks, out name, out hier, out itemid, out docData);
+
+      return hier;
     }
   }
 }
