@@ -40,7 +40,7 @@ namespace Nitra.Visualizer
       _libsChangedTimer.Interval = TimeSpan.FromSeconds(1.3);
       _libsChangedTimer.Tick    += _libsEdit_timer_Tick;
 
-      DataContext = _model = new TestSuiteCreateOrEditModel(settings, isCreate);
+      DataContext = _model = new TestSuiteCreateOrEditModel(settings, isCreate, baseTestSuite.DisableSemanticAnalysis);
 
       InitializeComponent();
 
@@ -172,7 +172,7 @@ namespace Nitra.Visualizer
         }
 
         var dynamicExtensions = _model.DynamicExtensions.Where(x => x.IsEnabled && x.IsChecked).Select(x => x.Descriptor);
-        var xml               = Utils.MakeXml(root, selectedLanguage, dynamicExtensions, _model.NormalizedLibs);
+        var xml               = Utils.MakeXml(root, selectedLanguage, dynamicExtensions, _model.NormalizedLibs, _model.IsSemanticAnalysisDisabled);
         var configPath        = Path.Combine(path, TestSuiteVm.ConfigFileName);
         File.WriteAllText(configPath, xml);
       }

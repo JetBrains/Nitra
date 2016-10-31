@@ -10,6 +10,7 @@ using Nitra.ProjectSystem;
 using Nitra.ViewModels;
 using Nitra.Visualizer.Properties;
 using File = System.IO.File;
+using Type = Nitra.Declarations.Type;
 
 namespace Nitra.Visualizer
 {
@@ -17,7 +18,7 @@ namespace Nitra.Visualizer
   {
     private readonly Settings _settings;
 
-    public TestSuiteCreateOrEditModel(Settings settings, bool isCreate)
+    public TestSuiteCreateOrEditModel(Settings settings, bool isCreate, bool isSemanticAnalysisDisabled = false)
     {
       _settings = settings;
 
@@ -26,6 +27,7 @@ namespace Nitra.Visualizer
       RootFolder = Path.GetDirectoryName(_settings.CurrentSolution);
       Languages = new ObservableCollection<Language>();
       DynamicExtensions = new ObservableCollection<DynamicExtensionModel>();
+      IsSemanticAnalysisDisabled = isSemanticAnalysisDisabled;
     }
 
     public bool IsCreate
@@ -75,6 +77,16 @@ namespace Nitra.Visualizer
 
     public static readonly DependencyProperty AssembliesProperty =
         DependencyProperty.Register("Assemblies", typeof(string), typeof(TestSuiteCreateOrEditModel), new FrameworkPropertyMetadata("", OnAssembliesChanged));
+
+    public bool IsSemanticAnalysisDisabled
+    {
+      get { return (bool) GetValue(IsSemanticAnalysisDisabledProperty); }
+      set { SetValue(IsSemanticAnalysisDisabledProperty, value);}
+    }
+
+    public static readonly DependencyProperty IsSemanticAnalysisDisabledProperty =
+        DependencyProperty.Register("IsSemanticAnalysisDisabled", typeof(bool), typeof(TestSuiteCreateOrEditModel),
+            new FrameworkPropertyMetadata(false));
 
     private static void OnAssembliesChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
