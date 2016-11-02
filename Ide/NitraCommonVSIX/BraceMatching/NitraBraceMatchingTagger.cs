@@ -80,7 +80,7 @@ namespace Nitra.VisualStudio.BraceMatching
 
     public IEnumerable<ITagSpan<TextMarkerTag>> GetTags(NormalizedSnapshotSpanCollection spans)
     {
-      var matchedBrackets = TextViewModel.MatchedBrackets;
+      var matchedBrackets = TextViewModel?.MatchedBrackets;
 
       if (!_caretPosOpt.HasValue || matchedBrackets == null)
         yield break;
