@@ -13,14 +13,14 @@ namespace Nitra.VisualStudio.BraceMatching
   [Export(typeof(IViewTaggerProvider) )]
   [ContentType("nitra")]
   [TagType(typeof(TextMarkerTag))]
-  internal sealed class NitraBraceMatchingTaggerProvider : IViewTaggerProvider
+  internal sealed class InteractiveHighlightingProvider : IViewTaggerProvider
   {
     [Import] ITextDocumentFactoryService _textDocumentFactoryService = null;
 
     public ITagger<T> CreateTagger<T>(ITextView textView, ITextBuffer buffer) where T : ITag
     {
       return (ITagger<T>)buffer.Properties.GetOrCreateSingletonProperty(Constants.BraceMatchingTaggerKey, 
-        () => new NitraBraceMatchingTagger(textView, buffer));
+        () => new InteractiveHighlightingTagger(textView, buffer));
     }
   }
 }

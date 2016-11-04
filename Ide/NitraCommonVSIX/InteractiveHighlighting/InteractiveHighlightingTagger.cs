@@ -14,7 +14,10 @@ using Nitra.VisualStudio.Models;
 
 namespace Nitra.VisualStudio.BraceMatching
 {
-  public class NitraBraceMatchingTagger : ITagger<TextMarkerTag>
+    /// <summary>
+    /// 
+    /// </summary>
+  public class InteractiveHighlightingTagger : ITagger<TextMarkerTag>
   {
              TextViewModel  _textViewModelOpt;
     readonly ITextView      _textView;
@@ -23,7 +26,7 @@ namespace Nitra.VisualStudio.BraceMatching
 
     public event EventHandler<SnapshotSpanEventArgs>  TagsChanged;
 
-    public NitraBraceMatchingTagger(ITextView textView, ITextBuffer textBuffer)
+    public InteractiveHighlightingTagger(ITextView textView, ITextBuffer textBuffer)
     {
       _textView    = textView;
       _textBuffer  = textBuffer;
@@ -115,7 +118,7 @@ namespace Nitra.VisualStudio.BraceMatching
             var loc = definition.Location;
             if (loc.File.FileId != id)
               continue;
-            yield return MakeTagSpan(lastSnapshot, currentSnapshot, loc.Span, Constants.BraceMatchingSecond);
+            yield return MakeTagSpan(lastSnapshot, currentSnapshot, loc.Span, Constants.CurrentSymbol);
           }
 
           foreach (var fileEntries in symbolRefs.References)

@@ -16,7 +16,7 @@ namespace Nitra.VisualStudio.Models
   {
     public   FileModel                FileModel { get; }
     readonly IWpfTextView             _wpfTextView;
-             NitraBraceMatchingTagger _braceMatchingTaggerOpt;
+             InteractiveHighlightingTagger _braceMatchingTaggerOpt;
     public   MatchedBrackets          MatchedBrackets      { get; private set; }
     public   FindSymbolReferences     FindSymbolReferences { get; private set; }
     readonly KeyBindingCommandFilter  _keyBindingCommandFilter;
@@ -29,7 +29,7 @@ namespace Nitra.VisualStudio.Models
       _keyBindingCommandFilter = new KeyBindingCommandFilter(wpfTextView, file.Server.ServiceProvider, this);
     }
 
-    public NitraBraceMatchingTagger BraceMatchingTaggerOpt
+    public InteractiveHighlightingTagger BraceMatchingTaggerOpt
     {
       get
       {
@@ -39,7 +39,7 @@ namespace Nitra.VisualStudio.Models
           if (!props.ContainsProperty(Constants.BraceMatchingTaggerKey))
             return null;
 
-          _braceMatchingTaggerOpt = props.GetProperty<NitraBraceMatchingTagger>(Constants.BraceMatchingTaggerKey);
+          _braceMatchingTaggerOpt = props.GetProperty<InteractiveHighlightingTagger>(Constants.BraceMatchingTaggerKey);
         }
 
         return _braceMatchingTaggerOpt;
