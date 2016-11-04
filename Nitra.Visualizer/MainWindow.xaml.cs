@@ -1057,7 +1057,7 @@ namespace Nitra.Visualizer
       else if ((refreshProjectFailed = msg as AsyncServerMessage.RefreshProjectFailed) != null)
         MessageBox.Show(this, "Project loading is failed in call RefreshProject().\r\nException: " + refreshProjectFailed.exception);
       else if ((exception = msg as AsyncServerMessage.Exception) != null)
-        MessageBox.Show(this, "Exception occurred on the server: " + refreshProjectFailed.exception);
+        MessageBox.Show(this, "Exception occurred on the server: " + exception.exception);
 
       if (ViewModel.CurrentFile == null || msg.FileId >= 0 && msg.FileId != ViewModel.CurrentFile.Id || msg.Version >= 0 && msg.Version != ViewModel.CurrentFile.Version)
         return;
