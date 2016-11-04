@@ -17,7 +17,8 @@ namespace Nitra.VisualStudio.Models
     public   FileModel                FileModel { get; }
     readonly IWpfTextView             _wpfTextView;
              NitraBraceMatchingTagger _braceMatchingTaggerOpt;
-    public   MatchedBrackets          MatchedBrackets { get; private set; }
+    public   MatchedBrackets          MatchedBrackets      { get; private set; }
+    public   FindSymbolReferences     FindSymbolReferences { get; private set; }
     readonly KeyBindingCommandFilter  _keyBindingCommandFilter;
 
     public TextViewModel(IWpfTextView wpfTextView, FileModel file)
@@ -84,6 +85,12 @@ namespace Nitra.VisualStudio.Models
     internal void Update(MatchedBrackets matchedBrackets)
     {
       MatchedBrackets = matchedBrackets;
+      BraceMatchingTaggerOpt?.Update();
+    }
+
+    internal void Update(FindSymbolReferences findSymbolReferences)
+    {
+      FindSymbolReferences = findSymbolReferences;
       BraceMatchingTaggerOpt?.Update();
     }
 

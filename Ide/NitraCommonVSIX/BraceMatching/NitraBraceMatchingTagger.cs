@@ -80,24 +80,52 @@ namespace Nitra.VisualStudio.BraceMatching
 
     public IEnumerable<ITagSpan<TextMarkerTag>> GetTags(NormalizedSnapshotSpanCollection spans)
     {
-      var matchedBrackets = TextViewModel?.MatchedBrackets;
+      if (TextViewModel == null)
+        yield break;
 
-      if (!_caretPosOpt.HasValue || matchedBrackets == null)
+      var matchedBrackets = TextViewModel.MatchedBrackets;
+
+      if (!_caretPosOpt.HasValue)
         yield break;
 
       var caretPos        = _caretPosOpt.Value;
       var lastSnapshot    = caretPos.Snapshot;
       var currentSnapshot = _textBuffer.CurrentSnapshot;
 
-      if (lastSnapshot.Version.VersionNumber != matchedBrackets.Version + 1)
-        yield break;
-
-      var tagName = "blue";
-      foreach (MatchBrackets pair in matchedBrackets.results)
+      if (matchedBrackets != null && lastSnapshot.Version.VersionNumber == matchedBrackets.Version + 1)
       {
-        yield return MakeTagSpan(lastSnapshot, currentSnapshot, pair.Open,  tagName);
-        yield return MakeTagSpan(lastSnapshot, currentSnapshot, pair.Close, tagName);
-        tagName = Constants.BraceMatchingSecond;
+        var tagName = "blue";
+        foreach (MatchBrackets pair in matchedBrackets.results)
+        {
+          yield return MakeTagSpan(lastSnapshot, currentSnapshot, pair.Open, tagName);
+          yield return MakeTagSpan(lastSnapshot, currentSnapshot, pair.Close, tagName);
+          tagName = Constants.BraceMatchingSecond;
+        }
+      }
+
+      var findSymbolReferences = TextViewModel.FindSymbolReferences;
+      var id = TextViewModel.FileModel.Id;
+
+      if (findSymbolReferences != null && lastSnapshot.Version.VersionNumber == findSymbolReferences.Version + 1)
+      {
+        foreach (var symbolRefs in findSymbolReferences.symbols)
+        {
+          foreach (var definition in symbolRefs.Definitions)
+          {
+            var loc = definition.Location;
+            if (loc.File.FileId != id)
+              continue;
+            yield return MakeTagSpan(lastSnapshot, currentSnapshot, loc.Span, Constants.BraceMatchingSecond);
+          }
+
+          foreach (var fileEntries in symbolRefs.References)
+          {
+            if (fileEntries.File.FileId != id)
+              continue;
+            foreach (var span in fileEntries.Spans)
+              yield return MakeTagSpan(lastSnapshot, currentSnapshot, span, Constants.BraceMatchingSecond);
+          }
+        }
       }
     }
 

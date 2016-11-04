@@ -133,6 +133,7 @@ namespace Nitra.VisualStudio.Models
       MappingMessages                 mappingMessages;
       ParsingMessages                 parsingMessages;
       SemanticAnalysisMessages        semanticAnalysisMessages;
+      FindSymbolReferences            findSymbolReferences;
 
       if ((outlining = msg as OutliningCreated) != null)
       {
@@ -149,6 +150,13 @@ namespace Nitra.VisualStudio.Models
           return;
 
         _activeTextViewModelOpt.Update(matchedBrackets);
+      }
+      else if ((findSymbolReferences = msg as FindSymbolReferences) != null)
+      {
+        if (_activeTextViewModelOpt == null)
+          return;
+
+        _activeTextViewModelOpt.Update(findSymbolReferences);
       }
       else if ((parsingMessages = msg as ParsingMessages) != null)
         UpdateCompilerMessages(0, parsingMessages.messages, parsingMessages.Version);
