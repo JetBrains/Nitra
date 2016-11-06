@@ -20,7 +20,7 @@ namespace Nitra.VisualStudio.BraceMatching
         internal NitraCurrentSymbolClassifications()
         {
             this.DisplayName = "Nitra Current Sybmol";
-            this.BackgroundColor = Colors.Azure;
+            this.BackgroundColor = Colors.LightGray;
         }
     }
 
