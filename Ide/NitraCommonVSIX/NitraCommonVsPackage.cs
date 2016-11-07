@@ -4,24 +4,26 @@
 // </copyright>
 //------------------------------------------------------------------------------
 
+using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.OLE.Interop;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Events;
+using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.Win32;
+
+using Nitra.ClientServer.Client;
+using Nitra.ClientServer.Messages;
+using Nitra.VisualStudio;
+using NitraCommonIde;
+
 using System;
+using System.Collections.Generic;
+using System.ComponentModel;
 using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.InteropServices;
-using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.OLE.Interop;
-using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Shell.Interop;
-using Microsoft.Win32;
-using System.ComponentModel;
-using Nitra.ClientServer.Client;
-using Nitra.VisualStudio;
-using System.Collections.Generic;
-using Microsoft.VisualStudio.Shell.Events;
-using NitraCommonIde;
-using Nitra.ClientServer.Messages;
 
 namespace Nitra.VisualStudio
 {
@@ -62,7 +64,7 @@ namespace Nitra.VisualStudio
     private StringManager                               _stringManager = new StringManager();
     private string                                      _currentSolutionPath;
     private SolutionId                                  _currentSolutionId;
-    private int                                         _loadingProjectId;
+    private ProjectId                                   _loadingProjectId;
     private uint                                        _objectManagerCookie;
     private Library                                     _library;
 
@@ -242,7 +244,7 @@ namespace Nitra.VisualStudio
       if (project == null)
         return; // not supported prfoject type
 
-      var projectId   = _stringManager.GetId(project.FullName);
+      var projectId   = new ProjectId(_stringManager.GetId(project.FullName));
       var projectPath = project.FullName;
 
       _loadingProjectPath = projectPath;
@@ -277,7 +279,7 @@ namespace Nitra.VisualStudio
       var sourceProject = r.SourceProject; // TODO: Add support of project reference
       var path          = r.Path;
       var projectPath   = r.ContainingProject.FileName;
-      var projectId     = _stringManager.GetId(projectPath);
+      var projectId     = new ProjectId(_stringManager.GetId(projectPath));
 
       foreach (var server in _servers)
         server.ReferenceAdded(projectId, path);
@@ -290,7 +292,7 @@ namespace Nitra.VisualStudio
       var hierarchy = e.Hierarchy;
       var project   = hierarchy.GetProp<EnvDTE.Project>(VSConstants.VSITEMID_ROOT, __VSHPROPID.VSHPROPID_ExtObject);
       var path      = project.FullName;
-      var id        = _stringManager.GetId(path);
+      var id        = new ProjectId(_stringManager.GetId(path));
 
       Debug.WriteLine($"tr: BeforeCloseProject(IsRemoved='{e.IsRemoved}', FullName='{project.FullName}' id={id})");
 
@@ -306,7 +308,7 @@ namespace Nitra.VisualStudio
     private void FileAdded(object sender, HierarchyItemEventArgs e)
     {
       var path      = e.FileName;
-      var id        = _stringManager.GetId(path);
+      var id        = new FileId(_stringManager.GetId(path));
 
       string action = e.Hierarchy.GetProp<string>(e.ItemId, __VSHPROPID4.VSHPROPID_BuildAction);
 
@@ -319,10 +321,10 @@ namespace Nitra.VisualStudio
         if (ErrorHelper.Succeeded(hr2) && projectItem != null)
         {
           var projectPath = projectItem.ContainingProject.FileName;
-          var projectId = _stringManager.GetId(projectPath);
+          var projectId = new ProjectId(_stringManager.GetId(projectPath));
 
           foreach (var server in _servers)
-            server.FileAdded(projectId, path, id, 0);
+            server.FileAdded(projectId, path, id, new FileVersion());
 
           Debug.WriteLine($"tr: FileAdded(BuildAction='{action}', FileName='{path}' projectId={projectId})");
           return;
@@ -335,7 +337,7 @@ namespace Nitra.VisualStudio
     private void FileDeleted(object sender, HierarchyItemEventArgs e)
     {
       var path      = e.FileName;
-      var id        = _stringManager.GetId(path);
+      var id        = new FileId(_stringManager.GetId(path));
 
       string action = e.Hierarchy.GetProp<string>(e.ItemId, __VSHPROPID4.VSHPROPID_BuildAction);
 
@@ -397,7 +399,7 @@ namespace Nitra.VisualStudio
     private void OnDocumentWindowOnScreenChanged(object sender, DocumentWindowOnScreenChangedEventArgs e)
     {
       var fullPath    = e.Info.FullPath;
-      var id          = _stringManager.GetId(fullPath);
+      var id          = new FileId(_stringManager.GetId(fullPath));
       var windowFrame = e.Info.WindowFrame;
       var vsTextView  = VsShellUtilities.GetTextView(windowFrame);
       var wpfTextView = vsTextView.ToIWpfTextView();

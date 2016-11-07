@@ -184,7 +184,7 @@ namespace Nitra.VisualStudio
       return new FileChange.Replace(Convert(change.OldSpan), change.NewText);
     }
 
-    public static FileModel GetOrCreateFileModel(IWpfTextView wpfTextView, int id, Server server, IVsHierarchy hierarchy, string fullPath)
+    public static FileModel GetOrCreateFileModel(IWpfTextView wpfTextView, FileId id, Server server, IVsHierarchy hierarchy, string fullPath)
     {
       var textBuffer = wpfTextView.TextBuffer;
       var props      = textBuffer.Properties;
@@ -235,6 +235,11 @@ namespace Nitra.VisualStudio
       rdt.GetDocumentInfo(docCookie, out flags, out readlocks, out editlocks, out name, out hier, out itemid, out docData);
 
       return hier;
+    }
+
+    public static FileVersion Convert(this ITextVersion version)
+    {
+      return new FileVersion(version.VersionNumber - 1);
     }
   }
 }

@@ -138,14 +138,14 @@ namespace Nitra.VisualStudio.Highlighting
       return result;
     }
 
-    internal void Update(HighlightingType highlightingType, ImmutableArray<SpanInfo> spanInfos, int version)
+    internal void Update(HighlightingType highlightingType, ImmutableArray<SpanInfo> spanInfos, FileVersion version)
     {
       if (ClassificationChanged == null)
         return;
 
       var snapshot = _buffer.CurrentSnapshot;
 
-      if (snapshot.Version.VersionNumber != version + 1)
+      if (snapshot.Version.Convert() != version)
         return;
 
       _snapshots[(int)highlightingType] = snapshot;

@@ -34,7 +34,7 @@ namespace Nitra.VisualStudio.CodeCompletion
       var client  = fileModel.Server.Client;
       var triggerPoint = session.GetTriggerPoint(_textBuffer);
       var snapshot = _textBuffer.CurrentSnapshot;
-      var version = snapshot.Version.VersionNumber - 1;
+      var version = snapshot.Version.Convert();
 
       client.Send(new ClientMessage.CompleteWord(fileModel.Id, version, triggerPoint.GetPoint(snapshot).Position));
       var result = client.Receive<ServerMessage.CompleteWord>();

@@ -23,7 +23,7 @@ namespace Nitra.VisualStudio.Models
     public const int KindCount = 3;
     readonly ITextBuffer                             _textBuffer;
     public   Server                                  Server                     { get; }
-    public   int                                     Id                         { get; }
+    public   FileId                                  Id                         { get; }
     public   IVsHierarchy                            Hierarchy                  { get; }
     public   string                                  FullPath                   { get; }
     public   CompilerMessage[][]                     CompilerMessages           { get; private set; }
@@ -32,9 +32,8 @@ namespace Nitra.VisualStudio.Models
 
     readonly Dictionary<IWpfTextView, TextViewModel> _textViewModelsMap = new Dictionary<IWpfTextView, TextViewModel>();
              TextViewModel                           _activeTextViewModelOpt;
-             Dispatcher                              _dispatcher;
     
-    public FileModel(int id, ITextBuffer textBuffer, Server server, Dispatcher dispatcher, IVsHierarchy hierarchy, string fullPath)
+    public FileModel(FileId id, ITextBuffer textBuffer, Server server, Dispatcher dispatcher, IVsHierarchy hierarchy, string fullPath)
     {
       Hierarchy   = hierarchy;
       FullPath    = fullPath;
@@ -103,7 +102,7 @@ namespace Nitra.VisualStudio.Models
     void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
     {
       var textBuffer = (ITextBuffer)sender;
-      var newVersion = e.AfterVersion.VersionNumber - 1;
+      var newVersion = e.AfterVersion.Convert();
       var fileModel = textBuffer.Properties.GetProperty<FileModel>(Constants.FileModelKey);
       var id = fileModel.Id;
       var changes = e.Changes;
@@ -265,7 +264,7 @@ namespace Nitra.VisualStudio.Models
       }
     }
 
-    void UpdateSpanInfos(ITextBuffer textBuffer, HighlightingType highlightingType, ImmutableArray<SpanInfo> spanInfos, int version)
+    void UpdateSpanInfos(ITextBuffer textBuffer, HighlightingType highlightingType, ImmutableArray<SpanInfo> spanInfos, FileVersion version)
     {
       if (!textBuffer.Properties.ContainsProperty(Constants.NitraEditorClassifierKey))
         return;

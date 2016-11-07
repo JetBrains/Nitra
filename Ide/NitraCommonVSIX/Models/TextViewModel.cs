@@ -123,7 +123,7 @@ namespace Nitra.VisualStudio.Models
     {
       var fileModel = FileModel;
       var client = fileModel.Server.Client;
-      client.Send(new ClientMessage.FindSymbolReferences(fileModel.Id, point.Snapshot.Version.VersionNumber - 1, point.Position));
+      client.Send(new ClientMessage.FindSymbolReferences(fileModel.Id, point.Snapshot.Version.Convert(), point.Position));
       var msg = client.Receive<ServerMessage.FindSymbolReferences>();
     }
 
@@ -131,7 +131,7 @@ namespace Nitra.VisualStudio.Models
     {
       var fileModel = FileModel;
       var client = fileModel.Server.Client;
-      client.Send(new ClientMessage.FindSymbolDefinitions(fileModel.Id, point.Snapshot.Version.VersionNumber - 1, point.Position));
+      client.Send(new ClientMessage.FindSymbolDefinitions(fileModel.Id, point.Snapshot.Version.Convert(), point.Position));
       var msg = client.Receive<ServerMessage.FindSymbolDefinitions>();
     }
   }

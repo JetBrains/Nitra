@@ -68,9 +68,9 @@ namespace Nitra.VisualStudio
       Client.Send(new ClientMessage.SolutionStartLoading(id, solutionPath));
     }
 
-    internal void CaretPositionChanged(int id, int pos, int version)
+    internal void CaretPositionChanged(FileId fileId, int pos, FileVersion version)
     {
-      Client.Send(new ClientMessage.SetCaretPos(id, version, pos));
+      Client.Send(new ClientMessage.SetCaretPos(fileId, version, pos));
     }
 
     internal void SolutionLoaded(SolutionId solutionId)
@@ -78,38 +78,38 @@ namespace Nitra.VisualStudio
       Client.Send(new ClientMessage.SolutionLoaded(solutionId));
     }
 
-    internal void ProjectStartLoading(int id, string projectPath)
+    internal void ProjectStartLoading(ProjectId id, string projectPath)
     {
       var config = ConvertConfig(_config);
       Client.Send(new ClientMessage.ProjectStartLoading(id, projectPath, config));
     }
 
-    internal void ProjectLoaded(int id)
+    internal void ProjectLoaded(ProjectId id)
     {
       Client.Send(new ClientMessage.ProjectLoaded(id));
     }
 
-    internal void ReferenceAdded(int projectId, string referencePath)
+    internal void ReferenceAdded(ProjectId projectId, string referencePath)
     {
       Client.Send(new ClientMessage.ReferenceLoaded(projectId, "File:" + referencePath));
     }
 
-    internal void BeforeCloseProject(int id)
+    internal void BeforeCloseProject(ProjectId id)
     {
       Client.Send(new ClientMessage.ProjectUnloaded(id));
     }
 
-    internal void FileAdded(int projectId, string path, int id, int version)
+    internal void FileAdded(ProjectId projectId, string path, FileId id, FileVersion version)
     {
       Client.Send(new ClientMessage.FileLoaded(projectId, path, id, version));
     }
 
-    internal void FileUnloaded(int id)
+    internal void FileUnloaded(FileId id)
     {
       Client.Send(new ClientMessage.FileUnloaded(id));
     }
 
-    internal void ViewActivated(IWpfTextView wpfTextView, int id, IVsHierarchy hierarchy, string fullPath)
+    internal void ViewActivated(IWpfTextView wpfTextView, FileId id, IVsHierarchy hierarchy, string fullPath)
     {
       var textBuffer = wpfTextView.TextBuffer;
 
@@ -122,7 +122,7 @@ namespace Nitra.VisualStudio
       fileModel.ViewActivated(textViewModel);
     }
 
-    internal void ViewDeactivated(IWpfTextView wpfTextView, int id)
+    internal void ViewDeactivated(IWpfTextView wpfTextView, FileId id)
     {
       var fileModel = wpfTextView.TextBuffer.Properties.GetProperty<FileModel>(Constants.FileModelKey);
       fileModel.Remove(wpfTextView);

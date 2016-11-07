@@ -1129,8 +1129,7 @@ namespace Nitra.Visualizer
       if (_initializing)
         return;
 
-      var version = ViewModel.CurrentFile.Version;
-      version++;
+      var version = new FileVersion(ViewModel.CurrentFile.Version.Value + 1);
 
       Debug.Assert(e.OffsetChangeMap != null);
       ViewModel.CurrentFile.OnTextChanged(version, e.InsertedText, e.InsertionLength, e.Offset, e.RemovalLength, _textEditor.Text);
@@ -1671,7 +1670,7 @@ namespace Nitra.Visualizer
 
       if (project != null)
       {
-        client.Send(new ClientMessage.FileUnloaded(project.Id));
+        client.Send(new ClientMessage.FileUnloaded(file.Id));
 
         if (Directory.Exists(project.FullPath))
           FileSystem.DeleteDirectory(project.FullPath, UIOption.OnlyErrorDialogs, RecycleOption.DeletePermanently);

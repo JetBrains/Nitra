@@ -32,12 +32,14 @@ namespace Nitra.ClientServer.Server.ProjectSystem
   {
     // TODO: override ParseResult, Ast, GetParseTree and so on and implement parsing/typing in work threads
     public  Parent                  : Project;
-    public  override Id             : int { get; }
+    public  override Id             : int { get { this.FileId.Value } }
+    public  FileId                  : FileId { get; }
     public  CancellationTokenSource : CancellationTokenSource { get; private set; }
     public  DynamicExtensions       : Seq[GrammarDescriptor]  { get; }
     public  IsDisposed              : bool                    { get; private set; }
     public  IsActive                : bool                    { get; private set; }
-    public  override Version        : int                     { get; private set; }
+    public  override Version        : int                     { get { this.FileVersion.Value } }
+    public  FileVersion             : FileVersion            { get; private set; }
             _parseQueue             : BlockingCollection[ParserMessage];
     mutable _fileInfo               : FileInfo;
     mutable _text                   : StringBuilder;
@@ -51,15 +53,15 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     mutable _caretPosOpt            : int = -1;
     mutable _caretPosVersionOpt     : int = -1;
     
-    public this(id : int, fullPath : string, version : int, parent : Project)
+    public this(id : FileId, fullPath : string, version : FileVersion, parent : Project)
     {
       base(null);
-      Id                = id;
+      FileId            = id;
       _fileInfo         = FileInfo(fullPath);
       Parent            = parent;
       _name             = IO.Path.GetFileNameWithoutExtension(FullName);
       _parseQueue       = parent.ParseQueue;
-      Version           = version;
+      FileVersion       = version;
       (Language, DynamicExtensions) = parent.GetLanguage(Path.GetExtension(fullPath));
       // TODO: Add statistics support.
       
@@ -68,10 +70,10 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     }
 
     /// Used for in memory text editing (with no file available)
-    public this(id : int, name : string, parent : Project, text : string)
+    public this(id : FileId, name : string, parent : Project, text : string)
     {
       base();
-      Id        = id;
+      FileId    = id;
       Parent    = parent;
       _snapshot = SourceSnapshot(text, this, 0);
       _text     = StringBuilder(text);
@@ -160,20 +162,20 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       | FileChange.Replace(span, text) => Replace(span, text)
     }
     
-    public Change(version : int, change : FileChange) : void
+    public Change(version : FileVersion, change : FileChange) : void
     {
       _ = GetSource();
-      Version = version;
+      FileVersion = version;
       ApplyChange(change);
       _snapshot = SourceSnapshot(_text.ToString(), this, version);
 
       TrySendParseMessage();
     }
     
-    public Change(version : int, changes : ImmutableArray[FileChange]) : void
+    public Change(version : FileVersion, changes : ImmutableArray[FileChange]) : void
     {
       _ = GetSource();
-      Version = version;
+      FileVersion = version;
       for (mutable i = 0; i < changes.Length; i++)
         ApplyChange(changes[i]);
       _snapshot = SourceSnapshot(_text.ToString(), this, version);
@@ -214,7 +216,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
                                         dynamicExtensions = DynamicExtensions);
       CancellationTokenSource = cancellationTokenSource;
 
-      ParserMessage.ParseFile(Parent.Parent.Id, this.Id, parseSession, source)
+      ParserMessage.ParseFile(Parent.Parent.Id, this.FileId, parseSession, source)
     }
     
     public CreateAstMessage(parseResult : IParseResult) : ParserMessage.CreateAst
@@ -223,7 +225,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       TryMatchBrackets();
       
       _parseTree   = parseResult.CreateParseTree(); 
-      ParserMessage.CreateAst(Parent.Parent.Id, this.Id, parseResult, IsActive)
+      ParserMessage.CreateAst(Parent.Parent.Id, this.FileId, parseResult, IsActive)
     }
     
     public AstCreated(ast : IAst, parseTree : ParseTree) : void
@@ -241,8 +243,8 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     public CreateVisualInfo(parseResult : IParseResult) : void
     {
       def solutionId = Parent.Parent.Id;
-      _parseQueue.Add(ParserMessage.CreateKeywordsHighlighting(solutionId, Id, parseResult));
-      _parseQueue.Add(ParserMessage.CreateOutlining(solutionId, Id, parseResult));
+      _parseQueue.Add(ParserMessage.CreateKeywordsHighlighting(solutionId, this.FileId, parseResult));
+      _parseQueue.Add(ParserMessage.CreateOutlining(solutionId, this.FileId, parseResult));
     }
     
     public Activate() : void
@@ -262,14 +264,14 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       TryCreateParseTreeReflection();
         
       when (Parent.IsSemanticAvailable)
-        Parent.ParseQueue.Add(ParserMessage.CreateSymbolsHighlighting(Parent.Parent.Id, Id, Version, Ast));
+        Parent.ParseQueue.Add(ParserMessage.CreateSymbolsHighlighting(Parent.Parent.Id, this.FileId, this.FileVersion, Ast));
     }
     
     TryCreateParseTreeReflection() : void
     {
       def router           = Parent.Router;
       when (router.IsParseTreeReflectionEnable && _parseResult != null)
-        Parent.ParseQueue.Add(ParserMessage.CreateParseTreeReflection(Parent.Parent.Id, this.Id, this.Version, _parseResult));
+        Parent.ParseQueue.Add(ParserMessage.CreateParseTreeReflection(Parent.Parent.Id, this.FileId, this.FileVersion, _parseResult));
     }
     
     TryPrettyPrint() : void
@@ -277,7 +279,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       def router           = Parent.Router;
       def prettyPrintState = router.PrettyPrintState;
       when (router.PrettyPrintState != PrettyPrintState.Disabled && _parseTree != null)
-        Parent.ParseQueue.Add(ParserMessage.CreatePrettyPrint(Parent.Parent.Id, Id, Version, prettyPrintState, _parseTree));
+        Parent.ParseQueue.Add(ParserMessage.CreatePrettyPrint(Parent.Parent.Id, this.FileId, this.FileVersion, prettyPrintState, _parseTree));
     }    
     public Deactivate() : void
     {
@@ -391,7 +393,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
             visitor.FoundSymbols.Clear();
             curAst.Accept(visitor);
             def source       = curAst.Source;
-            def fileIdentity = FileIdentity(source.File.Id, source.Version);
+            def fileIdentity = FileIdentity(FileId(source.File.Id), FileVersion(source.Version));
             
             
             assert2(spansBiulder.Count == 0);
@@ -409,7 +411,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
         if (forHighlighting)
         {
           def source = ast.Location.Source;
-          router.SendAsyncResponse(AsyncServerMessage.FindSymbolReferences(source.File.Id, source.Version, solutionId, refSpan, symbolsBiulder.MoveToImmutable()));
+          router.SendAsyncResponse(AsyncServerMessage.FindSymbolReferences(FileId(source.File.Id), FileVersion(source.Version), solutionId, refSpan, symbolsBiulder.MoveToImmutable()));
         }
         else
           router.SendResponse(ServerMessage.FindSymbolReferences(solutionId, refSpan, symbolsBiulder.MoveToImmutable()));
@@ -687,9 +689,9 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       Parent.AddSemanticAction(action);
     }
 
-    public RenameFile(newId : int, newPath : string): void
+    public RenameFile(newId : FileId, newPath : string): void
     {
-      def newVersion = 0; // TODO: get from client
+      def newVersion = FileVersion(); // TODO: get from client
       def project = Parent;
       project.RemoveFile(this);
       def newFile = File(newId, newPath, newVersion, project);
@@ -724,7 +726,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       when (parseResult != null && parseResult.SourceSnapshot.Version == _caretPosVersionOpt)
       {
         def solutionId  = Parent.Parent.Id;
-        _parseQueue.Add(ParserMessage.CreateMatchBrackets(solutionId, Id, parseResult, _caretPosOpt));
+        _parseQueue.Add(ParserMessage.CreateMatchBrackets(solutionId, this.FileId, parseResult, _caretPosOpt));
       }
     }
     
