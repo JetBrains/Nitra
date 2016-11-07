@@ -63,7 +63,7 @@ namespace Nitra.VisualStudio
       Client?.Dispose();
     }
 
-    internal void SolutionStartLoading(int id, string solutionPath)
+    internal void SolutionStartLoading(SolutionId id, string solutionPath)
     {
       Client.Send(new ClientMessage.SolutionStartLoading(id, solutionPath));
     }
@@ -73,7 +73,7 @@ namespace Nitra.VisualStudio
       Client.Send(new ClientMessage.SetCaretPos(id, version, pos));
     }
 
-    internal void SolutionLoaded(int solutionId)
+    internal void SolutionLoaded(SolutionId solutionId)
     {
       Client.Send(new ClientMessage.SolutionLoaded(solutionId));
     }

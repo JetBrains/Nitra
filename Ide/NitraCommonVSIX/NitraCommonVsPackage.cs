@@ -21,6 +21,7 @@ using Nitra.VisualStudio;
 using System.Collections.Generic;
 using Microsoft.VisualStudio.Shell.Events;
 using NitraCommonIde;
+using Nitra.ClientServer.Messages;
 
 namespace Nitra.VisualStudio
 {
@@ -60,7 +61,7 @@ namespace Nitra.VisualStudio
     private List<Server>                                _servers = new List<Server>();
     private StringManager                               _stringManager = new StringManager();
     private string                                      _currentSolutionPath;
-    private int                                         _currentSolutionId;
+    private SolutionId                                  _currentSolutionId;
     private int                                         _loadingProjectId;
     private uint                                        _objectManagerCookie;
     private Library                                     _library;
@@ -172,7 +173,7 @@ namespace Nitra.VisualStudio
       }
 
       var solutionPath = e.SolutionFilename;
-      var id           = stringManager.GetId(solutionPath);
+      var id           = new SolutionId(stringManager.GetId(solutionPath));
 
       _currentSolutionPath = solutionPath;
       _currentSolutionId = id;

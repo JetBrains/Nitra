@@ -99,12 +99,12 @@ namespace Nitra.Visualizer.ViewModels
     public class AstContext
     {
       public NitraClient Client      { get; private set; }
-      public int         SolutionId  { get; private set; }
+      public SolutionId  SolutionId  { get; private set; }
       public int         ProjectId   { get; private set; }
       public int         FileId      { get; private set; }
       public int         FileVersion { get; private set; }
 
-      public AstContext(NitraClient client, int solutionId, int projectId, int fileId, int fileVersion)
+      public AstContext(NitraClient client, SolutionId solutionId, int projectId, int fileId, int fileVersion)
       {
         Client      = client;
         SolutionId  = solutionId;
