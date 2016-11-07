@@ -57,14 +57,23 @@ namespace Nitra.VisualStudio.KeyBinding
 
     public int QueryStatus(ref Guid pguidCmdGroup, uint cCmds, OLECMD[] prgCmds, IntPtr pCmdText)
     {
-      if (pguidCmdGroup == VSStd2K)
+      if (pguidCmdGroup == GUID_VSStandardCommandSet97)
+      {
+        switch ((VSStd97CmdID)prgCmds[0].cmdID)
+        {
+          case VSStd97CmdID.GotoRef:
+          case VSStd97CmdID.GotoDefn:
+            return (int)OLECMDF.OLECMDF_SUPPORTED | (int)OLECMDF.OLECMDF_ENABLED;
+        }
+      }
+      else if (pguidCmdGroup == VSStd2K)
       {
         switch ((VSStd2KCmdID)prgCmds[0].cmdID)
         {
           case VSStd2KCmdID.AUTOCOMPLETE:
           case VSStd2KCmdID.SHOWMEMBERLIST:
           case VSStd2KCmdID.COMPLETEWORD: 
-            prgCmds[0].cmdf = (uint)(OLECMDF.OLECMDF_ENABLED | OLECMDF.OLECMDF_SUPPORTED);
+            prgCmds[0].cmdf = (uint)OLECMDF.OLECMDF_ENABLED | (int)OLECMDF.OLECMDF_SUPPORTED;
             return S_OK;
         }
       }
@@ -77,7 +86,15 @@ namespace Nitra.VisualStudio.KeyBinding
       if (VsShellUtilities.IsInAutomationFunction(_serviceProvider))
         return _nextTarget.Exec(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
 
-      if (pguidCmdGroup == VSStd2K)
+      if (pguidCmdGroup == GUID_VSStandardCommandSet97)
+      {
+        switch ((VSStd97CmdID)nCmdID)
+        {
+          case VSStd97CmdID.GotoRef:  GotoRef();  return S_OK;
+          case VSStd97CmdID.GotoDefn: GotoDefn(); return S_OK;
+        }
+      }
+      else if (pguidCmdGroup == VSStd2K)
       {
         var cmd = (VSStd2KCmdID)nCmdID;
         
@@ -92,6 +109,22 @@ namespace Nitra.VisualStudio.KeyBinding
 
       var result = _nextTarget.Exec(ref pguidCmdGroup, nCmdID, nCmdexecopt, pvaIn, pvaOut);
       return result;
+    }
+
+    void GotoRef()
+    {
+      var caretPosition = _wpfTextView.Caret.Position;
+      var caretPosOpt = caretPosition.Point.GetPoint(_wpfTextView.TextBuffer, caretPosition.Affinity);
+      if (caretPosOpt.HasValue)
+        _textViewModel.GotoRef(caretPosOpt.Value);
+    }
+
+    void GotoDefn()
+    {
+      var caretPosition = _wpfTextView.Caret.Position;
+      var caretPosOpt = caretPosition.Point.GetPoint(_wpfTextView.TextBuffer, caretPosition.Affinity);
+      if (caretPosOpt.HasValue)
+        _textViewModel.GotoDefn(caretPosOpt.Value);
     }
 
     void OnGoToBrace()

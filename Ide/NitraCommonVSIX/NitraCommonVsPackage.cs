@@ -61,7 +61,9 @@ namespace Nitra.VisualStudio
     private StringManager                               _stringManager = new StringManager();
     private string                                      _currentSolutionPath;
     private int                                         _currentSolutionId;
-    private int _loadingProjectId;
+    private int                                         _loadingProjectId;
+    private uint                                        _objectManagerCookie;
+    private Library                                     _library;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="NitraCommonVsPackage"/> class.
@@ -88,6 +90,16 @@ namespace Nitra.VisualStudio
 
       _runningDocTableEventse = new RunningDocTableEvents();
       SubscibeToSolutionEvents();
+
+
+      if (_objectManagerCookie == 0)
+      {
+        _library = new Library();
+        var objManager = this.GetService(typeof(SVsObjectManager)) as IVsObjectManager2;
+
+        if (null != objManager)
+          ErrorHandler.ThrowOnFailure(objManager.RegisterSimpleLibrary(_library, out _objectManagerCookie));
+      }
     }
 
     protected override void Dispose(bool disposing)
@@ -99,6 +111,10 @@ namespace Nitra.VisualStudio
 
         UnsubscibeToSolutionEvents();
         _runningDocTableEventse?.Dispose();
+
+        var objManager = GetService(typeof(SVsObjectManager)) as IVsObjectManager2;
+        if (objManager != null)
+          objManager.UnregisterLibrary(_objectManagerCookie);
       }
       finally
       {

@@ -118,5 +118,21 @@ namespace Nitra.VisualStudio.Models
       NavigateTo(snapshotPoint);
       _wpfTextView.ToVsTextView().SendExplicitFocus();
     }
+
+    internal void GotoRef(SnapshotPoint point)
+    {
+      var fileModel = FileModel;
+      var client = fileModel.Server.Client;
+      client.Send(new ClientMessage.FindSymbolReferences(fileModel.Id, point.Snapshot.Version.VersionNumber - 1, point.Position));
+      var msg = client.Receive<ServerMessage.FindSymbolReferences>();
+    }
+
+    internal void GotoDefn(SnapshotPoint point)
+    {
+      var fileModel = FileModel;
+      var client = fileModel.Server.Client;
+      client.Send(new ClientMessage.FindSymbolDefinitions(fileModel.Id, point.Snapshot.Version.VersionNumber - 1, point.Position));
+      var msg = client.Receive<ServerMessage.FindSymbolDefinitions>();
+    }
   }
 }
