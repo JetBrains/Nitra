@@ -12,7 +12,7 @@ namespace Nitra.VisualStudio
 
     public Library()
     {
-      _guid = new Guid("{4B0F8F12-120B-47E3-9B63-4777DD378187}");
+      _guid = new Guid("EDCC3B81-0BAD-11DB-BC1A-00112FDE8B61");
     }
 
     #region IVsSimpleLibrary2 Members
@@ -42,7 +42,8 @@ namespace Nitra.VisualStudio
 
     public int GetLibFlags2(out uint pgrfFlags)
     {
-      pgrfFlags = (uint)_LIB_FLAGS2.LF_SUPPORTSLISTREFERENCES;
+      pgrfFlags = (uint)_LIB_FLAGS.LF_PROJECT | (uint)_LIB_FLAGS2.LF_SUPPORTSFILTERING | (uint)_LIB_FLAGS2.LF_SUPPORTSCALLBROWSER;
+      //pgrfFlags = (uint)_LIB_FLAGS2.LF_SUPPORTSLISTREFERENCES;
       return VSConstants.S_OK;
     }
 
@@ -151,7 +152,8 @@ namespace Nitra.VisualStudio
 
     public int UpdateCounter(out uint pCurUpdate)
     {
-      pCurUpdate = 0;
+      //return ((IVsSimpleObjectList2)_root).UpdateCounter(out pCurUpdate);
+      pCurUpdate = 1;
       return VSConstants.E_NOTIMPL;
     }
 

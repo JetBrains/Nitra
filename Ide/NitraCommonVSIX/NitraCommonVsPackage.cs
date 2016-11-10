@@ -79,6 +79,11 @@ namespace Nitra.VisualStudio
       // initialization is the Initialize method.
     }
 
+    public void SetFindResult(IVsSimpleObjectList2 findResults)
+    {
+      _library.OnFindAllReferencesDone(findResults);
+    }
+
     #region Package Members
 
     /// <summary>

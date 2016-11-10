@@ -79,15 +79,15 @@ namespace Nitra.Visualizer.ViewModels
           items.Add(new PopupItemViewModel(symbolId, file, definition.Location.Span, true, Editor.IntelliSensePopup));
         }
 
-        foreach (var reference in s.References)
+        foreach (var fileEntries in s.References)
         {
-          var f = reference.File;
+          var f = fileEntries.File;
           var file = CurrentSolution.GetFile(f.FileId);
           if (file.Version != f.FileVersion)
             continue;
 
-          foreach (var span in reference.Spans)
-            items.Add(new PopupItemViewModel(symbolId, file, span, false, Editor.IntelliSensePopup));
+          foreach (var range in fileEntries.Ranges)
+            items.Add(new PopupItemViewModel(symbolId, file, range.Span, false, Editor.IntelliSensePopup));
         }
       }
 

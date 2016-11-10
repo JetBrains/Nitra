@@ -125,8 +125,8 @@ namespace Nitra.VisualStudio.BraceMatching
           {
             if (fileEntries.File.FileId != id)
               continue;
-            foreach (var span in fileEntries.Spans)
-              yield return MakeTagSpan(lastSnapshot, currentSnapshot, span, Constants.CurrentSymbol);
+            foreach (var range in fileEntries.Ranges)
+              yield return MakeTagSpan(lastSnapshot, currentSnapshot, range.Span, Constants.CurrentSymbol);
           }
         }
       }

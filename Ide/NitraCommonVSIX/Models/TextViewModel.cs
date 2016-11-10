@@ -9,6 +9,8 @@ using static Nitra.ClientServer.Messages.AsyncServerMessage;
 using Nitra.VisualStudio.BraceMatching;
 using Nitra.VisualStudio.KeyBinding;
 using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Shell.Interop;
+using System.Diagnostics;
 
 namespace Nitra.VisualStudio.Models
 {
@@ -125,6 +127,10 @@ namespace Nitra.VisualStudio.Models
       var client = fileModel.Server.Client;
       client.Send(new ClientMessage.FindSymbolReferences(fileModel.Id, point.Snapshot.Version.Convert(), point.Position));
       var msg = client.Receive<ServerMessage.FindSymbolReferences>();
+
+      var locs = msg.symbols.SelectMany(s => s.Definitions.Select(d => d.Location).Concat(s.References.SelectMany(
+        referenc => referenc.Ranges.Select(range => new Location(referenc.File, range))))).ToArray();
+      ShowInFindResultWindow(fileModel, msg.referenceSpan, locs);
     }
 
     internal void GotoDefn(SnapshotPoint point)
@@ -133,6 +139,54 @@ namespace Nitra.VisualStudio.Models
       var client = fileModel.Server.Client;
       client.Send(new ClientMessage.FindSymbolDefinitions(fileModel.Id, point.Snapshot.Version.Convert(), point.Position));
       var msg = client.Receive<ServerMessage.FindSymbolDefinitions>();
+      var len = msg.definitions.Length;
+
+      ShowInFindResultWindow(fileModel, msg.referenceSpan, msg.definitions.Select(d => d.Location).ToArray());
+    }
+
+    static void GoToLocation(FileModel fileModel, Location loc)
+    {
+      var path = fileModel.Server.Client.StringManager.GetPath(loc.File.FileId);
+      fileModel.Server.ServiceProvider.Navigate(path, loc.Range.StartLine, loc.Range.StartColumn);
+    }
+
+    void ShowInFindResultWindow(FileModel fileModel, NSpan span, Location[] locations)
+    {
+      if (locations.Length == 1)
+      {
+        GoToLocation(fileModel, locations[0]);
+        return;
+      }
+
+      var findSvc = (IVsObjectSearch)fileModel.Server.ServiceProvider.GetService(typeof(SVsObjectSearch));
+      Debug.Assert(findSvc != null);
+
+      var caption = _wpfTextView.TextBuffer.CurrentSnapshot.GetText(VsUtils.Convert(span));
+
+      var libSearchResults = new LibraryNode("<Nitra>", LibraryNode.LibraryNodeType.References, LibraryNode.LibraryNodeCapabilities.None, null);
+
+      foreach (var location in locations)
+      {
+        var inner = new GotoInfoLibraryNode(location, caption, fileModel.Server);
+        libSearchResults.AddNode(inner);
+      }
+
+      var package = NitraCommonVsPackage.Instance;
+      package.SetFindResult(libSearchResults);
+      var criteria =
+        new[]
+        {
+          new VSOBSEARCHCRITERIA
+          {
+            eSrchType = VSOBSEARCHTYPE.SO_ENTIREWORD,
+            grfOptions = (uint)_VSOBSEARCHOPTIONS.VSOBSO_CASESENSITIVE,
+            szName = "<dummy>",
+            dwCustom = Library.FindAllReferencesMagicNum,
+          }
+        };
+
+      IVsObjectList results;
+      var hr = findSvc.Find((uint)__VSOBSEARCHFLAGS.VSOSF_EXPANDREFS, criteria, out results);
     }
   }
 }

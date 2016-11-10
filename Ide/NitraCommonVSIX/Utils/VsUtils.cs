@@ -1,4 +1,5 @@
-﻿using Microsoft.VisualStudio.Shell;
+﻿using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
@@ -240,6 +241,56 @@ namespace Nitra.VisualStudio
     public static FileVersion Convert(this ITextVersion version)
     {
       return new FileVersion(version.VersionNumber - 1);
+    }
+
+    public static bool Navigate(this IServiceProvider serviceProvider, string path, int line, int column)
+    {
+      Guid logicalView = VSConstants.LOGVIEWID_TextView;
+
+      if (VsShellUtilities.ShellIsShuttingDown)
+        return false;
+
+      var vsUIShellOpenDocument = (IVsUIShellOpenDocument)serviceProvider.GetService(typeof(IVsUIShellOpenDocument));
+      if (vsUIShellOpenDocument == null)
+        return false;
+
+      Guid guid = logicalView;
+      Microsoft.VisualStudio.OLE.Interop.IServiceProvider serviceProviderRet;
+      IVsUIHierarchy vsUIHierarchy;
+      uint pItemId;
+      IVsWindowFrame vsWindowFrame;
+      if (ErrorHelper.Failed(vsUIShellOpenDocument.OpenDocumentViaProject(path, ref guid, out serviceProviderRet, out vsUIHierarchy, out pItemId, out vsWindowFrame)) || vsWindowFrame == null)
+        return false;
+
+      object obj;
+      vsWindowFrame.GetProperty(-4004, out obj);
+      var vsTextBuffer = obj as VsTextBuffer;
+      if (vsTextBuffer == null)
+      {
+        IVsTextBufferProvider vsTextBufferProvider = obj as IVsTextBufferProvider;
+        if (vsTextBufferProvider != null)
+        {
+          IVsTextLines vsTextLines;
+          ErrorHelper.ThrowOnFailure(vsTextBufferProvider.GetTextBuffer(out vsTextLines));
+          vsTextBuffer = vsTextLines as VsTextBuffer;
+          if (vsTextBuffer == null)
+          {
+            return false;
+          }
+        }
+      }
+
+      var vsTextManager = (IVsTextManager)serviceProvider.GetService(typeof(VsTextManagerClass));
+      if (vsTextManager == null)
+        return false;
+
+      if (column > 0)
+        column--;
+
+      if (line > 0)
+        line--;
+
+      return ErrorHelper.Succeeded(vsTextManager.NavigateToLineAndColumn(vsTextBuffer, ref logicalView, line, column, line, column));
     }
   }
 }
