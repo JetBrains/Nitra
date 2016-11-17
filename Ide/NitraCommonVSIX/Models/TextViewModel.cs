@@ -11,6 +11,8 @@ using Nitra.VisualStudio.KeyBinding;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Shell.Interop;
 using System.Diagnostics;
+using System.Windows;
+using System.Windows.Media;
 
 namespace Nitra.VisualStudio.Models
 {
@@ -22,11 +24,14 @@ namespace Nitra.VisualStudio.Models
     public   MatchedBrackets          MatchedBrackets      { get; private set; }
     public   FindSymbolReferences     FindSymbolReferences { get; private set; }
     readonly KeyBindingCommandFilter  _keyBindingCommandFilter;
+             SnapshotPoint?           _lastMouseHoverPointOpt;
 
     public TextViewModel(IWpfTextView wpfTextView, FileModel file)
     {
       _wpfTextView = wpfTextView;
       FileModel    = file;
+
+      _wpfTextView.MouseHover += _wpfTextView_MouseHover;
 
       _keyBindingCommandFilter = new KeyBindingCommandFilter(wpfTextView, file.Server.ServiceProvider, this);
     }
@@ -142,6 +147,73 @@ namespace Nitra.VisualStudio.Models
       var len = msg.definitions.Length;
 
       ShowInFindResultWindow(fileModel, msg.referenceSpan, msg.definitions.Select(d => d.Location).ToArray());
+    }
+
+    void _wpfTextView_MouseHover(object sender, MouseHoverEventArgs e)
+    {
+      var pointOpt = e.TextPosition.GetPoint(_wpfTextView.TextBuffer, PositionAffinity.Predecessor);
+
+      _lastMouseHoverPointOpt = pointOpt;
+
+      if (!pointOpt.HasValue)
+        return;
+
+      var point    = pointOpt.Value;
+      var snapshot = point.Snapshot;
+      var server   = this.FileModel.Server;
+
+      this.FileModel.OnMouseHover(this);
+
+      server.Client.Send(new ClientMessage.GetHint(this.FileModel.Id, snapshot.Version.Convert(), point.Position));
+    }
+
+    internal void ShowHint(AsyncServerMessage.Hint msg)
+    {
+      if (!_lastMouseHoverPointOpt.HasValue)
+        return;
+
+      var lastPoint = _lastMouseHoverPointOpt.Value;
+      var snapshot  = _wpfTextView.TextBuffer.CurrentSnapshot;
+
+      this.FileModel.OnMouseHover(null);
+      _lastMouseHoverPointOpt = null;
+
+      if (snapshot.Version.Convert() != msg.Version || lastPoint.Snapshot != snapshot)
+        return;
+
+      if (!msg.referenceSpan.IntersectsWith(lastPoint.Position))
+        return;
+
+      // TODO: Use VS colors. .SetResourceReference(Microsoft.VisualStudio.PlatformUI.EnvironmentColors.ToolTipBrushKey); //ToolTipTextBrushKey 
+
+      var span       = new SnapshotSpan(snapshot, new Span(msg.referenceSpan.StartPos, msg.referenceSpan.Length));
+      var geometry   = _wpfTextView.TextViewLines.GetTextMarkerGeometry(span);
+      var visual     = (Visual)_wpfTextView;
+      var rect       = new Rect(visual.PointToScreen(geometry.Bounds.Location), geometry.Bounds.Size);
+      var vsTextView = _wpfTextView.ToVsTextView();
+      var hWnd       = vsTextView.GetWindowHandle();
+      var hintXml    = "<hint><keyword>xyz</keyword> <hint value='Вложенный хинт' key='ключ' /><lb/>" + msg.text.Replace("<unknown>", "&lt;unknown&gt;").Replace("\r", "").Replace("\n", "<lb/>") + "</hint>";
+      var hint       = this.FileModel.Server.Hint; 
+
+      rect.Height += 10;
+
+      if (hint.IsOpen)
+      {
+        if (hint.PlacementRect == rect)
+        {
+          hint.Text = hintXml;
+          return;
+        }
+
+        hint.Close();
+      }
+
+      hint.Show(hWnd, rect, subHintText, hintXml);
+    }
+
+    private string subHintText(string arg)
+    {
+      return "<hint>Sub hint! Key='<b>" + arg + "'</b></hint>";
     }
 
     static void GoToLocation(FileModel fileModel, Location loc)

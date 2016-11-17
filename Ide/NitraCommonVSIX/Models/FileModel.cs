@@ -32,6 +32,7 @@ namespace Nitra.VisualStudio.Models
 
     readonly Dictionary<IWpfTextView, TextViewModel> _textViewModelsMap = new Dictionary<IWpfTextView, TextViewModel>();
              TextViewModel                           _activeTextViewModelOpt;
+             TextViewModel                           _mouseHoverTextViewModelOpt;
     
     public FileModel(FileId id, ITextBuffer textBuffer, Server server, Dispatcher dispatcher, IVsHierarchy hierarchy, string fullPath)
     {
@@ -85,6 +86,11 @@ namespace Nitra.VisualStudio.Models
       _activeTextViewModelOpt = textViewModel;
     }
 
+    internal void OnMouseHover(TextViewModel textViewModel)
+    {
+      _mouseHoverTextViewModelOpt = textViewModel;
+    }
+
     public void Dispose()
     {
       _textBuffer.Changed -= TextBuffer_Changed;
@@ -133,6 +139,7 @@ namespace Nitra.VisualStudio.Models
       ParsingMessages                 parsingMessages;
       SemanticAnalysisMessages        semanticAnalysisMessages;
       FindSymbolReferences            findSymbolReferences;
+      Hint                            hint;
 
       if ((outlining = msg as OutliningCreated) != null)
       {
@@ -163,6 +170,8 @@ namespace Nitra.VisualStudio.Models
         UpdateCompilerMessages(1, mappingMessages.messages, mappingMessages.Version);
       else if ((semanticAnalysisMessages = msg as SemanticAnalysisMessages) != null)
         UpdateCompilerMessages(2, semanticAnalysisMessages.messages, semanticAnalysisMessages.Version);
+      else if ((hint = msg as Hint) != null)
+        _mouseHoverTextViewModelOpt?.ShowHint(hint);
     }
 
     private void UpdateCompilerMessages(int index, CompilerMessage[] messages, int version)

@@ -21,6 +21,7 @@ using Nitra.VisualStudio.BraceMatching;
 using Nitra.VisualStudio.Models;
 using System.Diagnostics.Contracts;
 using Microsoft.VisualStudio.Shell.Interop;
+using WpfHint;
 
 namespace Nitra.VisualStudio
 {
@@ -30,6 +31,8 @@ namespace Nitra.VisualStudio
     public IServiceProvider ServiceProvider { get; }
 
     public NitraClient Client { get; private set; }
+
+    public Hint Hint { get; } = new Hint() { WrapWidth = 900.1 };
 
     public Server(StringManager stringManager, Ide.Config config, IServiceProvider serviceProvider)
     {
