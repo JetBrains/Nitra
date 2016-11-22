@@ -197,7 +197,7 @@ namespace Nitra.VisualStudio.Models
       var rect = new Rect(visual.PointToScreen(bound.Location), bound.Size);
       var vsTextView = _wpfTextView.ToVsTextView();
       var hWnd       = vsTextView.GetWindowHandle();
-      var hintXml    = "<hint><keyword>xyz</keyword> <hint value='Вложенный хинт' key='ключ' /><lb/>" + msg.text.Replace("<unknown>", "&lt;unknown&gt;").Replace("\r", "").Replace("\n", "<lb/>") + "</hint>";
+      var hintXml    = "<hint>" + msg.text.Replace("<unknown>", "&lt;unknown&gt;").Replace("\r", "").Replace("\n", "<lb/>") + "</hint>";
       var hint       = this.FileModel.Server.Hint;
 
       if (hint.IsOpen)
