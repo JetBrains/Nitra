@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Diagnostics;
 using System.Windows.Input;
+using System.Windows.Media;
 
 namespace WpfHint
 {
@@ -16,6 +17,9 @@ namespace WpfHint
 
     public event Action<Hint, string> Click;
     public event Action<Hint> Closed;
+
+    public Func<string, Brush> MapBrush { get; private set; }
+
 
     /// <summary>
     /// Deafult = 400.0
@@ -68,11 +72,12 @@ namespace WpfHint
       Debug.WriteLine("Close()");
     }
 
-    public void Show(IntPtr owner, Rect placementRect, Func<string, string> getHintContent, string text)
+    public void Show(IntPtr owner, Rect placementRect, Func<string, string> getHintContent, string text, Func<string, Brush> mapBrush)
     {
       PlacementRect = placementRect;
       Text = text;
       _getHintContent = getHintContent;
+      MapBrush = mapBrush;
 
       try
       {
@@ -81,7 +86,10 @@ namespace WpfHint
       catch
       {
       }
-    }
+      finally
+      {
+      }
+   }
 
     private void Show(IntPtr owner)
     {

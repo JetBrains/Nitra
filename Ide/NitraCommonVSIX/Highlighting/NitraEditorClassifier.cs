@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Windows.Media;
+using Microsoft.VisualStudio.Text.Editor;
 
 namespace Nitra.VisualStudio.Highlighting
 {
@@ -151,6 +152,23 @@ namespace Nitra.VisualStudio.Highlighting
       _snapshots[(int)highlightingType] = snapshot;
       _spanInfos[(int)highlightingType] = spanInfos;
       ClassificationChanged(this, new ClassificationChangedEventArgs(new SnapshotSpan(snapshot, new Span(0, snapshot.Length))));
+    }
+
+    internal Brush SpanClassToBrush(string spanClass, IWpfTextView _wpfTextView)
+    {
+      var spanClassOpt = Server.GetSpanClassOpt(spanClass);
+      if (!spanClassOpt.HasValue)
+        return Server.SpanClassToBrush(spanClass);
+
+      IClassificationType classificationType;
+      if (_classificationMap.TryGetValue(spanClassOpt.Value.Id, out classificationType))
+      {
+        var map = _classificationFormatMapService.GetClassificationFormatMap(_wpfTextView);
+        var properties = map.GetTextProperties(classificationType);
+        return properties.ForegroundBrush;
+      }
+
+      return Server.SpanClassToBrush(spanClass);
     }
 
     #endregion

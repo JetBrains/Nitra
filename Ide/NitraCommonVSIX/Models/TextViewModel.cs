@@ -211,7 +211,12 @@ namespace Nitra.VisualStudio.Models
         hint.Close();
       }
 
-      hint.Show(hWnd, rect, subHintText, hintXml);
+      hint.Show(hWnd, rect, subHintText, hintXml, this.SpanClassToBrush);
+    }
+
+    private Brush SpanClassToBrush(string spanClass)
+    {
+      return this.FileModel.SpanClassToBrush(spanClass, _wpfTextView);
     }
 
     private string subHintText(string arg)

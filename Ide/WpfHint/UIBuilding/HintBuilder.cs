@@ -118,19 +118,21 @@ namespace WpfHint.UIBuilding
       string handler;
       token.Attributes.TryGetValue("handler", out handler);
 
-      string key = token.Attributes["id"];
+      string key       = token.Attributes["id"];
+      string spanClass = token.Attributes["SpanClass"];
 
       string value = token.Text;
 
       var hc = new HintControl(key, hint.RaiseGetHintContent, handler);
-      hc.Inlines.Add(new Run(value) { Foreground = Brushes.DarkCyan }); // TODO: use color from classifier
+      hc.Inlines.Add(new Run(value) { Foreground = hint.MapBrush(spanClass) });
       return new InlineUIContainer { Child = hc };
     }
 
     private static Inline BuildSymbol(ElementToken token, Hint hint)
     {
-      string value = token.Text;
-      return new Run(value) { Foreground = Brushes.DarkCyan }; // TODO: use color from classifier
+      string spanClass = token.Attributes["SpanClass"];
+      string value     = token.Text;
+      return new Run(value) { Foreground = hint.MapBrush(spanClass) };
     }
 
     private static Inline BuildHint(ElementToken token, Hint hint)

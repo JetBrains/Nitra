@@ -22,6 +22,7 @@ using Nitra.VisualStudio.Models;
 using System.Diagnostics.Contracts;
 using Microsoft.VisualStudio.Shell.Interop;
 using WpfHint;
+using System.Windows.Media;
 
 namespace Nitra.VisualStudio
 {
@@ -148,6 +149,28 @@ namespace Nitra.VisualStudio
           _spanClassInfos = bilder.MoveToImmutable();
         }
       }
+    }
+
+    internal SpanClassInfo? GetSpanClassOpt(string spanClass)
+    {
+      foreach (var spanClassInfo in SpanClassInfos)
+        if (spanClassInfo.FullName == spanClass)
+          return spanClassInfo;
+
+      return null;
+    }
+
+    internal Brush SpanClassToBrush(string spanClass)
+    {
+      var spanClassOpt = GetSpanClassOpt(spanClass);
+      if (spanClassOpt.HasValue)
+      {
+        // TODO: use classifiers
+        var bytes = BitConverter.GetBytes(spanClassOpt.Value.ForegroundColor);
+        return new SolidColorBrush(Color.FromArgb(bytes[3], bytes[2], bytes[1], bytes[0]));
+      }
+
+      return Brushes.Black;
     }
   }
 }

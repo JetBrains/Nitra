@@ -15,6 +15,7 @@ using Nitra.VisualStudio.CompilerMessages;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TextManager.Interop;
+using System.Windows.Media;
 
 namespace Nitra.VisualStudio.Models
 {
@@ -147,9 +148,9 @@ namespace Nitra.VisualStudio.Models
         tegget.Update(outlining);
       }
       else if ((keywordHighlighting = msg as KeywordsHighlightingCreated) != null)
-        UpdateSpanInfos(textBuffer, HighlightingType.Keyword, keywordHighlighting.spanInfos, keywordHighlighting.Version);
+        UpdateSpanInfos(HighlightingType.Keyword, keywordHighlighting.spanInfos, keywordHighlighting.Version);
       else if ((symbolsHighlighting = msg as SymbolsHighlightingCreated) != null)
-        UpdateSpanInfos(textBuffer, HighlightingType.Symbol, symbolsHighlighting.spanInfos, symbolsHighlighting.Version);
+        UpdateSpanInfos(HighlightingType.Symbol, symbolsHighlighting.spanInfos, symbolsHighlighting.Version);
       else if ((matchedBrackets = msg as MatchedBrackets) != null)
       {
         if (_activeTextViewModelOpt == null)
@@ -174,16 +175,21 @@ namespace Nitra.VisualStudio.Models
         _mouseHoverTextViewModelOpt?.ShowHint(hint);
     }
 
+    internal Brush SpanClassToBrush(string spanClass, IWpfTextView _wpfTextView)
+    {
+      var classifierOpt = GetClassifierOpt();
+      if (classifierOpt == null)
+        return Server.SpanClassToBrush(spanClass);
+
+      return classifierOpt.SpanClassToBrush(spanClass, _wpfTextView);
+    }
+
     private void UpdateCompilerMessages(int index, CompilerMessage[] messages, int version)
     {
       var snapshot = _textBuffer.CurrentSnapshot;
 
       if (snapshot.Version.VersionNumber != version + 1)
         return;
-
-      if (messages.Length > 0)
-      {
-      }
 
       CompilerMessages[index]          = messages;
       CompilerMessagesSnapshots[index] = snapshot;
@@ -273,13 +279,19 @@ namespace Nitra.VisualStudio.Models
       }
     }
 
-    void UpdateSpanInfos(ITextBuffer textBuffer, HighlightingType highlightingType, ImmutableArray<SpanInfo> spanInfos, FileVersion version)
+    NitraEditorClassifier GetClassifierOpt()
     {
-      if (!textBuffer.Properties.ContainsProperty(Constants.NitraEditorClassifierKey))
-        return;
+      NitraEditorClassifier classifier;
+      _textBuffer.Properties.TryGetProperty(Constants.NitraEditorClassifierKey, out classifier);
+      return classifier;
+    }
 
-      var tegget = (NitraEditorClassifier)textBuffer.Properties.GetProperty(Constants.NitraEditorClassifierKey);
-      tegget.Update(highlightingType, spanInfos, version);
+    void UpdateSpanInfos(HighlightingType highlightingType, ImmutableArray<SpanInfo> spanInfos, FileVersion version)
+    {
+      var classifierOpt = GetClassifierOpt();
+      if (classifierOpt == null)
+        return;
+      classifierOpt.Update(highlightingType, spanInfos, version);
     }
   }
 }
