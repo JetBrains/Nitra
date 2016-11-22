@@ -189,13 +189,16 @@ namespace Nitra.VisualStudio.Models
       var span       = new SnapshotSpan(snapshot, new Span(msg.referenceSpan.StartPos, msg.referenceSpan.Length));
       var geometry   = _wpfTextView.TextViewLines.GetTextMarkerGeometry(span);
       var visual     = (Visual)_wpfTextView;
-      var rect       = new Rect(visual.PointToScreen(geometry.Bounds.Location), geometry.Bounds.Size);
+      var bound      = geometry.Bounds;
+
+      bound.Offset(-_wpfTextView.ViewportLeft, -_wpfTextView.ViewportTop);
+      bound.Height  += 10;
+
+      var rect = new Rect(visual.PointToScreen(bound.Location), bound.Size);
       var vsTextView = _wpfTextView.ToVsTextView();
       var hWnd       = vsTextView.GetWindowHandle();
       var hintXml    = "<hint><keyword>xyz</keyword> <hint value='Вложенный хинт' key='ключ' /><lb/>" + msg.text.Replace("<unknown>", "&lt;unknown&gt;").Replace("\r", "").Replace("\n", "<lb/>") + "</hint>";
-      var hint       = this.FileModel.Server.Hint; 
-
-      rect.Height += 10;
+      var hint       = this.FileModel.Server.Hint;
 
       if (hint.IsOpen)
       {
