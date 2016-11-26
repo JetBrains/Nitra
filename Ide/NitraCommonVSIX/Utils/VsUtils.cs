@@ -292,5 +292,13 @@ namespace Nitra.VisualStudio
 
       return ErrorHelper.Succeeded(vsTextManager.NavigateToLineAndColumn(vsTextBuffer, ref logicalView, line, column, line, column));
     }
+
+    public static EnvDTE.Project GetProject(this IVsHierarchy hierarchy)
+    {
+      var itemid = VSConstants.VSITEMID_ROOT;
+
+      var project = hierarchy.GetProp(itemid, __VSHPROPID.VSHPROPID_ExtObject) as EnvDTE.Project;
+      return project;
+    }
   }
 }

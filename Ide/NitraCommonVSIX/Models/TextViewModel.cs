@@ -197,7 +197,7 @@ namespace Nitra.VisualStudio.Models
       var rect = new Rect(visual.PointToScreen(bound.Location), bound.Size);
       var vsTextView = _wpfTextView.ToVsTextView();
       var hWnd       = vsTextView.GetWindowHandle();
-      var hintXml    = "<hint>" + msg.text.Replace("<unknown>", "&lt;unknown&gt;").Replace("\r", "").Replace("\n", "<lb/>") + "</hint>";
+      var hintXml    = msg.text;
       var hint       = this.FileModel.Server.Hint;
 
       if (hint.IsOpen)
@@ -211,17 +211,28 @@ namespace Nitra.VisualStudio.Models
         hint.Close();
       }
 
-      hint.Show(hWnd, rect, subHintText, hintXml, this.SpanClassToBrush);
+      hint.Show(hWnd, rect, SubHintText, hintXml, this.SpanClassToBrush);
     }
 
-    private Brush SpanClassToBrush(string spanClass)
+    Brush SpanClassToBrush(string spanClass)
     {
       return this.FileModel.SpanClassToBrush(spanClass, _wpfTextView);
     }
 
-    private string subHintText(string arg)
+    string SubHintText(string symbolIdText)
     {
-      return "<hint>Sub hint! Key='<b>" + arg + "'</b></hint>";
+      var symbolId = int.Parse(symbolIdText);
+      var fileModel = FileModel;
+      var client = fileModel.Server.Client;
+      client.Send(new ClientMessage.GetSubHint(GetCurrntProjectId(), symbolId));
+      var msg = client.Receive<ServerMessage.SubHint>();
+      return msg.text;
+    }
+
+    ProjectId GetCurrntProjectId()
+    {
+      var project = FileModel.Hierarchy.GetProject();
+      return new ProjectId(FileModel.Server.Client.StringManager.GetId(project.FileName));
     }
 
     static void GoToLocation(FileModel fileModel, Location loc)
