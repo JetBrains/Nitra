@@ -63,7 +63,7 @@ namespace WpfHint.UIBuilding
           case "font":
             return BuildFont(et, hint);
           case "keyword":
-            return new Span { Foreground = Brushes.Blue }.Fill(et, hint);
+            return new Span { Foreground = hint.MapBrush("Nitra.Language.Keyword") }.Fill(et, hint);
           //case "span":
           case "hint":
             return BuildHint(et, hint);

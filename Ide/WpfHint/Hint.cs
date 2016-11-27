@@ -4,6 +4,7 @@ using System.Windows.Interop;
 using System.Diagnostics;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Controls;
 
 namespace WpfHint
 {
@@ -64,6 +65,9 @@ namespace WpfHint
 
     public bool IsOpen { get { return _hintWindow != null; } }
 
+    public object BackgroundResourceReference { get; set; }
+    public object ForegroundResourceReference { get; set; }
+
     public void Close()
     {
       if (_hintWindow != null)
@@ -107,6 +111,13 @@ namespace WpfHint
       // create hint window
       var ht = HintRoot.Create(PlacementRect, _hintSource);
       _hintWindow = new HintWindow(this, ht) { Text = _text };
+
+      if (BackgroundResourceReference != null)
+        _hintWindow.border.SetResourceReference(Border.BackgroundProperty, BackgroundResourceReference);
+
+      if (ForegroundResourceReference != null)
+        _hintWindow._textBlock.SetResourceReference(TextBlock.ForegroundProperty, ForegroundResourceReference);
+
       _hintSource.HintWindow = _hintWindow;
       //new WindowInteropHelper(_hintWindow) { Owner = _hintSource.Owner };
       _hintWindow.Closed += HintWindowClosed;

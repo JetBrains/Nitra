@@ -140,7 +140,14 @@ namespace WpfHint
 			}
 
 			var wnd = new HintWindow(_hint, ht) { Text = hintText, Owner = this };
-			wnd.Show();
+
+      if (_hint.BackgroundResourceReference != null)
+        wnd.border.SetResourceReference(Border.BackgroundProperty, _hint.BackgroundResourceReference);
+
+      if (_hint.ForegroundResourceReference != null)
+        wnd._textBlock.SetResourceReference(TextBlock.ForegroundProperty, _hint.ForegroundResourceReference);
+
+      wnd.Show();
 		}
 
 		#endregion

@@ -13,6 +13,8 @@ using Microsoft.VisualStudio.Shell.Interop;
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Media;
+using Microsoft.VisualStudio.PlatformUI;
+using System.Windows.Controls;
 
 namespace Nitra.VisualStudio.Models
 {
@@ -186,6 +188,8 @@ namespace Nitra.VisualStudio.Models
 
       // TODO: Use VS colors. .SetResourceReference(Microsoft.VisualStudio.PlatformUI.EnvironmentColors.ToolTipBrushKey); //ToolTipTextBrushKey 
 
+      //Microsoft.VisualStudio.PlatformUI.EnvironmentColors.ToolTipBrushKey
+
       var span       = new SnapshotSpan(snapshot, new Span(msg.referenceSpan.StartPos, msg.referenceSpan.Length));
       var geometry   = _wpfTextView.TextViewLines.GetTextMarkerGeometry(span);
       var visual     = (Visual)_wpfTextView;
@@ -199,6 +203,9 @@ namespace Nitra.VisualStudio.Models
       var hWnd       = vsTextView.GetWindowHandle();
       var hintXml    = msg.text;
       var hint       = this.FileModel.Server.Hint;
+
+      hint.BackgroundResourceReference = EnvironmentColors.ToolTipBrushKey;
+      hint.ForegroundResourceReference = EnvironmentColors.ToolTipTextBrushKey;
 
       if (hint.IsOpen)
       {
