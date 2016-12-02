@@ -118,7 +118,7 @@ namespace Nitra.VisualStudio
       IVsUserData data = vsTextView as IVsUserData;
       if (data == null)
       {
-        throw new InvalidOperationException("The IVsTextView shims should allow us to cast to IVsUserData");
+        return null;
       }
       Guid guidIWpfTextViewHost = GuidIWpfTextViewHost;
       ErrorHelper.ThrowOnFailure(data.GetData(ref guidIWpfTextViewHost, out obj2));
@@ -299,6 +299,39 @@ namespace Nitra.VisualStudio
 
       var project = hierarchy.GetProp(itemid, __VSHPROPID.VSHPROPID_ExtObject) as EnvDTE.Project;
       return project;
+    }
+
+    internal static void NavigateTo(IServiceProvider serviceProvider, string filename, int line, int col)
+    {
+      IVsTextView viewAdapter;
+      IVsWindowFrame pWindowFrame;
+      OpenDocument(serviceProvider, filename, out viewAdapter, out pWindowFrame);
+
+      ErrorHandler.ThrowOnFailure(pWindowFrame.Show());
+
+      // Set the cursor at the beginning of the declaration.
+      ErrorHandler.ThrowOnFailure(viewAdapter.SetCaretPos(line, col));
+      // Make sure that the text is visible.
+      viewAdapter.CenterLines(line, 1);
+    }
+
+    static void OpenDocument(IServiceProvider serviceProvider,  string filename, out IVsTextView viewAdapter, out IVsWindowFrame pWindowFrame)
+    {
+      IVsTextManager textMgr = (IVsTextManager)serviceProvider.GetService(typeof(SVsTextManager));
+
+      IVsUIShellOpenDocument uiShellOpenDocument = (IVsUIShellOpenDocument)serviceProvider.GetService(typeof(SVsUIShellOpenDocument));
+      IVsUIHierarchy hierarchy;
+      uint itemid;
+
+
+      VsShellUtilities.OpenDocument(
+          serviceProvider,
+          filename,
+          Guid.Empty,
+          out hierarchy,
+          out itemid,
+          out pWindowFrame,
+          out viewAdapter);
     }
   }
 }

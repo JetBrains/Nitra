@@ -19,7 +19,6 @@ namespace Nitra.VisualStudio.BraceMatching
     /// </summary>
   public class InteractiveHighlightingTagger : ITagger<TextMarkerTag>
   {
-             TextViewModel  _textViewModelOpt;
     readonly ITextView      _textView;
     readonly ITextBuffer    _textBuffer;
              SnapshotPoint? _caretPosOpt;
@@ -38,20 +37,8 @@ namespace Nitra.VisualStudio.BraceMatching
       UpdateAtCaretPosition(_textView.Caret.Position);
     }
 
-    internal TextViewModel TextViewModel
-    {
-      get
-      {
-        if (_textViewModelOpt == null)
-        {
-          if (!_textView.Properties.ContainsProperty(Constants.TextViewModelKey))
-            return null;
-
-          _textViewModelOpt = (TextViewModel)_textView.Properties.GetProperty(Constants.TextViewModelKey);
-        }
-        return _textViewModelOpt;
-      }
-    }
+    // don't cache it! Property can be changed in _textView.Properties when the view hide or show.
+    TextViewModel GetTextViewModel() => (TextViewModel)_textView.Properties.GetProperty(Constants.TextViewModelKey);
 
     void ViewLayoutChanged(object source, TextViewLayoutChangedEventArgs e)
     {
@@ -66,27 +53,30 @@ namespace Nitra.VisualStudio.BraceMatching
 
     void UpdateAtCaretPosition(CaretPosition caretPosition)
     {
-      if (TextViewModel == null)
+      var textViewModel = GetTextViewModel();
+      if (textViewModel == null)
         return;
 
       _caretPosOpt = caretPosition.Point.GetPoint(_textBuffer, caretPosition.Affinity);
 
       if (_caretPosOpt.HasValue)
       {
-        var fileModel = TextViewModel.FileModel;
+        var fileModel = textViewModel.FileModel;
         var pos = _caretPosOpt.Value;
         fileModel.Server.CaretPositionChanged(fileModel.Id, pos.Position, pos.Snapshot.Version.Convert());
       }
       else
-        TextViewModel.Reset();
+        textViewModel.Reset();
     }
 
     public IEnumerable<ITagSpan<TextMarkerTag>> GetTags(NormalizedSnapshotSpanCollection spans)
     {
-      if (TextViewModel == null)
+      var textViewModel = GetTextViewModel();
+
+      if (textViewModel == null)
         yield break;
 
-      var matchedBrackets = TextViewModel.MatchedBrackets;
+      var matchedBrackets = textViewModel.MatchedBrackets;
 
       if (!_caretPosOpt.HasValue)
         yield break;
@@ -106,8 +96,8 @@ namespace Nitra.VisualStudio.BraceMatching
         }
       }
 
-      var findSymbolReferences = TextViewModel.FindSymbolReferences;
-      var id = TextViewModel.FileModel.Id;
+      var findSymbolReferences = textViewModel.FindSymbolReferences;
+      var id = textViewModel.FileModel.Id;
 
       if (findSymbolReferences != null && lastSnapshot.Version.VersionNumber == findSymbolReferences.Version + 1)
       {

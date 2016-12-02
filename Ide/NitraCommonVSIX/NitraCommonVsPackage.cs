@@ -119,6 +119,7 @@ namespace Nitra.VisualStudio
 
         UnsubscibeToSolutionEvents();
         _runningDocTableEventse?.Dispose();
+        _runningDocTableEventse = null;
 
         var objManager = GetService(typeof(SVsObjectManager)) as IVsObjectManager2;
         if (objManager != null)
@@ -408,6 +409,8 @@ namespace Nitra.VisualStudio
       var windowFrame = e.Info.WindowFrame;
       var vsTextView  = VsShellUtilities.GetTextView(windowFrame);
       var wpfTextView = vsTextView.ToIWpfTextView();
+      if (wpfTextView == null)
+        return;
       var dispatcher  = wpfTextView.VisualElement.Dispatcher;
       var hierarchy   = windowFrame.GetHierarchyFromVsWindowFrame();
 
@@ -417,6 +420,17 @@ namespace Nitra.VisualStudio
       else
         foreach (var server in _servers)
           server.ViewDeactivated(wpfTextView, id);
+    }
+
+    private void OnDocumentWindowDestroy(object sender, DocumentWindowEventArgs e)
+    {
+      var windowFrame = e.Info.WindowFrame;
+      var vsTextView = VsShellUtilities.GetTextView(windowFrame);
+      var wpfTextView = vsTextView.ToIWpfTextView();
+      if (wpfTextView == null)
+        return;
+      foreach (var server in _servers)
+        server.DocumentWindowDestroy(wpfTextView);
     }
 
     private void SubscibeToSolutionEvents()
@@ -449,6 +463,7 @@ namespace Nitra.VisualStudio
       SolutionEvents.OnQueryUnloadProject += SolutionEvents_OnQueryUnloadProject;
 
       _runningDocTableEventse.DocumentWindowOnScreenChanged += OnDocumentWindowOnScreenChanged;
+      _runningDocTableEventse.DocumentWindowDestroy         += OnDocumentWindowDestroy;
     }
 
     private void UnsubscibeToSolutionEvents()

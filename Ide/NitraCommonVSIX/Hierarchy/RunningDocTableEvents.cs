@@ -20,6 +20,8 @@ namespace Nitra.VisualStudio
     public RunningDocumentTable RunningDocumentTable { get { return _runningDocumentTable; } }
 
     public event EventHandler<DocumentWindowOnScreenChangedEventArgs> DocumentWindowOnScreenChanged;
+    public event EventHandler<DocumentWindowEventArgs>                DocumentWindowCreate;
+    public event EventHandler<DocumentWindowEventArgs>                DocumentWindowDestroy;
 
     public RunningDocTableEvents()
     {
@@ -56,6 +58,7 @@ namespace Nitra.VisualStudio
       {
         var windowFrameInfo = new WindowFrameInfo(frame, this);
         _windowFrames.Add(frame, windowFrameInfo);
+        DocumentWindowCreate?.Invoke(this, new DocumentWindowEventArgs(windowFrameInfo));
       }
 
       //var path = frame.GetFilePath();
@@ -81,9 +84,14 @@ namespace Nitra.VisualStudio
       //object path = frame.GetFilePath();
       //Debug.WriteLine($"tr: OnAfterDocumentWindowHide(docCookie={docCookie}, path='{path}')");
 
-      var windowFrameInfo = _windowFrames[frame];
-      windowFrameInfo.Dispose();
-      _windowFrames.Remove(frame);
+      WindowFrameInfo windowFrameInfo;
+
+      if (_windowFrames.TryGetValue(frame, out windowFrameInfo))
+      {
+        DocumentWindowDestroy?.Invoke(this, new DocumentWindowEventArgs(windowFrameInfo));
+        windowFrameInfo.Dispose();
+        _windowFrames.Remove(frame);
+      }
 
       return VSConstants.S_OK;
     }

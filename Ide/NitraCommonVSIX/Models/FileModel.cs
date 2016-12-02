@@ -72,12 +72,13 @@ namespace Nitra.VisualStudio.Models
       TextViewModel textViewModel;
       if (_textViewModelsMap.TryGetValue(wpfTextView, out textViewModel))
       {
+        if (textViewModel == _activeTextViewModelOpt)
+          _activeTextViewModelOpt = null;
+        if (textViewModel == _mouseHoverTextViewModelOpt)
+          _mouseHoverTextViewModelOpt = null;
         textViewModel.Dispose();
         _textViewModelsMap.Remove(wpfTextView);
       }
-
-      if (_textViewModelsMap.Count == 0)
-        Dispose();
 
       return;
     }
@@ -257,7 +258,10 @@ namespace Nitra.VisualStudio.Models
 
       var textViewModel = GetTextViewModel();
       if (textViewModel == null)
+      {
+        VsUtils.NavigateTo(Server.ServiceProvider, FullPath, task.Line, task.Column);
         return;
+      }
 
       textViewModel.Navigate(task.Line, task.Column);
     }

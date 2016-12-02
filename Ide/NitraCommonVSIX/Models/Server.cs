@@ -128,8 +128,16 @@ namespace Nitra.VisualStudio
 
     internal void ViewDeactivated(IWpfTextView wpfTextView, FileId id)
     {
-      var fileModel = wpfTextView.TextBuffer.Properties.GetProperty<FileModel>(Constants.FileModelKey);
-      fileModel.Remove(wpfTextView);
+      FileModel fileModel;
+      if (wpfTextView.TextBuffer.Properties.TryGetProperty<FileModel>(Constants.FileModelKey, out fileModel))
+        fileModel.Remove(wpfTextView);
+    }
+
+    internal void DocumentWindowDestroy(IWpfTextView wpfTextView)
+    {
+      FileModel fileModel;
+      if (wpfTextView.TextBuffer.Properties.TryGetProperty<FileModel>(Constants.FileModelKey, out fileModel))
+        fileModel.Dispose();
     }
 
     void Response(AsyncServerMessage msg)
