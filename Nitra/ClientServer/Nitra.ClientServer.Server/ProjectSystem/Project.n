@@ -17,7 +17,8 @@ using System.Linq;
 using System.Threading;
 using System.Reflection;
 
-using NSP = Nitra.ProjectSystem;
+using NSP    = Nitra.ProjectSystem;
+using NCSSPS = Nitra.ClientServer.Server.ProjectSystem;
 
 namespace Nitra.ClientServer.Server.ProjectSystem
 {
@@ -41,6 +42,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     public  Router                                   : Router { get; }
     mutable _expectsToBuildAst                       : int;
     public  SemanticActions                          : ConcurrentQueue[Action[CancellationToken, SolutionId, ImmutableArray[IAst]]] = ConcurrentQueue();
+    mutable _semanticResult                          : ImmutableArray[FileEvalPropertiesData];
            
     internal this(parent : Solution, fullPath : string, id : ProjectId, config : Config, parseQueue : BlockingCollection[ParserMessage], router : Router)
     {
@@ -211,6 +213,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
           ServerUtils.Log("Prepare to Semantic Analysis");
 
           def files = NSP.File.GetEvalPropertiesData(_files.Values.Where(_.IsSupported).OrderBy(_.IsActive));
+          _semanticResult = ImmutableArray.Empty;
           foreach (file in files)
             file.Ast.DeepResetProperties();
             
@@ -220,18 +223,43 @@ namespace Nitra.ClientServer.Server.ProjectSystem
           ServerUtils.Log("Project support not available!");
       }
     }
-    
 
-    public SemanticAnalysisFinished() : void
+    public GetSemanticAnalysisMessages(fileId : FileId) : array[CompilerMessage]
+    {
+      def files = _semanticResult;
+      def empty = array(0);
+      
+      when (files.IsDefaultOrEmpty)
+        return empty;
+      
+      for (mutable i = 0; i < files.Length; i++)
+      {
+        def file = files[i];
+        when (fileId != file.FileId)
+          continue;
+        
+        if (file.HasCompilerMessage)
+        {
+          def msgs = file.GetCompilerMessage();
+          def cm   = ServerUtils.ConvertCompilerMessages(CompilerMessageSource.SemanticAnalysis, msgs);
+          return cm;
+        }
+        else
+          return empty;
+      }
+      empty
+    }
+    
+    public SemanticAnalysisFinished(files : ImmutableArray[FileEvalPropertiesData]) : void
     {
       IsSemanticAvailable = true;
-      def files = _files.Values.ToArray();
+      _semanticResult     = files;
+
       def cancellationToken = _semanticAnalysisCancellationTokenSource.Token;
-      
-      foreach (file when file.IsActive && file.IsSupported in files)
-      {
-        ParseQueue.Add(ParserMessage.CreateSymbolsHighlighting(Parent.Id, file.FileId, file.FileVersion, file.Ast));
-      }
+
+      foreach (file in files)
+        when (file.Ast?.Location?.Source?.File is NCSSPS.File as file when file.IsActive)
+          ParseQueue.Add(ParserMessage.CreateSymbolsHighlighting(Parent.Id, file.FileId, file.FileVersion, file.Ast));
       
       def semanticActions = SemanticActions;
       mutable action;
@@ -252,6 +280,14 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     }
 
     static GetAsts(files : Seq[File]) : ImmutableArray[IAst]
+    {
+      def builder = ImmutableArray.CreateBuilder(files.Count());
+      foreach(file in files)
+        builder.Add(file.Ast);
+      builder.MoveToImmutable();
+    }
+    
+    static GetAsts(files : ImmutableArray[FileEvalPropertiesData]) : ImmutableArray[IAst]
     {
       def builder = ImmutableArray.CreateBuilder(files.Count());
       foreach(file in files)
