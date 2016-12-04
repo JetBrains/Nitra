@@ -192,6 +192,10 @@ namespace Nitra.VisualStudio.Models
 
       var span       = new SnapshotSpan(snapshot, new Span(msg.referenceSpan.StartPos, msg.referenceSpan.Length));
       var geometry   = _wpfTextView.TextViewLines.GetTextMarkerGeometry(span);
+
+      if (geometry == null)
+        return;
+
       var visual     = (Visual)_wpfTextView;
       var bound      = geometry.Bounds;
 
