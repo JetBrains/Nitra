@@ -261,6 +261,9 @@ namespace Nitra.VisualStudio
 
       Debug.WriteLine($"tr: AfterOpenProject(IsAdded='{e.IsAdded}', FullName='{projectPath}' id={projectId})");
 
+      foreach (var server in _servers)
+        server.AddedMscorlibReference(projectId);
+
       var listener = new HierarchyListener(hierarchy);
 
       listener.ItemAdded      += FileAdded;

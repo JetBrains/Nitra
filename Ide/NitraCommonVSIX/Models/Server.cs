@@ -98,6 +98,11 @@ namespace Nitra.VisualStudio
       Client.Send(new ClientMessage.ReferenceLoaded(projectId, "File:" + referencePath));
     }
 
+    internal void AddedMscorlibReference(ProjectId projectId)
+    {
+      Client.Send(new ClientMessage.ReferenceLoaded(projectId, "FullName:mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"));
+    }
+
     internal void BeforeCloseProject(ProjectId id)
     {
       Client.Send(new ClientMessage.ProjectUnloaded(id));
