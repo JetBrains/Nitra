@@ -248,6 +248,9 @@ namespace Nitra.VisualStudio.Models
 
     static void GoToLocation(FileModel fileModel, Location loc)
     {
+      if (loc.File.FileId < 0)
+        return;
+
       var path = fileModel.Server.Client.StringManager.GetPath(loc.File.FileId);
       fileModel.Server.ServiceProvider.Navigate(path, loc.Range.StartLine, loc.Range.StartColumn);
     }
