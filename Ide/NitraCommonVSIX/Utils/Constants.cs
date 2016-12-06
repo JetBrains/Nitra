@@ -19,5 +19,7 @@ namespace Nitra.VisualStudio
     public const string FileModelKey              = "Nitra-FileModel";
     public const string TextViewModelKey          = "Nitra-TextViewModel";
     public const string CompilerMessagesTaggerKey = "Nitra-CompilerMessagesTagger";
+    public const string DefenitionHighlighting    = "NitraDefenitionHighlighting";
+    public const string ReferenceHighlighting     = "NitraReferenceHighlighting";
   }
 }
