@@ -108,7 +108,7 @@ namespace Nitra.VisualStudio.BraceMatching
             var loc = definition.Location;
             if (loc.File.FileId != id)
               continue;
-            yield return MakeTagSpan(lastSnapshot, currentSnapshot, loc.Span, Constants.CurrentSymbol);
+            yield return MakeTagSpan(lastSnapshot, currentSnapshot, loc.Span, Constants.DefenitionHighlighting);
           }
 
           foreach (var fileEntries in symbolRefs.References)
@@ -116,7 +116,7 @@ namespace Nitra.VisualStudio.BraceMatching
             if (fileEntries.File.FileId != id)
               continue;
             foreach (var range in fileEntries.Ranges)
-              yield return MakeTagSpan(lastSnapshot, currentSnapshot, range.Span, Constants.CurrentSymbol);
+              yield return MakeTagSpan(lastSnapshot, currentSnapshot, range.Span, Constants.ReferenceHighlighting);
           }
         }
       }
