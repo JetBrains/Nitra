@@ -20,6 +20,8 @@ using System.Linq;
 using System.Threading;
 using NRB = Nitra.Declarations;
 
+[assembly: ProjectSupport("Nitra DotNet", typeof(DotNet.CompilationUnit))]
+
 namespace DotNet
 {
   public partial class CompilationUnit : AstBase, IProjectSupport, NamespaceBody
@@ -29,9 +31,20 @@ namespace DotNet
       def oldManager = ManagerClass.Instance;
       try
       {
-        def manager : ManagerClass = if (project is NitraProject(Manager = manager)) manager else StubCompiler(project);
+        project.OnSymbolAssemblyResolve += OnSymbolAssemblyResolve;
+
+        def context = DependentPropertyEvalContext();
+        def manager : ManagerClass =
+          if (project is NitraProject(Manager = manager) as p)
+          {
+            context.OnEmitSymbol += p.EmitSymbol;
+            manager
+          }
+          else
+            StubCompiler(project);
+
         ManagerClass.Instance = manager;
-        def context       = DependentPropertyEvalContext();
+
         context.CancellationToken = cancellationToken;
         def rootNamespace = NamespaceSymbol();
 
@@ -48,7 +61,7 @@ namespace DotNet
           manager.BeforeSaveAssembly += writeMetadataCallback;
 
         //def rootScope = CreateNemerleSymbols(cancellationToken, manager, rootNamespace, context);
-        def rootScope : Scope = rootNamespace.MemberTable;
+        def rootScope = rootNamespace.MemberTable;
         rootNamespace.EvalProperties(context);
 
         // ensure static symbols are created
@@ -57,13 +70,17 @@ namespace DotNet
         LoadNitraMetadata(cancellationToken, project, manager, rootNamespace);
         (context, rootNamespace, rootScope, manager)
       }
-      finally ManagerClass.Instance = oldManager;
+      finally
+      {
+        ManagerClass.Instance = oldManager;
+        project.OnSymbolAssemblyResolve -= OnSymbolAssemblyResolve;
+      }
     }
 
     public RefreshProject(cancellationToken : CancellationToken, files : ImmutableArray[FileEvalPropertiesData], data : object) : void
     {
       def oldManager = ManagerClass.Instance;
-      def (context, rootNamespace, rootScope, manager) = data :> (DependentPropertyEvalContext * NamespaceSymbol * Scope * ManagerClass);
+      def (context, rootNamespace, rootScope, manager) = DecomposeData(data);
 
       context.CancellationToken = cancellationToken;
       
@@ -88,6 +105,48 @@ namespace DotNet
       finally ManagerClass.Instance = oldManager;
     }
 
+    public GetSymbolById(data : object, symbolId : int) : ValueOption[DeclarationSymbol]
+    {
+      def (_, rootNamespace, _, _) = DecomposeData(data);
+      // TODO: cache symbols an use it cache to find symbol by id
+      def findSymbol(tableScope : TableScope) : ValueOption[DeclarationSymbol]
+      {
+        foreach (symbols in tableScope.Symbols)
+        foreach (symbol is NamespaceSymbol in symbols)
+        {
+          when (symbol.Id == symbolId)
+            return ValueOption.Some(symbol);
+            
+          when (symbol.IsMemberTableEvaluated)
+          {
+            def result = findSymbol(symbol.MemberTable);
+          
+            when (result.IsSome)
+              return result;
+          }
+        }
+        
+        ValueOption.None()
+      }
+      
+      findSymbol(rootNamespace.MemberTable)
+    }
+    
+    public DeconstructType(symbol : DeclarationSymbol, type : out TypeSymbol, typeArgs : out ImmutableArray[TypeSymbol]) : bool
+    {
+      match (symbol)
+      {
+        | s is TopConstructedTypeSymbol    => type = s.TypeInfo; typeArgs = s.Args; true
+        | s is NestedConstructedTypeSymbol => type = s.TypeInfo; typeArgs = s.Args; true
+        | _ => type = null; typeArgs = ImmutableArray.Empty; false
+      }
+    }
+    
+    public DecomposeData(data : object) : DependentPropertyEvalContext * NamespaceSymbol * TableScope * ManagerClass
+    {
+      data :> (DependentPropertyEvalContext * NamespaceSymbol * TableScope * ManagerClass)
+    }
+    
     class StubCompiler : ManagerClass
     {
       public this(project : Project)
@@ -109,6 +168,16 @@ namespace DotNet
         }
         InitCompiler ();
         LoadExternalLibraries ();
+      }
+    }
+
+    private static OnSymbolAssemblyResolve(_ : Project, fullName : System.Reflection.AssemblyName) : System.Reflection.Assembly
+    {
+      match (fullName.Name)
+      {
+        | "Boot.DotNetLang"    => typeof(DotNet.ClassSymbol).Assembly;
+        | "Boot.Nitra.Runtime" => typeof(Nitra.Location).Assembly;
+        | _ => null
       }
     }
 

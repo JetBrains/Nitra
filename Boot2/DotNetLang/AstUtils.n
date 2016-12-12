@@ -1,4 +1,5 @@
-﻿using Nitra;
+﻿using System.Text;
+using Nitra;
 using Nitra.Declarations;
 using Nitra.ProjectSystem;
 
@@ -102,7 +103,12 @@ namespace DotNet
         arguments)
     }
 
-    public MakeNamespaceFullName(parentFullName : string, name : string, typeParameters : IList[TypeParameterSymbol] = null) : string
+    public MakeNamespaceFullName(parentFullName : string, name : string) : string
+    {
+      MakeNamespaceFullName(parentFullName, name, default(ImmutableArray[TypeParameterSymbol]))
+    }
+    
+    public MakeNamespaceFullName(parentFullName : string, name : string, typeParameters : ImmutableArray[TypeParameterSymbol]) : string
     {
       def result =
         if (string.IsNullOrEmpty(parentFullName))
@@ -110,7 +116,7 @@ namespace DotNet
         else
           parentFullName + "." + name;
           
-      if (typeParameters == null || typeParameters.Count == 0)
+      if (typeParameters.IsDefaultOrEmpty)
         result
       else
         $<#$result<..$(typeParameters; ", "; _.Name)>#>
@@ -180,12 +186,12 @@ namespace DotNet
       foreach (decl in t.Declarations)
         resultSymbol.AddDeclaration(decl);
       resultSymbol.TypeInfo = t;
-      resultSymbol.Args     = t.TypeParameters.ToArray();
+      resultSymbol.Args     = t.TypeParameters.CastArray();
       resultSymbol.EvalProperties(context);
       resultSymbol
     }
 
-    public CreateNestedConstructedTypeSymbol(loc : Location, parentTypeSubst : TypeSymbol, typeInfo : GenericTypeSymbol, arguments : IList[TypeSymbol], context : DependentPropertyEvalContext) : ConstructedTypeSymbol
+    public CreateNestedConstructedTypeSymbol(loc : Location, parentTypeSubst : TypeSymbol, typeInfo : GenericTypeSymbol, arguments : ImmutableArray[TypeSymbol], context : DependentPropertyEvalContext) : ConstructedTypeSymbol
     {
       def name              = Name(loc, "#ConstructedType");
       def decl              = NestedConstructedType(loc, name);
@@ -200,7 +206,7 @@ namespace DotNet
       resultSymbol
     }
 
-    public CreateConstructedTypeSymbol(loc : Location, typeInfo : GenericTypeSymbol, arguments : IList[TypeSymbol], context : DependentPropertyEvalContext) : ConstructedTypeSymbol
+    public CreateConstructedTypeSymbol(loc : Location, typeInfo : GenericTypeSymbol, arguments : ImmutableArray[TypeSymbol], context : DependentPropertyEvalContext) : ConstructedTypeSymbol
     {
       def name              = Name(loc, "#ConstructedType");
       def decl              = TopConstructedType(loc, name);
@@ -215,49 +221,50 @@ namespace DotNet
 
     public MakeConstructedType(ast : ILocated, args : ImmutableArray[Ref[DeclarationSymbol]], context : DependentPropertyEvalContext) : ResolutionAlgorithm[DeclarationSymbol, DeclarationSymbol]
     {
-      def (resolvedArgs, allArgumentsResolved) = ResolveAll.[TypeSymbol, _](args);
+      def loc = ast.Location;
+      mutable resolvedArgs;
+      def allArgumentsResolved = ResolveAll.[TypeSymbol, _](args, out resolvedArgs);
       fun (symbol)
       {
-        def makeArguments(symbol : GenericTypeSymbol)
+        def makeArguments(symbol : GenericTypeSymbol) : ImmutableArray[TypeSymbol]
         {
-          mutable argsWithTemplates = resolvedArgs;
           unless (allArgumentsResolved)
           {
             def typeParameters = symbol.TypeParameters;
-            argsWithTemplates  = array(resolvedArgs.Length);
-            foreach (arg in resolvedArgs with index)
-              argsWithTemplates[index] = arg ?? typeParameters[index];
+            foreach (arg when arg == null in resolvedArgs with index)
+              resolvedArgs[index] = typeParameters[index];
           }
-          argsWithTemplates
+          resolvedArgs.MoveToImmutable()
         }
 
         match (symbol)
         {
-          | symbol is NestedGenericTypeSymbol => VSome(CreateNestedConstructedTypeSymbol(ast.Location, symbol.DeclaredIn.TypeSubst, symbol, makeArguments(symbol), context))
-          | symbol is TopGenericTypeSymbol    => VSome(CreateConstructedTypeSymbol(ast.Location, symbol, makeArguments(symbol), context))
+          | symbol is NestedGenericTypeSymbol => VSome(CreateNestedConstructedTypeSymbol(loc, symbol.DeclaredIn.TypeSubst, symbol, makeArguments(symbol), context))
+          | symbol is TopGenericTypeSymbol    => VSome(CreateConstructedTypeSymbol(loc, symbol, makeArguments(symbol), context))
           | _ => VNone()
         }
       }
     }
 
-    public static ResolveAll[TSymbol, TRef](refs : ImmutableArray[TRef]) : array[TSymbol] * bool
-      where TSymbol : DeclarationSymbol
+    public static ResolveAll[TSymbol, TRef](refs : ImmutableArray[TRef], result : out ImmutableArray[TSymbol].Builder) : bool
+      where TSymbol : class, DeclarationSymbol
       where TRef    : IRef
     {
       mutable isResolvedAll = true;
-      def symbols = array(refs.Length);
+      def symbols = ImmutableArray.CreateBuilder(refs.Length);
       foreach (r in refs with index)
       {
         def resolvedArg = r.Resolve.[TSymbol]();
         if (resolvedArg.IsSymbolEvaluated)
-          symbols[index] = resolvedArg.Symbol
+          symbols.Add(resolvedArg.Symbol)
         else
         {
           isResolvedAll  = false; 
-          symbols[index] = default(TSymbol);
+          symbols.Add(null);
         }
       }
-      (symbols, isResolvedAll)
+      result = symbols;
+      isResolvedAll
     }
 
     public GetTypeParametersCount(declaration : Declaration) : int
@@ -274,16 +281,16 @@ namespace DotNet
 
     public NoTypeParameters : array[TypeParameterSymbol] = array(0);
 
-    public CreateTypeParameters(count : int) : array[TypeParameterSymbol]
+    public CreateTypeParameters(count : int) : ImmutableArray[TypeParameterSymbol]
     {
       if (count == 0)
-        NoTypeParameters
+        ImmutableArray.Empty
       else
       {
-        def result = array(count);
-        for (mutable i = 0; i < result.Length; ++i)
-          result[i] = TypeParameterSymbol();
-        result
+        def result = ImmutableArray.CreateBuilder(count);
+        for (mutable i = 0; i < count; ++i)
+          result.Add(TypeParameterSymbol());
+        result.MoveToImmutable()
       }
     }
 
@@ -296,6 +303,83 @@ namespace DotNet
     {
       def symbols = memberTable.Symbols;
       symbols.SelectMany(s => s.OfType.[NestedTypeSymbol]()).ToArray()
+    }
+    
+    public HintMlQuote(this builder : StringBuilder, text : string) : StringBuilder
+    {
+      builder
+        .Append(<#"#>)
+        .Append(XmlEscape(text))
+        .Append(<#"#>)
+    }
+    
+    public HintMlAttr(this builder : StringBuilder, name : string, text : string) : StringBuilder
+    {
+      builder
+        .Append(" ")
+        .Append(XmlEscape(name))
+        .Append("=")
+        .HintMlQuote(text)
+    }
+    
+    XmlEscape(text : string) : string
+    {
+      text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+    }
+    
+    SymbolToHintMlWithSubHint(symbol : DeclarationSymbol, builder : StringBuilder) : void
+    {
+      _ = builder
+        .Append("<Symbol")
+        .HintMlAttr("SpanClass", symbol.SpanClass.FullName)
+        .HintMlAttr("id", GetSymbolId(symbol).ToString())
+        .Append(">")
+        .Append(XmlEscape(symbol.Name))
+        .Append("</Symbol>");
+    }
+    
+    SymbolToHintMl(symbol : DeclarationSymbol, builder : StringBuilder) : void
+    {
+      _ = builder
+        .Append("<Symbol")
+        .HintMlAttr("SpanClass", symbol.SpanClass.FullName)
+        .Append(">")
+        .Append(XmlEscape(symbol.Name))
+        .Append("</Symbol>");
+    }
+    
+    GetSymbolId(symbol : DeclarationSymbol) : int
+    {
+      symbol.Id
+    }
+
+    IsRoot(ns : NamespaceMemberDeclarationSymbol) : bool { ns?.DeclaredIn == null }
+
+    MakeHintMlPath(ns : NamespaceMemberDeclarationSymbol, builder : StringBuilder) : StringBuilder
+    {
+      def parent = ns.DeclaredIn;
+
+      when (!IsRoot(parent))
+      {
+        _ = MakeHintMlPath(parent, builder);
+        _ = builder.Append("."); // TODO: make separator independent from language
+      }
+
+      SymbolToHintMlWithSubHint(ns, builder);
+      builder
+    }
+    
+    public Combine(parent : NamespaceMemberDeclarationSymbol, symbol : DeclarationSymbol) : string
+    {
+      def builder = StringBuilder();
+      when (!IsRoot(parent))
+      {
+        _ = MakeHintMlPath(parent, builder);
+        _ = builder.Append("."); // TODO: make separator independent from language
+      }
+
+      SymbolToHintMl(symbol, builder);
+      builder.ToString()
     }
   }
 }
