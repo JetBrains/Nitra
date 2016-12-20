@@ -12,7 +12,7 @@ namespace Nitra.VisualStudio
 
     public Library()
     {
-      _guid = new Guid("EDCC3B81-0BAD-11DB-BC1A-00112FDE8B61");
+      _guid = new Guid("1CC425ED-A93C-40B1-8A2B-672D9FE337DF");
     }
 
     #region IVsSimpleLibrary2 Members

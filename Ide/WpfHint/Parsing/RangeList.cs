@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace WpfHint.Parsing
+namespace WpfHint2.Parsing
 {
 	public class RangeList
 	{

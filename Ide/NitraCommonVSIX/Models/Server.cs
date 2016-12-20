@@ -21,7 +21,7 @@ using Nitra.VisualStudio.BraceMatching;
 using Nitra.VisualStudio.Models;
 using System.Diagnostics.Contracts;
 using Microsoft.VisualStudio.Shell.Interop;
-using WpfHint;
+using WpfHint2;
 using System.Windows.Media;
 
 namespace Nitra.VisualStudio

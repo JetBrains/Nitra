@@ -3,11 +3,11 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
-using WpfHint.Parsing;
+using WpfHint2.Parsing;
 using System.Linq;
 using System.Diagnostics;
 
-namespace WpfHint.UIBuilding
+namespace WpfHint2.UIBuilding
 {
   internal static class HintBuilder
   {

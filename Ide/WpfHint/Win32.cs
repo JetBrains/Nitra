@@ -2,7 +2,7 @@
 using System.Runtime.InteropServices;
 using System.Windows;
 
-namespace WpfHint
+namespace WpfHint2
 {
 	// ReSharper disable InconsistentNaming
 	public static class Win32

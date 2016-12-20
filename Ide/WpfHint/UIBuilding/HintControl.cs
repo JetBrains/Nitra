@@ -3,7 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System;
 
-namespace WpfHint.UIBuilding
+namespace WpfHint2.UIBuilding
 {
 	internal class HintControl : TextBlock
 	{

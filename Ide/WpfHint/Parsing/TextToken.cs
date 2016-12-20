@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Xml.Linq;
 
-namespace WpfHint.Parsing
+namespace WpfHint2.Parsing
 {
 	public class TextToken : ParseToken
 	{

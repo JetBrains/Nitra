@@ -6,7 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Controls;
 
-namespace WpfHint
+namespace WpfHint2
 {
   public class Hint
   {

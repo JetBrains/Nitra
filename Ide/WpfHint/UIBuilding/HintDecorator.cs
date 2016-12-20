@@ -3,7 +3,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 
-namespace WpfHint.UIBuilding
+namespace WpfHint2.UIBuilding
 {
 	internal class HintDecorator : Decorator
 	{

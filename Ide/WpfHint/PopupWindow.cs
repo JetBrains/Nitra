@@ -3,7 +3,7 @@ using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
 
-namespace WpfHint
+namespace WpfHint2
 {
 	internal class PopupWindow : Window
 	{

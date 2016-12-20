@@ -5,7 +5,7 @@ using System.Windows;
 using System.Windows.Threading;
 using System.Linq;
 
-namespace WpfHint
+namespace WpfHint2
 {
 	internal class HintSource : IDisposable
 	{

@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace WpfHint.Parsing
+namespace WpfHint2.Parsing
 {
 	public class Range
 	{

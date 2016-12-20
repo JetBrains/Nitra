@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
-namespace WpfHint.Parsing
+namespace WpfHint2.Parsing
 {
 	public class ParamParser
 	{

@@ -3,7 +3,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Diagnostics;
 
-namespace WpfHint
+namespace WpfHint2
 {
 	internal abstract class HintRoot : IDisposable
 	{

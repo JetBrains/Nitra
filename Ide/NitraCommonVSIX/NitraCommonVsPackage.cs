@@ -299,16 +299,21 @@ namespace Nitra.VisualStudio
     private void SolutionEvents_OnBeforeCloseProject(object sender, CloseProjectEventArgs e)
     {
       var hierarchy = e.Hierarchy;
-      var project   = hierarchy.GetProp<EnvDTE.Project>(VSConstants.VSITEMID_ROOT, __VSHPROPID.VSHPROPID_ExtObject);
-      var path      = project.FullName;
-      var id        = new ProjectId(_stringManager.GetId(path));
-
-      Debug.WriteLine($"tr: BeforeCloseProject(IsRemoved='{e.IsRemoved}', FullName='{project.FullName}' id={id})");
 
       var listener = _listenersMap[hierarchy];
       listener.StopListening();
       listener.Dispose();
       _listenersMap.Remove(hierarchy);
+
+      var project   = hierarchy.GetProp<EnvDTE.Project>(VSConstants.VSITEMID_ROOT, __VSHPROPID.VSHPROPID_ExtObject);
+
+      if (project == null)
+        return;
+
+      var path      = project.FullName;
+      var id        = new ProjectId(_stringManager.GetId(path));
+
+      Debug.WriteLine($"tr: BeforeCloseProject(IsRemoved='{e.IsRemoved}', FullName='{project.FullName}' id={id})");
 
       foreach (var server in _servers)
         server.BeforeCloseProject(id);

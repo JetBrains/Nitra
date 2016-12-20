@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Windows;
 
-namespace WpfHint
+namespace WpfHint2
 {
 	static class Utils
 	{

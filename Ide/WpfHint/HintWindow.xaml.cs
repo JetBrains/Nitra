@@ -11,11 +11,11 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
-using WpfHint.Parsing;
-using WpfHint.UIBuilding;
+using WpfHint2.Parsing;
+using WpfHint2.UIBuilding;
 using System.Diagnostics;
 
-namespace WpfHint
+namespace WpfHint2
 {
 	/// <summary>
 	/// Interaction logic for HintWindow.xaml

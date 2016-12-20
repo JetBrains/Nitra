@@ -1,7 +1,7 @@
 using System.Windows;
 using System.Windows.Documents;
 
-namespace WpfHint.UIBuilding
+namespace WpfHint2.UIBuilding
 {
 	internal class SoftBreak : Run
 	{
