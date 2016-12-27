@@ -1,3 +1,5 @@
+![Nitra](https://github.com/rsdn/nitra/blob/master/Doc/Imgs/nitra-logo.png)
+
 # Nitra
 
 Nitra is a [language workbench](http://martinfowler.com/bliki/LanguageWorkbench.html). You can use Nitra for the creation or extension of a general-purpose programming language or a domain-specific language (DSL).
