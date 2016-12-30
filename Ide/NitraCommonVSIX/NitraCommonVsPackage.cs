@@ -334,7 +334,7 @@ namespace Nitra.VisualStudio
         var projectItem = obj as EnvDTE.ProjectItem;
         if (ErrorHelper.Succeeded(hr2) && projectItem != null)
         {
-          var projectPath = projectItem.ContainingProject.FileName;
+          var projectPath = projectItem.ContainingProject.FullName;
           var projectId = new ProjectId(_stringManager.GetId(projectPath));
 
           foreach (var server in _servers)
