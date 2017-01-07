@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -37,18 +38,20 @@ namespace NitraCommonIde
 
   public class LanguageInfo
   {
-    public string Name { get; }
-    public string Path { get; }
+    public string                   Name       { get; }
+    public string                   Path       { get; }
+    public ImmutableHashSet<string> Extensions { get; }
 
     public List<DynamicExtensionInfo> DynamicExtensions = new List<DynamicExtensionInfo>();
 
     /// <summary>Record Constructor</summary>
     /// <param name="name"><see cref="Name"/></param>
     /// <param name="path"><see cref="Path"/></param>
-    public LanguageInfo(string name, string path)
+    public LanguageInfo(string name, string path, ImmutableHashSet<string> extensions)
     {
-      Name = name;
-      Path = path;
+      Name       = name;
+      Path       = path;
+      Extensions = extensions;
     }
   }
 

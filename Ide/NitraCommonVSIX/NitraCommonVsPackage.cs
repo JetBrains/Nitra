@@ -22,6 +22,7 @@ using System.ComponentModel;
 using System.ComponentModel.Design;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Globalization;
 using System.Runtime.InteropServices;
 
@@ -321,8 +322,9 @@ namespace Nitra.VisualStudio
 
     private void FileAdded(object sender, HierarchyItemEventArgs e)
     {
-      var path      = e.FileName;
-      var id        = new FileId(_stringManager.GetId(path));
+      var path = e.FileName;
+      var ext  = Path.GetExtension(path);
+      var id   = new FileId(_stringManager.GetId(path));
 
       string action = e.Hierarchy.GetProp<string>(e.ItemId, __VSHPROPID4.VSHPROPID_BuildAction);
 
@@ -338,7 +340,8 @@ namespace Nitra.VisualStudio
           var projectId = new ProjectId(_stringManager.GetId(projectPath));
 
           foreach (var server in _servers)
-            server.FileAdded(projectId, path, id, new FileVersion());
+            if (server.IsSupportedExtension(ext))
+              server.FileAdded(projectId, path, id, new FileVersion());
 
           Debug.WriteLine($"tr: FileAdded(BuildAction='{action}', FileName='{path}' projectId={projectId})");
           return;
@@ -350,14 +353,16 @@ namespace Nitra.VisualStudio
 
     private void FileDeleted(object sender, HierarchyItemEventArgs e)
     {
-      var path      = e.FileName;
-      var id        = new FileId(_stringManager.GetId(path));
+      var path = e.FileName;
+      var ext  = Path.GetExtension(path);
+      var id   = new FileId(_stringManager.GetId(path));
 
       string action = e.Hierarchy.GetProp<string>(e.ItemId, __VSHPROPID4.VSHPROPID_BuildAction);
 
       if (action == "Compile" || action == "Nitra")
         foreach (var server in _servers)
-          server.FileUnloaded(id);
+          if (server.IsSupportedExtension(ext))
+            server.FileUnloaded(id);
 
       Debug.WriteLine($"tr: FileAdded(FileName='{path}' id={id})");
     }
@@ -413,6 +418,7 @@ namespace Nitra.VisualStudio
     private void OnDocumentWindowOnScreenChanged(object sender, DocumentWindowOnScreenChangedEventArgs e)
     {
       var fullPath    = e.Info.FullPath;
+      var ext         = Path.GetExtension(fullPath);
       var id          = new FileId(_stringManager.GetId(fullPath));
       var windowFrame = e.Info.WindowFrame;
       var vsTextView  = VsShellUtilities.GetTextView(windowFrame);
@@ -423,11 +429,17 @@ namespace Nitra.VisualStudio
       var hierarchy   = windowFrame.GetHierarchyFromVsWindowFrame();
 
       if (e.OnScreen)
+      {
         foreach (var server in _servers)
-          server.ViewActivated(wpfTextView, id, hierarchy, fullPath);
+          if (server.IsSupportedExtension(ext))
+            server.ViewActivated(wpfTextView, id, hierarchy, fullPath);
+      }
       else
+      {
         foreach (var server in _servers)
-          server.ViewDeactivated(wpfTextView, id);
+          if (server.IsSupportedExtension(ext))
+            server.ViewDeactivated(wpfTextView, id);
+      }
     }
 
     private void OnDocumentWindowDestroy(object sender, DocumentWindowEventArgs e)

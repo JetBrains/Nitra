@@ -29,11 +29,11 @@ namespace Nitra.VisualStudio
   class Server : IDisposable
   {
     Ide.Config _config;
-    public IServiceProvider ServiceProvider { get; }
+    public IServiceProvider         ServiceProvider { get; }
+    public NitraClient              Client          { get; private set; }
+    public Hint                     Hint            { get; } = new Hint() { WrapWidth = 900.1 };
+    public ImmutableHashSet<string> Extensions      { get; }
 
-    public NitraClient Client { get; private set; }
-
-    public Hint Hint { get; } = new Hint() { WrapWidth = 900.1 };
 
     public Server(StringManager stringManager, Ide.Config config, IServiceProvider serviceProvider)
     {
@@ -47,6 +47,11 @@ namespace Nitra.VisualStudio
       responseMap[-1] = Response;
       _config = config;
       Client = client;
+
+      var builder = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+      foreach (var lang in config.Languages)
+        builder.UnionWith(lang.Extensions);
+      Extensions = builder.ToImmutable();
     }
 
     private ImmutableArray<SpanClassInfo> _spanClassInfos = ImmutableArray<SpanClassInfo>.Empty;
@@ -122,13 +127,18 @@ namespace Nitra.VisualStudio
     {
       var textBuffer = wpfTextView.TextBuffer;
 
-      if (!textBuffer.Properties.ContainsProperty(Constants.ServerKey))
-        textBuffer.Properties.AddProperty(Constants.ServerKey, this);
+      TryAddServerProperty(textBuffer);
 
       FileModel fileModel = VsUtils.GetOrCreateFileModel(wpfTextView, id, this, hierarchy, fullPath);
       TextViewModel textViewModel = VsUtils.GetOrCreateTextViewModel(wpfTextView, fileModel);
 
       fileModel.ViewActivated(textViewModel);
+    }
+
+    void TryAddServerProperty(ITextBuffer textBuffer)
+    {
+      if (!textBuffer.Properties.ContainsProperty(Constants.ServerKey))
+        textBuffer.Properties.AddProperty(Constants.ServerKey, this);
     }
 
     internal void ViewDeactivated(IWpfTextView wpfTextView, FileId id)
@@ -184,6 +194,11 @@ namespace Nitra.VisualStudio
       }
 
       return Brushes.Black;
+    }
+
+    public bool IsSupportedExtension(string ext)
+    {
+      return Extensions.Contains(ext);
     }
   }
 }

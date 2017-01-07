@@ -11,6 +11,7 @@ namespace XXNamespaceXX
 
   using System;
   using System.Collections.Generic;
+  using System.Collections.Immutable;
   using System.ComponentModel;
   using System.Diagnostics;
   using System.IO;
@@ -55,9 +56,11 @@ namespace XXNamespaceXX
 
       var assemblyFullPath = Path.Combine(VsUtils.GetPlaginPath(), @"Languages\XXProjectSupportAssemblyXX");
       var projectSupport   = new ProjectSupport("XXProjectSupportXX", "XXProjectSupportClassXX", Path.Combine(VsUtils.GetPlaginPath(), assemblyFullPath));
+      var path             = Path.Combine(VsUtils.GetPlaginPath(), @"Languages\XXProjectSupportAssemblyXX");
+      var extensions       = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase, XXFileExtensionsXX);
       var languages = new []
         {
-          new LanguageInfo("XXLanguageFullNameXX", Path.Combine(VsUtils.GetPlaginPath(), @"Languages\XXProjectSupportAssemblyXX"))
+          new LanguageInfo("XXLanguageFullNameXX", path, extensions)
         };
 
       var config = new Config(projectSupport, languages);

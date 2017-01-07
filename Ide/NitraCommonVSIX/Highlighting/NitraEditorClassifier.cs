@@ -53,7 +53,7 @@ namespace Nitra.VisualStudio.Highlighting
     {
       get
       {
-        if (_classificationMap.Count == 0 && _classificationMap.Count < Server.SpanClassInfos.Length)
+        if (_classificationMap.Count == 0 || _classificationMap.Count < Server.SpanClassInfos.Length)
         {
           _classificationMap.Clear();
           IClassificationFormatMap classificationFormatMap = null;
