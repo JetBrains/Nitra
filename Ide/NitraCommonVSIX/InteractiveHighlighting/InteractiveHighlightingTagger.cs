@@ -63,7 +63,7 @@ namespace Nitra.VisualStudio.BraceMatching
       {
         var fileModel = textViewModel.FileModel;
         var pos = _caretPosOpt.Value;
-        fileModel.Server.CaretPositionChanged(fileModel.Id, pos.Position, pos.Snapshot.Version.Convert());
+        fileModel.CaretPositionChanged(pos.Position, pos.Snapshot.Version.Convert());
       }
       else
         textViewModel.Reset();
