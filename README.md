@@ -7,6 +7,10 @@ At present Nitra allows you to create dynamically expanding parsers. In the futu
 
 License — [BSD 3-Clause License](http://opensource.org/licenses/BSD-3-Clause)
 
+[Gitter](https://gitter.im/rsdn/nemerle)
+
+[Russian forum](http://rsdn.org/forum/nemerle)
+
 [Install](http://confluence.jetbrains.com/display/Nitra/Install) — instructions to setup environment.
 
 [Build](http://confluence.jetbrains.com/display/Nitra/Build) — building Nitra project from sources.
