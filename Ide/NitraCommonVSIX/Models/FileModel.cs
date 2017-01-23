@@ -37,24 +37,42 @@ namespace Nitra.VisualStudio.Models
     
     public FileModel(FileId id, ITextBuffer textBuffer, Server server, Dispatcher dispatcher, IVsHierarchy hierarchy, string fullPath)
     {
-      Hierarchy   = hierarchy;
-      FullPath    = fullPath;
-      Id          = id;
-      Server      = server;
+      Hierarchy = hierarchy;
+      FullPath = fullPath;
+      Id = id;
+      Server = server;
       _textBuffer = textBuffer;
 
       var snapshot = textBuffer.CurrentSnapshot;
       var empty = new CompilerMessage[0];
-      CompilerMessages          = new CompilerMessage[KindCount][] { empty,    empty,    empty };
-      CompilerMessagesSnapshots = new ITextSnapshot[KindCount]     { snapshot, snapshot, snapshot };
-      _errorListProviders       = new ErrorListProvider[KindCount] { null,     null,     null};
-
+      CompilerMessages = new CompilerMessage[KindCount][] { empty, empty, empty };
+      CompilerMessagesSnapshots = new ITextSnapshot[KindCount] { snapshot, snapshot, snapshot };
+      _errorListProviders = new ErrorListProvider[KindCount] { null, null, null };
 
       server.Client.ResponseMap[id] = msg => dispatcher.BeginInvoke(DispatcherPriority.Normal,
         new Action<AsyncServerMessage>(msg2 => Response(msg2)), msg);
 
-      server.Client.Send(new ClientMessage.FileActivated(id));
+      server.Add(this);
+
+      Activate();
+
       textBuffer.Changed += TextBuffer_Changed;
+    }
+
+    public void CaretPositionChanged(int position, FileVersion fileVersion)
+    {
+      var server = this.Server;
+
+      if (server.IsLoaded)
+        server.Client.Send(new ClientMessage.SetCaretPos(Id, fileVersion, position));
+    }
+
+    public void Activate()
+    {
+      var server = this.Server;
+
+      if (server.IsLoaded)
+        server.Client.Send(new ClientMessage.FileActivated(Id));
     }
 
     public TextViewModel GetOrAdd(IWpfTextView wpfTextView)
@@ -105,6 +123,7 @@ namespace Nitra.VisualStudio.Models
       client.ResponseMap.TryRemove(Id, out value);
       client.Send(new ClientMessage.FileDeactivated(Id));
       _textBuffer.Properties.RemoveProperty(Constants.FileModelKey);
+      Server.Remove(this);
     }
 
     void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)

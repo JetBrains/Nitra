@@ -174,8 +174,16 @@ namespace Nitra.VisualStudio
       object obj;
       hr2 = Hierarchy.GetProperty(currentItem, (int)__VSHPROPID.VSHPROPID_ExtObject, out obj);
 
+      if (!ErrorHelper.Succeeded(hr2))
+        return false;
+
       var reference = obj as VSLangProj.Reference;
-      if (ErrorHelper.Succeeded(hr2) && reference != null)
+      var projectItem = obj as EnvDTE.ProjectItem;
+
+      if (reference == null && projectItem != null)
+        reference = projectItem.Object as VSLangProj.Reference;
+
+      if (reference != null)
       {
         ReferenceAdded(this, new ReferenceEventArgs(Hierarchy, currentItem, reference));
         return true;

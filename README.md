@@ -7,7 +7,7 @@ At present Nitra allows you to create dynamically expanding parsers. In the futu
 
 License — [BSD 3-Clause License](http://opensource.org/licenses/BSD-3-Clause)
 
-[Gitter](https://gitter.im/rsdn/nemerle) - chat for interactive discussions
+[![Join the chat at https://gitter.im/rsdn/nemerle](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/rsdn/nemerle?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge) - chat for interactive discussions
 
 [Russian forum](http://rsdn.org/forum/nemerle)
 

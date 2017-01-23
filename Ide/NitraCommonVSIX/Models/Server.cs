@@ -28,12 +28,12 @@ namespace Nitra.VisualStudio
 {
   class Server : IDisposable
   {
-    Ide.Config _config;
+           Ide.Config               _config;
     public IServiceProvider         ServiceProvider { get; }
     public NitraClient              Client          { get; private set; }
     public Hint                     Hint            { get; } = new Hint() { WrapWidth = 900.1 };
     public ImmutableHashSet<string> Extensions      { get; }
-
+    public bool                     IsLoaded        { get; private set; }
 
     public Server(StringManager stringManager, Ide.Config config, IServiceProvider serviceProvider)
     {
@@ -55,6 +55,8 @@ namespace Nitra.VisualStudio
     }
 
     private ImmutableArray<SpanClassInfo> _spanClassInfos = ImmutableArray<SpanClassInfo>.Empty;
+    private readonly HashSet<FileModel> _fileModels = new HashSet<FileModel>();
+
     public ImmutableArray<SpanClassInfo> SpanClassInfos { get { return _spanClassInfos; } }
 
 
@@ -67,6 +69,16 @@ namespace Nitra.VisualStudio
       return msgConfig;
     }
 
+    internal void Add(FileModel fileModel)
+    {
+      _fileModels.Add(fileModel);
+    }
+
+    internal void Remove(FileModel fileModel)
+    {
+      _fileModels.Remove(fileModel);
+    }
+
     public void Dispose()
     {
       Client?.Dispose();
@@ -77,14 +89,14 @@ namespace Nitra.VisualStudio
       Client.Send(new ClientMessage.SolutionStartLoading(id, solutionPath));
     }
 
-    internal void CaretPositionChanged(FileId fileId, int pos, FileVersion version)
-    {
-      Client.Send(new ClientMessage.SetCaretPos(fileId, version, pos));
-    }
-
     internal void SolutionLoaded(SolutionId solutionId)
     {
       Client.Send(new ClientMessage.SolutionLoaded(solutionId));
+
+      //foreach (var fileModel in _fileModels)
+      //  fileModel.Activate();
+
+      //IsLoaded = true;
     }
 
     internal void ProjectStartLoading(ProjectId id, string projectPath)
@@ -95,6 +107,7 @@ namespace Nitra.VisualStudio
 
     internal void ProjectLoaded(ProjectId id)
     {
+      IsLoaded = true;
       Client.Send(new ClientMessage.ProjectLoaded(id));
     }
 
