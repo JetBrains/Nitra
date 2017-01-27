@@ -123,6 +123,12 @@ namespace Nitra.VisualStudio
       Client.Send(new ClientMessage.ReferenceLoaded(projectId, "File:" + referencePath));
     }
 
+    internal void ProjectReferenceAdded(ProjectId projectId, ProjectId referencedProjectId, string referencePath)
+    {
+      Debug.Assert(IsSolutionCreated);
+      Client.Send(new ClientMessage.ProjectReferenceLoaded(projectId, referencedProjectId, referencePath));
+    }
+
     internal void AddedMscorlibReference(ProjectId projectId)
     {
       Debug.Assert(IsSolutionCreated);
