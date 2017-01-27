@@ -28,16 +28,21 @@ namespace Nitra.VisualStudio
 {
   class Server : IDisposable
   {
-           Ide.Config               _config;
-    public IServiceProvider         ServiceProvider { get; }
-    public NitraClient              Client          { get; private set; }
-    public Hint                     Hint            { get; } = new Hint() { WrapWidth = 900.1 };
-    public ImmutableHashSet<string> Extensions      { get; }
-    public bool                     IsLoaded        { get; private set; }
+             Ide.Config                     _config;
+    public   IServiceProvider               ServiceProvider   { get; }
+    public   NitraClient                    Client            { get; private set; }
+    public   Hint                           Hint              { get; } = new Hint() { WrapWidth = 900.1 };
+    public   ImmutableHashSet<string>       Extensions        { get; }
+    public   bool                           IsLoaded          { get; private set; }
+    public   bool                           IsSolutionCreated { get; private set; }
+             ImmutableArray<SpanClassInfo>  _spanClassInfos = ImmutableArray<SpanClassInfo>.Empty;
+    readonly HashSet<FileModel>             _fileModels = new HashSet<FileModel>();
 
     public Server(StringManager stringManager, Ide.Config config, IServiceProvider serviceProvider)
     {
-      Contract.Requires(ServiceProvider != null);
+      Contract.Requires(stringManager != null);
+      Contract.Requires(config != null);
+      Contract.Requires(serviceProvider != null);
 
       ServiceProvider = serviceProvider;
 
@@ -54,11 +59,7 @@ namespace Nitra.VisualStudio
       Extensions = builder.ToImmutable();
     }
 
-    private ImmutableArray<SpanClassInfo> _spanClassInfos = ImmutableArray<SpanClassInfo>.Empty;
-    private readonly HashSet<FileModel> _fileModels = new HashSet<FileModel>();
-
     public ImmutableArray<SpanClassInfo> SpanClassInfos { get { return _spanClassInfos; } }
-
 
     private static M.Config ConvertConfig(Ide.Config config)
     {
@@ -86,11 +87,14 @@ namespace Nitra.VisualStudio
 
     internal void SolutionStartLoading(SolutionId id, string solutionPath)
     {
+      Debug.Assert(!IsSolutionCreated);
       Client.Send(new ClientMessage.SolutionStartLoading(id, solutionPath));
+      IsSolutionCreated = true;
     }
 
     internal void SolutionLoaded(SolutionId solutionId)
     {
+      Debug.Assert(IsSolutionCreated);
       Client.Send(new ClientMessage.SolutionLoaded(solutionId));
 
       //foreach (var fileModel in _fileModels)
@@ -101,43 +105,58 @@ namespace Nitra.VisualStudio
 
     internal void ProjectStartLoading(ProjectId id, string projectPath)
     {
+      Debug.Assert(IsSolutionCreated);
       var config = ConvertConfig(_config);
       Client.Send(new ClientMessage.ProjectStartLoading(id, projectPath, config));
     }
 
     internal void ProjectLoaded(ProjectId id)
     {
+      Debug.Assert(IsSolutionCreated);
       IsLoaded = true;
       Client.Send(new ClientMessage.ProjectLoaded(id));
     }
 
     internal void ReferenceAdded(ProjectId projectId, string referencePath)
     {
+      Debug.Assert(IsSolutionCreated);
       Client.Send(new ClientMessage.ReferenceLoaded(projectId, "File:" + referencePath));
     }
 
     internal void AddedMscorlibReference(ProjectId projectId)
     {
+      Debug.Assert(IsSolutionCreated);
       Client.Send(new ClientMessage.ReferenceLoaded(projectId, "FullName:mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"));
     }
 
     internal void BeforeCloseProject(ProjectId id)
     {
+      Debug.Assert(IsSolutionCreated);
       Client.Send(new ClientMessage.ProjectUnloaded(id));
     }
 
     internal void FileAdded(ProjectId projectId, string path, FileId id, FileVersion version)
     {
+      Debug.Assert(IsSolutionCreated);
       Client.Send(new ClientMessage.FileLoaded(projectId, path, id, version));
     }
 
     internal void FileUnloaded(FileId id)
     {
+      foreach (var fileModel in _fileModels)
+      {
+        if (fileModel.Id == id)
+        {
+          fileModel.Remove();
+          return;
+        }
+      }
       Client.Send(new ClientMessage.FileUnloaded(id));
     }
 
     internal void ViewActivated(IWpfTextView wpfTextView, FileId id, IVsHierarchy hierarchy, string fullPath)
     {
+      Debug.Assert(IsSolutionCreated);
       var textBuffer = wpfTextView.TextBuffer;
 
       TryAddServerProperty(textBuffer);

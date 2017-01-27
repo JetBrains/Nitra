@@ -34,6 +34,7 @@ namespace Nitra.VisualStudio.Models
     readonly Dictionary<IWpfTextView, TextViewModel> _textViewModelsMap = new Dictionary<IWpfTextView, TextViewModel>();
              TextViewModel                           _activeTextViewModelOpt;
              TextViewModel                           _mouseHoverTextViewModelOpt;
+             bool                                    _fileIsRemoved;
     
     public FileModel(FileId id, ITextBuffer textBuffer, Server server, Dispatcher dispatcher, IVsHierarchy hierarchy, string fullPath)
     {
@@ -121,7 +122,8 @@ namespace Nitra.VisualStudio.Models
       var client = Server.Client;
       Action<AsyncServerMessage> value;
       client.ResponseMap.TryRemove(Id, out value);
-      client.Send(new ClientMessage.FileDeactivated(Id));
+      if (!_fileIsRemoved)
+        client.Send(new ClientMessage.FileDeactivated(Id));
       _textBuffer.Properties.RemoveProperty(Constants.FileModelKey);
       Server.Remove(this);
     }
@@ -145,6 +147,12 @@ namespace Nitra.VisualStudio.Models
 
         Server.Client.Send(new ClientMessage.FileChangedBatch(id, newVersion, builder.MoveToImmutable()));
       }
+    }
+
+    internal void Remove()
+    {
+      _fileIsRemoved = true;
+      Server.Client.Send(new ClientMessage.FileUnloaded(Id));
     }
 
     void Response(AsyncServerMessage msg)
