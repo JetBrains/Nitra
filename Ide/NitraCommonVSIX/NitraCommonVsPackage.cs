@@ -303,7 +303,10 @@ namespace Nitra.VisualStudio
           if (reference.SourceProject == null)
           {
             if (path == null)
+            {
               Debug.WriteLine($"tr:    Error: reference.Path=null reference.Name={reference.Name}");
+              continue;
+            }
 
             foreach (var server in _servers)
               server.ReferenceAdded(projectId, path);
