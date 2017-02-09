@@ -44,11 +44,16 @@ namespace Nitra.VisualStudio.Models
       {
         if (_braceMatchingTaggerOpt == null)
         {
-          var props = _wpfTextView.TextBuffer.Properties;
-          if (!props.ContainsProperty(Constants.BraceMatchingTaggerKey))
-            return null;
+          var textBuffer = _wpfTextView.TextBuffer;
 
-          _braceMatchingTaggerOpt = props.GetProperty<InteractiveHighlightingTagger>(Constants.BraceMatchingTaggerKey);
+          lock (textBuffer)
+          {
+            var props = textBuffer.Properties;
+            if (!props.ContainsProperty(Constants.BraceMatchingTaggerKey))
+              return null;
+
+            _braceMatchingTaggerOpt = props.GetProperty<InteractiveHighlightingTagger>(Constants.BraceMatchingTaggerKey);
+          }
         }
 
         return _braceMatchingTaggerOpt;
@@ -77,7 +82,8 @@ namespace Nitra.VisualStudio.Models
 
     public override string ToString()
     {
-      return _wpfTextView.ToString();
+      var index = Array.IndexOf(FileModel.TextViewModels, this);
+      return FileModel + " (" + index + ") - " + _wpfTextView;
     }
 
     public void Dispose()

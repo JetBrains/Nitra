@@ -76,57 +76,66 @@ namespace Nitra.VisualStudio.BraceMatching
       if (textViewModel == null)
         yield break;
 
-      var matchedBrackets = textViewModel.MatchedBrackets;
-
-      if (!_caretPosOpt.HasValue)
-        yield break;
-
-      var caretPos        = _caretPosOpt.Value;
-      var lastSnapshot    = caretPos.Snapshot;
       var currentSnapshot = _textBuffer.CurrentSnapshot;
 
-      if (matchedBrackets != null && lastSnapshot.Version.VersionNumber == matchedBrackets.Version + 1)
+      if (_caretPosOpt.HasValue)
       {
-        var tagName = "blue";
-        foreach (MatchBrackets pair in matchedBrackets.results)
+        var matchedBrackets = textViewModel.MatchedBrackets;
+        var caretPos        = _caretPosOpt.Value;
+        var lastSnapshot    = caretPos.Snapshot;
+
+        if (matchedBrackets != null && lastSnapshot.Version.VersionNumber == matchedBrackets.Version + 1)
         {
-          yield return MakeTagSpan(lastSnapshot, currentSnapshot, pair.Open, tagName);
-          yield return MakeTagSpan(lastSnapshot, currentSnapshot, pair.Close, tagName);
-          tagName = Constants.BraceMatchingSecond;
+          var tagName = "blue";
+          foreach (MatchBrackets pair in matchedBrackets.results)
+          {
+            yield return MakeTagSpan(lastSnapshot, currentSnapshot, pair.Open, tagName);
+            yield return MakeTagSpan(lastSnapshot, currentSnapshot, pair.Close, tagName);
+            tagName = Constants.BraceMatchingSecond;
+          }
         }
       }
 
       var findSymbolReferences = textViewModel.FindSymbolReferences;
-      var id = textViewModel.FileModel.Id;
+      var fileId               = textViewModel.FileModel.Id;
+      var fileVersion          = new FileVersion(currentSnapshot.Version.VersionNumber - 1);
 
-      if (findSymbolReferences != null && lastSnapshot.Version.VersionNumber == findSymbolReferences.Version + 1)
+      if (findSymbolReferences != null)
       {
         foreach (var symbolRefs in findSymbolReferences.symbols)
         {
           foreach (var definition in symbolRefs.Definitions)
           {
             var loc = definition.Location;
-            if (loc.File.FileId != id)
+            var file = loc.File;
+            if (file.FileId != fileId || file.FileVersion != fileVersion)
               continue;
-            yield return MakeTagSpan(lastSnapshot, currentSnapshot, loc.Span, Constants.DefenitionHighlighting);
+            yield return MakeTagSpan(currentSnapshot, loc.Span, Constants.DefenitionHighlighting);
           }
 
           foreach (var fileEntries in symbolRefs.References)
           {
-            if (fileEntries.File.FileId != id)
+            var file = fileEntries.File;
+            if (file.FileId != fileId || file.FileVersion != fileVersion)
               continue;
             foreach (var range in fileEntries.Ranges)
-              yield return MakeTagSpan(lastSnapshot, currentSnapshot, range.Span, Constants.ReferenceHighlighting);
+              yield return MakeTagSpan(currentSnapshot, range.Span, Constants.ReferenceHighlighting);
           }
         }
       }
+    }
+
+    public static TagSpan<TextMarkerTag> MakeTagSpan(ITextSnapshot currentSnapshot, NSpan nSpan, string tagType)
+    {
+      var span = new SnapshotSpan(currentSnapshot, VsUtils.Convert(nSpan));
+      return new TagSpan<TextMarkerTag>(span, new TextMarkerTag(tagType));
     }
 
     public static TagSpan<TextMarkerTag> MakeTagSpan(ITextSnapshot lastSnapshot, ITextSnapshot currentSnapshot, NSpan nSpan, string tagType)
     {
       var span           = new SnapshotSpan(lastSnapshot, VsUtils.Convert(nSpan));
       var translatedSpan = span.TranslateTo(currentSnapshot, SpanTrackingMode.EdgeExclusive);
-      return new TagSpan<TextMarkerTag>(span, new TextMarkerTag(tagType));
+      return new TagSpan<TextMarkerTag>(translatedSpan, new TextMarkerTag(tagType));
     }
 
     internal void Update()

@@ -19,8 +19,9 @@ namespace Nitra.VisualStudio.BraceMatching
 
     public ITagger<T> CreateTagger<T>(ITextView textView, ITextBuffer buffer) where T : ITag
     {
-      return (ITagger<T>)buffer.Properties.GetOrCreateSingletonProperty(Constants.BraceMatchingTaggerKey, 
-        () => new InteractiveHighlightingTagger(textView, buffer));
+      lock (buffer)
+        return (ITagger<T>)buffer.Properties.GetOrCreateSingletonProperty(Constants.BraceMatchingTaggerKey,
+          () => new InteractiveHighlightingTagger(textView, buffer));
     }
   }
 }

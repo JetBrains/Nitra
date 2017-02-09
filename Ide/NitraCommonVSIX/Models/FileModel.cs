@@ -16,6 +16,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TextManager.Interop;
 using System.Windows.Media;
+using System.IO;
 
 namespace Nitra.VisualStudio.Models
 {
@@ -59,6 +60,8 @@ namespace Nitra.VisualStudio.Models
 
       textBuffer.Changed += TextBuffer_Changed;
     }
+
+    public TextViewModel[] TextViewModels => _textViewModelsMap.Values.ToArray();
 
     public void CaretPositionChanged(int position, FileVersion fileVersion)
     {
@@ -167,7 +170,6 @@ namespace Nitra.VisualStudio.Models
       MappingMessages                 mappingMessages;
       ParsingMessages                 parsingMessages;
       SemanticAnalysisMessages        semanticAnalysisMessages;
-      FindSymbolReferences            findSymbolReferences;
       Hint                            hint;
 
       if ((outlining = msg as OutliningCreated) != null)
@@ -185,13 +187,6 @@ namespace Nitra.VisualStudio.Models
           return;
 
         _activeTextViewModelOpt.Update(matchedBrackets);
-      }
-      else if ((findSymbolReferences = msg as FindSymbolReferences) != null)
-      {
-        if (_activeTextViewModelOpt == null)
-          return;
-
-        _activeTextViewModelOpt.Update(findSymbolReferences);
       }
       else if ((parsingMessages = msg as ParsingMessages) != null)
         UpdateCompilerMessages(0, parsingMessages.messages, parsingMessages.Version);
@@ -323,6 +318,11 @@ namespace Nitra.VisualStudio.Models
       if (classifierOpt == null)
         return;
       classifierOpt.Update(highlightingType, spanInfos, version);
+    }
+
+    public override string ToString()
+    {
+      return Path.GetFileName(FullPath) + " [" + _textViewModelsMap.Count + " view(s)]";
     }
   }
 }

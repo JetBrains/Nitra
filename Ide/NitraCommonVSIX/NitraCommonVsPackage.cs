@@ -556,12 +556,14 @@ namespace Nitra.VisualStudio
 
       if (e.OnScreen)
       {
+        Debug.WriteLine("OnScreen '" + fullPath + "'");
         foreach (var server in _servers)
           if (server.IsSupportedExtension(ext))
             server.ViewActivated(wpfTextView, id, hierarchy, fullPath);
       }
       else
       {
+        Debug.WriteLine("OffScreen '" + fullPath + "'");
         foreach (var server in _servers)
           if (server.IsSupportedExtension(ext))
             server.ViewDeactivated(wpfTextView, id);

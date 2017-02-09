@@ -183,7 +183,9 @@ namespace Nitra.VisualStudio
     {
       FileModel fileModel;
       if (wpfTextView.TextBuffer.Properties.TryGetProperty<FileModel>(Constants.FileModelKey, out fileModel))
+      {
         fileModel.Remove(wpfTextView);
+      }
     }
 
     internal void DocumentWindowDestroy(IWpfTextView wpfTextView)
@@ -195,7 +197,8 @@ namespace Nitra.VisualStudio
 
     void Response(AsyncServerMessage msg)
     {
-      AsyncServerMessage.LanguageLoaded languageInfo;
+      AsyncServerMessage.LanguageLoaded       languageInfo;
+      AsyncServerMessage.FindSymbolReferences findSymbolReferences;
 
       if ((languageInfo = msg as AsyncServerMessage.LanguageLoaded) != null)
       {
@@ -209,6 +212,14 @@ namespace Nitra.VisualStudio
           bilder.AddRange(spanClassInfos);
           _spanClassInfos = bilder.MoveToImmutable();
         }
+      }
+      else if ((findSymbolReferences = msg as AsyncServerMessage.FindSymbolReferences) != null)
+      {
+        // передать всем вьюхам отображаемым на экране
+
+        foreach (var fileModel in _fileModels)
+          foreach (var textViewModel in fileModel.TextViewModels)
+            textViewModel.Update(findSymbolReferences);
       }
     }
 

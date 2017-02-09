@@ -31,7 +31,7 @@ namespace Nitra.VisualStudio
 
     public IEnumerable<ITagSpan<IOutliningRegionTag>> GetTags(NormalizedSnapshotSpanCollection spans)
     {
-      Debug.WriteLine($"GetTags({spans}) begin");
+      //Debug.WriteLine($"GetTags({spans}) begin");
       var oldSnapshot = _oldSnapshot;
       var outlining   = _outlining;
 
@@ -56,7 +56,7 @@ namespace Nitra.VisualStudio
           Debug.WriteLine($"  tagSpan={{Start={tagSpan.Span.Start.Position}, Len={tagSpan.Span.Length}}}");
           yield return tagSpan;
         }
-        Debug.WriteLine($"GetTags({spans}) end");
+        //Debug.WriteLine($"GetTags({spans}) end");
       }
     }
 
