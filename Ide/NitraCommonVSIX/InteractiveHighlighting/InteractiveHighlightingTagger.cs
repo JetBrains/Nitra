@@ -38,7 +38,13 @@ namespace Nitra.VisualStudio.BraceMatching
     }
 
     // don't cache it! Property can be changed in _textView.Properties when the view hide or show.
-    TextViewModel GetTextViewModel() => (TextViewModel)_textView.Properties.GetProperty(Constants.TextViewModelKey);
+    TextViewModel GetTextViewModelOpt()
+    {
+      if (_textView.Properties.TryGetProperty<TextViewModel>(Constants.TextViewModelKey, out var value))
+        return value;
+
+      return null;
+    }
 
     void ViewLayoutChanged(object source, TextViewLayoutChangedEventArgs e)
     {
@@ -53,7 +59,7 @@ namespace Nitra.VisualStudio.BraceMatching
 
     void UpdateAtCaretPosition(CaretPosition caretPosition)
     {
-      var textViewModel = GetTextViewModel();
+      var textViewModel = GetTextViewModelOpt();
       if (textViewModel == null)
         return;
 
@@ -71,7 +77,7 @@ namespace Nitra.VisualStudio.BraceMatching
 
     public IEnumerable<ITagSpan<TextMarkerTag>> GetTags(NormalizedSnapshotSpanCollection spans)
     {
-      var textViewModel = GetTextViewModel();
+      var textViewModel = GetTextViewModelOpt();
 
       if (textViewModel == null)
         yield break;

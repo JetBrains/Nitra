@@ -27,6 +27,8 @@ namespace Nitra.VisualStudio.Models
     public   FindSymbolReferences     FindSymbolReferences { get; private set; }
     readonly KeyBindingCommandFilter  _keyBindingCommandFilter;
              SnapshotPoint?           _lastMouseHoverPointOpt;
+             FileVersion              _previosMouseHoverFileVersion = FileVersion.Invalid;
+             int                      _previosMouseHoverPos = -1;
 
     public TextViewModel(IWpfTextView wpfTextView, FileModel file)
     {
@@ -169,6 +171,14 @@ namespace Nitra.VisualStudio.Models
       var point    = pointOpt.Value;
       var snapshot = point.Snapshot;
       var server   = this.FileModel.Server;
+      var pos      = point.Position;
+      var fileVer  = snapshot.Version.Convert();
+
+      if (_previosMouseHoverPos == pos && _previosMouseHoverFileVersion == fileVer)
+        return;
+
+      _previosMouseHoverPos         = pos;
+      _previosMouseHoverFileVersion = fileVer;
 
       this.FileModel.OnMouseHover(this);
 
@@ -184,7 +194,9 @@ namespace Nitra.VisualStudio.Models
       var snapshot  = _wpfTextView.TextBuffer.CurrentSnapshot;
 
       this.FileModel.OnMouseHover(null);
-      _lastMouseHoverPointOpt = null;
+      _lastMouseHoverPointOpt       = null;
+      _previosMouseHoverPos         = -1;
+      _previosMouseHoverFileVersion = FileVersion.Invalid;
 
       if (snapshot.Version.Convert() != msg.Version || lastPoint.Snapshot != snapshot)
         return;

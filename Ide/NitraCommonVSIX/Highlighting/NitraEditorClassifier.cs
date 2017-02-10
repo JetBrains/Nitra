@@ -131,8 +131,11 @@ namespace Nitra.VisualStudio.Highlighting
           if (!newSpan.IntersectsWith(processedSpan))
             break;
 
-          var classificationType = ClassificationMap[spanInfo.SpanClassId];
-          result.Add(new ClassificationSpan(newSpan, classificationType));
+          if (ClassificationMap.TryGetValue(spanInfo.SpanClassId, out var classificationType))
+            result.Add(new ClassificationSpan(newSpan, classificationType));
+          else
+          {
+          }
         }
       }
 

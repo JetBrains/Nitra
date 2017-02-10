@@ -36,7 +36,8 @@ namespace Nitra.VisualStudio.Models
              TextViewModel                           _activeTextViewModelOpt;
              TextViewModel                           _mouseHoverTextViewModelOpt;
              bool                                    _fileIsRemoved;
-    
+
+
     public FileModel(FileId id, ITextBuffer textBuffer, Server server, Dispatcher dispatcher, IVsHierarchy hierarchy, string fullPath)
     {
       Hierarchy = hierarchy;
@@ -56,12 +57,12 @@ namespace Nitra.VisualStudio.Models
 
       server.Add(this);
 
-      Activate();
-
       textBuffer.Changed += TextBuffer_Changed;
     }
 
     public TextViewModel[] TextViewModels => _textViewModelsMap.Values.ToArray();
+
+    public bool IsOnScreen => _textViewModelsMap.Count > 0;
 
     public void CaretPositionChanged(int position, FileVersion fileVersion)
     {
@@ -71,7 +72,21 @@ namespace Nitra.VisualStudio.Models
         server.Client.Send(new ClientMessage.SetCaretPos(Id, fileVersion, position));
     }
 
-    public void Activate()
+    public TextViewModel GetOrAdd(IWpfTextView wpfTextView)
+    {
+      if (!_textViewModelsMap.TryGetValue(wpfTextView, out var textViewModel))
+      {
+        var isOnScreen = IsOnScreen;
+        _textViewModelsMap.Add(wpfTextView, textViewModel = new TextViewModel(wpfTextView, this));
+
+        if (!isOnScreen)
+          OnSwhow();
+      }
+
+      return textViewModel;
+    }
+
+    void OnSwhow()
     {
       var server = this.Server;
 
@@ -79,30 +94,32 @@ namespace Nitra.VisualStudio.Models
         server.Client.Send(new ClientMessage.FileActivated(Id));
     }
 
-    public TextViewModel GetOrAdd(IWpfTextView wpfTextView)
-    {
-      TextViewModel textViewModel;
-
-      if (!_textViewModelsMap.TryGetValue(wpfTextView, out textViewModel))
-        _textViewModelsMap.Add(wpfTextView, textViewModel = new TextViewModel(wpfTextView, this));
-
-      return textViewModel;
-    }
-
     public void Remove(IWpfTextView wpfTextView)
     {
-      TextViewModel textViewModel;
-      if (_textViewModelsMap.TryGetValue(wpfTextView, out textViewModel))
+      if (_textViewModelsMap.TryGetValue(wpfTextView, out var textViewModel))
       {
+        var isWasOnScreen = IsOnScreen;
+
         if (textViewModel == _activeTextViewModelOpt)
           _activeTextViewModelOpt = null;
         if (textViewModel == _mouseHoverTextViewModelOpt)
           _mouseHoverTextViewModelOpt = null;
         textViewModel.Dispose();
         _textViewModelsMap.Remove(wpfTextView);
+
+        if (isWasOnScreen && !IsOnScreen)
+          OnHide();
       }
 
       return;
+    }
+
+    public void OnHide()
+    {
+      var server = this.Server;
+
+      if (!_fileIsRemoved && server.IsLoaded)
+        server.Client.Send(new ClientMessage.FileDeactivated(Id));
     }
 
     internal void ViewActivated(TextViewModel textViewModel)
@@ -117,6 +134,7 @@ namespace Nitra.VisualStudio.Models
 
     public void Dispose()
     {
+      Debug.Assert(!IsOnScreen);
       _textBuffer.Changed -= TextBuffer_Changed;
       foreach (var errorListProvider in _errorListProviders)
         if (errorListProvider != null)
@@ -125,8 +143,6 @@ namespace Nitra.VisualStudio.Models
       var client = Server.Client;
       Action<AsyncServerMessage> value;
       client.ResponseMap.TryRemove(Id, out value);
-      if (!_fileIsRemoved)
-        client.Send(new ClientMessage.FileDeactivated(Id));
       _textBuffer.Properties.RemoveProperty(Constants.FileModelKey);
       Server.Remove(this);
     }
