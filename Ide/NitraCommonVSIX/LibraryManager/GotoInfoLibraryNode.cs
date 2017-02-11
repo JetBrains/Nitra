@@ -20,12 +20,12 @@ namespace Nitra.VisualStudio
   class GotoInfoLibraryNode : LibraryNode
   {
     private readonly Location _location;
-    private readonly Server _server;
+    private readonly ServerModel _server;
     private readonly StringManager _stringManager;
     private readonly string _caption;
     private readonly string Text;
 
-    public GotoInfoLibraryNode(Location location, string caption, Server server)
+    public GotoInfoLibraryNode(Location location, string caption, ServerModel server)
         : base(caption)
     {
       _location = location;

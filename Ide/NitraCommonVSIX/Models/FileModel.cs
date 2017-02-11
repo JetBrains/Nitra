@@ -24,11 +24,11 @@ namespace Nitra.VisualStudio.Models
   /// Represent file in a text editor. An instance of this class is created for opened (in editors) files 
   /// that at least once were visible on the screen. If the user closes a tab, its associated the FileModel is destroyed.
   /// </summary>
-  class FileModel : IDisposable
+  internal class FileModel : IDisposable
   {
     public const int KindCount = 3;
     readonly ITextBuffer                             _textBuffer;
-    public   Server                                  Server                     { get; }
+    public   ServerModel                                  Server                     { get; }
     public   FileId                                  Id                         { get; }
     public   IVsHierarchy                            Hierarchy                  { get; }
     public   string                                  FullPath                   { get; }
@@ -42,7 +42,7 @@ namespace Nitra.VisualStudio.Models
              bool                                    _fileIsRemoved;
 
 
-    public FileModel(FileId id, ITextBuffer textBuffer, Server server, Dispatcher dispatcher, IVsHierarchy hierarchy, string fullPath)
+    public FileModel(FileId id, ITextBuffer textBuffer, ServerModel server, Dispatcher dispatcher, IVsHierarchy hierarchy, string fullPath)
     {
       Hierarchy = hierarchy;
       FullPath = fullPath;

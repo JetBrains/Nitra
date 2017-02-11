@@ -63,7 +63,7 @@ namespace Nitra.VisualStudio
     RunningDocTableEvents                       _runningDocTableEventse;
     Dictionary<IVsHierarchy, HierarchyListener> _listenersMap = new Dictionary<IVsHierarchy, HierarchyListener>();
     List<EnvDTE.Project>                        _projects = new List<EnvDTE.Project>();
-    List<Server>                                _servers = new List<Server>();
+    List<ServerModel>                                _servers = new List<ServerModel>();
     StringManager                               _stringManager = new StringManager();
     uint                                        _objectManagerCookie;
     Library                                     _library;
@@ -202,7 +202,7 @@ namespace Nitra.VisualStudio
 
       foreach (var config in NitraCommonPackage.Configs)
       {
-        var server = new Server(stringManager, config, this);
+        var server = new ServerModel(stringManager, config, this);
         _servers.Add(server);
       }
 

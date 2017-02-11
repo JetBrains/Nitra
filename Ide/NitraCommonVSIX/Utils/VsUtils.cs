@@ -185,7 +185,7 @@ namespace Nitra.VisualStudio
       return new FileChange.Replace(Convert(change.OldSpan), change.NewText);
     }
 
-    public static FileModel GetOrCreateFileModel(IWpfTextView wpfTextView, FileId id, Server server, IVsHierarchy hierarchy, string fullPath)
+    public static FileModel GetOrCreateFileModel(IWpfTextView wpfTextView, FileId id, ServerModel server, IVsHierarchy hierarchy, string fullPath)
     {
       var textBuffer = wpfTextView.TextBuffer;
       var props      = textBuffer.Properties;

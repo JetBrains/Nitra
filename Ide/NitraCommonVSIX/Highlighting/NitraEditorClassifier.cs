@@ -21,7 +21,7 @@ namespace Nitra.VisualStudio.Highlighting
     readonly ImmutableArray<SpanInfo>[]           _spanInfos = new ImmutableArray<SpanInfo>[(int)HighlightingType.Count];
     readonly ITextSnapshot[]                      _snapshots = new ITextSnapshot[(int)HighlightingType.Count];
     readonly IClassificationFormatMapService      _classificationFormatMapService;
-             Server                               _server;
+             ServerModel                               _server;
 
     public NitraEditorClassifier(IClassificationTypeRegistryService registry, IClassificationFormatMapService formatMapService, ITextBuffer buffer)
     {
@@ -38,12 +38,12 @@ namespace Nitra.VisualStudio.Highlighting
       }
     }
 
-    private Server Server
+    private ServerModel Server
     {
       get
       {
         if (_server == null)
-          _server = (Server)_buffer.Properties.GetProperty(Constants.ServerKey);
+          _server = (ServerModel)_buffer.Properties.GetProperty(Constants.ServerKey);
 
         return _server;
       }

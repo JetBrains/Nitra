@@ -22,7 +22,7 @@ namespace Nitra.VisualStudio.Models
   /// that visible on the screen. If the IWpfTextView is hidding (tab is switched or closed), 
   /// its associated the TextViewModel is destroyed.
   /// </summary>
-  class TextViewModel : IEquatable<TextViewModel>, IDisposable
+  internal class TextViewModel : IEquatable<TextViewModel>, IDisposable
   {
     public   FileModel                     FileModel { get; }
     public   MatchedBrackets               MatchedBrackets      { get; private set; }

@@ -1,32 +1,28 @@
-﻿using Nitra.ClientServer.Client;
+﻿using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Editor;
+
+using Nitra.ClientServer.Client;
+using Nitra.ClientServer.Messages;
+using Nitra.VisualStudio.Models;
+
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using NitraCommonIde;
+using System.Collections.Immutable;
 using System.Diagnostics;
-using Nitra.ClientServer.Messages;
+using System.Diagnostics.Contracts;
+using System.Linq;
+using System.Windows.Media;
+
+using WpfHint2;
 
 using Ide = NitraCommonIde;
-using M = Nitra.ClientServer.Messages;
-using Microsoft.VisualStudio.Text.Editor;
-using System.Windows.Threading;
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Text.Classification;
-using System.Collections.Immutable;
-using Nitra.VisualStudio.Highlighting;
-using Nitra.VisualStudio.BraceMatching;
-using Nitra.VisualStudio.Models;
-using System.Diagnostics.Contracts;
-using Microsoft.VisualStudio.Shell.Interop;
-using WpfHint2;
-using System.Windows.Media;
+using M   = Nitra.ClientServer.Messages;
 
 namespace Nitra.VisualStudio
 {
-  class Server : IDisposable
+  /// <summary>Represent a server (Nitra.ClientServer.Server) instance.</summary>
+  internal class ServerModel : IDisposable
   {
              Ide.Config                     _config;
     public   IServiceProvider               ServiceProvider   { get; }
@@ -38,7 +34,7 @@ namespace Nitra.VisualStudio
              ImmutableArray<SpanClassInfo>  _spanClassInfos = ImmutableArray<SpanClassInfo>.Empty;
     readonly HashSet<FileModel>             _fileModels = new HashSet<FileModel>();
 
-    public Server(StringManager stringManager, Ide.Config config, IServiceProvider serviceProvider)
+    public ServerModel(StringManager stringManager, Ide.Config config, IServiceProvider serviceProvider)
     {
       Contract.Requires(stringManager != null);
       Contract.Requires(config != null);
