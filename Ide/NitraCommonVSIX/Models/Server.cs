@@ -80,11 +80,6 @@ namespace Nitra.VisualStudio
       _fileModels.Remove(fileModel);
     }
 
-    public void Dispose()
-    {
-      Client?.Dispose();
-    }
-
     internal void SolutionStartLoading(SolutionId id, string solutionPath)
     {
       Debug.Assert(!IsSolutionCreated);
@@ -181,11 +176,8 @@ namespace Nitra.VisualStudio
 
     internal void ViewDeactivated(IWpfTextView wpfTextView, FileId id)
     {
-      FileModel fileModel;
-      if (wpfTextView.TextBuffer.Properties.TryGetProperty<FileModel>(Constants.FileModelKey, out fileModel))
-      {
-        fileModel.Remove(wpfTextView);
-      }
+      //if (wpfTextView.TextBuffer.Properties.TryGetProperty<FileModel>(Constants.FileModelKey, out var fileModel))
+      //  fileModel.Remove(wpfTextView);
     }
 
     internal void DocumentWindowDestroy(IWpfTextView wpfTextView)
@@ -248,6 +240,15 @@ namespace Nitra.VisualStudio
     public bool IsSupportedExtension(string ext)
     {
       return Extensions.Contains(ext);
+    }
+
+    public void Dispose()
+    {
+      var fileModels = _fileModels.ToArray();
+      foreach (var fileModel in fileModels)
+        fileModel.Dispose();
+
+      Client?.Dispose();
     }
   }
 }

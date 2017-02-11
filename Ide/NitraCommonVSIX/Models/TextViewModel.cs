@@ -1,34 +1,40 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using Microsoft.VisualStudio.PlatformUI;
+using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
+
 using Nitra.ClientServer.Messages;
-using static Nitra.ClientServer.Messages.AsyncServerMessage;
 using Nitra.VisualStudio.BraceMatching;
 using Nitra.VisualStudio.KeyBinding;
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Shell.Interop;
+
+using System;
 using System.Diagnostics;
+using System.Linq;
 using System.Windows;
 using System.Windows.Media;
-using Microsoft.VisualStudio.PlatformUI;
-using System.Windows.Controls;
+
+using static Nitra.ClientServer.Messages.AsyncServerMessage;
 
 namespace Nitra.VisualStudio.Models
 {
+  /// <summary>
+  /// Represent a text view in a text editor. An instance of this class is created for each IWpfTextView
+  /// that visible on the screen. If the IWpfTextView is hidding (tab is switched or closed), 
+  /// its associated the TextViewModel is destroyed.
+  /// </summary>
   class TextViewModel : IEquatable<TextViewModel>, IDisposable
   {
-    public   FileModel                FileModel { get; }
-    readonly IWpfTextView             _wpfTextView;
+    public   FileModel                     FileModel { get; }
+    public   MatchedBrackets               MatchedBrackets      { get; private set; }
+    public   FindSymbolReferences          FindSymbolReferences { get; private set; }
+    public   bool                          IsDisposed           { get; private set; }
+
+             KeyBindingCommandFilter       _keyBindingCommandFilter;
+             IWpfTextView                  _wpfTextView;
              InteractiveHighlightingTagger _braceMatchingTaggerOpt;
-    public   MatchedBrackets          MatchedBrackets      { get; private set; }
-    public   FindSymbolReferences     FindSymbolReferences { get; private set; }
-    readonly KeyBindingCommandFilter  _keyBindingCommandFilter;
-             SnapshotPoint?           _lastMouseHoverPointOpt;
-             FileVersion              _previosMouseHoverFileVersion = FileVersion.Invalid;
-             int                      _previosMouseHoverPos = -1;
+             SnapshotPoint?                _lastMouseHoverPointOpt;
+             FileVersion                   _previosMouseHoverFileVersion = FileVersion.Invalid;
+             int                           _previosMouseHoverPos = -1;
 
     public TextViewModel(IWpfTextView wpfTextView, FileModel file)
     {
@@ -44,6 +50,7 @@ namespace Nitra.VisualStudio.Models
     {
       get
       {
+        CheckDisposed();
         if (_braceMatchingTaggerOpt == null)
         {
           var textBuffer = _wpfTextView.TextBuffer;
@@ -88,12 +95,6 @@ namespace Nitra.VisualStudio.Models
       return FileModel + " (" + index + ") - " + _wpfTextView;
     }
 
-    public void Dispose()
-    {
-      _keyBindingCommandFilter.Dispose();
-      _wpfTextView.Properties.RemoveProperty(Constants.TextViewModelKey);
-    }
-
     internal void Reset()
     {
       Update(default(MatchedBrackets));
@@ -101,35 +102,41 @@ namespace Nitra.VisualStudio.Models
 
     internal void Update(MatchedBrackets matchedBrackets)
     {
+      CheckDisposed();
       MatchedBrackets = matchedBrackets;
       BraceMatchingTaggerOpt?.Update();
     }
 
     internal void Update(FindSymbolReferences findSymbolReferences)
     {
+      CheckDisposed();
       FindSymbolReferences = findSymbolReferences;
       BraceMatchingTaggerOpt?.Update();
     }
 
     internal void NavigateTo(ITextSnapshot snapshot, int pos)
     {
+      CheckDisposed();
       _wpfTextView.Caret.MoveTo(new SnapshotPoint(snapshot, pos));
       _wpfTextView.ViewScroller.EnsureSpanVisible(new SnapshotSpan(snapshot, pos, 0));
     }
 
     internal void NavigateTo(SnapshotPoint snapshotPoint)
     {
+      CheckDisposed();
       _wpfTextView.Caret.MoveTo(snapshotPoint);
       _wpfTextView.ViewScroller.EnsureSpanVisible(new SnapshotSpan(snapshotPoint, snapshotPoint));
     }
 
     internal void Navigate(int line, int column)
     {
+      CheckDisposed();
       Navigate(_wpfTextView.TextBuffer.CurrentSnapshot, line, column);
     }
 
     internal void Navigate(ITextSnapshot snapshot, int line, int column)
     {
+      CheckDisposed();
       var snapshotLine  = snapshot.GetLineFromLineNumber(line);
       var snapshotPoint = snapshotLine.Start + column;
       NavigateTo(snapshotPoint);
@@ -138,6 +145,7 @@ namespace Nitra.VisualStudio.Models
 
     internal void GotoRef(SnapshotPoint point)
     {
+      CheckDisposed();
       var fileModel = FileModel;
       var client = fileModel.Server.Client;
       client.Send(new ClientMessage.FindSymbolReferences(fileModel.Id, point.Snapshot.Version.Convert(), point.Position));
@@ -150,6 +158,7 @@ namespace Nitra.VisualStudio.Models
 
     internal void GotoDefn(SnapshotPoint point)
     {
+      CheckDisposed();
       var fileModel = FileModel;
       var client = fileModel.Server.Client;
       client.Send(new ClientMessage.FindSymbolDefinitions(fileModel.Id, point.Snapshot.Version.Convert(), point.Position));
@@ -161,6 +170,7 @@ namespace Nitra.VisualStudio.Models
 
     void _wpfTextView_MouseHover(object sender, MouseHoverEventArgs e)
     {
+      CheckDisposed();
       var pointOpt = e.TextPosition.GetPoint(_wpfTextView.TextBuffer, PositionAffinity.Predecessor);
 
       _lastMouseHoverPointOpt = pointOpt;
@@ -187,6 +197,8 @@ namespace Nitra.VisualStudio.Models
 
     internal void ShowHint(AsyncServerMessage.Hint msg)
     {
+      CheckDisposed();
+
       if (!_lastMouseHoverPointOpt.HasValue)
         return;
 
@@ -205,7 +217,6 @@ namespace Nitra.VisualStudio.Models
         return;
 
       // TODO: Use VS colors. .SetResourceReference(Microsoft.VisualStudio.PlatformUI.EnvironmentColors.ToolTipBrushKey); //ToolTipTextBrushKey 
-
       //Microsoft.VisualStudio.PlatformUI.EnvironmentColors.ToolTipBrushKey
 
       var span       = new SnapshotSpan(snapshot, new Span(msg.referenceSpan.StartPos, msg.referenceSpan.Length));
@@ -245,11 +256,13 @@ namespace Nitra.VisualStudio.Models
 
     Brush SpanClassToBrush(string spanClass)
     {
+      CheckDisposed();
       return this.FileModel.SpanClassToBrush(spanClass, _wpfTextView);
     }
 
     string SubHintText(string symbolIdText)
     {
+      CheckDisposed();
       var symbolId = int.Parse(symbolIdText);
       var fileModel = FileModel;
       var client = fileModel.Server.Client;
@@ -260,6 +273,7 @@ namespace Nitra.VisualStudio.Models
 
     ProjectId GetCurrntProjectId()
     {
+      CheckDisposed();
       var project = FileModel.Hierarchy.GetProject();
       return new ProjectId(FileModel.Server.Client.StringManager.GetId(project.FileName));
     }
@@ -275,6 +289,8 @@ namespace Nitra.VisualStudio.Models
 
     void ShowInFindResultWindow(FileModel fileModel, NSpan span, Location[] locations)
     {
+      CheckDisposed();
+
       if (locations.Length == 1)
       {
         GoToLocation(fileModel, locations[0]);
@@ -310,6 +326,30 @@ namespace Nitra.VisualStudio.Models
 
       IVsObjectList results;
       var hr = findSvc.Find((uint)__VSOBSEARCHFLAGS.VSOSF_EXPANDREFS, criteria, out results);
+    }
+
+    void CheckDisposed()
+    {
+      if (IsDisposed)
+        throw new ObjectDisposedException(this.GetType().FullName, this.ToString());
+    }
+
+    public void Dispose()
+    {
+      CheckDisposed();
+
+      IsDisposed = true;
+
+      _wpfTextView.MouseHover -= _wpfTextView_MouseHover;
+      _keyBindingCommandFilter.Dispose();
+      _wpfTextView.Properties.RemoveProperty(Constants.TextViewModelKey);
+
+      _wpfTextView                  = null;
+      _keyBindingCommandFilter      = null;
+      _braceMatchingTaggerOpt       = null;
+      _lastMouseHoverPointOpt       = null;
+      _previosMouseHoverFileVersion = FileVersion.Invalid;
+      _previosMouseHoverPos         = -1;
     }
   }
 }

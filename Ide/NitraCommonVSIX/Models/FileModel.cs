@@ -20,6 +20,10 @@ using System.IO;
 
 namespace Nitra.VisualStudio.Models
 {
+  /// <summary>
+  /// Represent file in a text editor. An instance of this class is created for opened (in editors) files 
+  /// that at least once were visible on the screen. If the user closes a tab, its associated the FileModel is destroyed.
+  /// </summary>
   class FileModel : IDisposable
   {
     public const int KindCount = 3;
@@ -130,21 +134,6 @@ namespace Nitra.VisualStudio.Models
     internal void OnMouseHover(TextViewModel textViewModel)
     {
       _mouseHoverTextViewModelOpt = textViewModel;
-    }
-
-    public void Dispose()
-    {
-      Debug.Assert(!IsOnScreen);
-      _textBuffer.Changed -= TextBuffer_Changed;
-      foreach (var errorListProvider in _errorListProviders)
-        if (errorListProvider != null)
-          errorListProvider.Dispose();
-      _errorListProviders = null;
-      var client = Server.Client;
-      Action<AsyncServerMessage> value;
-      client.ResponseMap.TryRemove(Id, out value);
-      _textBuffer.Properties.RemoveProperty(Constants.FileModelKey);
-      Server.Remove(this);
     }
 
     void TextBuffer_Changed(object sender, TextContentChangedEventArgs e)
@@ -339,6 +328,24 @@ namespace Nitra.VisualStudio.Models
     public override string ToString()
     {
       return Path.GetFileName(FullPath) + " [" + _textViewModelsMap.Count + " view(s)]";
+    }
+
+    public void Dispose()
+    {
+      var textViews = _textViewModelsMap.Keys.ToArray();
+
+      foreach (var textView in textViews)
+        Remove(textView);
+
+      _textBuffer.Changed -= TextBuffer_Changed;
+      foreach (var errorListProvider in _errorListProviders)
+        if (errorListProvider != null)
+          errorListProvider.Dispose();
+      _errorListProviders = null;
+      var client = Server.Client;
+      client.ResponseMap.TryRemove(Id, out var value);
+      _textBuffer.Properties.RemoveProperty(Constants.FileModelKey);
+      Server.Remove(this);
     }
   }
 }

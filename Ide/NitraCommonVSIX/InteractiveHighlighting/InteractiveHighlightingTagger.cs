@@ -3,26 +3,38 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Tagging;
 using Microsoft.VisualStudio.Utilities;
 
+using Nitra.ClientServer.Messages;
+using Nitra.VisualStudio.Models;
+
 using System;
 using System.Linq;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
-using Nitra.ClientServer.Messages;
 using System.Collections.Immutable;
 using static Nitra.ClientServer.Messages.AsyncServerMessage;
-using Nitra.VisualStudio.Models;
+
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Navigation;
+using System.Windows.Shapes;
+using System.Diagnostics;
 
 namespace Nitra.VisualStudio.BraceMatching
 {
-    /// <summary>
-    /// 
-    /// </summary>
   public class InteractiveHighlightingTagger : ITagger<TextMarkerTag>
   {
     readonly ITextView      _textView;
     readonly ITextBuffer    _textBuffer;
              SnapshotPoint? _caretPosOpt;
 
+    //Событие у второго эземпляра не подключаются. Так же жопа с маос_ховер.
     public event EventHandler<SnapshotSpanEventArgs>  TagsChanged;
 
     public InteractiveHighlightingTagger(ITextView textView, ITextBuffer textBuffer)
@@ -31,11 +43,49 @@ namespace Nitra.VisualStudio.BraceMatching
       _textBuffer  = textBuffer;
       _caretPosOpt = null;
 
-      _textView.Caret.PositionChanged += CaretPositionChanged;
-      _textView.LayoutChanged         += ViewLayoutChanged;
+      _textView.Caret.PositionChanged         += CaretPositionChanged;
+      _textView.LayoutChanged                 += ViewLayoutChanged;
+      _textView.Closed                        += _textView_Closed;
+      ((UIElement)_textView).IsVisibleChanged += Elem_IsVisibleChanged;
 
       UpdateAtCaretPosition(_textView.Caret.Position);
     }
+
+    private void _textView_Closed(object sender, EventArgs e)
+    {
+      _textView.Caret.PositionChanged         -= CaretPositionChanged;
+      _textView.LayoutChanged                 -= ViewLayoutChanged;
+      _textView.Closed                        -= _textView_Closed;
+      ((UIElement)_textView).IsVisibleChanged -= Elem_IsVisibleChanged;
+    }
+
+    private void Elem_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+      var isVisible = (bool)e.NewValue;
+      var wpfTextView = (IWpfTextView)_textView;
+
+      if (isVisible)
+      {
+        var textViewModelOpt = GetTextViewModelOpt();
+        if (textViewModelOpt == null)
+        {
+          // It happens when second view was opened. For example if user split a editor.
+          var fileModel = _textBuffer.Properties.GetProperty<FileModel>(Constants.FileModelKey);
+          textViewModelOpt = VsUtils.GetOrCreateTextViewModel(wpfTextView, fileModel);
+        }
+      }
+      else
+      {
+        var textViewModelOpt = GetTextViewModelOpt();
+        if (textViewModelOpt != null)
+        {
+          var fileModel = textViewModelOpt.FileModel;
+          fileModel.Remove(wpfTextView);
+        }
+      }
+    }
+
+    public ITextView TextView => _textView;
 
     // don't cache it! Property can be changed in _textView.Properties when the view hide or show.
     TextViewModel GetTextViewModelOpt()
