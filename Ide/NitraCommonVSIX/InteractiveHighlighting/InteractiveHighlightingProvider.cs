@@ -22,19 +22,8 @@ namespace Nitra.VisualStudio.BraceMatching
     {
       lock (buffer)
       {
-        var tagger = buffer.Properties.GetOrCreateSingletonProperty(Constants.BraceMatchingTaggerKey,
-          () => new InteractiveHighlightingTagger(textView, buffer));
-
-        if (tagger.TextView != textView)
-        {
-          if (tagger.TextView.Properties.TryGetProperty<TextViewModel>(Constants.TextViewModelKey, out var previosTextViewModel))
-          {
-            var fileModel = previosTextViewModel.FileModel;
-            var textViewModel = VsUtils.GetOrCreateTextViewModel((IWpfTextView)textView, fileModel);
-            tagger = new InteractiveHighlightingTagger(textView, buffer);
-          }
-        }
-
+        var tagger = textView.Properties.GetOrCreateSingletonProperty(Constants.InteractiveHighlightingTaggerKey,
+          () => new InteractiveHighlightingTagger((IWpfTextView)textView, buffer));
         return (ITagger<T>)tagger;
       }
     }

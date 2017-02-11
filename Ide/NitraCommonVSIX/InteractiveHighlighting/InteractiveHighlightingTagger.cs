@@ -30,39 +30,39 @@ namespace Nitra.VisualStudio.BraceMatching
 {
   public class InteractiveHighlightingTagger : ITagger<TextMarkerTag>
   {
-    readonly ITextView      _textView;
+    readonly IWpfTextView   _wpfTextView;
     readonly ITextBuffer    _textBuffer;
              SnapshotPoint? _caretPosOpt;
 
     //Событие у второго эземпляра не подключаются. Так же жопа с маос_ховер.
     public event EventHandler<SnapshotSpanEventArgs>  TagsChanged;
 
-    public InteractiveHighlightingTagger(ITextView textView, ITextBuffer textBuffer)
+    public InteractiveHighlightingTagger(IWpfTextView wpfTextView, ITextBuffer textBuffer)
     {
-      _textView    = textView;
+      _wpfTextView = wpfTextView;
       _textBuffer  = textBuffer;
       _caretPosOpt = null;
 
-      _textView.Caret.PositionChanged         += CaretPositionChanged;
-      _textView.LayoutChanged                 += ViewLayoutChanged;
-      _textView.Closed                        += _textView_Closed;
-      ((UIElement)_textView).IsVisibleChanged += Elem_IsVisibleChanged;
+      _wpfTextView.Caret.PositionChanged         += CaretPositionChanged;
+      _wpfTextView.LayoutChanged                 += ViewLayoutChanged;
+      _wpfTextView.Closed                        += _textView_Closed;
+      ((UIElement)_wpfTextView).IsVisibleChanged += Elem_IsVisibleChanged;
 
-      UpdateAtCaretPosition(_textView.Caret.Position);
+      UpdateAtCaretPosition(_wpfTextView.Caret.Position);
     }
 
     private void _textView_Closed(object sender, EventArgs e)
     {
-      _textView.Caret.PositionChanged         -= CaretPositionChanged;
-      _textView.LayoutChanged                 -= ViewLayoutChanged;
-      _textView.Closed                        -= _textView_Closed;
-      ((UIElement)_textView).IsVisibleChanged -= Elem_IsVisibleChanged;
+      _wpfTextView.Caret.PositionChanged         -= CaretPositionChanged;
+      _wpfTextView.LayoutChanged                 -= ViewLayoutChanged;
+      _wpfTextView.Closed                        -= _textView_Closed;
+      ((UIElement)_wpfTextView).IsVisibleChanged -= Elem_IsVisibleChanged;
     }
 
     private void Elem_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
       var isVisible = (bool)e.NewValue;
-      var wpfTextView = (IWpfTextView)_textView;
+      var wpfTextView = (IWpfTextView)_wpfTextView;
 
       if (isVisible)
       {
@@ -85,13 +85,16 @@ namespace Nitra.VisualStudio.BraceMatching
       }
     }
 
-    public ITextView TextView => _textView;
+    public ITextView TextView => _wpfTextView;
 
     // don't cache it! Property can be changed in _textView.Properties when the view hide or show.
     TextViewModel GetTextViewModelOpt()
     {
-      if (_textView.Properties.TryGetProperty<TextViewModel>(Constants.TextViewModelKey, out var value))
-        return value;
+      if (_wpfTextView.Properties.TryGetProperty<TextViewModel>(Constants.TextViewModelKey, out var textViewModel))
+        return textViewModel;
+
+      if (_textBuffer.Properties.TryGetProperty<FileModel>(Constants.FileModelKey, out var fileModel))
+        return VsUtils.GetOrCreateTextViewModel(_wpfTextView, fileModel);
 
       return null;
     }
@@ -99,7 +102,7 @@ namespace Nitra.VisualStudio.BraceMatching
     void ViewLayoutChanged(object source, TextViewLayoutChangedEventArgs e)
     {
       if (e.NewSnapshot != e.OldSnapshot) //make sure that there has really been a change
-        UpdateAtCaretPosition(_textView.Caret.Position);
+        UpdateAtCaretPosition(_wpfTextView.Caret.Position);
     }
 
     void CaretPositionChanged(object _, CaretPositionChangedEventArgs e)

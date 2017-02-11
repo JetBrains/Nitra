@@ -53,15 +53,14 @@ namespace Nitra.VisualStudio.Models
         CheckDisposed();
         if (_braceMatchingTaggerOpt == null)
         {
-          var textBuffer = _wpfTextView.TextBuffer;
+          var textView = _wpfTextView;
 
-          lock (textBuffer)
+          lock (textView)
           {
-            var props = textBuffer.Properties;
-            if (!props.ContainsProperty(Constants.BraceMatchingTaggerKey))
-              return null;
+            if (textView.Properties.TryGetProperty(Constants.InteractiveHighlightingTaggerKey, out _braceMatchingTaggerOpt))
+              return _braceMatchingTaggerOpt;
 
-            _braceMatchingTaggerOpt = props.GetProperty<InteractiveHighlightingTagger>(Constants.BraceMatchingTaggerKey);
+            _braceMatchingTaggerOpt = null;
           }
         }
 
@@ -92,7 +91,7 @@ namespace Nitra.VisualStudio.Models
     public override string ToString()
     {
       var index = Array.IndexOf(FileModel.TextViewModels, this);
-      return FileModel + " (" + index + ") - " + _wpfTextView;
+      return FileModel + " (" + index + ")";
     }
 
     internal void Reset()
