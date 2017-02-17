@@ -26,6 +26,15 @@ namespace DotNet
 {
   public partial class CompilationUnit : AstBase, IProjectSupport, NamespaceBody
   {
+    [Record]
+    private class ProjectData
+    {
+      public Context       : DependentPropertyEvalContext;
+      public RootNamespace : NamespaceSymbol;
+      public RootScope     : TableScope;
+      public Manager       : ManagerClass;
+    }
+
     public RefreshReferences(cancellationToken : CancellationToken, project : Project) : object
     {
       def oldManager = ManagerClass.Instance;
@@ -68,7 +77,8 @@ namespace DotNet
         _ = WellKnownSymbols.GetSymbolsToEvaluate();
 
         LoadNitraMetadata(cancellationToken, project, manager, rootNamespace);
-        (context, rootNamespace, rootScope, manager)
+        CreatePredefinedSymbols(rootScope, context);
+        ProjectData(context, rootNamespace, rootScope, manager)
       }
       finally
       {
@@ -80,7 +90,7 @@ namespace DotNet
     public RefreshProject(cancellationToken : CancellationToken, files : ImmutableArray[FileEvalPropertiesData], data : object) : void
     {
       def oldManager = ManagerClass.Instance;
-      def (context, rootNamespace, rootScope, manager) = DecomposeData(data);
+      def (context, rootNamespace, rootScope, manager) = data :> ProjectData;
 
       context.CancellationToken = cancellationToken;
       
@@ -107,7 +117,7 @@ namespace DotNet
 
     public GetSymbolById(data : object, symbolId : int) : ValueOption[DeclarationSymbol]
     {
-      def (_, rootNamespace, _, _) = DecomposeData(data);
+      def rootNamespace = (data :> ProjectData).RootNamespace;
       // TODO: cache symbols an use it cache to find symbol by id
       def findSymbol(tableScope : TableScope) : ValueOption[DeclarationSymbol]
       {
@@ -141,12 +151,7 @@ namespace DotNet
         | _ => type = null; typeArgs = ImmutableArray.Empty; false
       }
     }
-    
-    public DecomposeData(data : object) : DependentPropertyEvalContext * NamespaceSymbol * TableScope * ManagerClass
-    {
-      data :> (DependentPropertyEvalContext * NamespaceSymbol * TableScope * ManagerClass)
-    }
-    
+
     class StubCompiler : ManagerClass
     {
       public this(project : Project)
@@ -232,6 +237,55 @@ namespace DotNet
           return;
 
         visitAssembly(assemblyId);
+      }
+    }
+
+    private static CreatePredefinedSymbols(rootScope : TableScope, context : DependentPropertyEvalContext) : void
+    {
+      def nitraNs = GetOrCreatePredefinedSymbol.[NamespaceSymbol](rootScope, Location.Default, "Nitra", context, () => NamespaceSymbol());
+
+      _ = GetOrCreatePredefinedSymbol.[LanguageSymbol](nitraNs.MemberTable, Location.Default, "Language", context,
+        fun()
+        {
+          def symbol = LanguageSymbol();
+          symbol.BaseTypeSet = BaseTypeReferenceSet(null);
+          symbol
+        });
+
+      def declarationsNs = GetOrCreatePredefinedSymbol.[NamespaceSymbol](nitraNs.MemberTable, Location.Default, "Declarations", context, () => NamespaceSymbol());
+
+      def scopedAstSymbol = GetOrCreatePredefinedSymbol.[TopAstSymbol](declarationsNs.MemberTable, Location.Default, "ScopedAst", context,
+        fun()
+        {
+          def symbol = TopAstSymbol();
+          symbol.BaseTypeSet = BaseTypeReferenceSet(null);
+          symbol
+        });
+
+      _ = GetOrCreatePredefinedSymbol.[TopAstSymbol](declarationsNs.MemberTable, Location.Default, "Declaration", context,
+        fun()
+        {
+          def symbol = TopAstSymbol();
+          symbol.BaseTypeSet = BaseTypeReferenceSet(null);
+          symbol.BaseTypeSet.AddParent(scopedAstSymbol);
+          symbol
+        });
+    }
+
+    private static GetOrCreatePredefinedSymbol[TSymbol](scope : TableScope, loc : Nitra.Location, name : string, context : DependentPropertyEvalContext, symbolFactory : Func[DeclarationSymbol]) : TSymbol
+      where TSymbol : DeclarationSymbol
+    {
+      def result = scope.Bind.[TSymbol](Reference(loc, name));
+      if (result.IsSymbolEvaluated)
+      {
+        result.Symbol
+      }
+      else
+      {
+        def decl   = PredefinedDeclaration(Name(loc, name), symbolFactory);
+        def symbol = decl.DefineSymbol(scope) :> TSymbol;
+        symbol.EvalProperties(context);
+        symbol
       }
     }
 
