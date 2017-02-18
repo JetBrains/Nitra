@@ -85,7 +85,9 @@ namespace Nitra.VisualStudio.Models
 
     public override int GetHashCode()
     {
+#pragma warning disable RECS0025 // Non-readonly field referenced in 'GetHashCode()'
       return _wpfTextView.GetHashCode();
+#pragma warning restore RECS0025 // Non-readonly field referenced in 'GetHashCode()'
     }
 
     public override string ToString()
