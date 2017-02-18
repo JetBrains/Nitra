@@ -274,7 +274,7 @@ namespace Nitra.VisualStudio.Models
     {
       CheckDisposed();
       var project = FileModel.Hierarchy.GetProject();
-      return new ProjectId(FileModel.Server.Client.StringManager.GetId(project.FileName));
+      return new ProjectId(FileModel.Server.Client.StringManager.GetId(project.FullName));
     }
 
     static void GoToLocation(FileModel fileModel, Location loc)
