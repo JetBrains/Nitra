@@ -20,6 +20,19 @@ using System.IO;
 
 namespace Nitra.VisualStudio.Models
 {
+  public class NitraErrorListProvider : ErrorListProvider, IVsTaskProvider2
+  {
+    public NitraErrorListProvider(IServiceProvider provider) : base(provider)
+    {
+    }
+
+    int IVsTaskProvider2.MaintainInitialTaskOrder(out int fMaintainOrder)
+    {
+      fMaintainOrder = MaintainInitialTaskOrder ? 1 : 0;
+      return 0;
+    }
+  }
+
   /// <summary>
   /// Represent file in a text editor. An instance of this class is created for opened (in editors) files 
   /// that at least once were visible on the screen. If the user closes a tab, its associated the FileModel is destroyed.
@@ -231,7 +244,11 @@ namespace Nitra.VisualStudio.Models
       if (!(messages.Length == 0 && noTasks))
       {
         if (errorListProvider == null)
-          _errorListProviders[index] = errorListProvider = new ErrorListProvider(Server.ServiceProvider);
+        {
+          _errorListProviders[index] = errorListProvider = new NitraErrorListProvider(Server.ServiceProvider);
+          errorListProvider.MaintainInitialTaskOrder = true;
+          errorListProvider.DisableAutoRoute = true;
+        }
         errorListProvider.SuspendRefresh();
         try
         {
@@ -239,32 +256,42 @@ namespace Nitra.VisualStudio.Models
           tasks.Clear();
           foreach (var msg in messages)
           {
-            var startPos = msg.Location.Span.StartPos;
-            if (startPos > snapshot.Length)
-            {
-              continue;
-            }
-            var line = snapshot.GetLineFromPosition(startPos);
-            var col = startPos - line.Start.Position;
-            var task = new ErrorTask()
-            {
-              Text = msg.Text,
-              Category = TaskCategory.CodeSense,
-              ErrorCategory = ConvertMessageType(msg.Type),
-              Priority = TaskPriority.High,
-              HierarchyItem = Hierarchy,
-              Line = line.LineNumber,
-              Column = col,
-              Document = FullPath,
-            };
-
-            task.Navigate += Task_Navigate;
-
-            errorListProvider.Tasks.Add(task);
+            AddTask(snapshot, errorListProvider, msg);
           }
         }
-        finally { errorListProvider.ResumeRefresh(); }
+        finally
+        {
+          errorListProvider.ResumeRefresh();
+        }
       }
+    }
+
+    private void AddTask(ITextSnapshot snapshot, ErrorListProvider errorListProvider, CompilerMessage msg)
+    {
+      var startPos = msg.Location.Span.StartPos;
+      if (startPos > snapshot.Length)
+        return;
+
+      var line = snapshot.GetLineFromPosition(startPos);
+      var col = startPos - line.Start.Position;
+      var task = new ErrorTask()
+      {
+        Text = msg.Text,
+        Category = TaskCategory.CodeSense,
+        ErrorCategory = ConvertMessageType(msg.Type),
+        Priority = TaskPriority.High,
+        HierarchyItem = Hierarchy,
+        Line = line.LineNumber,
+        Column = col,
+        Document = FullPath,
+      };
+
+      task.Navigate += Task_Navigate;
+
+      errorListProvider.Tasks.Add(task);
+
+      foreach (var nested in msg.NestedMessages)
+        AddTask(snapshot, errorListProvider, nested);
     }
 
     TextViewModel GetTextViewModel()
