@@ -10,7 +10,7 @@ namespace Nitra.VisualStudio.CompilerMessages
 {
   [Export(typeof(ITaggerProvider))]
   [ContentType("nitra")]
-  [TagType(typeof(ErrorTag))]
+  [TagType(typeof(NitraErrorTag))]
   class CompilerMessagesTaggerProvider : ITaggerProvider
   {
     public ITagger<T> CreateTagger<T>(ITextBuffer buffer) where T : ITag

@@ -10,7 +10,7 @@ using Nitra.ClientServer.Messages;
 
 namespace Nitra.VisualStudio.CompilerMessages
 {
-  public class CompilerMessagesTagger : ITagger<ErrorTag>
+  public class CompilerMessagesTagger : ITagger<NitraErrorTag>
   {
     private readonly ITextBuffer _textBuffer;
     public event EventHandler<SnapshotSpanEventArgs> TagsChanged;
@@ -20,7 +20,7 @@ namespace Nitra.VisualStudio.CompilerMessages
       _textBuffer = buffer;
     }
 
-    public IEnumerable<ITagSpan<ErrorTag>> GetTags(NormalizedSnapshotSpanCollection spans)
+    public IEnumerable<ITagSpan<NitraErrorTag>> GetTags(NormalizedSnapshotSpanCollection spans)
     {
       var fileModel = VsUtils.TryGetFileModel(_textBuffer);
 
@@ -55,27 +55,10 @@ namespace Nitra.VisualStudio.CompilerMessages
       return new SnapshotSpan(snapshot, span).TranslateTo(currentSnapshot, SpanTrackingMode.EdgeExclusive);
     }
 
-    static TagSpan<ErrorTag> TagSpanFromMessage(CompilerMessage msg, SnapshotSpan snapshotSpan)
+    static TagSpan<NitraErrorTag> TagSpanFromMessage(CompilerMessage msg, SnapshotSpan snapshotSpan)
     {
-      var errorTag = new ErrorTag(ConvertMessageType(msg.Type), msg.Text);
-      return new TagSpan<ErrorTag>(snapshotSpan, errorTag);
-    }
-
-    static string ConvertMessageType(CompilerMessageType type)
-    {
-      switch (type)
-      {
-        case CompilerMessageType.FatalError:
-          return PredefinedErrorTypeNames.OtherError;
-        case CompilerMessageType.Error:
-          return PredefinedErrorTypeNames.SyntaxError;
-        case CompilerMessageType.Warning:
-          return PredefinedErrorTypeNames.Warning;
-        case CompilerMessageType.Hint:
-          return PredefinedErrorTypeNames.Suggestion;
-        default:
-          return PredefinedErrorTypeNames.OtherError;
-      }
+      var errorTag = new NitraErrorTag(msg);
+      return new TagSpan<NitraErrorTag>(snapshotSpan, errorTag);
     }
 
     internal void Update()

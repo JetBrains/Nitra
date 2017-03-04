@@ -5,6 +5,8 @@ using System.Diagnostics;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Controls;
+using WpfHint2.Parsing;
+using WpfHint2.UIBuilding;
 
 namespace WpfHint2
 {
@@ -71,12 +73,16 @@ namespace WpfHint2
     public void Close()
     {
       if (_hintWindow != null)
+      {
+        if (_hintWindow.IsClosing)
+          return;
         _hintWindow.Close();
+      }
 
       Debug.WriteLine("Close()");
     }
 
-    public void Show(IntPtr owner, Rect placementRect, Func<string, string> getHintContent, string text, Func<string, Brush> mapBrush)
+    public void Show(Rect placementRect, Func<string, string> getHintContent, string text, Func<string, Brush> mapBrush)
     {
       PlacementRect = placementRect;
       Text = text;
@@ -85,17 +91,15 @@ namespace WpfHint2
 
       try
       {
-        Show(owner);
+        Show();
       }
-      catch
+      catch(Exception ex)
       {
-      }
-      finally
-      {
+        Debug.WriteLine("Hint.Show() Exception: " + ex.Message);
       }
    }
 
-    private void Show(IntPtr owner)
+    private void Show()
     {
       if (InputManager.Current.IsInMenuMode)
         return;
@@ -106,7 +110,7 @@ namespace WpfHint2
       // subclass
       _hintSource = new HintSource();
       _hintSource.Activate += Close;
-      _hintSource.SubClass(owner);
+      _hintSource.SubClass();
 
       // create hint window
       var ht = HintRoot.Create(PlacementRect, _hintSource);
@@ -133,7 +137,7 @@ namespace WpfHint2
       _hintSource.UnSubClass();
       _hintSource = null;
       _hintWindow = null;
-      if (Closed != null) Closed(this);
+      Closed?.Invoke(this);
     }
 
     internal string RaiseGetHintContent(string key)
@@ -152,10 +156,27 @@ namespace WpfHint2
       return key;
     }
 
+    public void SetCallbacks(Func<string, string> getHintContent, Func<string, Brush> mapBrush)
+    {
+      _getHintContent = getHintContent;
+      MapBrush = mapBrush;
+    }
+
     internal void RaiseClick(string handler)
     {
-      if (Click != null)
-        Click(this, handler);
+      Click?.Invoke(this, handler);
+    }
+
+    public FrameworkElement ParseToFrameworkElement(string value)
+    {
+      var root = HintParser.Parse(value);
+      var fe   = HintBuilder.Build(root, this);
+      return fe;
+    }
+
+    public Window ShowSubHint(FrameworkElement el, string hintText, Window owner)
+    {
+      return HintWindow.ShowSubHint(this, el, hintText, owner);
     }
   }
 }

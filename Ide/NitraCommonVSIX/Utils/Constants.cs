@@ -21,5 +21,6 @@ namespace Nitra.VisualStudio
     public const string CompilerMessagesTaggerKey        = "Nitra-CompilerMessagesTagger";
     public const string DefenitionHighlighting           = "NitraDefenitionHighlighting";
     public const string ReferenceHighlighting            = "NitraReferenceHighlighting";
+    public const string NitraQuickInfoSourceKey          = "Nitra-NitraQuickInfoSource";
   }
 }

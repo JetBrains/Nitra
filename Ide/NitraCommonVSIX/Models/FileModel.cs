@@ -2,8 +2,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using static Nitra.ClientServer.Messages.AsyncServerMessage;
 using Microsoft.VisualStudio.Text;
 using System.Windows.Threading;
@@ -14,25 +12,11 @@ using System.Diagnostics;
 using Nitra.VisualStudio.CompilerMessages;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
-using Microsoft.VisualStudio.TextManager.Interop;
 using System.Windows.Media;
 using System.IO;
 
 namespace Nitra.VisualStudio.Models
 {
-  public class NitraErrorListProvider : ErrorListProvider, IVsTaskProvider2
-  {
-    public NitraErrorListProvider(IServiceProvider provider) : base(provider)
-    {
-    }
-
-    int IVsTaskProvider2.MaintainInitialTaskOrder(out int fMaintainOrder)
-    {
-      fMaintainOrder = MaintainInitialTaskOrder ? 1 : 0;
-      return 0;
-    }
-  }
-
   /// <summary>
   /// Represent file in a text editor. An instance of this class is created for opened (in editors) files 
   /// that at least once were visible on the screen. If the user closes a tab, its associated the FileModel is destroyed.
@@ -41,7 +25,7 @@ namespace Nitra.VisualStudio.Models
   {
     public const int KindCount = 3;
     readonly ITextBuffer                             _textBuffer;
-    public   ServerModel                                  Server                     { get; }
+    public   ServerModel                             Server                     { get; }
     public   FileId                                  Id                         { get; }
     public   IVsHierarchy                            Hierarchy                  { get; }
     public   string                                  FullPath                   { get; }

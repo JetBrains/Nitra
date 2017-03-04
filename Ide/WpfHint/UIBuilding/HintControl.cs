@@ -5,7 +5,7 @@ using System;
 
 namespace WpfHint2.UIBuilding
 {
-	internal class HintControl : TextBlock
+	public class HintControl : TextBlock
 	{
 		#region ClickEvent
 

@@ -19,9 +19,11 @@ namespace WpfHint2
 			ShowInTaskbar = false;
 
 			Loaded += InvisibleWindow_Loaded;
-		}
+      SnapsToDevicePixels = true;
+      TextOptions.SetTextFormattingMode((DependencyObject)this, TextFormattingMode.Display);
+    }
 
-		void InvisibleWindow_Loaded(object sender, RoutedEventArgs e)
+    void InvisibleWindow_Loaded(object sender, RoutedEventArgs e)
 		{
 			var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
 			if (source != null)

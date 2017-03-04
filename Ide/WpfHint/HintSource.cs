@@ -11,43 +11,54 @@ namespace WpfHint2
 	{
 		public event Action Activate;
 		public HintWindow HintWindow { get; set; }
+    bool _disposed;
 
-		/// text editor window handle
-		public IntPtr Owner { get; private set; }
+    ///// text editor window handle
+    //public IntPtr Owner { get; private set; }
 
-		private InputManager _inputManager;
+    private InputManager _inputManager;
 		private Dispatcher   _dispatcher;
 
-		public void SubClass(IntPtr owner)
+		public void SubClass()
 		{
-			Owner = owner;
-			_inputManager = InputManager.Current;
+      CheckDisposed();
+      _inputManager = InputManager.Current;
 			_dispatcher   = _inputManager.Dispatcher;
 
 			_inputManager.PreProcessInput += OnPreProcessInputEventHandler;
 			_inputManager.EnterMenuMode   += OnEnterMenuMode;
 
-			//Debug.WriteLine("SubClass(): " + owner);
+			Debug.WriteLine("SubClass()");
 		}
 
 		void Unsubscribe()
 		{
-			_inputManager.PreProcessInput -= OnPreProcessInputEventHandler;
-			_inputManager.EnterMenuMode   -= OnEnterMenuMode;
+      lock (this)
+      {
+        if (_disposed)
+          return;
+
+        _inputManager.PreProcessInput -= OnPreProcessInputEventHandler;
+        _inputManager.EnterMenuMode -= OnEnterMenuMode;
+        Dispose();
+      }
 		}
 
 		public void UnSubClass()
 		{
+      CheckDisposed();
+
 			if (_dispatcher != null)
 				_dispatcher.BeginInvoke((Action)Unsubscribe);
 
-			//Debug.WriteLine("UnSubClass(): " + _owner);
+      Debug.WriteLine("UnSubClass(): ");
 		}
 
 		#region Dispatcher handlers
 
 		bool MouseHoverHintWindow()
 		{
+      CheckDisposed();
 			var pos = Win32.GetCursorPos();
 
 			Func<Window, bool> process = null; process = wnd => // local funtion :)
@@ -68,6 +79,7 @@ namespace WpfHint2
 
 		void OnPreProcessInputEventHandler(object sender, PreProcessInputEventArgs e)
 		{
+      CheckDisposed();
 			var name = e.StagingItem.Input.RoutedEvent.Name;
 
 			switch (name)
@@ -102,28 +114,49 @@ namespace WpfHint2
 
 		void CollActivate()
 		{
+      CheckDisposed();
 			if (Activate != null)
 				Activate();
 		}
 
 		void OnEnterMenuMode(object sender, EventArgs e)
 		{
-			CollActivate();
+      CheckDisposed();
+
+      CollActivate();
 		}
 
-		#endregion Dispatcher handlers
+    #endregion Dispatcher handlers
 
-		#region Implementation of IDisposable
+    #region Implementation of IDisposable
 
+    void CheckDisposed()
+    {
+      if (_disposed)
+      {
+        Debug.Assert(!_disposed);
+        throw new ObjectDisposedException(this.GetType().FullName);
+      }
+    }
 
-		~HintSource()
+    ~HintSource()
 		{
-			Dispose();
+      if (!_disposed)
+			  Dispose();
 		}
 
 		public void Dispose()
 		{
-			UnSubClass();
+      if (_disposed)
+        return;
+
+      UnSubClass();
+
+      _disposed = true;
+      _dispatcher = null;
+      _inputManager = null;
+
+      GC.SuppressFinalize(this);
 		}
 
 		#endregion

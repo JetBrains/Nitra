@@ -13,11 +13,17 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Media;
+
+using D = System.Drawing;
 
 namespace Nitra.VisualStudio
 {
   internal static class VsUtils
   {
+    public static D.Rectangle ToRectangle(this Rect r) => new D.Rectangle((int)r.X, (int)r.Y, (int)r.Width, (int)r.Height);
+
     public static string GetAssemblyPath(Assembly assembly)
     {
       var codeBase = assembly.CodeBase;
@@ -332,6 +338,23 @@ namespace Nitra.VisualStudio
           out itemid,
           out pWindowFrame,
           out viewAdapter);
+    }
+
+    public static Rect? CalcActiveAreaRect(IWpfTextView wpfTextView, SnapshotSpan span)
+    {
+      var geometry = wpfTextView.TextViewLines.GetTextMarkerGeometry(span);
+
+      if (geometry == null)
+        return null;
+
+      var visual = (Visual)wpfTextView;
+      var bound = geometry.Bounds;
+
+      bound.Offset(-wpfTextView.ViewportLeft, -wpfTextView.ViewportTop);
+      bound.Height += 10;
+
+      var rect = new Rect(visual.PointToScreen(bound.Location), bound.Size);
+      return rect;
     }
   }
 }

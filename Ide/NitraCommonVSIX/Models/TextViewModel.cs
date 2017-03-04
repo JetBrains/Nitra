@@ -6,7 +6,7 @@ using Microsoft.VisualStudio.Text.Editor;
 using Nitra.ClientServer.Messages;
 using Nitra.VisualStudio.BraceMatching;
 using Nitra.VisualStudio.KeyBinding;
-
+using Nitra.VisualStudio.QuickInfo;
 using System;
 using System.Diagnostics;
 using System.Linq;
@@ -214,45 +214,13 @@ namespace Nitra.VisualStudio.Models
       if (snapshot.Version.Convert() != msg.Version || lastPoint.Snapshot != snapshot)
         return;
 
-      if (!msg.referenceSpan.IntersectsWith(lastPoint.Position))
-        return;
+      Debug.WriteLine("Hint data avalable!");
 
-      // TODO: Use VS colors. .SetResourceReference(Microsoft.VisualStudio.PlatformUI.EnvironmentColors.ToolTipBrushKey); //ToolTipTextBrushKey 
-      //Microsoft.VisualStudio.PlatformUI.EnvironmentColors.ToolTipBrushKey
-
-      var span       = new SnapshotSpan(snapshot, new Span(msg.referenceSpan.StartPos, msg.referenceSpan.Length));
-      var geometry   = _wpfTextView.TextViewLines.GetTextMarkerGeometry(span);
-
-      if (geometry == null)
-        return;
-
-      var visual     = (Visual)_wpfTextView;
-      var bound      = geometry.Bounds;
-
-      bound.Offset(-_wpfTextView.ViewportLeft, -_wpfTextView.ViewportTop);
-      bound.Height  += 10;
-
-      var rect = new Rect(visual.PointToScreen(bound.Location), bound.Size);
-      var vsTextView = _wpfTextView.ToVsTextView();
-      var hWnd       = vsTextView.GetWindowHandle();
-      var hintXml    = msg.text;
-      var hint       = this.FileModel.Server.Hint;
-
-      hint.BackgroundResourceReference = EnvironmentColors.ToolTipBrushKey;
-      hint.ForegroundResourceReference = EnvironmentColors.ToolTipTextBrushKey;
-
-      if (hint.IsOpen)
+      NitraQuickInfoSource quickInfo;
+      if (_wpfTextView.TextBuffer.Properties.TryGetProperty(Constants.NitraQuickInfoSourceKey, out quickInfo))
       {
-        if (hint.PlacementRect == rect)
-        {
-          hint.Text = hintXml;
-          return;
-        }
-
-        hint.Close();
+        quickInfo.SetHintData(msg.text, SubHintText, this.SpanClassToBrush);
       }
-
-      hint.Show(hWnd, rect, SubHintText, hintXml, this.SpanClassToBrush);
     }
 
     Brush SpanClassToBrush(string spanClass)

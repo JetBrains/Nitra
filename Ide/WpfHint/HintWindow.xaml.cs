@@ -14,6 +14,7 @@ using System.Windows.Threading;
 using WpfHint2.Parsing;
 using WpfHint2.UIBuilding;
 using System.Diagnostics;
+using System.ComponentModel;
 
 namespace WpfHint2
 {
@@ -22,10 +23,10 @@ namespace WpfHint2
 	/// </summary>
 	internal partial class HintWindow
 	{
-		private readonly Hint            _hint;
+    public bool IsClosing { get; private set; }
+    private readonly Hint            _hint;
 		private readonly HintRoot        _hintRoot;
-		private readonly DispatcherTimer _timer = new DispatcherTimer 
-		                                          { Interval = TimeSpan.FromMilliseconds(1000) };
+		private readonly DispatcherTimer _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
 		private          string          _text;
 
 		public string Text
@@ -76,9 +77,16 @@ namespace WpfHint2
 
 			HintControl.AddClickHandler(this, OnClick);
 			HintControl.AddMouseHoverHandler(this, OnMouseHover);
-		}
+      TextOptions.SetTextFormattingMode((DependencyObject)this, TextFormattingMode.Display);
+    }
 
-		protected override void OnInitialized(EventArgs e)
+    protected override void OnClosing(CancelEventArgs e)
+    {
+      IsClosing = true;
+      base.OnClosing(e);
+    }
+
+    protected override void OnInitialized(EventArgs e)
 		{
 			base.OnInitialized(e);
 			RestartCloseTimer();
@@ -123,32 +131,42 @@ namespace WpfHint2
 				ShowSubHint(hc, hc.Hint);
 		}
 
-		private void ShowSubHint(FrameworkElement el, string hintText)
+    private void ShowSubHint(FrameworkElement el, string hintText)
+    {
+      ShowSubHint(_hint, el, hintText, this);
+    }
+
+    public static Window ShowSubHint(Hint hint, FrameworkElement el, string hintText, Window owner)
 		{
 			var ht = HintRoot.Create(el);
 
-			foreach (HintWindow window in OwnedWindows)
-			{
-				if (!window._hintRoot.Equals(ht))
-				{
-					window.Close();
-					continue;
-				}
+      if (owner != null)
+      {
+        foreach (HintWindow window in owner.OwnedWindows)
+        {
+          if (!window._hintRoot.Equals(ht))
+          {
+            window.Close();
+            continue;
+          }
 
-				ht.Dispose();
-				return;
-			}
+          ht.Dispose();
+          return null;
+        }
+      }
 
-			var wnd = new HintWindow(_hint, ht) { Text = hintText, Owner = this };
+			var wnd = new HintWindow(hint, ht) { Text = hintText, Owner = owner };
 
-      if (_hint.BackgroundResourceReference != null)
-        wnd.border.SetResourceReference(Border.BackgroundProperty, _hint.BackgroundResourceReference);
+      if (hint.BackgroundResourceReference != null)
+        wnd.border.SetResourceReference(Border.BackgroundProperty, hint.BackgroundResourceReference);
 
-      if (_hint.ForegroundResourceReference != null)
-        wnd._textBlock.SetResourceReference(TextBlock.ForegroundProperty, _hint.ForegroundResourceReference);
+      if (hint.ForegroundResourceReference != null)
+        wnd._textBlock.SetResourceReference(TextBlock.ForegroundProperty, hint.ForegroundResourceReference);
 
       wnd.Show();
-		}
+
+      return wnd;
+    }
 
 		#endregion
 
