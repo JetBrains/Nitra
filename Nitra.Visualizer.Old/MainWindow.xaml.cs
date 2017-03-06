@@ -1325,7 +1325,7 @@ namespace Nitra.Visualizer
         var symbol = elem as DeclarationSymbol;
         if (symbol != null && symbol.IsNameValid)
         {
-          var content = symbol.ToXaml();
+          var content = symbol.ToString();
           var description = content;
           // TODO: починить отображение неоднозначностей
           //var amb = symbol as IAmbiguousSymbol;

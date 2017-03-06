@@ -23,16 +23,20 @@ namespace Nitra.VisualStudio.QuickInfo
 {
   class NitraQuickInfoSource : IQuickInfoSource
   {
+    public static readonly Hint Hint = new Hint { WrapWidth = 900.1 };
+
+    public event Action Dismissed;
+
     ITextBuffer _textBuffer;
     ITextStructureNavigatorSelectorService _navigatorService;
     IWpfTextView _textView;
-    Hint _hint = new Hint { WrapWidth = 900.1 };
     PopupContainer _container;
     readonly DispatcherTimer _timer = new DispatcherTimer{ Interval=TimeSpan.FromMilliseconds(100), IsEnabled=false };
     IQuickInfoSession _session;
     D.Rectangle _activeAreaRect;
     D.Rectangle _hintRect;
     Window _subHuntWindow;
+    Action<string> _onClick;
     //HwndSource _currentPoupupWndSource;
 
     public NitraQuickInfoSource(ITextBuffer textBuffer, ITextStructureNavigatorSelectorService navigatorService)
@@ -53,8 +57,8 @@ namespace Nitra.VisualStudio.QuickInfo
 
       Debug.WriteLine("AugmentQuickInfoSession");
 
-      _hint.BackgroundResourceReference = EnvironmentColors.ToolTipBrushKey;
-      _hint.ForegroundResourceReference = EnvironmentColors.ToolTipTextBrushKey;
+      Hint.BackgroundResourceReference = EnvironmentColors.ToolTipBrushKey;
+      Hint.ForegroundResourceReference = EnvironmentColors.ToolTipTextBrushKey;
 
       var snapshot = _textBuffer.CurrentSnapshot;
       var triggerPoint = session.GetTriggerPoint(snapshot);
@@ -62,8 +66,7 @@ namespace Nitra.VisualStudio.QuickInfo
       if (triggerPoint.HasValue)
       {
         _textView = (IWpfTextView)session.TextView;
-        var navigator    = _navigatorService.GetTextStructureNavigator(_textBuffer);
-        var extent       = navigator.GetExtentOfWord(triggerPoint.Value);
+        var extent       = GetTextExtent(triggerPoint.Value);
         var text         = extent.Span.GetText();
         if (!text.All(c => char.IsLetterOrDigit(c) || c == '_'))
         {
@@ -79,10 +82,11 @@ namespace Nitra.VisualStudio.QuickInfo
         _textView.VisualElement.MouseWheel += MouseWheel;
         _activeAreaRect = rectOpt.Value.ToRectangle();
         _session = session;
-        session.Dismissed += Dismissed;
+        session.Dismissed += OnDismissed;
 
         var container = new PopupContainer();
 
+        HintControl.AddClickHandler(container, OnClick);
         HintControl.AddMouseHoverHandler(container, OnMouseHover);
 
         container.LayoutUpdated += Container_LayoutUpdated;
@@ -101,11 +105,27 @@ namespace Nitra.VisualStudio.QuickInfo
       applicableToSpan = null;
     }
 
-    public void SetHintData(string data, Func<string, string> getHintContent, Func<string, Brush> mapBrush)
+    private void OnClick(object sender, RoutedEventArgs e)
+    {
+      if (_onClick == null)
+        return;
+
+      var hc = e.Source as HintControl;
+
+      if (hc == null)
+        return;
+
+      if (hc.Handler != null)
+        _onClick.Invoke(hc.Handler);
+    }
+
+    public void SetHintData(string data, Func<string, string> getHintContent, Func<string, Brush> mapBrush, Action<string> onClick)
     {
       Debug.WriteLine("SetHintData(" + data + ")");
       if (_container == null)
         return;
+
+      _onClick = onClick;
 
       if (data == "<hint></hint>")
       {
@@ -114,8 +134,8 @@ namespace Nitra.VisualStudio.QuickInfo
       }
 
       //"<hint>SubHint <hint value='SubSubHint 1'>active area 1</hint>! <hint value='SubSubHint 2'>active area 2</hint></hint>"
-      _hint.SetCallbacks(getHintContent, mapBrush);
-      var content = _hint.ParseToFrameworkElement(data);
+      Hint.SetCallbacks(getHintContent, mapBrush);
+      var content = Hint.ParseToFrameworkElement(data);
       _textView.VisualElement.Dispatcher.BeginInvoke((Action<FrameworkElement>)SetHintData_inUIThread, content);
     }
 
@@ -143,6 +163,13 @@ namespace Nitra.VisualStudio.QuickInfo
       _container.UpdateLayout();
     }
 
+    public TextExtent GetTextExtent(SnapshotPoint triggerPoint)
+    {
+      var navigator = _navigatorService.GetTextStructureNavigator(_textBuffer);
+      var extent = navigator.GetExtentOfWord(triggerPoint);
+      return extent;
+    }
+
     void Container_LayoutUpdated(object sender, EventArgs e)
     {
       var hintRectOpt = GetHintRect();
@@ -166,7 +193,7 @@ namespace Nitra.VisualStudio.QuickInfo
       if (hc.Hint != null)
       {
         _container.IsMouseOverAggregated = true;
-        var subHuntWindow = _hint.ShowSubHint(hc, hc.Hint, null);
+        var subHuntWindow = Hint.ShowSubHint(hc, hc.Hint, null);
         subHuntWindow.Closed += SubHuntWindow_Closed;
         _subHuntWindow = subHuntWindow;
       }
@@ -275,8 +302,10 @@ namespace Nitra.VisualStudio.QuickInfo
       _session.Dismiss();
     }
 
-    private void Dismissed(object sender, EventArgs e)
+    private void OnDismissed(object sender, EventArgs e)
     {
+      Dismissed?.Invoke();
+
       if (_subHuntWindow != null)
         _subHuntWindow.Close();
 
@@ -286,7 +315,7 @@ namespace Nitra.VisualStudio.QuickInfo
 
       _container.LayoutUpdated           -= Container_LayoutUpdated;
       _container.PopupOpened             -= PopupOpened;
-      _session.Dismissed                 -= Dismissed;
+      _session.Dismissed                 -= OnDismissed;
       _textView.VisualElement.MouseWheel -= MouseWheel;
 
       _timer.Stop();
@@ -295,60 +324,13 @@ namespace Nitra.VisualStudio.QuickInfo
       Debug.WriteLine("Dismissed");
     }
 
-    Rect? GetViewSpanRect(ITrackingSpan viewSpan)
+    public Rect? GetViewSpanRect(ITrackingSpan viewSpan)
     {
       var wpfTextView = _textView;
       if (wpfTextView == null || wpfTextView.TextViewLines == null || wpfTextView.IsClosed)
-        return new Rect?();
-      SnapshotSpan span = viewSpan.GetSpan(wpfTextView.TextSnapshot);
-      var nullable = new Rect?();
-      if (span.Length > 0)
-      {
-        double num1 = double.MaxValue;
-        double num2 = double.MaxValue;
-        double val1_1 = double.MinValue;
-        double val1_2 = double.MinValue;
-        foreach (TextBounds textBounds in wpfTextView.TextViewLines.GetNormalizedTextBounds(span))
-        {
-          num1 = Math.Min(num1, textBounds.Left);
-          num2 = Math.Min(num2, textBounds.TextTop);
-          val1_1 = Math.Max(val1_1, textBounds.Right);
-          val1_2 = Math.Max(val1_2, textBounds.TextBottom + 1.0);
-        }
-        IWpfTextViewLine containingBufferPosition = wpfTextView.TextViewLines.GetTextViewLineContainingBufferPosition(span.Start);
-        if (containingBufferPosition != null)
-        {
-          TextBounds extendedCharacterBounds = containingBufferPosition.GetExtendedCharacterBounds(span.Start);
-          if (extendedCharacterBounds.Left < val1_1 && extendedCharacterBounds.Left >= wpfTextView.ViewportLeft && extendedCharacterBounds.Left < wpfTextView.ViewportRight)
-            num1 = extendedCharacterBounds.Left;
-        }
-        ITextViewLine textViewLine = (ITextViewLine)wpfTextView.TextViewLines.GetTextViewLineContainingBufferPosition(span.End);
-        if (textViewLine != null && textViewLine.Start == span.End)
-          val1_2 = Math.Max(val1_2, textViewLine.TextBottom + 1.0);
-        if (num1 < val1_1)
-          nullable = new Rect(num1, num2, val1_1 - num1, val1_2 - num2);
-      }
-      else
-      {
-        ITextViewLine textViewLine = (ITextViewLine)wpfTextView.TextViewLines.GetTextViewLineContainingBufferPosition(span.Start);
-        if (textViewLine != null)
-        {
-          TextBounds characterBounds = textViewLine.GetCharacterBounds(span.Start);
-          nullable = new Rect?(new Rect(characterBounds.Left, characterBounds.TextTop, 0.0, characterBounds.TextHeight + 1.0));
-        }
-      }
-      if (!nullable.HasValue || nullable.Value.IsEmpty)
-        return new Rect?();
-      Rect rect1 = new Rect(wpfTextView.ViewportLeft, wpfTextView.ViewportTop, wpfTextView.ViewportWidth, wpfTextView.ViewportHeight);
-      Rect rect2 = nullable.Value;
-      rect2.Intersect(rect1);
-      return new Rect?(new Rect(this.GetScreenPointFromTextXY(rect2.Left, rect2.Top), this.GetScreenPointFromTextXY(rect2.Right, rect2.Bottom)));
-    }
+        return null;
 
-    private Point GetScreenPointFromTextXY(double x, double y)
-    {
-      var wpfTextView = (IWpfTextView)_textView;
-      return wpfTextView.VisualElement.PointToScreen(new Point(x - wpfTextView.ViewportLeft, y - wpfTextView.ViewportTop));
+      return VsUtils.GetViewSpanRect(_textView, viewSpan.GetSpan(wpfTextView.TextSnapshot));
     }
 
     public void Dispose()

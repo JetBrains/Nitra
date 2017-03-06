@@ -2,6 +2,8 @@
 using Microsoft.VisualStudio.Text.Tagging;
 
 using Nitra.ClientServer.Messages;
+using Nitra.VisualStudio.QuickInfo;
+using System;
 
 namespace Nitra.VisualStudio.CompilerMessages
 {
@@ -14,7 +16,20 @@ namespace Nitra.VisualStudio.CompilerMessages
       Msg = msg;
     }
 
-    public object ToolTipContent => Msg.Text;
+    public object ToolTipContent
+    {
+      get
+      {
+        var data = Msg.Text;
+        if (data.StartsWith("<hint>", StringComparison.InvariantCulture))
+        {
+          var content = NitraQuickInfoSource.Hint.ParseToFrameworkElement(Msg.Text);
+          return content;
+        }
+
+        return data;
+      }
+    }
 
     public string ErrorType
     {

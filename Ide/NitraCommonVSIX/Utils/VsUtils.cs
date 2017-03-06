@@ -3,6 +3,7 @@ using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Editor;
+using Microsoft.VisualStudio.Text.Formatting;
 using Microsoft.VisualStudio.TextManager.Interop;
 using Nitra.ClientServer.Messages;
 using Nitra.VisualStudio.Models;
@@ -355,6 +356,59 @@ namespace Nitra.VisualStudio
 
       var rect = new Rect(visual.PointToScreen(bound.Location), bound.Size);
       return rect;
+    }
+
+    public static Rect? GetViewSpanRect(IWpfTextView wpfTextView, SnapshotSpan span)
+    {
+      var nullable = new Rect?();
+      if (span.Length > 0)
+      {
+        double num1 = double.MaxValue;
+        double num2 = double.MaxValue;
+        double val1_1 = double.MinValue;
+        double val1_2 = double.MinValue;
+        foreach (TextBounds textBounds in wpfTextView.TextViewLines.GetNormalizedTextBounds(span))
+        {
+          num1 = Math.Min(num1, textBounds.Left);
+          num2 = Math.Min(num2, textBounds.TextTop);
+          val1_1 = Math.Max(val1_1, textBounds.Right);
+          val1_2 = Math.Max(val1_2, textBounds.TextBottom + 1.0);
+        }
+        IWpfTextViewLine containingBufferPosition = wpfTextView.TextViewLines.GetTextViewLineContainingBufferPosition(span.Start);
+        if (containingBufferPosition != null)
+        {
+          TextBounds extendedCharacterBounds = containingBufferPosition.GetExtendedCharacterBounds(span.Start);
+          if (extendedCharacterBounds.Left < val1_1 && extendedCharacterBounds.Left >= wpfTextView.ViewportLeft && extendedCharacterBounds.Left < wpfTextView.ViewportRight)
+            num1 = extendedCharacterBounds.Left;
+        }
+        ITextViewLine textViewLine = wpfTextView.TextViewLines.GetTextViewLineContainingBufferPosition(span.End);
+        if (textViewLine != null && textViewLine.Start == span.End)
+          val1_2 = Math.Max(val1_2, textViewLine.TextBottom + 1.0);
+        if (num1 < val1_1)
+          nullable = new Rect(num1, num2, val1_1 - num1, val1_2 - num2);
+      }
+      else
+      {
+        ITextViewLine textViewLine = wpfTextView.TextViewLines.GetTextViewLineContainingBufferPosition(span.Start);
+        if (textViewLine != null)
+        {
+          TextBounds characterBounds = textViewLine.GetCharacterBounds(span.Start);
+          nullable = new Rect(characterBounds.Left, characterBounds.TextTop, 0.0, characterBounds.TextHeight + 1.0);
+        }
+      }
+      if (!nullable.HasValue || nullable.Value.IsEmpty)
+        return null;
+      Rect rect1 = new Rect(wpfTextView.ViewportLeft, wpfTextView.ViewportTop, wpfTextView.ViewportWidth, wpfTextView.ViewportHeight);
+      Rect rect2 = nullable.Value;
+      rect2.Intersect(rect1);
+      var point1 = GetScreenPointFromTextXY(wpfTextView, rect2.Left, rect2.Top);
+      var point2 = GetScreenPointFromTextXY(wpfTextView, rect2.Right, rect2.Bottom);
+      return new Rect(point1, point2);
+    }
+
+    public static Point GetScreenPointFromTextXY(IWpfTextView wpfTextView, double x, double y)
+    {
+      return wpfTextView.VisualElement.PointToScreen(new Point(x - wpfTextView.ViewportLeft, y - wpfTextView.ViewportTop));
     }
   }
 }

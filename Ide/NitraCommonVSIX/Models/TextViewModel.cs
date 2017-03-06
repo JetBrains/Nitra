@@ -34,7 +34,8 @@ namespace Nitra.VisualStudio.Models
              InteractiveHighlightingTagger _braceMatchingTaggerOpt;
              SnapshotPoint?                _lastMouseHoverPointOpt;
              FileVersion                   _previosMouseHoverFileVersion = FileVersion.Invalid;
-             int                           _previosMouseHoverPos = -1;
+             SnapshotSpan?                 _previosActiveSpanOpt;
+             NitraQuickInfoSource          _quickInfoOpt;
 
     public TextViewModel(IWpfTextView wpfTextView, FileModel file)
     {
@@ -185,15 +186,21 @@ namespace Nitra.VisualStudio.Models
       var pos      = point.Position;
       var fileVer  = snapshot.Version.Convert();
 
-      if (_previosMouseHoverPos == pos && _previosMouseHoverFileVersion == fileVer)
-        return;
-
-      _previosMouseHoverPos         = pos;
       _previosMouseHoverFileVersion = fileVer;
 
-      this.FileModel.OnMouseHover(this);
+      if (_wpfTextView.TextBuffer.Properties.TryGetProperty(Constants.NitraQuickInfoSourceKey, out _quickInfoOpt))
+      {
+        var extent = _quickInfoOpt.GetTextExtent(point);
 
-      server.Client.Send(new ClientMessage.GetHint(this.FileModel.Id, snapshot.Version.Convert(), point.Position));
+        if (_previosActiveSpanOpt == extent.Span)
+          return;
+
+        _previosActiveSpanOpt = extent.Span;
+
+        this.FileModel.OnMouseHover(this);
+
+        server.Client.Send(new ClientMessage.GetHint(this.FileModel.Id, snapshot.Version.Convert(), point.Position));
+      }
     }
 
     internal void ShowHint(AsyncServerMessage.Hint msg)
@@ -206,21 +213,62 @@ namespace Nitra.VisualStudio.Models
       var lastPoint = _lastMouseHoverPointOpt.Value;
       var snapshot  = _wpfTextView.TextBuffer.CurrentSnapshot;
 
-      this.FileModel.OnMouseHover(null);
-      _lastMouseHoverPointOpt       = null;
-      _previosMouseHoverPos         = -1;
-      _previosMouseHoverFileVersion = FileVersion.Invalid;
-
       if (snapshot.Version.Convert() != msg.Version || lastPoint.Snapshot != snapshot)
         return;
 
       Debug.WriteLine("Hint data avalable!");
 
-      NitraQuickInfoSource quickInfo;
-      if (_wpfTextView.TextBuffer.Properties.TryGetProperty(Constants.NitraQuickInfoSourceKey, out quickInfo))
+      if (_quickInfoOpt != null)
       {
-        quickInfo.SetHintData(msg.text, SubHintText, this.SpanClassToBrush);
+        _quickInfoOpt.SetHintData(msg.text, SubHintText, this.SpanClassToBrush, OnHintRefClic);
+        _quickInfoOpt.Dismissed += OnDismissed;
       }
+    }
+
+    private void OnHintRefClic(string handler)
+    {
+      string tag = null;
+      string data = null;
+
+      var colonIndex = handler.IndexOf(':');
+      if (colonIndex <= 0)
+        tag = handler;
+      else
+      {
+        tag = handler.Substring(0, colonIndex);
+        data = handler.Substring(colonIndex + 1, handler.Length - colonIndex - 1);
+      }
+
+      switch (tag)
+      {
+        case "goto":
+          var rx = new System.Text.RegularExpressions.Regex(@"(?<path>.*)\:\((?<line>\d*),\s*(?<col>\d*)\)\[(?<pos>\d*),\s*(?<len>\d*)\]");
+          var res = rx.Match(data);
+          if (res.Success)
+          {
+            var path = res.Groups["path"].Value;
+            var line = int.Parse(res.Groups["line"].Value);
+            var col  = int.Parse(res.Groups["col"].Value);
+            var pos  = int.Parse(res.Groups["pos"].Value);
+            var len  = int.Parse(res.Groups["len"].Value);
+            VsUtils.NavigateTo(FileModel.Server.ServiceProvider, path, line, col);
+          }
+          break;
+        default:
+          break;
+      }
+      //var prefix =
+    }
+
+    private void OnDismissed()
+    {
+      this.FileModel.OnMouseHover(null);
+      _lastMouseHoverPointOpt = null;
+      _previosMouseHoverFileVersion = FileVersion.Invalid;
+      _previosActiveSpanOpt = null;
+      if (_quickInfoOpt != null)
+        _quickInfoOpt.Dismissed -= OnDismissed;
+      _quickInfoOpt = null;
     }
 
     Brush SpanClassToBrush(string spanClass)
@@ -318,7 +366,7 @@ namespace Nitra.VisualStudio.Models
       _braceMatchingTaggerOpt       = null;
       _lastMouseHoverPointOpt       = null;
       _previosMouseHoverFileVersion = FileVersion.Invalid;
-      _previosMouseHoverPos         = -1;
+      _quickInfoOpt                 = null;
     }
   }
 }

@@ -57,6 +57,7 @@ namespace WpfHint2.UIBuilding
           case "i":
             return new Italic().Fill(et, hint);
           case "lb":
+          case "br":
             return new LineBreak();
           case "code":
             return new Span { FontFamily = new FontFamily("Consolas"), FontSize = 12.0d * (96d / 72d) }.Fill(et, hint);
@@ -71,7 +72,7 @@ namespace WpfHint2.UIBuilding
             return BuildRef(et, hint);
           case "params":
             return BuildParam(et, hint);
-          case "Symbol":
+          case "symbol":
             if (et.Attributes.ContainsKey("id"))
               return BuildSymbolHint(et, hint);
 
@@ -113,13 +114,13 @@ namespace WpfHint2.UIBuilding
 
     private static Inline BuildSymbolHint(ElementToken token, Hint hint)
     {
-      Trace.Assert(token.Name == "Symbol");
+      Trace.Assert(token.Name == "symbol");
 
       string handler;
       token.Attributes.TryGetValue("handler", out handler);
 
       string key       = token.Attributes["id"];
-      string spanClass = token.Attributes["SpanClass"];
+      string spanClass = token.Attributes["span-class"];
 
       string value = token.Text;
 
@@ -130,7 +131,7 @@ namespace WpfHint2.UIBuilding
 
     private static Inline BuildSymbol(ElementToken token, Hint hint)
     {
-      string spanClass = token.Attributes["SpanClass"];
+      string spanClass = token.Attributes["span-class"];
       string value     = token.Text;
       return new Run(value) { Foreground = hint.MapBrush(spanClass) };
     }
