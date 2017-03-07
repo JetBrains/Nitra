@@ -220,44 +220,9 @@ namespace Nitra.VisualStudio.Models
 
       if (_quickInfoOpt != null)
       {
-        _quickInfoOpt.SetHintData(msg.text, SubHintText, this.SpanClassToBrush, OnHintRefClic);
+        _quickInfoOpt.SetHintData(msg.text);
         _quickInfoOpt.Dismissed += OnDismissed;
       }
-    }
-
-    private void OnHintRefClic(string handler)
-    {
-      string tag = null;
-      string data = null;
-
-      var colonIndex = handler.IndexOf(':');
-      if (colonIndex <= 0)
-        tag = handler;
-      else
-      {
-        tag = handler.Substring(0, colonIndex);
-        data = handler.Substring(colonIndex + 1, handler.Length - colonIndex - 1);
-      }
-
-      switch (tag)
-      {
-        case "goto":
-          var rx = new System.Text.RegularExpressions.Regex(@"(?<path>.*)\:\((?<line>\d*),\s*(?<col>\d*)\)\[(?<pos>\d*),\s*(?<len>\d*)\]");
-          var res = rx.Match(data);
-          if (res.Success)
-          {
-            var path = res.Groups["path"].Value;
-            var line = int.Parse(res.Groups["line"].Value);
-            var col  = int.Parse(res.Groups["col"].Value);
-            var pos  = int.Parse(res.Groups["pos"].Value);
-            var len  = int.Parse(res.Groups["len"].Value);
-            VsUtils.NavigateTo(FileModel.Server.ServiceProvider, path, line, col);
-          }
-          break;
-        default:
-          break;
-      }
-      //var prefix =
     }
 
     private void OnDismissed()
@@ -269,30 +234,6 @@ namespace Nitra.VisualStudio.Models
       if (_quickInfoOpt != null)
         _quickInfoOpt.Dismissed -= OnDismissed;
       _quickInfoOpt = null;
-    }
-
-    Brush SpanClassToBrush(string spanClass)
-    {
-      CheckDisposed();
-      return this.FileModel.SpanClassToBrush(spanClass, _wpfTextView);
-    }
-
-    string SubHintText(string symbolIdText)
-    {
-      CheckDisposed();
-      var symbolId = int.Parse(symbolIdText);
-      var fileModel = FileModel;
-      var client = fileModel.Server.Client;
-      client.Send(new ClientMessage.GetSubHint(GetCurrntProjectId(), symbolId));
-      var msg = client.Receive<ServerMessage.SubHint>();
-      return msg.text;
-    }
-
-    ProjectId GetCurrntProjectId()
-    {
-      CheckDisposed();
-      var project = FileModel.Hierarchy.GetProject();
-      return new ProjectId(FileModel.Server.Client.StringManager.GetId(project.FullName));
     }
 
     static void GoToLocation(FileModel fileModel, Location loc)

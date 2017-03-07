@@ -23,7 +23,7 @@ namespace Nitra.VisualStudio.CompilerMessages
         var data = Msg.Text;
         if (data.StartsWith("<hint>", StringComparison.InvariantCulture))
         {
-          var content = NitraQuickInfoSource.Hint.ParseToFrameworkElement(Msg.Text);
+          var content = NitraQuickInfoSource.Current.ParseToFrameworkElement(Msg.Text);
           return content;
         }
 

@@ -211,6 +211,13 @@ namespace Nitra.VisualStudio
       return textViewModel;
     }
 
+    public static TextViewModel TryGetTextViewModel(this ITextView wpfTextView)
+    {
+      TextViewModel textViewModel;
+      wpfTextView.Properties.TryGetProperty(Constants.TextViewModelKey, out textViewModel);
+      return textViewModel;
+    }
+
     public static FileModel TryGetFileModel(ITextBuffer textBuffer)
     {
       var props = textBuffer.Properties;
@@ -308,12 +315,37 @@ namespace Nitra.VisualStudio
       return project;
     }
 
-    internal static void NavigateTo(IServiceProvider serviceProvider, string filename, int line, int col)
+    internal static void NavigateTo(IServiceProvider serviceProvider, string filename, int pos)
     {
       IVsTextView viewAdapter;
       IVsWindowFrame pWindowFrame;
       OpenDocument(serviceProvider, filename, out viewAdapter, out pWindowFrame);
+      if (pWindowFrame == null || viewAdapter == null)
+        return;
+      ErrorHandler.ThrowOnFailure(pWindowFrame.Show());
 
+      var wpfTextView = viewAdapter.ToIWpfTextView();
+      var textViewModel = wpfTextView.TryGetTextViewModel();
+      if (textViewModel == null)
+        return;
+
+      var snapshot = wpfTextView.TextSnapshot;
+
+      if (pos >= snapshot.Length)
+        return;
+
+      textViewModel.NavigateTo(wpfTextView.TextSnapshot, pos);
+    }
+
+    internal static void NavigateTo(IServiceProvider serviceProvider, string filename, int line, int col)
+    {
+      line--;
+      col--;
+      IVsTextView viewAdapter;
+      IVsWindowFrame pWindowFrame;
+      OpenDocument(serviceProvider, filename, out viewAdapter, out pWindowFrame);
+      if (pWindowFrame == null)
+        return;
       ErrorHandler.ThrowOnFailure(pWindowFrame.Show());
 
       // Set the cursor at the beginning of the declaration.

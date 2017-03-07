@@ -88,27 +88,25 @@ namespace WpfHint2.UIBuilding
     {
       var span = new Span();
 
-      string size;
-      if (token.Attributes.TryGetValue("size", out size))
+      if (token.Attributes.TryGetValue("size", out var size))
       {
         var fc = new FontSizeConverter();
         var sz = (double)fc.ConvertFromString(size);
         span.FontSize = sz;
       }
 
-      string face;
-      if (token.Attributes.TryGetValue("face", out face))
+      if (token.Attributes.TryGetValue("face", out var face))
       {
         span.FontFamily = new FontFamily(face);
       }
 
-      string color;
-      if (token.Attributes.TryGetValue("color", out color))
+      if (token.Attributes.TryGetValue("color", out var color))
       {
         var bc = new BrushConverter();
         var br = (Brush)bc.ConvertFromString(color);
         span.Foreground = br;
       }
+
       return span.Fill(token, hint);
     }
 
