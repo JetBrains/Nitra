@@ -19,6 +19,19 @@ using System.Text;
 
 namespace Nitra.VisualStudio.Models
 {
+  public class NitraErrorListProvider : ErrorListProvider, IVsTaskProvider2
+  {
+    public NitraErrorListProvider(IServiceProvider provider) : base(provider)
+    {
+    }
+
+    int IVsTaskProvider2.MaintainInitialTaskOrder(out int fMaintainOrder)
+    {
+      fMaintainOrder = MaintainInitialTaskOrder ? 1 : 0;
+      return 0;
+    }
+  }
+
   /// <summary>
   /// Represent file in a text editor. An instance of this class is created for opened (in editors) files 
   /// that at least once were visible on the screen. If the user closes a tab, its associated the FileModel is destroyed.
@@ -258,6 +271,7 @@ namespace Nitra.VisualStudio.Models
       if (startPos > snapshot.Length)
         return;
 
+
       var line = snapshot.GetLineFromPosition(startPos);
       var col = startPos - line.Start.Position;
       var text = ToText(msg.Text);
@@ -300,9 +314,6 @@ namespace Nitra.VisualStudio.Models
           case XElement   e when e.Name == "br" || e.Name == "bl": builder.AppendLine(); break;
           case XContainer c: XmlToString(builder, c); break;
           case XText      t: builder.Append(t.Value); break;
-        }
-      }
-    }
 
     TextViewModel GetTextViewModel()
     {

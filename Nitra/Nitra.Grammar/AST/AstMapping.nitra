@@ -26,11 +26,14 @@ namespace Nitra.Ast
         NamespaceBody.NamespaceMembers -> Members;
       }
 
-    | Ast -> Nitra.Ast.TopAst          // Header Name AstInheritanceOpt Body
+    | Ast ->  // Header Name AstInheritanceOpt Body
+      let header : AstHeader = Header in
+      Nitra.Ast.TopAst
       {
         Name -> Name;
+        header -> Header;
         match(AstInheritanceOpt) { Some(value) -> value | None() -> [] } -> TypeBase;
-        Body.Members -> Members;
+        Body.Members(header) -> Members;
       }
 
     | MapSyntax -> TopMapSyntax // "map" "syntax" RuleName=QualifiedReference ParametersOpt=MapSyntaxParameters? "->" AstName=NitraType /*AstType*/ MapSyntaxBody
@@ -62,7 +65,16 @@ namespace Nitra.Ast
     | Language -> Nitra.Ast.Language   // Name ParentOpt Members
       {
         Name -> Name;
-        ParentOpt -> Parent;
+        match (ParentOpt)
+        {
+          | Some(value) -> [value]
+          | None ->
+            [QualifiedReference.Qualified
+            {
+              QualifiedReference.Simple { Name = Reference(ParentOpt.Location, "Nitra"); } -> Qualifier;
+              Name = Reference(ParentOpt.Location, "Language");
+            }]
+        } -> TypeBase;
         Members -> Members;
       }
 
@@ -115,50 +127,64 @@ namespace Nitra.Ast
     }
   }
 
+  map syntax NitraSyntax.NamespaceMember.Ast.Header -> AstHeader
+  {
+    | Ast
+      {
+        IsDeclaration = ParsedValue(KwAst, false);
+        AstModifiers -> Modifiers;
+      }
+
+    | Declaration
+      {
+        IsDeclaration = ParsedValue(KwDeclaration, true);
+        AstModifiers -> Modifiers;
+      }
+  }
+
+  map syntax NitraSyntax.AstModifier -> AstModifier
+  {
+    | Abstract {}
+    | Optional {}
+    | Multiple {}
+  }
+
   map syntax NitraSyntax.StyleProperty -> StyleProperty
   {
     | ForegroundColor { Color = ParsedValue(Color.Span, Color.Value(Nitra.Declarations.AstContext.CompilerMessages)); }
   }
 
-  map syntax NitraSyntax.LanguageMember -> LanguageMember
+  map syntax NitraSyntax.LanguageMember -> LanguageMember*
   {
-    | Style -> Style // "style" sm Name sm StyleBody
+    | Style -> [Style // "style" sm Name sm StyleBody
       {
         Name -> Name;
         StyleBody.Properties -> Properties;
-      }
+      }]
 
     | SpanClass -> StyleReference(Name) // "span" sm "class" sm Name sm MatchTokensOpt=("regex" sm RegexExpression sm)? StyleReference
     | SyntaxModule ->
-      match (this)
+      [match (RuleOpt)
       {
-        // "syntax" sm "module" sm Module=QualifiedReference RuleOpt=(sm "start" sm "rule" sm QualifiedReference)? ";"
-        | (_, _, m, Some((_, _, r)), _) -> StartSyntaxModuleReference
-          {
-            m -> Module;
-            r -> Rule;
-          }
+        | Some((_, _, r)) -> StartSyntaxModuleReference    { Module -> Module; r -> Rule; }
+        | None            -> AdditionSyntaxModuleReference { Module -> Module; }
+      }]
 
-        // "syntax" sm "module" sm Module=QualifiedReference RuleOpt=(sm "start" sm "rule" sm QualifiedReference)? ";"
-        | (_, _, m, None, _) -> AdditionSyntaxModuleReference
-          {
-            m -> Module;
-          }
-      }
-
-    | FileExtension -> FileExtension { Extension = ParsedValue(Ext, GetText(Ext)); }
-    | Company       -> Company       { Name = ParsedValue(Name, GetText(Name)); }
-    | Description   -> Description   { Text = ParsedValue(Text, GetText(Text)); }
-    | Authors       -> Authors       { Text = ParsedValue(Text, GetText(Text)); }
-    | Copyright     -> Copyright     { Text = ParsedValue(Text, GetText(Text)); }
-    | LicenseUrl    -> LicenseUrl    { Text = ParsedValue(Text, GetText(Text)); }
-    | RequireLicenseAcceptance -> RequireLicenseAcceptance { }
+    | FileExtension -> [FileExtension { Extension = ParsedValue(Ext, GetText(Ext)); }]
+    | Company       -> [Company       { Name = ParsedValue(Name, GetText(Name)); }]
+    | Description   -> [Description   { Text = ParsedValue(Text, GetText(Text)); }]
+    | Authors       -> [Authors       { Text = ParsedValue(Text, GetText(Text)); }]
+    | Copyright     -> [Copyright     { Text = ParsedValue(Text, GetText(Text)); }]
+    | LicenseUrl    -> [LicenseUrl    { Text = ParsedValue(Text, GetText(Text)); }]
+    | RequireLicenseAcceptance -> [RequireLicenseAcceptance { }]
   }
 
-  map syntax NitraSyntax.LanguageMember.SpanClass.StyleReference(name : Name) -> SpanClass
+  map syntax NitraSyntax.LanguageMember.SpanClass.StyleReference(name : Name) -> LanguageMember*
   {
-    | Reference -> StyledSpanClass { name -> Name; QualifiedReference -> StyleReference; } //= "=" sm QualifiedReference ";"
-    | StyleBody -> InlineSpanClass { name -> Name; StyleBody.Properties -> Properties; } 
+    | Reference -> [SpanClass { name -> Name; QualifiedReference -> StyleReference; }] //= "=" sm QualifiedReference ";"
+    | StyleBody ->
+      [Style     { Name = Name(name.Location, name.Id); StyleBody.Properties -> Properties; },
+       SpanClass { name -> Name; QualifiedReference.Simple { Name = Nitra.Declarations.Reference(name.Location, name.Id); } -> StyleReference; }]
   }
 
   map syntax NitraSyntax.SyntaxModuleMember -> Nitra.Ast.SyntaxModuleMember
@@ -270,6 +296,7 @@ namespace Nitra.Ast
     Name -> Name;
     RuleBody -> Members;
     RuleAttributes -> Attributes;
+    [] -> Fields;
   }
 
   map syntax NitraSyntax.ExtensibleRule(_ : NestedTag) -> NestedExtensibleRule
@@ -277,6 +304,7 @@ namespace Nitra.Ast
     Name -> Name;
     RuleBody -> Members;
     RuleAttributes -> Attributes;
+    [] -> Fields;
   }
 
   map syntax NitraSyntax.RuleBody -> RuleBodyMember*
@@ -480,7 +508,7 @@ namespace Nitra.Ast
       }
   }
 
-  map syntax NitraSyntax.AstMember -> AM.AstMember
+  map syntax NitraSyntax.AstMember(parentHeader : AstHeader) -> AM.AstMember
   {
     | StructuralProperty       -> AM.StructuralProperty { Name -> Name; NitraType /*AstType*/ -> TypeName; }
     | DependentProperty        -> this.DependentProperty
@@ -489,11 +517,14 @@ namespace Nitra.Ast
     | DependentAddStatement    -> this.DependentAddStatement
     | Decompose                -> AM.Decompose {}
     | StageScope               -> this.StageScope
-    | ChildAst                 -> AM.NestedAst
+    | ChildAst                 ->
+      let header : AstHeader = AstHeader { IsDeclaration = parentHeader.IsDeclaration; [] -> Modifiers; } in
+      AM.NestedAst
       {
         Name -> Name;
+        header -> Header;
         match(AstInheritanceOpt) { Some(value) -> value | None() -> [] } -> TypeBase;
-        match(Body) { Some(value) -> value.Members | None() -> [] } -> Members;
+        match(Body) { Some(value) -> value.Members(header) | None() -> [] } -> Members;
       }
   }
 
