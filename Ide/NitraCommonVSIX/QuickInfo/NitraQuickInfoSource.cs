@@ -40,7 +40,7 @@ namespace Nitra.VisualStudio.QuickInfo
     Window _subHuntWindow;
     FileModel _fileModel;
     TextViewModel _textViewModel;
-    //HwndSource _currentPoupupWndSource;
+    int _subhintOpen;
 
     public NitraQuickInfoSource(ITextBuffer textBuffer, ITextStructureNavigatorSelectorService navigatorService)
     {
@@ -109,7 +109,6 @@ namespace Nitra.VisualStudio.QuickInfo
         quickInfoContent.Add(container);
 
         _timer.Tick += _timer_Tick;
-        _timer.Start();
         //Externals.FillRect(_activeAreaRect);
         return;
       }
@@ -214,6 +213,9 @@ namespace Nitra.VisualStudio.QuickInfo
 
       if (hc.Hint != null)
       {
+        _timer.Stop();
+        _subhintOpen++;
+        Debug.WriteLine($"_subhintOpen = {_subhintOpen}  OnMouseHover");
         _container.IsMouseOverAggregated = true;
         var subHuntWindow = Hint.ShowSubHint(hc, hc.Hint, null);
         subHuntWindow.Closed += SubHuntWindow_Closed;
@@ -229,6 +231,8 @@ namespace Nitra.VisualStudio.QuickInfo
         _subHuntWindow = null;
       if (_container == null)
         return;
+      _subhintOpen--;
+      Debug.WriteLine($"_subhintOpen = {_subhintOpen}  SubHuntWindow_Closed");
       _container.IsMouseOverAggregated = false;
       _timer.Start();
     }
@@ -257,36 +261,8 @@ namespace Nitra.VisualStudio.QuickInfo
       if (!ReferenceEquals(_container.RootElementOpt, hWndSource.RootVisual))
         return null;
 
-      //if (_currentPoupupWndSource == null || _currentPoupupWndSource.Handle != hWndSource.Handle)
-      //{
-      //  _currentPoupupWndSource?.RemoveHook(HwndSourceHook);
-      //  _currentPoupupWndSource = hWndSource;
-      //  hWndSource.AddHook(HwndSourceHook);
-      //}
-
       return WinApi.GetWindowRect(hWndOpt);
     }
-
-    //IntPtr HwndSourceHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
-    //{
-    //  const int WM_SYSCOMMAND = 0x0112;
-    //  const int SC_MOVE = 0xF010;
-    //  const int WM_MOVING = 0x0216;
-    //
-    //  switch (msg)
-    //  {
-    //    case WM_SYSCOMMAND:
-    //      int command = wParam.ToInt32() & 0xfff0;
-    //      if (command == SC_MOVE)
-    //        handled = true;
-    //      break;
-    //    case WM_MOVING:
-    //      handled = true;
-    //      break;
-    //  }
-    //
-    //  return IntPtr.Zero;
-    //}
 
     bool IsMouseOverHintOrActiveArea
     {
@@ -321,7 +297,7 @@ namespace Nitra.VisualStudio.QuickInfo
       if (IsMouseOverHintOrActiveArea)
         return;
 
-      if (_container == null || _container.IsMouseOverAggregated)
+      if (_container == null || _subhintOpen > 0)
         return;
 
       _timer.Stop();
@@ -335,10 +311,6 @@ namespace Nitra.VisualStudio.QuickInfo
 
       if (_subHuntWindow != null)
         _subHuntWindow.Close();
-
-      //if (_currentPoupupWndSource != null)
-      //  _currentPoupupWndSource.RemoveHook(HwndSourceHook);
-      //_currentPoupupWndSource = null;
 
       _container.LayoutUpdated           -= Container_LayoutUpdated;
       _container.PopupOpened             -= PopupOpened;
