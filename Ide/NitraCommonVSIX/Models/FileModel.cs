@@ -19,19 +19,6 @@ using System.Text;
 
 namespace Nitra.VisualStudio.Models
 {
-  public class NitraErrorListProvider : ErrorListProvider, IVsTaskProvider2
-  {
-    public NitraErrorListProvider(IServiceProvider provider) : base(provider)
-    {
-    }
-
-    int IVsTaskProvider2.MaintainInitialTaskOrder(out int fMaintainOrder)
-    {
-      fMaintainOrder = MaintainInitialTaskOrder ? 1 : 0;
-      return 0;
-    }
-  }
-
   /// <summary>
   /// Represent file in a text editor. An instance of this class is created for opened (in editors) files 
   /// that at least once were visible on the screen. If the user closes a tab, its associated the FileModel is destroyed.
@@ -39,19 +26,19 @@ namespace Nitra.VisualStudio.Models
   internal class FileModel : IDisposable
   {
     public const int KindCount = 3;
-    readonly ITextBuffer                             _textBuffer;
-    public   ServerModel                             Server                     { get; }
-    public   FileId                                  Id                         { get; }
-    public   IVsHierarchy                            Hierarchy                  { get; }
-    public   string                                  FullPath                   { get; }
-    public   CompilerMessage[][]                     CompilerMessages           { get; private set; }
-    public   ITextSnapshot[]                         CompilerMessagesSnapshots  { get; private set; }
-             ErrorListProvider[]                     _errorListProviders;
+    readonly ITextBuffer _textBuffer;
+    public ServerModel Server { get; }
+    public FileId Id { get; }
+    public IVsHierarchy Hierarchy { get; }
+    public string FullPath { get; }
+    public CompilerMessage[][] CompilerMessages { get; private set; }
+    public ITextSnapshot[] CompilerMessagesSnapshots { get; private set; }
+    ErrorListProvider[] _errorListProviders;
 
     readonly Dictionary<IWpfTextView, TextViewModel> _textViewModelsMap = new Dictionary<IWpfTextView, TextViewModel>();
-             TextViewModel                           _activeTextViewModelOpt;
-             TextViewModel                           _mouseHoverTextViewModelOpt;
-             bool                                    _fileIsRemoved;
+    TextViewModel _activeTextViewModelOpt;
+    TextViewModel _mouseHoverTextViewModelOpt;
+    bool _fileIsRemoved;
 
 
     public FileModel(FileId id, ITextBuffer textBuffer, ServerModel server, Dispatcher dispatcher, IVsHierarchy hierarchy, string fullPath)
@@ -180,14 +167,14 @@ namespace Nitra.VisualStudio.Models
       Debug.Assert(msg.FileId >= 0);
       ITextBuffer textBuffer = _textBuffer;
 
-      OutliningCreated                outlining;
-      KeywordsHighlightingCreated     keywordHighlighting;
-      SymbolsHighlightingCreated      symbolsHighlighting;
-      MatchedBrackets                 matchedBrackets;
-      MappingMessages                 mappingMessages;
-      ParsingMessages                 parsingMessages;
-      SemanticAnalysisMessages        semanticAnalysisMessages;
-      Hint                            hint;
+      OutliningCreated outlining;
+      KeywordsHighlightingCreated keywordHighlighting;
+      SymbolsHighlightingCreated symbolsHighlighting;
+      MatchedBrackets matchedBrackets;
+      MappingMessages mappingMessages;
+      ParsingMessages parsingMessages;
+      SemanticAnalysisMessages semanticAnalysisMessages;
+      Hint hint;
 
       if ((outlining = msg as OutliningCreated) != null)
       {
@@ -231,7 +218,7 @@ namespace Nitra.VisualStudio.Models
       if (snapshot.Version.VersionNumber != version + 1)
         return;
 
-      CompilerMessages[index]          = messages;
+      CompilerMessages[index] = messages;
       CompilerMessagesSnapshots[index] = snapshot;
 
       CompilerMessagesTagger tegger;
@@ -271,7 +258,6 @@ namespace Nitra.VisualStudio.Models
       if (startPos > snapshot.Length)
         return;
 
-
       var line = snapshot.GetLineFromPosition(startPos);
       var col = startPos - line.Start.Position;
       var text = ToText(msg.Text);
@@ -304,16 +290,19 @@ namespace Nitra.VisualStudio.Models
       XmlToString(builder, XElement.Parse(text));
       return builder.ToString();
     }
-    
+
     static void XmlToString(StringBuilder builder, XContainer container)
     {
       foreach (var n in container.Nodes())
       {
         switch (n)
         {
-          case XElement   e when e.Name == "br" || e.Name == "bl": builder.AppendLine(); break;
+          case XElement e when e.Name == "br" || e.Name == "bl": builder.AppendLine(); break;
           case XContainer c: XmlToString(builder, c); break;
-          case XText      t: builder.Append(t.Value); break;
+          case XText t: builder.Append(t.Value); break;
+        }
+      }
+    }
 
     TextViewModel GetTextViewModel()
     {
