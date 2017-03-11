@@ -1816,5 +1816,10 @@ namespace Nitra.Visualizer
       var msg = client.Receive<ServerMessage.FileExtensions>();
       return msg.fileExtensions;
     }
+
+    private void OnAstItemCopy(object sender, RoutedEventArgs e)
+    {
+      CopyTreeNodeToClipboard(_astTreeView.SelectedItem);
+    }
   }
 }
