@@ -31,12 +31,15 @@ namespace Nitra.Visualizer.Views
         this.OneWayBind(ViewModel, vm => vm.IntelliSensePopup, v => v._popup.ViewModel)
             .AddTo(disposables);
 
+        var isSelectionChanging = false;
+
         this.WhenAnyValue(vm => vm.ViewModel.Selection)
-            .Subscribe(span => {
-              if (span.HasValue)
-                Select(span.Value.StartPos, span.Value.Length);
-            })
-            .AddTo(disposables);
+            .Subscribe(spanOpt =>
+              {
+                if (!isSelectionChanging && spanOpt.HasValue)
+                  Select(spanOpt.Value.StartPos, spanOpt.Value.Length);
+              })
+              .AddTo(disposables);
 
         this.WhenAnyValue(vm => vm.ViewModel.ScrollPosition)
             .Where(pos => pos != null)
@@ -54,15 +57,21 @@ namespace Nitra.Visualizer.Views
                  .Subscribe(visible => TextArea.Focus())
                  .AddTo(disposables);
 
-        TextArea.SelectionChanged += (sender, args) => {
-          var selection = TextArea.Selection;
-          var span = selection.Segments.FirstOrDefault();
-          
-          if (span != null)
-            ViewModel.Selection = new NSpan(span.StartOffset, span.EndOffset);
-          else
-            ViewModel.Selection = null;
-        };
+        TextArea.SelectionChanged += (sender, args) => 
+          {
+            isSelectionChanging = true;
+            try
+            {
+              var selection = TextArea.Selection;
+              var span = selection.Segments.FirstOrDefault();
+
+              if (span != null)
+                ViewModel.Selection = new NSpan(span.StartOffset, span.EndOffset);
+              else
+                ViewModel.Selection = null;
+            }
+            finally { isSelectionChanging = false; }
+          };
 
         TextArea.Caret.PositionChanged += (sender, args) => {
           ViewModel.CaretOffset = CaretOffset;
