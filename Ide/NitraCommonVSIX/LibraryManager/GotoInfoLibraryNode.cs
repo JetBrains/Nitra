@@ -21,7 +21,7 @@ namespace Nitra.VisualStudio
   {
     private readonly Location _location;
     private readonly ServerModel _server;
-    private readonly StringManager _stringManager;
+    //private readonly StringManager _stringManager;
     private readonly string _caption;
     private readonly string Text;
 
