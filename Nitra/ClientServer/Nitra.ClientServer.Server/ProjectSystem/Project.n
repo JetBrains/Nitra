@@ -430,6 +430,67 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       get { _files.Values }
     }
     
+    public FindDeclarations(pattern : string, kinds : ImmutableArray[string]) : void
+    {
+      def action(cancellationToken : CancellationToken, _solutionId : SolutionId, mutable _asts : ImmutableArray[IAst * bool]) : void
+      {
+        def projectSupport = _projectSupport ?? this.GetProjectSupport();
+        when (projectSupport != null)
+        {
+          ServerUtils.Log($"FindDeclarations('$pattern', [..$kinds]) ProjectId=$(this.Id)");
+          
+          def timer = Stopwatch.StartNew();
+          def infos = List();
+          def send() : void
+          {
+            when (infos.Count == 0)
+              return;
+            def result = infos.ToImmutableArray();
+            def msg = AsyncServerMessage.FoundDeclarations(FileId.Invalid, FileVersion.Invalid, _solutionId, this.Id, result);
+            Router.SendAsyncResponse(msg);
+            ServerUtils.Log($"Sending $(infos.Count) DeclarationInfo-s.");
+            infos.Clear();
+          }
+          def callbac(symbol : DeclarationSymbol) : bool
+          {
+            when (symbol.DeclarationsCount > 3 && symbol.IsKindEvaluated && symbol.Kind.Equals("namespace",  StringComparison.CurrentCulture))
+              return false;
+
+            def name = symbol.InitialName;
+            when (StringPatternMatching.MatchPattern(name, pattern))
+            {
+              def fullName = if (symbol.IsFullNameEvaluated) symbol.FullName else "<not evaluated>";
+              def spanClassId = Router.SpanClassesManager[symbol.SpanClass];
+              foreach (decl in symbol.GetDeclarationsUntyped() with i)
+              {
+                when (i > 20)
+                  break;
+  
+                def name2 = decl.Name.Text;
+                def spans = StringPatternMatching.MatchPatternSpans(name2, pattern);
+                def loc = ServerUtils.ConvertLocation(decl.Name.Location, withText=false);
+                def info = DeclarationInfo(symbol.Id, name2, spans, fullName, spanClassId, loc);
+                infos.Add(info);
+                def dbg =spans.Select(r => (name2.Substring(r.StartPos, r.Length), r));
+                ServerUtils.Log($"Match: '$name2' [..$dbg]");
+                when (timer.ElapsedMilliseconds > 10)
+                {
+                  send();
+                  timer.Restart();
+                }
+              }
+            }
+            
+            cancellationToken.IsCancellationRequested
+          }
+          projectSupport.VisitGlobalSymbols(this.Data, callbac);
+          send();
+          ServerUtils.Log("Finish FindDeclarations");
+        }
+      }
+      AddSemanticAction(action);
+   }
+    
     public Dispose() : void
     {
       when (IsDisposed)

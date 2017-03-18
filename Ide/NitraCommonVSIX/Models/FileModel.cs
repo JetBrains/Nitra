@@ -31,6 +31,7 @@ namespace Nitra.VisualStudio.Models
     public FileId Id { get; }
     public IVsHierarchy Hierarchy { get; }
     public string FullPath { get; }
+    public string Ext { get; }
     public CompilerMessage[][] CompilerMessages { get; private set; }
     public ITextSnapshot[] CompilerMessagesSnapshots { get; private set; }
     ErrorListProvider[] _errorListProviders;
@@ -45,6 +46,7 @@ namespace Nitra.VisualStudio.Models
     {
       Hierarchy = hierarchy;
       FullPath = fullPath;
+      Ext = Path.GetExtension(fullPath).ToLowerInvariant();
       Id = id;
       Server = server;
       _textBuffer = textBuffer;

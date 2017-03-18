@@ -3,37 +3,58 @@ using System;
 using Microsoft.VisualStudio.Language.NavigateTo.Interfaces;
 using System.ComponentModel.Composition;
 using Microsoft.VisualStudio.Language.Intellisense;
+using System.Collections.Generic;
 
 namespace Nitra.VisualStudio.NavigateTo
 {
-  class NitraNavigateToItemProvider : INavigateToItemProvider
+  class NitraNavigateToItemProvider : INavigateToItemProvider2
   {
-    readonly IServiceProvider _serviceProvider;
-    readonly IGlyphService    _glyphService;
+    public  readonly IServiceProvider                  ServiceProvider;
+    public  readonly IGlyphService                     GlyphService;
 
-    public NitraNavigateToItemProvider(IServiceProvider serviceProvider, IGlyphService glyphService1)
+    public NitraNavigateToItemProvider(IServiceProvider serviceProvider, IGlyphService glyphService)
     {
-      _serviceProvider = serviceProvider;
-      _glyphService    = glyphService1;
+      ServiceProvider = serviceProvider;
+      GlyphService    = glyphService;
+    }
+
+    public NitraNavigateToItemDisplayFactory GetFactory(ServerModel serverModel)
+    {
+      return new NitraNavigateToItemDisplayFactory(ServiceProvider, GlyphService, serverModel);
     }
 
     public void StartSearch(INavigateToCallback callback, string searchValue)
     {
-      var factory = new NitraNavigateToItemDisplayFactory(_serviceProvider, _glyphService);
-      callback.AddItem(new NavigateToItem("RulePrefix",   "OtherSymbol",  "Nitra", "aaa", null, MatchKind.Prefix, factory));
-      callback.AddItem(new NavigateToItem("ExactRule",     "OtherSymbol", "Nitra", "aaa", null, MatchKind.Exact, factory));
-      callback.AddItem(new NavigateToItem("RuleRegular",   "OtherSymbol", "Nitra", "aaa", null, MatchKind.Regular, factory));
-      callback.AddItem(new NavigateToItem("SubstringRule", "NitraSymbol", "Nitra", "aaa", null, MatchKind.Substring, factory));
-      callback.AddItem(new NavigateToItem("None",          "NitraSymbol", "Nitra", "aaa", null, MatchKind.None, factory));
-      //callback.Done();
+      StartSearch(callback, searchValue, true, false, new SortedSet<string>());
     }
 
     public void StopSearch()
     {
+      var servers = NitraCommonVsPackage.Instance.Servers;
+      foreach (var server in servers)
+        server.StopSearch();
     }
 
     public void Dispose()
     {
+    }
+
+    // INavigateToItemProvider2
+
+    public ISet<string> KindsProvided => new HashSet<string>() { "OtherSymbol", "NitraSymbol" };
+    public bool         CanFilter     => true;
+
+    public void StartSearch(INavigateToCallback callback, string searchValue, INavigateToFilterParameters filter)
+    {
+      var options = (INavigateToOptions2)callback.Options;
+      StartSearch(callback, searchValue, options.HideExternalItems, options.SearchCurrentDocument, filter.Kinds);
+    }
+
+    private void StartSearch(INavigateToCallback callback, string pattern, bool hideExternalItems, bool searchCurrentDocument, ISet<string> kinds)
+    {
+      var servers = NitraCommonVsPackage.Instance.Servers;
+      foreach (var server in servers)
+        server.StartSearch(this, callback, pattern, hideExternalItems, searchCurrentDocument, kinds);
     }
   }
 }

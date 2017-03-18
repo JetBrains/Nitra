@@ -17,22 +17,29 @@ using System.Windows.Media;
 using WpfHint2;
 
 using Ide = NitraCommonIde;
-using M   = Nitra.ClientServer.Messages;
+using M = Nitra.ClientServer.Messages;
+using Microsoft.VisualStudio.Language.NavigateTo.Interfaces;
+using Nitra.VisualStudio.NavigateTo;
+using System.IO;
 
 namespace Nitra.VisualStudio
 {
   /// <summary>Represent a server (Nitra.ClientServer.Server) instance.</summary>
   internal class ServerModel : IDisposable
   {
-             Ide.Config                     _config;
-    public   IServiceProvider               ServiceProvider   { get; }
-    public   NitraClient                    Client            { get; private set; }
-    public   Hint                           Hint              { get; } = new Hint() { WrapWidth = 900.1 };
-    public   ImmutableHashSet<string>       Extensions        { get; }
-    public   bool                           IsLoaded          { get; private set; }
-    public   bool                           IsSolutionCreated { get; private set; }
-             ImmutableArray<SpanClassInfo>  _spanClassInfos = ImmutableArray<SpanClassInfo>.Empty;
-    readonly HashSet<FileModel>             _fileModels = new HashSet<FileModel>();
+              Ide.Config                    _config;
+    public    IServiceProvider              ServiceProvider   { get; }
+    public    NitraClient                   Client            { get; private set; }
+    public    Hint                          Hint              { get; } = new Hint() { WrapWidth = 900.1 };
+    public    ImmutableHashSet<string>      Extensions        { get; }
+
+    public    bool                          IsLoaded          { get; private set; }
+    public    bool                          IsSolutionCreated { get; private set; }
+              ImmutableArray<SpanClassInfo> _spanClassInfos   = ImmutableArray<SpanClassInfo>.Empty;
+    readonly  HashSet<FileModel>            _fileModels       = new HashSet<FileModel>();
+    readonly  Dictionary<FileId, FileModel> _filIdToFileModelMap = new Dictionary<FileId, FileModel>();
+    private   INavigateToCallback           _callback;
+    private   NitraNavigateToItemProvider   _nitraNavigateToItemProvider;
 
     public ServerModel(StringManager stringManager, Ide.Config config, IServiceProvider serviceProvider)
     {
@@ -66,14 +73,23 @@ namespace Nitra.VisualStudio
       return msgConfig;
     }
 
+    FileModel GetFileModelOpt(FileId fileId)
+    {
+      if (_filIdToFileModelMap.TryGetValue(fileId, out var fileModel))
+        return fileModel;
+      return null;
+    }
+
     internal void Add(FileModel fileModel)
     {
       _fileModels.Add(fileModel);
+      _filIdToFileModelMap.Add(fileModel.Id, fileModel);
     }
 
     internal void Remove(FileModel fileModel)
     {
       _fileModels.Remove(fileModel);
+      _filIdToFileModelMap.Remove(fileModel.Id);
     }
 
     internal void SolutionStartLoading(SolutionId id, string solutionPath)
@@ -185,29 +201,63 @@ namespace Nitra.VisualStudio
 
     void Response(AsyncServerMessage msg)
     {
-      AsyncServerMessage.LanguageLoaded       languageInfo;
-      AsyncServerMessage.FindSymbolReferences findSymbolReferences;
-
-      if ((languageInfo = msg as AsyncServerMessage.LanguageLoaded) != null)
+      switch (msg)
       {
-        var spanClassInfos = languageInfo.spanClassInfos;
-        if (_spanClassInfos.IsDefaultOrEmpty)
-          _spanClassInfos = spanClassInfos;
-        else if (!spanClassInfos.IsDefaultOrEmpty)
-        {
-          var bilder = ImmutableArray.CreateBuilder<SpanClassInfo>(_spanClassInfos.Length + spanClassInfos.Length);
-          bilder.AddRange(_spanClassInfos);
-          bilder.AddRange(spanClassInfos);
-          _spanClassInfos = bilder.MoveToImmutable();
-        }
-      }
-      else if ((findSymbolReferences = msg as AsyncServerMessage.FindSymbolReferences) != null)
-      {
-        // передать всем вьюхам отображаемым на экране
+        case AsyncServerMessage.LanguageLoaded languageInfo:
+          var spanClassInfos = languageInfo.spanClassInfos;
+          if (_spanClassInfos.IsDefaultOrEmpty)
+            _spanClassInfos = spanClassInfos;
+          else if (!spanClassInfos.IsDefaultOrEmpty)
+          {
+            var bilder = ImmutableArray.CreateBuilder<SpanClassInfo>(_spanClassInfos.Length + spanClassInfos.Length);
+            bilder.AddRange(_spanClassInfos);
+            bilder.AddRange(spanClassInfos);
+            _spanClassInfos = bilder.MoveToImmutable();
+          }
+          break;
 
-        foreach (var fileModel in _fileModels)
-          foreach (var textViewModel in fileModel.TextViewModels)
-            textViewModel.Update(findSymbolReferences);
+        case AsyncServerMessage.FindSymbolReferences findSymbolReferences:
+          // передать всем вьюхам отображаемым на экране
+
+          foreach (var fileModel in _fileModels)
+            foreach (var textViewModel in fileModel.TextViewModels)
+              textViewModel.Update(findSymbolReferences);
+          break;
+
+        case AsyncServerMessage.FoundDeclarations found:
+          if (_callback == null)
+            break;
+
+          MatchKind calcKibd(DeclarationInfo decl)
+          {
+            var spans = decl.NameMatchRuns;
+            switch (spans.Length)
+            {
+              case 0: return MatchKind.None;
+              case 1:
+                var name = decl.Name;
+                var span = decl.NameMatchRuns[0];
+                if (span.StartPos == 0)
+                  return span.Length == name.Length ? MatchKind.Exact : MatchKind.Prefix;
+                return MatchKind.Substring;
+              default:
+                return MatchKind.Regular;
+            }
+          }
+
+          foreach (var decl in found.declarations)
+          {
+            // So far we can use the following kinds "OtherSymbol", "NitraSymbol"
+            // TODO: Allows add user spetified kinds
+            var loc = decl.Location;
+            var fileId = loc.File.FileId;
+            var path = fileId == FileId.Invalid ? "<no file>" : Client.StringManager.GetPath(fileId);
+            var ext  = fileId == FileId.Invalid ? "" : Path.GetExtension(path);
+            var lang = _config.Languages.Where(x => x.Extensions.Contains(ext)).Select(x => x.Name).SingleOrDefault() ?? "<Unknown Nitra language>";
+            _callback.AddItem(new NavigateToItem(decl.Name, "NitraSymbol", lang, decl.FullName, decl, calcKibd(decl), false, _nitraNavigateToItemProvider.Factory));
+          }
+
+          break;
       }
     }
 
@@ -236,6 +286,21 @@ namespace Nitra.VisualStudio
     public bool IsSupportedExtension(string ext)
     {
       return Extensions.Contains(ext);
+    }
+
+    internal void StartSearch(NitraNavigateToItemProvider nitraNavigateToItemProvider, INavigateToCallback callback, string pattern, bool hideExternalItems, bool searchCurrentDocument, ISet<string> kinds)
+    {
+      _callback                     = callback;
+      _nitraNavigateToItemProvider  = nitraNavigateToItemProvider;
+      // TODO: find curent ProjectId for active file
+      // TODO: Add support for 'searchCurrentDocument'
+      Client.Send(new ClientMessage.FindDeclarations(pattern, ProjectId.Invalid, hideExternalItems, kinds.ToImmutableArray()));
+    }
+
+    internal void StopSearch()
+    {
+      _callback = null;
+      _nitraNavigateToItemProvider = null;
     }
 
     public void Dispose()

@@ -1,80 +1,66 @@
-
 using System;
+using System.Collections.Immutable;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Drawing;
 using Microsoft.VisualStudio.Language.NavigateTo.Interfaces;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Shell;
 using System.Collections.Generic;
 using Microsoft.VisualStudio.Language.Intellisense;
-using System.ComponentModel.Composition;
-using Microsoft.VisualStudio.Utilities;
 using Microsoft.VisualStudio.Imaging;
+using Microsoft.VisualStudio.Imaging.Interop;
+using Microsoft.VisualStudio.Text;
+using Nitra.ClientServer.Messages;
+using System.IO;
 
 namespace Nitra.VisualStudio.NavigateTo
 {
-  internal class NavigateToSymbolFilters
+  class NitraNavigateToItemDisplay : INavigateToItemDisplay3
   {
-    [Name("Navigate To Nitra Symbol"), Order(After = "Navigate To Class"), Export(typeof(FilterShortcutDefinition))]
-    public sealed class NitraSymbolFilterShortcut : FilterShortcutDefinition
+    readonly IGlyphService    _glyphService;
+    readonly NavigateToItem   _item;
+    readonly IServiceProvider _serviceProvider;
+    readonly ServerModel      _serverModel;
+
+    public NitraNavigateToItemDisplay(IServiceProvider serviceProvider, IGlyphService glyphService, NavigateToItem item, ServerModel serverModel)
     {
-      public NitraSymbolFilterShortcut()
-      {
-        base.ActivationSequence = "n";
-        base.IsDelimiterRequired = true;
-        base.Description = "desc";
-        base.Button = new ButtonDefinition(KnownMonikers.IntellisenseKeyword, "desc", null);
-      }
+      _serviceProvider  = serviceProvider;
+      _glyphService     = glyphService;
+      _item             = item;
+      _serverModel      = serverModel;
     }
 
-    [Filter("Navigate To All Nitra Symbol"), FilterShortcut("Navigate To Nitra Symbol"), Export]
-    internal FilterToShortcutDefinition nitraSymbolFilterMapping;
-  }
+    public DeclarationInfo  Declaration           => (DeclarationInfo)_item.Tag;
+    public string           AdditionalInformation => Declaration.FullName + " [" + FileName + LineCol + "]";
 
-  [Name("Navigate To Nitra Symbol"), Order(After = "Navigate To Class"), Export(typeof(FilterDefinition))]
-  internal sealed class NavigateToNitraSymbolFilter : KindFilterDefinition
-  {
-    public NavigateToNitraSymbolFilter()
-    {
-      base.Kind = "NitraSymbol";
-      //base.Button = new ButtonDefinition(KnownMonikers.IntellisenseKeyword, "desc", null);
-    }
-  }
-
-  class NitraNavigateToItemDisplay : INavigateToItemDisplay, INavigateToItemDisplay2
-  {
-    private IGlyphService _glyphService;
-    private NavigateToItem _item;
-    private IServiceProvider _serviceProvider;
-
-    public NitraNavigateToItemDisplay(IServiceProvider serviceProvider, IGlyphService glyphService, NavigateToItem item)
-    {
-      _serviceProvider = serviceProvider;
-      _glyphService = glyphService;
-      _item = item;
-    }
-
-    public string AdditionalInformation => "ssss";
-    public string Description => null;
+    private bool   FileValid   => Declaration.Location.File.FileId != FileId.Invalid;
+    private string FullName    => FileValid ? _serverModel.Client.StringManager.GetPath(Declaration.Location.File.FileId) : "<no file>";
+    private string FileName    => FileValid ? Path.GetFileName(FullName) : "<no file>";
+    private Range  Range       => Declaration.Location.Range;
+    private string LineCol     => "(" + Range.StartColumn + Range.StartColumn + ")";
+    public  string Description => null;
 
     public ReadOnlyCollection<DescriptionItem> DescriptionItems
     {
       get
       {
-        var category = new ReadOnlyCollection<DescriptionRun>(new[] { new DescriptionRun(_item.Name + " category", bold:true) });
+        var category = new ReadOnlyCollection<DescriptionRun>(new[] { new DescriptionRun(_item.Name + " category", bold: true) });
         var details  = new ReadOnlyCollection<DescriptionRun>(new[] { new DescriptionRun(_item.Name + " details", Color.DarkGoldenrod) });
-        var items    = new List<DescriptionItem>() { new DescriptionItem(category, details) };
+        var items    = new List<DescriptionItem>()                  { new DescriptionItem(category, details) };
         return items.AsReadOnly();
       }
     }
 
     public Icon Glyph => null;
     public string Name => _item.Name;
+
     public int GetProvisionalViewingStatus()
     {
-      //VsShellUtilities.GetProvisionalViewingStatus()
       return (int)__VSPROVISIONALVIEWINGSTATUS.PVS_Enabled;
     }
+
+    // INavigateToItemDisplay2
 
     public void NavigateTo()
     {
@@ -82,6 +68,22 @@ namespace Nitra.VisualStudio.NavigateTo
 
     public void PreviewItem()
     {
+    }
+
+    // INavigateToItemDisplay3
+
+    public ImageMoniker GlyphMoniker => ImageLibrary.InvalidImageMoniker;
+
+    public IReadOnlyList<Span> GetAdditionalInformationMatchRuns(string searchValue)
+    {
+      return new List<Span>();
+    }
+
+    public IReadOnlyList<Span> GetNameMatchRuns(string searchValue)
+    {
+      var decl = (DeclarationInfo)_item.Tag;
+      var spans = decl.NameMatchRuns.Select(r => new Span(r.StartPos, r.Length)).ToArray();
+      return spans;
     }
   }
 }

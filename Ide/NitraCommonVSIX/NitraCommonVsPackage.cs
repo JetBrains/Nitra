@@ -63,12 +63,14 @@ namespace Nitra.VisualStudio
     RunningDocTableEvents                       _runningDocTableEventse;
     Dictionary<IVsHierarchy, HierarchyListener> _listenersMap = new Dictionary<IVsHierarchy, HierarchyListener>();
     List<EnvDTE.Project>                        _projects = new List<EnvDTE.Project>();
-    List<ServerModel>                                _servers = new List<ServerModel>();
+    List<ServerModel>                           _servers = new List<ServerModel>();
     StringManager                               _stringManager = new StringManager();
     uint                                        _objectManagerCookie;
     Library                                     _library;
     SolutionLoadingSate                         _backgroundLoading;
     SolutionId                                  _currentSolutionId = InvalidSolutionId;
+
+    internal List<ServerModel> Servers { get => _servers; }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="NitraCommonVsPackage"/> class.

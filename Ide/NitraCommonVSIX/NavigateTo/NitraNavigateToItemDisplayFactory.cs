@@ -9,18 +9,20 @@ namespace Nitra.VisualStudio.NavigateTo
   [Export(typeof(INavigateToItemDisplayFactory))]
   class NitraNavigateToItemDisplayFactory : INavigateToItemDisplayFactory
   {
-    private IGlyphService _glyphService;
-    private IServiceProvider _serviceProvider;
+    readonly IGlyphService    _glyphService;
+    readonly IServiceProvider _serviceProvider;
+    readonly ServerModel      _serverModel;
 
-    public NitraNavigateToItemDisplayFactory(IServiceProvider serviceProvider, IGlyphService glyphService)
+    public NitraNavigateToItemDisplayFactory(IServiceProvider serviceProvider, IGlyphService glyphService, ServerModel serverModel)
     {
       _serviceProvider = serviceProvider;
-      _glyphService = glyphService;
+      _glyphService    = glyphService;
+      _serverModel     = serverModel;
     }
 
     public INavigateToItemDisplay CreateItemDisplay(NavigateToItem item)
     {
-      return new NitraNavigateToItemDisplay(_serviceProvider, _glyphService, item);
+      return new NitraNavigateToItemDisplay(_serviceProvider, _glyphService, item, _serverModel);
     }
   }
 }
