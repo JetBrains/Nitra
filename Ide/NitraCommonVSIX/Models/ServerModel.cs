@@ -64,6 +64,20 @@ namespace Nitra.VisualStudio
 
     public ImmutableArray<SpanClassInfo> SpanClassInfos { get { return _spanClassInfos; } }
 
+    public SpanClassInfo? GetSpanClassOpt(int id)
+    {
+      if (_spanClassInfos.IsDefaultOrEmpty)
+        return null;
+
+      foreach (var spanClassInfo in _spanClassInfos)
+      {
+        if (spanClassInfo.Id == id)
+          return spanClassInfo;
+      }
+
+      return null;
+    }
+
     private static M.Config ConvertConfig(Ide.Config config)
     {
       var ps = config.ProjectSupport;
@@ -254,7 +268,7 @@ namespace Nitra.VisualStudio
             var path = fileId == FileId.Invalid ? "<no file>" : Client.StringManager.GetPath(fileId);
             var ext  = fileId == FileId.Invalid ? "" : Path.GetExtension(path);
             var lang = _config.Languages.Where(x => x.Extensions.Contains(ext)).Select(x => x.Name).SingleOrDefault() ?? "<Unknown Nitra language>";
-            _callback.AddItem(new NavigateToItem(decl.Name, "NitraSymbol", lang, decl.FullName, decl, calcKibd(decl), false, _nitraNavigateToItemProvider.Factory));
+            _callback.AddItem(new NavigateToItem(decl.Name, "NitraSymbol", lang, decl.FullName, decl, calcKibd(decl), false, _nitraNavigateToItemProvider.GetFactory(this)));
           }
 
           break;

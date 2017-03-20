@@ -32,24 +32,63 @@ namespace Nitra.VisualStudio.NavigateTo
     }
 
     public DeclarationInfo  Declaration           => (DeclarationInfo)_item.Tag;
-    public string           AdditionalInformation => Declaration.FullName + " [" + FileName + LineCol + "]";
+    public string           AdditionalInformation => Declaration.Kind + " " + Declaration.FullName + " – " + FileName + LineCol;
 
     private bool   FileValid   => Declaration.Location.File.FileId != FileId.Invalid;
     private string FullName    => FileValid ? _serverModel.Client.StringManager.GetPath(Declaration.Location.File.FileId) : "<no file>";
     private string FileName    => FileValid ? Path.GetFileName(FullName) : "<no file>";
     private Range  Range       => Declaration.Location.Range;
-    private string LineCol     => "(" + Range.StartColumn + Range.StartColumn + ")";
+    private string LineCol     => "(" + Range.StartLine + "," + Range.StartColumn + ")";
     public  string Description => null;
 
     public ReadOnlyCollection<DescriptionItem> DescriptionItems
     {
       get
       {
-        var category = new ReadOnlyCollection<DescriptionRun>(new[] { new DescriptionRun(_item.Name + " category", bold: true) });
-        var details  = new ReadOnlyCollection<DescriptionRun>(new[] { new DescriptionRun(_item.Name + " details", Color.DarkGoldenrod) });
-        var items    = new List<DescriptionItem>()                  { new DescriptionItem(category, details) };
+        DescriptionItem Make(string category, params DescriptionRun[] details)
+        {
+          return new DescriptionItem(
+            new ReadOnlyCollection<DescriptionRun>(new[] { new DescriptionRun(category, true) }),
+            new ReadOnlyCollection<DescriptionRun>(details));
+        }
+
+        var items = new List<DescriptionItem>()
+        {
+          Make("Name:",      MakeNameDescriptionRuns()),
+          Make("File:",      new DescriptionRun(FullName)),
+          Make("Line:",      new DescriptionRun(Range.StartLine.ToString())),
+          Make("Kind:",      new DescriptionRun(Declaration.Kind, Color.Blue)),
+          Make("Full name:", new DescriptionRun(Declaration.FullName)),
+        };
         return items.AsReadOnly();
       }
+    }
+
+    DescriptionRun[] MakeNameDescriptionRuns()
+    {
+      var spanClassOpt = _serverModel.GetSpanClassOpt(Declaration.SpanClassId);
+      var color = spanClassOpt.HasValue ? spanClassOpt.Value.ToDColor() : Color.Black;
+
+      var name = Declaration.Name;
+      var nameParts = new List<DescriptionRun>();
+      void t(int start, int len) => nameParts.Add(new DescriptionRun(name.Substring(start, len), color, false, false, false));
+      void b(int start, int len) => nameParts.Add(new DescriptionRun(name.Substring(start, len), color, true,  false, false));
+
+      var prev = 0;
+      foreach (var r in Declaration.NameMatchRuns)
+      {
+        if (r.StartPos > prev)
+          t(prev, r.StartPos - prev);
+
+        b(r.StartPos, r.Length);
+
+        prev = r.EndPos;
+      }
+
+      if (name.Length > prev)
+        t(prev, name.Length - prev);
+
+      return nameParts.ToArray();
     }
 
     public Icon Glyph => null;
@@ -64,10 +103,12 @@ namespace Nitra.VisualStudio.NavigateTo
 
     public void NavigateTo()
     {
+      VsUtils.NavigateTo(_serviceProvider, FullName, Range.Span);
     }
 
     public void PreviewItem()
     {
+      VsUtils.NavigateTo(_serviceProvider, FullName, Range.Span);
     }
 
     // INavigateToItemDisplay3

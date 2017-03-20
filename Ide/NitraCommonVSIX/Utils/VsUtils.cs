@@ -257,6 +257,59 @@ namespace Nitra.VisualStudio
       return new FileVersion(version.VersionNumber - 1);
     }
 
+    public static EnvDTE.Project GetProject(this IVsHierarchy hierarchy)
+    {
+      var itemid = VSConstants.VSITEMID_ROOT;
+
+      var project = hierarchy.GetProp(itemid, __VSHPROPID.VSHPROPID_ExtObject) as EnvDTE.Project;
+      return project;
+    }
+
+    internal static void NavigateTo(IServiceProvider serviceProvider, string filename, int pos)
+    {
+      IVsTextView viewAdapter;
+      IVsWindowFrame pWindowFrame;
+      OpenDocument(serviceProvider, filename, out viewAdapter, out pWindowFrame);
+      if (pWindowFrame == null || viewAdapter == null)
+        return;
+      ErrorHandler.ThrowOnFailure(pWindowFrame.Show());
+
+      var wpfTextView = viewAdapter.ToIWpfTextView();
+      var textViewModel = wpfTextView.TryGetTextViewModel();
+      if (textViewModel == null)
+        return;
+
+      var snapshot = wpfTextView.TextSnapshot;
+
+      if (pos >= snapshot.Length)
+        return;
+
+      textViewModel.NavigateTo(wpfTextView.TextSnapshot, pos);
+    }
+
+    internal static void NavigateTo(IServiceProvider serviceProvider, string filename, NSpan span)
+    {
+      IVsTextView viewAdapter;
+      IVsWindowFrame pWindowFrame;
+      OpenDocument(serviceProvider, filename, out viewAdapter, out pWindowFrame);
+      if (pWindowFrame == null || viewAdapter == null)
+        return;
+      ErrorHandler.ThrowOnFailure(pWindowFrame.Show());
+
+      var wpfTextView = viewAdapter.ToIWpfTextView();
+      var textViewModel = wpfTextView.TryGetTextViewModel();
+      if (textViewModel == null)
+        return;
+
+      var snapshot = wpfTextView.TextSnapshot;
+
+      if (span.EndPos >= snapshot.Length)
+        return;
+
+      textViewModel.NavigateTo(wpfTextView.TextSnapshot, span.StartPos);
+      wpfTextView.Selection.Select(new SnapshotSpan(snapshot, new Span(span.StartPos, span.Length)), false);
+    }
+
     public static bool Navigate(this IServiceProvider serviceProvider, string path, int line, int column)
     {
       Guid logicalView = VSConstants.LOGVIEWID_TextView;
@@ -305,36 +358,6 @@ namespace Nitra.VisualStudio
         line--;
 
       return ErrorHelper.Succeeded(vsTextManager.NavigateToLineAndColumn(vsTextBuffer, ref logicalView, line, column, line, column));
-    }
-
-    public static EnvDTE.Project GetProject(this IVsHierarchy hierarchy)
-    {
-      var itemid = VSConstants.VSITEMID_ROOT;
-
-      var project = hierarchy.GetProp(itemid, __VSHPROPID.VSHPROPID_ExtObject) as EnvDTE.Project;
-      return project;
-    }
-
-    internal static void NavigateTo(IServiceProvider serviceProvider, string filename, int pos)
-    {
-      IVsTextView viewAdapter;
-      IVsWindowFrame pWindowFrame;
-      OpenDocument(serviceProvider, filename, out viewAdapter, out pWindowFrame);
-      if (pWindowFrame == null || viewAdapter == null)
-        return;
-      ErrorHandler.ThrowOnFailure(pWindowFrame.Show());
-
-      var wpfTextView = viewAdapter.ToIWpfTextView();
-      var textViewModel = wpfTextView.TryGetTextViewModel();
-      if (textViewModel == null)
-        return;
-
-      var snapshot = wpfTextView.TextSnapshot;
-
-      if (pos >= snapshot.Length)
-        return;
-
-      textViewModel.NavigateTo(wpfTextView.TextSnapshot, pos);
     }
 
     internal static void NavigateTo(IServiceProvider serviceProvider, string filename, int line, int col)
@@ -442,5 +465,12 @@ namespace Nitra.VisualStudio
     {
       return wpfTextView.VisualElement.PointToScreen(new Point(x - wpfTextView.ViewportLeft, y - wpfTextView.ViewportTop));
     }
+
+    public static D.Color ToDColor(this int colorValue)
+    {
+      var bytes = BitConverter.GetBytes(colorValue);
+      return D.Color.FromArgb(bytes[3], bytes[2], bytes[1], bytes[0]);
+    }
+    public static D.Color ToDColor(this SpanClassInfo spanClass) => ToDColor(spanClass.ForegroundColor);
   }
 }

@@ -15,7 +15,9 @@ namespace Nitra.VisualStudio.NavigateTo
         base.ActivationSequence = "n";
         base.IsDelimiterRequired = true;
         base.Description = "desc";
-        base.Button = new ButtonDefinition(KnownMonikers.IntellisenseKeyword, "desc", null);
+        base.IsExclusive = true;
+        base.ShouldSearchImmediately = true;
+        base.Button = new ButtonDefinition(KnownMonikers.IntellisenseKeyword, "Nitra Symbols", null);
       }
     }
 

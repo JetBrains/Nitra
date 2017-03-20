@@ -38,7 +38,8 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     public  IsDisposed                               : bool                         { get; private set; }
     public  IsSemanticAvailable                      : bool                         { get; private set; }
     public  ParseQueue                               : BlockingCollection[ParserMessage];
-            _semanticAnalysisCancellationTokenSource : CancellationTokenSource { get; private set; }
+    mutable _semanticAnalysisCancellationTokenSource : CancellationTokenSource;
+    mutable _findDeclarationsCancellationTokenSource : CancellationTokenSource;
     public  Router                                   : Router { get; }
     mutable _expectsToBuildAst                       : int;
     public  SemanticActions                          : ConcurrentQueue[Action[CancellationToken, SolutionId, ImmutableArray[IAst * bool]]] = ConcurrentQueue();
@@ -154,13 +155,12 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     
     public CancelSemanticAnalysisCancellation() : void
     {
-      def cts = _semanticAnalysisCancellationTokenSource;
-      when (cts == null)
-        return;
-
-      _semanticAnalysisCancellationTokenSource = null;
-      cts.Cancel();
-      cts.Dispose();
+      ServerUtils.CancelCancellation(ref _semanticAnalysisCancellationTokenSource);
+    }
+    
+    public CancelFindDeclarationsCancellation() : void
+    {
+      ServerUtils.CancelCancellation(ref _findDeclarationsCancellationTokenSource);
     }
     
     public AstCreated(file : File) : void
@@ -432,12 +432,21 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     
     public FindDeclarations(pattern : string, kinds : ImmutableArray[string]) : void
     {
+      CancelFindDeclarationsCancellation();
+      def cancellationTokenSource              = CancellationTokenSource();
+      def findDeclarationsCancellationToken    = cancellationTokenSource.Token;
+      _findDeclarationsCancellationTokenSource = cancellationTokenSource;
+      
       def action(cancellationToken : CancellationToken, _solutionId : SolutionId, mutable _asts : ImmutableArray[IAst * bool]) : void
       {
+        def isCancellationRequested() : bool { findDeclarationsCancellationToken.IsCancellationRequested || cancellationToken.IsCancellationRequested }
+        when (isCancellationRequested())
+          return;
+
         def projectSupport = _projectSupport ?? this.GetProjectSupport();
         when (projectSupport != null)
         {
-          ServerUtils.Log($"FindDeclarations('$pattern', [..$kinds]) ProjectId=$(this.Id)");
+          //ServerUtils.Log($"FindDeclarations('$pattern', [..$kinds]) ProjectId=$(this.Id)");
           
           def timer = Stopwatch.StartNew();
           def infos = List();
@@ -448,7 +457,7 @@ namespace Nitra.ClientServer.Server.ProjectSystem
             def result = infos.ToImmutableArray();
             def msg = AsyncServerMessage.FoundDeclarations(FileId.Invalid, FileVersion.Invalid, _solutionId, this.Id, result);
             Router.SendAsyncResponse(msg);
-            ServerUtils.Log($"Sending $(infos.Count) DeclarationInfo-s.");
+            //ServerUtils.Log($"Sending $(infos.Count) DeclarationInfo-s.");
             infos.Clear();
           }
           def callbac(symbol : DeclarationSymbol) : bool
@@ -463,18 +472,16 @@ namespace Nitra.ClientServer.Server.ProjectSystem
               def spanClassId = Router.SpanClassesManager[symbol.SpanClass];
               foreach (decl in symbol.GetDeclarationsUntyped() with i)
               {
-                when (i > 20)
-                  break;
-  
                 def name2 = decl.Name.Text;
                 def spans = StringPatternMatching.MatchPatternSpans(name2, pattern);
                 def loc = ServerUtils.ConvertLocation(decl.Name.Location, withText=false);
-                def info = DeclarationInfo(symbol.Id, name2, spans, fullName, spanClassId, loc);
+                def kind = if (symbol.IsKindEvaluated) symbol.Kind else "<unknown>";
+                def info = DeclarationInfo(symbol.Id, name2, spans, fullName, kind, spanClassId, loc);
                 infos.Add(info);
-                def dbg =spans.Select(r => (name2.Substring(r.StartPos, r.Length), r));
-                ServerUtils.Log($"Match: '$name2' [..$dbg]");
                 when (timer.ElapsedMilliseconds > 10)
                 {
+                  when (isCancellationRequested())
+                    return true;
                   send();
                   timer.Restart();
                 }
@@ -485,12 +492,12 @@ namespace Nitra.ClientServer.Server.ProjectSystem
           }
           projectSupport.VisitGlobalSymbols(this.Data, callbac);
           send();
-          ServerUtils.Log("Finish FindDeclarations");
+          //ServerUtils.Log("Finish FindDeclarations");
         }
       }
       AddSemanticAction(action);
-   }
-    
+    }
+
     public Dispose() : void
     {
       when (IsDisposed)
@@ -503,16 +510,10 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       }
       
       _files.Clear();
-      
-      def cts = _semanticAnalysisCancellationTokenSource;
-      when (cts != null)
-      {
-        _semanticAnalysisCancellationTokenSource = null;
-        unless (cts.IsCancellationRequested)
-          cts.Cancel();
-        cts.Dispose();
-      }
-      
+
+      ServerUtils.DisposeCancellationTokenSource(ref _semanticAnalysisCancellationTokenSource);
+      ServerUtils.DisposeCancellationTokenSource(ref _findDeclarationsCancellationTokenSource);
+
       IsDisposed = true;
     }
 
