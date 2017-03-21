@@ -125,6 +125,7 @@ namespace Nitra.Visualizer
 
       _textEditor.TextArea.TextView.BackgroundRenderers.Add(_textMarkerService);
       _textEditor.TextArea.TextView.LineTransformers.Add(_textMarkerService);
+      _textEditor.TextArea.Caret.PositionChanged += Caret_PositionChanged;
       _textEditor.Options.ConvertTabsToSpaces = true;
       _textEditor.Options.EnableRectangularSelection = true;
       _textEditor.Options.IndentationSize = 2;
@@ -140,6 +141,11 @@ namespace Nitra.Visualizer
       _textEditor.Document.Changed += Document_Changed;
       _textEditor.Document.UpdateStarted += DocumentOnUpdateStarted;
       _textEditor.Document.UpdateFinished += DocumentOnUpdateFinished;
+    }
+
+    private void Caret_PositionChanged(object sender, EventArgs e)
+    {
+      ViewModel.Settings.CaretOffset = _textEditor.CaretOffset;
     }
 
     private void DocumentOnUpdateFinished(object sender, EventArgs eventArgs)
@@ -170,8 +176,10 @@ namespace Nitra.Visualizer
 
     protected override void OnSourceInitialized(EventArgs e)
     {
+      var caretOffset = ViewModel.Settings.CaretOffset; // _textEditor.CaretOffset changed in SetPlacement(). Cache it.
       base.OnSourceInitialized(e);
       this.SetPlacement(ViewModel.Settings.MainWindowPlacement);
+      _textEditor.CaretOffset = caretOffset;
     }
 
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
@@ -665,6 +673,7 @@ namespace Nitra.Visualizer
         {
           if (solution.FullPath == fullPath)
           {
+            suite.IsExpanded    = true;
             solution.IsSelected = true;
             break;
           }
@@ -673,6 +682,8 @@ namespace Nitra.Visualizer
           {
             if (project.FullPath == fullPath)
             {
+              suite.IsExpanded = true;
+              solution.IsExpanded = true;
               project.IsSelected = true;
               break;
             }
@@ -680,7 +691,10 @@ namespace Nitra.Visualizer
             {
               if (test.FullPath == fullPath)
               {
-                test.IsSelected = true;
+                suite.IsExpanded    = true;
+                solution.IsExpanded = true;
+                project.IsExpanded  = true;
+                test.IsSelected     = true;
                 break;
               }
             }
