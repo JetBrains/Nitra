@@ -1025,90 +1025,80 @@ namespace Nitra.Visualizer
 
     void Response(AsyncServerMessage msg)
     {
-      AsyncServerMessage.OutliningCreated outlining;
-      AsyncServerMessage.KeywordsHighlightingCreated keywordHighlighting;
-      AsyncServerMessage.LanguageLoaded languageInfo;
-      AsyncServerMessage.SymbolsHighlightingCreated symbolsHighlighting;
-      AsyncServerMessage.ParsingMessages parsingMessages = null;
-      AsyncServerMessage.SemanticAnalysisMessages typingMessages = null;
-      AsyncServerMessage.PrettyPrintCreated prettyPrintCreated;
-      AsyncServerMessage.ReflectionStructCreated reflectionStructCreated;
-      AsyncServerMessage.RefreshReferencesFailed refreshReferencesFailed;
-      AsyncServerMessage.RefreshProjectFailed refreshProjectFailed;
-      AsyncServerMessage.Exception exception;
-
       var solution = ViewModel.CurrentSolution;
       if (solution == null || msg.SolutionId >= 0 && msg.SolutionId != solution.Id)
         return; // no solution or message for the old solution
 
-      if ((parsingMessages = msg as AsyncServerMessage.ParsingMessages) != null)
+      switch (msg)
       {
-        FileVm file = ViewModel.CurrentSolution.GetFile(msg.FileId);
-        file.ParsingMessages = parsingMessages.messages;
+        case AsyncServerMessage.ParsingMessages parsingMessages:
+          {
+            FileVm file = ViewModel.CurrentSolution.GetFile(msg.FileId);
+            file.ParsingMessages = parsingMessages.messages;
+            TryReportError();
+          }
+          break;
+        case AsyncServerMessage.SemanticAnalysisMessages typingMessages:
+          {
+            FileVm file = ViewModel.CurrentSolution.GetFile(msg.FileId);
+            file.SemanticAnalysisMessages = typingMessages.messages;
+            TryReportError();
+          }
+          break;
+        case AsyncServerMessage.LanguageLoaded languageInfo:
+          UpdateHighlightingStyles(languageInfo);
+          break;
+        case AsyncServerMessage.SemanticAnalysisDone _1:
+          if (IsAstReflectionTabItemActive())
+          {
+            _fillAstTimer.Stop();
+            _fillAstTimer.Start();
+          }
+          break;
+        case AsyncServerMessage.RefreshReferencesFailed refreshReferencesFailed:
+          ViewModel.CurrentProject = null;
+          ViewModel.CurrentFile = null;
+          MessageBox.Show(this, "Project loading is failed in call RefreshReferences().\r\nException: "
+            + refreshReferencesFailed.exception);
+          break;
+        case AsyncServerMessage.RefreshProjectFailed refreshProjectFailed:
+          MessageBox.Show(this, "Project loading is failed in call RefreshProject().\r\nException: " + refreshProjectFailed.exception);
+          break;
+        case AsyncServerMessage.Exception exception:
+          MessageBox.Show(this, "Exception occurred on the server: " + exception.exception);
+          break;
       }
-      else if ((typingMessages = msg as AsyncServerMessage.SemanticAnalysisMessages) != null)
-      {
-        FileVm file = ViewModel.CurrentSolution.GetFile(msg.FileId);
-        file.SemanticAnalysisMessages = typingMessages.messages;
-      }
-      else if ((languageInfo = msg as AsyncServerMessage.LanguageLoaded) != null)
-        UpdateHighlightingStyles(languageInfo);
-      else if (msg is AsyncServerMessage.SemanticAnalysisDone)
-      {
-        if (IsAstReflectionTabItemActive())
-        {
-          _fillAstTimer.Stop();
-          _fillAstTimer.Start();
-        }
-      }
-      else if ((refreshReferencesFailed = msg as AsyncServerMessage.RefreshReferencesFailed) != null)
-      {
-        ViewModel.CurrentProject = null;
-        ViewModel.CurrentFile = null;
-        MessageBox.Show(this, "Project loading is failed in call RefreshReferences().\r\nException: "
-          + refreshReferencesFailed.exception);
-      }
-      else if ((refreshProjectFailed = msg as AsyncServerMessage.RefreshProjectFailed) != null)
-        MessageBox.Show(this, "Project loading is failed in call RefreshProject().\r\nException: " + refreshProjectFailed.exception);
-      else if ((exception = msg as AsyncServerMessage.Exception) != null)
-        MessageBox.Show(this, "Exception occurred on the server: " + exception.exception);
 
       if (ViewModel.CurrentFile == null || msg.FileId >= 0 && msg.FileId != ViewModel.CurrentFile.Id || msg.Version >= 0 && msg.Version != ViewModel.CurrentFile.Version)
         return;
 
-      if ((outlining = msg as AsyncServerMessage.OutliningCreated) != null)
+      switch (msg)
       {
-        _foldingStrategy.Outlining = outlining.outlining;
-        _foldingStrategy.UpdateFoldings(_foldingManager, _textEditor.Document);
-      }
-      else if ((keywordHighlighting = msg as AsyncServerMessage.KeywordsHighlightingCreated) != null)
-      {
-        UpdateKeywordSpanInfos(keywordHighlighting);
-      }
-      else if ((symbolsHighlighting = msg as AsyncServerMessage.SymbolsHighlightingCreated) != null)
-      {
-        UpdateSymbolsSpanInfos(symbolsHighlighting);
-      }
-      else if ((prettyPrintCreated = msg as AsyncServerMessage.PrettyPrintCreated) != null)
-      {
-        switch (prettyPrintCreated.type)
-        {
-          case PrettyPrintState.Text:
-            _prettyPrintTextBox.Text = prettyPrintCreated.text;
-            break;
-          case PrettyPrintState.Html:
-            prettyPrintViewer.NavigateToString(prettyPrintCreated.text);
-            break;
-        }
-      }
-      else if ((reflectionStructCreated = msg as AsyncServerMessage.ReflectionStructCreated) != null)
-      {
-        _reflectionTreeView.ItemsSource = new[] { reflectionStructCreated.root };
-        ShowParseTreeNodeForCaret(enforce: true);
-      }
-      else if (parsingMessages != null || typingMessages != null)
-      {
-        TryReportError();
+        case AsyncServerMessage.OutliningCreated outlining:
+          _foldingStrategy.Outlining = outlining.outlining;
+          _foldingStrategy.UpdateFoldings(_foldingManager, _textEditor.Document);
+          break;
+        case AsyncServerMessage.KeywordsHighlightingCreated keywordHighlighting:
+          UpdateKeywordSpanInfos(keywordHighlighting);
+          break;
+        case AsyncServerMessage.SymbolsHighlightingCreated symbolsHighlighting:
+          UpdateSymbolsSpanInfos(symbolsHighlighting);
+          break;
+        case AsyncServerMessage.PrettyPrintCreated prettyPrintCreated:
+          switch (prettyPrintCreated.type)
+          {
+            case PrettyPrintState.Text:
+              _prettyPrintTextBox.Text = prettyPrintCreated.text;
+              break;
+            case PrettyPrintState.Html:
+              prettyPrintViewer.NavigateToString(prettyPrintCreated.text);
+              break;
+          }
+          break;
+        case AsyncServerMessage.ReflectionStructCreated reflectionStructCreated:
+          _reflectionTreeView.ItemsSource = new[] { reflectionStructCreated.root };
+          ShowParseTreeNodeForCaret(enforce: true);
+          break;
       }
     }
 
@@ -1834,6 +1824,25 @@ namespace Nitra.Visualizer
     private void OnAstItemCopy(object sender, RoutedEventArgs e)
     {
       CopyTreeNodeToClipboard(_astTreeView.SelectedItem);
+    }
+
+    private void ShowGraph_Click(object sender, RoutedEventArgs e)
+    {
+      var file = ViewModel.CurrentFile;
+
+      if (file == null)
+        return;
+
+      var solution = file.Project.Solution;
+      var suite    = solution.Suite;
+
+      var node = _astTreeView.SelectedItem as AstNodeViewModel;
+
+      if (node == null)
+        return;
+
+      NitraClient client = suite.Client;
+      client.Send(new ClientMessage.GetObjectGraph(solution.Id, file.Id, file.Version, node.ObjectId));
     }
   }
 }
