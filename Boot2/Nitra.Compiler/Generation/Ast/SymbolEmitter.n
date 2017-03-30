@@ -83,10 +83,21 @@ namespace Nitra.Compiler
               when (propertySymbol.PropertyContainer == _symbol)
                 DefineInterfaceDependentProperty(propertySymbol, _tb, propertySymbol.OverrideProperty.HasValue);
 
+            | TablePropertySymbol as propertySymbol =>
+              when (propertySymbol.PropertyContainer == _symbol)
+              {
+                Util.locate(propertySymbol.FirstLocation.NLocation(),
+                {
+                  _tb.Define(<[decl: $(propertySymbol.Name : usesite) : $(TypeCompiler.Compile(propertySymbol.Type)) { get; }]>);
+                });
+              }
+
             | _ => assert(false)
           }
 
         | ParsedSimpleSymbolSymbol =>
+          def getTableBody = SCG.List();
+
           foreach (s in _symbol.AllProperties)
           {
             | DependentPropertySymbol as propertySymbol =>
@@ -97,8 +108,39 @@ namespace Nitra.Compiler
 
               DefineDependentProperty(_tb, propertySymbol, bit, mask, NemerleModifiers.Public | NemerleModifiers.Virtual, acceptVisitorBody = null);
 
+            | TablePropertySymbol as propertySymbol =>
+              def backingFieldName = Util.tmpname(propertySymbol.Name);
+              def propertyType = TypeCompiler.Compile(propertySymbol.Type);
+              Util.locate(propertySymbol.FirstLocation.NLocation(),
+              {
+                _tb.Define(<[decl: private mutable $(backingFieldName : usesite) : $propertyType ]>);
+                _tb.Define(<[decl:
+                  public $(propertySymbol.Name : usesite) : $propertyType
+                  {
+                    get
+                    {
+                      when ($(backingFieldName : usesite) == null)
+                      {
+                        $(backingFieldName : usesite) = $propertyType(this, $(propertySymbol.Name));
+                      }
+                      $(backingFieldName : usesite)
+                    }
+                  }
+                ]>);
+              });
+              getTableBody.Add(<[ case: | $(propertySymbol.Name) => VSome($(propertySymbol.Name : usesite)) ]>);
+
             | _ => assert(false)
           }
+
+          getTableBody.Add(<[ case: | _ => VNone() ]>);
+
+          _tb.Define(<[ decl:
+            public override GetTable(tableName : string) : ValueOption[Nitra.Declarations.TableScope]
+            {
+              match (tableName) { ..$getTableBody }
+            }
+          ]>);
 
         | _ => assert(false)
       }
@@ -124,12 +166,7 @@ namespace Nitra.Compiler
           {
             Util.locate(identifier.NLocation(),
             {
-              def method = 
-                match (Environment.SymbolBaseTypeInfo.LookupMember(identifier.Value))
-                {
-                  | [IMethod as method] => method
-                  | x => throw Exception($"Expected method but found $x $(x?.GetType()?.FullName)");
-                };
+              def [IMethod as method] = Environment.SymbolBaseTypeInfo.LookupMember(identifier.Value);
               def parms = method.GetParameters().Map(p => <[ parameter: $(p.Name : global) : $(p.Type : typed) ]>);
               _tb.Define(<[ decl: public override $(identifier.Value : usesite)(..$parms) : $(method.ReturnType : typed) { IgnoreParams(); $expr } ]>);
             });
