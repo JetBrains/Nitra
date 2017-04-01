@@ -120,11 +120,14 @@ namespace Nitra.VisualStudio.Highlighting
         var index = spanInfos.BinarySearch(processedSpanInfo, SpanInfo.Comparer);
         if (index < 0)
           index = ~index;
-
+        var oldSpan = default(NSpan);
         for (int k = index; k < spanInfos.Length; k++)
         {
           var spanInfo = spanInfos[k];
           var span     = spanInfo.Span;
+          if (oldSpan == span)
+            continue;
+          oldSpan = span;
           var newSpan  = new SnapshotSpan(snapshot, new Span(span.StartPos, span.Length))
                               .TranslateTo(currentSnapshot, SpanTrackingMode.EdgeExclusive);
 
