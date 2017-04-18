@@ -1,7 +1,10 @@
-﻿using System.Xml;
+﻿using System.Security.Cryptography;
+using System.Text;
+using System.Xml;
 using Nemerle.Collections;
 using Nemerle.Text;
 using Nemerle.Utility;
+using Nemerle.Imperative;
 
 using Nitra;
 using System;
@@ -10,6 +13,16 @@ using System.Console;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+
+[Record]
+struct LogRecord
+{
+  public Name   : string;
+  public Size   : int;
+  public Hash   : string;
+  public Status : string;
+  public Time   : double;
+}
 
 module Program
 {
@@ -25,14 +38,22 @@ module Program
 
   CompareLogs(name1 : string, name2 : string) : void
   {
-    def times1 = ReadLog(name1);
-    def times2 = ReadLog(name2);
-    assert(times1.Count == times2.Count);
+    def records1 = ReadLog(name1);
+    def records2 = ReadLog(name2);
+    assert(records1.Count == records2.Count);
     def rel = List();
-    for (mutable i = 0; i < times1.Count; ++i)
+    for (mutable i = 0; i < records1.Count; ++i)
     {
-      def t1 = times1[i];
-      def t2 = times2[i];
+      def r1 = records1[i];
+      def r2 = records2[i];
+      assert(r1.Name == r2.Name);
+      assert(r1.Size == r2.Size);
+      when (r1.Hash != r2.Hash)
+      {
+        Error.WriteLine($"$(r1.Hash) $(r2.Hash) $(r1.Status) $(r2.Status) $(r1.Name)");
+      }
+      def t1 = r1.Time;
+      def t2 = r2.Time;
       rel.Add(if (t1 < t2) t2 / t1 - 1 else 1 - t1 / t2);
     }
     rel.Sort();
@@ -58,28 +79,33 @@ module Program
       WriteLine($"diviation = $(avgRange((rel.Count / 10) * i, (rel.Count / 10) * (i + 1)))");
   }
 
-  ReadLog(name : string) : List[double]
+  ReadLog(logName : string) : List[LogRecord]
   {
-    def times = List();
-    using (log = File.OpenText(name))
+    def records = List();
+    using (log = File.OpenText(logName))
     using (xmlLog = XmlReader.Create(log))
     {
       while (xmlLog.ReadToFollowing("file"))
       {
         _ = xmlLog.MoveToFirstAttribute();
+        mutable name   : string = "";
+        mutable size   : int    = 0;
+        mutable hash   : string = "";
+        mutable status : string = "";
+        mutable time   : double = 0;
         do
         {
-          when (xmlLog.Name == "time")
-          {
-            //WriteLine(xmlLog.Name);
-            //WriteLine(xmlLog.Value);
-            times.Add(double.Parse(xmlLog.Value));
-          }
+          when (xmlLog.Name == "name")   name   = xmlLog.Value;
+          when (xmlLog.Name == "size")   size   = int.Parse(xmlLog.Value);
+          when (xmlLog.Name == "hash")   hash   = xmlLog.Value;
+          when (xmlLog.Name == "status") status = xmlLog.Value;
+          when (xmlLog.Name == "time")   time   = double.Parse(xmlLog.Value);
         }
         while (xmlLog.MoveToNextAttribute());
+        records.Add(LogRecord(name, size, hash, status, time));
       }
     }
-    times
+    records
   }
 
   RunBenchmark(root : string) : void
@@ -134,12 +160,30 @@ module Program
             def time = Stopwatch.StartNew();
             def res = session.Parse(src);
             time.Stop();
-            (time.Elapsed, res.IsSuccess)
+            (time.Elapsed, res)
           }
-          def (time, isSuccess) = parse();
+          def (time, res) = parse();
+          {
+            try
+            {
+              def writer = StringPrettyPrintWriter();
+              res.CreateParseTree().PrettyPrint(writer, 0, null);
+              def hash = Nitra.Internal.DotUtils.Sha1(writer.ToString());
+              xmlLog.WriteAttribute("hash", hash);
+            }
+            catch
+            {
+              | ex =>
+                xmlLog.WriteAttribute("hash", $"Exception:$(ex.GetType())");
+                xmlLog.WriteAttribute("status", "fail");
+                xmlLog.WriteEndElement();
+                continue;
+            }
+          }
+
           def times = List();
           mutable minTime = time;
-          if (isSuccess)
+          if (res.IsSuccess)
           {
             xmlLog.WriteAttribute("status", "success");
             times.Add(time);
@@ -149,7 +193,7 @@ module Program
             }
             while (((timeRelLessThanCount(1.05) < 3 && timeRelLessThanCount(1.1) < 5) || times.Count < 5) && times.Count < 50)
             {
-              def (time, _isSuccess) = parse();
+              def (time, _res) = parse();
               times.Add(time);
               minTime = if (time.TotalSeconds < minTime.TotalSeconds) time else minTime;
             }
