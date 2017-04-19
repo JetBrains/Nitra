@@ -13,15 +13,325 @@ using Nemerle.Utility;
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
+
+#pragma warning disable 10003
 
 namespace Nitra.Declarations
 {
-  [Record]
-  public variant Ref[TSymbol] : IRef
+  public abstract class Ref[TSymbol] : IRef
     where TSymbol : DeclarationSymbol
   {
-    public          Location    : Location  { get; }
+            _result     : BindResult[TSymbol];
+            _symbols    : ImmutableArray[TSymbol];
+    mutable _resolvedTo : IRef;
+
+    public this(result : BindResult[TSymbol])
+    {
+      _result = result;
+
+      match (result)
+      {
+        | Nil => _symbols = ImmutableArray.Empty;
+        | _   => _symbols = result.Symbols;
+      }
+    }
+    
+    public          Result               : BindResult[TSymbol]     { get { _result } }
+    public          Symbols              : ImmutableArray[TSymbol] { get { _symbols } }
+    
+    public abstract Location             : Location                 { get; }
+    public virtual  IgnoreAmbiguities    : bool                     { get { false } }
+
+    [DependentProperty("IsResolvedToEvaluated")]
+    public          ResolvedTo            : IRef                    { get { _resolvedTo } }
+    public          IsResolvedToEvaluated : bool                    { get { _resolvedTo != null } }
+
+    public          Span                  : NSpan                   { get { Location.Span } }
+    public          IsUnresolved          : bool                    { get { _result.IsEmpty } }
+    public          IsAmbiguous           : bool                    { get { _symbols.Length > 1 } }
+
+    [DependentProperty("IsSymbolEvaluated")]
+    public abstract IsSymbolEvaluated     : bool                    { get; }
+    public abstract Symbol                : TSymbol                 { get; }
+
+    public abstract IsNameValid           : bool                    { get; }
+    public abstract Name                  : string                  { get; }
+
+    [DependentProperty("IsFullNameEvaluated")]
+    public virtual  FullName              : string                  { get { Symbol.FullName } }
+    public virtual  IsFullNameEvaluated   : bool                    { get { Symbol.IsFullNameEvaluated } }
+
+    [DependentProperty("IsKindEvaluated")]
+    public          IsKindEvaluated       : bool                    { get { true } }
+    public          Kind                  : string
+    {
+      get
+      {
+        if(IsUnresolved) 
+          "unresolved"
+        else if (IsAmbiguous)
+          "ambiguous"
+        else if (Symbol.IsKindEvaluated)
+          Symbol.Kind
+        else
+          "<unknown>"
+      }
+    }
+
+    [DependentProperty("IsSpanClassEvaluated")]
+    public          IsSpanClassEvaluated  : bool                    { get { true } }
+    public          SpanClass             : SpanClass
+    {
+      get
+      {
+        if (IsUnresolved)
+          Language.ErrorSpanClass
+        else if (IsAmbiguous)
+          if (IgnoreAmbiguities)
+            this.Symbols.First(s => s.IsSpanClassEvaluated).SpanClass
+          else
+            Language.ErrorSpanClass
+        else if (Symbol.IsSpanClassEvaluated)
+          Symbol.SpanClass
+        else
+          Language.DefaultSpanClass
+      }
+    }
+    
+    [DependentProperty("IsScopeEvaluated")]
+    public          IsScopeEvaluated      : bool
+    {
+      get
+      {
+        if (IsUnresolved)
+          true
+        else if (IsAmbiguous)
+        {
+          foreach (s when s.IsScopeEvaluated in Symbols)
+            return true;
+          false
+        }
+        else
+          Symbol.IsScopeEvaluated
+      }
+    }
+    public          Scope                 : Scope
+    {
+      [Memoize(InvalidValue=null)] get
+      {
+        if (IsUnresolved)
+          EmptyScope.Instance
+        else if (IsAmbiguous)
+        {
+          mutable builder = UnionScopeBuilder();
+          foreach (s when s.IsScopeEvaluated in Symbols)
+            UnionScopeBuilder.Add(s.Scope, ref builder);
+          builder.ToScope();
+        }
+        else
+          Symbol.Scope
+      }
+    }
+    
+    public          Ambiguities           : Seq[DeclarationSymbol] { get { Symbols } }
+
+    public GetSymbols() : Seq[DeclarationSymbol] { Symbols }
+    
+    public Resolve[TConcreteSymbol](predicate : Predicate[TConcreteSymbol]) : Ref[TConcreteSymbol]
+      where TConcreteSymbol : DeclarationSymbol
+      //where TConcreteSymbol : TSymbol
+      requires !IsResolvedToEvaluated
+    {
+      def bindResult = _result.Filter.[TConcreteSymbol](predicate);
+      def res        = Ref.[TConcreteSymbol].CreateRevole(this, bindResult);
+      _resolvedTo    = res;
+      res
+    }
+
+    public Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
+      where TConcreteSymbol : DeclarationSymbol
+      requires !IsResolvedToEvaluated
+    {
+      def algorithm = algorithm ?? ResolutionAlgorithms.TryCast;
+      def bindResult = _result.Filter.[TConcreteSymbol](algorithm);
+      def res        = Ref.[TConcreteSymbol].CreateRevole(this, bindResult);
+      _resolvedTo = res;
+      res
+    }
+    
+    public ResolveAsIgnoreAmbiguities() : Ref[TSymbol]
+    {
+      def result = Ignore(_result, this);
+      _resolvedTo = result;
+      result
+    }
+    
+    public static CreateBind(location : Location, bindResult : BindResult[TSymbol]) : Ref[TSymbol]
+    {
+      match (bindResult)
+      {
+        | Nil => BindUnresolved(bindResult, location, location.GetText())
+        | _   => Bind(bindResult, location)
+      }
+    }
+
+    public static CreateRevole(from : IRef, bindResult : BindResult[TSymbol]) : Ref[TSymbol]
+    {
+      match (bindResult)
+      {
+        | Nil => Unresolved(bindResult, from)
+        | _   => Resolved(bindResult, from)
+      }
+    }
+
+    private class Bind : Ref[TSymbol]
+    {
+      public this(result : BindResult[TSymbol], location : Location)
+      {
+        base(result);
+        Location = location;
+        Symbol   = Symbols[0];
+      }
+
+      public override Location            : Location { get; }
+      public override Symbol              : TSymbol  { get; }
+      public override IsSymbolEvaluated   : bool     { get { true } }
+      public override IgnoreAmbiguities   : bool     { get { false } }
+      public override IsNameValid         : bool     { get { Symbol.IsNameValid } }
+      public override Name                : string   { get { Symbol.Name } }
+      public override IsFullNameEvaluated : bool     { get { Symbol.IsFullNameEvaluated } }
+      public override FullName            : string   { get { Symbol.FullName } }
+      
+      public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+      {
+        metadataWriter.WriteObject(_result, writer);
+      }
+      public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+      {
+        def location = Location(metadataReader.Source, 0);
+        def result   = metadataReader.ReadObject(reader);
+        Bind(result, location)
+      }
+    }
+
+    [Record]
+    private class BindUnresolved : Ref[TSymbol]
+    {
+      public override Location            : Location { get; }
+      public override Name                : string   { get; }
+      public override IsNameValid         : bool     { get { true } }
+      public override IgnoreAmbiguities   : bool     { get { false } }
+      public override IsSymbolEvaluated   : bool     { get { false } }
+      public override Symbol              : TSymbol  { get { assert(false, "The property Symbol is not evaluated.") } }
+      public override IsFullNameEvaluated : bool     { get { true } }
+      public override FullName            : string   { get { Name } }
+
+      public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+      {
+        metadataWriter.WriteObject(_result, writer);
+        writer.Write(Name);
+      }
+      public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+      {
+        def location   = Location(metadataReader.Source, 0);
+        def result     = metadataReader.ReadObject(reader);
+        def name       = reader.ReadString();
+        BindUnresolved(result, location, name)
+      }
+    }
+
+    [Record]
+    private abstract class ResolvedBase : Ref[TSymbol]
+    {
+      public From : IRef;
+      public override Location            : Location { get { From.Location } }
+      public override IsNameValid         : bool     { get { From.IsNameValid } }
+      public override Name                : string   { get { From.Name } }
+      public override IsFullNameEvaluated : bool     { get { true } }
+      public override FullName            : string   { get { Name } }
+
+      public override Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void
+      {
+        metadataWriter.WriteObject(_resolvedTo, writer);
+        metadataWriter.WriteObject(_result, writer);
+        metadataWriter.WriteObject(From, writer);
+      }
+    }
+    
+    [Record]
+    private class Resolved : ResolvedBase
+    {
+      public this(result : BindResult[TSymbol], from : IRef)
+      {
+        base(result, from);
+        Symbol = Symbols[0];
+      }
+
+      public override Symbol              : TSymbol  { get; }
+      public override IsNameValid         : bool     { get { Symbol.IsNameValid } }
+      public override Name                : string   { get { Symbol.Name } }
+      public override IsSymbolEvaluated   : bool     { get { true } }
+      public override IsFullNameEvaluated : bool     { get { Symbol.IsFullNameEvaluated } }
+      public override FullName            : string   { get { Symbol.FullName } }
+
+      public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+      {
+        def resolvedTo = metadataReader.ReadObject(reader);
+        def result     = metadataReader.ReadObject(reader);
+        def from       = metadataReader.ReadObject(reader);
+        def res = Resolved(result, from);
+        res._resolvedTo = resolvedTo;
+        res
+      }
+    }
+      
+    [Record]
+    private class Unresolved : ResolvedBase
+    {
+      public override IsSymbolEvaluated   : bool     { get { false } }
+      public override Symbol              : TSymbol  { get { assert(false, "The property Symbol is not evaluated.") } }
+
+      public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+      {
+        def resolvedTo = metadataReader.ReadObject(reader);
+        def result     = metadataReader.ReadObject(reader);
+        def from       = metadataReader.ReadObject(reader);
+        def res = Unresolved(result, from);
+        res._resolvedTo = resolvedTo;
+        res
+      }
+    }
+
+    [Record]
+    private class Ignore : ResolvedBase
+    {
+      public override IgnoreAmbiguities : bool     { get { true } }
+      public override IsSymbolEvaluated : bool     { get { From.IsSymbolEvaluated } }
+      public override Symbol            : TSymbol  { get { From.Symbol :> TSymbol } }
+
+      public static Deserialize(reader : IO.BinaryReader, metadataReader : MetadataReader) : this
+      {
+        def resolvedTo = metadataReader.ReadObject(reader);
+        def result     = metadataReader.ReadObject(reader);
+        def from       = metadataReader.ReadObject(reader);
+        def res = Ignore(result, from);
+        res._resolvedTo = resolvedTo;
+        res
+      }
+    }
+
+    public abstract Serialize(writer : BinaryWriter, metadataWriter : MetadataWriter) : void;
+  }
+  
+  /*
+  [Record]
+  public variant Ref_33[TSymbol] : IRef
+    where TSymbol : DeclarationSymbol
+  {
+    public          Location    : Location   { get; }
+    public          Result      : BindResult { get; }
     public          Span        : NSpan     { get { Location.Span } }
     public abstract Name        : string    { get; }
     public abstract IsNameValid : bool      { get; }
@@ -58,11 +368,9 @@ namespace Nitra.Declarations
     {
       get
       {
-        match (this)
-        {
-          | Ambiguous as a => a.Ambiguities
-          | _ => []
-        }
+        when (this is Ambiguous as a)
+        foreach (res in a.Ambiguities)
+          yield res.Symbol
       }
     }
 
@@ -76,7 +384,8 @@ namespace Nitra.Declarations
     public virtual ResolveAsIgnoreAmbiguities() : Ref[TSymbol] { this }
     
     public Resolve[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol] = null) : Ref[TConcreteSymbol]
-      where TConcreteSymbol : DeclarationSymbol
+      where TSymbol         : DeclarationSymbol
+      where TConcreteSymbol : TSymbol
       requires !IsResolvedToEvaluated
     {
       def algorithm = algorithm ?? ResolutionAlgorithms.TryCast;
@@ -87,7 +396,8 @@ namespace Nitra.Declarations
     }
 
     ResolveItfImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[DeclarationSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
-      where TConcreteSymbol : DeclarationSymbol
+      where TSymbol         : DeclarationSymbol
+      where TConcreteSymbol : TSymbol
       implements IRef.Resolve
     {
       // type cast avoids invalid IL
@@ -95,10 +405,12 @@ namespace Nitra.Declarations
     }
 
     protected abstract ResolveImpl[TConcreteSymbol](algorithm : ResolutionAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
-      where TConcreteSymbol : DeclarationSymbol;
+      where TSymbol         : DeclarationSymbol
+      where TConcreteSymbol : TSymbol;
 
     public ResolveMany[TConcreteSymbol](algorithm : ResolveManyAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
-      where TConcreteSymbol : DeclarationSymbol
+      where TSymbol         : DeclarationSymbol
+      where TConcreteSymbol : TSymbol
       requires !IsResolvedToEvaluated
     {
       def result =
@@ -111,7 +423,8 @@ namespace Nitra.Declarations
     }
 
     protected abstract ResolveManyImpl[TConcreteSymbol](algorithm : ResolveManyAlgorithm[TSymbol, TConcreteSymbol]) : Ref[TConcreteSymbol]
-      where TConcreteSymbol : DeclarationSymbol;
+      where TSymbol         : DeclarationSymbol
+      where TConcreteSymbol : TSymbol;
 
     public override ToString() : string { Name + " (" + Kind + ")" }
     public abstract GetSymbols() : Seq[DeclarationSymbol];
@@ -141,6 +454,22 @@ namespace Nitra.Declarations
 
     | Some
       {
+        //public new this([Nemerle.Internal.MappedMember("Location")] location : Location, [Nemerle.Internal.MappedMember("Symbol")] symbol : TSymbol)
+        //{
+        //  base(location);
+        //  this.Symbol = symbol;
+        //}
+        
+        public new this([Nemerle.Internal.MappedMember("Location")] location : Location, [Nemerle.Internal.MappedMember("Result")] result : BindResult[TSymbol])
+        {
+          base(location);
+          this.Result = result;
+        }
+        
+        [DependentProperty("IsSymbolEvaluated")]
+        public override Symbol            : TSymbol { get { Result.Symbol } }
+        public override IsSymbolEvaluated : bool    { get { true } }
+
         public override Name        : string    { get { Symbol.Name } }
         public override IsNameValid : bool      { get { Symbol.IsNameValid } }
 
@@ -155,10 +484,6 @@ namespace Nitra.Declarations
         [DependentProperty("IsSpanClassEvaluated")]
         public override SpanClass            : SpanClass { get { Symbol.SpanClass } }
         public override IsSpanClassEvaluated : bool      { get { Symbol.IsSpanClassEvaluated } }
-
-        [DependentProperty("IsSymbolEvaluated")]
-        public override Symbol            : TSymbol { get; }
-        public override IsSymbolEvaluated : bool    { get { true } }
 
         [DependentProperty("IsScopeEvaluated")]
         public override Scope            : Scope { get { Symbol.Scope } }
@@ -280,21 +605,26 @@ namespace Nitra.Declarations
 
     | Ambiguous
       {
-        public this(location : Location, ambiguities : list[TSymbol], source : ResolutionSource)
-        {
-          this(location, ambiguities, source, ignoreAmbiguities=false)
-        }
+        //public this(location : Location, ambiguities : list[TSymbol], source : ResolutionSource)
+        //{
+        //  this(location, ambiguities, source, ignoreAmbiguities=false)
+        //}
 
-        public          Ambiguities       : list[TSymbol]    { get; }
-        public          Source            : ResolutionSource { get; }
+        public new this([Nemerle.Internal.MappedMember("Location")] location : Location, [Nemerle.Internal.MappedMember("Result")] ambiguities : list[BindResult[TSymbol]], source : ResolutionSource)
+        {
+          base(location);
+          assert(!ambiguities.IsEmpty);
+          this.Ambiguities = ambiguities;
+        }
+        
         public override IgnoreAmbiguities : bool             { get; }
 
-        public override Name        : string    { get { Ambiguities.Head.Name } }
-        public override IsNameValid : bool      { get { Ambiguities.Head.IsNameValid } }
+        public override Name        : string    { get { this.Ambiguities.Head.Symbol.Name } }
+        public override IsNameValid : bool      { get { Ambiguities.Head.Symbol.IsNameValid } }
 
         [DependentProperty("IsFullNameEvaluated")]
-        public override FullName            : string { get { Ambiguities.Head.FullName } }
-        public override IsFullNameEvaluated : bool   { get { Ambiguities.Head.IsFullNameEvaluated } }
+        public override FullName            : string { get { Ambiguities.Head.Symbol.FullName } }
+        public override IsFullNameEvaluated : bool   { get { Ambiguities.Head.Symbol.IsFullNameEvaluated } }
   
         [DependentProperty("IsKindEvaluated")]
         public override Kind            : string { get { "ambiguous" } }
@@ -306,7 +636,7 @@ namespace Nitra.Declarations
           get
           {
             if (IgnoreAmbiguities)
-              this.Ambiguities.First(a => a.IsSpanClassEvaluated).SpanClass
+              this.Ambiguities.First(a => a.Symbol.IsSpanClassEvaluated).SpanClass
             else
               Language.ErrorSpanClass
           }
@@ -317,7 +647,7 @@ namespace Nitra.Declarations
           get
           {
             if (IgnoreAmbiguities)
-              this.Ambiguities.Any(a => a.IsSpanClassEvaluated)
+              this.Ambiguities.Any(a => a.Symbol.IsSpanClassEvaluated)
             else
               true
           }
@@ -338,7 +668,7 @@ namespace Nitra.Declarations
             {
               mutable acc = EmptyScope.Instance : Scope;
               foreach (s in Ambiguities)
-                acc = acc.UnionWith(s.Scope);
+                acc = acc.UnionWith(s.Symbol.Scope);
               _scope = acc;
             }
             _scope
@@ -351,13 +681,13 @@ namespace Nitra.Declarations
           {
             when (_scope : object == null)
               foreach (s in Ambiguities)
-                unless (s.IsScopeEvaluated)
+                unless (s.Symbol.IsScopeEvaluated)
                   return false;
             true
           }
         }
 
-        public          AllDeclarations   : Seq[Declaration] { get { Ambiguities.SelectMany(_.Declarations) } }
+        public          AllDeclarations   : Seq[Declaration] { get { Ambiguities.SelectMany(res => res.Symbol.Declarations) } }
 
         public override IsAmbiguous  : bool  { get { true } }
 
@@ -407,7 +737,7 @@ namespace Nitra.Declarations
           // cast avoids invalid IL
           (Ambiguities : object) :> Seq[DeclarationSymbol]
         }
-        public override ToString() : string { $<#$Kind: ..$(Ambiguities; " "; _.FullName)#> }
+        public override ToString() : string { $<#$Kind: ..$(Ambiguities; " "; r => r.Symbol.FullName)#> }
         public override GetHashCode() : int { Ambiguities.GetHashCode() }
         public override Equals(other : object) : bool
         {
@@ -428,4 +758,6 @@ namespace Nitra.Declarations
         }
       }
   }
+  */
 }
+#pragma warning restore 10003
