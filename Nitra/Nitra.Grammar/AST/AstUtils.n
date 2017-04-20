@@ -259,14 +259,12 @@ namespace Nitra
 
     public BindAstExtension(name : Reference, scope : Scope, defaultReturnType : AstTypeSymbol) : Ref[AstTypeSymbol]
     {
-      mutable candidates = LightList();
-      scope.BindMany(name, ref candidates);
-      match (candidates.Count)
-      {
-        | 0 => Ref.Some(name.Location, defaultReturnType)
-        | 1 => Ref.Some(name.Location, candidates.FirstItem)
-        | _ => Ref.Ambiguous(name.Location, candidates.ToNList(), ResolutionSource.Bind(scope))
-      }
+      def bindRes = scope.Bind(name);
+      
+      if (bindRes.IsEmpty)
+        Ref.CreateBind(name.Location, BindResult.Single(defaultReturnType))
+      else
+        Ref.CreateBind(name.Location, bindRes)
     }
 
     public CreateRuleField(parseTree : NitraSyntaxParseTree.RuleExpression) : RuleField
@@ -391,7 +389,7 @@ namespace Nitra
 
     public CreateImplicitRuleTypeCast(loc : ILocated, thisType : TypeSymbol, expectedType : TypeSymbol, context : DependentPropertyEvalContext) : Ref[FunctionTypeSymbol]
     {
-      mutable validCasts = LightList();
+      mutable validCasts = BindResult.Nil();
 
       when (expectedType : object != WellKnownSymbols.AnyType)
       {
@@ -401,22 +399,15 @@ namespace Nitra
           mapSyntax.IsTypeEvaluated && AstTypeUnifier.Instance.TryUnify(mapSyntax.Type, castTemplate);
         }
         def scope = if (thisType.IsScopeEvaluated) thisType.Scope else EmptyScope.Instance;
-        scope.FindMany.[MapSyntaxSymbol](canBeImplicitCast, ref validCasts);
+        validCasts = scope.Bind.[MapSyntaxSymbol](canBeImplicitCast);
       }
-
-      match (validCasts.Count)
-      {
-        | 0 => Ref.Some(loc.Location, CreateFunctionType(loc, array[thisType], thisType, context)) // return identity function
-        | 1 => Ref.Some(loc.Location, validCasts.FirstItem.Type :> FunctionTypeSymbol)             // return type cast function
-        | _ =>
-          mutable functionTypes = [];
-          def e = validCasts.GetEnumerator();
-          while(e.MoveNext())
-            functionTypes ::= e.Current.Type :> FunctionTypeSymbol;
-          Ref.Ambiguous(loc.Location, functionTypes, ResolutionSource.Unknown())
-      }
+      
+      if (validCasts.IsEmpty)
+        Ref.CreateBind(loc.Location, CreateFunctionType(loc, array[thisType], thisType, context))
+      else
+        Ref.CreateBind(loc.Location, validCasts.Filter());
     }
-
+    
     public FilterResolvedLanguage(refs : ImmutableArray[Ref[DeclarationSymbol]]) : Seq[LanguageSymbol]
     {
       def lst = List(refs.Length);
@@ -445,18 +436,13 @@ namespace Nitra
       lst
     }
     
-    public GetResolveStructuralPropertyTypeAlgorithm(context : DependentPropertyEvalContext) : ResolveManyAlgorithm[DeclarationSymbol, TypeSymbol]
-    {
-      ResolveStructuralPropertyType(_, context)
-    }
-    
-    public ResolveStructuralPropertyType(candidates : LightList[DeclarationSymbol], context : DependentPropertyEvalContext) : LightList[TypeSymbol]
+    public ResolveStructuralPropertyType(candidates : Ref[DeclarationSymbol], context : DependentPropertyEvalContext) : Ref[TypeSymbol]
     {
       mutable parsedValueType;
-      def repack(typeSymbol : TypeSymbol) : TypeSymbol
+      def resolve(candidate) : ValueOption[TypeSymbol]
       {
-        | ast is AstTypeSymbol => ast
-        | _ => 
+        | ast is AstTypeSymbol => VSome(ast)
+        | typeSymbol is TypeSymbol =>                
           when (parsedValueType == null)
             parsedValueType = context.BindFullName(1, "Nitra", "ParsedValue");
           def constructedType = TopConstructedTypeSymbol();
@@ -464,28 +450,14 @@ namespace Nitra
           constructedType.Args = ImmutableArray.Create(typeSymbol);
           constructedType.EvalProperties(context);
           //constructedType.Scope = parsedValueType.Scope;
-          constructedType
-        
-      }
-      def res = LightList.[TypeSymbol]();
-      match (candidates.Count)
-      {
-        | 0 => ()
-        | 1 =>
-          when (candidates[0] is TypeSymbol as t)
-            res.Add(repack(t));
-            
-        | _ => 
-          foreach (ast is AstTypeSymbol in candidates)
-            res.Add(ast);
-          when (res.Count == 0)
-            foreach (t is TypeSymbol in candidates)
-              res.Add(t)
-      }
-      res
-    }
+          VSome(constructedType)
 
-    public GetImplicitBaseTypeForLanguage(scope : Scope, symbol : LanguageSymbol) : Seq[TypeSymbol] -> TypeSymbol
+        | _ => VNone()
+      }
+      candidates.Resolve(resolve)
+    }
+    
+    public GetImplicitBaseTypeForLanguage(context : DependentPropertyEvalContext, symbol : LanguageSymbol) : Seq[TypeSymbol] -> TypeSymbol
     {
       def isBaseLanguage(symbol)
       {
@@ -501,11 +473,11 @@ namespace Nitra
           when (parent is LanguageSymbol)
             return null;
 
-        TryResolveBuiltInSymbol.[LanguageSymbol](Location.Default, scope, ["Nitra", "Language"])
+        context.GetLanguage()
       }
     }
 
-    public GetImplicitBaseTypeForDeclaration(scope : Scope, symbol : AstSymbol) : Seq[TypeSymbol] -> TypeSymbol
+    public GetImplicitBaseTypeForDeclaration(context : DependentPropertyEvalContext, symbol : AstSymbol) : Seq[TypeSymbol] -> TypeSymbol
     {
       def isBaseDeclaration(symbol)
       {
@@ -526,32 +498,7 @@ namespace Nitra
           when (isDeclaration(parent))
             return null;
 
-        TryResolveBuiltInSymbol.[AstSymbol](Location.Default, scope, ["Nitra", "Declarations", "Declaration"])
-      }
-    }
-
-    private TryResolveBuiltInSymbol[TSymbol](location : Location, scope : Scope, fqn : list[string]) : TSymbol
-      where TSymbol : DeclarationSymbol
-    {
-      // TODO: получать корневое пространство имен!
-
-      match (fqn)
-      {
-        | [] => default(TSymbol)
-        | [name] =>
-          //TODO: регистрировать ошибки
-          def symbolRef = scope.Bind.[TSymbol](Reference(location, name));
-          if (symbolRef.IsSymbolEvaluated)
-            symbolRef.Symbol
-          else
-            default(TSymbol)
-
-        | nsName :: tail =>
-          def symbolRef = scope.Bind.[NamespaceSymbol](Reference(location, nsName));
-          if (symbolRef.IsScopeEvaluated)
-            TryResolveBuiltInSymbol.[TSymbol](location, symbolRef.Scope, tail)
-          else
-            default(TSymbol)
+        context.GetDeclaration()
       }
     }
   } // module
