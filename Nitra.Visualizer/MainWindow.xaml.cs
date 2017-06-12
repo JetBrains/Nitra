@@ -179,7 +179,8 @@ namespace Nitra.Visualizer
       var caretOffset = ViewModel.Settings.CaretOffset; // _textEditor.CaretOffset changed in SetPlacement(). Cache it.
       base.OnSourceInitialized(e);
       this.SetPlacement(ViewModel.Settings.MainWindowPlacement);
-      _textEditor.CaretOffset = caretOffset;
+      if (_textEditor.Text.Length >= caretOffset)
+        _textEditor.CaretOffset = caretOffset;
     }
 
     private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
