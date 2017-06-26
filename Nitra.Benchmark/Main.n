@@ -1,0 +1,222 @@
+﻿using System.Security.Cryptography;
+using System.Text;
+using System.Xml;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+using Nemerle.Imperative;
+
+using Nitra;
+using System;
+using System.Collections.Generic;
+using System.Console;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+
+[Record]
+struct LogRecord
+{
+  public Name   : string;
+  public Size   : int;
+  public Hash   : string;
+  public Status : string;
+  public Time   : double;
+}
+
+module Program
+{
+  Main(args : array[string]) : void
+  {
+    match (args[0])
+    {
+      | "run" => RunBenchmark(args[1])
+      | "cmp" => CompareLogs(args[1], args[2])
+      | _     => WriteLine("invalid arg")
+    }
+  }
+
+  CompareLogs(name1 : string, name2 : string) : void
+  {
+    def records1 = ReadLog(name1);
+    def records2 = ReadLog(name2);
+    assert(records1.Count == records2.Count);
+    def rel = List();
+    for (mutable i = 0; i < records1.Count; ++i)
+    {
+      def r1 = records1[i];
+      def r2 = records2[i];
+      assert(r1.Name == r2.Name);
+      assert(r1.Size == r2.Size);
+      when (r1.Hash != r2.Hash)
+      {
+        Error.WriteLine($"$(r1.Hash) $(r2.Hash) $(r1.Status) $(r2.Status) $(r1.Name)");
+      }
+      def t1 = r1.Time;
+      def t2 = r2.Time;
+      rel.Add(if (t1 < t2) t2 / t1 - 1 else 1 - t1 / t2);
+    }
+    rel.Sort();
+    def median = rel[rel.Count / 2];
+    for (mutable i = 0; i < rel.Count; ++i)
+      rel[i] = Math.Abs(rel[i] - median);
+    rel.Sort();
+    def avgRange(b, e)
+    {
+      mutable avg = 0.0;
+      for (mutable i = b; i < e; ++i)
+        avg += rel[i];
+      avg / (e - b)
+    }
+    def times = if (median > 0)
+      median + 1;
+    else
+      1 / (1 - median);
+    WriteLine($"log1/log2 = $(1 / times)");
+    WriteLine($"log2/log1 = $times");
+    WriteLine($"median    = $median");
+    for (mutable i = 0; i < 10; ++i)
+      WriteLine($"diviation = $(avgRange((rel.Count / 10) * i, (rel.Count / 10) * (i + 1)))");
+  }
+
+  ReadLog(logName : string) : List[LogRecord]
+  {
+    def records = List();
+    using (log = File.OpenText(logName))
+    using (xmlLog = XmlReader.Create(log))
+    {
+      while (xmlLog.ReadToFollowing("file"))
+      {
+        _ = xmlLog.MoveToFirstAttribute();
+        mutable name   : string = "";
+        mutable size   : int    = 0;
+        mutable hash   : string = "";
+        mutable status : string = "";
+        mutable time   : double = 0;
+        do
+        {
+          when (xmlLog.Name == "name")   name   = xmlLog.Value;
+          when (xmlLog.Name == "size")   size   = int.Parse(xmlLog.Value);
+          when (xmlLog.Name == "hash")   hash   = xmlLog.Value;
+          when (xmlLog.Name == "status") status = xmlLog.Value;
+          when (xmlLog.Name == "time")   time   = double.Parse(xmlLog.Value);
+        }
+        while (xmlLog.MoveToNextAttribute());
+        records.Add(LogRecord(name, size, hash, status, time));
+      }
+    }
+    records
+  }
+
+  RunBenchmark(root : string) : void
+  {
+    def getFileName()
+    {
+      def t = DateTime.UtcNow;
+      string.Format("{0:0000}_{1:00}_{2:00}_{3:00}_{4:00}_{5:00}_{6:000}.xml", t.Year, t.Month, t.Day, t.Hour, t.Minute, t.Second, t.Millisecond);
+    }
+    RunBenchmark(root, getFileName());
+  }
+
+  private WriteAttribute(this writer : XmlWriter, name : string, value : string) : void
+  {
+    writer.WriteStartAttribute(name);
+    writer.WriteValue(value);
+    writer.WriteEndAttribute();
+  }
+
+  RunBenchmark(root : string, logName : string) : void
+  {
+    def removeRootFromPath(path)
+    {
+      assert(path.StartsWith(root));
+      path.Substring(root.Length);
+    }
+
+    def session = ParseSession(CSharp.Main.CompilationUnit);
+
+    def logSettings = XmlWriterSettings();
+    logSettings.Indent = true;
+    logSettings.IndentChars = "  ";
+    using (log = File.CreateText(logName))
+    using (xmlLog = XmlWriter.Create(log, logSettings))
+    {
+      xmlLog.WriteStartElement("benchmark");
+      def walk(path)
+      {
+        foreach (dir in Directory.GetDirectories(path).SortInplace(string.CompareOrdinal).Filter(d => !Path.GetFileName(d).StartsWith(".")))
+          walk(dir);
+
+        foreach (file in Directory.GetFiles(path, "*.cs").SortInplace(string.CompareOrdinal))
+        {
+          def len = FileInfo(file).Length;
+          xmlLog.WriteStartElement("file");
+          xmlLog.WriteAttribute("name", removeRootFromPath(file));
+          xmlLog.WriteAttribute("size", len.ToString());
+
+          def src = SourceSnapshot(File.ReadAllText(file), file);
+          def parse()
+          {
+            def time = Stopwatch.StartNew();
+            def res = session.Parse(src);
+            time.Stop();
+            (time.Elapsed, res)
+          }
+          def (time, res) = parse();
+          {
+            try
+            {
+              def writer = StringPrettyPrintWriter();
+              res.CreateParseTree().PrettyPrint(writer, 0, null);
+              def hash = Nitra.Internal.DotUtils.Sha1(writer.ToString());
+              xmlLog.WriteAttribute("hash", hash);
+            }
+            catch
+            {
+              | ex =>
+                xmlLog.WriteAttribute("hash", $"Exception:$(ex.GetType())");
+                xmlLog.WriteAttribute("status", "fail");
+                xmlLog.WriteEndElement();
+                continue;
+            }
+          }
+
+          def times = List();
+          mutable minTime = time;
+          if (res.IsSuccess)
+          {
+            xmlLog.WriteAttribute("status", "success");
+            times.Add(time);
+            def timeRelLessThanCount(rel)
+            {
+              times.Count(time => time.TotalSeconds / minTime.TotalSeconds < rel)
+            }
+            while (((timeRelLessThanCount(1.05) < 3 && timeRelLessThanCount(1.1) < 5) || times.Count < 5) && times.Count < 50)
+            {
+              def (time, _res) = parse();
+              times.Add(time);
+              minTime = if (time.TotalSeconds < minTime.TotalSeconds) time else minTime;
+            }
+            xmlLog.WriteAttribute("time", minTime.TotalSeconds.ToString("0.0000000"));
+
+            foreach (time in times)
+            {
+              xmlLog.WriteStartElement("run");
+              xmlLog.WriteAttribute("time", time.TotalSeconds.ToString("0.0000000"));
+              xmlLog.WriteAttribute("speed", (len / time.TotalSeconds).ToString("0,0"));
+              xmlLog.WriteAttribute("rel", (time.TotalSeconds / minTime.TotalSeconds).ToString("0.0000000"));
+              xmlLog.WriteEndElement();
+            }
+          }
+          else
+          {
+            xmlLog.WriteAttribute("status", "fail");
+          }
+          xmlLog.WriteEndElement();
+        }
+      }
+      walk(root);
+      xmlLog.WriteEndElement();
+    }
+  }
+}

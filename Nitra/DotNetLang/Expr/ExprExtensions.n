@@ -1,0 +1,493 @@
+﻿using Nemerle;
+using Nemerle.Imperative;
+using Nemerle.Collections;
+using Nemerle.Text;
+using Nemerle.Utility;
+
+using System;
+using System.Globalization;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
+
+using Nitra;
+using Nitra.Declarations;
+using DotNet;
+
+namespace DotNet
+{
+  public module AstExprExtensions
+  {
+    public static NoLocation : Location       = Location(SourceSnapshot.Default.File, NSpan(0));
+    public static NoFile : ProjectSystem.File = SourceSnapshot.Default.File;
+    public static NoSpan : NSpan              = NSpan(0);
+    
+    public GetArithmeticType(this host : Expr, e1Type : TypeSymbol, e2Type : TypeSymbol) : TypeSymbol
+    {      
+      match (host, e1Type.FullName, e2Type.FullName) {
+        | (Expr.Sum, "System.String", _) => e1Type
+        | (Expr.Sum, _, "System.String") => e2Type
+        | (Expr.Sum, "System.Char", "System.Char") => PlatformTypes.String
+        | (Expr.Sum, _, "System.Char") when e1Type.IsNumeric() => e1Type
+        | (Expr.Sum, "System.Char", _) when e2Type.IsNumeric() => e2Type
+        | (_, "System.Double", _) => PlatformTypes.Double
+        | (_, _, "System.Double") => PlatformTypes.Double
+        | (_, "System.Float", _) => e1Type
+        | (_, _, "System.Float") => e2Type
+        | (_, "System.Int64", _) => e1Type
+        | (_, _, "System.Int64") => e2Type
+        | (_, _, _) when e1Type.IsNumeric() && e2Type.IsNumeric() => e1Type
+        | _ => e1Type
+      }
+    }
+    
+    public GetParameterType(this parameterScope : TableScope, parameterIndex : int) : TypeSymbol
+    {
+      def parm = parameterScope
+                       .Symbols
+                       .SelectMany(s => s)
+                       .OfType.[FormalParameterSymbol]()
+                       .FirstOrDefault(s => s.Index == parameterIndex :> (uint));
+      
+      parm.Type
+    }
+    
+    public IsBinaryOpCompatible(this expr : BinaryExpr, left : TypeSymbol, right : TypeSymbol) : bool
+    {
+      if (left.IsNumeric() && right.IsNumeric()) true
+      else if (left.IsNumeric() && !right.IsNumeric()) false
+      else if ((left.FullName == "System.String" || right.FullName == "System.String") && expr is Expr.Sum) true
+      else true
+    }
+    
+    public FindSuitableConstructor(this ctor : Expr, type : DeclarationSymbol, argumentTypes : ImmutableArray[TypeSymbol], context : DependentPropertyEvalContext) : Ref[Member.ConstructorSymbol]
+    {
+      match (type) {
+        | type is TypeSymbol =>
+          mutable list = LightList();
+          type.Scope.FindMany(s => s is Member.ConstructorSymbol, ref list);
+      
+          foreach (item when DoArgumentsMatchParameters(item.ParameterScope, argumentTypes) in list)
+            return Ref[Member.ConstructorSymbol].Some(NoLocation, item);
+          
+          ctor.Error(context, "Suitable constructor not found");
+          
+          Ref[Member.ConstructorSymbol].Unresolved(NoLocation, "constructor", ResolutionSource.Unknown())
+          
+        | _ => 
+          Ref[Member.ConstructorSymbol].Unresolved(NoLocation, "constructor", ResolutionSource.Unknown())
+      }
+    }
+    
+    private DoArgumentsMatchParameters(parameterScope : TableScope, argumentTypes : ImmutableArray[TypeSymbol]) : bool
+    {
+      def parms = parameterScope.Symbols
+                                .SelectMany(s => s)
+                                .OfType.[FormalParameterSymbol]()
+                                .OrderBy(p => p.Index)
+                                .ToList();
+          
+      when (parms.Count != argumentTypes.Length)
+        return false;
+          
+      def zipped = parms.Zip(argumentTypes, (parm, argType) => (parm, argType));
+          
+      foreach ((parm, argType) in zipped)
+        when(!argType.IsSubtypeOf(parm.Type) && !argType.HasImplicitConversion(parm.Type))
+          return false;
+      
+      true
+    }
+    
+    public GetOverloadResolutionAlgorithm[TSymbol, TConcreteSymbol](this _methodCall : Expr, argumentTypes : ImmutableArray[TypeSymbol]) : ResolutionAlgorithm[TSymbol, TConcreteSymbol]
+      where TSymbol         : DeclarationSymbol
+      where TConcreteSymbol : DeclarationSymbol
+    {      
+      fun (symbol : TSymbol) : ValueOption[TConcreteSymbol] {
+        | x is Member.MethodSymbol when DoArgumentsMatchParameters(x.ParameterScope, argumentTypes) =>
+          VSome(symbol :> TConcreteSymbol);
+        | _ => 
+          VNone()
+      }
+    }
+    
+    public InvocationResolveMethod(this host : Expr, left : Expr, _ : TypeSymbol, argumentTypes : ImmutableArray[TypeSymbol], context : DependentPropertyEvalContext) : Ref[Member.MethodSymbol]
+    {
+      match (left) {
+        | qn is Expr.QualifiedName with symbolRef = qn.Ref
+        | ma is Expr.MemberAccess1 with symbolRef = ma.Ref => 
+          match (symbolRef) {
+            | Ref.Some when symbolRef.Symbol is Member.MethodSymbol => 
+              Ref[Member.MethodSymbol].Some(host.Location, symbolRef.Symbol :> Member.MethodSymbol)
+              
+            | Ref.Ambiguous as amb => 
+              def resolved = amb.Resolve(GetOverloadResolutionAlgorithm(host, argumentTypes));
+              /*def resolution = amb.Ambiguities
+                                  .OfType.[Member.MethodSymbol]()
+                                  .FirstOrDefault(m => DoArgumentsMatchParameters(m.ParameterScope, argumentTypes, context));
+              */
+              if (resolved is Ref.Some as some when some.IsSymbolEvaluated)
+                Ref[Member.MethodSymbol].Some(host.Location, some.Symbol)
+              else
+                Ref[Member.MethodSymbol].Unresolved(host.Location, symbolRef.Name, ResolutionSource.Unknown())
+                
+            | _ => Ref[Member.MethodSymbol].Unresolved(host.Location, symbolRef.Name, ResolutionSource.Unknown())
+          }
+        | _ => 
+          host.Error(context, "Invocation of " + left + " not supported");
+          Ref.Unresolved(host.Location, "", ResolutionSource.Unknown())
+      }
+    }
+    
+    //private ExprInvocation(leftAst : InitAst, method : Member.MethodSymbol, arguments : array[InitAst]) : InitAst
+    //{
+    //  match (leftAst) {
+    //    | ti is InitAst.TypeInfo => InitAst.StaticCall(ti, method.Name, arguments)
+    //    | _ => InitAst.Call(leftAst, method.Name, arguments)
+    //  }
+    //}
+    
+    //private ExprMemberAccess(host : Expr, leftAst : InitAst, member : DeclarationSymbol, _context : DependentPropertyEvalContext) : InitAst
+    //{
+    //  match (member) {
+    //    | x is Member.PropertySymbol when leftAst is InitAst.TypeInfo => InitAst.StaticProperty(leftAst :> InitAst.TypeInfo, x.Name)
+    //    | x is Member.PropertySymbol when x.IsStatic() =>
+    //      throw ExprException("Instance can't be used to access static property", host);
+
+    //    | x is Member.PropertySymbol => InitAst.Property(leftAst, x.Name)
+    //    | x is Member.FieldSymbol when leftAst is InitAst.TypeInfo => InitAst.StaticField(leftAst :> InitAst.TypeInfo, x.Name)
+    //    | x is Member.FieldSymbol when x.IsStatic() => 
+    //      throw ExprException("Instance can't be used to access static field", host);
+          
+    //    | x is Member.FieldSymbol => InitAst.Field(leftAst, x.Name)
+        
+    //    | _ is Member.MethodSymbol when leftAst is InitAst.TypeInfo => leftAst
+    //    | x is Member.MethodSymbol when x.IsStatic() => 
+    //      throw ExprException("Instance can't be used to access static method", host);
+          
+    //    | _ is Member.MethodSymbol => leftAst
+    //    | x is EnumMemberSymbol =>
+    //      InitAst.PrimitiveValue(x.DeclaredIn.AsTypeInfo(), x.FullName, false)
+          
+    //    | _ => throw ExprException("This member type is not supported as member access in expression", host)
+    //  }
+    //}
+        
+    //private ExprQualifiedName(host : Expr, key : QualifiedReference, symbol : DeclarationSymbol, context : DependentPropertyEvalContext) : InitAst
+    //{
+    //  match (key) {
+    //    | QualifiedReference.Simple => 
+    //      match (symbol) {
+    //        | x is LambdaParameterSymbol => InitAst.Parameter(x.Name, x.Type.FullName)
+    //        | x is TypeSymbol => x.AsTypeInfo()
+    //        | _ => throw ExprException("Invalid qualified name expression", host)
+    //      }
+          
+    //    | qualified is QualifiedReference.Qualified =>
+    //      match (symbol) {
+    //        | prop is Member.PropertySymbol when prop.IsStatic() =>  
+    //          InitAst.StaticProperty(prop.DeclaredIn.AsTypeInfo(), prop.Name)
+    //        | _ => 
+    //          def left = ExprQualifiedName(host, qualified.Qualifier, qualified.Qualifier.Ref.Symbol, context);
+    //          ExprMemberAccess(host, left, symbol, context)
+    //      }
+          
+    //    | _ => throw ExprException("Unknown reference: " + key, host)
+    //  }
+    //}
+    
+    public ResolveLambdaParameterType(this _parm : LambdaParameter, typeRef : ValueOption[Ref[TypeSymbol]]) : TypeSymbol
+    {      
+      if (typeRef.HasValue && typeRef.Value.IsSymbolEvaluated) {
+        match (typeRef.Value.Symbol) {
+          | alias is TypeAliasSymbol => alias.Replacement.Symbol :> TypeSymbol
+          | x => x
+        }
+      } else {
+        PlatformTypes.Object;
+      }
+    }
+    /*
+    public ArrayRefGetType(this expr : Expr, leftType : TypeSymbol, indexType : TypeSymbol, context : DependentPropertyEvalContext) : TypeSymbol
+    {
+      match (leftType.FirstDeclarationOrDefault) {
+        | atd is IExternalTopTypeDeclaration => 
+          def systemType = atd.Type;
+          
+          if (systemType.IsArray) {
+            def elementType = systemType.GetElementType();
+            mutable elementTypeSymbol;
+            
+            if (elementType != null && context.TypeMap.TryGetValue(elementType.FullName, out elementTypeSymbol))
+              elementTypeSymbol;
+            else
+              PlatformTypes.Object
+          } else {
+            def parmTypeMatches(prop) {
+              def indexerParms = prop.GetIndexParameters();
+              mutable parmTypeSymbol;
+              if (indexerParms.Length == 1 && context.TypeMap.TryGetValue(indexerParms[0].ParameterType.FullName, out parmTypeSymbol)) {
+                indexType.IsDescendant(parmTypeSymbol)
+              } else {
+                false
+              }
+            }
+            
+            def indexer = systemType.GetProperties()
+                                    .FirstOrDefault(p => parmTypeMatches(p));
+            
+            mutable indexerTypeSymbol;
+            if (indexer != null && context.TypeMap.TryGetValue(indexer.PropertyType.FullName, out indexerTypeSymbol))
+              indexerTypeSymbol
+            else {
+              expr.Error(context, "Indexer of type " + indexType.GetFullName() + " is not compatible with " + leftType.GetFullName());
+              PlatformTypes.Object
+            }
+          }
+        | _ => {
+          expr.Error(context, "Indexer of type " + indexType.GetFullName() + " is not compatible with " + leftType.GetFullName());
+          PlatformTypes.Object;
+        }
+      }
+    }*/
+    
+    //private BinaryOp(host : BinaryExpr, op : BinaryOp, leftExprType : TypeSymbol, leftAst : InitAst, rightExprType : TypeSymbol, rightAst : InitAst, context : DependentPropertyEvalContext) : InitAst
+    //{
+    //  def context = context.ToAmmyContext();
+    //  def types = context.Types;
+      
+    //  match (host) {
+    //    | Expr.Sum when leftExprType.IsDescendant(types.String)
+    //    | Expr.Sum when rightExprType.IsDescendant(types.String) =>
+                
+    //    if (leftExprType.IsDescendant(types.String) && rightExprType.IsDescendant(types.String))
+    //      InitAst.Binary(op, leftAst, rightAst)                 
+    //    else 
+    //      InitAst.StaticCall(types.String.AsTypeInfo(), "Concat", array[leftAst, rightAst])
+                            
+    //    | EqualExpr when leftExprType.IsNumeric() && rightExprType.IsNumeric()
+    //    | NumericBinary =>
+    //      mutable resultType;
+    //      def (l, r) = BinaryNumericPromotion(op, leftExprType, leftAst, rightExprType, rightAst, context, out resultType);
+                
+    //      when (!host.IsTypeEvaluated)
+    //        host.Type = resultType;
+                  
+    //      InitAst.Binary(op, l, r)
+                
+    //    | EqualExpr => 
+    //      InitAst.Binary(op, leftAst, rightAst)
+              
+    //    | OrAndExpr =>
+    //      when (!leftExprType.IsDescendant(context.Types.Boolean))
+    //        host.Expr1.Error(context, "Expected boolean expression, got " + leftExprType.GetFullName());
+                  
+    //      when (!rightExprType.IsDescendant(context.Types.Boolean))
+    //        host.Expr2.Error(context, "Expected boolean expression, got " + rightExprType.GetFullName());
+                
+    //      InitAst.Binary(op, leftAst, rightAst)
+                
+    //    | _ => 
+    //      throw Exception("Invalid binary expression: " + host)
+    //  }
+    //}
+        
+    //private BinaryNumericPromotion(_op : BinaryOp, leftExprType : TypeSymbol, leftExprAst : InitAst, rightExprType : TypeSymbol, rightExprAst : InitAst, context : DependentPropertyEvalContext, resultType : out TypeSymbol) : (InitAst*InitAst)
+    //{
+    //  def context = context.ToAmmyContext();
+      
+    //  match (leftExprType.GetFullName(), rightExprType.GetFullName()) {
+    //    | (l, r) when l == r    => 
+    //      resultType = leftExprType;
+    //      (leftExprAst, rightExprAst)
+        
+    //    | ("System.Decimal", _) => 
+    //      resultType = leftExprType;
+    //      (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.Decimal"), rightExprAst))
+    //    | (_, "System.Decimal") => 
+    //      resultType = rightExprType;
+    //      (InitAst.Cast(InitAst.TypeInfo("System.Decimal"), leftExprAst), rightExprAst)
+        
+    //    | ("System.Double", _) => 
+    //      resultType = leftExprType;
+    //      (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.Double"), rightExprAst))
+          
+    //    | (_, "System.Double") => 
+    //      resultType = rightExprType;
+    //      (InitAst.Cast(InitAst.TypeInfo("System.Double"), leftExprAst), rightExprAst)
+        
+    //    | ("System.Single", _) => 
+    //      resultType = leftExprType;
+    //      (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.Single"), rightExprAst))
+          
+    //    | (_, "System.Single") => 
+    //      resultType = rightExprType;
+    //      (InitAst.Cast(InitAst.TypeInfo("System.Single"), leftExprAst), rightExprAst)
+        
+    //    | ("System.System.UInt64", r) => 
+    //        if (r != "System.SByte" && r != "System.Int16" && r != "System.Int32" && r != "System.Int64") {
+    //          resultType = leftExprType;
+    //          (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.UInt64"), rightExprAst))
+    //        } else
+    //           throw Exception($"Operand types $(leftExprType.GetFullName()) and $(rightExprType.GetFullName()) are incompatible")
+            
+    //    | (l, "System.System.UInt64") => 
+    //        if (l != "System.SByte" && l != "System.Int16" && l != "System.Int32" && l != "System.Int64") {
+    //          resultType = rightExprType;
+    //          (InitAst.Cast(InitAst.TypeInfo("System.UInt64"), leftExprAst), rightExprAst)
+    //        } else
+    //          throw Exception($"Operand types $(leftExprType.GetFullName()) and $(rightExprType.GetFullName()) are incompatible")
+            
+            
+    //    | ("System.Int64", _) => 
+    //      resultType = leftExprType;
+    //      (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.Int64"), rightExprAst))
+          
+    //    | (_, "System.Int64") => 
+    //      resultType = rightExprType;
+    //      (InitAst.Cast(InitAst.TypeInfo("System.Int64"), leftExprAst), rightExprAst)
+       
+    //    | ("System.UInt32", o) when o == "System.SByte" || o == "System.Int16" || o == "System.Int32"
+    //    | (o, "System.UInt32") when o == "System.SByte" || o == "System.Int16" || o == "System.Int32" => 
+    //      resultType = context.Types.Int64;
+    //      (InitAst.Cast(InitAst.TypeInfo("System.Int64"), leftExprAst), InitAst.Cast(InitAst.TypeInfo("System.Int64"), rightExprAst))
+                  
+    //    | ("System.UInt32", _) => 
+    //      resultType = leftExprType;
+    //      (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.UInt32"), rightExprAst))
+          
+    //    | (_, "System.UInt32") => 
+    //      resultType = rightExprType;
+    //      (InitAst.Cast(InitAst.TypeInfo("System.UInt32"), leftExprAst), rightExprAst)
+        
+    //    | ("System.Int32", _) => 
+    //      resultType = leftExprType;
+    //      (leftExprAst, InitAst.Cast(InitAst.TypeInfo("System.Int32"), rightExprAst))
+          
+    //    | (_, "System.Int32") => 
+    //      resultType = rightExprType;
+    //      (InitAst.Cast(InitAst.TypeInfo("System.Int32"), leftExprAst), rightExprAst)
+    //    | _ => 
+    //      resultType = leftExprType;
+    //      (leftExprAst, rightExprAst);
+    //  }
+    //}
+    
+    //private UnaryNumericPromotion(op : UnaryOp, exprType : TypeSymbol, exprAst : InitAst, context : DependentPropertyEvalContext) : InitAst
+    //{
+    //  def context = context.ToAmmyContext();
+      
+    //  match (exprType.GetFullName()) {
+    //    | "System.Byte" | "System.SByte" | "System.Int16" | "System.UInt16" | "System.Char" =>
+    //      InitAst.Cast(context.Types.Int32.AsTypeInfo(), exprAst)
+    //    | "System.UInt32" when op is UnaryOp.Minus => 
+    //      InitAst.Cast(context.Types.Int64.AsTypeInfo(), exprAst)
+    //    | _ => 
+    //      exprAst
+    //  }
+    //}
+        
+    //public BuildAstValue(this host : LambdaExpr, expr : Expr, _exprType : TypeSymbol, parmName : string, parmType : TypeSymbol, context : DependentPropertyEvalContext) : BuildResult
+    //{
+    //  try {
+    //    def body = BuildAstValueImpl(expr, context.ToAmmyContext());
+    //    BuildResult.Result(InitAst.Lambda(body, array[InitAst.Parameter(parmName, parmType.FullName)], false))
+    //  } catch {
+    //   | e => {
+    //      host.Error(context, e.Message);
+    //     BuildResult.Ignore();
+    //   }
+    //  }
+    //}
+    
+    //private BuildAstValueImpl(expr : Expr, context : AmmyDependentPropertyEvalContext) : InitAst
+    //{
+    //  def types = context.Types;
+    //  def build = BuildAstValueImpl(_, context);
+      
+    //  match (expr) {
+    //    | x is Expr.IntegerLiteral when x.Value.HasValue => InitAst.PrimitiveValue(types.Int32.AsTypeInfo(), x.Value.Value.ToString(), false);
+    //    | x is Expr.FloatLiteral when x.Value.HasValue => InitAst.PrimitiveValue(types.Double.AsTypeInfo(), x.Value.Value.ToString(CultureInfo.InvariantCulture), false);
+    //    | x is Expr.String when x.Value.HasValue => InitAst.PrimitiveValue(types.String.AsTypeInfo(), x.Value.Value.ToString(), false);
+    //    | x is Expr.Char when x.Value.HasValue   => InitAst.PrimitiveValue(types.Char.AsTypeInfo(), x.Value.Value.ToString(), false);
+    //    | _ is Expr.FalseLiteral => InitAst.PrimitiveValue(types.Boolean.AsTypeInfo(), "false", false);
+    //    | _ is Expr.TrueLiteral => InitAst.PrimitiveValue(types.Boolean.AsTypeInfo(), "true", false);
+    //    | _ is Expr.NullLiteral => InitAst.Null(types.Object.AsTypeInfo());
+    //    | x is Expr.QualifiedName => 
+    //      if (x.Ref.IsSymbolEvaluated)
+    //        ExprQualifiedName(x, x.Key, x.Ref.Symbol, context);
+    //      else if (x.Ref.IsResolvedToEvaluated && x.Ref.ResolvedTo.IsSymbolEvaluated)
+    //        ExprQualifiedName(x, x.Key, x.Ref.ResolvedTo.Symbol, context);
+    //      else
+    //        InitAst.Seq([]) 
+            
+    //    | x is Expr.MemberAccess => 
+    //      if (x.Ref.IsSymbolEvaluated)
+    //        ExprMemberAccess(x, build(x.Expr), x.Ref.Symbol, context)
+    //      else if (x.Ref.IsResolvedToEvaluated && x.Ref.ResolvedTo.IsSymbolEvaluated)
+    //        ExprMemberAccess(x, build(x.Expr), x.Ref.ResolvedTo.Symbol, context)
+    //      else 
+    //        InitAst.Seq([])         
+        
+    //    | x is Expr.ArrayRef => InitAst.ArrayAccess(build(x.Left), build(x.Index))
+    //    | x is Expr.Constructor => InitAst.New(x.Type.AsTypeInfo(), x.Arguments.Select(a => build(a)).ToArray())
+    //    | x is Expr.Invocation => ExprInvocation(build(x.Left), x.Method.Symbol, x.Arguments.Select(a => build(a)).ToArray())
+    //    | x is Expr.Argument => build(x.Expr);
+    //    | x is Expr.Ternary => InitAst.Ternary(build(x.Condition), build(x.Left), build(x.Right))
+    //    | x is Expr.Cast => InitAst.Cast(x.Type.AsTypeInfo(), build(x.Right))
+    //    | x is BinaryExpr => BinaryOp(x, x.Operation, x.Expr1.Type, build(x.Expr1), x.Expr2.Type, build(x.Expr2), context)
+    //    | x is Unary => InitAst.Unary(x.Operation, UnaryNumericPromotion(x.Operation, x.Expr1.Type, build(x.Expr1), context))
+    //    | _ => InitAst.Seq([]); // Error should already be registered
+    //  }
+    //}
+    
+    public GetMemberAccessReturnType(this _ : Expr, rf : Ref[DeclarationSymbol]) : TypeSymbol
+    {
+      if (rf.IsSymbolEvaluated) {
+        rf.Symbol.GetMemberReturnType()
+      } else if (rf is Ref.Ambiguous as amb) {
+        def firstSymbol = amb.Ambiguities.First();
+        firstSymbol.GetMemberReturnType()
+      } else {
+        PlatformTypes.Object
+      }
+    }
+    
+    //class ExprException : Exception
+    //{
+    //  public Expr : Expr { get; set; }
+      
+    //  public this(message : string, expr : Expr) {
+    //    base(message);
+    //    Expr = expr;
+    //  }
+    //}
+  }
+    
+  public variant BinaryOp {
+    | Or
+    | And
+    | Equal
+    | NotEqual
+    | LessEqual
+    | Less
+    | GreaterEqual
+    | Greater
+    | Sum
+    | Sub
+    | Mod
+    | Mul
+    | Div
+  }
+  
+  public variant UnaryOp {
+    | Identity
+    | Negation
+    | LogicalNegation
+    | BitwiseNegation
+    | PreIncrement
+    | PreDecrement
+    | PostIncrement
+    | PostDecrement
+  }
+}
