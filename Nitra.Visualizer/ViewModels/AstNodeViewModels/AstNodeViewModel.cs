@@ -63,6 +63,8 @@ namespace Nitra.Visualizer.ViewModels
 
     public virtual bool IsRoot { get { return false; } }
 
+    public string TypeFullName => _objectDescriptor.TypeFullName;
+
     public int ObjectId => _objectDescriptor.Id;
 
     public void LoadItems()

@@ -104,21 +104,7 @@ namespace Nitra.Visualizer
       var ast = e.NewValue as AstNodeViewModel;
 
       if (ast != null && !ast.Span.IsEmpty && !ast.IsRoot)
-      {
         _interactiveSpanInfos = ImmutableArray.Create(new SpanInfo(ast.Span, CurrentAstSpanClassId));
-
-        //var obj = ((TreeViewItem) e.NewValue).Tag;
-        //var symbol = obj as DeclarationSymbol;
-        //var id = symbol != null ? symbol.Id : (obj == null ? 0 : obj.GetHashCode());
-        //try
-        //{
-        //  _propertyGrid.SelectedObject = obj;
-        //}
-        //catch
-        //{
-        //}
-        //_objectType.Text = obj == null ? "<null>" : obj.GetType().FullName + " [" + id + "]";
-      }
       else
         _interactiveSpanInfos = ImmutableArray<SpanInfo>.Empty;
 

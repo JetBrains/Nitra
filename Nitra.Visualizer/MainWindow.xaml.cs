@@ -59,18 +59,14 @@ namespace Nitra.Visualizer
     bool _initializing = true;
     bool _doTreeOperation;
     bool _doChangeCaretPos;
-    //readonly Timer _nodeForCaretTimer;
+
     readonly TextMarkerService _textMarkerService;
     readonly NitraFoldingStrategy _foldingStrategy;
     readonly FoldingManager _foldingManager;
     readonly ToolTip _textBox1Tooltip;
-    //ParseTree _parseTree;
-    readonly PependentPropertyGrid _propertyGrid;
-    //readonly MatchBracketsWalker _matchBracketsWalker = new MatchBracketsWalker();
     readonly List<ITextMarker> _matchedBracketsMarkers = new List<ITextMarker>();
     readonly Action<AsyncServerMessage> _responseDispatcher;
     readonly Timer _fillAstTimer;
-    //List<MatchBracketsWalker.MatchBrackets> _matchedBrackets;
 
     public MainWindow()
     {
@@ -130,8 +126,6 @@ namespace Nitra.Visualizer
       _textEditor.Options.EnableRectangularSelection = true;
       _textEditor.Options.IndentationSize = 2;
       _testsTreeView.SelectedValuePath = "FullPath";
-      _propertyGrid = new PependentPropertyGrid();
-      _windowsFormsHost.Child = _propertyGrid;
 
       if (string.IsNullOrWhiteSpace(ViewModel.Settings.CurrentWorkspace))
         ViewModel.Workspace = null;

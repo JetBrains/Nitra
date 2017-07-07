@@ -6,6 +6,11 @@ namespace Nitra.Visualizer.ViewModels
   {
     public int Index { get; private set; }
 
+    public ItemAstNodeViewModel(AstContext context, ObjectDescriptor objectDescriptor, int index) : base(context, objectDescriptor)
+    {
+      Index = index;
+    }
+
     public string Pefix
     {
       get
@@ -15,11 +20,6 @@ namespace Nitra.Visualizer.ViewModels
 
         return "";
       }
-    }
-
-    public ItemAstNodeViewModel(AstContext context, ObjectDescriptor objectDescriptor, int index) : base(context, objectDescriptor)
-    {
-      Index = index;
     }
 
     public override bool IsRoot { get { return Index == -1; } }
