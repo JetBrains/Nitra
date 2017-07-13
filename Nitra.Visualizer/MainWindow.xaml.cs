@@ -1427,20 +1427,20 @@ namespace Nitra.Visualizer
       CopyTreeNodeToClipboard(((TreeViewItem)_errorsTreeView.SelectedItem).Header);
     }
 
+    private static void SetClipboardText(string text)
+    {
+      Clipboard.SetData(DataFormats.Text, text);
+      Clipboard.SetData(DataFormats.UnicodeText, text);
+    }
+
     private static void CopyTreeNodeToClipboard(object node)
     {
-      var vm = node as BaseVm;
-      if (vm != null)
+      switch (node)
       {
-        var text = vm.FullPath.ToString();
-        Clipboard.SetData(DataFormats.Text, text);
-        Clipboard.SetData(DataFormats.UnicodeText, text);
-      }
-      else if (node != null)
-      {
-        var text = node.ToString();
-        Clipboard.SetData(DataFormats.Text, text);
-        Clipboard.SetData(DataFormats.UnicodeText, text);
+        case null: break;
+        case AstNodeViewModel astVm: SetClipboardText(astVm.Value + " " + astVm.TypeFullName); break;
+        case BaseVm              vm: SetClipboardText(vm.FullPath.ToString()); break;
+        default:                     SetClipboardText(node.ToString()); break;
       }
     }
 
