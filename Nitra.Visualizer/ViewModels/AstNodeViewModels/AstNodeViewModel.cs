@@ -77,7 +77,7 @@ namespace Nitra.Visualizer.ViewModels
       Items.Clear();
 
       var client = Context.Client;
-      client.Send(new ClientMessage.GetObjectContent(Context.SolutionId, Context.FileId, Context.FileVersion, _objectDescriptor.Id));
+      client.Send(new ClientMessage.GetObjectContent(Context.SolutionId, Context.ProjectId, Context.FileId, Context.FileVersion, _objectDescriptor.Id));
       var content = client.Receive<ServerMessage.ObjectContent>();
 
       if (content.content is ContentDescriptor.Fail)

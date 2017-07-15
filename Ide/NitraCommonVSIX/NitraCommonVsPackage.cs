@@ -353,10 +353,33 @@ namespace Nitra.VisualStudio
       if (project == null)
         return; // not supported prfoject type
 
+      if (project.Name == VsProjectTypes.NuGetSolutionSettingsFolder)
+        return; // not supported prfoject type
+
+      var isMiscFiles = false;
+
+      switch (project.Kind)
+      {
+        case VsProjectTypes.VsProjectItemKindSolutionItem:
+          Debug.Assert(false, "Unexopected project kind: VsProjectItemKindSolutionItem");
+          break;
+        case VsProjectTypes.VsProjectItemKindPhysicalFolder:
+        case VsProjectTypes.VsProjectItemKindSolutionFolder:
+        case VsProjectTypes.UnloadedProjectTypeGuid:
+          return; // not supported prfoject kinds
+        case VsProjectTypes.VsProjectKindMisc:
+          isMiscFiles = true;
+          break;
+      }
+      if (Constants.SolutionFolderGuid == new Guid(project.Kind))
+        return; // not supported prfoject kind
+
       var projectPath = project.FullName;
       var projectId = new ProjectId(_stringManager.GetId(projectPath));
 
-      var isMiscFiles = string.IsNullOrEmpty(projectPath);
+      if (!isMiscFiles)
+        Debug.Assert(!string.IsNullOrEmpty(projectPath));
+
       var isDelayLoading = _backgroundLoading != SolutionLoadingSate.AsynchronousLoading && !isMiscFiles;
 
       if (isDelayLoading)
@@ -489,12 +512,13 @@ namespace Nitra.VisualStudio
       var id   = new FileId(_stringManager.GetId(path));
 
       string action = e.Hierarchy.GetProp<string>(e.ItemId, __VSHPROPID4.VSHPROPID_BuildAction);
-      var project = e.Hierarchy.GetProp<EnvDTE.Project>(VSConstants.VSITEMID_ROOT, __VSHPROPID.VSHPROPID_ExtObject);
+      var project   = e.Hierarchy.GetProp<EnvDTE.Project>(VSConstants.VSITEMID_ROOT, __VSHPROPID.VSHPROPID_ExtObject);
+      var projectId = GetProjectId(project);
 
       if (action == "Compile" || action == "Nitra" || (action == null && string.IsNullOrEmpty(project.FileName)))
         foreach (var server in _servers)
           if (server.IsSupportedExtension(ext))
-            server.FileUnloaded(id);
+            server.FileUnloaded(projectId, id);
 
       Debug.WriteLine($"tr: FileAdded(FileName='{path}' id={id})");
     }

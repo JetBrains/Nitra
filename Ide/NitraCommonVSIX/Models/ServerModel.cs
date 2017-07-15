@@ -168,7 +168,7 @@ namespace Nitra.VisualStudio
       Client.Send(new ClientMessage.FileLoaded(projectId, path, id, version));
     }
 
-    internal void FileUnloaded(FileId id)
+    internal void FileUnloaded(ProjectId projectId, FileId id)
     {
       foreach (var fileModel in _fileModels)
       {
@@ -178,7 +178,7 @@ namespace Nitra.VisualStudio
           return;
         }
       }
-      Client.Send(new ClientMessage.FileUnloaded(id));
+      Client.Send(new ClientMessage.FileUnloaded(projectId, id));
     }
 
     internal void ViewActivated(IWpfTextView wpfTextView, FileId id, IVsHierarchy hierarchy, string fullPath)

@@ -36,7 +36,7 @@ namespace Nitra.VisualStudio.CodeCompletion
       var snapshot = _textBuffer.CurrentSnapshot;
       var version = snapshot.Version.Convert();
 
-      client.Send(new ClientMessage.CompleteWord(fileModel.Id, version, triggerPoint.GetPoint(snapshot).Position));
+      client.Send(new ClientMessage.CompleteWord(fileModel.GetProjectId(), fileModel.Id, version, triggerPoint.GetPoint(snapshot).Position));
       var result = client.Receive<ServerMessage.CompleteWord>();
       var span = result.replacementSpan;
       var applicableTo = snapshot.CreateTrackingSpan(new Span(span.StartPos, span.Length), SpanTrackingMode.EdgeInclusive);

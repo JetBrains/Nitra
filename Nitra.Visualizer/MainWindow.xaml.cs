@@ -1353,8 +1353,9 @@ namespace Nitra.Visualizer
         return;
 
       var client = ViewModel.CurrentSuite.Client;
+      var currentFile = ViewModel.CurrentFile;
 
-      client.Send(new ClientMessage.CompleteWord(ViewModel.CurrentFile.Id, ViewModel.CurrentFile.Version, pos));
+      client.Send(new ClientMessage.CompleteWord(ViewModel.CurrentProject.Id, currentFile.Id, currentFile.Version, pos));
       var result = client.Receive<ServerMessage.CompleteWord>();
       var replacementSpan = result.replacementSpan;
 
@@ -1662,14 +1663,14 @@ namespace Nitra.Visualizer
         else if (index > 0)
           file.Project.Children[index - 1].IsSelected = true;
 
-        client.Send(new ClientMessage.FileUnloaded(file.Id));
+        client.Send(new ClientMessage.FileUnloaded(project.Id, file.Id));
 
         return;
       }
 
       if (project != null)
       {
-        client.Send(new ClientMessage.FileUnloaded(file.Id));
+        client.Send(new ClientMessage.FileUnloaded(project.Id, file.Id));
 
         if (Directory.Exists(project.FullPath))
           FileSystem.DeleteDirectory(project.FullPath, UIOption.OnlyErrorDialogs, RecycleOption.DeletePermanently);
@@ -1828,7 +1829,8 @@ namespace Nitra.Visualizer
       if (file == null)
         return;
 
-      var solution = file.Project.Solution;
+      var project  = file.Project;
+      var solution = project.Solution;
       var suite    = solution.Suite;
 
       var node = _astTreeView.SelectedItem as AstNodeViewModel;
@@ -1837,7 +1839,7 @@ namespace Nitra.Visualizer
         return;
 
       NitraClient client = suite.Client;
-      client.Send(new ClientMessage.GetObjectGraph(solution.Id, file.Id, file.Version, node.ObjectId));
+      client.Send(new ClientMessage.GetObjectGraph(solution.Id, project.Id, file.Id, file.Version, node.ObjectId));
     }
   }
 }

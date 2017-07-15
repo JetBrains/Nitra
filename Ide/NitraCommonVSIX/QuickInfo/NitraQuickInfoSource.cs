@@ -341,8 +341,7 @@ namespace Nitra.VisualStudio.QuickInfo
 
     ProjectId GetCurrntProjectId()
     {
-      var project = _fileModel.Hierarchy.GetProject();
-      return new ProjectId(_fileModel.Server.Client.StringManager.GetId(project.FullName));
+      return _fileModel.GetProjectId();
     }
 
     void OnHintRefClic(string handler)

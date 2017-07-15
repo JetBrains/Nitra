@@ -74,7 +74,7 @@ namespace Nitra.VisualStudio.Models
       var server = this.Server;
 
       if (server.IsLoaded)
-        server.Client.Send(new ClientMessage.SetCaretPos(Id, fileVersion, position));
+        server.Client.Send(new ClientMessage.SetCaretPos(GetProjectId(), Id, fileVersion, position));
     }
 
     public TextViewModel GetOrAdd(IWpfTextView wpfTextView)
@@ -96,7 +96,7 @@ namespace Nitra.VisualStudio.Models
       var server = this.Server;
 
       if (server.IsLoaded)
-        server.Client.Send(new ClientMessage.FileActivated(Id));
+        server.Client.Send(new ClientMessage.FileActivated(GetProjectId(), Id));
     }
 
     public void Remove(IWpfTextView wpfTextView)
@@ -124,7 +124,7 @@ namespace Nitra.VisualStudio.Models
       var server = this.Server;
 
       if (!_fileIsRemoved && server.IsLoaded)
-        server.Client.Send(new ClientMessage.FileDeactivated(Id));
+        server.Client.Send(new ClientMessage.FileDeactivated(GetProjectId(), Id));
     }
 
     internal void ViewActivated(TextViewModel textViewModel)
@@ -158,10 +158,16 @@ namespace Nitra.VisualStudio.Models
       }
     }
 
+    public ProjectId GetProjectId()
+    {
+      var project = this.Hierarchy.GetProject();
+      return new ProjectId(this.Server.Client.StringManager.GetId(project.FullName));
+    }
+
     internal void Remove()
     {
       _fileIsRemoved = true;
-      Server.Client.Send(new ClientMessage.FileUnloaded(Id));
+      Server.Client.Send(new ClientMessage.FileUnloaded(GetProjectId(), Id));
     }
 
     void Response(AsyncServerMessage msg)
