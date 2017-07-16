@@ -36,7 +36,13 @@ namespace Nitra.VisualStudio
       Text = location.Range.Text;
     }
 
-    public string Path { get { return _server.Client.StringManager.GetPath(_location.File.FileId); } }
+    public string Path
+    {
+      get
+      {
+        return _location.File.FileId >= 0 ? _server.Client.StringManager.GetPath(_location.File.FileId) : "";
+      }
+    }
 
     protected override void GotoSource(Microsoft.VisualStudio.Shell.Interop.VSOBJGOTOSRCTYPE gotoType)
     {
