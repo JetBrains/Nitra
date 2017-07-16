@@ -302,16 +302,9 @@ namespace Nitra.VisualStudio
         {
           var path = reference.Path;
 
-          if (string.IsNullOrEmpty(path))
-          {
-            // This situation occurs when a referenced project is missing
-            continue; 
-          }
-
-
           if (reference.SourceProject == null)
           {
-            if (path == null)
+            if (string.IsNullOrEmpty(path))
             {
               Debug.WriteLine($"tr:    Error: reference.Path=null reference.Name={reference.Name}");
               continue;
@@ -323,6 +316,12 @@ namespace Nitra.VisualStudio
           }
           else
           {
+            if (string.IsNullOrEmpty(path))
+            {
+              // This situation occurs when a referenced project is missing
+              continue;
+            }
+
             var referencedProjectId = GetProjectId(reference.SourceProject);
             foreach (var server in _servers)
               server.ProjectReferenceAdded(projectId, referencedProjectId, path);
