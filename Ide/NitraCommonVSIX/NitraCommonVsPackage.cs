@@ -302,6 +302,13 @@ namespace Nitra.VisualStudio
         {
           var path = reference.Path;
 
+          if (string.IsNullOrEmpty(path))
+          {
+            // This situation occurs when a referenced project is missing
+            continue; 
+          }
+
+
           if (reference.SourceProject == null)
           {
             if (path == null)
