@@ -96,7 +96,7 @@ namespace Nitra.VisualStudio.Models
       var server = this.Server;
 
       if (server.IsLoaded)
-        server.Client.Send(new ClientMessage.FileActivated(GetProjectId(), Id));
+        server.Client.Send(new ClientMessage.FileActivated(GetProjectId(), Id, _textBuffer.CurrentSnapshot.Version.Convert()));
     }
 
     public void Remove(IWpfTextView wpfTextView)
