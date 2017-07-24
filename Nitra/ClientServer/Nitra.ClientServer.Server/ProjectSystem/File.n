@@ -11,6 +11,7 @@ using Nitra.Declarations;
 using Nitra.Internal;
 using Nitra.PrettyPrint;
 
+using Nitra.Runtime.Reflection;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -53,6 +54,8 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     mutable _needHint               : bool;
     mutable _caretPosOpt            : int = -1;
     mutable _caretPosVersionOpt     : int = -1;
+    mutable _completeWordPosOpt     : int = -1;
+    mutable _prevSourceOpt          : SourceSnapshot = null;
     
     public this(id : FileId, fullPath : string, version : FileVersion, parent : Project)
     {
@@ -163,8 +166,15 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       | FileChange.Delete(span)        => Delete(span)
       | FileChange.Replace(span, text) => Replace(span, text)
     }
-    
+
     public Change(version : FileVersion, change : FileChange) : void
+    {
+      assert2(_completeWordPosOpt < 0 && _prevSourceOpt == null);
+    
+      ChangeImpl(version, change);
+    }
+
+    ChangeImpl(version : FileVersion, change : FileChange) : void
     {
       _ = GetSource();
       FileVersion = version;
@@ -176,6 +186,8 @@ namespace Nitra.ClientServer.Server.ProjectSystem
     
     public Change(version : FileVersion, changes : ImmutableArray[FileChange]) : void
     {
+      assert2(_completeWordPosOpt < 0 && _prevSourceOpt == null);
+
       _ = GetSource();
       FileVersion = version;
       for (mutable i = changes.Length - 1; i >= 0; i--)
@@ -238,13 +250,44 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       
       TryHighlightSymbolReferences();
       
-      // TODO: make _astMessages local for working threads
-      //_astMessages = NSP.CompilerMessageList();
-      Parent.AstCreated(this);
+      def isForCompleteWord = FileVersion.IsForCompleteWord(Version);
+      if (isForCompleteWord && CanCompleteWord())
+      {
+        assert2(_completeWordPosOpt >= 0);
+        Parent.AstCreated(this, _completeWordPosOpt);
+      }
+      else
+        // TODO: make _astMessages local for working threads
+        //_astMessages = NSP.CompilerMessageList();
+        Parent.AstCreated(this, -1);
+    }
+
+    CanCompleteWord() : bool
+    {
+      def pos = _completeWordPosOpt;
+      def parseResult = _parseResult;
+      
+      when (parseResult == null)
+        return false;
+
+      // Получаем информацию о пробельных ветках дерева разбора в области курсора
+      def curretSpan     = Nitra.NSpan(pos, pos);
+      def spans          = HashSet();
+      def spasesWalker   = VoidRuleWalker(curretSpan);
+      
+      spasesWalker.Walk(parseResult, spans);
+
+      foreach (spanInfo when spanInfo.Span.Contains(curretSpan) && spanInfo.SpanClass != Language.DefaultSpanClass in spans)
+        return false; // выходим, если комплит идет в комментарии или грязи
+
+      true
     }
     
     public CreateVisualInfo(parseResult : IParseResult) : void
     {
+      when (FileVersion.IsForCompleteWord(parseResult.SourceSnapshot.File.Version))
+        return;
+      
       def solutionId = Parent.Parent.Id;
       _parseQueue.Add(ParserMessage.CreateKeywordsHighlighting(solutionId, Parent.Id, this.FileId, parseResult));
       _parseQueue.Add(ParserMessage.CreateOutlining(solutionId, Parent.Id, this.FileId, parseResult));
@@ -306,40 +349,32 @@ namespace Nitra.ClientServer.Server.ProjectSystem
       def prettyPrintState = router.PrettyPrintState;
       when (router.PrettyPrintState != PrettyPrintState.Disabled && _parseTree != null)
         Parent.ParseQueue.Add(ParserMessage.CreatePrettyPrint(Parent.Parent.Id, Parent.Id, this.FileId, this.FileVersion, prettyPrintState, _parseTree));
-    }    
+    }
+
     public Deactivate() : void
     {
       IsActive = false;
     }
     
-    public CompleteWord(version : int, pos : int) : void
+    public CompleteWord(version : FileVersion, pos : int) : void
     {
-      when (_parseResult == null || _ast == null || version != _parseResult.SourceSnapshot.Version)
-      {
-        Log("CompleteWord $Id skipped");
-        return;
-      }
-
-      def timer = Stopwatch.StartNew();
-      def router = Parent.Router;
-      mutable replacementSpan;
-      def result = NitraUtils.CompleteWord(pos, _parseResult, _ast, out replacementSpan);
-      def builder = ImmutableArray.CreateBuilder();
-      foreach (elem in result)
-      {
-        | text is string => builder.Add(CompletionElem.Literal(text));
-        | s is DeclarationSymbol when s.IsNameValid =>
-          def name = s.Name;
-          when (string.IsNullOrEmpty(name) && !char.IsLetter(name[0]))
-            continue;
-
-          def content = s.ToString();
-          builder.Add(CompletionElem.Symbol(s.Id, name, content, content, 0)); // TODO: add support of iconId & description
-          
-        | _ => assert2(false);
-      }
-      router.SendResponse(ServerMessage.CompleteWord(Parent.Parent.Id, ServerUtils.ConvertNSpan(replacementSpan), builder.ToImmutable()));
-      LogMsgHandled("CompleteWord " + Id + " finished.", timer, 200);
+      _prevSourceOpt = _snapshot;
+      def change = FileChange.Insert(pos, "\uFFFE");
+      def fileVersion = FileVersion(FileVersion.CompleteWordMask | version);
+      Log($"CompleteWord started in the $fileVersion file in position: $pos");
+      ChangeImpl(fileVersion, change);
+      _completeWordPosOpt = pos;
+    }
+    
+    public CompleteWordDismiss(version : FileVersion) : void
+    {
+      assert2(_prevSourceOpt.Version == version);
+      this.FileVersion = version;
+      _snapshot = _prevSourceOpt;
+      _ = _text.Remove(_completeWordPosOpt, 1);
+      _completeWordPosOpt = -1;
+      _prevSourceOpt = null;
+      TrySendParseMessage();
     }
     
     public FindSymbolDefinitions(fileVersion : int, pos : int) : void

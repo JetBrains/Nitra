@@ -1062,6 +1062,9 @@ namespace Nitra.Visualizer
         case AsyncServerMessage.Exception exception:
           MessageBox.Show(this, "Exception occurred on the server: " + exception.exception);
           break;
+        case AsyncServerMessage.CompleteWord completeWord:
+          CompleteWord(completeWord);
+          break;
       }
 
       if (ViewModel.CurrentFile == null || msg.FileId >= 0 && msg.FileId != ViewModel.CurrentFile.Id || msg.Version >= 0 && msg.Version != ViewModel.CurrentFile.Version)
@@ -1095,6 +1098,51 @@ namespace Nitra.Visualizer
           ShowParseTreeNodeForCaret(enforce: true);
           break;
       }
+    }
+
+    private void CompleteWord(AsyncServerMessage.CompleteWord result)
+    {
+      var replacementSpan = result.replacementSpan;
+
+      _completionWindow = new CompletionWindow(_textEditor.TextArea);
+      IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
+
+      CompletionElem.Literal lit;
+      CompletionElem.Symbol s;
+
+      Func<CompletionElem, string> completionKeySelector = el => {
+        if ((lit = el as CompletionElem.Literal) != null) return lit.text;
+        if ((s = el as CompletionElem.Symbol) != null) return s.name;
+        return "";
+      };
+
+      var completionList = result.completionList
+                                 .Where(c => {
+                                   var key = completionKeySelector(c);
+                                   return !key.StartsWith("?") &&
+                                          !key.StartsWith("<");
+                                 })
+                                 .Distinct(completionKeySelector);
+
+      foreach (var completionData in completionList)
+      {
+        if ((lit = completionData as CompletionElem.Literal) != null)
+        {
+          var escaped = Utils.Escape(lit.text);
+          var xaml = "<Span Foreground='blue'>" + escaped + "</Span>";
+          data.Add(new CompletionData(replacementSpan, lit.text, xaml, "keyword " + xaml, priority: 1.0));
+        }
+        else if ((s = completionData as CompletionElem.Symbol) != null)
+          data.Add(new CompletionData(replacementSpan, s.name, s.content, s.description, priority: 1.0));
+      }
+
+      _completionWindow.Show();
+      _completionWindow.Closed += delegate
+      {
+        _completionWindow = null;
+        var client = ViewModel.CurrentSuite.Client;
+        client.Send(new ClientMessage.CompleteWordDismiss(ViewModel.CurrentProject.Id, result.FileId, result.Version));
+      };
     }
 
     void _fillAstTimer_Elapsed(object sender, ElapsedEventArgs e)
@@ -1356,43 +1404,6 @@ namespace Nitra.Visualizer
       var currentFile = ViewModel.CurrentFile;
 
       client.Send(new ClientMessage.CompleteWord(ViewModel.CurrentProject.Id, currentFile.Id, currentFile.Version, pos));
-      var result = client.Receive<ServerMessage.CompleteWord>();
-      var replacementSpan = result.replacementSpan;
-
-      _completionWindow = new CompletionWindow(_textEditor.TextArea);
-      IList<ICompletionData> data = _completionWindow.CompletionList.CompletionData;
-
-      CompletionElem.Literal lit;
-      CompletionElem.Symbol  s;
-
-      Func<CompletionElem, string> completionKeySelector = el => {
-        if ((lit = el as CompletionElem.Literal) != null) return lit.text;
-        if ((s = el as CompletionElem.Symbol) != null) return s.name;
-        return "";
-      };
-
-      var completionList = result.completionList
-                                 .Where(c => {
-                                   var key = completionKeySelector(c);
-                                   return !key.StartsWith("?") &&
-                                          !key.StartsWith("<");
-                                 })
-                                 .Distinct(completionKeySelector);
-
-      foreach (var completionData in completionList)
-      {
-        if ((lit = completionData as CompletionElem.Literal) != null)
-        {
-          var escaped = Utils.Escape(lit.text);
-          var xaml = "<Span Foreground='blue'>" + escaped + "</Span>";
-          data.Add(new CompletionData(replacementSpan, lit.text, xaml, "keyword " + xaml, priority: 1.0));
-        }
-        else if ((s = completionData as CompletionElem.Symbol) != null)
-          data.Add(new CompletionData(replacementSpan, s.name, s.content, s.description, priority: 1.0));
-      }
-
-      _completionWindow.Show();
-      _completionWindow.Closed += delegate { _completionWindow = null; };
     }
 
     private void TryMatchBraces()

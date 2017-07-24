@@ -1315,35 +1315,8 @@ namespace Nitra.Visualizer
 
     private List<CompletionData> CompleteWord(int pos, IAst astRoot)
     {
-      NSpan replacementSpan;
-      var parseResult = astRoot.Location.Source.File.ParseResult;
-      var result = NitraUtils.CompleteWord(pos, parseResult, astRoot, out replacementSpan);
       var completionList = new List<CompletionData>();
-
-      foreach (var elem in result)
-      {
-        var symbol = elem as DeclarationSymbol;
-        if (symbol != null && symbol.IsNameValid)
-        {
-          var content = symbol.ToString();
-          var description = content;
-          // TODO: починить отображение неоднозначностей
-          //var amb = symbol as IAmbiguousSymbol;
-          //if (amb != null)
-          //  description = Utils.WrapToXaml(string.Join(@"<LineBreak/>", amb.Ambiguous.Select(a => a.ToXaml())));
-          if (symbol.Name.All(IsIdenrChar))
-            completionList.Add(new CompletionData(replacementSpan, symbol.Name, content, description, priority: 1.0));
-        }
-
-        var literal = elem as string;
-        if (literal != null)
-        {
-          var escaped = Utils.Escape(literal);
-          var xaml = "<Span Foreground='blue'>" + escaped + "</Span>";
-          completionList.Add(new CompletionData(replacementSpan, literal, xaml, "keyword " + xaml, priority: 2.0));
-        }
-      }
-
+      // not supported
       return completionList;
     }
 

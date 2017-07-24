@@ -101,7 +101,8 @@ namespace Nitra.ClientServer.Server
         def parseResult = parseSession.Parse(source);
         _mainQueue.Add(RouterAnswerMessage.FileParsed(projectId, fileId, parseResult));
 
-        ServerUtils.SendCompilerMessages(parseResult, _router, solutionId, projectId, fileId);
+        unless (FileVersion.IsForCompleteWord(source.File.Version))
+          ServerUtils.SendCompilerMessages(parseResult, _router, solutionId, projectId, fileId);
         ServerUtils.LogMsgHandled("ParseFile " + fileId + " Length=" + parseResult.SourceSnapshot.Text.Length, timer, 200);
       
       | CreateAst(solutionId, projectId, fileId, parseResult, isActive) =>
@@ -160,16 +161,27 @@ namespace Nitra.ClientServer.Server
         _router.SendAsyncResponse(AsyncServerMessage.ReflectionStructCreated(fileId, version, solutionId, convertedRoot));
         ServerUtils.LogMsgHandled("ParseTreeReflection " + fileId, timer, 100);
       
-      | SemanticAnalysisStart(solutionId, projectId, cancellationToken, projectSupport, files, data) =>
-        ServerUtils.Log($"SemanticAnalysisStart: ..$(files.Select(_.Title))");
+      | SemanticAnalysisStart(solutionId, projectId, cancellationToken, projectSupport, files, data, completeWordPosOpt) =>
+        ServerUtils.Log($<#SemanticAnalysisStart: $(if (completeWordPosOpt < 0) "CompletePos" + completeWordPosOpt else "") ..$(files.Select(_.Title))#>);
         def timer = Stopwatch.StartNew();
         try
           projectSupport.RefreshProject(cancellationToken, files, data);
         catch
         {
           | e is OperationCanceledException => ServerUtils.LogCanceled(e); throw;
-          | e => SendAsyncResponse(AsyncServerMessage.RefreshProjectFailed(FileId.Invalid, FileVersion.Invalid, solutionId, e.ToString()));
+          | e when completeWordPosOpt < 0 => SendAsyncResponse(AsyncServerMessage.RefreshProjectFailed(FileId.Invalid, FileVersion.Invalid, solutionId, e.ToString()));
         }
+        
+        when (completeWordPosOpt >= 0)
+        {
+          // word complate
+          foreach (file when FileVersion.IsForCompleteWord(file.FileVersion) in files)
+          {
+            CompleteWord(solutionId, completeWordPosOpt, file);
+            return;
+          }
+        }
+        
         _mainQueue.Add(RouterAnswerMessage.SemanticAnalysisFinished(projectId, cancellationToken, files));
         def empty = array(0);
         for (mutable i = 0; i < files.Length; i++)
@@ -259,6 +271,78 @@ namespace Nitra.ClientServer.Server
         def msg = AsyncServerMessage.MatchedBrackets(fileId, FileVersion(parseResult.SourceSnapshot.Version), solutionId, projectId, builder.MoveToImmutable());
         SendAsyncResponse(msg);
         ServerUtils.LogMsgHandled("CreateMatchBrackets fileId=" + fileId, timer, 50);
+    }
+    
+    public CompleteWord(solutionId : SolutionId, pos : int, fileData : FileEvalPropertiesData) : void
+    {
+      def astRoot = fileData.Ast;
+      def source  = astRoot.Location.Source;
+
+      // находим цепочку ветвей AST ведущую к позиции комплита
+
+      def visitor = R.FindNodeAstVisitor(NSpan(pos, pos));
+      astRoot.Accept(visitor);
+      
+      def isEndOfIdentifier(ast : IAst) : bool
+      {
+        | Reference as r => r.Span.IntersectsWith(pos)
+        | _ => false
+      }
+      
+      def reference = visitor.Stack.FirstOrDefault(isEndOfIdentifier);
+      
+      when (reference == null)
+        return;
+
+      // Вычисляем префикс комплита (если есть). Он будет использоваться для фильтрации списка и будет заменен выбранным словом
+      def span            = Nitra.NSpan(reference.Span.StartPos, pos);
+      def prefix          = source.Text.Substring(span.StartPos, span.Length);
+      def replacementSpan = Nitra.NSpan(reference.Span.StartPos, reference.Span.EndPos - 1); // -1 – for fake identifier character ('\uFFFE')
+      
+      // Находим первую ветку AST в которой есть зависимое свойство Scope и вычисляем по этому Scope список автодополнения
+      foreach (ast in visitor.Stack)
+      {
+//        | BindableAst(IsScopeEvaluated = true, Scope = scope)
+        | Reference(IsScopeEvaluated=true, IsRefEvaluated=true, Scope=scope, Ref=r) when ast.Span.IntersectsWith(span) =>
+          //completionList.AddRange(scope.Bind(prefix));
+          mutable r2 = r : IRef;
+          while (r2.ResolvedTo != null)
+            r2 = r2.ResolvedTo;
+            
+          def symbolTypeOpt = if (r2 == null) null else r2.GetType().GetGenericArguments()[0];
+            
+          def matcher(symbol) : bool
+          {
+            def symbolTypeOpt = symbolTypeOpt;
+            def prefix = prefix;
+            def isNameMatch = !symbol.IsNameValid || symbol.Name.StartsWith(prefix); // TODO: заменить на спецфункцию
+            when (!isNameMatch)
+              return false;
+            def isTypeMatch = symbolTypeOpt == null || symbolTypeOpt.IsInstanceOfType(symbol);
+            isTypeMatch
+          }
+          def br = scope.Bind(matcher);
+          def symbols = br.Symbols;
+          def builder = ImmutableArray.CreateBuilder(symbols.Length);
+          
+          foreach (symbol : DeclarationSymbol in br.Symbols)
+          {
+            def name = symbol.Name;
+            when (StringPatternMatching.MatchPattern(name, prefix))
+            {
+              def desc = symbol.ToString();
+              def elem = CompletionElem.Symbol(symbol.Id, name, desc, desc, -1);
+              builder.Add(elem);
+            }
+          }
+          
+          def ver = FileVersion(fileData.FileVersion ^ FileVersion.CompleteWordMask);
+          def msg = AsyncServerMessage.CompleteWord(FileId(fileData.FileId), ver, solutionId, ServerUtils.ConvertNSpan(replacementSpan), builder.MoveToImmutable());
+          SendAsyncResponse(msg);
+          break;
+
+        | _ => ()
+      }
     }
     
     ConvertParseTreeReflection(node : R.ReflectionStruct, objectMap : Hashtable[R.ReflectionStruct, ParseTreeReflectionStruct]) : ParseTreeReflectionStruct

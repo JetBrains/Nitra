@@ -33,16 +33,7 @@ namespace Nitra.Visualizer
 
     public void Complete(TextArea textArea, ISegment completionSegment, EventArgs insertionRequestEventArgs)
     {
-      var line = textArea.Document.GetLineByOffset(Span.EndPos);
-      var lineText = textArea.Document.GetText(line);
-      var end = Span.EndPos - line.Offset;
-      for (; end < lineText.Length; end++)
-      {
-        var ch = lineText[end];
-        if (!char.IsLetterOrDigit(ch))
-          break;
-      }
-      textArea.Document.Replace(Span.StartPos, end + line.Offset - Span.StartPos, this.Text);
+      textArea.Document.Replace(Span.StartPos, Span.Length, this.Text);
     }
 
     public int CompareTo(CompletionData other)
